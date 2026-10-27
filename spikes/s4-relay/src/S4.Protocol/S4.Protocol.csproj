@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>S4</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- One implementation of the secure channel: S2's, checked byte for byte against WebCrypto. -->
+    <Compile Include="..\..\..\s2-noise-interop\dotnet\Noise.cs" Link="Noise.cs" />
+  </ItemGroup>
+
+</Project>

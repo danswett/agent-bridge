@@ -69,3 +69,28 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium webkit
       - run: node js/test-browsers.mjs
+
+  s4-relay:
+    # The relay's security and routing checks against a fake GitHub, then the PWA in
+    # Chromium and WebKit through the same relay, then the container build.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: spikes/s4-relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: dotnet build src/S4.DevStack -c Release --nologo
+      - run: dotnet build src/S4.Host -c Release --nologo
+      - run: dotnet src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll check
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      - run: node js/test-pwa.mjs
+      - name: Container builds
+        working-directory: spikes
+        run: docker build -f s4-relay/Dockerfile -t agent-bridge-relay-s4 .

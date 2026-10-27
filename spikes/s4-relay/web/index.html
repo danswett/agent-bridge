@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#24292f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Agent Bridge">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <title>Agent Bridge · S4 relay spike</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    body { margin: 0; padding: max(16px, env(safe-area-inset-top)) 16px 32px; max-width: 720px; margin-inline: auto; }
+    h1 { font-size: 1.25rem; margin: 0 0 4px; }
+    .muted { opacity: .7; font-size: .9rem; }
+    section { border: 1px solid #8884; border-radius: 10px; padding: 12px; margin: 12px 0; }
+    button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid #8886; background: #2f81f7; color: white; }
+    button.secondary { background: transparent; color: inherit; }
+    button:disabled { opacity: .5; }
+    .code { font: 600 1.6rem ui-monospace, monospace; letter-spacing: .1em; }
+    ul { list-style: none; padding: 0; margin: 0; }
+    li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid #8882; }
+    li:last-child { border-bottom: 0; }
+    pre { white-space: pre-wrap; word-break: break-word; font-size: .8rem; background: #8881; padding: 8px; border-radius: 6px; max-height: 40vh; overflow: auto; }
+    .ok { color: #1a7f37; } .bad { color: #cf222e; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+  </style>
+</head>
+<body>
+  <h1>Agent Bridge</h1>
+  <div class="muted">Spike S4: phone ↔ relay ↔ host, end-to-end encrypted. Test data only.</div>
+
+  <section id="signin-box">
+    <button id="signin">Sign in with GitHub</button>
+    <div id="code-box" hidden>
+      <p>Open <a id="verify" target="_blank" rel="noopener">GitHub</a> and enter:</p>
+      <div class="code" id="code"></div>
+      <p class="muted">Waiting for GitHub…</p>
+    </div>
+  </section>
+
+  <section id="account" hidden>
+    <div>Signed in as <b id="login"></b> · this device <code id="me"></code></div>
+    <div class="muted" id="relay-state">Connecting to the relay…</div>
+    <div class="row"><button class="secondary" id="signout">Sign out</button></div>
+  </section>
+
+  <section id="devices-box" hidden>
+    <b>Your online devices</b>
+    <ul id="devices"></ul>
+  </section>
+
+  <section id="channel" hidden>
+    <div>Channel to <b id="peer"></b></div>
+    <div id="peer-check"></div>
+    <div class="muted" id="hs-info"></div>
+    <div class="row">
+      <button id="snapshot">Snapshot</button>
+      <button id="ping">Ping ×20</button>
+      <button id="echo">Echo test</button>
+    </div>
+    <div id="pings"></div>
+    <pre id="result"></pre>
+  </section>
+
+  <pre id="log"></pre>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
