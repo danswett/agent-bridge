@@ -165,7 +165,11 @@ static class Native
     static extern bool SetConsoleCtrlHandler(HandlerRoutine? handler, bool add);
     delegate bool HandlerRoutine(uint ctrlType);
 
-    [StructLayout(LayoutKind.Sequential)]
+    // CharSet.Unicode is load-bearing: a struct with a char field and no CharSet is
+    // marshalled as ANSI, which converts UnicodeChar through the system code page -
+    // '–' becomes U+0096 and '世' becomes '?' - while the record layout still looks
+    // right. (agent-ha-bridge's ConsoleInjector declares it without one.)
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     struct KEY_EVENT_RECORD
     {
         public int bKeyDown; // Win32 BOOL, 4 bytes
@@ -176,7 +180,7 @@ static class Native
         public uint dwControlKeyState;
     }
 
-    [StructLayout(LayoutKind.Explicit)]
+    [StructLayout(LayoutKind.Explicit, CharSet = CharSet.Unicode)]
     struct INPUT_RECORD
     {
         [FieldOffset(0)] public ushort EventType;

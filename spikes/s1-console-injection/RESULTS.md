@@ -35,9 +35,10 @@ else breaks when a long-lived host process does it.
 | Delivery into a conhost console (`ConsoleWindowClass`) | ✅ |
 | Delivery into a Windows Terminal / ConPTY console (`PseudoConsoleWindow`) | ✅ |
 | 40 deliveries alternating between two consoles from one process | ✅ 0 failures, each target received exactly its own lines in order. About 64 ms per delivery, of which 60 ms is the deliberate pre-Enter pause. Handle count stable (224) |
-| Non-ASCII text (`héllo – 世界 ✓`, quotes, backslashes) | ✅ **Identical to the existing bridge injector** into identical targets. The `?` replacements come from the test target's `Console.ReadLine` code page, not from injection |
+| Non-ASCII text (`héllo – 世界 ✓`, quotes, backslashes) into a UTF-8-reading target | ✅ **Exact**, once `KEY_EVENT_RECORD` is declared `CharSet.Unicode` (see below). The existing bridge injector into the same target: `héllo  ?? ?` |
 | Windowless child process after an attach/free cycle (`CreateNoWindow`) | ✅ Runs, no console of our own left behind |
 | **Live Copilot CLI 1.0.104**: prompt typed, then Enter as a separate keystroke | ✅ `user.message` recorded **exactly** as sent, the model answered with the marker, and `/exit` ended the session |
+| **Live Copilot CLI 1.0.104, Unicode prompt** (`café – 世界 ✓ “smart” 🚀`) | ✅ This injector: recorded **exactly**, including the emoji surrogate pair. ❌ The existing bridge injector: recorded as `café  ?? ? smart ??` |
 | Ctrl+C in the target console while attached, no handler | ❌ Injector terminated (`0xC000013A STATUS_CONTROL_C_EXIT`) |
 | Same, managed handler registered **before** `AttachConsole` | ❌ Terminated: the registration does not cover the console attached later |
 | Same, handler registered **after** `AttachConsole`, or `SetConsoleCtrlHandler(NULL, TRUE)` | ✅ Survives |
@@ -58,19 +59,30 @@ else breaks when a long-lived host process does it.
 2. The host itself never needs a console, so the hidden-console launcher (VBS) and
    its logon retry loop are not needed for the host. Every console child the host
    starts must use `CreateNoWindow` (one `StartWindowless` helper).
-3. Unicode behavior is unchanged from today, so no new parity risk.
+3. **Declare the console records `CharSet.Unicode`.** A struct with a `char` field and
+   no `CharSet` is marshalled as ANSI, so `UnicodeChar` goes through the system code
+   page while the record layout still looks correct. Characters that exist in cp1252
+   survive (`é`). The rest become `?` or, like `–` (cp1252 0x96), turn into the C1
+   control U+0096 and vanish. The first run of this spike had the same defect and
+   misattributed it to the target. Codex's review on PR #1 caught it.
 
 ## Note for the existing bridge (not acted on here)
 
-The PowerShell daemon uses the same attach sequence in-process, so it is presumably
-exposed to the close-while-attached termination as well. Its supervisor restarts it
-with backoff. This was **not** tested against the daemon itself. If it ever matters,
-the fix there would be the same worker pattern, but that is for the
-`agent-ha-bridge` repository and its own process.
+* **Non-Latin-1 text is corrupted today.** agent-ha-bridge's `ConsoleInjector`
+  (`hooks/decision-inject.ps1`) declares `KEY_EVENT_RECORD` without `CharSet`, so every
+  dashboard or phone reply and typed answer containing an en/em dash, smart quotes,
+  CJK, symbols or emoji reaches the session mangled. This was reproduced live above
+  against Copilot CLI 1.0.104 with the bridge's own injector source. The fix there is
+  `CharSet = CharSet.Unicode` on the struct (Claude and Codex delivery share it).
+* The daemon uses the same attach sequence in-process, so it is presumably exposed to
+  the close-while-attached termination as well, and its supervisor restarts it with
+  backoff. This was **not** tested against the daemon itself.
+
+Both belong to the `agent-ha-bridge` repository and its own PR process.
 
 ## Reproduce
 
 ```powershell
 pwsh -NoProfile -File spikes\s1-console-injection\run-s1.ps1
-pwsh -NoProfile -File spikes\s1-console-injection\live-copilot.ps1   # needs a logged-in Copilot CLI
+pwsh -NoProfile -File spikes\s1-console-injection\live-copilot.ps1 [-Unicode] [-Injector new|old]   # needs a logged-in Copilot CLI
 ```

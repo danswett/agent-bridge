@@ -7,7 +7,14 @@
 # the installed bridge's hooks or instructions and never appears on its dashboard. The
 # junction is removed on its own before the temp directory, so the real pkg is untouched.
 [CmdletBinding()]
-param([int]$TimeoutSec = 180)
+param(
+    [int]$TimeoutSec = 180,
+    # Which injector types the prompt: this spike's, or the existing bridge's
+    # (old-injector.ps1, run hidden as the daemon is).
+    [ValidateSet('new', 'old')][string]$Injector = 'new',
+    [switch]$Unicode,
+    [string]$DecisionInjectPath = (Join-Path $HOME 'repos\agent-ha-bridge\hooks\decision-inject.ps1')
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -33,7 +40,7 @@ $injectorLog = Join-Path $root 'injector.jsonl'
 $cliPid = $null
 $window = $null
 $marker = "PINEAPPLE$(Get-Random -Minimum 1000 -Maximum 9999)"
-$result = [ordered]@{ marker = $marker }
+$result = [ordered]@{ marker = $marker; injector = $Injector; unicode = [bool]$Unicode }
 try {
     $env:COPILOT_HOME = $copilotHome
     $window = Start-Process conhost.exe -ArgumentList "cmd.exe /c cd /d `"$ws`" && copilot" -PassThru
@@ -54,10 +61,25 @@ try {
     $result.version = (Get-ChildItem (Join-Path $HOME '.copilot\pkg\win32-x64') | Sort-Object Name | Select-Object -Last 1).Name
     Start-Sleep -Seconds 6   # let the input box come up
 
-    $prompt = "Reply with exactly the single word $marker and nothing else."
-    $p = Start-Process $exe -ArgumentList "send --pid $cliPid --text `"$prompt`" --out `"$injectorLog`"" -PassThru -Wait
-    $result.injectorExit = $p.ExitCode
-    $result.injector = (Get-Content $injectorLog | Select-Object -Last 1 | ConvertFrom-Json).result
+    $prompt = if ($Unicode) {
+        # Smart quotes are string delimiters to PowerShell itself, hence the code points.
+        "Reply with exactly the single word $marker and nothing else. (Ignore this: café – 世界 ✓ $([char]0x201C)smart$([char]0x201D) 🚀)"
+    } else { "Reply with exactly the single word $marker and nothing else." }
+    if ($Injector -eq 'new') {
+        $psi = [Diagnostics.ProcessStartInfo]::new($exe)
+        foreach ($a in 'send', '--pid', "$cliPid", '--text', $prompt, '--out', $injectorLog) { $psi.ArgumentList.Add($a) }
+        $p = [Diagnostics.Process]::Start($psi); $p.WaitForExit()
+        $result.injectorOutcome = (Get-Content $injectorLog | Select-Object -Last 1 | ConvertFrom-Json).result
+    }
+    else {
+        $oldOut = Join-Path $root 'old-injector.txt'
+        $psi = [Diagnostics.ProcessStartInfo]::new('pwsh.exe')
+        foreach ($a in '-NoProfile', '-File', (Join-Path $here 'old-injector.ps1'), '-DecisionInjectPath', $DecisionInjectPath,
+            '-TargetPid', "$cliPid", '-Text', $prompt, '-Out', $oldOut) { $psi.ArgumentList.Add($a) }
+        $psi.CreateNoWindow = $true; $psi.UseShellExecute = $false
+        $p = [Diagnostics.Process]::Start($psi); $p.WaitForExit()
+        $result.injectorOutcome = (Get-Content $oldOut | Select-Object -Last 1)
+    }
 
     $events = Join-Path $sessionDir 'events.jsonl'
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
@@ -74,6 +96,7 @@ try {
     }
     $result.userMessageExact = ($user -ceq $prompt)
     $result.userMessage = $user
+    $result.sent = $prompt
     $result.assistantMessage = $assistant
 
     # End it the way the bridge's End session does: type /exit.
