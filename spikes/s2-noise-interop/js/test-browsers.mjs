@@ -18,6 +18,12 @@ await new Promise((ok, fail) => {
     if (s.includes('serving')) { clearTimeout(t); ok(); }
   });
 });
+// Belt and braces: the marker is printed once Kestrel listens, but confirm with a request.
+for (let i = 0; ; i++) {
+  try { if ((await fetch(`http://127.0.0.1:${port}/pin`)).ok) { break; } } catch { /* not yet */ }
+  if (i >= 50) { throw new Error('server not answering'); }
+  await new Promise((r) => setTimeout(r, 200));
+}
 
 let failed = 0;
 try {

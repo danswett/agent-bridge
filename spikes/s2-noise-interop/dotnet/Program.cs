@@ -133,7 +133,9 @@ if (mode == "serve")
         }
         catch (WebSocketException) { }
     });
-    Console.WriteLine($"serving {web} on http://127.0.0.1:{port}  (static {Hex(serverStatic.Public)[..16]}...)");
+    // Printed once Kestrel is actually listening: the browser runner starts on this line.
+    app.Lifetime.ApplicationStarted.Register(() =>
+        Console.WriteLine($"serving {web} on http://127.0.0.1:{port}  (static {Hex(serverStatic.Public)[..16]}...)"));
     await app.RunAsync();
     return 0;
 }
