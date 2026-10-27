@@ -35,6 +35,14 @@ jobs:
             if ($errors) { $errors | ForEach-Object { Write-Error "$($f.Name): $_" }; $bad++ }
           }
           exit $bad
+      - name: S3 publish carries the compiled XAML
+        # The build output runs either way; only a published copy fails at startup when
+        # the app's .pri is missing, so check the publish folder itself.
+        shell: pwsh
+        run: |
+          dotnet publish spikes/s3-winui-velopack/App/AgentBridgeS3.csproj -c Release -o "$env:RUNNER_TEMP/s3" --nologo
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if (-not (Test-Path "$env:RUNNER_TEMP/s3/AgentBridgeS3.pri")) { Write-Error 'AgentBridgeS3.pri is missing from the publish output'; exit 1 }
 
   s2-noise-interop:
     # The .NET and WebCrypto implementations must keep agreeing byte for byte, in

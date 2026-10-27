@@ -1,7 +1,7 @@
 # S2: end-to-end encryption interop between .NET and browser WebCrypto
 
-**Verdict: GO** in Node, Chromium and WebKit (Safari's engine). The real-iPhone
-Safari run uses the published page (see the last section).
+**Verdict: GO** in Node, Chromium, WebKit (Safari's engine) and real iPhone Safari,
+which passed all 22 offline checks on the published page (see the last section).
 
 Run on 2026-10-27 on Windows 11 x64 with .NET SDK 10.0.403, Node 24.22.1, Chromium
 141.0.7390.37 and WebKit 26.0 (Playwright 1.56.1). CI repeats it on Linux with fresh
@@ -97,6 +97,11 @@ network traffic beyond loading itself:
 **https://danswett.github.io/agent-bridge/s2/**. Opening it in iPhone Safari runs the
 22 offline checks (vectors, negatives, non-exportable keys, IndexedDB) on the device's
 real WebCrypto. The live checks need the spike server and only run with `?live`.
+
+**Result (2026-10-27): all 22 checks passed in Safari on a real iPhone**, including
+the off-curve rejection. That rejection is made by the page's own point check, so it
+does not show whether Safari's backend would have caught the point by itself; the
+product keeps its own check either way.
 
 `vectors.json` holds **test-only** keys, generated for this transcript and used for
 nothing else.
