@@ -4,3 +4,5 @@ node_modules/
 *.user
 .vs/
 TestResults/
+# Spike publish output, installers and release feeds.
+out/
