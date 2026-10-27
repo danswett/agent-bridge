@@ -52,6 +52,7 @@ jobs:
         with:
           node-version: '22'
       - run: dotnet build dotnet/S2.Noise.csproj -c Release --nologo
+      - run: dotnet dotnet/bin/Release/net10.0/s2-noise.dll check
       - name: Fresh vectors from .NET, replayed in Node
         run: |
           dotnet dotnet/bin/Release/net10.0/s2-noise.dll vectors "$RUNNER_TEMP/vectors.json"

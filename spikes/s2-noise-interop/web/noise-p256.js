@@ -40,11 +40,27 @@ export class P256KeyPair {
   }
 
   async dh(peerPublic) {
-    if (peerPublic.length !== PUBLEN || peerPublic[0] !== 4) { throw new Error('bad public key encoding'); }
-    // importKey rejects a point that is not on the curve.
+    assertOnCurve(peerPublic);
     const peer = await subtle.importKey('raw', peerPublic, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
     return new Uint8Array(await subtle.deriveBits({ name: 'ECDH', public: peer }, this.privateKey, 256));
   }
+}
+
+// Checked here rather than left to importKey, because not every WebCrypto does it:
+// WebKit on Linux (Playwright 1.56, WebKitGTK) accepted an off-curve point that
+// Chromium, Windows WebKit, Node and .NET all refuse. ECDH against an unchecked point
+// is the invalid-curve attack, which leaks bits of a long-lived static key. P-256's
+// cofactor is 1, so a point on the curve is in the prime-order group.
+const P = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffffn;
+const B = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604bn;
+const toBig = (bytes) => BigInt('0x' + hex(bytes));
+export function assertOnCurve(pub) {
+  if (pub.length !== PUBLEN || pub[0] !== 4) { throw new Error('bad public key encoding'); }
+  const x = toBig(pub.subarray(1, 33)), y = toBig(pub.subarray(33, 65));
+  if (x >= P || y >= P) { throw new Error('public key coordinate out of range'); }
+  const rhs = (x * x * x - 3n * x + B) % P;
+  // BigInt % keeps the dividend's sign, so normalise before comparing with zero.
+  if ((((y * y - rhs) % P) + P) % P !== 0n) { throw new Error('public key is not on P-256'); }
 }
 
 export class CipherState {

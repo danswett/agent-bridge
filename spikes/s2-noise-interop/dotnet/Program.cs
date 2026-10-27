@@ -63,6 +63,23 @@ if (mode == "vectors")
     return 0;
 }
 
+if (mode == "check")
+{
+    // The .NET side of the curve checks, independent of what the platform's import does.
+    int failed = 0;
+    void Expect(string name, bool ok) { Console.WriteLine($"{(ok ? "PASS" : "FAIL")}  {name}"); if (!ok) { failed++; } }
+    bool Refused(byte[] pub) { try { P256KeyPair.AssertOnCurve(pub); return false; } catch (CryptographicException) { return true; } }
+    using var good = P256KeyPair.Generate();
+    Expect("a generated public key is on the curve", !Refused(good.Public));
+    var off = (byte[])good.Public.Clone(); off[64] ^= 1;
+    Expect("a public key that is not on the curve is refused", Refused(off));
+    var big = new byte[65]; big[0] = 4; Convert.FromHexString("ffffffff00000001000000000000000000000000ffffffffffffffffffffffff").CopyTo(big, 1);
+    Expect("a public key with a coordinate outside the field is refused", Refused(big));
+    using var other = P256KeyPair.Generate();
+    Expect("ECDH agrees in both directions", good.Dh(other.Public).AsSpan().SequenceEqual(other.Dh(good.Public)));
+    return failed == 0 ? 0 : 1;
+}
+
 if (mode == "serve")
 {
     int port = int.Parse(Arg("--port") ?? "8765");

@@ -62,6 +62,8 @@ export async function negativeChecks(v) {
   const bad = unhex(v.keys.respStatic.pub); bad[64] ^= 1; // a point off the curve
   const kp = await P256KeyPair.generate();
   out.push({ name: 'a public key that is not on the curve is refused', ok: await rejects(() => kp.dh(bad)) });
+  const big = new Uint8Array(65); big[0] = 4; big.set(unhex('ffffffff00000001000000000000000000000000ffffffffffffffffffffffff'), 1);
+  out.push({ name: 'a public key with a coordinate outside the field is refused', ok: await rejects(() => kp.dh(big)) });
   return out;
 }
 

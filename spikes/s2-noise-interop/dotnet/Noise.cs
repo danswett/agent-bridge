@@ -61,15 +61,32 @@ public sealed class P256KeyPair : IDisposable
 
     public byte[] Dh(byte[] peerPublic)
     {
-        if (peerPublic.Length != NoiseConst.PubLen || peerPublic[0] != 0x04) { throw new CryptographicException("bad public key encoding"); }
+        AssertOnCurve(peerPublic);
         using var peer = ECDiffieHellman.Create();
-        // ImportParameters validates that the point is on the curve; an invalid point throws.
         peer.ImportParameters(new ECParameters
         {
             Curve = ECCurve.NamedCurves.nistP256,
             Q = new ECPoint { X = peerPublic[1..33], Y = peerPublic[33..65] },
         });
         return key.DeriveRawSecretAgreement(peer.PublicKey);
+    }
+
+    // Checked explicitly rather than left to the platform's import, which differs by
+    // backend (WebKitGTK's WebCrypto accepted an off-curve point that every other
+    // implementation refused). ECDH against an unchecked point is the invalid-curve
+    // attack on a long-lived static key. P-256's cofactor is 1.
+    static readonly System.Numerics.BigInteger P = System.Numerics.BigInteger.Parse("0ffffffff00000001000000000000000000000000ffffffffffffffffffffffff", System.Globalization.NumberStyles.HexNumber);
+    static readonly System.Numerics.BigInteger B = System.Numerics.BigInteger.Parse("05ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b", System.Globalization.NumberStyles.HexNumber);
+
+    public static void AssertOnCurve(byte[] pub)
+    {
+        if (pub.Length != NoiseConst.PubLen || pub[0] != 0x04) { throw new CryptographicException("bad public key encoding"); }
+        var x = new System.Numerics.BigInteger(pub.AsSpan(1, 32), isUnsigned: true, isBigEndian: true);
+        var y = new System.Numerics.BigInteger(pub.AsSpan(33, 32), isUnsigned: true, isBigEndian: true);
+        if (x >= P || y >= P) { throw new CryptographicException("public key coordinate out of range"); }
+        var rhs = System.Numerics.BigInteger.Remainder(x * x * x - 3 * x + B, P);
+        var diff = ((y * y - rhs) % P + P) % P;
+        if (!diff.IsZero) { throw new CryptographicException("public key is not on P-256"); }
     }
 
     static byte[] EncodePoint(byte[] x, byte[] y)

@@ -49,20 +49,31 @@ These are the primitives the shipped agent-ha-bridge pairing protocol already us
 | All three handshake messages **byte-identical** to .NET (89/196/97 B), and .NET's decrypt | ✅ | ✅ | ✅ |
 | Handshake hash identical (channel binding for pairing codes) | ✅ | ✅ | ✅ |
 | Five transport messages identical both ways, up to 60,000 B | ✅ | ✅ | ✅ |
-| Tampered handshake, different prologue, tampered or replayed transport, off-curve key: all refused | ✅ | ✅ | ✅ |
+| Tampered handshake, different prologue, tampered or replayed transport, off-curve key, out-of-field coordinate: all refused | ✅ | ✅ | ✅ |
 | Private key generated non-exportable | ✅ | ✅ | ✅ |
 | Device key in IndexedDB still works after reload, still non-exportable | n/a | ✅ | ✅ |
 | **Live** WebSocket handshake with the .NET server, its key pinned | n/a | ✅ 17 ms | ✅ 412 ms |
 | Live echo: Unicode, 60,000 random bytes, empty | n/a | ✅ | ✅ |
 | Server closes on a tampered frame (4001) | n/a | ✅ | ✅ |
 | A server whose key does not match the pin is refused, before the client reveals its own static key | n/a | ✅ | ✅ |
-| **Total** | **20/20** | **27/27** | **27/27** |
+| **Total** | **21/21** | **28/28** | **28/28** |
 
 Random-key handshake time, including key generation: Node 6.5 ms, Chromium 1.6 ms,
 WebKit 823 ms. Playwright's Windows WebKit uses a slow software crypto backend.
 Safari on Apple hardware uses CommonCrypto, and the iPhone run below gives the real
 figure. Even at the WebKit-on-Windows figure, a once-per-connection cost is
 acceptable.
+
+## A finding: not every WebCrypto validates the peer's point
+
+On Linux CI, **Playwright's WebKit (WebKitGTK) accepted an off-curve P-256 public key** in
+`importKey`/`deriveBits`. Chromium, Windows WebKit, Node and .NET all refused it. ECDH
+against an unchecked point is the *invalid-curve attack*, which can leak bits of a
+long-lived static key, which is exactly what device keys are. Both implementations now
+check the point themselves (coordinates below p, and y² = x³ − 3x + b mod p) before any
+ECDH, independent of the platform. P-256's cofactor is 1, so that suffices. The
+.NET side has its own `s2-noise check`, run in CI. The real-iPhone run below shows
+whether Safari's own backend validates, but the product must not rely on it.
 
 ## Consequences for the design
 
@@ -84,7 +95,7 @@ acceptable.
 `.github/workflows/pages.yml` publishes `web/` as a static page with no server and no
 network traffic beyond loading itself:
 **https://danswett.github.io/agent-bridge/s2/**. Opening it in iPhone Safari runs the
-21 offline checks (vectors, negatives, non-exportable keys, IndexedDB) on the device's
+22 offline checks (vectors, negatives, non-exportable keys, IndexedDB) on the device's
 real WebCrypto. The live checks need the spike server and only run with `?live`.
 
 `vectors.json` holds **test-only** keys, generated for this transcript and used for
