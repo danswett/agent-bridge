@@ -1,0 +1,12 @@
+{
+  "name": "agent-bridge-spike-s2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:node": "node js/test-node.mjs",
+    "test:browsers": "node js/test-browsers.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

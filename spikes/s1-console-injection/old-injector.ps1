@@ -8,8 +8,10 @@ param(
     [Parameter(Mandatory)][string]$Out
 )
 $src = Get-Content -Raw -LiteralPath $DecisionInjectPath
-$m = [regex]::Match($src, "-Source @'\r?\n(?<cs>.*?)\r?\n'@", 'Singleline')
-if (-not $m.Success) { throw 'ConsoleInjector source not found' }
+# The file compiles more than one type; take the block that defines the injector.
+$m = [regex]::Matches($src, "-Source @'\r?\n(?<cs>.*?)\r?\n'@", 'Singleline') |
+    Where-Object { $_.Groups['cs'].Value -match 'class ConsoleInjector' } | Select-Object -First 1
+if (-not $m) { throw 'ConsoleInjector source not found' }
 Add-Type -TypeDefinition $m.Groups['cs'].Value
 $r = [CopilotCli.ConsoleInjector]::Send([uint32]$TargetPid, $Text, $true, 300)
 Add-Content -LiteralPath $Out -Value $r -Encoding utf8
