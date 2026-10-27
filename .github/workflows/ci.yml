@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  spikes:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build spike projects
+        shell: pwsh
+        run: |
+          $projects = Get-ChildItem spikes -Recurse -Filter *.csproj
+          foreach ($p in $projects) {
+            dotnet build $p.FullName -c Release --nologo
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+      - name: Parse spike scripts
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($f in Get-ChildItem spikes -Recurse -Filter *.ps1) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors)
+            if ($errors) { $errors | ForEach-Object { Write-Error "$($f.Name): $_" }; $bad++ }
+          }
+          exit $bad
