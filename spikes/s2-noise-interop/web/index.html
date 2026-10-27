@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-bridge S2: Noise interop self-test</title>
+<style>
+  body { font: 15px/1.4 -apple-system, "Segoe UI", sans-serif; margin: 16px; max-width: 760px; }
+  h1 { font-size: 18px; }
+  #summary { font-size: 22px; font-weight: 600; margin: 12px 0; }
+  .pass { color: #107c10; } .fail { color: #c50f1f; }
+  li { margin: 4px 0; } small { color: #666; }
+</style>
+</head>
+<body>
+<h1>agent-bridge spike S2: end-to-end encryption interop</h1>
+<p><code>Noise_XX_P256_AESGCM_SHA256</code> on this browser's WebCrypto, checked byte for byte
+against a transcript produced by the .NET implementation. Nothing is sent anywhere
+unless this page is served by the spike's own server (live checks).</p>
+<div id="summary">Running…</div>
+<ul id="list"></ul>
+<p><small id="ua"></small></p>
+<script type="module">
+import { vectorChecks, negativeChecks, randomChecks, indexedDbCheck } from './selftest.js';
+import { P256KeyPair, XXHandshake, hex, unhex } from './noise-p256.js';
+
+const enc = new TextEncoder();
+const list = document.getElementById('list');
+document.getElementById('ua').textContent = navigator.userAgent;
+
+function frames(ws) {
+  const queue = []; const waiters = [];
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = (e) => { const b = new Uint8Array(e.data); waiters.length ? waiters.shift()(b) : queue.push(b); };
+  return () => new Promise((ok, fail) => {
+    if (queue.length) { return ok(queue.shift()); }
+    waiters.push(ok);
+    ws.onclose = (e) => fail(new Error(`closed ${e.code}`));
+  });
+}
+
+async function connect(pin) {
+  const ws = new WebSocket(`${location.origin.replace(/^http/, 'ws')}/ws`);
+  await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = () => fail(new Error('ws error')); });
+  const next = frames(ws);
+  const hs = await XXHandshake.create(true, await P256KeyPair.generate(), enc.encode('agent-bridge-s2-live'));
+  const t0 = performance.now();
+  ws.send(await hs.writeMessage(new Uint8Array(0)));
+  await hs.readMessage(await next());
+  // The responder's static key arrives inside message 2: compare with the pin before
+  // sending anything that identifies this side.
+  if (hex(hs.remoteStatic) !== pin) { ws.close(); throw new Error('pinned key mismatch'); }
+  ws.send(await hs.writeMessage(new Uint8Array(0)));
+  return { ws, hs, next, ms: performance.now() - t0 };
+}
+
+async function liveChecks() {
+  const out = [];
+  const pin = (await (await fetch('/pin')).text()).trim();
+  const c = await connect(pin);
+  out.push({ name: 'live handshake with the .NET server, its key pinned', ok: true, detail: `${c.ms.toFixed(1)} ms` });
+  const big = new Uint8Array(60000); crypto.getRandomValues(big);
+  for (const [label, payload] of [['unicode text', enc.encode('café – 世界 ✓ “smart” 🚀')], ['60,000 random bytes', big], ['an empty message', new Uint8Array(0)]]) {
+    c.ws.send(await c.hs.send.encryptWithAd(new Uint8Array(0), payload));
+    const back = await c.hs.receive.decryptWithAd(new Uint8Array(0), await c.next());
+    out.push({ name: `live echo of ${label} through the encrypted channel`, ok: hex(back) === hex(payload) });
+  }
+  c.ws.close();
+
+  const t = await connect(pin);
+  const frame = await t.hs.send.encryptWithAd(new Uint8Array(0), enc.encode('tampered'));
+  frame[0] ^= 1;
+  const closed = new Promise((ok) => { t.ws.onclose = (e) => ok(e.code); });
+  t.ws.send(frame);
+  const code = await Promise.race([closed, new Promise((ok) => setTimeout(() => ok('timeout'), 5000))]);
+  out.push({ name: 'the server refuses a tampered frame and closes (4001)', ok: code === 4001, detail: `close ${code}` });
+
+  const wrong = pin.slice(0, -2) + (pin.endsWith('00') ? '01' : '00');
+  let refused = false;
+  try { await connect(wrong); } catch (e) { refused = /pinned key mismatch/.test(e.message); }
+  out.push({ name: 'a server whose key does not match the pin is refused', ok: refused });
+  return out;
+}
+
+const results = [];
+try {
+  const v = await (await fetch('./vectors.json')).json();
+  results.push(...await vectorChecks(v), ...await negativeChecks(v), ...await randomChecks(), ...await indexedDbCheck());
+  if (new URLSearchParams(location.search).has('live')) { results.push(...await liveChecks()); }
+} catch (e) {
+  results.push({ name: 'the self-test ran to completion', ok: false, detail: String(e && e.stack || e) });
+}
+for (const r of results) {
+  const li = document.createElement('li');
+  li.innerHTML = `<span class="${r.ok ? 'pass' : 'fail'}">${r.ok ? 'PASS' : 'FAIL'}</span> ${r.name}${r.detail ? ` <small>(${r.detail})</small>` : ''}`;
+  list.appendChild(li);
+}
+const failed = results.filter((r) => !r.ok).length;
+const s = document.getElementById('summary');
+s.textContent = failed ? `${failed} of ${results.length} FAILED` : `All ${results.length} checks passed`;
+s.className = failed ? 'fail' : 'pass';
+window.__S2_RESULT = { userAgent: navigator.userAgent, passed: results.length - failed, failed, results };
+</script>
+</body>
+</html>

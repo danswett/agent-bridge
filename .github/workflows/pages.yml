@@ -1,0 +1,43 @@
+name: Pages
+
+# Publishes the spikes' browser self-tests, so they can be run on real devices (an
+# iPhone's Safari in particular) without any server: https://danswett.github.io/agent-bridge/
+on:
+  push:
+    branches: [main]
+    paths: ['spikes/**/web/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble site
+        run: |
+          mkdir -p _site/s2
+          cp spikes/s2-noise-interop/web/* _site/s2/
+          cat > _site/index.html <<'EOF'
+          <!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>agent-bridge spikes</title>
+          <h1>agent-bridge spike self-tests</h1>
+          <ul><li><a href="s2/">S2: end-to-end encryption interop (Noise_XX_P256_AESGCM_SHA256)</a></li></ul>
+          EOF
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

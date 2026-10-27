@@ -34,3 +34,4 @@ Home Assistant.
 | Spike | Question | Result |
 |---|---|---|
 | [S1](spikes/s1-console-injection/RESULTS.md) | Can a console-less .NET process type into agent sessions? | GO, through an injector worker process |
+| [S2](spikes/s2-noise-interop/RESULTS.md) | Can .NET and browser WebCrypto share one end-to-end encrypted channel? | GO: byte-identical in Node, Chromium and WebKit. [Run it on your phone](https://danswett.github.io/agent-bridge/s2/) |

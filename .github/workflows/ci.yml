@@ -35,3 +35,28 @@ jobs:
             if ($errors) { $errors | ForEach-Object { Write-Error "$($f.Name): $_" }; $bad++ }
           }
           exit $bad
+
+  s2-noise-interop:
+    # The .NET and WebCrypto implementations must keep agreeing byte for byte, in
+    # Node, Chromium and WebKit (Safari's engine), and live over a WebSocket.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: spikes/s2-noise-interop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: dotnet build dotnet/S2.Noise.csproj -c Release --nologo
+      - name: Fresh vectors from .NET, replayed in Node
+        run: |
+          dotnet dotnet/bin/Release/net10.0/s2-noise.dll vectors "$RUNNER_TEMP/vectors.json"
+          cp "$RUNNER_TEMP/vectors.json" web/vectors.json
+          node js/test-node.mjs
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      - run: node js/test-browsers.mjs
