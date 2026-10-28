@@ -1,0 +1,11 @@
+{
+  "name": "agent-bridge-spike-s4",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:pwa": "node js/test-pwa.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

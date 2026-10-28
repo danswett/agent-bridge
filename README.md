@@ -36,3 +36,4 @@ Home Assistant.
 | [S1](spikes/s1-console-injection/RESULTS.md) | Can a console-less .NET process type into agent sessions? | GO, through an injector worker process |
 | [S2](spikes/s2-noise-interop/RESULTS.md) | Can .NET and browser WebCrypto share one end-to-end encrypted channel? | GO: byte-identical in Node, Chromium and WebKit. [Run it on your phone](https://danswett.github.io/agent-bridge/s2/) |
 | [S3](spikes/s3-winui-velopack/RESULTS.md) | Can an unpackaged WinUI 3 app install, update and uninstall itself with Velopack, and take answers from toasts? | GO, with OS toast activation instead of Windows App SDK's, and `EnableMsixTooling` for publish |
+| [S4](spikes/s4-relay/RESULTS.md) | Can one untrusted relay serve every user, with GitHub sign-in and end-to-end channels from hosts and a PWA? | GO, live on Azure Container Apps. Needs a cross-replica backplane to deploy without splitting. [PWA](https://danswett.github.io/agent-bridge/s4/) |

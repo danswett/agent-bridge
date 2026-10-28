@@ -8,6 +8,11 @@ on:
     paths: ['spikes/**/web/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 
+env:
+  # The S4 PWA's relay. The page is served from here, not by the relay, so a relay operator
+  # cannot change the code that holds the keys.
+  S4_RELAY: https://agent-bridge-relay.agreeablepebble-329880d4.westus2.azurecontainerapps.io
+
 permissions:
   contents: read
   pages: write
@@ -27,13 +32,25 @@ jobs:
       - uses: actions/checkout@v4
       - name: Assemble site
         run: |
-          mkdir -p _site/s2
+          mkdir -p _site/s2 _site/s4
           cp spikes/s2-noise-interop/web/* _site/s2/
+          cp spikes/s4-relay/web/* _site/s4/
+          cp spikes/s2-noise-interop/web/noise-p256.js _site/s4/
+          printf "export const RELAY = '%s';\n" "$S4_RELAY" > _site/s4/config.js
+          # Pages cannot send headers, so the policy goes in the page: script only from
+          # this site, and network only to the one relay.
+          relay_ws="wss://${S4_RELAY#https://}"
+          csp="default-src 'self'; script-src 'self'; connect-src 'self' $S4_RELAY $relay_ws; img-src 'self' data:; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+          sed -i "s|<meta charset=\"utf-8\">|<meta charset=\"utf-8\">\n  <meta http-equiv=\"Content-Security-Policy\" content=\"$csp\">|" _site/s4/index.html
+          grep -q 'Content-Security-Policy' _site/s4/index.html
           cat > _site/index.html <<'EOF'
           <!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
           <title>agent-bridge spikes</title>
           <h1>agent-bridge spike self-tests</h1>
-          <ul><li><a href="s2/">S2: end-to-end encryption interop (Noise_XX_P256_AESGCM_SHA256)</a></li></ul>
+          <ul>
+          <li><a href="s2/">S2: end-to-end encryption interop (Noise_XX_P256_AESGCM_SHA256)</a></li>
+          <li><a href="s4/">S4: the PWA, through the relay to your hosts (test data only)</a></li>
+          </ul>
           EOF
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
