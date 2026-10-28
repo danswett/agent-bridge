@@ -115,9 +115,16 @@ export class FleetStatus {
     try {
       channel = await this.connection.openChannel(id, { timeoutMs: 10000 });
       client = this.makeClient(channel);
+      // Each answer is dropped if the machine has been chosen for viewing meanwhile: its own
+      // channel then has newer figures, and the book keeps one report per machine.
+      const viewed = () => id === this.hosts.targetId;
       const hello = await client.hello();
+      if (viewed()) { return; }
       this.#note(id, hello.machine);
-      if (hello.capabilities.includes(USAGE.capability)) { this.book.set(id, await client.usage()); }
+      if (hello.capabilities.includes(USAGE.capability)) {
+        const report = await client.usage();
+        if (!viewed()) { this.book.set(id, report); }
+      }
     } catch {
       // Not retried before the minute is up, whatever went wrong.
       const old = this.#machines.get(id);

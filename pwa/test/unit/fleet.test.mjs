@@ -153,3 +153,21 @@ test('a machine left alone is looked at again every minute while the app is in f
   assert.deepEqual(connection.opened, ['a', 'a', 'a']);
   fleet.clear();
 });
+test("a look still under way when its machine is chosen does not overwrite what the machine's own channel says", async () => {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const { connection, hosts, book, fleet } = fleetWith({ a: { machine: { hostVersion: '0.1.0' }, capabilities: ['usage'], usage: usage(40) } });
+  const makeClient = fakeClient(connection);
+  fleet.makeClient = (ch) => ({ ...makeClient(ch), async usage() { await held; return usage(40); } });
+  fleet.probe();
+  await flush();
+
+  const client = { synced: true, on: () => {}, subscribeUsage: async () => usage(55) };
+  Object.assign(hosts, { targetId: 'a', phase: 'open', client, machine: { hostVersion: '0.1.0' }, capabilities: ['sessions.read', 'usage'] });
+  hosts.change();
+  await flush();
+  release();
+  await fleet.idle();
+
+  assert.equal(book.entries()[0].windows[0].percent, 55);
+});
