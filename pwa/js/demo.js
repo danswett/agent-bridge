@@ -22,6 +22,7 @@
 import { checkAnswer } from './answers.js';
 import { checkReply, typedForm } from './replies.js';
 import { readQuestion } from './protocol.js';
+import { USAGE } from './usage.js';
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const now = () => new Date().toISOString();
@@ -74,12 +75,13 @@ export class DemoHost {
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
   // replying: false, one that can't reply; attaching: false, one that takes no files;
   // stopping: false, one that can't end sessions. stopWindowMs is how long a first press of
-  // a busy session waits for its second.
-  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, stopping = answering, stopWindowMs = 10000 } = {}) {
-    this.machine = { id: 'demo', name: machineName, os: 'windows', hostVersion: 'demo' };
+  // a busy session waits for its second. usage: false plays a host from before usage.get.
+  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, stopping = answering, stopWindowMs = 10000, usage = true } = {}) {
+    this.machine = { id: 'demo', name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true };
+    this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(stopping ? ['sessions.stop'] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : [])];
     this.sessions = new Map();
     for (const s of fixture.sessions ?? []) { this.sessions.set(s.id, s); }
     this.revision = fixture.revision ?? 1;
@@ -96,7 +98,14 @@ export class DemoHost {
     const reply = (result) => t.deliver({ re: id, ok: true, result });
     switch (op) {
       case 'hello':
-        return reply({ protocol: 1, machine: this.machine, capabilities: this.capabilities });
+        return reply({ protocol: 1, machine: { ...this.machine, sessions: this.sessions.size }, capabilities: this.capabilities });
+      case USAGE.get:
+        if (!this.capabilities.includes(USAGE.capability)) { break; }
+        return reply(this.usage);
+      case USAGE.subscribe:
+        if (!this.capabilities.includes(USAGE.capability)) { break; }
+        t.usageSubscribed = true;
+        return reply(this.usage);
       case 'sessions.list':
         return reply({ sessions: [...this.sessions.values()].map(withoutHistory), revision: this.revision });
       case 'session.get': {
@@ -297,6 +306,12 @@ export class DemoHost {
 
   #event(t, ev, data) { t.deliver({ ev, seq: ++this.seq, data }); }
 
+  // A new usage report, sent to every channel subscribed to usage as a host would.
+  setUsage(report) {
+    this.usage = report;
+    for (const t of this.transports) { if (t.usageSubscribed) { this.#event(t, USAGE.update, report); } }
+  }
+
   #broadcast(ev, data) {
     for (const t of this.transports) { if (t.subscribed) { this.#event(t, ev, data); } }
   }
@@ -433,3 +448,36 @@ const DEMO_QUESTIONS = [
     fields: [],
   },
 ];
+
+// Usage as a host reports it, around the time the demo is opened, so pace and resets read
+// sensibly on any day: a month of Copilot credits, Claude's session and week, and Codex's
+// two windows as its last transcript saw them a couple of hours ago.
+export function demoUsage(now = Date.now()) {
+  const at = (ms) => new Date(now + ms).toISOString();
+  const d = new Date(now);
+  const month = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
+  const next = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)).toISOString();
+  const H = 3600000;
+  return {
+    agents: [
+      {
+        agent: 'copilot', label: 'GitHub Copilot', account: 'danswett', plan: 'enterprise', source: 'api', measuredAt: at(-60000),
+        windows: [{ key: 'plan', label: 'Plan', percent: 78.9, used: 1183313, limit: 1500000, unit: 'AIC', startsAt: month, resetsAt: next }],
+      },
+      {
+        agent: 'claude', label: 'Claude Code', accountKey: '3f9a2c71b0de', plan: 'max', source: 'api', measuredAt: at(-4 * 60000),
+        windows: [
+          { key: 'session', label: 'Session (5h)', percent: 12, resetsAt: at(3 * H) },
+          { key: 'weekly_all', label: 'Weekly', percent: 41.3, startsAt: at(-2 * 24 * H), resetsAt: at(5 * 24 * H) },
+        ],
+      },
+      {
+        agent: 'codex', label: 'Codex', plan: 'plus', source: 'transcript', measuredAt: at(-2 * H),
+        windows: [
+          { key: 'primary', label: '5h limit', percent: 23.5, resetsAt: at(2 * H) },
+          { key: 'secondary', label: 'Weekly', percent: 61, resetsAt: at(3 * 24 * H) },
+        ],
+      },
+    ],
+  };
+}

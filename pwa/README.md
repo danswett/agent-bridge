@@ -10,9 +10,10 @@ Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/ap
 
 It shows sessions, their activity and their pending questions, answers those questions
 (`session.answer`), replies to sessions (`session.reply`) with files and images
-(`attachment.*`), ends them (`session.stop`), and notifies the phone when a session asks or
-finishes, even with the app closed (Web Push), per
-[docs/protocol/v1-sessions.md](../docs/protocol/v1-sessions.md). Larger files and launching
+(`attachment.*`), ends them (`session.stop`), notifies the phone when a session asks or
+finishes, even with the app closed (Web Push), and shows each agent's usage and each
+machine's status, per [docs/protocol/v1-sessions.md](../docs/protocol/v1-sessions.md) and
+[v1-usage.md](../docs/protocol/v1-usage.md). Larger files and launching
 come next.
 
 | Light | Dark | Answering | A permission request |
@@ -41,10 +42,12 @@ come next.
 | `js/attachments.js` | A file or image for a reply: named, size-checked (a large image is redrawn smaller), hashed, and sent in chunks from where the machine has got to |
 | `js/stop-service.js` | Ending sessions: `answer-service.js` with `session.stop`, one press on its way per session, the second press carrying the first's token |
 | `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
+| `js/usage.js` | Agent usage: the tolerant reader, merging every machine's reports into one row per allowance (a reading beats a failure, then the freshest wins), and the card's words: colours at 75% and 90%, pace, resets, ages |
+| `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`) and usage: the viewed machine's on its channel (`usage.subscribe`), every other online machine's by a short channel (`hello`, `usage.get`) at most once a minute while the app is in front |
 | `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
-| `js/ui/*` | Session cards, the question and its answer form, the reply box, End session, machines list, fold state, relative times |
-| `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering, replying and ending sessions included |
+| `js/ui/*` | Session cards, the question and its answer form, the reply box, End session, machines list, the usage panel, fold state, relative times |
+| `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering, replying, ending sessions and usage included |
 | `tools/build-site.mjs` | Assembles the site for Pages: `config.js` with the relay, CSP in the page, and `sw.js` stamped with a hash of everything served, so any change reaches an open app as an update (the app then offers Reload) |
 
 ### Connecting a host
@@ -220,6 +223,16 @@ keeping its connection. The app also closes notifications itself: those for a qu
 answered, and question notifications for questions its machine no longer asks. iOS shows
 no action buttons on web notifications, so none are sent; a question is answered in the
 app.
+
+### Usage and machines
+
+The **Agent usage** panel is agent-ha-bridge's usage card: one row per allowance, merged
+across every machine, fullest first, each window a bar with an even-pace mark, its amounts,
+when it resets and how old the reading is. Folded, it is one line of figures in their own
+colours; whether it is folded is remembered. It shows once any machine offers `usage`.
+Each machine in the list says how many sessions it has, its version, and `(dev)` for a
+build from a working copy. Demo mode has usage too (`window.agentBridgeDemo.usage(report)`
+sends a new one; `?usage=0` plays a host without it).
 
 ### Markdown
 

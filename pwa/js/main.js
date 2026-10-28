@@ -12,6 +12,7 @@
 //   attachments.js   preparing files and images for a reply, and sending them first
 //   stop-service.js  ending sessions (session.stop), likewise, two presses when not idle
 //   push.js          notifications: turning them on and off, registering with each machine
+//   usage.js, fleet.js  agent usage merged across machines, and each machine's status line
 //   sessions-store.js, ui/*  what is shown
 //   demo.js          ?demo=1: a simulated host, no relay
 import { RELAY } from '../config.js';
@@ -27,6 +28,9 @@ import { StopService } from './stop-service.js';
 import { PushRegistrar, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities } from './protocol.js';
 import { SessionListView, renderMachines } from './ui/views.js';
+import { UsageBook, USAGE, machineStatus } from './usage.js';
+import { FleetStatus } from './fleet.js';
+import { UsageView } from './ui/usage-view.js';
 import { DemoHost, runScript } from './demo.js';
 
 const $ = (id) => document.getElementById(id);
@@ -34,6 +38,9 @@ const params = new URLSearchParams(location.search);
 const BASE = RELAY || location.origin;
 
 const store = new SessionsStore();
+// Every machine's latest usage report, drawn as one row per allowance.
+const book = new UsageBook();
+new UsageView($('usage'), book);
 let currentClient = null;
 let machineName = '';
 // Who answers questions, sends replies and ends sessions now: { service, replies, stops,
@@ -146,6 +153,7 @@ async function startDemo() {
     attaching: params.get('attach') !== '0',
     stopping: params.get('stop') !== '0' && params.get('answer') !== '0',
     stopWindowMs: Number(params.get('stopWindow')) || 10000,
+    usage: params.get('usage') !== '0',
   });
   // ?attachDelay= slows each file chunk, so its progress can be watched.
   host.attachmentDelayMs = Number(params.get('attachDelay')) || 0;
@@ -161,18 +169,27 @@ async function startDemo() {
   const stops = new StopService({ current, retryMs });
   answering = () => ({ service: answers, replies, stops, hostId: hello.machine.id, capabilities: hello.capabilities });
   $('machines').hidden = false;
-  renderMachines($('machine-list'), {
+  const drawMachine = () => renderMachines($('machine-list'), {
     presence: [{ id: hello.machine.id, name: hello.machine.name, kind: 'host' }],
     me: null,
     current: hello.machine.id,
     onSelect: () => {},
+    status: () => machineStatus({ ...hello.machine, sessions: client.synced ? store.size : hello.machine.sessions }),
   });
+  drawMachine();
+  store.onChange(drawMachine);
   showSessionsFor(hello.machine.name);
   setHostState('');
   await client.subscribe();
+  if (hello.capabilities.includes(USAGE.capability)) {
+    client.on('usage', (r) => book.set(hello.machine.id, r));
+    book.set(hello.machine.id, await client.subscribeUsage());
+  }
   const script = params.get('static') === '1' ? null : runScript(host, { tickMs: Number(params.get('tick')) || 4000 });
   window.agentBridgeDemo = {
-    host, client, store, view, answers, replies, stops,
+    host, client, store, view, answers, replies, stops, book,
+    // A new usage report from the host, sent as usage.update.
+    usage: (report) => host.setUsage(report),
     // The next answers' outcomes, in order: 'delivered' (the default once these run out),
     // 'unconfirmed', 'stale', 'busy', 'refused', an unknown one, or { outcome, reason,
     // drop: true } to lose the response the first time, as a dropped channel would.
@@ -326,13 +343,16 @@ function begin(account) {
   });
 
   const nameOf = (id) => connection.presence.find((d) => d.id === id)?.name;
+  const fleet = new FleetStatus({ connection, hosts, store, book, me: identity.deviceId });
   const drawMachines = () => {
     const n = renderMachines($('machine-list'), {
       presence: connection.presence, me: identity.deviceId, current: hosts.targetId,
       onSelect: (id) => { hosts.select(id); $('sessions').focus(); },
+      status: (id) => fleet.status(id),
     });
     $('machines-empty').hidden = n !== 0 || !connection.ready;
   };
+  fleet.onChange(drawMachines);
 
   connection.on('presence', drawMachines);
   connection.on('log', (line) => console.log(line));
@@ -351,6 +371,7 @@ function begin(account) {
     // The account's sessions and remembered machine go with it; a reconnect within the
     // same sign-in keeps them, but a new sign-in may be a different account.
     hosts.forget();
+    fleet.clear();
     answers.clear();
     replies.clear();
     stops.clear();
@@ -386,6 +407,7 @@ function begin(account) {
 
   $('signout').onclick = async () => {
     hosts.forget();
+    fleet.clear();
     answers.clear();
     replies.clear();
     stops.clear();
@@ -398,7 +420,7 @@ function begin(account) {
 
   // For the E2E tests and debugging from the console. Holds no secrets beyond what the
   // page already has.
-  window.agentBridge = { connection, hosts, store, answers, replies, stops, notices };
+  window.agentBridge = { connection, hosts, store, answers, replies, stops, notices, fleet, book };
   drawNotify();
   connection.start();
 }

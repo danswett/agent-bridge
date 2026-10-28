@@ -63,10 +63,12 @@ export class SessionListView {
   card(id) { return this.#cards.get(id) ?? null; }
 }
 
-export function renderMachines(list, { presence, me, current, onSelect }) {
+// status(id) -> "3 sessions · 0.1.0 (dev)", or '' while nothing is known (fleet.js).
+export function renderMachines(list, { presence, me, current, onSelect, status = () => '' }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   list.replaceChildren(...hosts.map((d) => {
     const selected = d.id === current;
+    const said = status(d.id);
     return h('li', { class: 'machine', dataset: { deviceId: d.id, deviceName: d.name } },
       h('button', {
         type: 'button', class: `machine-button${selected ? ' selected' : ''}`,
@@ -75,7 +77,9 @@ export function renderMachines(list, { presence, me, current, onSelect }) {
       },
       icon('machine'),
       h('span', { class: 'machine-name' }, d.name),
-      h('span', { class: 'machine-id' }, d.id.slice(0, 8)),
+      h('span', { class: 'machine-sub' },
+        h('span', { class: 'machine-id' }, d.id.slice(0, 8)),
+        said ? h('span', { class: 'machine-status' }, ` \u00b7 ${said}`) : null),
       h('span', { class: 'machine-state' }, selected ? 'Viewing' : 'Online')));
   }));
   return hosts.length;

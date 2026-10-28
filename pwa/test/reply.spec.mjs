@@ -214,5 +214,7 @@ test('a machine that does not take replies shows no reply box', async ({ page })
   await expect(card(page, IDLE)).toBeVisible();
   await expect(page.locator('form.reply')).toHaveCount(0);
   // It still takes answers, and ends sessions.
-  expect(await page.evaluate(() => window.agentBridgeDemo.host.capabilities)).toEqual(['sessions.read', 'sessions.answer', 'sessions.stop']);
+  const capabilities = await page.evaluate(() => window.agentBridgeDemo.host.capabilities);
+  expect(capabilities).toEqual(expect.arrayContaining(['sessions.answer', 'sessions.stop']));
+  expect(capabilities).not.toContain('sessions.reply');
 });

@@ -342,3 +342,35 @@ test.describe('notifications', () => {
     await expect(card(page, 'linked-2').locator('.question-slot button').first()).toBeFocused();
   });
 });
+
+test('every machine shows its sessions and version, and its agents\' usage, merged, whether or not it is the one being viewed', async ({ page }) => {
+  const at = (ms) => new Date(Date.now() + ms).toISOString();
+  const copilot = (percent) => ({ agents: [{ agent: 'copilot', label: 'GitHub Copilot', account: 'octo', plan: 'enterprise', source: 'api', measuredAt: at(0), windows: [{ key: 'plan', label: 'Plan', percent, startsAt: at(-10 * 86400000), resetsAt: at(20 * 86400000) }] }] });
+  const t = at(0);
+  const usageHost = await startFixtureHost({
+    base: relayUrl, name: 'usage-host', usage: copilot(40),
+    sessions: [{ id: 'u-1', agent: 'copilot', title: 'One', status: 'idle', statusSince: t, updatedAt: t, activity: {} }, { id: 'u-2', agent: 'claude', title: 'Two', status: 'idle', statusSince: t, updatedAt: t, activity: {} }],
+  });
+  try {
+    await signIn(page);
+    // Not viewed: a short channel tells the list what it is and the panel what it has spent.
+    const row = page.locator('[data-device-name="usage-host"]');
+    await expect(row.locator('.machine-status')).toHaveText(' · 2 sessions · 0.0.0-fixture (dev)', { timeout: 30000 });
+    await expect(page.locator('#usage .usage-summary')).toHaveText('GitHub Copilot 40%');
+    await expect(page.locator('#usage .usage-account')).toHaveText('octo · enterprise');
+    // A machine that offers no usage says only its version.
+    await expect(page.locator('[data-device-name="fixture-host"] .machine-status')).toHaveText(' · 0.0.0-fixture');
+    expect(usageHost.log.filter((op) => op === 'usage.get').length).toBe(1);
+
+    // Viewed: the usage comes on its own channel, as it changes.
+    await row.locator('button').click();
+    await expect(page.locator('.session')).toHaveCount(2, { timeout: 30000 });
+    await expect.poll(() => usageHost.log.filter((op) => op === 'usage.subscribe').length, { timeout: 15000 }).toBe(1);
+    await usageHost.setUsage(copilot(91));
+    await expect(page.locator('#usage .usage-summary')).toHaveText('GitHub Copilot 91%');
+    await expect(page.locator('#usage .usage-figure')).toHaveClass(/crit/);
+    await expect(page.locator('#usage .usage-verdict')).toHaveText('58% ahead of pace');
+  } finally {
+    usageHost.close();
+  }
+});

@@ -200,3 +200,35 @@ test('getSession returns null for a session that has ended', async () => {
   t.host({ re: 1, ok: true, result: { missing: true } });
   assert.equal(await p, null);
 });
+
+test('usage.subscribe returns the report and each usage.update is heard as usage', async () => {
+  const t = fakeTransport();
+  const client = await subscribed(t, new SessionsStore());
+  const heard = [];
+  client.on('usage', (r) => heard.push(r));
+  const p = client.subscribeUsage();
+  await flush();
+  t.host({ re: t.lastRequest('usage.subscribe').id, ok: true, result: { agents: [{ agent: 'codex', label: 'Codex', source: 'transcript', measuredAt: '2026-10-28T04:00:00.000Z', windows: [{ key: 'primary', label: '5h limit', percent: 3 }] }] } });
+  assert.equal((await p).agents[0].windows[0].percent, 3);
+  t.host({ ev: 'usage.update', seq: 1, data: { agents: [{ agent: 'codex', label: 'Codex', source: 'transcript', measuredAt: '2026-10-28T04:10:00.000Z', windows: [{ key: 'primary', label: '5h limit', percent: 4 }] }] } });
+  assert.equal(heard.length, 1);
+  assert.equal(heard[0].agents[0].windows[0].percent, 4);
+});
+
+test('a gap subscribes to usage again too, so a lost update is replaced by the current report', async () => {
+  const t = fakeTransport();
+  const client = await subscribed(t, new SessionsStore());
+  const heard = [];
+  client.on('usage', (r) => heard.push(r));
+  const p = client.subscribeUsage();
+  await flush();
+  t.host({ re: t.lastRequest('usage.subscribe').id, ok: true, result: { agents: [] } });
+  await p;
+  t.host({ ev: 'usage.update', seq: 1, data: { agents: [] } });
+  t.host({ ev: 'usage.update', seq: 3, data: { agents: [] } });
+  await flush();
+  assert.equal(t.sent.filter((m) => m.op === 'usage.subscribe').length, 2);
+  t.host({ re: t.lastRequest('usage.subscribe').id, ok: true, result: { agents: [{ agent: 'claude', label: 'Claude Code', source: 'api', measuredAt: '2026-10-28T04:00:00.000Z', windows: [{ key: 'session', label: 'Session (5h)', percent: 9 }] }] } });
+  await flush();
+  assert.equal(heard.at(-1).agents[0].agent, 'claude');
+});
