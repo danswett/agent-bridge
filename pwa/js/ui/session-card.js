@@ -3,12 +3,13 @@
 // amber while it waits on you, calm when idle, and a still, dashed blue edge while it is
 // idle but delegating: its own turn is over and work it started in the background is not),
 // with a header that stays visible when the card is folded, and the response, reasoning,
-// history and question below it.
+// history and question below it, and a box to reply to the session.
 import { h, icon } from './dom.js';
 import { ago, duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
 import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
 import { answerability } from '../answers.js';
+import { ReplyBox } from './reply-view.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 const STATUS_TEXT = { working: 'Working', waiting: 'Waiting on you', idle: 'Idle' };
@@ -35,10 +36,15 @@ export class SessionCard {
   #panel = null;
   #receipt = null;
   #orphan = null;
+  #reply = null;
+  // The host the reply box is for, and what it held when it last went away (the machine
+  // stopped taking replies for a moment, say), so it comes back with the words in it.
+  #replyHost = null;
+  #replyDraft = { hostId: null, text: '' };
 
   // fetchDetail(id) -> Promise<Session|null>, for the tool history (session.get).
-  // answering() -> { service, hostId, capabilities } | null: who answers questions, and
-  // whether the connected machine takes answers at all.
+  // answering() -> { service, replies, hostId, capabilities } | null: who answers questions
+  // and sends replies, and whether the connected machine takes either at all.
   constructor(session, { folds, fetchDetail, machineName, answering = () => null }) {
     Object.assign(this, { folds, fetchDetail, machineName, answering });
     const n = ++seq;
@@ -79,8 +85,9 @@ export class SessionCard {
     e.history = h('details', { class: 'history' }, h('summary', null, 'Tool history'), e.historyBody);
     e.history.addEventListener('toggle', () => { if (e.history.open) { this.#loadHistory(); } });
     e.facts = h('p', { class: 'facts' });
+    e.reply = h('div', { class: 'reply-slot' });
     e.body = h('div', { class: 'body', id: this.ids.body },
-      e.question, e.truncated, e.response, e.reasoning, e.user, e.history, e.facts);
+      e.question, e.truncated, e.response, e.reasoning, e.user, e.reply, e.history, e.facts);
 
     e.frame = h('div', { class: 'frame' },
       h('header', { class: 'head' }, h('h3', { class: 'title' }, e.fold), e.meta, e.statusLine, e.tool),
@@ -139,6 +146,7 @@ export class SessionCard {
     }
 
     this.#renderQuestion(s);
+    this.#renderReply(s);
     if (this.#changed('response', s.activity.response ?? '')) {
       e.response.replaceChildren(renderMarkdown(s.activity.response ?? ''));
     }
@@ -173,12 +181,38 @@ export class SessionCard {
   dispose() {
     this.#panel?.destroy();
     this.#panel = null;
+    this.#reply?.destroy();
+    this.#reply = null;
     this.#dropReceipt();
     clearTimeout(this.#history.timer);
   }
 
   // The machine's capabilities changed (a reconnect to another version of its host).
-  refreshQuestion() { if (this.#s) { this.#renderQuestion(this.#s); } }
+  refreshQuestion() {
+    if (!this.#s) { return; }
+    this.#renderQuestion(this.#s);
+    this.#renderReply(this.#s);
+  }
+
+  // The reply box, while the connected machine takes replies.
+  #renderReply(s) {
+    const ctx = this.answering();
+    const hostId = ctx?.replies && ctx.capabilities?.includes('sessions.reply') ? ctx.hostId : null;
+    if (this.#replyHost !== hostId || (hostId && !this.#reply)) {
+      if (this.#reply) {
+        this.#replyDraft = { hostId: this.#replyHost, text: this.#reply.text };
+        this.#reply.destroy();
+        this.#reply = null;
+      }
+      if (hostId) {
+        this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id } });
+        if (this.#replyDraft.hostId === hostId) { this.#reply.els.input.value = this.#replyDraft.text; }
+      }
+      this.#replyHost = hostId;
+      this.els.reply.replaceChildren(...(this.#reply ? [this.#reply.element] : []));
+    }
+    this.#reply?.update(s);
+  }
 
   #renderQuestion(s) {
     const q = s.question;

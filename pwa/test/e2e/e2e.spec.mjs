@@ -6,7 +6,9 @@
 // session.get, reconnecting after the socket drops (with a session that ended meanwhile
 // dropped by the new snapshot), returning to the last host, ?host= links, a host that
 // predates the protocol, and answering a question: delivered, resent with the same request
-// after the socket drops mid-answer (typed once), and the host's own checks.
+// after the socket drops mid-answer (typed once), and the host's own checks; and replying:
+// delivered as one line, resent after the socket drops mid-reply (typed once), refused while
+// the session asks a question.
 //
 // Needs: dotnet build spikes/s4-relay/src/S4.DevStack -c Release
 import { test, expect } from '@playwright/test';
@@ -34,7 +36,8 @@ const stackOut = [];
 
 test.beforeAll(async ({}, info) => {
   test.setTimeout(120000);
-  const relayPort = 8800 + info.parallelIndex * 2;
+  // PWA_E2E_PORT moves these, for a machine running another checkout's tests at once.
+  const relayPort = (Number(process.env.PWA_E2E_PORT) || 8800) + info.parallelIndex * 2;
   const sitePort = relayPort + 1;
   const relay = `http://127.0.0.1:${relayPort}`;
   const dir = buildSite({ out: path.join(pwa, '.site', `e2e-${info.project.name}`), relay });
@@ -197,4 +200,47 @@ test('a phone answers a question through the relay, and an answer in flight when
   expect(await direct({ id: 'ask-3', question: 'q3', fields: { answer: 'zzz' } })).toEqual({ outcome: 'refused', reason: '"Pick": not one of the choices' });
   expect(typedFor('ask-3')).toHaveLength(0);
   await expect(card(page, 'ask-3').locator('.question')).toHaveCount(1);
+});
+
+test('a phone replies to a session through the relay, and a reply in flight when the socket drops is resent and typed once', async ({ page, context }) => {
+  const sockets = [];
+  await context.routeWebSocket(/\/v1\/ws$/, (ws) => { ws.connectToServer(); sockets.push(ws); });
+  const t = new Date().toISOString();
+  await host.upsert({ id: 'reply-1', agent: 'copilot', title: 'Takes replies', status: 'idle', statusSince: t, updatedAt: t, activity: { response: 'Done.' } });
+  const sentFor = (id) => host.replies.filter((r) => r.id === id);
+  const typedFor = (id) => host.typedReplies.filter((r) => r.id === id);
+
+  await signIn(page);
+  await page.click('[data-device-name="fixture-host"] button');
+  const reply = card(page, 'reply-1').locator('form.reply');
+  const input = reply.getByRole('textbox', { name: 'Reply' });
+  await expect(input).toBeEnabled({ timeout: 30000 });
+  await input.fill('Ship it.\nThen tag v0.2 – 🚀');
+  await reply.getByRole('button', { name: 'Send' }).click();
+  await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.', { timeout: 15000 });
+  await expect(input).toHaveValue('');
+  expect(sentFor('reply-1')).toEqual([{ id: 'reply-1', request: expect.stringMatching(UUID), text: 'Ship it.\nThen tag v0.2 – 🚀' }]);
+  expect(typedFor('reply-1').map((r) => r.said)).toEqual(['Ship it. Then tag v0.2 – 🚀']);
+  await expect(card(page, 'reply-1')).toHaveAttribute('data-status', 'working');
+
+  // The socket drops while the host is still delivering: resent with the same request, and
+  // the host returns the first outcome without typing it again.
+  host.scriptReplies({ outcome: 'delivered', holdMs: 4000 });
+  await input.fill('and the release notes');
+  await reply.getByRole('button', { name: 'Send' }).click();
+  await expect.poll(() => sentFor('reply-1').length, { timeout: 10000 }).toBe(2);
+  for (const ws of sockets.splice(0)) { await ws.close({ code: 4000, reason: 'test drop' }); }
+  await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.', { timeout: 30000 });
+  const sent = sentFor('reply-1');
+  expect(sent).toHaveLength(3);
+  expect(sent[2].request).toBe(sent[1].request);
+  expect(typedFor('reply-1')).toHaveLength(2);
+
+  // A question arrives: the box is held, and the host refuses a reply sent anyway.
+  const asked = new Date().toISOString();
+  await host.upsert({ id: 'reply-1', agent: 'copilot', title: 'Takes replies', status: 'waiting', statusSince: asked, updatedAt: asked, activity: {}, question: { id: 'rq1', kind: 'form', message: 'Which?', fields: [], askedAt: asked } });
+  await expect(input).toBeDisabled({ timeout: 15000 });
+  const direct = await page.evaluate(() => window.agentBridge.hosts.client.reply({ id: 'reply-1', request: crypto.randomUUID(), text: 'not now' }));
+  expect(direct).toEqual({ outcome: 'refused', reason: 'the session is waiting for an answer to its question; answer that first' });
+  expect(typedFor('reply-1')).toHaveLength(2);
 });

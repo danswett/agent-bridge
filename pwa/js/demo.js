@@ -6,13 +6,17 @@
 //
 // window.agentBridgeDemo (demo mode only) lets tests and curious people drive it:
 //   upsert(session), remove(id), frame(rawFrame), calls (ops received), pause(),
-//   script(...outcomes) for the next answers
+//   script(...outcomes) for the next answers, scriptReplies(...outcomes) for the next replies
 //
 // It answers questions as a host would: the same validation (answers.js mirrors the C#
 // Answers.Check), stale when the session is no longer asking, a request seen before gets
 // its first outcome again, and an answer that is typed takes the question away with an
-// upsert. Outcomes are delivered unless a test or curious person scripts others.
+// upsert. Replies likewise (replies.js mirrors Replies.Check): refused while the session
+// asks a question and for agents a host can't reply to yet (only Copilot), and a typed one
+// shows as the session's latest message, with the session at work on it. Outcomes are
+// delivered unless a test or curious person scripts others.
 import { checkAnswer } from './answers.js';
+import { checkReply, typedForm } from './replies.js';
 import { readQuestion } from './protocol.js';
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -46,12 +50,19 @@ export class DemoHost {
   typed = [];
   #script = [];
   onTyped = null;
+  // session.reply, the same way: outcomes by request, every request, what was typed.
+  replies = new Map();
+  replyLog = [];
+  typedReplies = [];
+  #replyScript = [];
+  onReplied = null;
 
-  // answering: false plays a host that can't answer (agent-ha-bridge still running, say).
-  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true } = {}) {
+  // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
+  // replying: false, one that can't reply.
+  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering } = {}) {
     this.machine = { id: 'demo', name: machineName, os: 'windows', hostVersion: 'demo' };
     this.answerDelayMs = answerDelayMs;
-    this.capabilities = answering ? ['sessions.read', 'sessions.answer'] : ['sessions.read'];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : [])];
     this.sessions = new Map();
     for (const s of fixture.sessions ?? []) { this.sessions.set(s.id, s); }
     this.revision = fixture.revision ?? 1;
@@ -84,12 +95,49 @@ export class DemoHost {
       }
       case 'session.answer':
         return this.#answer(data, reply);
+      case 'session.reply':
+        if (!this.capabilities.includes('sessions.reply')) { break; }
+        return this.#reply(data, reply);
       default:
         return t.deliver({ re: id, ok: false, error: `unknown op ${op}` });
     }
   }
 
   scriptAnswers(outcomes) { this.#script.push(...outcomes); }
+
+  scriptReplies(outcomes) { this.#replyScript.push(...outcomes); }
+
+  #reply(data, reply) {
+    this.replyLog.push(clone(data ?? null));
+    const request = typeof data?.request === 'string' ? data.request : '';
+    const known = this.replies.get(request);
+    if (known) { known.result.then(reply); return; }
+    const step = this.#replyScript.shift() ?? 'delivered';
+    const scripted = typeof step === 'string' ? { outcome: step } : step;
+    const result = new Promise((resolve) => setTimeout(() => resolve(this.#decideReply(data, scripted)), this.answerDelayMs));
+    this.replies.set(request, { result });
+    result.then((r) => { if (!scripted.drop) { reply(r); } });
+  }
+
+  #decideReply(data, scripted) {
+    const problem = checkReply(data);
+    if (problem) { return { outcome: 'refused', reason: problem }; }
+    const s = this.sessions.get(data?.id);
+    if (!s) { return { outcome: 'stale', reason: 'the session has ended' }; }
+    if (s.agent !== 'copilot') { return { outcome: 'refused', reason: `replying is not supported for ${s.agent} yet; reply at the machine` }; }
+    if (s.question) { return { outcome: 'refused', reason: 'the session is waiting for an answer to its question; answer that first' }; }
+    const { outcome } = scripted;
+    if (outcome === 'stale') { return { outcome, reason: scripted.reason ?? 'the session has ended' }; }
+    if (outcome === 'busy') { return { outcome, reason: scripted.reason ?? 'another answer or reply to this session is being delivered' }; }
+    if (outcome === 'refused') { return { outcome, reason: scripted.reason ?? 'the session is running elevated' }; }
+    // Typed: the session has a new message from you, and works on it.
+    const said = typedForm(data.text);
+    this.typedReplies.push({ id: s.id, request: data.request, said });
+    this.upsert({ ...s, status: 'working', statusSince: now(), updatedAt: now(), activity: { ...s.activity, userMessage: said } });
+    this.onReplied?.(s.id, said);
+    if (outcome === 'delivered') { return { outcome }; }
+    return { outcome, reason: scripted.reason ?? (outcome === 'unconfirmed' ? 'the session did not record the reply within 60 seconds' : 'from a newer host') };
+  }
 
   #answer(data, reply) {
     this.answerLog.push(clone(data ?? null));
@@ -113,7 +161,7 @@ export class DemoHost {
     if (problem) { return { outcome: 'refused', reason: problem }; }
     const { outcome } = scripted;
     if (outcome === 'stale') { return { outcome, reason: scripted.reason ?? 'answered at the machine' }; }
-    if (outcome === 'busy') { return { outcome, reason: scripted.reason ?? 'another answer to this session is being delivered' }; }
+    if (outcome === 'busy') { return { outcome, reason: scripted.reason ?? 'another answer or reply to this session is being delivered' }; }
     if (outcome === 'refused') { return { outcome, reason: scripted.reason ?? 'the session is running elevated' }; }
     // Typed: the question goes, and the session works on the answer.
     const said = data.text ?? Object.entries(data.fields ?? {}).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('; ');
@@ -218,6 +266,12 @@ export function runScript(host, { tickMs = 4000 } = {}) {
     const question = { ...DEMO_QUESTIONS[asked++ % DEMO_QUESTIONS.length], id: `toolu_demo_${Date.now()}`, askedAt: now() };
     host.upsert({ ...s, status: 'waiting', statusSince: now(), updatedAt: now(), question });
   }, tickMs * 1.5);
+  // A reply gets an answer a little later, and the session is idle again.
+  host.onReplied = (id, said) => setTimeout(() => {
+    const s = host.get(id);
+    if (!s || paused || s.question) { return; }
+    host.upsert({ ...s, status: 'idle', statusSince: now(), updatedAt: now(), activity: { ...s.activity, response: `On it: *${said.length > 80 ? `${said.slice(0, 79)}…` : said}* Done.`, currentTool: null } });
+  }, tickMs);
   let k = 0, timer = null, paused = false;
   const tick = () => {
     if (!paused) { steps[k++ % steps.length](); }

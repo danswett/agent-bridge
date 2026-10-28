@@ -4,7 +4,9 @@
 // session.answer as a host must: it checks the answer (with the app's mirror of the C#
 // Answers.Check), says stale when the session is no longer asking, returns a repeated
 // request's first outcome without "typing" again, even while the first is still being
-// delivered, and takes an answered question away with an upsert. It reuses
+// delivered, and takes an answered question away with an upsert; and session.reply the same
+// way (Replies.Check through the app's mirror, refused while the session asks a question,
+// only Copilot sessions, a repeat typed once). It reuses
 // the app's own relay and Noise code, so it proves the wire format against the real relay
 // and the real browser crypto, not against a copy of either.
 //
@@ -16,11 +18,12 @@ import { deviceIdOf } from '../../js/identity.js';
 import { startDeviceFlow } from '../../js/signin.js';
 import { concat, fromUtf8, utf8 } from '../../js/bytes.js';
 import { checkAnswer } from '../../js/answers.js';
+import { checkReply, typedForm } from '../../js/replies.js';
 import { readQuestion } from '../../js/protocol.js';
 
 const EMPTY = new Uint8Array(0);
 
-export async function startFixtureHost({ base, name = 'fixture-host', sessions = [], answering = true }) {
+export async function startFixtureHost({ base, name = 'fixture-host', sessions = [], answering = true, replying = answering }) {
   const key = await P256KeyPair.generate();
   const deviceId = await deviceIdOf(key.public);
   const account = await (await startDeviceFlow(base)).wait();
@@ -38,6 +41,11 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
   const outcomes = new Map();
   const typed = [];
   const script = [];
+  // session.reply, likewise.
+  const replies = [];
+  const replyOutcomes = new Map();
+  const typedReplies = [];
+  const replyScript = [];
 
   const send = (ch, kind, body) => relay.send(ch.peer, concat(new Uint8Array([kind]), ch.id, body));
   const sendJson = (ch, message) => {
@@ -53,7 +61,7 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
     const reply = (result) => sendJson(ch, { re: id, ok: true, result });
     switch (op) {
       case 'hello':
-        return reply({ protocol: 1, machine: { id: deviceId, name, os: 'linux', hostVersion: '0.0.0-fixture' }, capabilities: answering ? ['sessions.read', 'sessions.answer'] : ['sessions.read'] });
+        return reply({ protocol: 1, machine: { id: deviceId, name, os: 'linux', hostVersion: '0.0.0-fixture' }, capabilities: ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : [])] });
       case 'sessions.list':
         return reply({ sessions: [...state.values()].map(listed), revision });
       case 'session.get': {
@@ -70,6 +78,11 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
         answers.push(structuredClone(data));
         if (!outcomes.has(data?.request)) { outcomes.set(data?.request, answer(data)); }
         return reply(await outcomes.get(data?.request));
+      case 'session.reply':
+        if (!replying) { break; }
+        replies.push(structuredClone(data));
+        if (!replyOutcomes.has(data?.request)) { replyOutcomes.set(data?.request, replyTo(data)); }
+        return reply(await replyOutcomes.get(data?.request));
       default:
         break;
     }
@@ -89,6 +102,24 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
     if (['stale', 'busy', 'refused'].includes(outcome)) { return { outcome, reason: reason ?? outcome }; }
     typed.push({ id: s.id, question: q.id, request: data.request, fields: data.fields, text: data.text });
     await upsert({ ...s, status: 'working', statusSince: new Date().toISOString(), updatedAt: new Date().toISOString(), question: null });
+    return outcome === 'delivered' ? { outcome } : { outcome, reason: reason ?? 'not confirmed' };
+  }
+
+  async function replyTo(data) {
+    const step = replyScript.shift() ?? 'delivered';
+    const { outcome, reason, holdMs = 0 } = typeof step === 'string' ? { outcome: step } : step;
+    if (holdMs) { await new Promise((r) => setTimeout(r, holdMs)); }
+    const problem = checkReply(data);
+    if (problem) { return { outcome: 'refused', reason: problem }; }
+    const s = state.get(data?.id);
+    if (!s) { return { outcome: 'stale', reason: 'the session has ended' }; }
+    if (s.agent !== 'copilot') { return { outcome: 'refused', reason: `replying is not supported for ${s.agent} yet; reply at the machine` }; }
+    if (s.question) { return { outcome: 'refused', reason: 'the session is waiting for an answer to its question; answer that first' }; }
+    if (['stale', 'busy', 'refused'].includes(outcome)) { return { outcome, reason: reason ?? outcome }; }
+    const said = typedForm(data.text);
+    typedReplies.push({ id: s.id, request: data.request, said });
+    const t = new Date().toISOString();
+    await upsert({ ...s, status: 'working', statusSince: t, updatedAt: t, activity: { ...s.activity, userMessage: said } });
     return outcome === 'delivered' ? { outcome } : { outcome, reason: reason ?? 'not confirmed' };
   }
 
@@ -141,6 +172,10 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
     // The next answers' outcomes: 'delivered', 'unconfirmed', 'stale', 'busy', 'refused',
     // or { outcome, reason, holdMs }.
     scriptAnswers(...steps) { script.push(...steps); },
+    replies,
+    typedReplies,
+    // The next replies' outcomes, the same way.
+    scriptReplies(...steps) { replyScript.push(...steps); },
     get openChannels() { return subscribers().length; },
     upsert,
     remove(id) {

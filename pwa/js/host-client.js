@@ -24,6 +24,7 @@ export class HostClient {
   #next = 0;
   #timeoutMs;
   #answerTimeoutMs;
+  #replyTimeoutMs;
   #listeners = new Map();
   #lastSeq = null;
   // While a subscription's snapshot is arriving: the ids received since subscribing.
@@ -33,12 +34,15 @@ export class HostClient {
   synced = false;
 
   // Typing and confirming an answer can take a host a while, so session.answer gets longer
-  // than other requests before it counts as lost (and is resent with the same request).
-  constructor(transport, { store, timeoutMs = 15000, answerTimeoutMs = Math.max(timeoutMs, 30000) } = {}) {
+  // than other requests before it counts as lost (and is resent with the same request). A
+  // reply to a working session is confirmed only once the agent takes it, which a host
+  // waits up to a minute for, so session.reply gets longer still.
+  constructor(transport, { store, timeoutMs = 15000, answerTimeoutMs = Math.max(timeoutMs, 30000), replyTimeoutMs = Math.max(answerTimeoutMs, 90000) } = {}) {
     this.#transport = transport;
     this.store = store;
     this.#timeoutMs = timeoutMs;
     this.#answerTimeoutMs = answerTimeoutMs;
+    this.#replyTimeoutMs = replyTimeoutMs;
     transport.onmessage = (m) => this.#receive(m);
     transport.onclose = (e) => this.#closed(e);
   }
@@ -103,6 +107,12 @@ export class HostClient {
   // Resolves to { outcome, reason }; rejects only when no outcome arrived (HostError).
   async answer(data, { timeoutMs = this.#answerTimeoutMs } = {}) {
     return readAnswerResult(await this.request(Ops.sessionAnswer, data, { timeoutMs }));
+  }
+
+  // Sends a session a prompt: data is session.reply's { id, request, text }. Resolves to
+  // { outcome, reason }; rejects only when no outcome arrived (HostError).
+  async reply(data, { timeoutMs = this.#replyTimeoutMs } = {}) {
+    return readAnswerResult(await this.request(Ops.sessionReply, data, { timeoutMs }));
   }
 
   // Starts (or restarts) the subscription. The host answers {revision, count}, then sends
