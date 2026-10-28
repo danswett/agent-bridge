@@ -241,6 +241,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (probe.Active() is { } active) { return Refused(active); }
             if (source.Get(session.Id)?.Question?.Id != question.Id) { return Stale("the session is no longer asking that question"); }
             var call = ClaudeTranscript.Find(transcript, question.Id);
+            if (!call.Readable) { return Refused("the session's transcript could not be read, so nothing is typed; answer at the machine"); }
             if (call.Input is not { } input) { return Stale("the session's transcript no longer shows that question"); }
             if (call.Answer is not null || call.Interrupted) { return Stale("the question has already been answered"); }
             if (!call.IsMainAgent) { return Refused("the question was asked by a subagent; answer at the machine"); }
@@ -304,7 +305,7 @@ public sealed class AnswerService : ISessionAnswerer
             // answered or the turn is over.
             if (probe.Active() is not null) { return; }
             var state = ClaudeTranscript.Since(transcript, toolUseId, from);
-            if (state.Answer is not null || state.Interrupted) { return; }
+            if (!state.Readable || state.Answer is not null || state.Interrupted) { return; }
             if (!processes.GetAgentProcesses(AgentKind.Claude).Any(p => p.Id == pid) || guard.Refuse(pid) is not null) { return; }
             var enter = new KeyPlan([new KeySend("", true, 0, 0)]);
             var result = await TypeAsync(pid, enter);

@@ -111,6 +111,25 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_Claude_transcript_that_cannot_be_read_types_nothing_and_never_earns_the_review_Enter()
+    {
+        // Gone after the keys: nothing says the question is still unanswered, so no Enter.
+        injector.OnInject = _ => File.Delete(claude);
+        var typed = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
+        Assert.Equal(AnswerOutcome.Unconfirmed, typed.Outcome);
+        Assert.Single(injector.Plans);
+
+        // Gone before them: nothing is typed at all.
+        Fixture.Append(claude, Claude.Assistant(second++, "tool_use", Claude.ToolUse("toolu_2", "AskUserQuestion", Input)));
+        await source.RefreshAsync();
+        File.Delete(claude);
+        var refused = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_2", Chosen));
+        Assert.Equal(AnswerOutcome.Refused, refused.Outcome);
+        Assert.Contains("could not be read", refused.Reason);
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
     public async Task A_different_answer_recorded_by_Claude_is_unconfirmed_never_delivered()
     {
         injector.OnInject = _ => Fixture.Append(claude, Recorded(database: "DuckDB"));

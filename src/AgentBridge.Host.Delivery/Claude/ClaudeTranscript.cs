@@ -12,7 +12,10 @@ public sealed record ClaudeCallState(
     bool IsMainAgent,
     ClaudeAnswerRecord? Answer,
     bool Interrupted,
-    long ScannedTo);
+    long ScannedTo,
+    // False when the file could not be opened: then nothing here says the call is still
+    // unanswered, and nothing may be typed on the strength of it.
+    bool Readable = true);
 
 // The tool_result for the call. Answers is the entry's toolUseResult.answers, question text
 // to the answer Claude recorded, when the build writes it; Text is the result's own text,
@@ -49,7 +52,7 @@ public static class ClaudeTranscript
 
         if (Jsonl.Lines(path, from, skipFirst: requireStart, Line) is not { } scannedTo)
         {
-            return new ClaudeCallState(null, true, null, false, from);
+            return new ClaudeCallState(null, true, null, false, from, Readable: false);
         }
         return new ClaudeCallState(input, main, started ? answer : null, started && interrupted, scannedTo);
 
