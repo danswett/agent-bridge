@@ -8,7 +8,7 @@ namespace S4.Relay;
 
 // Routes opaque frames between the devices of one account. It sees routing ids, sizes and
 // timing, and nothing a session says: payloads are Noise ciphertext end to end.
-public sealed class RelayHub(RelayOptions options, Tokens tokens, ILogger<RelayHub> log)
+public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, ILogger<RelayHub> log)
 {
     static readonly HashSet<string> Kinds = ["host", "app", "pwa", "phone", "test"];
     readonly ConcurrentDictionary<string, ConcurrentDictionary<string, Connection>> accounts = new();
@@ -147,6 +147,27 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, ILogger<RelayH
             }
             if (frame is null) { return "closed"; }
             var (type, data) = frame.Value;
+            if (type == WebSocketMessageType.Text)
+            {
+                // The one control message a device sends after admission: forward a push.
+                if (!WithinRate(conn))
+                {
+                    await CloseAndDrainAsync(conn, CloseCodes.RateLimited, "rate-limited");
+                    return "rate limited";
+                }
+                JsonElement m;
+                try { m = JsonDocument.Parse(data).RootElement; } catch (JsonException) { continue; }
+                if (m.TryGetProperty("t", out var t) && t.GetString() == "push" && m.TryGetProperty("id", out var pid) && pid.TryGetInt64(out var id))
+                {
+                    var c = conn;
+                    _ = Task.Run(async () =>
+                    {
+                        var r = await push.SendAsync(c.Account.Id, m);
+                        await c.SendJsonAsync(new { t = "push-result", id, status = r.Status, error = r.Error });
+                    });
+                }
+                continue;
+            }
             if (type != WebSocketMessageType.Binary) { continue; }
             if (!WithinRate(conn))
             {

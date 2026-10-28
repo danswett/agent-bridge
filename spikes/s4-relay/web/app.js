@@ -218,6 +218,123 @@ async function connectTo(d) {
   $('result').textContent = '';
   $('pings').textContent = '';
   log(`channel to ${ch.peerName} in ${ms.toFixed(0)} ms`);
+  // Hand this host our push subscription, so it can notify us when the app is closed.
+  // Sent on every connect: hosts may have restarted, and browsers rotate subscriptions.
+  sendSubscription(ch).catch((e) => log(`subscription: ${e.message}`));
+  await refreshQuestions();
+  return ch;
+}
+
+// ---- notifications (spike S5) ----
+const b64uToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+const installed = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+
+async function existingSubscription() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) { return null; }
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+
+async function sendSubscription(ch) {
+  const sub = await existingSubscription();
+  if (!sub) { return; }
+  const j = sub.toJSON();
+  const appUrl = new URL('./', location.href).href;
+  const r = await ch.request('push-subscribe', { endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, appUrl });
+  if (r.ok) { log(`${ch.peerName} will notify this device`); }
+}
+
+function renderNotifyState(text, cls = 'muted') {
+  $('notify-state').className = cls;
+  $('notify-state').textContent = text;
+}
+
+async function updateNotifyBox() {
+  $('notify-box').hidden = false;
+  if (!('PushManager' in window)) {
+    renderNotifyState(/iPhone|iPad/.test(navigator.userAgent) && !installed()
+      ? 'On iPhone, add this page to your Home Screen (Share → Add to Home Screen) and open it from there to get notifications.'
+      : 'This browser does not support Web Push.');
+    $('enable-push').hidden = true;
+    return;
+  }
+  const sub = await existingSubscription();
+  $('enable-push').hidden = !!sub;
+  renderNotifyState(sub ? `Notifications on (${new URL(sub.endpoint).host})` : `Notifications off (permission: ${Notification.permission})`, sub ? 'ok' : 'muted');
+}
+
+$('enable-push').onclick = async () => {
+  try {
+    // Asked first and directly in the tap: Safari only shows the prompt for a user gesture.
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') { renderNotifyState(`Permission ${permission}`, 'bad'); return; }
+    const { key: serverKey } = await (await fetch(`${BASE}/v1/push/key`)).json();
+    const reg = await navigator.serviceWorker.ready;
+    await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(serverKey) });
+    if (current) { await sendSubscription(current); }
+    await updateNotifyBox();
+  } catch (e) {
+    renderNotifyState(`Could not enable: ${e.message}`, 'bad');
+  }
+};
+
+$('ask-me').onclick = async () => {
+  const r = await current.request('ask-me', { delaySeconds: 10 });
+  $('result').textContent = `${current.peerName} will ask a question in ${r.result.scheduled} s. Lock the phone or switch apps to see the notification.`;
+  // If the app is still open by then, show the question here too.
+  setTimeout(() => refreshQuestions().catch(() => {}), (r.result.scheduled + 1.5) * 1000);
+};
+
+// ---- questions ----
+async function refreshQuestions() {
+  if (!current) { return; }
+  const r = await current.request('questions');
+  const list = r.ok ? r.result : [];
+  const box = $('questions');
+  box.replaceChildren();
+  for (const q of list) { box.append(renderQuestion(q)); }
+  $('questions-box').hidden = list.length === 0;
+}
+
+function renderQuestion(q) {
+  const el = document.createElement('div');
+  el.className = 'question';
+  el.dataset.q = q.q;
+  const text = document.createElement('p');
+  text.textContent = q.text;
+  const row = document.createElement('div');
+  row.className = 'row';
+  const status = document.createElement('div');
+  status.className = 'muted';
+  for (const choice of q.choices) {
+    const b = document.createElement('button');
+    b.textContent = choice;
+    b.onclick = async () => {
+      const r = await current.request('answer', { q: q.q, answer: choice });
+      const res = r.result ?? {};
+      status.className = res.accepted ? 'ok' : 'bad';
+      status.textContent = res.accepted ? `Sent: ${choice}` : `Not sent: ${res.reason ?? r.error}`;
+      for (const x of row.querySelectorAll('button')) { x.disabled = true; }
+    };
+    row.append(b);
+  }
+  el.append(text, row, status);
+  return el;
+}
+
+// Opened from a notification: ?q=<question>&host=<device id>. Connect to that host as soon
+// as it shows up in presence, then show the question.
+const opened = new URLSearchParams(location.search);
+let pendingHost = opened.get('host');
+let lastPresence = [];
+
+// Presence can arrive before the relay connection is ready to send, so this runs from both
+// places and acts once both are true.
+function openPendingHost() {
+  const target = relay && pendingHost && lastPresence.find((d) => d.id === pendingHost);
+  if (!target) { return; }
+  pendingHost = null;
+  connectTo(target).then(() => $('questions-box').scrollIntoView()).catch((e) => log(`connect failed: ${e.message}`));
 }
 
 $('snapshot').onclick = async () => {
@@ -250,7 +367,11 @@ async function start(acct) {
   $('me').textContent = me.slice(0, 8);
   const r = new Relay(key, me);
   r.onData = onData;
-  r.onPresence = renderDevices;
+  r.onPresence = (list) => {
+    lastPresence = list;
+    renderDevices(list);
+    openPendingHost();
+  };
   r.onClose = (e) => {
     // textContent: the close reason comes from the relay, which is not trusted.
     $('relay-state').className = 'bad';
@@ -260,6 +381,8 @@ async function start(acct) {
   relay = await r.connect(account.token, deviceName());
   $('relay-state').className = 'ok';
   $('relay-state').textContent = 'Connected to the relay; key proven';
+  openPendingHost();
+  await updateNotifyBox();
 }
 
 (async () => {

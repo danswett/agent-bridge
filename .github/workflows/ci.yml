@@ -88,6 +88,7 @@ jobs:
       - run: dotnet build src/S4.DevStack -c Release --nologo
       - run: dotnet build src/S4.Host -c Release --nologo
       - run: dotnet src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll check
+      - run: node js/test-sw.mjs
       - run: npm ci
       - run: npx playwright install --with-deps chromium webkit
       - run: node js/test-pwa.mjs

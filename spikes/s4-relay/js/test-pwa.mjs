@@ -18,12 +18,13 @@ await new Promise((ok, fail) => {
   const t = setTimeout(() => fail(new Error('dev stack did not start')), 60000);
   const poll = setInterval(() => { if (out.includes('ready ')) { clearTimeout(t); clearInterval(poll); ok(); } }, 100);
 });
+const demoHost = out.match(/demo-host ([0-9a-f]{32})/)[1];
 
 let failed = 0;
 for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
   const browser = await type.launch();
   try {
-    const page = await browser.newPage();
+    const page = await (await browser.newContext()).newPage();
     page.on('pageerror', (e) => console.log(`[${name}] page error: ${e.message}`));
     await page.goto(`http://127.0.0.1:${port}/`);
     await page.click('#signin');
@@ -45,7 +46,21 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
 
     // The service worker registers, so the page can be installed and work offline.
     const sw = await page.evaluate(async () => !!(await navigator.serviceWorker?.getRegistration()));
-    console.log(`PASS  ${name}: signed in, proved its key, channel to demo-host; ${hs}; ${pings}; service worker ${sw}`);
+
+    // A question from the host: asked, shown and answered in the app.
+    await page.click('#ask-me');
+    await page.waitForSelector('.question button', { timeout: 30000 });
+    await page.click('.question button');
+    await page.waitForFunction(() => document.querySelector('.question .ok')?.textContent.startsWith('Sent:'), null, { timeout: 15000 });
+    const answered = await page.textContent('.question .ok');
+
+    // What a notification tap opens: ?q=…&host=…. The app connects to that host by itself.
+    const opened = await page.context().newPage();
+    await opened.goto(`http://127.0.0.1:${port}/?q=anything&host=${demoHost}`);
+    await opened.waitForFunction(() => document.querySelector('#peer')?.textContent.includes('demo-host'), null, { timeout: 30000 });
+    await opened.close();
+
+    console.log(`PASS  ${name}: signed in, proved its key, channel to demo-host; ${hs}; ${pings}; service worker ${sw}; question answered (${answered}); notification link opens the host`);
   } catch (e) {
     failed++;
     console.log(`FAIL  ${name}: ${e.message}`);

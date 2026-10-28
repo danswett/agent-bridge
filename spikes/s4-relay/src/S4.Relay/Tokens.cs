@@ -25,6 +25,17 @@ public sealed class RelayOptions
     // read what the PWA decrypts. The dev stack and CI serve it same-origin.
     public bool ServePwa { get; set; } = true;
 
+    // Web Push (spike S5). The relay signs and forwards pushes that hosts have already
+    // encrypted to the browser; it cannot read them. Unset key: pushes are refused.
+    public string? VapidPrivateKey { get; set; }
+    public string VapidSubject { get; set; } = "https://github.com/danswett/agent-bridge";
+    // The relay only ever POSTs to these push services (host or a subdomain of it), over
+    // HTTPS, so a device cannot use it to reach anything else.
+    public string[] PushHosts { get; set; } = ["web.push.apple.com", "fcm.googleapis.com", "push.services.mozilla.com", "notify.windows.com"];
+    // Test only: allows http:// push endpoints, for a local fake push service.
+    public bool AllowInsecurePush { get; set; }
+    public int MaxPushesPerMinute { get; set; } = 30;
+
     // Test hooks. Tap observes every forwarded payload; Route lets a test play a hostile
     // relay that redirects or forges routing.
     public Action<string, string, byte[]>? Tap { get; set; }
