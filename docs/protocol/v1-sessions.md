@@ -8,9 +8,11 @@ document are in `src/AgentBridge.Protocol/Sessions.cs`, and the PWA mirrors them
 JavaScript.
 
 Scope so far: a host reports sessions, their activity and their pending questions
-(`sessions.read`), can take an answer to a question (`sessions.answer`), and can take a
-reply: a prompt typed into a session (`sessions.reply`). Attachments, launching and
-stopping come next; they will add ops without changing anything here.
+(`sessions.read`), can take an answer to a question (`sessions.answer`), can take a
+reply: a prompt typed into a session (`sessions.reply`), and notifies a client's devices
+when a session asks or finishes, even with the app closed (`push`, see
+[Notifications](#notifications)). Attachments, launching and stopping come next; they will
+add ops without changing anything here.
 
 ## Rules for every message
 
@@ -76,6 +78,7 @@ Request `data`: `{}`. Result:
 | `sessions.read` | `sessions.list`, `session.get`, `sessions.subscribe` |
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
 | `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
+| `push` | `push.subscribe`, `push.unsubscribe`, `push.list`: Web Push notifications of questions and finished turns ([Notifications](#notifications)) |
 
 ### `sessions.list`
 
@@ -217,6 +220,149 @@ what it reports and, immediately before typing, in the transcript itself. The pe
 serialization is shared with answers, but it ends once the reply's keys have gone: a
 question the agent asks while the host waits for its prompt to be recorded can be answered
 at once.
+
+### `push.subscribe`
+
+Registers this device for notifications from this host. A client sends it on every
+channel it opens to a host while notifications are on, so a host that dropped the
+subscription, or a browser that renewed it, is brought up to date. Request `data`:
+
+```json
+{
+  "endpoint": "https://web.push.apple.com/QGuQyavXutnMhZ…",
+  "keys": { "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV…", "auth": "BTBZMqHH6r4Tts7J_aSIgg" },
+  "app": "https://danswett.github.io/agent-bridge/app/",
+  "device": "iPhone · Agent Bridge"
+}
+```
+
+| Field | Notes |
+|---|---|
+| `endpoint`, `keys` | Exactly what the browser's `PushSubscription.toJSON()` gives, for a subscription made with the relay's VAPID key (`GET /v1/push/key`). `endpoint` is https; `p256dh` is a base64url P-256 point, `auth` 16 base64url bytes |
+| `app` | The client's own URL (https): where a tap on a notification opens it |
+| `device` | Optional. How `push.list` names this device; the channel's peer name otherwise |
+
+Result: `{ "subscribed": true, "count": 2 }`, `count` being how many devices the host now
+notifies. A host keeps **one subscription per device** (the channel's peer id) and per
+`endpoint`: subscribing again replaces the device's own, and an endpoint registered by a
+new device id (a reinstalled app) replaces the old one. It keeps at most 16, dropping the
+oldest. A request that fails the checks above fails as a request (`ok: false`) with the
+reason.
+
+**Only devices of the host's own account.** A push goes straight to a device, around the
+relay's account-scoped routing, so the host keeps the account boundary itself: it takes
+`push.*` only on a channel whose relay connection is signed in to the host's account and
+lists the peer among that account's devices, and refuses anything else. It saves
+subscriptions with the account they belong to, and drops them all if the profile signs
+in as another account.
+
+### `push.unsubscribe`
+
+Request `data`: `{}` or `{ "endpoint": "…" }`. Removes this device's subscription, and the
+one with `endpoint` if given (whoever holds an endpoint can already send to it). Result:
+`{ "removed": true }`. A host that is offline when a device turns notifications off
+learns it from the push service instead: it drops a subscription the service answers
+404 or 410 for.
+
+### `push.list`
+
+Request `data`: `{}`. Result: the devices this host notifies, oldest first:
+
+```json
+{ "devices": [ { "device": "4f0e…", "name": "iPhone · Agent Bridge", "service": "web.push.apple.com", "since": "2026-10-28T04:22:43.182Z", "current": true } ] }
+```
+
+`current` marks the calling device. Endpoints are never sent back: one is a capability to
+notify that device.
+
+## Notifications
+
+A host with `push` notifies every subscribed device when one of its sessions needs the
+person or has something to say, whether or not the app is open, the same moments
+agent-ha-bridge notifies a phone through Home Assistant.
+
+### When a host notifies
+
+| `kind` | When | Once per |
+|---|---|---|
+| `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it |
+| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty `response`, and is still idle 3 s later. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news | Finished turn: the same `turnCount` and `response` seen ending again is not repeated |
+| `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead | Question |
+
+A question answered before its 2 s are up is never notified. A notice that cannot be sent
+because the host's relay connection is down is sent when it is back; a newer notice about
+the same session replaces it first, so a device gets only the latest. A host sends at
+most 20 pushes a minute (the relay allows 30 per account, across all its hosts) and holds
+the rest, keeping only the latest per device and session, until there is room. A push
+service answering 429 or 5xx is retried with backoff; 404 or 410 means the subscription
+is gone, and the host drops it.
+
+### Replacing and collapsing
+
+Every notice about one session on one machine shares:
+
+* a **tag**, `<machine id>:<session id>`: the device replaces the session's notification
+  in place. A `resolved` notice turns a stale question into "no longer waiting"; a
+  `finished` one replaces the question it followed.
+* a **topic** (RFC 8030 `Topic`), the first 24 bytes of SHA-256 of
+  `agent-bridge-push|<machine id>|<session id>`, base64url (32 characters; Apple refuses
+  other lengths, spike S5 finding 6): the push service replaces an undelivered push with
+  the newer one, so a phone that was offline gets one notice per session, not a backlog.
+
+| `kind` | TTL | Urgency |
+|---|---|---|
+| `question`, `resolved` | 24 h | `high`, `normal` |
+| `finished` | 6 h | `normal` |
+
+### The payload
+
+What the host encrypts is a [Declarative Web Push](https://webkit.org/blog/16535/meet-declarative-web-push/)
+message, which Safari 18.4+ shows without running the service worker, and which a client's
+service worker shows from the same fields everywhere else:
+
+```json
+{
+  "web_push": 8030,
+  "notification": {
+    "title": "Pick the session store",
+    "body": "DSWETT-DEV-VM1 · waiting on you\nWhich database should the session store use?",
+    "navigate": "https://danswett.github.io/agent-bridge/app/?host=53d1997f…&session=0f3c…&question=toolu_01",
+    "tag": "53d1997f…:0f3c…",
+    "lang": "en",
+    "data": { "v": 1, "kind": "question", "machine": "53d1997f…", "session": "0f3c…", "question": "toolu_01", "at": "2026-10-28T04:22:43.182Z" }
+  }
+}
+```
+
+| Field | Notes |
+|---|---|
+| `title` | The session's `title`, or "Copilot session" (by agent) without one. At most 120 bytes |
+| `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the `response` (as agent-ha-bridge's preview), "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
+| `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. A client opens that machine and session, and the question ready to answer |
+| `silent` | `true` for `resolved`, which replaces a question without alerting again |
+| `data.kind` | `question`, `finished` or `resolved`. A client reads a kind it doesn't know as `question` |
+| `data.machine`, `data.session`, `data.question` | The machine's device id, the session's `id`, the question's `id` (not for `finished`) |
+| `data.at` | When the host sent it |
+
+The JSON as encrypted is at most **3 KiB**: under RFC 8291's one 4096-byte record (3993
+bytes of plaintext) and Apple's 4 KiB cap. The host cuts the body, then the title, never
+mid-character, until it fits (`PushNotice.Fit` in C#). A client must show something for
+any push, even an unreadable one: iOS revokes notifications from an app whose push shows
+nothing.
+
+### Privacy
+
+Nothing a notice says reaches the relay or the push service (Apple, Google, Mozilla,
+Microsoft) in plaintext. The host encrypts each push to the subscribing browser's own key
+(RFC 8291, aes128gcm); the relay only adds its VAPID signature and forwards the
+ciphertext to an allowlisted push service. They learn that a push of some size went to an
+endpoint at some time, and the push's `Topic`, `TTL` and `Urgency` headers: the topic is a
+hash, which names no session. The subscription's keys reach only the host, over the
+end-to-end channel. The device shows the notice on its lock screen.
+
+A relay is not trusted to tell the truth about who is in an account. A hostile one could
+present its own device as the account's and register a subscription, but it could equally
+open a channel and read `sessions.list`, so `push` gives it nothing more.
 
 ## Types
 

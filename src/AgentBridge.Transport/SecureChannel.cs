@@ -49,6 +49,8 @@ public sealed class SecureChannel
     public string PeerKind { get; internal set; } = "";
     public byte[]? PeerStatic => Handshake.RemoteStatic;
     public byte[] HandshakeHash => Handshake.HandshakeHash;
+    // The relay connection this channel runs over: its account, and the presence it reports.
+    public RelayClient Relay => hub.Relay;
 
     // Events the peer sent, in the order it sent them. Held for a reader that has not caught
     // up, up to the hub's EventBufferCapacity; past that the oldest go, never the latest,

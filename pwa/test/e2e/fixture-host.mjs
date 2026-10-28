@@ -6,7 +6,8 @@
 // request's first outcome without "typing" again, even while the first is still being
 // delivered, and takes an answered question away with an upsert; and session.reply the same
 // way (Replies.Check through the app's mirror, refused while the session asks a question,
-// only Copilot sessions, a repeat typed once). It reuses
+// only Copilot sessions, a repeat typed once). It offers push and records push.subscribe and
+// push.unsubscribe, but sends no notifications. It reuses
 // the app's own relay and Noise code, so it proves the wire format against the real relay
 // and the real browser crypto, not against a copy of either.
 //
@@ -46,6 +47,8 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
   const replyOutcomes = new Map();
   const typedReplies = [];
   const replyScript = [];
+  // push.subscribe and push.unsubscribe requests, in order.
+  const push = [];
 
   const send = (ch, kind, body) => relay.send(ch.peer, concat(new Uint8Array([kind]), ch.id, body));
   const sendJson = (ch, message) => {
@@ -61,7 +64,7 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
     const reply = (result) => sendJson(ch, { re: id, ok: true, result });
     switch (op) {
       case 'hello':
-        return reply({ protocol: 1, machine: { id: deviceId, name, os: 'linux', hostVersion: '0.0.0-fixture' }, capabilities: ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : [])] });
+        return reply({ protocol: 1, machine: { id: deviceId, name, os: 'linux', hostVersion: '0.0.0-fixture' }, capabilities: ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : []), 'push'] });
       case 'sessions.list':
         return reply({ sessions: [...state.values()].map(listed), revision });
       case 'session.get': {
@@ -83,6 +86,13 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
         replies.push(structuredClone(data));
         if (!replyOutcomes.has(data?.request)) { replyOutcomes.set(data?.request, replyTo(data)); }
         return reply(await replyOutcomes.get(data?.request));
+      // Notifications: what a phone registers is recorded, as the C# host would store it.
+      case 'push.subscribe':
+        push.push({ op, peer: ch.peer, peerName: ch.peerName, data: structuredClone(data) });
+        return reply({ subscribed: true, count: 1 });
+      case 'push.unsubscribe':
+        push.push({ op, peer: ch.peer, data: structuredClone(data) });
+        return reply({ removed: true });
       default:
         break;
     }
@@ -169,6 +179,7 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
     log,
     answers,
     typed,
+    push,
     // The next answers' outcomes: 'delivered', 'unconfirmed', 'stale', 'busy', 'refused',
     // or { outcome, reason, holdMs }.
     scriptAnswers(...steps) { script.push(...steps); },

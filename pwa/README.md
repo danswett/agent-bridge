@@ -9,9 +9,10 @@ Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflow
 Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/app/?demo=1).
 
 It shows sessions, their activity and their pending questions, answers those questions
-(`session.answer`) and replies to sessions (`session.reply`), per
-[docs/protocol/v1-sessions.md](../docs/protocol/v1-sessions.md). Attachments, launching and
-notifications come next.
+(`session.answer`), replies to sessions (`session.reply`), and notifies the phone when a
+session asks or finishes, even with the app closed (Web Push), per
+[docs/protocol/v1-sessions.md](../docs/protocol/v1-sessions.md). Attachments and launching
+come next.
 
 | Light | Dark | Answering | A permission request |
 |---|---|---|---|
@@ -36,6 +37,8 @@ notifications come next.
 | `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect |
 | `js/replies.js` | A reply checked before it goes: `checkReply` mirrors the C# `Replies.Check`, with its wording |
 | `js/reply-service.js` | Sending replies: `answer-service.js` with `session.reply`, one reply on its way per session |
+| `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
+| `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
 | `js/ui/*` | Session cards, the question and its answer form, the reply box, machines list, fold state, relative times |
 | `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering and replying included |
@@ -129,6 +132,40 @@ A host waits up to a minute for a working session to take a reply, so the reques
 90 s for its response before it counts as lost. Demo mode replies as a host would
 (`window.agentBridgeDemo.scriptReplies(…)`), only to Copilot sessions.
 
+### Notifications
+
+**Turn on notifications** (under the sessions) asks for permission, which browsers allow
+only from a tap, then subscribes with the relay's VAPID key (`GET /v1/push/key`) and
+registers the subscription with the machine shown (`push.subscribe`). From then on the
+app registers again on every channel it opens to a machine that offers `push`, so each
+machine viewed on this device notifies it, and one that lost the subscription, or a
+browser that renewed it, is caught up. **Turn off notifications** tells the machine shown
+(`push.unsubscribe`) and unsubscribes the browser; other machines learn it from the push
+service (410) at their next push. Signing out unsubscribes too, so an account's machines
+never notify a device signed in as someone else.
+
+On an iPhone or iPad, web push exists only for the app added to the Home Screen and
+opened from there; in a Safari tab the panel says how to add it. Where the permission was
+refused, it says to allow it in Settings.
+
+Each machine encrypts its notices to this browser's key, so neither the relay nor Apple
+or Google can read them. A notice is a Declarative Web Push message (Safari 18.4+ shows it
+without the worker); `sw.js` shows the same fields elsewhere:
+
+| Notice | Shown | Tap |
+|---|---|---|
+| `question` | The session's title; "*machine* · waiting on you" and the question. Alerts | Opens that machine and session, scrolled to it, with focus on the question's first control |
+| `finished` | "*machine* · finished" and the start of the response. Alerts | Opens the session |
+| `resolved` | "*machine* · no longer waiting", silently, in place of the question | Opens the session |
+
+All notices about one session share its tag (`<machine id>:<session id>`), so each
+replaces the last. A tap opens the app at `?host=&session=&question=`, which it takes out
+of the address once read; an app already open is focused and told where to go instead,
+keeping its connection. The app also closes notifications itself: those for a question it
+answered, and question notifications for questions its machine no longer asks. iOS shows
+no action buttons on web notifications, so none are sent; a question is answered in the
+app.
+
 ### Markdown
 
 Agent text is rendered by `js/markdown.js`, written for this app rather than vendored.
@@ -180,7 +217,20 @@ running another checkout's tests at the same time.
   demo host reported as not supporting sessions, and answering: delivered, an answer in
   flight when the socket drops resent with the same request and typed once, and the
   fixture host's own validation (stale and refused); and replying, the same way, with a
-  reply refused while the session asks a question.
+  reply refused while the session asks a question. Notifications, with the browser's
+  permission and push subscription faked (headless browsers have no push service):
+  turning them on registers with the machine using the relay's real VAPID key, again on
+  every new channel, and turning them off unregisters; a notification's link, and a tap
+  while the app is open, opens the session with its question focused.
+* `test/push.spec.mjs`, Chromium only: real pushes delivered to the real service worker
+  through DevTools (`ServiceWorker.deliverPushMessage`), the notifications read back, a
+  later notice replacing the session's, and an unreadable push still shown.
+* `test/unit/sw.test.mjs` and `test/unit/push.test.mjs`: the worker's handlers in every
+  case (tags, quiet replacement, unknown kinds, taps that never leave the app, a tap with
+  the app open or closed), and turning notifications on and off, iOS's Home Screen rule,
+  a relay key change, a turn-off racing a registration, and closing stale notices.
 
 Not covered end to end: the C# Bridge Host (it is not wired yet; the fixture host speaks
-the same contract), the live relay and GitHub, real phones, and Web Push.
+the same contract; `tests/AgentBridge.Host.Tests` drives its notifications through the
+in-process relay to a fake push service), the live relay and GitHub, real phones, and
+real push services.

@@ -9,6 +9,7 @@
 //   answers.js       building and checking an answer before it is sent
 //   answer-service.js sending answers: one outcome each, resent with the same request
 //   replies.js, reply-service.js  checking and sending replies (session.reply), likewise
+//   push.js          notifications: turning them on and off, registering with each machine
 //   sessions-store.js, ui/*  what is shown
 //   demo.js          ?demo=1: a simulated host, no relay
 import { RELAY } from '../config.js';
@@ -20,6 +21,8 @@ import { HostClient } from './host-client.js';
 import { SessionsStore } from './sessions-store.js';
 import { AnswerService } from './answer-service.js';
 import { ReplyService } from './reply-service.js';
+import { PushRegistrar, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
+import { Capabilities } from './protocol.js';
 import { SessionListView, renderMachines } from './ui/views.js';
 import { DemoHost, runScript } from './demo.js';
 
@@ -42,7 +45,56 @@ const view = new SessionListView($('session-list'), store, {
 view.onRender = (n) => {
   $('session-count').textContent = n ? `${n} live` : '';
   $('sessions-empty').hidden = n !== 0 || !$('host-state').hidden;
+  focusLinked();
 };
+
+// ---- links: a notification's ?host=&session=&question= ----
+// The session a link asked for, until its card is on screen: { host, session }.
+let linked = null;
+// Set once signed in: goes to a link's machine.
+let followLink = null;
+
+const ID = /^[0-9a-f]{32}$/;
+const param = (p, name) => { const v = p.get(name); return v && v.length <= 256 ? v : null; };
+
+// A link's machine, session and question, taken out of the address so neither a reload nor a
+// later sign-in, possibly as another account, reuses it.
+function takeLink() {
+  const link = { host: param(params, 'host'), session: param(params, 'session'), question: param(params, 'question') };
+  if (!['host', 'session', 'question'].some((k) => params.has(k))) { return null; }
+  for (const k of ['host', 'session', 'question']) { params.delete(k); }
+  const rest = params.toString();
+  history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`);
+  return { ...link, host: link.host && ID.test(link.host) ? link.host : null };
+}
+
+// Opens the session a notification was about, with its question ready to answer.
+function focusLinked() {
+  if (!linked || linked.host !== currentHost()) { return; }
+  const card = view.card(linked.session);
+  if (!card) { return; }
+  linked = null;
+  if (card.folded) { card.setFolded(false); }
+  const el = card.element;
+  el.classList.add('linked');
+  setTimeout(() => el.classList.remove('linked'), 4000);
+  el.scrollIntoView({ block: 'start' });
+  const target = el.querySelector('.question-slot button:not([disabled]), .question-slot input:not([disabled]), .question-slot textarea:not([disabled])') ?? el.querySelector('.fold');
+  target?.focus({ preventScroll: true });
+}
+
+let currentHost = () => null;
+
+// A tap on a notification while the app is open: the worker says where to go.
+navigator.serviceWorker?.addEventListener('message', (e) => {
+  if (e.data?.type !== 'agent-bridge.open' || typeof e.data.url !== 'string') { return; }
+  let p;
+  try { p = new URL(e.data.url).searchParams; } catch { return; }
+  const host = param(p, 'host');
+  if (!host || !ID.test(host)) { return; }
+  followLink?.({ host, session: param(p, 'session'), question: param(p, 'question') });
+});
+navigator.serviceWorker?.startMessages?.();
 
 function setPill(text, cls = '') {
   const p = $('conn');
@@ -127,22 +179,12 @@ async function startDemo() {
 // ---- live ----
 let identity;
 
-// A link's ?host= (a notification tap) picks the machine once. It is taken out of the
-// address, so neither a reload nor a later sign-in, possibly as another account, reuses it.
-function takeLinkedHost() {
-  const id = params.get('host');
-  if (id === null) { return null; }
-  params.delete('host');
-  const rest = params.toString();
-  history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`);
-  return /^[0-9a-f]{32}$/.test(id) ? id : null;
-}
-
 function showSignIn(error) {
   $('signin').hidden = false;
   $('machines').hidden = true;
   $('sessions').hidden = true;
   $('account').hidden = true;
+  $('notify').hidden = true;
   $('signin-error').hidden = !error;
   $('signin-error').textContent = error ?? '';
   setPill('Signed out');
@@ -180,7 +222,15 @@ function begin(account) {
 
   const connection = new BridgeConnection({ base: BASE, key: identity.key, deviceId: identity.deviceId, name: deviceName(), account });
   const hosts = new HostSession({ connection, store });
-  hosts.restoreTarget(takeLinkedHost());
+  const link = takeLink();
+  hosts.restoreTarget(link?.host ?? null);
+  currentHost = () => hosts.targetId;
+  linked = link?.host && link.session ? { host: link.host, session: link.session } : null;
+  followLink = ({ host, session }) => {
+    linked = session ? { host, session } : null;
+    hosts.select(host);
+    focusLinked();
+  };
   // Answers go to the machine they were given for, on whichever channel to it is open now:
   // after a reconnect, one still waiting for its outcome is resent with the same request.
   const current = () => (hosts.phase === 'open' && hosts.client ? { client: hosts.client, hostId: hosts.targetId } : null);
@@ -188,6 +238,76 @@ function begin(account) {
   const replies = new ReplyService({ current });
   answering = () => (hosts.targetId ? { service: answers, replies, hostId: hosts.targetId, capabilities: hosts.capabilities } : null);
   let shownCapabilities = '';
+
+  // ---- notifications ----
+  const worker = () => new Promise((resolve, reject) => {
+    if (!navigator.serviceWorker) { reject(new Error('This browser has no service worker.')); return; }
+    const timer = setTimeout(() => reject(new Error("The app's service worker isn't running. Reload and try again.")), 10000);
+    navigator.serviceWorker.ready.then((r) => { clearTimeout(timer); resolve(r); }, reject);
+  });
+  const notices = new PushRegistrar({
+    registration: worker,
+    fetchKey: () => fetchVapidKey(BASE),
+    appUrl: new URL('./', location.href).href,
+    device: deviceName(),
+  });
+  let registeredOn = null;
+  const drawNotify = () => {
+    const support = notices.support;
+    const on = notices.enabled;
+    const button = $('notify-toggle');
+    const name = hosts.machine?.name ?? 'This machine';
+    const notes = {
+      install: 'On iPhone and iPad, notifications need Agent Bridge on the Home Screen: tap Share, then Add to Home Screen, and open it from there.',
+      unsupported: "This browser can't show notifications from Agent Bridge.",
+      denied: 'Notifications are blocked for Agent Bridge. Allow them in Settings to turn them on.',
+    };
+    $('notify').hidden = false;
+    button.hidden = support !== 'ok';
+    button.disabled = !!notices.busy;
+    button.textContent = notices.busy === 'on' ? 'Turning on…' : notices.busy === 'off' ? 'Turning off…' : on ? 'Turn off notifications' : 'Turn on notifications';
+    button.setAttribute('aria-pressed', String(on));
+    $('notify-note').textContent = notes[support] ?? (!on
+      ? 'Get a notification when a session asks you something or finishes, even with the app closed.'
+      : hosts.phase === 'open' && !hosts.capabilities.includes(Capabilities.push)
+        ? `On for this device, but ${name} doesn't send notifications yet.`
+        : 'On for this device. The machines you open here notify it when a session asks you something or finishes.');
+    $('notify-error').hidden = !notices.error;
+    $('notify-error').textContent = notices.error;
+  };
+  notices.onChange(drawNotify);
+  // The Settings app can change the permission while this is in the background.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { drawNotify(); } });
+  $('notify-toggle').onclick = () => {
+    const client = hosts.phase === 'open' ? hosts.client : null;
+    // Not awaited before asking: enable() asks for permission first, inside this tap.
+    const done = notices.enabled ? notices.disable(client) : notices.enable(client, hosts.capabilities);
+    if (client) { registeredOn = client; }
+    done.catch((e) => console.warn('notifications:', e.message));
+  };
+  const registerHere = () => {
+    if (hosts.phase !== 'open' || !hosts.client || registeredOn === hosts.client) { return; }
+    registeredOn = hosts.client;
+    notices.register(hosts.client, hosts.capabilities).catch((e) => {
+      notices.error = `Couldn't register for notifications from ${hosts.machine?.name ?? 'this machine'}: ${e.message}`;
+      drawNotify();
+    });
+  };
+  // A question answered here needs no notification; and one answered anywhere else must not
+  // stay on the lock screen looking unanswered once this app has seen it go.
+  answers.onAny((a) => {
+    if (a.state === 'done' && ['delivered', 'unconfirmed', 'stale'].includes(a.outcome)) {
+      worker().then((r) => closeNotices(r, a.hostId, a.sessionId)).catch(() => {});
+    }
+  });
+  let staleTimer = null;
+  store.onChange((c) => {
+    if (c.type !== 'synced' && !hosts.client?.synced) { return; }
+    clearTimeout(staleTimer);
+    staleTimer = setTimeout(() => {
+      if (hosts.phase === 'open' && hosts.client?.synced) { worker().then((r) => closeStaleNotices(r, hosts.targetId, store)).catch(() => {}); }
+    }, 500);
+  });
 
   const nameOf = (id) => connection.presence.find((d) => d.id === id)?.name;
   const drawMachines = () => {
@@ -220,6 +340,8 @@ function begin(account) {
     currentClient = null;
     accountStore.clear();
     connection.stop();
+    // This account's machines must not go on notifying this device.
+    notices.forget().catch(() => {});
     showSignIn('The relay no longer accepts this sign-in. Sign in again.');
   });
   $('use-here').onclick = () => connection.start();
@@ -229,6 +351,8 @@ function begin(account) {
     const caps = `${hosts.targetId}:${hosts.capabilities.join(' ')}`;
     if (caps !== shownCapabilities) { shownCapabilities = caps; view.refreshQuestions(); }
     if (hosts.phase === 'open') { answers.ready(); replies.ready(); }
+    registerHere();
+    drawNotify();
     drawMachines();
     if (!hosts.targetId) { $('sessions').hidden = true; return; }
     const name = hosts.machine?.name ?? nameOf(hosts.targetId) ?? 'your machine';
@@ -243,18 +367,21 @@ function begin(account) {
     }
   });
 
-  $('signout').onclick = () => {
+  $('signout').onclick = async () => {
     hosts.forget();
     answers.clear();
     replies.clear();
     accountStore.clear();
     connection.stop();
+    // Not for long: signing out must not wait on a service worker that isn't running.
+    await Promise.race([notices.forget().catch(() => {}), new Promise((r) => { setTimeout(r, 2000); })]);
     location.replace(location.pathname);
   };
 
   // For the E2E tests and debugging from the console. Holds no secrets beyond what the
   // page already has.
-  window.agentBridge = { connection, hosts, store, answers, replies };
+  window.agentBridge = { connection, hosts, store, answers, replies, notices };
+  drawNotify();
   connection.start();
 }
 
