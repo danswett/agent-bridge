@@ -26,6 +26,15 @@ public class AnswerTests
     };
 
     [Fact]
+    public void A_prompt_marked_for_the_machine_takes_no_answer_however_well_formed()
+    {
+        var q = Form(Choice("answer")) with { AnswerAtMachine = true };
+        Assert.Equal("this prompt can only be answered at the machine", Answers.Check(q, Answer("""{"answer":"a"}""")));
+        Assert.Contains("\"answerAtMachine\":true", JsonSerializer.Serialize(q, ProtocolJson.Options));
+        Assert.DoesNotContain("answerAtMachine", JsonSerializer.Serialize(Form(Choice("answer")), ProtocolJson.Options));
+    }
+
+    [Fact]
     public void A_choice_takes_one_of_its_option_values_and_nothing_else()
     {
         var q = Form(Choice("answer"));

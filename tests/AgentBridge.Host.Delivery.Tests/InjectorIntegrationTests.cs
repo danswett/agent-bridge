@@ -129,6 +129,27 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
     }
 
     [WindowsFact]
+    public async Task A_Claude_multi_select_and_a_Codex_approval_reach_the_console_as_their_digits_arrows_letters_and_Enters()
+    {
+        var echo = StartEcho();
+        var claude = Claude.Ask(("Which ones?", true, ["a", "b", "c"]));
+        using var input = System.Text.Json.JsonDocument.Parse(claude.ToJsonString());
+        var (form, _) = AgentBridge.Host.Delivery.Claude.ClaudeForm.Read(input.RootElement);
+        var (plan, _) = AgentBridge.Host.Delivery.Claude.ClaudePlanner.Plan(form!, CopilotPlannerTests.Answer(new Dictionary<string, object> { ["Which ones?"] = new[] { "a", "c" } }));
+        var (approve, _, _) = AgentBridge.Host.Delivery.Codex.CodexApproval.Plan(CopilotPlannerTests.Answer(new { decision = "approve" }).Fields);
+        var injector = new WorkerInjector(Worker);
+
+        Assert.Equal(InjectionStatus.Typed, (await injector.InjectAsync(echo.Pid, plan!.Keys)).Status);
+        Assert.Equal(InjectionStatus.Typed, (await injector.InjectAsync(echo.Pid, approve!)).Status);
+
+        // 1, 3, Down x4, Enter; then y, Enter.
+        var down = new[] { 27, 91, 66 };
+        int[] expected = [49, 51, .. down, .. down, .. down, .. down, 13, 121, 13];
+        var got = WaitFor(echo.Log, lines => Keys(lines) is { } k && k.Count >= expected.Length * 2 ? k : null);
+        Assert.Equal(expected, got.Where(k => k.StartsWith("key 1", StringComparison.Ordinal)).Select(k => int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture)));
+    }
+
+    [WindowsFact]
     public async Task The_host_survives_the_session_console_closing_mid_answer_reports_it_unconfirmed_and_answers_the_next()
     {
         var echo = StartEcho();

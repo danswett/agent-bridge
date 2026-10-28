@@ -75,8 +75,11 @@ on screen. Unknown events still count for `seq`.
 ### Answering
 
 A question can be answered from the phone when the machine's `hello` lists
-`sessions.answer` and the question is not `truncated`. Otherwise it is shown read-only
-with "Answer at the machine", and why.
+`sessions.answer` and the question is neither `truncated` nor `answerAtMachine`. Otherwise
+it is shown read-only with "Answer at the machine", and why. A prompt marked
+`answerAtMachine` (a Copilot or Claude permission prompt, say) shows only what it asks,
+the card reads "Waiting at the machine", and the reply box is held until it is answered
+there.
 
 | Question | Controls | Sent when |
 |---|---|---|

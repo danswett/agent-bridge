@@ -171,7 +171,7 @@ anything but `delivered`:
 | `unconfirmed` | The host typed it, but could not confirm the agent recorded it (for example the session stopped answering). It never retries on its own; the client says to check at the machine | Yes |
 | `stale` | The session is no longer asking that question: answered at the machine or by another device, or gone | No |
 | `busy` | Another answer or a reply to this session is being delivered | No |
-| `refused` | The host will not type it: an invalid answer, a question the client should not answer remotely (`truncated`), an elevated or otherwise unreachable session, an agent or platform without delivery, or agent-ha-bridge active for this user | No |
+| `refused` | The host will not type it: an invalid answer, a question the client should not answer remotely (`truncated` or `answerAtMachine`), a prompt the host has already typed an answer into once, an elevated or otherwise unreachable session, an agent or platform without delivery, or agent-ha-bridge active for this user | No |
 
 A client treats an outcome it doesn't know as `unconfirmed`, never as `delivered`. The
 session's next `session.upsert` shows the question gone whatever the outcome.
@@ -179,6 +179,23 @@ session's next `session.upsert` shows the question gone whatever the outcome.
 Typing into a live session is a single writer's job, and the host serializes it: one
 answer or reply per session at a time (`busy` otherwise), checked against the transcript
 immediately before typing and confirmed by identity, never by clock, after.
+
+**One attempt per prompt.** Once a host has typed any key into a prompt, it never types
+into that prompt again, whatever the request and across restarts: nobody can say what a
+half-typed prompt holds, and a second answer would land on top of the first. Only an
+attempt that typed nothing (the session's console could not be reached) leaves the prompt
+answerable. A host records the attempt before the first key, and refuses when it cannot.
+
+What a host answers, by agent (the same as agent-ha-bridge, which is the baseline):
+
+| Agent | Prompt | `kind` | Answered | `delivered` when |
+|---|---|---|---|---|
+| Copilot CLI | `ask_user`: free text, or a form of `choice`, `multi`, `boolean`, `text` and `number` fields | `form` | Yes | Its `human_response.recorded` (or, for free text, its completion) holds the answer typed |
+| Copilot CLI | Permission request | `approval` | No: `answerAtMachine` | |
+| Claude Code | `AskUserQuestion`: one to four questions, each a `choice` or a `multi` of its options | `form` | Yes, but not with free text (no field has `allowOther`), and a `multi` needs at least one option | The `tool_result` for its `tool_use` id records every question's answer as typed |
+| Claude Code | Permission prompt (from agent-ha-bridge's hook) | `approval` | No: `answerAtMachine` | |
+| Codex | Approval recorded by agent-ha-bridge's hook | `approval` | Yes | Never: Codex records nothing that says how an approval was answered, so a typed one is `unconfirmed` |
+| Codex | Approval seen only in the rollout, or one agent-ha-bridge already typed into | `approval` | No: `answerAtMachine` | |
 
 ### `session.reply`
 
@@ -219,7 +236,12 @@ Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`:
 | `unconfirmed` | The host typed it but saw no such prompt: the agent recorded something else, or the reply without all its files, the session ended, or nothing came within the host's wait. A session that is working takes a prompt typed now at its next step (Copilot records it then, as `delivery: "steering"`), so a host waits for up to a minute. Never retried | Yes |
 | `stale` | The session has ended, or its process has | No |
 | `busy` | An answer or another reply to this session is being typed | No |
-| `refused` | The host will not type it: an invalid reply (above), **a question or permission prompt pending in the session** (the words would answer it, and Enter accept it; answer it first), a transcript the host cannot read to rule that out, an attachment the host does not hold (expired, removed, sent by another device, still arriving, or gone with an earlier reply) or cannot hand over, an elevated or otherwise unreachable session, an agent or platform without delivery yet, or agent-ha-bridge active for this user | No |
+| `refused` | The host will not type it: an invalid reply (above), **a question or permission prompt pending in the session** (the words would answer it, and Enter accept it; answer it first, at the machine for one marked `answerAtMachine`), a transcript the host cannot read to rule that out, an attachment the host does not hold (expired, removed, sent by another device, still arriving, or gone with an earlier reply) or cannot hand over, an elevated or otherwise unreachable session, an agent or platform without delivery yet, or agent-ha-bridge active for this user | No |
+
+Only Copilot CLI sessions take replies. Claude Code and Codex replies are `refused`:
+agent-ha-bridge types replies into both, but confirms a Claude reply only by *some* prompt
+being submitted (any `user` entry or queued prompt, not this one), and a Codex reply not at
+all, so neither could be `delivered` on evidence.
 
 A reply is never typed while the session is asking anything, which a host checks both in
 what it reports and, immediately before typing, in the transcript itself. The per-session
@@ -498,7 +520,7 @@ service worker shows from the same fields everywhere else:
 | Field | Notes |
 |---|---|
 | `title` | The session's `title`, or "Copilot session" (by agent) without one. At most 120 bytes |
-| `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the `response` (as agent-ha-bridge's preview), "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
+| `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the `response` (as agent-ha-bridge's preview), "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
 | `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. A client opens that machine and session, and the question ready to answer |
 | `silent` | `true` for `resolved`, which replaces a question without alerting again |
 | `data.kind` | `question`, `finished` or `resolved`. A client reads a kind it doesn't know as `question` |
@@ -599,11 +621,12 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string | The id of the tool call that asked it. It stays the same while the question is pending |
-| `kind` | `"form"` \| `"approval"` | `approval` is a permission prompt with fixed choices (Codex approvals, Copilot permission requests). It always has exactly one `choice` field, named `decision`, with the options `approve` and `deny`, so a client can style them |
+| `kind` | `"form"` \| `"approval"` | `approval` is a permission prompt with fixed choices (Codex approvals, Copilot and Claude permission prompts). It always has exactly one `choice` field, named `decision`, with the options `approve` and `deny`, so a client can style them. An answer to one is `{ "decision": "approve" }` or `{ "decision": "deny" }` |
 | `message` | string (Markdown) | What the agent wrote, at most 8 KiB |
 | `fields` | Field[] | In order. Empty for a plain message |
 | `askedAt` | time | |
 | `truncated` | bool? | The host had to cut `message` or drop `fields` to fit the budget. A client shows what it has and says to answer at the machine |
+| `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request, a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once. It still has its fields, so a client can say what it asks, but a client shows no controls for it, gives the session's status as "Waiting at the machine", and a `session.answer` for it is `refused` |
 
 ### Field
 
@@ -645,8 +668,8 @@ session is at most 40 KiB.
 | Agent | Sessions | Activity and status | Question |
 |---|---|---|---|
 | Copilot CLI | `~/.copilot/session-state/<id>/` with a live `inuse.<pid>.lock`, plus `workspace.yaml` | From `events.jsonl`: `user.message`, `assistant.message` (`content`, `toolRequests`), `tool.execution_start` and `_complete`, `assistant.turn_start` and `_end`, `session.compaction_complete`, `session.model_change` | A `tool.execution_start` with `toolName: "ask_user"`, using its `arguments.message` and `arguments.requestedSchema`. Pending until a `human_response.recorded` or `tool.execution_complete` with the same `toolCallId` |
-| Claude Code | The bridge's registration files, and `~/.claude/projects/<slug>/<id>.jsonl` | Transcript `assistant` entries (`text`, `thinking`, `tool_use`) and `user` entries | A `tool_use` named `AskUserQuestion`, pending until a `tool_result` with its id |
-| Codex | The bridge's registration files, and `~/.codex/sessions/…/rollout-*.jsonl` | Rollout `event_msg` payloads | Approval requests |
+| Claude Code | The bridge's registration files, and `~/.claude/projects/<slug>/<id>.jsonl` | Transcript `assistant` entries (`text`, `thinking`, `tool_use`) and `user` entries | A `tool_use` named `AskUserQuestion`, pending until a `tool_result` with its id. A permission prompt, which only agent-ha-bridge's hook reports (its status `waiting`, newer than the transcript, over a running tool), is an `approval` with that tool's id, `answerAtMachine` |
+| Codex | The bridge's registration files, and `~/.codex/sessions/…/rollout-*.jsonl` | Rollout `event_msg` payloads | An approval agent-ha-bridge's hook recorded in `<id>.approval.json` beside the registration: an `approval` whose `id` is the marker's `DecisionId` (its generation), `answerAtMachine` once the marker records agent-ha-bridge's own attempt (`DeliveryAttempted`). An `exec_approval_request` or `apply_patch_approval_request` in the rollout with no marker is an `approval` keyed by its `call_id`, `answerAtMachine` |
 
 Only Copilot reports `background` so far. Claude Code can run Bash with
 `run_in_background`, and Codex may have equivalents, but no transcript of either doing

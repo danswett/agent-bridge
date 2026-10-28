@@ -249,6 +249,17 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task A_prompt_only_the_machine_can_answer_is_notified_as_waiting_at_the_machine()
+    {
+        Start(existing: S("s1", SessionStatus.Waiting, question: Q("q1", "Allow **Run a command**?", QuestionKind.Approval) with { AnswerAtMachine = true }));
+        Subscribe(Phone);
+        await After(TimeSpan.FromSeconds(2));
+        var n = Assert.Single(Received()).Notification;
+        Assert.Equal("DEV · waiting at the machine\nAllow **Run a command**?", n.GetProperty("body").GetString());
+        Assert.Equal("question", Kind(n));
+    }
+
+    [Fact]
     public async Task A_finished_turn_replaces_the_answered_question_instead_of_adding_a_notice()
     {
         Start();

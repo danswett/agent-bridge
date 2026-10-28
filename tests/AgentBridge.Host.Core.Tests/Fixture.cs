@@ -100,6 +100,29 @@ internal sealed class Fixture : IDisposable
         File.WriteAllText(Path.Combine(CodexRegistrations, id + ".json"), json.ToJsonString());
     }
 
+    // agent-ha-bridge's <id>.approval.json, as Write-CodexApprovalMarker writes it, and as
+    // Set-CodexApprovalAttempt rewrites it once it has typed into the approval.
+    public string CodexApprovalMarker(string id, string decisionId, string question = "Needs approval: git push", DateTimeOffset? created = null, JsonNode? attempted = null, string? owner = null)
+    {
+        Directory.CreateDirectory(CodexRegistrations);
+        var json = new JsonObject
+        {
+            ["SessionId"] = owner ?? id,
+            ["DecisionId"] = decisionId,
+            ["Question"] = question,
+            ["Created"] = (created ?? T0).ToString("o"),
+        };
+        if (attempted is not null)
+        {
+            json["DeliveryAttempted"] = attempted;
+            json["DeliveryChoice"] = "Approve";
+            json["DeliveryOutcome"] = "unconfirmed";
+        }
+        var path = Path.Combine(CodexRegistrations, id + ".approval.json");
+        File.WriteAllText(path, json.ToJsonString());
+        return path;
+    }
+
     public static void Append(string path, params string[] lines)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -233,6 +256,40 @@ internal static class Claude
 
     public static string Assistant(int s, string? stopReason, params JsonObject[] blocks) => AssistantMessage(null, s, stopReason, blocks);
 
+    // AskUserQuestion's input: one entry per question, as (text, multiSelect, options).
+    public static JsonObject Ask(params (string Question, bool Multi, string[] Options)[] questions) => new()
+    {
+        ["questions"] = new JsonArray([.. questions.Select(q => (JsonNode)new JsonObject
+        {
+            ["question"] = q.Question,
+            ["header"] = q.Question.Split(' ')[0],
+            ["multiSelect"] = q.Multi,
+            ["options"] = new JsonArray([.. q.Options.Select(o => (JsonNode)new JsonObject { ["label"] = o, ["description"] = "About " + o })]),
+        })]),
+    };
+
+    // The answer to an AskUserQuestion as Claude Code records it: the tool_result's text,
+    // '"question"="answer"' per question, and the entry's toolUseResult with the answers by
+    // question text (left out, as an older build would).
+    public static string Answered(string id, int s, IReadOnlyDictionary<string, string> answers, bool structured = true, bool error = false)
+    {
+        var text = error
+            ? "The user doesn't want to proceed with this tool use."
+            : $"User has answered your questions: {string.Join(", ", answers.Select(a => $"\"{a.Key}\"=\"{a.Value}\""))}. You can now continue with the user's answers in mind.";
+        var e = Entry("user", new JsonObject
+        {
+            ["role"] = "user",
+            ["content"] = new JsonArray(new JsonObject { ["type"] = "tool_result", ["tool_use_id"] = id, ["content"] = text, ["is_error"] = error }),
+        }, s);
+        if (structured && !error)
+        {
+            var map = new JsonObject();
+            foreach (var (k, v) in answers) { map[k] = v; }
+            e["toolUseResult"] = new JsonObject { ["questions"] = new JsonArray(), ["answers"] = map };
+        }
+        return e.ToJsonString();
+    }
+
     // One API message streamed as several entries shares its message id.
     public static string AssistantMessage(string? id, int s, string? stopReason, params JsonObject[] blocks) =>
         Entry("assistant", new JsonObject
@@ -246,7 +303,7 @@ internal static class Claude
 
     public static JsonObject Text(string text) => new() { ["type"] = "text", ["text"] = text };
     public static JsonObject Thinking(string text) => new() { ["type"] = "thinking", ["thinking"] = text };
-    public static JsonObject ToolUse(string id, string name, JsonObject input) => new() { ["type"] = "tool_use", ["id"] = id, ["name"] = name, ["input"] = input };
+    public static JsonObject ToolUse(string id, string name, JsonObject input) => new() { ["type"] = "tool_use", ["id"] = id, ["name"] = name, ["input"] = input.DeepClone() };
 
     public static string System(string subtype, int s)
     {

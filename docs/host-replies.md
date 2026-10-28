@@ -93,9 +93,10 @@ In order, for every reply:
 3. One delivery per session (`busy`), shared with answers. Every request's outcome is
    remembered for 15 minutes and returned for a resend, which types nothing.
 4. No question or permission prompt in the session as reported (`refused`: "answer that
-   first"). Its attachments are held, complete, for this device (`refused` otherwise), and
-   are reserved for this reply. The process is the live agent process, and not elevated.
-   The attachments are staged (below).
+   first", or, for one marked `answerAtMachine`, "answer it there first"). Its attachments
+   are held, complete, for this device (`refused` otherwise), and are reserved for this
+   reply. The process is the live agent process, and not elevated. The attachments are
+   staged (below).
 5. The single typing turn is taken, then, immediately before typing: agent-ha-bridge again,
    the session again, and its transcript: no `ask_user` from any agent without its
    completion or `human_response.recorded`, and no `permission.requested` without its

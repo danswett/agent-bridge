@@ -183,6 +183,11 @@ export class ReplyBox {
     const held = this.#held();
     const pending = this.#pending();
     e.held.hidden = !held;
+    if (held) {
+      e.held.textContent = this.#session.question.answerAtMachine
+        ? 'The session is waiting at the machine for a prompt only it can answer. Answer it there first, then reply.'
+        : 'The session is waiting for an answer to its question. Answer that first, then reply.';
+    }
     e.input.disabled = held;
     e.attach.hidden = !this.#attach;
     e.attach.disabled = held || pending || this.#files.length + this.#preparing >= AttachmentLimits.perReply;

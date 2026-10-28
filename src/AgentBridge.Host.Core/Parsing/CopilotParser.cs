@@ -264,7 +264,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time) : Tra
     }
 
     // A permission request is asked of the person like a question, so it is one, of
-    // kind approval, keyed by the tool call it gates when there is one.
+    // kind approval, keyed by the tool call it gates when there is one. It is answered
+    // only at the machine: agent-ha-bridge mirrors these prompts as an alert and has never
+    // typed into one, so there is no proven walk to their options.
     void Permission(JsonElement data, DateTimeOffset at)
     {
         var request = Json.Str(data, "requestId");
@@ -275,7 +277,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time) : Tra
         var detail = ToolSummary.From(Json.Get(p, "args")) ?? Text.OneLine(Json.Str(p, "fullCommandText") ?? Json.Str(p, "intention"));
         var message = detail is null ? $"Allow **{what}**?" : $"Allow **{what}**?\n\n`{detail}`";
         _permissionQuestion[request] = id;
-        S.Ask(QuestionMapper.Approval(id, message, at));
+        S.Ask(QuestionMapper.Approval(id, message, at, atMachine: true));
     }
 
     void Context(JsonElement? context)

@@ -12,6 +12,7 @@ public static class Answers
     public static string? Check(Question question, AnswerRequest answer)
     {
         if (question.Truncated == true) { return "the question was too large to show in full; answer it at the machine"; }
+        if (question.AnswerAtMachine == true) { return "this prompt can only be answered at the machine"; }
         // Per-text limits alone don't bound the request: several text fields, each within
         // its own limit, can add up to more than a host promised to take.
         if (JsonSerializer.SerializeToUtf8Bytes(answer, ProtocolJson.Options).Length > Limits.AnswerRequest)

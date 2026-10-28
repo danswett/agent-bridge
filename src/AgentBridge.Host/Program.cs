@@ -156,7 +156,7 @@ async Task<int> ServeAsync()
     // machine nor loses a change, and every new channel subscribes to the same state.
     await using var source = new SessionSource(options);
     await source.StartAsync(stop.Token);
-    var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"));
+    var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"));
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
     // app closed. Subscriptions live in the profile's own folder, for this account only.
@@ -227,8 +227,9 @@ static string OsName() =>
 // for every hello, answer, reply and stop; this is only the startup note). They share one
 // gate, so an answer, a reply and ending a session (which types /exit) never act on one
 // session at once. Files sent with replies are staged in the profile's own folder, private
-// to this user (docs/host-replies.md).
-(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging)
+// to this user (docs/host-replies.md), and the prompts already
+// answered are recorded there too, so none is typed into twice.
+(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging, string attempts)
 {
     if (!OperatingSystem.IsWindows())
     {
@@ -244,7 +245,7 @@ static string OsName() =>
     Log(probe.Active() is { } active ? $"answering, replying and ending sessions are off for now: {active}" : "answering, replying and ending sessions are on");
     var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log);
     return (
-        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome }, Log, gate),
+        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts }, Log, gate),
         new ReplyService(source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome }, Log, gate, attachments),
         attachments,
         new StopService(source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log, gate));

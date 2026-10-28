@@ -103,6 +103,7 @@ export function readQuestion(raw) {
     fields: Array.isArray(q.fields) ? q.fields.map(readField).filter(Boolean) : [],
     askedAt: str(q.askedAt),
     truncated: q.truncated === true,
+    answerAtMachine: q.answerAtMachine === true,
   };
 }
 

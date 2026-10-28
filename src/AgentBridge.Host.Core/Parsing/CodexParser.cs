@@ -282,7 +282,10 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
 
     void Approve(string id, string message, string? reason, DateTimeOffset? at)
     {
-        S.Ask(QuestionMapper.Approval(id, string.IsNullOrWhiteSpace(reason) ? message : $"{message}\n\n{reason}", Now(at)));
+        // Answered only at the machine: what agent-ha-bridge answers is the approval its
+        // hook recorded (the marker, which SessionTracker prefers), since only that has a
+        // generation to check before typing. A request seen only in the rollout has none.
+        S.Ask(QuestionMapper.Approval(id, string.IsNullOrWhiteSpace(reason) ? message : $"{message}\n\n{reason}", Now(at), atMachine: true));
     }
 
     static string? Files(JsonElement p) =>

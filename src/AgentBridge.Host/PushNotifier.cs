@@ -538,7 +538,7 @@ public sealed class PushNotifier : IAsyncDisposable
         if (title.Length == 0) { title = $"{AgentName(s.Agent)} session"; }
         var body = kind switch
         {
-            NoticeKind.Question => $"{machine.Name} · {(s.Question?.Kind == QuestionKind.Approval ? "waiting for your approval" : "waiting on you")}\n" +
+            NoticeKind.Question => $"{machine.Name} · {Waiting(s.Question)}\n" +
                 (PushNotice.Flatten(s.Question?.Message) is { Length: > 0 } m ? m : "This session is waiting for an answer."),
             NoticeKind.Finished => $"{machine.Name} · finished\n{Preview(s.Activity.Response)}",
             _ => $"{machine.Name} · {(ended ? "session ended" : "no longer waiting")}",
@@ -574,6 +574,15 @@ public sealed class PushNotifier : IAsyncDisposable
         AgentKind.Claude => "Claude",
         AgentKind.Codex => "Codex",
         _ => "Agent",
+    };
+
+    // A prompt only the machine can answer says so on the lock screen, so the person goes to
+    // the machine rather than opening the app to find nothing to press.
+    static string Waiting(Question? q) => q switch
+    {
+        { AnswerAtMachine: true } => "waiting at the machine",
+        { Kind: QuestionKind.Approval } => "waiting for your approval",
+        _ => "waiting on you",
     };
 
     public async ValueTask DisposeAsync()

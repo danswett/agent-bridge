@@ -14,17 +14,20 @@ how the host does it and what it refuses.
 | Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape) |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
 | Copilot CLI | The older `question` / `choices` format | Refused: agent-ha-bridge never drove it, and no current build writes it |
-| Copilot CLI | Permission prompts (`kind: approval`) | Refused: agent-ha-bridge only mirrors them, so there is no proven walk |
-| Claude Code | `AskUserQuestion` | Refused for now (below) |
-| Codex | Approvals | Refused for now (below) |
+| Copilot CLI | Permission prompts | Refused, `answerAtMachine`: agent-ha-bridge only mirrors them as an alert, so there is no proven walk |
+| Claude Code | `AskUserQuestion`, one to four questions, each one option (`choice`) or several (`multi`, at least one, the first nine rows) | Yes |
+| Claude Code | Free text in `AskUserQuestion` ("Type something") | Refused: no field offers `allowOther` (below) |
+| Claude Code | More than four questions, a question without options, two questions with the same text | Refused, `answerAtMachine` |
+| Claude Code | Permission prompts | Refused, `answerAtMachine`: agent-ha-bridge's hook reports them and offers only its reply box, best effort |
+| Codex | An approval agent-ha-bridge's hook recorded (`<id>.approval.json`) | Yes: approve or deny, always `unconfirmed` (below) |
+| Codex | An approval seen only in the rollout, or one agent-ha-bridge has already typed into | Refused, `answerAtMachine` |
 
-Claude and Codex are refused deliberately. agent-ha-bridge's Claude walks are only partly
-proven (its own verifier records that `AskUserQuestion` was never run against a real
-question; its Other path is marked "not re-verified"; a single choice can end on a review
-screen that needs a conditional extra Enter). Its Codex delivery types `y` or `n` and
-logs "native approval is not confirmed", and a deny cannot be confirmed by identity in the
-rollout. Neither meets "delivered only on evidence". Both slot in as a planner and a
-verifier beside the Copilot ones once walked live.
+These are exactly what agent-ha-bridge answers, with two deliberate gaps. Claude's free
+text: agent-ha-bridge's only walk to "Type something" presses Down two rows past the
+options, Enter, the words and Enter, and its own code marks that path "not re-verified"
+(its README says `AskUserQuestion` never ran against a real question); a walk that misses
+answers in the person's name. And a Claude multi-select left empty, which agent-ha-bridge
+refuses for Claude too. Both can be added once walked live.
 
 macOS and Linux do not offer `sessions.answer` yet (tmux delivery comes later); an answer
 sent anyway is refused with "not supported on this platform yet".
@@ -74,13 +77,62 @@ The keys are planned from the tool call's own arguments in the transcript, not f
 (which rows open ticked, `minItems`, the older format). If the two
 readings of the schema disagree on fields, order, types or option values, nothing is typed.
 
+## The keys (Claude Code)
+
+Ported from agent-ha-bridge (`Get-BridgeFormPayloads`, `Send-CopilotSessionForm`,
+`Complete-DaemonClaudeAnswer`), with the same timings as Copilot's forms. Each question in
+order, committed with its own Enter:
+
+* **One option:** Down from the first row to the chosen one, then Enter. The prompt opens
+  on its first row and agent-ha-bridge counts from there; whether Up stops at the top of a
+  Claude list has not been seen, so the caret is not normalized as it is for Copilot.
+* **Several options:** Claude numbers the rows, and a digit toggles its row wherever the
+  cursor is. Each chosen row's digit is a send of its own, 350 ms apart (as one burst the
+  toggles were dropped), then Down once per row, the options plus "Type something", lands
+  on Submit, and Enter presses it. agent-ha-bridge verified this against Claude Code
+  2.1.273: `2`, `3` and four Downs recorded "Billing, Search".
+* **The review screen.** Claude can end on a screen that needs one more Enter. If nothing
+  is recorded for the call 1.5 s after the keys, and the transcript still shows it
+  unanswered, the host presses Enter once, with the same last checks as the answer. Never
+  twice.
+
+Delivered when the `tool_result` for the call's `tool_use` id records the answer typed:
+every question's answer in `toolUseResult.answers` (a multi-select's labels in list order
+joined by ", "), or, for a build that does not write that, `"question"="answer"` in the
+result's text. A result marked `is_error` (declined), a different answer, an interrupt,
+or nothing within 15 s is `unconfirmed`.
+
+## The keys (Codex)
+
+agent-ha-bridge's `Invoke-PendingCodexApprovals`: `y` to approve or `n` to deny, then
+Enter 300 ms later, as a reply is typed. The approval is the one agent-ha-bridge's
+`PermissionRequest` hook recorded in `<id>.approval.json`, and its `DecisionId` is the
+question's id: the generation. Immediately before typing the host reads the marker again
+and types nothing unless it names this session, holds the same generation, and records no
+attempt of agent-ha-bridge's own (`DeliveryAttempted`). Missing is `stale`; unreadable,
+or anything else its own sender would reject, is `refused`. The host only reads the
+marker: it never writes, renames or removes it, so its attempt is recorded in its own
+ledger (below), not in agent-ha-bridge's file.
+
+Codex records nothing that says how an approval was answered: the hook removes the marker
+on the next event however it was answered, and the rollout does not name the approval. So
+a typed approval is always `unconfirmed`, as agent-ha-bridge logs it ("native approval is
+not confirmed"), and the client says to check at the machine.
+
+Claude and Codex sessions are known to this host only through agent-ha-bridge's hook
+registrations, so answering them needs its Claude or Codex adapter installed (with its
+daemon stopped, or G5 refuses). Its Codex hook writes the approval marker only after
+reaching Home Assistant (`Enter-BridgeAdapterSession`); without that, an approval is seen
+at most in the rollout, and answered at the machine.
+
 ## Before and after typing
 
 In order, for every answer:
 
 1. Platform, then agent-ha-bridge (below).
 2. The session is live and its current question has the id the client sent (`stale`
-   otherwise); the agent and question kind are supported; `Answers.Check` passes.
+   otherwise); the question is not `answerAtMachine`; the agent and question kind are
+   supported; `Answers.Check` passes.
 3. One answer or reply per session at a time, through the `DeliveryGate` that replies
    ([host-replies.md](host-replies.md)) share (`busy` for a different request; a resend of
    the request being typed waits for its outcome instead). Every request UUID's outcome,
@@ -89,20 +141,28 @@ In order, for every answer:
 4. The session's process is still the live agent process; it does not run elevated
    (integrity level High or above, or unreadable, is refused).
 5. One answer is typed at a time across sessions, and its turn is taken before these last
-   checks: agent-ha-bridge again, then the transcript: the tool call's start is there, and
-   no `human_response.recorded`, `tool.execution_complete` or session abort/shutdown
-   follows it (`stale` otherwise). Identity, never time.
-6. The worker types the plan. Nothing written (it could not start, attach or open the
-   console input) is `refused`. Anything after its first write that is not a clean finish
-   (the worker died, hung, or the console closed) is `unconfirmed`, never retried.
-7. Up to 15 s, the transcript after the point read in step 5 is watched for that tool
-   call. `delivered` only when the session recorded the answer typed: the structured
+   checks: agent-ha-bridge again, then the agent's own record: for Copilot, the tool call's
+   start is there and no `human_response.recorded`, `tool.execution_complete` or session
+   abort/shutdown follows it; for Claude, the `AskUserQuestion` `tool_use` is there, in the
+   session's own entries, with no `tool_result` or interrupt after it; for Codex, the
+   approval marker as above (`stale` otherwise). Identity, never time.
+6. The prompt is claimed in the host's attempt ledger, `answer-attempts.json` in its
+   profile folder, written through to disk. A prompt already claimed (by any request,
+   before or after a restart) or a ledger that cannot be read or written is `refused`:
+   agent-ha-bridge's rule that a prompt gets one attempt (`Start-CopilotDecisionAttempt`,
+   `DeliveryAttempted`), since nobody can say what a half-typed prompt holds.
+7. The worker types the plan. Nothing written (it could not start, attach or open the
+   console input) is `refused`, and releases the claim. Anything after its first write that
+   is not a clean finish (the worker died, hung, or the console closed) is `unconfirmed`,
+   never retried, and the claim stands.
+8. Up to 15 s, the transcript after the point read in step 5 is watched for that call. For
+   Copilot, `delivered` only when the session recorded the answer typed: the structured
    `human_response.recorded` content field by field (choices by value, words with
    whitespace runs collapsed, lists as sets), or, for free text only, the rendered
    `User responded: …`. A form, even of one field, needs the structured record: its
    rendering trims, renders `a=x, b=y` (equally `a="x, b=y"`), and cannot tell options
    `x`, `x ` and `pick=x` apart. A different record, an error, a skip, the session
-   ending, or nothing is `unconfirmed` with the reason.
+   ending, or nothing is `unconfirmed` with the reason. Claude and Codex as above.
 
 ## agent-ha-bridge (design G5)
 

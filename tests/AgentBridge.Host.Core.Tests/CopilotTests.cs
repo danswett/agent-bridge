@@ -203,7 +203,7 @@ public class CopilotTests
     }
 
     [Fact]
-    public async Task A_permission_request_is_an_approval_question_until_it_is_completed()
+    public async Task A_permission_request_is_an_approval_question_answered_only_at_the_machine_until_it_is_completed()
     {
         await using var s = new Session_();
 
@@ -215,6 +215,7 @@ public class CopilotTests
         Assert.Equal(QuestionKind.Approval, q.Kind);
         Assert.Contains("rm -rf build", q.Message);
         Assert.Equal(["approve", "deny"], Assert.Single(q.Fields).Options!.Select(o => o.Value));
+        Assert.True(q.AnswerAtMachine);
 
         var granted = await s.After(Copilot.Event("permission.completed", new { requestId = "r1", toolCallId = "c9", result = new { kind = "approved" } }, 4));
         Assert.Null(granted.Question);

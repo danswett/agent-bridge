@@ -14,15 +14,17 @@ internal static class QuestionMapper
     static string Cut(string message) => Limits.KeepStart(message, Limits.QuestionMessage)!;
 
     static bool? IsCut(string message) => Cut(message).Length < message.Length ? true : null;
-    // A permission prompt: a fixed approve-or-deny choice.
-    public static Question Approval(string id, string message, DateTimeOffset askedAt) => new()
+    // A permission prompt: a fixed approve-or-deny choice. atMachine marks one no host can
+    // answer from another device, so a client shows it without the buttons.
+    public static Question Approval(string id, string message, DateTimeOffset askedAt, bool atMachine = false) => new()
     {
         Id = id,
         Kind = QuestionKind.Approval,
         Message = Cut(message),
-            Truncated = IsCut(message),
+        Truncated = IsCut(message),
         Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = ApprovalOptions, Required = true }],
         AskedAt = askedAt,
+        AnswerAtMachine = atMachine ? true : null,
     };
 
     // Copilot's ask_user. Current builds pass `message` and `requestedSchema` (a JSON
@@ -182,15 +184,22 @@ internal static class QuestionMapper
     static string Scalar(JsonElement v) => v.ValueKind == JsonValueKind.String ? v.GetString()! : v.GetRawText();
 
     // Claude's AskUserQuestion: { questions: [ { question, header, multiSelect, options:
-    // [ { label, description } ] } ] }. Claude records the answer under the question text
-    // and always offers "Other", so each field takes free text too. Option descriptions
-    // carry real content but have no place on an Option, so they are listed under the
-    // message, as the old bridge did.
+    // [ { label, description } ] } ] }. Claude records the answer under the question text.
+    // Option descriptions carry real content but have no place on an Option, so they are
+    // listed under the message, as the old bridge did.
+    //
+    // Claude's prompt also takes free text ("Type something"), but no field offers it:
+    // agent-ha-bridge's only walk to it overshoots the list by two rows and was never run
+    // against a real question, and a wrong walk answers in the person's name. A prompt
+    // the keys cannot drive at all (no questions, more than the tool's four, or an option
+    // past the ninth that a multi-select can only tick by its digit) is answered at the
+    // machine, as agent-ha-bridge leaves it to the terminal.
     public static Question FromClaudeAskUserQuestion(string id, JsonElement input, DateTimeOffset askedAt)
     {
         var fields = new List<Field>();
         var questions = new List<string>();
         var notes = new StringBuilder();
+        var drivable = true;
         if (Json.Arr(input, "questions") is { } list)
         {
             foreach (var q in list.EnumerateArray())
@@ -212,18 +221,20 @@ internal static class QuestionMapper
                         }
                     }
                 }
+                var multi = Json.Bool(q, "multiSelect") == true;
+                if (options.Count == 0 || (multi && options.Count > 9) || fields.Any(f => f.Name == text)) { drivable = false; }
                 fields.Add(new Field
                 {
                     Name = text,
                     Title = Json.Str(q, "header"),
                     Description = Json.Str(q, "header") is null ? null : text,
-                    Type = Json.Bool(q, "multiSelect") == true ? FieldType.Multi : FieldType.Choice,
+                    Type = multi ? FieldType.Multi : FieldType.Choice,
                     Options = options,
-                    AllowOther = true,
                     Required = true,
                 });
             }
         }
+        if (fields.Count is 0 or > 4) { drivable = false; }
         var message = questions.Count == 0 ? "Claude needs an answer." : string.Join("\n\n", questions);
         if (notes.Length > 0) { message += "\n" + notes; }
         return new Question
@@ -234,6 +245,7 @@ internal static class QuestionMapper
             Truncated = IsCut(message),
             Fields = fields,
             AskedAt = askedAt,
+            AnswerAtMachine = drivable ? null : true,
         };
     }
 }
