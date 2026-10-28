@@ -13,7 +13,10 @@ ops without changing anything here.
 ## Rules for every message
 
 * JSON, UTF-8, `camelCase` names. A field that is absent and one that is `null` mean
-  the same thing. Non-ASCII text is sent as UTF-8, not as `\u` escapes.
+  the same thing. Text in the Basic Multilingual Plane, accented letters and CJK
+  included, is sent as raw UTF-8, not as `\u` escapes. Characters outside it, which are
+  most emoji, **are** escaped as a surrogate pair (`\uD83D\uDE00`): 12 bytes of JSON for 4
+  bytes of text. Clients must read both forms.
 * **Clients ignore fields and enum values they don't know.** An unknown value reads as:
   `agent` → `unknown` (shown generically), `status` → `idle`, tool `status` → `done`,
   question `kind` → `form`, field `type` → `text`. Hosts never remove or rename a field
@@ -23,10 +26,12 @@ ops without changing anything here.
 * **Sizes are UTF-8 bytes of the JSON as sent.** No single message exceeds **48 KiB**, so
   it always fits one Noise transport message (65,535 bytes) with room to spare. **Every
   `Session` as sent fits 40 KiB**: in a list page, an event or `session.get`. Each type
-  below gives per-field limits. Those alone can't promise the budget (question options,
-  history), so a host finishes with the trimming order in
-  [Session budget](#session-budget). Long text is cut and flagged, never
-  mid-character.
+  below gives per-field limits, which count the UTF-8 bytes of the text itself, not its
+  JSON form. Those limits alone can't promise the budget: escaping makes the JSON larger
+  than the text (an emoji triples, and quotes and control characters grow too), and
+  question options and history have no total. So a host finishes with the trimming
+  order in [Session budget](#session-budget), which measures the JSON as sent. Long text
+  is cut and flagged, never mid-character.
 * Text is Markdown where the type says so (agent responses, questions), otherwise plain.
   Clients render Markdown without raw HTML.
 
@@ -137,8 +142,27 @@ the snapshot.
 | `currentTool` | ToolCall? | The tool running now, while `working` |
 | `history` | ToolCall[]? | Only in `session.get`: the latest 50 tool calls, oldest first |
 | `userMessage` | string? | The latest user message, at most 2 KiB |
-| `turnCount` | number? | Completed assistant turns |
+| `turnCount` | number? | User prompts whose turn has finished: the prompts sent, less one while a turn is still in progress (`working` or `waiting`). Not the agent's own model rounds: Copilot writes `assistant.turn_end` after every round of tool calls, and those are not counted |
 | `compactions` | number? | Context compactions so far |
+| `background` | Background? | Work the session started that is still running after its own turn. Absent when there is none |
+
+### Background
+
+`{ "agents": 2, "shells": 1 }`. Present only while at least one is above zero, and then
+both are sent.
+
+| Field | Type | Notes |
+|---|---|---|
+| `agents` | number | Background agents still working: Copilot `task` agents started in background mode, including one woken again by a later message |
+| `shells` | number | Background shell commands still running: started async, or started sync and left running in the background |
+
+**`status` is unchanged by it.** A session whose own turn has ended is `idle`, truthfully;
+`background` says why it is not finished. A client shows a session that is `idle` with
+`background` as **delegating**: its own style, and the status text "Waiting for
+background agents" when `agents` is above zero, otherwise "Waiting for background
+commands". An older client ignores the field and shows `idle`, as before. A change in
+either count is something a client shows, so it moves `updatedAt` and sends an upsert.
+Counts are never trimmed by the session budget.
 
 ### ToolCall
 
@@ -210,6 +234,44 @@ session is at most 40 KiB.
 | Claude Code | The bridge's registration files, and `~/.claude/projects/<slug>/<id>.jsonl` | Transcript `assistant` entries (`text`, `thinking`, `tool_use`) and `user` entries | A `tool_use` named `AskUserQuestion`, pending until a `tool_result` with its id |
 | Codex | The bridge's registration files, and `~/.codex/sessions/…/rollout-*.jsonl` | Rollout `event_msg` payloads | Approval requests |
 
+Only Copilot reports `background` so far. Claude Code can run Bash with
+`run_in_background`, and Codex may have equivalents, but no transcript of either doing
+so has been examined yet, so neither sends it.
+
 On a machine that still runs agent-ha-bridge, a shadow host **only reads**. It never
 opens the hook spool, never writes into a session folder, and never deletes or locks
 anything another process uses.
+
+### Background work (Copilot)
+
+Read from the same `events.jsonl`. Every rule below was checked against real transcripts
+(85 background agents and 535 background shells; the evidence is in the pull request
+that added `background`).
+
+* **Agents are tracked by id, never counted.** One starts with `subagent.started` whose
+  `executionMode` is `background`; its own events carry its `agentId` at the top level.
+  It is working until its own turn bookkeeping says it has stopped: an
+  `assistant.turn_end` stamped with its `agentId` whose turn asked for no tools. A later
+  `user.message` stamped with its `agentId` (a message sent to it) makes it work again.
+  Its own `abort` or `session.shutdown` (stamped with its `agentId`) ends its run and
+  nothing else. `subagent.completed` (by `toolCallId`) and a `system.notification` of kind
+  `agent_idle` (by `kind.agentId`) also end a run, but neither is enough alone:
+  `subagent.completed` is written once, after the first run only, and again for every
+  agent at shutdown (only the first counts); `agent_idle` arrives when the parent next
+  takes notifications, which was up to 90 minutes late, and for 3 of 44 later runs never.
+  A late one can arrive after a message has woken the agent again, so each is spent on a
+  run that already ended without one, and only a notice no run is owed ends the current
+  run.
+* **Shells, likewise by id.** A main-agent `tool.execution_complete` whose whole result is
+  `<command started in background with shellId: X>` or `<command with shellId: X moved to
+  background by the user…>`, or whose last line is `<command with shellId: X is still
+  running…>`, starts one. A last line `<shellId: X completed with exit code N>`, a whole
+  result `<command with id: X stopped>`, or a `system.notification` of kind
+  `shell_completed` with `kind.shellId` ends it. Markers anywhere else in a result are
+  quoted text (a command printing a transcript, say) and are ignored. Detached shells
+  (`started in detached background`) are services meant to outlive the session and are
+  not counted. A subagent's shells are its own work, covered by its agent, and do not
+  report their ends to the session.
+* **Nothing outlives its CLI process.** `session.shutdown` ends everything, and work
+  that began before the session's current process started is dropped: a CLI that was
+  replaced can never report back what it started.

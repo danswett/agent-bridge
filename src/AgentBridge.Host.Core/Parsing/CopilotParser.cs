@@ -15,9 +15,14 @@ namespace AgentBridge.Host.Core.Parsing;
 // events never carry. Their turns, prompts, replies and model are not the session's, so
 // they are ignored for status and text; their tool calls are real work and do appear in
 // the tool history. A session whose own turn has ended reads idle even while a
-// background agent it started is still running, as Copilot's own prompt does: such an
-// agent can sit idle awaiting messages without ever writing subagent.completed, so
-// counting it as work left sessions reading working for good.
+// background agent or shell it started is still running, as Copilot's own prompt does;
+// that work is reported beside the status, as activity.background (BackgroundWork).
+//
+// Which background agents are working is read from each agent's own turn bookkeeping,
+// not from subagent.completed: that is written once, after an agent's first run, so an
+// agent woken again by a message never writes another, and its agent_idle notification
+// came up to 90 minutes late, or never, in real transcripts. Every one of 125 run ends
+// in them was an agent turn_end that asked for no tools, at or before those signals.
 internal sealed class CopilotParser(SessionState state, TimeProvider time) : TranscriptParser(state, time)
 {
     static readonly IReadOnlyList<byte[]> Markers =
@@ -25,6 +30,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time) : Tra
         Marker("\"user.message\""),
         Marker("\"session.compaction_complete\""),
         Marker("\"session.start\""),
+        Marker("\"subagent.started\""),
     ];
 
     bool _turnAskedForTools;
@@ -60,10 +66,75 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time) : Tra
             case "session.start":
                 S.StartedAt ??= Json.Time(e, "timestamp");
                 break;
+            case "subagent.started":
+                // Only the mode: the agent's events in the parsed window say whether it is
+                // still working, and only an agent known to be background is tracked, so a
+                // sync one's events never look like one.
+                S.Background.KnowMode(Json.Str(data, "toolCallId"), Json.Str(e, "agentId"), Json.Str(data, "executionMode") == "background");
+                break;
         }
     }
 
     protected override bool Apply(JsonElement e, DateTimeOffset? at)
+    {
+        var before = S.Background.Version;
+        Background(e, at);
+        return ApplyOwn(e, at) || S.Background.Version != before;
+    }
+
+    void Background(JsonElement e, DateTimeOffset? at)
+    {
+        var data = Json.Obj(e, "data") ?? default;
+        var agentId = Json.Str(e, "agentId") is { Length: > 0 } a ? a : null;
+        var work = S.Background;
+        switch (Json.Str(e, "type"))
+        {
+            case "subagent.started":
+                if (Json.Str(data, "executionMode") == "background") { work.AgentStarted(Json.Str(data, "toolCallId"), agentId, at); }
+                break;
+            case "subagent.completed":
+                work.AgentCompleted(Json.Str(data, "toolCallId"));
+                break;
+            case "system.notification" when Json.Obj(data, "kind") is { } kind:
+                switch (Json.Str(kind, "type"))
+                {
+                    case "agent_idle": work.AgentIdle(Json.Str(kind, "agentId")); break;
+                    case "shell_completed": work.ShellEnded(Json.Str(kind, "shellId")); break;
+                }
+                break;
+            case "session.shutdown" when agentId is null:
+                work.EndAll();
+                break;
+            // A subagent's own abort or shutdown ends its run and nothing else: none were in
+            // two months of real transcripts, but a woken agent writes no second
+            // subagent.completed, so missing one would leave it working for good.
+            case "abort" or "session.shutdown" when agentId is not null:
+                work.AgentEnded(agentId);
+                break;
+            case "user.message" or "assistant.turn_start" or "tool.execution_start" when agentId is not null:
+                work.AgentActive(agentId, at);
+                break;
+            case "assistant.message" when agentId is not null:
+                work.AgentActive(agentId, at);
+                if (Json.Arr(data, "toolRequests") is { } requests && requests.GetArrayLength() > 0) { work.AgentAskedForTools(agentId); }
+                break;
+            case "assistant.turn_end" when agentId is not null:
+                work.AgentTurnEnded(agentId, at);
+                break;
+            // A subagent's shells are its own work, covered by its agent; they report their
+            // ends to it, not to the session, and counted here they never ended.
+            case "tool.execution_complete" when agentId is null:
+                {
+                    var content = Json.Obj(data, "result") is { } result ? Json.Str(result, "content") : null;
+                    var (started, ended) = ShellMarkers.Read(content);
+                    if (ended is not null) { work.ShellEnded(ended); }
+                    if (started is not null) { work.ShellStarted(started, at); }
+                    break;
+                }
+        }
+    }
+
+    bool ApplyOwn(JsonElement e, DateTimeOffset? at)
     {
         var type = Json.Str(e, "type");
         var data = Json.Obj(e, "data") ?? default;

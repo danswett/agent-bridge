@@ -119,7 +119,8 @@ function withHistory(s) {
 }
 
 // A few changes on a loop, so the demo looks alive: the working session's tool moves on,
-// a new session appears and goes, and the idle one gets a follow-up.
+// a new session appears and goes, the delegating one's background agents come and go, and
+// the idle one gets a follow-up.
 export function runScript(host, { tickMs = 4000 } = {}) {
   const steps = [
     () => {
@@ -138,6 +139,13 @@ export function runScript(host, { tickMs = 4000 } = {}) {
       host.upsert({ ...s, status: 'working', statusSince: now(), updatedAt: now(), activity: { ...s.activity, response: 'Re-running the suite 20 times to be sure the fix holds.' } });
     },
     () => host.remove('demo-new-session'),
+    () => {
+      // One of the delegating session's background agents finishes, then another starts.
+      const s = host.get('8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35');
+      if (!s) { return; }
+      const agents = s.activity?.background?.agents === 2 ? 1 : 2;
+      host.upsert({ ...s, updatedAt: now(), activity: { ...s.activity, background: { agents, shells: 1 } } });
+    },
     () => {
       const s = host.get('019a1b2c-codex-example');
       if (!s) { return; }

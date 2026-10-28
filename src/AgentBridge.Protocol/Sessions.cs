@@ -19,9 +19,12 @@ public static class ProtocolJson
     public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        // Non-ASCII text is sent as UTF-8, not \u escapes: the default encoder doubles the
-        // size of CJK text, which broke the byte limits in review. Nothing here is ever
-        // embedded in HTML, which is the only thing the stricter encoder protects.
+        // Text in the Basic Multilingual Plane is sent as UTF-8, not \u escapes: the default
+        // encoder doubles the size of CJK text, which broke the byte limits in review.
+        // Nothing here is ever embedded in HTML, which is the only thing the stricter
+        // encoder protects. Even this encoder escapes characters outside the BMP (emoji)
+        // as a surrogate pair, \uXXXX\uXXXX: 12 bytes for 4 of text. So the per-field
+        // limits, which count the text, do not bound the JSON; SessionBudget.Fit does.
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         Converters = { new TolerantEnumConverterFactory(), new UtcTimeConverter() },
     };
@@ -70,7 +73,8 @@ public sealed class TolerantEnumConverterFactory : JsonConverterFactory
     }
 }
 
-// Limits are UTF-8 bytes of the text, which is what the transport limit counts.
+// Limits are UTF-8 bytes of the text. Its JSON form can be larger (escaped quotes and
+// control characters, and 12 bytes for each emoji), which SessionBudget.Fit accounts for.
 public static class Limits
 {
     public const int Title = 240;
@@ -207,6 +211,22 @@ public sealed record Activity
     public string? UserMessage { get; init; }
     public int? TurnCount { get; init; }
     public int? Compactions { get; init; }
+    // Work the session started that outlives its own turn, still running. Absent when there
+    // is none; status says nothing about it, so an idle session with this is not finished.
+    public Background? Background { get; init; }
+}
+
+// Counts, never ids: a client shows that the session is waiting and on what kind of work.
+public sealed record Background
+{
+    // Background agents (Copilot task agents started in background mode) still working.
+    public int Agents { get; init; }
+    // Background shell commands (async, or sync ones moved to the background) still running.
+    public int Shells { get; init; }
+
+    // The field as sent: null when nothing is running, so it is absent rather than zeros.
+    public static Background? Of(int agents, int shells) =>
+        agents <= 0 && shells <= 0 ? null : new Background { Agents = Math.Max(0, agents), Shells = Math.Max(0, shells) };
 }
 
 public sealed record ToolCall

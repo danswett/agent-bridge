@@ -22,6 +22,7 @@ const dll = path.join(pwa, '..', 'spikes', 's4-relay', 'src', 'S4.DevStack', 'bi
 const fixture = JSON.parse(readFileSync(path.join(pwa, 'fixtures', 'sessions-list.json'), 'utf8'));
 const CLAUDE = '6f1c2b7e-claude-example';
 const CODEX = '019a1b2c-codex-example';
+const DELEGATING = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
 
 test.skip(!existsSync(dll), 'the dev stack is not built: dotnet build spikes/s4-relay/src/S4.DevStack -c Release');
 test.describe.configure({ mode: 'serial' });
@@ -78,10 +79,13 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   await expect(page.locator('[data-device-name="fixture-host"] button')).toBeVisible();
   await expect(page.locator('[data-device-name="demo-host"] button')).toBeVisible();
   await page.click('[data-device-name="fixture-host"] button');
-  await expect(page.locator('.session')).toHaveCount(3, { timeout: 30000 });
+  await expect(page.locator('.session')).toHaveCount(fixture.sessions.length, { timeout: 30000 });
   await expect(page.locator('#sessions-h')).toHaveText('Sessions on fixture-host');
   await expect(page.locator('[data-device-name="fixture-host"] button')).toHaveAttribute('aria-current', 'true');
   await expect(card(page, CLAUDE)).toHaveAttribute('data-status', 'working');
+  // Idle, but waiting on work it started: background crosses the relay intact.
+  await expect(card(page, DELEGATING)).toHaveAttribute('data-view', 'delegating');
+  await expect(card(page, DELEGATING).locator('.status-text')).toHaveText('Waiting for background agents');
 
   // Live changes, pushed by the host.
   const t = new Date(Date.now() + 1000).toISOString();

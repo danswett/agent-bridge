@@ -11,7 +11,10 @@ internal sealed record DiscoveredSession(
     string? TranscriptPath,
     string? StateDirectory,
     int? ProcessId,
-    Registration? Registration = null);
+    Registration? Registration = null,
+    // When that process started, if the OS would say: work a session began before it
+    // belongs to a CLI that has gone, and can never finish.
+    DateTimeOffset? ProcessStartedAt = null);
 
 // One agent-ha-bridge hook registration (<id>.json), as written by its Claude and Codex
 // hooks. Only read; agent-ha-bridge prunes its own files.
@@ -80,7 +83,7 @@ internal static class CopilotDiscovery
                 ?? (Directory.Exists(dir) ? Candidate.Of(dir, process.Id, DateTime.MinValue) : null);
             if (winner is null) { continue; }
             winner = ResolveResume(winner, candidates, process.StartedAt?.UtcDateTime);
-            live[winner.Id] = winner.ToSession();
+            live[winner.Id] = winner.ToSession(process.StartedAt);
             settled.Add(process.Id);
         }
 
@@ -90,7 +93,7 @@ internal static class CopilotDiscovery
         foreach (var group in candidates.Where(c => !settled.Contains(c.Pid)).GroupBy(c => c.Pid))
         {
             var winner = group.OrderByDescending(c => c.TranscriptWrite).First();
-            live.TryAdd(winner.Id, winner.ToSession());
+            live.TryAdd(winner.Id, winner.ToSession(byPid[winner.Pid].StartedAt));
         }
         return [.. live.Values];
     }
@@ -123,8 +126,8 @@ internal static class CopilotDiscovery
             return new Candidate(Path.GetFileName(dir), dir, pid, lockWrite, has, has ? LastWrite(transcript) : DateTime.MinValue);
         }
 
-        public DiscoveredSession ToSession() =>
-            new(Id, AgentKind.Copilot, Path.Combine(Directory, "events.jsonl"), Directory, Pid);
+        public DiscoveredSession ToSession(DateTimeOffset? processStartedAt) =>
+            new(Id, AgentKind.Copilot, Path.Combine(Directory, "events.jsonl"), Directory, Pid, ProcessStartedAt: processStartedAt);
     }
 
     static DateTime LastWrite(string path)
@@ -180,7 +183,7 @@ internal static class RegistrationDiscovery
             // Claude creates its transcript at the first message, so a missing file is a
             // live session with nothing to show yet, not a dead one.
             var transcript = string.IsNullOrWhiteSpace(r.TranscriptPath) ? findTranscript(r.SessionId) : r.TranscriptPath;
-            live.Add(new DiscoveredSession(r.SessionId, agent, transcript, null, r.ProcessId, r));
+            live.Add(new DiscoveredSession(r.SessionId, agent, transcript, null, r.ProcessId, r, process.StartedAt));
         }
         return live;
     }

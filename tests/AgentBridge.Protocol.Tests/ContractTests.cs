@@ -15,9 +15,35 @@ public class ContractTests
         var back = JsonSerializer.Serialize(list, ProtocolJson.Options);
 
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse(json), JsonNode.Parse(back)), back);
-        Assert.Equal(3, list.Sessions.Count);
+        Assert.Equal(4, list.Sessions.Count);
         Assert.Equal(SessionStatus.Waiting, list.Sessions[0].Status);
         Assert.Equal(FieldType.Multi, list.Sessions[0].Question!.Fields[1].Type);
+        Assert.Null(list.Sessions[0].Activity.Background);
+        Assert.Equal(SessionStatus.Idle, list.Sessions[3].Status);
+        Assert.Equal(new Background { Agents = 2, Shells = 1 }, list.Sessions[3].Activity.Background);
+    }
+
+    [Fact]
+    public void Background_work_is_absent_when_nothing_runs_and_sends_both_counts_when_anything_does()
+    {
+        Assert.Null(Background.Of(0, 0));
+        var activity = new Activity { Background = Background.Of(0, 3) };
+        Assert.Equal("""{"background":{"agents":0,"shells":3}}""", JsonSerializer.Serialize(activity, ProtocolJson.Options));
+        Assert.Equal("{}", JsonSerializer.Serialize(new Activity { Background = Background.Of(0, 0) }, ProtocolJson.Options));
+    }
+
+    [Fact]
+    public void An_emoji_is_escaped_as_a_surrogate_pair_so_only_the_session_budget_bounds_the_json()
+    {
+        // 4,096 emoji are exactly the 16 KiB response limit as text, and 48 KiB as JSON.
+        var text = string.Concat(Enumerable.Repeat("😀", 4096));
+        Assert.Equal(Limits.Response, System.Text.Encoding.UTF8.GetByteCount(text));
+        Assert.Contains("\\uD83D\\uDE00", JsonSerializer.Serialize(text, ProtocolJson.Options), StringComparison.OrdinalIgnoreCase);
+        Assert.True(ProtocolJson.ByteCount(text) > SessionBudget.MaxSessionBytes);
+
+        var s = SessionBudget.Fit(Big("emoji", text));
+        Assert.True(ProtocolJson.ByteCount(s) <= SessionBudget.MaxSessionBytes);
+        Assert.True(s.Activity.ResponseTruncated);
     }
 
     [Fact]

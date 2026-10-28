@@ -7,6 +7,7 @@ const fixture = JSON.parse(readFileSync(new URL('../fixtures/sessions-list.json'
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const CLAUDE = '6f1c2b7e-claude-example';
 const CODEX = '019a1b2c-codex-example';
+const DELEGATING = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
 
 const card = (page, id) => page.locator(`.session[data-id="${id}"]`);
 const order = (page) => page.locator('.session').evaluateAll((els) => els.map((e) => e.dataset.id));
@@ -33,7 +34,7 @@ async function upsert(page, id, change) {
 
 test('demo mode shows every session from the worked example, with every field', async ({ page }) => {
   await openDemo(page);
-  await expect(page.locator('.session')).toHaveCount(3);
+  await expect(page.locator('.session')).toHaveCount(4);
   await expect(page.locator('#sessions-h')).toHaveText('Sessions on Demo machine');
 
   const copilot = card(page, COPILOT);
@@ -85,7 +86,14 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(codex.locator('.tool-line')).toBeHidden();
   await expect(codex.locator('.since')).toHaveText('');
 
-  expect(await order(page)).toEqual([COPILOT, CLAUDE, CODEX]);
+  const delegating = card(page, DELEGATING);
+  await expect(delegating).toHaveAttribute('data-status', 'idle');
+  await expect(delegating).toHaveAttribute('data-view', 'delegating');
+  await expect(delegating.locator('.status-text')).toHaveText('Waiting for background agents');
+  await expect(delegating.locator('.since')).toHaveText(/^for /);
+  await expect(delegating.locator('.facts')).toContainText('2 background agents · 1 background command · 5 turns');
+
+  expect(await order(page)).toEqual([COPILOT, CLAUDE, CODEX, DELEGATING]);
   expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
 });
 
@@ -101,6 +109,43 @@ test('each status has its glow: working and waiting breathe, idle is calm', asyn
   const border = (id) => card(page, id).locator('.frame').evaluate((e) => getComputedStyle(e).borderTopColor);
   expect(await border(CLAUDE)).not.toBe(await border(COPILOT));
   expect(await border(CODEX)).not.toBe(await border(CLAUDE));
+});
+
+test('an idle session still waiting on background work is delegating: its own still, dashed edge and text', async ({ page }) => {
+  await openDemo(page);
+  const c = card(page, DELEGATING);
+  const frame = c.locator('.frame');
+  const style = () => frame.evaluate((e) => ({ border: getComputedStyle(e).borderTopStyle, color: getComputedStyle(e).borderTopColor }));
+  const working = await card(page, CLAUDE).locator('.frame').evaluate((e) => getComputedStyle(e).borderTopColor);
+  const idle = await card(page, CODEX).locator('.frame').evaluate((e) => ({ border: getComputedStyle(e).borderTopStyle, color: getComputedStyle(e).borderTopColor }));
+
+  await expect(frame).toHaveClass(/\bdelegating\b/);
+  await expect(frame).not.toHaveClass(/\bidle\b/);
+  expect(await style()).toEqual({ border: 'dashed', color: working });
+  expect(idle.border).toBe('solid');
+  // Still: delegating is not working, so it does not breathe.
+  expect(await c.locator('.glow').evaluate((e) => getComputedStyle(e).animationName)).toBe('none');
+
+  // Only shells left: it says commands.
+  await upsert(page, DELEGATING, { updatedAt: later(), activity: { background: { agents: 0, shells: 1 } } });
+  await expect(c.locator('.status-text')).toHaveText('Waiting for background commands');
+  await expect(c.locator('.facts')).toContainText('1 background command');
+  await expect(c.locator('.facts')).not.toContainText('background agent');
+
+  // Nothing left: plain idle again.
+  await upsert(page, DELEGATING, { updatedAt: later(), activity: { background: null } });
+  await expect(c).toHaveAttribute('data-view', 'idle');
+  await expect(c.locator('.status-text')).toHaveText('Idle');
+  await expect(frame).toHaveClass(/\bidle\b/);
+  await expect(frame).not.toHaveClass(/\bdelegating\b/);
+  await expect(c.locator('.since')).toHaveText('');
+  expect((await style()).border).toBe('solid');
+
+  // A session working on its own turn is working, whatever it has in the background.
+  await upsert(page, DELEGATING, { status: 'working', statusSince: later(), updatedAt: later(), activity: { background: { agents: 1, shells: 0 } } });
+  await expect(c).toHaveAttribute('data-view', 'working');
+  await expect(c.locator('.status-text')).toHaveText('Working');
+  await expect(c.locator('.facts')).toContainText('1 background agent');
 });
 
 test('with reduced motion the glow holds still and the spinner stops', async ({ page }) => {
@@ -148,7 +193,7 @@ test('raw HTML and script links from a host are shown as text and never run', as
   await openDemo(page);
 
   const list = page.locator('#session-list');
-  await expect(list.locator('.session')).toHaveCount(3);
+  await expect(list.locator('.session')).toHaveCount(4);
   await expect(list.locator('img, script, iframe, svg[onload], b, i, object, embed')).toHaveCount(0);
   const hrefs = await list.locator('a[href]').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
   expect(hrefs).toEqual(['https://example.com/']);
@@ -203,7 +248,7 @@ test('a gap in seq subscribes again, and the new snapshot replaces the list', as
     d.frame({ ev: 'session.upsert', seq: d.host.seq + 5, data: d.host.get('6f1c2b7e-claude-example') });
   });
   await expect.poll(() => calls(page, 'sessions.subscribe')).toBe(2);
-  await expect(page.locator('.session')).toHaveCount(2);
+  await expect(page.locator('.session')).toHaveCount(3);
   await expect(card(page, CODEX)).toHaveCount(0);
   expect(await calls(page, 'sessions.list')).toBe(0);
 });
@@ -211,12 +256,12 @@ test('a gap in seq subscribes again, and the new snapshot replaces the list', as
 test('an upsert moves a session to the top, and a remove takes it away', async ({ page }) => {
   await openDemo(page);
   await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later() });
-  await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE]);
+  await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
   await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
   await page.evaluate((id) => window.agentBridgeDemo.remove(id), CLAUDE);
   await expect(card(page, CLAUDE)).toHaveCount(0);
-  expect(await order(page)).toEqual([CODEX, COPILOT]);
-  await expect(page.locator('#session-count')).toHaveText('2 live');
+  expect(await order(page)).toEqual([CODEX, COPILOT, DELEGATING]);
+  await expect(page.locator('#session-count')).toHaveText('3 live');
 });
 
 test('folding is remembered across a reload, and a new question unfolds the card', async ({ page }) => {
