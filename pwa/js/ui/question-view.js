@@ -11,7 +11,7 @@ import { h } from './dom.js';
 import { renderMarkdown } from '../markdown.js';
 import {
   Limits, answerRequest, buildAnswer, checkAnswer, draftText, initialState, isRecommended,
-  optionTone, orderOptions, problemField, requestProblem, tapToAnswer, utf8Bytes,
+  optionTone, orderOptions, problemField, tapToAnswer, utf8Bytes,
 } from '../answers.js';
 
 const TYPE_LABEL = { choice: 'Choose one', multi: 'Choose any', boolean: 'Yes or no', text: 'Text answer', number: 'Number' };
@@ -407,11 +407,12 @@ export class QuestionPanel {
     const q = this.q;
     const { answer, problems } = buildAnswer(q, this.state);
     if (problems.length) { this.#fail(problems[0].message, problems[0].field); return; }
-    const problem = checkAnswer(q, answer);
-    if (problem) { this.#fail(problem, problemField(q, problem) ?? (q.fields.length === 0 ? '' : null)); return; }
     const { service, hostId, sessionId } = this.answering;
-    const tooBig = requestProblem(answerRequest({ sessionId, questionId: q.id, request: '00000000-0000-0000-0000-000000000000', answer }));
-    if (tooBig) { this.#fail(tooBig, null); return; }
+    // Checked as the request will be sent: a stand-in request id is the same length as the
+    // UUID the service gives it, so the 16 KiB check counts the same bytes.
+    const data = answerRequest({ sessionId, questionId: q.id, request: '00000000-0000-4000-8000-000000000000', answer });
+    const problem = checkAnswer(q, data);
+    if (problem) { this.#fail(problem, problemField(q, problem) ?? (q.fields.length === 0 ? '' : null)); return; }
     this.#clearError();
     tapped?.setAttribute('aria-pressed', 'true');
     service.submit({ hostId, sessionId, questionId: q.id, answer });

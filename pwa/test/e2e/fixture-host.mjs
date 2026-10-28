@@ -84,7 +84,7 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
     const s = state.get(data?.id);
     const q = s?.question ? readQuestion(s.question) : null;
     if (!q || q.id !== data.question) { return { outcome: 'stale', reason: 'the session is no longer asking that question' }; }
-    const problem = checkAnswer(q, { fields: data.fields, text: data.text });
+    const problem = checkAnswer(q, data);
     if (problem) { return { outcome: 'refused', reason: problem }; }
     if (['stale', 'busy', 'refused'].includes(outcome)) { return { outcome, reason: reason ?? outcome }; }
     typed.push({ id: s.id, question: q.id, request: data.request, fields: data.fields, text: data.text });

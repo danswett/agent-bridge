@@ -147,6 +147,20 @@ test.describe('on a phone', () => {
     expect((await log(page))[0].fields.notes).toHaveLength(1365);
   });
 
+  test('a whole answer over 16 KiB, as the machine would serialize it, is caught before it is sent', async ({ page }) => {
+    await openDemo(page);
+    const names = ['a', 'b'];
+    const q = await ask(page, { id: 'q-big', message: 'Two notes?', fields: names.map((name) => ({ name, title: `Note ${name}`, type: 'text' })) });
+    // 1,024 emoji each: 4 KiB of text, within the limit, but 12 KiB of the host's JSON.
+    for (const name of names) { await q.getByRole('textbox', { name: `Note ${name}` }).fill('😀'.repeat(1024)); }
+    await q.getByRole('button', { name: 'Send answer' }).tap();
+    await expect(q.locator('.answer-error')).toHaveText('The answer is larger than 16 KiB.');
+    expect(await log(page)).toEqual([]);
+    await q.getByRole('textbox', { name: 'Note b' }).fill('short');
+    await q.getByRole('button', { name: 'Send answer' }).tap();
+    await expect(q).toHaveCount(0);
+  });
+
   test('a number is a numeric input, pre-filled from its default', async ({ page }) => {
     await openDemo(page);
     const q = await ask(page, { id: 'q-num', message: 'How many runs?', fields: [{ name: 'runs', title: 'Runs', type: 'number', default: 20, required: true }] });

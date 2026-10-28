@@ -62,10 +62,14 @@ function valueProblem(field, value) {
 }
 
 // Null when the answer fits the question; otherwise why not, worded as the host words it.
-// `answer` is { fields } or { text }, as in the request. Whether the session is still asking
-// the question is the host's to say (stale), not this.
+// `answer` is the session.answer request data ({ id, question, request, fields | text });
+// the size check counts all of it, so pass the whole request (answerRequest builds one).
+// Whether the session is still asking the question is the host's to say (stale), not this.
 export function checkAnswer(question, answer) {
   if (question.truncated === true) { return 'the question was too large to show in full; answer it at the machine'; }
+  // Per-text limits alone don't bound the request: several text fields, each within its
+  // own limit, can add up to more than a host promised to take.
+  if (hostJsonBytes(answer) > Limits.request) { return `the answer is larger than ${Limits.request / 1024} KiB`; }
   const fields = isObject(answer.fields) ? answer.fields : null;
   if (question.fields.length === 0) {
     if (fields && Object.keys(fields).length > 0) { return 'this question takes a text answer, not fields'; }
@@ -88,17 +92,56 @@ export function checkAnswer(question, answer) {
   return Object.keys(given).length === 0 ? 'the answer is empty' : null;
 }
 
-// The session.answer request data, and whether it is within the 16 KiB a request may be.
+// The session.answer request data.
 export function answerRequest({ sessionId, questionId, request, answer }) {
   const data = { id: sessionId, question: questionId, request };
   if (answer.text !== undefined) { data.text = answer.text; } else { data.fields = answer.fields; }
   return data;
 }
 
-export function requestProblem(data) {
-  // The frame as HostClient sends it, with a generous id: what the host receives.
-  const bytes = utf8Bytes(JSON.stringify({ id: 2 ** 31, op: 'session.answer', data }));
-  return bytes > Limits.request ? `the answer is longer than ${Limits.request / 1024} KiB` : null;
+// The UTF-8 bytes of a request as the C# host serializes it to check its size: Answers.Check
+// measures JsonSerializer.SerializeToUtf8Bytes(answer, ProtocolJson.Options), not the bytes
+// this app sent. That encoder (UnsafeRelaxedJsonEscaping) writes BMP text raw but escapes
+// a character outside the BMP (most emoji) as a surrogate pair, \uXXXX\uXXXX: 12 bytes
+// where JSON.stringify writes 4. It also escapes characters it doesn't consider safe to
+// write raw; counted here as escaped are controls, format characters, unassigned and
+// private-use code points and the line and paragraph separators, which may count a few
+// bytes more than the host does but never fewer. Null and absent request properties are
+// left out, as WhenWritingNull does.
+export function hostJsonBytes(value) {
+  return utf8Bytes(hostJson(value, true));
+}
+
+const SHORT_ESCAPES = { '"': '\\"', '\\': '\\\\', '\b': '\\b', '\t': '\\t', '\n': '\\n', '\f': '\\f', '\r': '\\r' };
+const ESCAPED = /[\p{Cc}\p{Cf}\p{Cn}\p{Co}\p{Zl}\p{Zp}]/u;
+const u = (n) => `\\u${n.toString(16).toUpperCase().padStart(4, '0')}`;
+
+function hostString(s) {
+  let out = '"';
+  for (const ch of s) {
+    const cp = ch.codePointAt(0);
+    if (SHORT_ESCAPES[ch]) { out += SHORT_ESCAPES[ch]; } else if (cp > 0xffff) {
+      out += u(0xd800 + ((cp - 0x10000) >> 10)) + u(0xdc00 + ((cp - 0x10000) & 0x3ff));
+    } else if (cp >= 0xd800 && cp <= 0xdfff) {
+      // A lone surrogate: .NET writes the replacement character.
+      out += u(0xfffd);
+    } else if (ESCAPED.test(ch)) { out += u(cp); } else { out += ch; }
+  }
+  return `${out}"`;
+}
+
+function hostJson(v, top = false) {
+  if (typeof v === 'string') { return hostString(v); }
+  if (Array.isArray(v)) { return `[${v.map((x) => hostJson(x)).join(',')}]`; }
+  if (isObject(v)) {
+    const parts = [];
+    for (const [k, x] of Object.entries(v)) {
+      if (x === undefined || (top && x === null)) { continue; }
+      parts.push(`${hostString(k)}:${hostJson(x)}`);
+    }
+    return `{${parts.join(',')}}`;
+  }
+  return JSON.stringify(v) ?? 'null';
 }
 
 // Whether this phone may answer a question, and if not, why, for the read-only view.

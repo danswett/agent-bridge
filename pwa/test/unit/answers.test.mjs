@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  Limits, answerability, answerRequest, buildAnswer, checkAnswer, draftText, initialState,
-  optionTone, orderOptions, problemField, requestProblem, tapToAnswer, utf8Bytes,
+  Limits, answerability, answerRequest, buildAnswer, checkAnswer, draftText, hostJsonBytes, initialState,
+  optionTone, orderOptions, problemField, tapToAnswer, utf8Bytes,
 } from '../../js/answers.js';
 import { readAnswerResult, readQuestion } from '../../js/protocol.js';
 
@@ -13,7 +13,7 @@ const choice = (name, { other = false, required = true } = {}) => ({
   name, type: 'choice', options: [{ value: 'a', label: 'A (Recommended)' }, { value: 'b' }],
   ...(other ? { allowOther: true } : {}), ...(required ? { required: true } : {}),
 });
-const fields = (f) => ({ fields: f });
+const fields = (f) => ({ id: 's1', question: 'q1', request: 'r1', fields: f });
 
 test('a choice takes one of its option values and nothing else', () => {
   const q = form(choice('answer'));
@@ -61,8 +61,8 @@ test('required fields must be answered and unknown fields are refused', () => {
 
 test('a question without fields takes non-empty text, and one with fields takes no text', () => {
   const plain = form();
-  assert.equal(checkAnswer(plain, { text: 'ship it' }), null);
-  assert.match(checkAnswer(plain, { text: ' ' }), /empty/);
+  assert.equal(checkAnswer(plain, { id: 's1', question: 'q1', request: 'r1', text: 'ship it' }), null);
+  assert.match(checkAnswer(plain, { id: 's1', question: 'q1', request: 'r1', text: ' ' }), /empty/);
   assert.match(checkAnswer(plain, fields({ answer: 'a' })), /not fields/);
   assert.match(checkAnswer(form(choice('answer')), { text: 'a' }), /not a text answer/);
   assert.match(checkAnswer(plain, { text: 'é'.repeat(Limits.text / 2 + 1) }), /longer than 4 KiB/);
@@ -83,22 +83,46 @@ test('an outcome from a newer host reads as unconfirmed, never as delivered', ()
 
 test('the 4 KiB limit counts UTF-8 bytes, not characters', () => {
   const q = form({ name: 't', type: 'text' });
-  // 1,366 emoji are 2,732 UTF-16 code units and 5,464 bytes: over, though far fewer characters.
-  const emoji = '😀'.repeat(1366);
-  assert.equal(utf8Bytes(emoji), 5464);
+  // 1,025 emoji are 2,050 UTF-16 code units and 4,100 bytes: over, though far fewer characters.
+  const emoji = '😀'.repeat(1025);
+  assert.equal(utf8Bytes(emoji), 4100);
   assert.match(checkAnswer(q, fields({ t: emoji })), /longer than 4 KiB/);
   assert.equal(checkAnswer(q, fields({ t: '😀'.repeat(1024) })), null);
   assert.equal(checkAnswer(q, fields({ t: 'x'.repeat(Limits.text) })), null);
   assert.match(checkAnswer(q, fields({ t: '€'.repeat(1366) })), /longer than 4 KiB/);
 });
 
-test('a whole request over 16 KiB is caught before it is sent', () => {
-  const q = form(...['a', 'b', 'c', 'd', 'e'].map((name) => ({ name, type: 'text' })));
-  const answer = { fields: Object.fromEntries(['a', 'b', 'c', 'd', 'e'].map((k) => [k, 'x'.repeat(4000)])) };
-  assert.equal(checkAnswer(q, answer), null);
-  const data = answerRequest({ sessionId: 's1', questionId: 'q1', request: 'r1', answer });
-  assert.match(requestProblem(data), /longer than 16 KiB/);
-  assert.equal(requestProblem(answerRequest({ sessionId: 's1', questionId: 'q1', request: 'r1', answer: { fields: { a: 'x' } } })), null);
+test('a request over 16 KiB is refused even when each text is within its own limit', () => {
+  const names = ['t0', 't1', 't2', 't3', 't4'];
+  const text = 'x'.repeat(Limits.text);
+  const all = (n) => fields(Object.fromEntries(names.slice(0, n).map((k) => [k, text])));
+  const q = (n) => form(...names.slice(0, n).map((name) => ({ name, type: 'text' })));
+  assert.match(checkAnswer(q(5), all(5)), /larger than 16 KiB/);
+  assert.equal(checkAnswer(q(3), all(3)), null);
+  // Checked before anything else about the fields, as the host checks it.
+  assert.match(checkAnswer(form(), fields(Object.fromEntries(names.map((k) => [k, text])))), /larger than 16 KiB/);
+});
+
+test('the request is measured as the host serializes it: an emoji is a 12-byte surrogate pair', () => {
+  // 1,024 emoji are 4 KiB of UTF-8, within the per-text limit, but 12 KiB of the host's
+  // JSON. One fits; two are over 16 KiB, though JSON.stringify makes them 8 KiB.
+  const emoji = '😀'.repeat(1024);
+  const q = form(...['a', 'b'].map((name) => ({ name, type: 'text' })));
+  const two = fields({ a: emoji, b: emoji });
+  assert.ok(utf8Bytes(JSON.stringify(two)) < Limits.request);
+  assert.match(checkAnswer(q, two), /larger than 16 KiB/);
+  assert.equal(checkAnswer(q, fields({ a: emoji })), null);
+});
+
+test('the host\'s JSON is counted byte for byte: escapes, raw BMP text, and no null properties', () => {
+  const data = { id: 's1', question: 'q1', request: 'r1', text: 'a"b\\c\nd\u0001é€😀', fields: null };
+  // {"id":"s1","question":"q1","request":"r1","text":"a\"b\\c\nd\u0001é€\uD83D\uDE00"}
+  const expected = '{"id":"s1","question":"q1","request":"r1","text":"a\\"b\\\\c\\nd\\u0001é€\\uD83D\\uDE00"}';
+  assert.equal(hostJsonBytes(data), utf8Bytes(expected));
+  // A lone surrogate is written as the replacement character, escaped.
+  assert.equal(hostJsonBytes({ text: '\ud800' }), utf8Bytes('{"text":"\\uFFFD"}'));
+  // Inside fields, values are written as given, numbers and booleans included.
+  assert.equal(hostJsonBytes({ fields: { n: 2.5, b: false, l: ['a', { other: 'x' }] } }), utf8Bytes('{"fields":{"n":2.5,"b":false,"l":["a",{"other":"x"}]}}'));
   assert.deepEqual(answerRequest({ sessionId: 's1', questionId: 'q1', request: 'r1', answer: { text: 'hi' } }), { id: 's1', question: 'q1', request: 'r1', text: 'hi' });
 });
 
