@@ -10,7 +10,8 @@ namespace AgentBridge.Host;
 // Protocol v1's sessions ops, served on every channel a client opens to this host. Reads,
 // and the two ops that reach the machine, each only through its own service: session.answer
 // (the answerer types an answer to a pending question) and session.reply (the replier types
-// a prompt into a session's input).
+// a prompt into a session's input). The push.* ops, which register a device for
+// notifications, go to the PushNotifier.
 public sealed class SessionService
 {
     readonly ISessionSource source;
@@ -18,16 +19,18 @@ public sealed class SessionService
     readonly Action<string> log;
     readonly ISessionAnswerer? answers;
     readonly ISessionReplier? replies;
+    readonly PushNotifier? push;
     readonly ConcurrentDictionary<SecureChannel, Subscriber> subscribers = new();
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
-        ISessionReplier? replies = null)
+        ISessionReplier? replies = null, PushNotifier? push = null)
     {
         this.source = source;
         this.machine = machine;
         this.log = log ?? (_ => { });
         this.answers = answers;
         this.replies = replies;
+        this.push = push;
     }
 
     // Channels with a subscription running; tests and the host's log read it.
@@ -46,9 +49,11 @@ public sealed class SessionService
                 // it stops.
                 return new HelloResult(1, machine, Offered());
             case Ops.SessionAnswer:
-                return await AnswerAsync(data);
+                return await AnswerAsync(channel, data);
             case Ops.SessionReply:
                 return await ReplyAsync(data);
+            case Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList when push is not null:
+                return await push.HandleAsync(channel, op, data);
             case Ops.SessionsList:
                 return source.List(String(data, "cursor"));
             case Ops.SessionGet:
@@ -126,14 +131,17 @@ public sealed class SessionService
         public int Registered;
     }
 
-    async Task<AnswerResult> AnswerAsync(JsonElement data)
+    async Task<AnswerResult> AnswerAsync(SecureChannel channel, JsonElement data)
     {
         // A request without an id, question or request UUID fails as a request; anything
         // that can be read gets an outcome.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.answer needs an id, a question and a request"); }
         var request = data.Deserialize<AnswerRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.answer needs an id, a question and a request");
         if (answers is null) { return new AnswerResult(AnswerOutcome.Refused, "this host does not take answers; answer at the machine"); }
-        return await answers.AnswerAsync(request);
+        var result = await answers.AnswerAsync(request);
+        // Typed from this device: it needs no notification that the question was answered.
+        if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { push?.Answered(channel.PeerId, request.Id, request.Question); }
+        return result;
     }
 
     List<string> Offered()
@@ -141,6 +149,7 @@ public sealed class SessionService
         List<string> offered = [Capabilities.SessionsRead];
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }
+        if (push is not null) { offered.Add(Capabilities.Push); }
         return offered;
     }
 

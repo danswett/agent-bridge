@@ -324,6 +324,9 @@ public static class Ops
     public const string SessionsSubscribe = "sessions.subscribe";
     public const string SessionAnswer = "session.answer";
     public const string SessionReply = "session.reply";
+    public const string PushSubscribe = "push.subscribe";
+    public const string PushUnsubscribe = "push.unsubscribe";
+    public const string PushList = "push.list";
 }
 
 public static class Events
@@ -364,4 +367,5 @@ public static class Capabilities
     public const string SessionsRead = "sessions.read";
     public const string SessionsAnswer = "sessions.answer";
     public const string SessionsReply = "sessions.reply";
+    public const string Push = "push";
 }

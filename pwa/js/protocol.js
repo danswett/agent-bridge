@@ -15,6 +15,9 @@ export const Ops = Object.freeze({
   sessionsSubscribe: 'sessions.subscribe',
   sessionAnswer: 'session.answer',
   sessionReply: 'session.reply',
+  pushSubscribe: 'push.subscribe',
+  pushUnsubscribe: 'push.unsubscribe',
+  pushList: 'push.list',
 });
 
 export const Events = Object.freeze({
@@ -23,7 +26,7 @@ export const Events = Object.freeze({
   sessionsSynced: 'sessions.synced',
 });
 
-export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply' });
+export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', push: 'push' });
 
 export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 

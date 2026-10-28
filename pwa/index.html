@@ -68,6 +68,15 @@
       <p id="sessions-empty" class="note empty" hidden>No live sessions on this machine.</p>
     </section>
 
+    <section id="notify" class="panel notify" aria-labelledby="notify-h" hidden>
+      <h2 id="notify-h">Notifications</h2>
+      <p id="notify-note" class="note"></p>
+      <p id="notify-error" class="note warn" role="alert" hidden></p>
+      <div class="row">
+        <button type="button" id="notify-toggle" class="button" aria-pressed="false">Turn on notifications</button>
+      </div>
+    </section>
+
     <footer id="account" class="account" hidden>
       <p>Signed in as <b id="login"></b> · this device <code id="me"></code></p>
       <button type="button" id="signout" class="button secondary">Sign out</button>

@@ -20,14 +20,15 @@ using AgentBridge.Transport;
 //                                               serve Protocol v1 sessions, reconnecting, and
 //                                               type answers to their questions and replies
 //                                               (Windows; see docs/host-answers.md and
-//                                               docs/host-replies.md)
+//                                               docs/host-replies.md), and notify subscribed
+//                                               phones of questions and finished turns
 //   agent-bridge-host whoami                    this device and the account it signed in to
 //
 // Roots default to the current user's; --copilot-home, --claude-home and --codex-home
 // point elsewhere. Nothing under them is ever written. sign-in, serve and whoami take
-// --profile <name> (default "default"): the device key and account live in the product's
-// own folder (Identity.DefaultRoot), never agent-ha-bridge's. --relay defaults to
-// AGENT_BRIDGE_RELAY, then to the relay the profile signed in to.
+// --profile <name> (default "default"): the device key, account and push subscriptions
+// live in the product's own folder (Identity.DefaultRoot), never agent-ha-bridge's. --relay
+// defaults to AGENT_BRIDGE_RELAY, then to the relay the profile signed in to.
 
 // Device names carry characters outside the console's legacy code page ("iPhone · Agent Bridge"),
 // which a redirected log otherwise records as replacement characters.
@@ -137,8 +138,13 @@ async Task<int> ServeAsync()
     await using var source = new SessionSource(options);
     await source.StartAsync(stop.Token);
     var (answers, replies) = Typists(source);
-    var service = new SessionService(source, machine, Log, answers, replies);
-    Log($"watching {source.Snapshot().Count} live session(s); serving as \"{name}\" ({machine.Id[..8]}) on {relayUri.Host}");
+    // Notifications: the account's phones hear of questions and finished turns even with the
+    // app closed. Subscriptions live in the profile's own folder, for this account only.
+    await using var push = new PushNotifier(source, machine,
+        PushStore.Load(Path.Combine(identity.Folder, "push-subscriptions.json"), account.AccountId, Log), log: Log);
+    push.Start();
+    var service = new SessionService(source, machine, Log, answers, replies, push);
+    Log($"watching {source.Snapshot().Count} live session(s); serving as \"{name}\" ({machine.Id[..8]}) on {relayUri.Host}; {push.Subscribers} device(s) to notify");
 
     var backoff = TimeSpan.FromSeconds(1);
     var reconnects = 0;
@@ -155,6 +161,7 @@ async Task<int> ServeAsync()
             };
             hub.Accepted += ch => Log($"channel from {ch.PeerName} ({ch.PeerKind}, {ch.PeerId[..8]})");
             hub.Rejected += (peer, e) => Log($"rejected a frame from {peer[..Math.Min(8, peer.Length)]}: {e.Message}");
+            push.Attach(new RelayPushSender(relay));
             Log($"connected as {relay.Login}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             backoff = TimeSpan.FromSeconds(1);
             since.Restart();

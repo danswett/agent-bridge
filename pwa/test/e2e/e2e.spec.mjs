@@ -5,14 +5,17 @@
 // a Noise channel, hello, the subscription snapshot, live upserts and removes,
 // session.get, reconnecting after the socket drops (with a session that ended meanwhile
 // dropped by the new snapshot), returning to the last host, ?host= links, a host that
-// predates the protocol, and answering a question: delivered, resent with the same request
-// after the socket drops mid-answer (typed once), and the host's own checks; and replying:
+// predates the protocol, answering a question: delivered, resent with the same request
+// after the socket drops mid-answer (typed once), and the host's own checks; replying:
 // delivered as one line, resent after the socket drops mid-reply (typed once), refused while
-// the session asks a question.
+// the session asks a question; and notifications: registering with the host (with a faked
+// browser push subscription, as headless browsers have no push service) and opening a
+// notification's session.
 //
 // Needs: dotnet build spikes/s4-relay/src/S4.DevStack -c Release
 import { test, expect } from '@playwright/test';
 import { spawn } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,7 +34,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 test.skip(!existsSync(dll), 'the dev stack is not built: dotnet build spikes/s4-relay/src/S4.DevStack -c Release');
 test.describe.configure({ mode: 'serial' });
 
-let stack, site, host, appUrl;
+let stack, site, host, appUrl, relayUrl;
+
+const vapidKey = () => generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64');
 const stackOut = [];
 
 test.beforeAll(async ({}, info) => {
@@ -40,12 +45,14 @@ test.beforeAll(async ({}, info) => {
   const relayPort = (Number(process.env.PWA_E2E_PORT) || 8800) + info.parallelIndex * 2;
   const sitePort = relayPort + 1;
   const relay = `http://127.0.0.1:${relayPort}`;
+  relayUrl = relay;
   const dir = buildSite({ out: path.join(pwa, '.site', `e2e-${info.project.name}`), relay });
   site = await startStaticServer({ dir, port: sitePort });
   appUrl = `http://127.0.0.1:${sitePort}${APP_PATH}`;
   stack = spawn('dotnet', [dll, 'serve', '--port', String(relayPort)], {
     // The page's origin, which the relay must accept for sign-in (CORS) and the socket.
-    env: { ...process.env, Relay__AllowedOrigins__0: `http://127.0.0.1:${sitePort}` },
+    // And a VAPID key, so it offers push (GET /v1/push/key) as the deployed relay does.
+    env: { ...process.env, Relay__AllowedOrigins__0: `http://127.0.0.1:${sitePort}`, Relay__VapidPrivateKey: vapidKey() },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   stack.stdout.on('data', (d) => stackOut.push(d.toString()));
@@ -243,4 +250,95 @@ test('a phone replies to a session through the relay, and a reply in flight when
   const direct = await page.evaluate(() => window.agentBridge.hosts.client.reply({ id: 'reply-1', request: crypto.randomUUID(), text: 'not now' }));
   expect(direct).toEqual({ outcome: 'refused', reason: 'the session is waiting for an answer to its question; answer that first' });
   expect(typedFor('reply-1')).toHaveLength(2);
+});
+
+test.describe('notifications', () => {
+  // The app needs its service worker for a push subscription.
+  test.use({ serviceWorkers: 'allow' });
+
+  // A browser that grants notifications and makes push subscriptions without a push service:
+  // headless browsers have neither. The permission and the subscription outlive a reload, as
+  // a real browser's do.
+  async function fakePush(context) {
+    await context.addInitScript(() => {
+      if (typeof PushManager === 'undefined') { return; }
+      const saved = () => JSON.parse(localStorage.getItem('test.push') ?? 'null');
+      Object.defineProperty(Notification, 'permission', { configurable: true, get: () => localStorage.getItem('test.permission') ?? 'default' });
+      Notification.requestPermission = async () => { localStorage.setItem('test.permission', 'granted'); return 'granted'; };
+      const make = (s) => s && {
+        endpoint: s.endpoint,
+        options: { applicationServerKey: new Uint8Array(s.key).buffer },
+        toJSON: () => ({ endpoint: s.endpoint, keys: { p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', auth: 'BTBZMqHH6r4Tts7J_aSIgg' } }),
+        unsubscribe: async () => { localStorage.removeItem('test.push'); localStorage.setItem('test.unsubscribed', s.endpoint); return true; },
+      };
+      PushManager.prototype.getSubscription = async () => make(saved());
+      PushManager.prototype.subscribe = async (o) => {
+        const key = [...new Uint8Array(o.applicationServerKey.buffer ?? o.applicationServerKey)];
+        localStorage.setItem('test.push', JSON.stringify({ endpoint: `https://web.push.apple.com/e2e-${Date.now()}`, key, visible: o.userVisibleOnly }));
+        return make(saved());
+      };
+    });
+  }
+
+  test('turning notifications on registers this phone with the machine, again on every channel, and off takes it back', async ({ page, context, browserName }) => {
+    await fakePush(context);
+    await signIn(page);
+    test.skip(await page.evaluate(() => typeof PushManager === 'undefined'), `${browserName} here has no PushManager`);
+    await page.click('[data-device-name="fixture-host"] button');
+    await expect(page.locator('.session').first()).toBeVisible({ timeout: 30000 });
+    const toggle = page.locator('#notify-toggle');
+    await expect(toggle).toHaveText('Turn on notifications');
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    const before = host.push.length;
+
+    await toggle.click();
+    await expect(toggle).toHaveText('Turn off notifications', { timeout: 15000 });
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#notify-note')).toContainText('On for this device');
+    await expect.poll(() => host.push.length).toBe(before + 1);
+    const sub = host.push[before];
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('test.push')));
+    expect(sub.op).toBe('push.subscribe');
+    expect(sub.data).toEqual({
+      endpoint: saved.endpoint,
+      keys: { p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', auth: 'BTBZMqHH6r4Tts7J_aSIgg' },
+      app: appUrl,
+      device: expect.stringContaining('Agent Bridge'),
+    });
+    // Subscribed with the relay's own VAPID key, for visible notifications only.
+    const key = (await (await fetch(`${relayUrl}/v1/push/key`)).json()).key;
+    expect(Buffer.from(saved.key).toString('base64url')).toBe(key);
+    expect(saved.visible).toBe(true);
+
+    // Opened again later: registered again on the new channel, with the same subscription.
+    await page.reload();
+    await expect(page.locator('.session').first()).toBeVisible({ timeout: 30000 });
+    await expect.poll(() => host.push.length, { timeout: 15000 }).toBe(before + 2);
+    expect(host.push[before + 1].data.endpoint).toBe(saved.endpoint);
+
+    await page.locator('#notify-toggle').click();
+    await expect(page.locator('#notify-toggle')).toHaveText('Turn on notifications', { timeout: 15000 });
+    await expect.poll(() => host.push.length).toBe(before + 3);
+    expect(host.push[before + 2]).toMatchObject({ op: 'push.unsubscribe', data: { endpoint: saved.endpoint } });
+    expect(await page.evaluate(() => localStorage.getItem('test.unsubscribed'))).toBe(saved.endpoint);
+  });
+
+  test('a notification\'s link opens its machine and session with the question ready, and so does a tap while the app is open', async ({ page }) => {
+    const t = new Date().toISOString();
+    const question = (id) => ({ id: `q-${id}`, kind: 'form', message: 'Which one?', askedAt: t, fields: [{ name: 'answer', type: 'choice', options: [{ value: 'a' }, { value: 'b' }] }] });
+    for (const id of ['linked-1', 'linked-2']) {
+      await host.upsert({ id, agent: 'copilot', title: id, status: 'waiting', statusSince: t, updatedAt: t, activity: {}, question: question(id) });
+    }
+    await signIn(page);
+    await page.goto(`${appUrl}?host=${host.deviceId}&session=linked-1&question=q-linked-1`);
+    await expect(card(page, 'linked-1')).toHaveClass(/linked/, { timeout: 30000 });
+    await expect(card(page, 'linked-1').locator('.question-slot button').first()).toBeFocused();
+    expect(new URL(page.url()).search).toBe('');
+
+    // What the worker tells an open app when one of its notifications is tapped.
+    await page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
+      `${appUrl}?host=${host.deviceId}&session=linked-2&question=q-linked-2`);
+    await expect(card(page, 'linked-2')).toHaveClass(/linked/);
+    await expect(card(page, 'linked-2').locator('.question-slot button').first()).toBeFocused();
+  });
 });
