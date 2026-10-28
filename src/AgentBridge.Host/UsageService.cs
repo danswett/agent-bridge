@@ -28,22 +28,38 @@ public sealed class UsageService
     public Task<object?> HandleAsync(SecureChannel channel, string op, JsonElement data) => op switch
     {
         UsageProtocol.Get => Task.FromResult<object?>(monitor.Current.Report),
-        UsageProtocol.Subscribe => Task.FromResult<object?>(Subscribe(channel)),
+        UsageProtocol.Subscribe => SubscribeAsync(channel),
         _ => Task.FromResult<object?>(null),
     };
 
     // A second subscribe on a channel replaces the first rather than running beside it: the
     // client has the report it was just given, and later changes arrive once.
-    ChannelReply Subscribe(SecureChannel channel)
+    //
+    // The subscriber is held from taking the report until the response has gone. Otherwise a
+    // change announced in between could be sent as an update ahead of the response, and the
+    // client, taking the response as current, would keep the older report over it.
+    async Task<object?> SubscribeAsync(SecureChannel channel)
     {
-        var (report, version) = monitor.Current;
-        var subscriber = new Subscriber();
         var added = false;
-        var current = subscribers.AddOrUpdate(channel, _ => { added = true; return subscriber; }, (_, existing) => existing);
-        lock (current) { current.Sent = version; }
+        var current = subscribers.AddOrUpdate(channel, _ => { added = true; return new Subscriber(); }, (_, existing) => existing);
         if (added) { _ = channel.Closed.ContinueWith(_ => subscribers.TryRemove(channel, out Subscriber? _), TaskScheduler.Default); }
+        // Under the gate, so an update already being sent finishes first and the report taken
+        // here is at least as new as anything the client has had.
+        await current.Gate.WaitAsync();
+        UsageReport report;
+        try
+        {
+            long version;
+            (report, version) = monitor.Current;
+            lock (current) { current.Sent = version; current.Open = false; }
+        }
+        finally { current.Gate.Release(); }
         // After the response has gone: anything announced since the report was taken follows it.
-        return new ChannelReply(report, ch => PushAsync(ch, current));
+        return new ChannelReply(report, ch =>
+        {
+            lock (current) { current.Open = true; }
+            return PushAsync(ch, current);
+        });
     }
 
     async Task PushAsync(SecureChannel channel, Subscriber subscriber)
@@ -52,7 +68,7 @@ public sealed class UsageService
         try
         {
             var (report, version) = monitor.Current;
-            lock (subscriber) { if (version <= subscriber.Sent) { return; } }
+            lock (subscriber) { if (!subscriber.Open || version <= subscriber.Sent) { return; } }
             if (!channel.IsOpen) { return; }
             await channel.SendEventAsync(UsageProtocol.Update, report);
             lock (subscriber) { subscriber.Sent = version; }
@@ -66,5 +82,7 @@ public sealed class UsageService
     {
         public readonly SemaphoreSlim Gate = new(1, 1);
         public long Sent;
+        // Whether updates may go: not between taking a subscribe's report and sending its response.
+        public bool Open;
     }
 }
