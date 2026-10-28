@@ -28,6 +28,15 @@ standing.
 
 The protocol between them is specified in [docs/protocol](docs/protocol/v1-sessions.md).
 
+## Product code so far
+
+| Path | What it is |
+|---|---|
+| `src/AgentBridge.Protocol` | Bridge Protocol v1 records and their JSON |
+| `src/AgentBridge.Transport` | The end-to-end channel (Noise XX over P-256), the relay client, channels with requests, responses and events, sign-in, device keys (TPM, DPAPI or an owner-only file) and Web Push encryption. Promoted from spikes S2, S4, S5 and S6 |
+| `src/AgentBridge.Relay` | The relay (ASP.NET Core), promoted from S4. `docker build -f src/AgentBridge.Relay/Dockerfile .` from the repository root |
+| `tests/` | `dotnet test AgentBridge.slnx`, on Windows and Linux in CI |
+
 ## Ground rules while this is being built
 
 * Releases of this product are published **only here**, never in agent-ha-bridge,

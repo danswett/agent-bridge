@@ -1,0 +1,8 @@
+# Build context for src/AgentBridge.Relay/Dockerfile (the repository root).
+**/bin/
+**/obj/
+**/node_modules/
+.git/
+.vs/
+TestResults/
+out/

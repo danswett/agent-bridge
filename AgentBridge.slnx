@@ -1,8 +1,11 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/AgentBridge.Protocol/AgentBridge.Protocol.csproj" />
+    <Project Path="src/AgentBridge.Relay/AgentBridge.Relay.csproj" />
+    <Project Path="src/AgentBridge.Transport/AgentBridge.Transport.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/AgentBridge.Protocol.Tests/AgentBridge.Protocol.Tests.csproj" />
+    <Project Path="tests/AgentBridge.Transport.Tests/AgentBridge.Transport.Tests.csproj" />
   </Folder>
 </Solution>
