@@ -110,7 +110,8 @@ public static class CopilotPermissionTranscript
 //     ("(Esc)" or "(Esc to stop)"): both lists then deny with no message to Copilot.
 //
 // Anything else (no options, more than nine, no plain Yes or two, a last option that is not a
-// No) is not a prompt this host can read, and nothing is typed.
+// No, nothing above the options showing what the prompt is for) is not a prompt this host
+// can read, and nothing is typed.
 public static class CopilotPermissionScreen
 {
     // Key: what to type. Row: the option it answers. Hold: every row of the options, as read,
@@ -118,7 +119,8 @@ public static class CopilotPermissionScreen
     // the list (the No row's message box opened at the machine, say) stops it.
     public sealed record Choice(string Key, int Row, IReadOnlyList<ScreenRow> Hold);
 
-    public static (Choice? Choice, string? Problem) Locate(IReadOnlyList<string> rows, bool approve)
+    // probes: CopilotPermissionPrompt.Probes, what this prompt is about.
+    public static (Choice? Choice, string? Problem) Locate(IReadOnlyList<string> rows, bool approve, IReadOnlyList<string> probes)
     {
         var numbered = new List<(int Row, int Number, string Label, bool Selected)>();
         for (var i = 0; i < rows.Count; i++)
@@ -140,7 +142,20 @@ public static class CopilotPermissionScreen
 
         var last = block[^1];
         var (lastLabel, end) = Continued(rows, last.Row, last.Label);
-        var hold = Enumerable.Range(block[0].Row, end - block[0].Row + 1).Select(r => new ScreenRow(r, rows[r])).ToList();
+        // What the prompt is about, drawn above its options: the nearest rows that together
+        // show one of the probes, whitespace aside, since a long command wraps. Held from
+        // there down, so another prompt with the same options in its place (the next path
+        // request, say) stops the key.
+        var wanted = probes.Select(Squeeze).Where(s => s.Length > 0).ToList();
+        var top = -1;
+        var above = "";
+        for (var i = block[0].Row - 1; i >= Math.Max(0, block[0].Row - 30) && top < 0; i--)
+        {
+            above = Squeeze(Clean(rows[i]).Text) + above;
+            if (wanted.Any(w => above.Contains(w, StringComparison.Ordinal))) { top = i; }
+        }
+        if (top < 0) { return (null, "the session's screen does not show what this permission prompt is for"); }
+        var hold = Enumerable.Range(top, end - top + 1).Select(r => new ScreenRow(r, rows[r])).ToList();
         if (!lastLabel.StartsWith("No", StringComparison.Ordinal)) { return (null, "the prompt on the session's screen does not end with a No"); }
         // The No row selected is its message box open at the machine: a digit would be typed
         // into it, and Escape would send whatever is there.
@@ -207,6 +222,8 @@ public static class CopilotPermissionScreen
         while (s.Length > 0 && (char.IsWhiteSpace(s[^1]) || Box(s[^1]))) { s = s[..^1]; }
         return (s.ToString(), selected);
     }
+
+    static string Squeeze(string text) => string.Concat(text.Where(c => !char.IsWhiteSpace(c)));
 
     static bool Box(char c) => c is >= '\u2500' and <= '\u259F';
 

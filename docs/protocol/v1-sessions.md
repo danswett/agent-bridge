@@ -218,8 +218,9 @@ text, so nothing can be typed into the prompt's message box.
 
 Immediately before typing, the host checks the transcript (that request still waiting and
 reading as shown, and no other prompt waiting that the screen could be showing instead),
-then reads the session's screen and finds the option by its label, never by its position.
-The key goes only if the options, and which is highlighted, still read the same at the
+then reads the session's screen and finds the option by its label, never by its position,
+under rows showing what the prompt is for, and checks the transcript again. The key goes
+only if those rows and the options, and which is highlighted, still read the same at the
 moment it is typed.
 `permissions.remoteApproval` in the host's own settings turns this off on a machine
 ([host-answers.md](../host-answers.md)).

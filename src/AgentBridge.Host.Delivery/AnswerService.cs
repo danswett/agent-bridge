@@ -285,10 +285,19 @@ public sealed class AnswerService : ISessionAnswerer
             try { screen = await injector.ReadScreenAsync(pid); }
             catch (Exception e) { return Refused($"the host could not read the session's screen ({e.Message}); answer at the machine"); }
             if (screen.Rows is not { } rows) { return Refused(screen.Problem ?? "the host could not read the session's screen; answer at the machine"); }
-            var (choice, problem) = CopilotPermissionScreen.Locate(rows, approve);
+            var (choice, problem) = CopilotPermissionScreen.Locate(rows, approve, pending.Probes);
             if (choice is null) { return Refused($"{problem}; answer at the machine"); }
+            // Again after the screen was read: what is on it is this request only if this
+            // request was still the one waiting once it had been read.
+            var after = CopilotPermissionTranscript.Before(transcript, requestId);
+            if (!after.Readable) { return Refused("the session's transcript could not be read, so nothing is typed; answer at the machine"); }
+            if (after.Request is not { } still || !string.Equals(still.Digest, digest, StringComparison.Ordinal)) { return Stale("Copilot is no longer asking for that permission"); }
+            if (after.PendingPermissions + after.PendingAsks > 1)
+            {
+                return Refused("Copilot has more than one prompt waiting, and the screen shows only one of them; answer at the machine");
+            }
             keys = new KeyPlan([new KeySend(choice.Key, false, 0, 0, choice.Hold)]);
-            from = state.ScannedTo;
+            from = after.ScannedTo;
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
             typed = await TypeAsync(pid, keys);

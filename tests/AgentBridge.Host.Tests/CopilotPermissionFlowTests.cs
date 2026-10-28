@@ -14,6 +14,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
 
     static readonly string[] Prompt =
     [
+        " git push origin main --force-with-lease",
         " Do you want to run this command?",
         "",
         " \u276F 1. Yes",
@@ -81,7 +82,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
         Assert.Equal(500, pid);
         var send = Assert.Single(plan.Sends);
         Assert.Equal(("1", false), (send.Text, send.Enter));
-        Assert.Equal(Prompt.Skip(2).Select((text, i) => new ScreenRow(i + 2, text)), send.Expect);
+        Assert.Equal(Prompt.Select((text, i) => new ScreenRow(i, text)), send.Expect);
     }
 
     [Fact]
@@ -93,7 +94,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
 
         Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), result);
         var send = Assert.Single(Assert.Single(injector.Plans).Plan.Sends);
-        Assert.Equal((KeyPlan.Escape, false, 3), (send.Text, send.Enter, send.Expect!.Count));
+        Assert.Equal((KeyPlan.Escape, false, Prompt.Length), (send.Text, send.Enter, send.Expect!.Count));
     }
 
     [Theory]
@@ -191,7 +192,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
     [Fact]
     public async Task A_screen_offering_only_persistent_grants_is_refused_untyped_and_the_prompt_may_still_be_answered()
     {
-        injector.Screen = ["\u276F 1. Yes, and approve all file operations for the rest of the running session", "  2. No (Esc)"];
+        injector.Screen = [Prompt[0], "\u276F 1. Yes, and approve all file operations for the rest of the running session", "  2. No (Esc)"];
         var refused = await Answerer().AnswerAsync(Request("approve"));
         Assert.Equal(AnswerOutcome.Refused, refused.Outcome);
         Assert.Contains("no single plain Yes", refused.Reason);
@@ -200,6 +201,30 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
         injector.Screen = Prompt;
         Completes("approved");
         Assert.Equal(AnswerOutcome.Delivered, (await Answerer().AnswerAsync(Request("approve"))).Outcome);
+    }
+
+    [Fact]
+    public async Task A_prompt_for_something_else_drawn_with_the_same_options_is_not_approved()
+    {
+        injector.Screen = [" git push origin release --force", .. Prompt.Skip(1)];
+
+        var result = await Answerer().AnswerAsync(Request("approve"));
+
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Contains("does not show what this permission prompt is for", result.Reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_request_answered_at_the_machine_while_the_screen_was_read_is_stale_and_nothing_is_typed()
+    {
+        // The screen then shows whatever came next; what it showed is no longer this request.
+        injector.OnScreen = () => Fixture.Append(events, Copilot.PermissionDone("r1", "c1", "approved", second++));
+
+        var result = await Answerer().AnswerAsync(Request("approve"));
+
+        Assert.Equal(AnswerOutcome.Stale, result.Outcome);
+        Assert.Empty(injector.Plans);
     }
 
     [Fact]
@@ -272,6 +297,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
         public InjectionResult Result = new(InjectionStatus.Typed, "ok");
         public IReadOnlyList<string> Screen = [];
         public int ScreenReads;
+        public Action? OnScreen;
 
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
         {
@@ -283,6 +309,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
         {
             ScreenReads++;
+            OnScreen?.Invoke();
             return Task.FromResult(new ConsoleScreen(Screen, null));
         }
     }

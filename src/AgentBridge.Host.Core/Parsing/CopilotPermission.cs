@@ -14,8 +14,16 @@ namespace AgentBridge.Host.Core.Parsing;
 //
 // AtMachine says why the prompt is not offered to other devices at all: a kind the host
 // does not drive, or a request to run outside Copilot's sandbox.
+//
+// Probes are short pieces of what the prompt is about (the start of the command, a file or
+// path's last segment, a URL's host, a tool's name) that the CLI draws above its options. A
+// host finds them on the session's screen to know the prompt there is this one, and holds
+// those rows with the options when it types, so a prompt for something else drawn in the
+// same place, with the same options, stops the key.
 public sealed record CopilotPermissionPrompt(string RequestId, string? ToolCallId, string Kind, string Message, string Digest, string? AtMachine)
 {
+    public IReadOnlyList<string> Probes { get; init; } = [];
+
     public string QuestionId => $"{RequestId}#{Digest}";
 
     public static (string RequestId, string Digest)? ParseQuestionId(string id)
@@ -58,7 +66,27 @@ public static class CopilotPermission
         }
 
         message ??= Fallback(p, kind);
-        return new CopilotPermissionPrompt(request, toolCallId, kind, message, Digest(kind, message), atMachine);
+        return new CopilotPermissionPrompt(request, toolCallId, kind, message, Digest(kind, message), atMachine) { Probes = Probes(kind, p) };
+    }
+
+    static List<string> Probes(string kind, JsonElement p)
+    {
+        static string? Start(string? text) =>
+            text?.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) is { } line ? line[..Math.Min(40, line.Length)].TrimEnd() : null;
+        static string? Last(string? path) =>
+            path?.TrimEnd('\\', '/') is { Length: > 0 } trimmed ? trimmed[(trimmed.LastIndexOfAny(['\\', '/']) + 1)..] : null;
+        IEnumerable<string?> found = kind switch
+        {
+            "commands" => [Start(Json.Str(p, "fullCommandText"))],
+            "write" => [Last(Json.Str(p, "fileName"))],
+            "read" => [Last(Json.Str(p, "path"))],
+            "path" => Json.Arr(p, "paths") is { } paths ? paths.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => Last(e.GetString())) : [],
+            "url" => [Uri.TryCreate(Json.Str(p, "url"), UriKind.Absolute, out var u) ? u.Host : Start(Json.Str(p, "url"))],
+            "mcp" => [Json.Str(p, "toolTitle"), Json.Str(p, "toolName")],
+            "custom-tool" => [Json.Str(p, "toolName")],
+            _ => [],
+        };
+        return [.. found.OfType<string>().Where(s => s.Length > 0).Distinct(StringComparer.Ordinal)];
     }
 
     static string? Message(string kind, JsonElement p)

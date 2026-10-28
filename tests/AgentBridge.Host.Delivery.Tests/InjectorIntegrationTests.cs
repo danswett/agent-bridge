@@ -159,6 +159,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
     // host finds the plain Yes on it, and the digit goes only while that row still reads so.
     static readonly string[] PermissionPrompt =
     [
+        "git push origin main --force-with-lease",
         "Do you want to run this command?",
         "",
         "\u276F 1. Yes",
@@ -175,9 +176,9 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var screen = await injector.ReadScreenAsync(echo.Pid);
         Assert.Null(screen.Problem);
         Assert.Equal(PermissionPrompt, screen.Rows!.Take(PermissionPrompt.Length));
-        var (choice, problem) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate(screen.Rows!, approve: true);
+        var (choice, problem) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate(screen.Rows!, approve: true, ["git push origin main --force-with-lease"]);
         Assert.Null(problem);
-        Assert.Equal(("1", 2), (choice!.Key, choice.Row));
+        Assert.Equal(("1", 3), (choice!.Key, choice.Row));
 
         // The Yes row as it was, but the No row now selected at the machine: nothing is typed.
         var held = choice.Hold.ToList();
@@ -197,7 +198,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
     {
         var echo = StartEcho(show: PermissionPrompt);
         var injector = new WorkerInjector(Worker);
-        var (choice, _) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate((await injector.ReadScreenAsync(echo.Pid)).Rows!, approve: false);
+        var (choice, _) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate((await injector.ReadScreenAsync(echo.Pid)).Rows!, approve: false, ["git push origin main --force-with-lease"]);
 
         var typed = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend(choice!.Key, false, 0, 0, choice.Hold)]));
 

@@ -102,17 +102,24 @@ option, so Enter is never pressed and no option is found by position:
 * Refused, nothing typed: no prompt on screen, more than nine options, a last row that is
   not a "No", or that "No" row highlighted (someone at the machine has its message box
   open, where a digit would be typed as text).
-* The key is sent with every option row as read: inside the same attach, just before
-  writing, the worker reads those rows again and writes nothing unless they all still read
-  the same, highlight included (`fail screen 0`, `refused`, and the prompt stays
-  answerable). So the "No" row selected at the machine in between stops an approval too.
+* The prompt must show what it is for above its options: the host looks, within 30 rows,
+  for the start of the command (40 characters), a path's or file's last segment, the URL's
+  host, or the tool's name, whitespace aside since long lines wrap. Not found is refused.
+* The key is sent with every row from there through the options as read: inside the same
+  attach, just before writing, the worker reads those rows again and writes nothing unless
+  they all still read the same, highlight included (`fail screen 0`, `refused`, and the
+  prompt stays answerable). So the "No" row selected at the machine in between stops an
+  approval, and so does another prompt with the same options drawn in its place (the next
+  path request, say).
 
 Bound to the request. The question's id is `<requestId>#<digest>`, the digest a hash of
 the message the client was shown. Immediately before typing, the transcript must show
 that `permission.requested` with no `permission.completed` (and no session abort or
 shutdown) after it, reading exactly as shown (`stale` otherwise), and no other permission
 request or `ask_user` waiting, since the screen shows one prompt at a time and could be
-showing the other (`refused`). A request to run outside the sandbox, a kind not listed
+showing the other (`refused`). The transcript is checked so before the screen is read and
+again after, so what the screen showed was this request while it was still waiting. A
+request to run outside the sandbox, a kind not listed
 above, or one whose details cannot be read is `answerAtMachine`.
 
 Delivered when that request's `permission.completed` records `approved` for an approve,

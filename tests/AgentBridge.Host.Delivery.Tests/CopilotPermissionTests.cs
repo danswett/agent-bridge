@@ -30,29 +30,36 @@ public sealed class CopilotPermissionTests : IDisposable
     static readonly string[] Path =
     [
         "\u2502 Allow path access                                   \u2502",
-        "\u2502                                                     \u2502",
+        "\u2502   C:\\elsewhere\\notes.txt                            \u2502",
         "\u2502   1. Yes                                            \u2502",
         "\u2502 \u276F 2. Yes, and remember these paths for this session \u2502",
         "\u2502   3. Yes, allow file-tool read-only access to the listed directory \u2502",
         "\u2502   4. No (Esc)                                       \u2502",
     ];
 
+    static readonly string[] ShellProbes = ["git push origin main --force-with-lease"];
+    static readonly string[] PathProbes = ["notes.txt", "more"];
+
+    // A short screen with only its options, under a row saying what it is for.
+    static (CopilotPermissionScreen.Choice? Choice, string? Problem) Synthetic(IReadOnlyList<string> rows, bool approve) =>
+        CopilotPermissionScreen.Locate(["Run deploy.ps1", .. rows], approve, ["deploy.ps1"]);
+
     [Fact]
     public void Approve_is_the_digit_of_the_one_row_reading_exactly_Yes_and_the_key_waits_on_that_row_being_there()
     {
-        var (choice, problem) = CopilotPermissionScreen.Locate(Shell, approve: true);
+        var (choice, problem) = CopilotPermissionScreen.Locate(Shell, approve: true, ShellProbes);
 
         Assert.Null(problem);
         Assert.Equal("1", choice!.Key);
         Assert.Equal(6, choice.Row);
         // Every option row, the No included, is held: a change of highlight anywhere stops the key.
-        Assert.Equal(Enumerable.Range(6, 3).Select(r => new ScreenRow(r, Shell[r])), choice.Hold);
+        Assert.Equal(Enumerable.Range(2, 7).Select(r => new ScreenRow(r, Shell[r])), choice.Hold);
     }
 
     [Fact]
     public void A_list_opening_on_a_persistent_grant_is_still_approved_once_by_the_digit_of_its_plain_Yes()
     {
-        var (choice, _) = CopilotPermissionScreen.Locate(Path, approve: true);
+        var (choice, _) = CopilotPermissionScreen.Locate(Path, approve: true, PathProbes);
 
         Assert.Equal("1", choice!.Key);
         Assert.Equal(2, choice.Row);
@@ -63,7 +70,7 @@ public sealed class CopilotPermissionTests : IDisposable
     {
         string[] screen = ["  1. Yes, and approve all file operations for the rest of the running session", "\u276F 2. Yes", "  3. No (Esc)"];
 
-        Assert.Equal("2", CopilotPermissionScreen.Locate(screen, approve: true).Choice!.Key);
+        Assert.Equal("2", Synthetic(screen, approve: true).Choice!.Key);
     }
 
     [Theory]
@@ -71,7 +78,7 @@ public sealed class CopilotPermissionTests : IDisposable
     [InlineData("  1. Run this command outside of the sandbox", "  2. No, and tell Copilot what to do differently (Esc to stop)")]
     public void A_prompt_without_a_plain_Yes_is_never_approved(string first, string last)
     {
-        var (choice, problem) = CopilotPermissionScreen.Locate(["\u276F" + first[1..], last], approve: true);
+        var (choice, problem) = Synthetic(["\u276F" + first[1..], last], approve: true);
 
         Assert.Null(choice);
         Assert.Contains("no single plain Yes", problem);
@@ -82,15 +89,26 @@ public sealed class CopilotPermissionTests : IDisposable
     {
         string[] screen = ["\u276F 1. Yes", "     (always)", "  2. No (Esc)"];
 
-        Assert.Contains("no single plain Yes", CopilotPermissionScreen.Locate(screen, approve: true).Problem);
+        Assert.Contains("no single plain Yes", Synthetic(screen, approve: true).Problem);
+    }
+
+    [Fact]
+    public void A_prompt_not_showing_what_it_is_for_chooses_nothing_and_what_it_shows_is_held_with_the_options()
+    {
+        Assert.Contains("does not show what this permission prompt is for", CopilotPermissionScreen.Locate(Path, approve: true, ["other.txt"]).Problem);
+
+        var (choice, _) = CopilotPermissionScreen.Locate(Path, approve: true, PathProbes);
+
+        // The next path request draws the same options; its paths row is what tells them apart.
+        Assert.Equal(new ScreenRow(1, Path[1]), choice!.Hold[0]);
     }
 
     [Fact]
     public void Deny_is_Escape_only_when_the_last_option_is_a_No_labelled_as_Escapes()
     {
-        var (shell, _) = CopilotPermissionScreen.Locate(Shell, approve: false);
-        var (path, _) = CopilotPermissionScreen.Locate(Path, approve: false);
-        var (none, problem) = CopilotPermissionScreen.Locate(["\u276F 1. Yes", "  2. No"], approve: false);
+        var (shell, _) = CopilotPermissionScreen.Locate(Shell, approve: false, ShellProbes);
+        var (path, _) = CopilotPermissionScreen.Locate(Path, approve: false, PathProbes);
+        var (none, problem) = Synthetic(["\u276F 1. Yes", "  2. No"], approve: false);
 
         Assert.Equal((KeyPlan.Escape, 8), (shell!.Key, shell.Row));
         Assert.Equal((KeyPlan.Escape, 5), (path!.Key, path.Row));
@@ -103,7 +121,7 @@ public sealed class CopilotPermissionTests : IDisposable
     {
         string[] screen = ["\u276F 1. Yes", "  2. No, and tell Copilot what to do differently", "     (Esc to stop)"];
 
-        Assert.Equal(KeyPlan.Escape, CopilotPermissionScreen.Locate(screen, approve: false).Choice!.Key);
+        Assert.Equal(KeyPlan.Escape, Synthetic(screen, approve: false).Choice!.Key);
     }
 
     [Fact]
@@ -111,8 +129,8 @@ public sealed class CopilotPermissionTests : IDisposable
     {
         string[] screen = ["  1. Yes", "  2. Yes, and don't ask again", "\u276F 3. No, and tell Copilot what to do differently (Esc to stop)"];
 
-        Assert.Contains("someone at the machine", CopilotPermissionScreen.Locate(screen, approve: true).Problem);
-        Assert.Contains("someone at the machine", CopilotPermissionScreen.Locate(screen, approve: false).Problem);
+        Assert.Contains("someone at the machine", Synthetic(screen, approve: true).Problem);
+        Assert.Contains("someone at the machine", Synthetic(screen, approve: false).Problem);
     }
 
     [Fact]
@@ -120,7 +138,7 @@ public sealed class CopilotPermissionTests : IDisposable
     {
         string[] screen = ["1. Yes", "2. No (Esc)", "", "Here is the plan:", "1. Build", "2. Test", "", .. Shell];
 
-        var (choice, _) = CopilotPermissionScreen.Locate(screen, approve: true);
+        var (choice, _) = CopilotPermissionScreen.Locate(screen, approve: true, ShellProbes);
 
         Assert.Equal(7 + 6, choice!.Row);
     }
@@ -132,7 +150,7 @@ public sealed class CopilotPermissionTests : IDisposable
     [InlineData(new[] { "\u276F 1. Yes", "  2. Maybe later" }, "does not end with a No")]
     public void A_screen_that_does_not_show_a_whole_prompt_chooses_nothing(string[] screen, string why)
     {
-        var (choice, problem) = CopilotPermissionScreen.Locate(screen, approve: true);
+        var (choice, problem) = Synthetic(screen, approve: true);
 
         Assert.Null(choice);
         Assert.Contains(why, problem);
@@ -143,7 +161,7 @@ public sealed class CopilotPermissionTests : IDisposable
     {
         var screen = Enumerable.Range(1, 10).Select(i => i == 1 ? "\u276F 1. Yes" : i == 10 ? "  10. No (Esc)" : $"  {i}. Yes, and option {i}").ToArray();
 
-        Assert.Contains("more options", CopilotPermissionScreen.Locate(screen, approve: true).Problem);
+        Assert.Contains("more options", Synthetic(screen, approve: true).Problem);
     }
 
     [Fact]
