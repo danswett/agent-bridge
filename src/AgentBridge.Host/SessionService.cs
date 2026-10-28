@@ -13,8 +13,7 @@ public sealed class SessionService
     readonly ISessionSource source;
     readonly MachineInfo machine;
     readonly Action<string> log;
-    readonly ConcurrentDictionary<SecureChannel, Feed> feeds = new();
-    readonly ConcurrentDictionary<SecureChannel, SemaphoreSlim> subscribeLocks = new();
+    readonly ConcurrentDictionary<SecureChannel, Subscriber> subscribers = new();
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null)
     {
@@ -24,7 +23,10 @@ public sealed class SessionService
     }
 
     // Channels with a subscription running; tests and the host's log read it.
-    public int Subscribers => feeds.Count;
+    public int Subscribers => subscribers.Values.Count(s => s.Feed is not null);
+
+    // Each feed as it is made, so tests can check a replaced one is let go.
+    internal event Action<object>? FeedCreated;
 
     public async Task<object?> HandleAsync(SecureChannel channel, string op, JsonElement data)
     {
@@ -51,33 +53,62 @@ public sealed class SessionService
     // response, and the new snapshot covers whatever the old one never sent.
     async Task<object> SubscribeAsync(SecureChannel channel)
     {
+        var state = subscribers.GetOrAdd(channel, _ => new Subscriber());
+        // Cleanup is registered once per channel and finds whatever feed is current then.
+        // One registration per subscribe would keep every replaced feed (and anything still
+        // queued in it) reachable from the channel until it closes, so a client that keeps
+        // recovering on one long-lived channel would grow the host without bound. Tied to the
+        // channel rather than to the feed's run: when the response cannot be sent, ChannelHub
+        // never starts the run, and the subscription would stay with the source forever.
+        if (Interlocked.Exchange(ref state.Registered, 1) == 0)
+        {
+            _ = channel.Closed.ContinueWith(_ => EndAsync(channel, state), TaskScheduler.Default);
+        }
         // ChannelHub serves each request as it arrives, so two subscribes on one channel can
         // run at once; the lock keeps the old feed's stop and the new feed's start in order.
-        var gate = subscribeLocks.GetOrAdd(channel, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync();
+        await state.Gate.WaitAsync();
         try
         {
-            if (feeds.TryRemove(channel, out var old)) { await old.StopAsync(); }
+            if (state.Feed is { } old)
+            {
+                state.Feed = null;
+                await old.StopAsync();
+            }
             if (!channel.IsOpen) { throw new IOException("the channel is closed"); }
             var feed = new Feed(source.Subscribe());
-            feeds[channel] = feed;
-            // Tied to the channel rather than to the feed's run: when the response cannot be
-            // sent, ChannelHub never starts the run, and the subscription would otherwise
-            // stay registered with the source for as long as the host runs.
-            _ = channel.Closed.ContinueWith(_ => End(channel, feed), TaskScheduler.Default);
+            state.Feed = feed;
+            FeedCreated?.Invoke(feed);
             // The snapshot waits until the response has gone (ChannelReply), so the client
             // has {revision, count} before the first upsert.
             return new ChannelReply(feed.Subscription.Result, ch => feed.RunAsync(ch, log));
         }
-        finally { gate.Release(); }
+        finally { state.Gate.Release(); }
     }
 
-    async Task End(SecureChannel channel, Feed feed)
+    async Task EndAsync(SecureChannel channel, Subscriber state)
     {
-        if (feeds.TryRemove(new KeyValuePair<SecureChannel, Feed>(channel, feed))) { await feed.StopAsync(); }
-        // The lock is left for the GC rather than disposed: a subscribe already waiting on
-        // it would otherwise throw instead of finding the channel closed.
-        subscribeLocks.TryRemove(channel, out _);
+        subscribers.TryRemove(new KeyValuePair<SecureChannel, Subscriber>(channel, state));
+        // Under the lock, so a subscribe already running finishes first and its feed is the
+        // one stopped here. The lock itself is left for the GC rather than disposed: a
+        // subscribe still waiting on it would otherwise throw instead of finding the channel
+        // closed.
+        await state.Gate.WaitAsync();
+        try
+        {
+            if (state.Feed is { } feed)
+            {
+                state.Feed = null;
+                await feed.StopAsync();
+            }
+        }
+        finally { state.Gate.Release(); }
+    }
+
+    sealed class Subscriber
+    {
+        public readonly SemaphoreSlim Gate = new(1, 1);
+        public Feed? Feed;
+        public int Registered;
     }
 
     static string? String(JsonElement data, string name) =>

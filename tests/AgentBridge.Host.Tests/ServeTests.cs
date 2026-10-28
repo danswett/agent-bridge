@@ -199,6 +199,32 @@ public sealed class ServeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Subscriptions_replaced_on_a_long_lived_channel_are_let_go()
+    {
+        var ch = await OpenAsync();
+        var made = new List<WeakReference>();
+        service.FeedCreated += feed => made.Add(new WeakReference(feed));
+
+        for (var i = 0; i < 5; i++)
+        {
+            Result(await ch.RequestAsync(Ops.SessionsSubscribe, new { }));
+            await SnapshotAsync(ch);
+        }
+        Assert.Equal(5, made.Count);
+
+        // Every replaced feed is collectable while the channel stays open; only the current
+        // one is still held.
+        await Wait.UntilAsync(() =>
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            return made.Take(4).All(w => !w.IsAlive);
+        }, "the replaced subscriptions to be collected", Patience);
+        Assert.True(made[4].IsAlive);
+        Assert.True(ch.IsOpen);
+    }
+
+    [Fact]
     public async Task A_subscription_ends_when_its_channel_does()
     {
         var ch = await OpenAsync();
