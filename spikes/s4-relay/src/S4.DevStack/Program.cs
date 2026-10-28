@@ -581,6 +581,25 @@ if (mode == "check")
             $"pushes while down {whileDown}, after reconnect {after.Length} (\"{notice}\"), after another reconnect {total}");
     });
 
+    await Check("a device-key protection asked for by name where it does not exist is refused, not quietly stored in plaintext", () =>
+    {
+        if (OperatingSystem.IsWindows()) { return Task.FromResult((true, "Windows has both; s6-check covers them")); }
+        var results = new List<string>();
+        var ok = true;
+        foreach (var storage in new[] { S6.KeyStorage.Tpm, S6.KeyStorage.Dpapi })
+        {
+            var profile = $"devstack-{storage}-{Guid.NewGuid():N}";
+            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AgentBridgeS4", profile);
+            bool refused;
+            try { Identity.Load(profile, storage); refused = false; } catch (PlatformNotSupportedException) { refused = true; }
+            var plain = File.Exists(Path.Combine(folder, "key.json"));
+            ok &= refused && !plain;
+            results.Add($"{storage}: refused {refused}, plaintext key written {plain}");
+            try { Directory.Delete(folder, true); } catch (IOException) { }
+        }
+        return Task.FromResult((ok, string.Join("; ", results)));
+    });
+
     await Check("the relay's logs carry no tokens or payloads", () =>
     {
         var all = string.Join("\n", logs);

@@ -132,8 +132,10 @@ public sealed class TpmP256 : IDisposable
     }
 
     // "TPM-Version:2.0 -Level:0-Revision:1.59-VendorID:'MSFT'-..." on a Hyper-V virtual
-    // TPM, for example. False when there is no usable TPM.
-    public static bool IsAvailable(out string? platform)
+    // TPM, for example. False when there is no TPM, or one that cannot hold the key: the
+    // provider also answers for a TPM 1.2, which supports only RSA, so the algorithm
+    // itself is asked about.
+    public static bool IsAvailable(out string? platform, string algorithm = "ECDH_P256")
     {
         platform = null;
         if (NCryptOpenStorageProvider(out var p, ProviderName, 0) != 0) { return false; }
@@ -142,7 +144,7 @@ public sealed class TpmP256 : IDisposable
             var buf = new byte[512];
             if (NCryptGetProperty(p, "PCP_PLATFORM_TYPE", buf, buf.Length, out var n, 0) != 0) { return false; }
             platform = System.Text.Encoding.Unicode.GetString(buf, 0, n).TrimEnd('\0');
-            return true;
+            return NCryptIsAlgSupported(p, algorithm, 0) == 0;
         }
     }
 
@@ -211,6 +213,9 @@ public sealed class TpmP256 : IDisposable
 
     [DllImport("ncrypt.dll", CharSet = CharSet.Unicode)]
     static extern int NCryptGetProperty(SafeNCryptProviderHandle obj, string property, byte[] output, int size, out int result, int flags);
+
+    [DllImport("ncrypt.dll", CharSet = CharSet.Unicode)]
+    static extern int NCryptIsAlgSupported(SafeNCryptProviderHandle provider, string algorithm, int flags);
 
     [DllImport("ncrypt.dll", CharSet = CharSet.Unicode)]
     static extern int NCryptImportKey(SafeNCryptProviderHandle provider, IntPtr importKey, string blobType, IntPtr parameters, out SafeNCryptKeyHandle key, byte[] blob, int size, int flags);

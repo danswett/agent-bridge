@@ -40,16 +40,24 @@ non-exportable, and is it fast enough?
    wrapped key blob lives under the roaming AppData). The device must be paired again.
    Silently minting a new key would look like a new device to every peer, and a weaker
    one if it fell back to DPAPI.
+6. **"There is a TPM" isn't enough to choose it** (found in review). The provider also
+   answers for a TPM 1.2, which supports only RSA, so a new profile there would have
+   failed instead of falling back to DPAPI. The probe now asks the provider for
+   `ECDH_P256` itself. In the same vein, a protection asked for by name (`--key tpm` or
+   `dpapi`) on a platform without it is refused. Before, it was silently replaced by a
+   plaintext key file. This is checked on Linux in the S4 job.
 
 ## Results
 
-`s6-check check` (CI on `windows-latest`; on a machine without a TPM, the TPM checks
-report SKIP and the DPAPI checks still run). On DSWETT-DEV-VM1 (Hyper-V virtual TPM 2.0,
-`VendorID:'MSFT'`, revision 1.38):
+`s6-check check` runs in CI on `windows-latest`. GitHub's runners have no TPM, so there
+the TPM checks report SKIP and only the DPAPI path and the fallback choice are checked;
+the TPM checks below ran on a machine with one. On DSWETT-DEV-VM1 (Hyper-V virtual TPM
+2.0, `VendorID:'MSFT'`, revision 1.38):
 
 | Check | Result |
 |---|---|
 | The machine's TPM is reachable through the Platform Crypto Provider | Pass |
+| The TPM is only chosen when it can hold a P-256 key: the probe asks for the algorithm, not just the TPM (a TPM 1.2 has only RSA) | Pass |
 | A device key made in the TPM is per-user and its private half cannot be exported in any format (EccPrivateBlob, PKCS#8, `ExportParameters(true)`, encrypted PKCS#8, `P256KeyPair.Export`) | Pass, 5 of 5 refused |
 | The TPM's ECDH equals software ECDH, for 50 random peers in both directions | Pass |
 | An off-curve point is refused before it reaches the TPM (and the TPM refuses it too) | Pass |

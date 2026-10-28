@@ -85,6 +85,13 @@ try
         createMs = sw.Elapsed.TotalMilliseconds;
     }
 
+    Check("the TPM is only chosen when it can hold a P-256 key: the probe asks for the algorithm, not just the TPM (a TPM 1.2 has only RSA)", () =>
+    {
+        var p256 = TpmP256.IsAvailable(out _);
+        var unsupported = TpmP256.IsAvailable(out _, "NOT_AN_ALGORITHM");
+        return (p256 && !unsupported, $"ECDH_P256 {p256}, an algorithm the TPM lacks {unsupported}");
+    }, needsTpm: true);
+
     Check("a device key made in the TPM is per-user and its private half cannot be exported in any format", () =>
     {
         using var t = TpmP256.Open(tpmKey!.TpmKeyName!);

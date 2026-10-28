@@ -63,7 +63,9 @@ public sealed class Identity
             key = P256KeyPair.FromParameters(Wire.Unhex(k.GetProperty("d").GetString()!), Wire.Unhex(k.GetProperty("x").GetString()!), Wire.Unhex(k.GetProperty("y").GetString()!));
             storage = S6.KeyStorage.File;
         }
-        else if (S6.DeviceKeys.Exists(folder) || (OperatingSystem.IsWindows() && prefer != S6.KeyStorage.File))
+        // Asked for by name, TPM or DPAPI goes through DeviceKeys, which refuses a platform
+        // without them; only an unspecified choice off Windows falls back to a plain file.
+        else if (S6.DeviceKeys.Exists(folder) || prefer is S6.KeyStorage.Tpm or S6.KeyStorage.Dpapi || (prefer is null && OperatingSystem.IsWindows()))
         {
             var dk = S6.DeviceKeys.LoadOrCreate(folder, prefer);
             (key, storage) = (dk.Key, dk.Storage);
