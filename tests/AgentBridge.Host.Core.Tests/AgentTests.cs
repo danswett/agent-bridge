@@ -152,7 +152,8 @@ public class ClaudeTests
         Assert.Equal(2, q.Fields.Count);
         Assert.Equal(("Which database?", "Database", FieldType.Choice), (q.Fields[0].Name, q.Fields[0].Title, q.Fields[0].Type));
         Assert.Equal(["PostgreSQL", "SQLite"], q.Fields[0].Options!.Select(o => o.Value));
-        Assert.True(q.Fields[0].AllowOther);
+        Assert.Null(q.Fields[0].AllowOther);
+        Assert.Null(q.AnswerAtMachine);
         Assert.Equal(FieldType.Multi, q.Fields[1].Type);
 
         var answered = await s.After(Claude.ToolResult("ask1", 9));
@@ -190,6 +191,26 @@ public class ClaudeTests
         Assert.Equal(SessionStatus.Waiting, s1.Status);
         Assert.Equal(("tu9", QuestionKind.Approval), (s1.Question!.Id, s1.Question.Kind));
         Assert.Contains("deploy.sh", s1.Question.Message);
+        // agent-ha-bridge only mirrors Claude's permission prompts, so this one is answered there.
+        Assert.True(s1.Question.AnswerAtMachine);
+    }
+
+    [Fact]
+    public async Task An_AskUserQuestion_the_keys_cannot_drive_is_answered_at_the_machine()
+    {
+        await using var s = new Session_();
+        var five = Claude.Ask([.. Enumerable.Range(1, 5).Select(i => ($"Question {i}?", false, new[] { "a", "b" }))]);
+        var tenOptions = Claude.Ask(("Which ones?", true, [.. Enumerable.Range(1, 10).Select(i => $"o{i}")]));
+        var noOptions = Claude.Ask(("Anything?", false, Array.Empty<string>()));
+        var fine = Claude.Ask(("Which ones?", true, ["a", "b", "c"]), ("Which one?", false, ["x", "y"]));
+
+        foreach (var (input, atMachine) in new[] { (five, true), (tenOptions, true), (noOptions, true), (fine, false) })
+        {
+            var id = "ask" + Guid.NewGuid().ToString("N")[..6];
+            var q = (await s.After(Claude.Assistant(2, "tool_use", Claude.ToolUse(id, "AskUserQuestion", input)))).Question!;
+            Assert.Equal((id, atMachine ? true : (bool?)null), (q.Id, q.AnswerAtMachine));
+            await s.After(Claude.ToolResult(id, 3));
+        }
     }
 }
 
@@ -276,6 +297,8 @@ public class CodexTests
         Assert.Equal(("call7", QuestionKind.Approval), (waiting.Question!.Id, waiting.Question.Kind));
         Assert.Contains("rm -rf dist", waiting.Question.Message);
         Assert.Contains("Clean the build", waiting.Question.Message);
+        // Without agent-ha-bridge's marker there is no generation to check before typing.
+        Assert.True(waiting.Question.AnswerAtMachine);
 
         Fixture.Append(rollout, Codex.Event(new { type = "exec_command_begin", call_id = "call7", command = new[] { "rm", "-rf", "dist" } }, 3));
         await source.RefreshAsync();
@@ -321,6 +344,56 @@ public class CodexTests
         Assert.Equal(SessionStatus.Waiting, s.Status);
         Assert.Equal(("node-1", "Needs approval: git push"), (s.Question!.Id, s.Question.Message));
         Assert.Equal(Fixture.T0.AddSeconds(10), s.Question.AskedAt);
+        Assert.Equal("decision", Assert.Single(s.Question.Fields).Name);
+        Assert.Equal(["approve", "deny"], s.Question.Fields[0].Options!.Select(o => o.Value));
+        Assert.Null(s.Question.AnswerAtMachine);
+    }
+
+    [Fact]
+    public async Task The_marker_stands_for_the_approval_the_rollout_shows_so_the_one_shown_can_be_answered()
+    {
+        using var f = new Fixture();
+        var rollout = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, rollout, status: "waiting", updated: Fixture.T0.AddSeconds(10));
+        f.CodexApprovalMarker(Id, "node-2", created: Fixture.T0.AddSeconds(3));
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(rollout, Codex.Event(new { type = "task_started" }, 1),
+            Codex.Event(new { type = "exec_approval_request", call_id = "call7", command = new[] { "git", "push" } }, 2));
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        var q = source.Get(Id)!.Question!;
+        Assert.Equal(("node-2", (bool?)null), (q.Id, q.AnswerAtMachine));
+    }
+
+    [Fact]
+    public async Task A_marker_agent_ha_bridge_already_typed_into_is_answered_at_the_machine_and_an_unreadable_one_is_not_shown()
+    {
+        using var f = new Fixture();
+        var rollout = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, rollout, status: "waiting", updated: Fixture.T0.AddSeconds(10));
+        f.CodexApprovalMarker(Id, "node-3", attempted: true);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(rollout, Codex.Event(new { type = "task_started" }, 1));
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+        Assert.Equal(("node-3", (bool?)true), (source.Get(Id)!.Question!.Id, source.Get(Id)!.Question!.AnswerAtMachine));
+
+        // Its own sender refuses these as unreadable, so they are no approval to answer.
+        foreach (var marker in new Action[]
+        {
+            () => f.CodexApprovalMarker(Id, "node-4", attempted: false),
+            () => f.CodexApprovalMarker(Id, "node-5", attempted: "yes"),
+            () => f.CodexApprovalMarker(Id, "node-6", owner: "someone-else"),
+            () => File.WriteAllText(Path.Combine(f.CodexRegistrations, Id + ".approval.json"), "{\"SessionId\":"),
+        })
+        {
+            marker();
+            await source.RefreshAsync();
+            Assert.Null(source.Get(Id)!.Question);
+        }
     }
 
     [Fact]

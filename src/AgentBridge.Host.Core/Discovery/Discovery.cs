@@ -34,7 +34,50 @@ internal sealed record Registration(
 
 // A Codex command waiting for approval (<id>.approval.json): the hook writes it on
 // PermissionRequest and removes it on the next event that proves it was answered.
-internal sealed record ApprovalMarker(string DecisionId, string Question, DateTimeOffset? Created);
+// Attempted: agent-ha-bridge has already typed an answer into this generation.
+internal sealed record ApprovalMarker(string DecisionId, string Question, DateTimeOffset? Created, bool Attempted);
+
+public enum ApprovalMarkerState { Absent, Unreadable, Present }
+
+// One read of agent-ha-bridge's Codex approval marker, by the rules its own sender applies
+// before typing (Set-CodexApprovalAttempt): the marker names this session, carries a
+// generation (DecisionId), and an attempt it records is a boolean true. Anything else is
+// Unreadable, which a caller must treat as "something may be pending", never as absent.
+public sealed record ApprovalMarkerRead(ApprovalMarkerState State, string? DecisionId = null, string? Question = null, DateTimeOffset? Created = null, bool Attempted = false)
+{
+    public static string PathFor(string registrationPath, string sessionId) =>
+        Path.Combine(Path.GetDirectoryName(registrationPath)!, RegistrationDiscovery.SafeKey(sessionId) + ".approval.json");
+
+    public static ApprovalMarkerRead Read(string registrationPath, string sessionId)
+    {
+        var path = PathFor(registrationPath, sessionId);
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length > 1024 * 1024) { return new(ApprovalMarkerState.Unreadable); }
+            using var doc = JsonDocument.Parse(stream);
+            var e = doc.RootElement;
+            if (e.ValueKind != JsonValueKind.Object) { return new(ApprovalMarkerState.Unreadable); }
+            if (!e.TryGetProperty("SessionId", out var owner) || owner.ValueKind != JsonValueKind.String || !string.Equals(owner.GetString(), sessionId, StringComparison.Ordinal))
+            {
+                return new(ApprovalMarkerState.Unreadable);
+            }
+            if (!e.TryGetProperty("DecisionId", out var decision) || decision.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(decision.GetString()))
+            {
+                return new(ApprovalMarkerState.Unreadable);
+            }
+            var attempted = false;
+            if (e.TryGetProperty("DeliveryAttempted", out var tried))
+            {
+                if (tried.ValueKind != JsonValueKind.True) { return new(ApprovalMarkerState.Unreadable); }
+                attempted = true;
+            }
+            return new(ApprovalMarkerState.Present, decision.GetString(), Json.Str(e, "Question") ?? "", Json.Time(e, "Created"), attempted);
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return new(ApprovalMarkerState.Absent); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or ArgumentException) { return new(ApprovalMarkerState.Unreadable); }
+    }
+}
 
 internal static class CopilotDiscovery
 {
@@ -225,15 +268,10 @@ internal static class RegistrationDiscovery
 
         var pid = Json.Int(e, "ProcessId") ?? 0;
         ApprovalMarker? approval = null;
-        if (agent == AgentKind.Codex)
+        if (agent == AgentKind.Codex
+            && ApprovalMarkerRead.Read(path, id) is { State: ApprovalMarkerState.Present } marker)
         {
-            var markerPath = Path.Combine(Path.GetDirectoryName(path)!, SafeKey(id) + ".approval.json");
-            using var marker = File.Exists(markerPath) ? ReadJson(markerPath) : null;
-            if (marker is { RootElement.ValueKind: JsonValueKind.Object } m
-                && Json.Str(m.RootElement, "DecisionId") is { Length: > 0 } decision)
-            {
-                approval = new ApprovalMarker(decision, Json.Str(m.RootElement, "Question") ?? "", Json.Time(m.RootElement, "Created"));
-            }
+            approval = new ApprovalMarker(marker.DecisionId!, marker.Question ?? "", marker.Created, marker.Attempted);
         }
         return new Registration(
             id,

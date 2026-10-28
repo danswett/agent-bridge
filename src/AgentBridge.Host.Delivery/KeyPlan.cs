@@ -11,12 +11,23 @@ namespace AgentBridge.Host.Delivery;
 //
 // Arrow keys travel inside Text as the VT sequences ESC [ A and ESC [ B, typed as
 // characters, the way the old injector sends them and the CLI reads them.
-public sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs);
+//
+// Expect, when set, makes the send conditional on the screen: inside the same attach, just
+// before its first key, the worker reads those rows of the console's visible window and
+// types nothing unless every one still reads exactly so (trailing spaces aside). A
+// permission prompt's option is chosen by what the host read on screen a moment earlier;
+// this proves the options, and which of them is highlighted, are unchanged when the key goes.
+public sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, IReadOnlyList<ScreenRow>? Expect = null);
+
+// A row of the console's visible window, counted from its top, and its text.
+public sealed record ScreenRow(int Row, string Text);
 
 public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
 {
     public const string Up = "\u001b[A";
     public const string Down = "\u001b[B";
+    // A lone escape: the key itself, which a CLI tells from an arrow by nothing following it.
+    public const string Escape = "\u001b";
 
     // What the worker reads on stdin: a header, then one line per send with the text as
     // base64 of its UTF-8, so nothing in it can be mistaken for the line format.
@@ -31,8 +42,13 @@ public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
                 .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(send.Text)))
                 .Append(' ').Append(send.Enter ? '1' : '0')
                 .Append(' ').Append(send.EnterDelayMs.ToString(CultureInfo.InvariantCulture))
-                .Append(' ').Append(send.PauseAfterMs.ToString(CultureInfo.InvariantCulture))
-                .Append('\n');
+                .Append(' ').Append(send.PauseAfterMs.ToString(CultureInfo.InvariantCulture));
+            foreach (var expect in send.Expect ?? [])
+            {
+                script.Append(' ').Append(expect.Row.ToString(CultureInfo.InvariantCulture))
+                    .Append(' ').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(expect.Text)));
+            }
+            script.Append('\n');
         }
         return script.ToString();
     }
@@ -43,7 +59,8 @@ public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
     // For the log: what is pressed, never the words typed.
     public string Describe() => string.Join(" | ", Sends.Select(s =>
     {
-        var keys = s.Text.Replace(Up, "").Replace(Down, "").Replace(" ", "").Length == 0
+        var keys = s.Text == Escape ? "esc"
+            : s.Text.Replace(Up, "").Replace(Down, "").Replace(" ", "").Length == 0
             ? string.Join(' ', new[]
             {
                 Count(s.Text, Up) is > 0 and var u ? $"{u}up" : null,
@@ -51,7 +68,7 @@ public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
                 s.Text.EndsWith(' ') ? "space" : null,
             }.Where(k => k is not null))
             : $"{s.Text.Length} chars";
-        return $"{keys}{(s.Enter ? " enter" : "")}".Trim();
+        return $"{keys}{(s.Enter ? " enter" : "")}{(s.Expect is { Count: > 0 } ? " (if the screen still shows it)" : "")}".Trim();
     }));
 
     static int Count(string text, string what) => (text.Length - text.Replace(what, "").Length) / what.Length;

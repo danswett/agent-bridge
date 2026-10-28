@@ -31,7 +31,7 @@ internal sealed class SessionTracker
         _firstSeen = time.GetUtcNow();
         _parser = discovered.Agent switch
         {
-            AgentKind.Copilot => new CopilotParser(_state, time),
+            AgentKind.Copilot => new CopilotParser(_state, time, options.CopilotRemoteApproval),
             AgentKind.Claude => new ClaudeParser(_state, time),
             _ => new CodexParser(_state, time),
         };
@@ -102,16 +102,23 @@ internal sealed class SessionTracker
                 case "idle": status = SessionStatus.Idle; hintAt = hookAt; break;
                 case "working": status = SessionStatus.Working; hintAt = hookAt; break;
                 case "waiting" when question is null && _state.Tools.Current() is { } tool:
-                    question = QuestionMapper.Approval(tool.Id, tool.Summary is null ? $"Allow **{tool.Name}**?" : $"Allow **{tool.Name}**?\n\n`{tool.Summary}`", hookAt);
+                    // A permission prompt, which agent-ha-bridge's Notification hook reports
+                    // and only mirrors: it offers the reply box at best, never a proven
+                    // answer, so it is answered at the machine.
+                    question = QuestionMapper.Approval(tool.Id, tool.Summary is null ? $"Allow **{tool.Name}**?" : $"Allow **{tool.Name}**?\n\n`{tool.Summary}`", hookAt, atMachine: true);
                     hintAt = hookAt;
                     break;
             }
         }
         if (d.Agent == AgentKind.Codex && reg is not null)
         {
-            if (question is null && reg.Approval is { } marker)
+            // The approval agent-ha-bridge's hook recorded is the one that can be answered:
+            // its generation is what is checked before typing. It stands for whatever the
+            // rollout shows pending, which is the same prompt. One that agent-ha-bridge has
+            // already typed into is never typed into again, so it is answered at the machine.
+            if (reg.Approval is { } marker && (question is null || question.Kind == QuestionKind.Approval))
             {
-                question = QuestionMapper.Approval(marker.DecisionId, marker.Question, marker.Created ?? reg.Updated ?? now);
+                question = QuestionMapper.Approval(marker.DecisionId, marker.Question, marker.Created ?? reg.Updated ?? now, atMachine: marker.Attempted);
                 hintAt = question.AskedAt;
             }
             // Codex's hooks report status directly, at UserPromptSubmit and Stop.

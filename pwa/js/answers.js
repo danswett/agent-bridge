@@ -67,6 +67,7 @@ function valueProblem(field, value) {
 // Whether the session is still asking the question is the host's to say (stale), not this.
 export function checkAnswer(question, answer) {
   if (question.truncated === true) { return 'the question was too large to show in full; answer it at the machine'; }
+  if (question.answerAtMachine === true) { return 'this prompt can only be answered at the machine'; }
   // Per-text limits alone don't bound the request: several text fields, each within its
   // own limit, can add up to more than a host promised to take.
   if (hostJsonBytes(answer) > Limits.request) { return `the answer is larger than ${Limits.request / 1024} KiB`; }
@@ -144,8 +145,17 @@ function hostJson(v, top = false) {
   return JSON.stringify(v) ?? 'null';
 }
 
-// Whether this phone may answer a question, and if not, why, for the read-only view.
-export function answerability(question, capabilities) {
+// Whether this phone may answer a question, and if not, why, for the read-only view. A
+// prompt the host marks as answered only at the machine says so whatever the machine
+// offers: no host can answer it from here. A Copilot permission prompt held at a machine
+// that answers but does not approve (sessions.approve) is held because approving from
+// another device is turned off there.
+export function answerability(question, capabilities, agent = null) {
+  if (question.answerAtMachine) {
+    const off = agent === 'copilot' && question.kind === 'approval'
+      && capabilities.includes('sessions.answer') && !capabilities.includes('sessions.approve');
+    return { ok: false, why: off ? 'approvalOff' : 'atMachine' };
+  }
   if (!capabilities.includes('sessions.answer')) { return { ok: false, why: 'machine' }; }
   if (question.truncated) { return { ok: false, why: 'truncated' }; }
   return { ok: true, why: null };

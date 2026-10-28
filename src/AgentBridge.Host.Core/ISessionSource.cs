@@ -25,6 +25,11 @@ public interface ISessionSource : IAsyncDisposable
     // session.get: the full session with its tool history, or null once it has gone.
     Session? Get(string id);
 
+    // Where a live session's files are, for a host that types into it and then reads what
+    // the agent recorded: its transcript and, for Claude and Codex, agent-ha-bridge's hook
+    // registration. Null once it has gone, or from a source that does not know.
+    SessionFiles? Files(string id) => null;
+
     // sessions.subscribe: the result to send, then on Events one session.upsert per live
     // session, sessions.synced, and every live change after that, in order. Dispose the
     // subscription when the channel closes. A second sessions.subscribe on a channel
@@ -56,6 +61,8 @@ public sealed record SessionProcess(int Id, DateTimeOffset? StartedAt);
 public enum SessionChangeKind { Upserted, Removed }
 
 public sealed record SessionChange(SessionChangeKind Kind, string Id, Session? Session, long Revision);
+
+public sealed record SessionFiles(AgentKind Agent, string? Transcript, string? Registration);
 
 // One event for a subscriber, named as on the wire (Events.SessionUpsert and so on), with
 // its data record: Session, SessionRemoved or SessionsSynced.

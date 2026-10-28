@@ -262,6 +262,11 @@ public sealed record Question
     // Set when the host had to cut the message or drop the fields to fit the size budget;
     // a client then says to answer at the machine instead.
     public bool? Truncated { get; init; }
+    // Set when no host can answer this prompt from another device (a Claude permission
+    // prompt, which agent-ha-bridge only ever mirrored; a Copilot permission prompt of a kind
+    // the host does not drive, or on a host with remote approval off): a client shows it with
+    // no controls and says it is waiting at the machine.
+    public bool? AnswerAtMachine { get; init; }
 }
 
 public sealed record Field
@@ -377,4 +382,6 @@ public static class Capabilities
     public const string SessionsStop = "sessions.stop";
     public const string Push = "push";
     public const string SessionsAttach = "sessions.attach";
+    // Copilot permission prompts are approved or denied through session.answer on this host.
+    public const string SessionsApprove = "sessions.approve";
 }

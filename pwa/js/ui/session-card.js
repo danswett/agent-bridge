@@ -20,9 +20,11 @@ const TOOL_MARK = { running: '⟳', done: '✓', failed: '✗' };
 // What the card shows: the status, except that an idle session still waiting on work it
 // started in the background is not finished, and reads as delegating, as on the old
 // dashboard. Agents are named first: a session waiting on both is delegating more than it
-// is running a command.
+// is running a command. A session waiting on a prompt only the machine can answer says so,
+// so nobody expects to answer it from here.
 export function cardState(s) {
   const b = s.activity.background;
+  if (s.status === 'waiting' && s.question?.answerAtMachine) { return { view: 'waiting', text: 'Waiting at the machine' }; }
   if (s.status !== 'idle' || !b) { return { view: s.status, text: STATUS_TEXT[s.status] }; }
   return { view: 'delegating', text: b.agents > 0 ? 'Waiting for background agents' : 'Waiting for background commands' };
 }
@@ -241,9 +243,9 @@ export class SessionCard {
   #renderQuestion(s) {
     const q = s.question;
     const ctx = this.answering();
-    const able = q ? answerability(q, ctx?.capabilities ?? []) : null;
+    const able = q ? answerability(q, ctx?.capabilities ?? [], s.agent) : null;
     const answerable = !!(able?.ok && ctx?.service);
-    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null])) { return; }
+    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why])) { return; }
     const old = this.#panel;
     const sameQuestion = !!(old && q && old.questionId === q.id && answerable && old.answering.hostId === ctx.hostId);
     if (old && !sameQuestion) {

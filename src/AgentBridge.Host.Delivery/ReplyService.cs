@@ -123,7 +123,7 @@ public sealed class ReplyService : ISessionReplier
             var keysWent = false;
             try
             {
-                if (session.Question is not null) { return Asking(); }
+                if (session.Question is { } asking) { return Asking(asking); }
                 if (refs.Count > 0)
                 {
                     (claim, var problem) = attachments!.Claim(peer, refs);
@@ -201,7 +201,7 @@ public sealed class ReplyService : ISessionReplier
             if (probe.Active() is { } active) { return Done(Refused(active)); }
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
-            if (now.Question is not null) { return Done(Asking()); }
+            if (now.Question is { } asking) { return Done(Asking(asking)); }
             // The transcript, read now, may be ahead of the session source: a question asked a
             // moment ago is there first, and a subagent's is only there. One that cannot be
             // read cannot say nothing is asking.
@@ -293,7 +293,11 @@ public sealed class ReplyService : ISessionReplier
     static ReplyResult Stale(string reason) => new(AnswerOutcome.Stale, reason);
     static ReplyResult Busy() => new(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");
     static ReplyResult Unconfirmed(string reason) => new(AnswerOutcome.Unconfirmed, reason);
-    static ReplyResult Asking() => new(AnswerOutcome.Refused, "the session is waiting for an answer to its question; answer that first");
+    // Typed words would answer the prompt, and Enter accept it. One that is only answered at
+    // the machine (a permission prompt) says so, since answering it first is done there.
+    static ReplyResult Asking(Question? question = null) => new(AnswerOutcome.Refused, question?.AnswerAtMachine == true
+        ? "the session is waiting at a prompt that can only be answered at the machine; answer it there first"
+        : "the session is waiting for an answer to its question; answer that first");
 }
 
 // macOS and Linux, until delivery through tmux exists: hello never offers sessions.reply,

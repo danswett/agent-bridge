@@ -4,7 +4,7 @@ using System.Text;
 
 namespace AgentBridge.Injector;
 
-// agent-bridge-injector <pid>
+// agent-bridge-injector <pid> [--screen]
 //
 // Reads a key plan on stdin (KeyPlan.ToWorkerScript in AgentBridge.Host.Delivery) and
 // types it into the console of <pid>, one attach-write-detach per send, the shape
@@ -17,6 +17,11 @@ namespace AgentBridge.Injector;
 //   ok                    every send is complete
 //   fail <stage> <code>   it stopped: usage, plan, attach, input, write or partial, with
 //                         the Win32 error
+//
+// A send may name rows of the console's visible window and their text: it is typed only if,
+// inside the same attach, every one still reads so; otherwise "fail screen 0" and nothing of
+// it is written. With --screen nothing is typed at all: it says "row <base64>" for each row
+// of the visible window, top to bottom, then "ok".
 //
 // The host treats a worker that ends any other way after a "writing" line as "some of the
 // answer may have gone", and never retries it. It is a separate process because Windows
@@ -31,11 +36,13 @@ internal static unsafe partial class Program
     {
         // Taken before any attach: these are the pipes the host gave us, and stay so.
         output = Console.OpenStandardOutput();
-        if (args.Length != 1 || !uint.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out var pid) || pid == 0)
+        if (args.Length is not (1 or 2) || (args.Length == 2 && args[1] != "--screen")
+            || !uint.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out var pid) || pid == 0)
         {
             Say("fail usage 0");
             return 2;
         }
+        if (args.Length == 2) { return Screen(pid); }
         var sends = Read(Console.OpenStandardInput());
         if (sends is null)
         {
@@ -55,7 +62,7 @@ internal static unsafe partial class Program
         return 0;
     }
 
-    sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs);
+    sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, List<(int Row, string Text)> Expect);
 
     static List<KeySend>? Read(Stream input)
     {
@@ -69,13 +76,18 @@ internal static unsafe partial class Program
             var line = raw.TrimEnd('\r');
             if (line.Length == 0) { continue; }
             var parts = line.Split(' ');
-            if (parts.Length != 5 || parts[0] != "send") { return null; }
+            if (parts.Length < 5 || (parts.Length - 5) % 2 != 0 || parts[0] != "send") { return null; }
             try
             {
                 var text = Encoding.UTF8.GetString(Convert.FromBase64String(parts[1]));
+                var expect = new List<(int, string)>();
+                for (var k = 5; k < parts.Length; k += 2)
+                {
+                    expect.Add((int.Parse(parts[k], NumberStyles.None, CultureInfo.InvariantCulture), Encoding.UTF8.GetString(Convert.FromBase64String(parts[k + 1]))));
+                }
                 sends.Add(new KeySend(text, parts[2] == "1",
                     int.Parse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture),
-                    int.Parse(parts[4], NumberStyles.None, CultureInfo.InvariantCulture)));
+                    int.Parse(parts[4], NumberStyles.None, CultureInfo.InvariantCulture), expect));
             }
             catch (FormatException) { return null; }
             catch (OverflowException) { return null; }
@@ -101,6 +113,15 @@ internal static unsafe partial class Program
         }
         try
         {
+            if (send.Expect.Count > 0)
+            {
+                var (rows, failure) = Window();
+                if (rows is null) { return failure; }
+                foreach (var (row, expected) in send.Expect)
+                {
+                    if (row >= rows.Count || !string.Equals(rows[row], expected.TrimEnd(), StringComparison.Ordinal)) { return "fail screen 0"; }
+                }
+            }
             if (send.Text.Length > 0)
             {
                 Say($"writing {index}");
@@ -123,6 +144,59 @@ internal static unsafe partial class Program
         Say($"wrote {index}");
         if (send.PauseAfterMs > 0) { Thread.Sleep(send.PauseAfterMs); }
         return null;
+    }
+
+    static int Screen(uint pid)
+    {
+        FreeConsole();
+        if (!AttachConsole(pid))
+        {
+            Say($"fail attach {Marshal.GetLastPInvokeError()}");
+            return 3;
+        }
+        Ignore();
+        List<string>? rows;
+        string? failure;
+        try { (rows, failure) = Window(); }
+        finally { FreeConsole(); }
+        if (rows is null)
+        {
+            Say(failure!);
+            return 3;
+        }
+        foreach (var row in rows) { Say("row " + Convert.ToBase64String(Encoding.UTF8.GetBytes(row))); }
+        Say("ok");
+        return 0;
+    }
+
+    // The visible window of the attached console's active screen buffer, each row with its
+    // trailing spaces removed. Only read: nothing is written to CONOUT$.
+    static (List<string>? Rows, string? Failure) Window()
+    {
+        var screen = CreateFile("CONOUT$", GenericRead | GenericWrite, FileShareRead | FileShareWrite, 0, OpenExisting, 0, 0);
+        if (screen == -1) { return (null, $"fail output {Marshal.GetLastPInvokeError()}"); }
+        try
+        {
+            if (!GetConsoleScreenBufferInfo(screen, out var info)) { return (null, $"fail output {Marshal.GetLastPInvokeError()}"); }
+            var width = info.WindowRight - info.WindowLeft + 1;
+            if (width <= 0 || info.WindowBottom < info.WindowTop) { return (null, "fail output 0"); }
+            var buffer = new char[width];
+            var rows = new List<string>();
+            for (var y = info.WindowTop; y <= info.WindowBottom; y++)
+            {
+                uint read;
+                fixed (char* first = buffer)
+                {
+                    if (!ReadConsoleOutputCharacterW(screen, first, (uint)width, new Coord { X = info.WindowLeft, Y = (short)y }, out read))
+                    {
+                        return (null, $"fail output {Marshal.GetLastPInvokeError()}");
+                    }
+                }
+                rows.Add(new string(buffer, 0, (int)read).TrimEnd());
+            }
+            return (rows, null);
+        }
+        finally { CloseHandle(screen); }
     }
 
     // Every UTF-16 code unit as its own key down and key up, Unicode throughout: a character
@@ -183,6 +257,30 @@ internal static unsafe partial class Program
         [FieldOffset(16)] public uint ControlKeyState;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    struct Coord
+    {
+        public short X;
+        public short Y;
+    }
+
+    // CONSOLE_SCREEN_BUFFER_INFO: size, cursor, attributes, window, largest window.
+    [StructLayout(LayoutKind.Sequential)]
+    struct ScreenBufferInfo
+    {
+        public short SizeX;
+        public short SizeY;
+        public short CursorX;
+        public short CursorY;
+        public ushort Attributes;
+        public short WindowLeft;
+        public short WindowTop;
+        public short WindowRight;
+        public short WindowBottom;
+        public short MaxX;
+        public short MaxY;
+    }
+
     const ushort KeyEvent = 1;
     const ushort VkReturn = 0x0D;
     const uint GenericRead = 0x80000000;
@@ -205,6 +303,14 @@ internal static unsafe partial class Program
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool CloseHandle(nint handle);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetConsoleScreenBufferInfo(nint output, out ScreenBufferInfo info);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool ReadConsoleOutputCharacterW(nint output, char* characters, uint length, Coord at, out uint read);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

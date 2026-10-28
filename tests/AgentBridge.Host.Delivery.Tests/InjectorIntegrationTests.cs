@@ -58,12 +58,18 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
 
     // Starts the echo program in a console of its own (CREATE_NEW_CONSOLE), hidden, and waits
     // for it to say it is reading. With exitOn, it exits once that line is typed and entered.
-    Echo StartEcho(string? exitOn = null)
+    Echo StartEcho(string? exitOn = null, IReadOnlyList<string>? show = null)
     {
         var log = Path.Combine(root, $"echo-{Guid.NewGuid():N}.log");
         var exe = Path.Combine(AppContext.BaseDirectory, "agent-bridge-console-echo.exe");
         var info = new StartupInfo { Size = Marshal.SizeOf<StartupInfo>(), Flags = 1 /* STARTF_USESHOWWINDOW */, ShowWindow = 0 /* SW_HIDE */ };
         var command = new StringBuilder($"\"{exe}\" \"{log}\"{(exitOn is null ? "" : $" --exit-on \"{exitOn}\"")}");
+        if (show is not null)
+        {
+            var screen = Path.Combine(root, $"screen-{Guid.NewGuid():N}.txt");
+            File.WriteAllText(screen, string.Join("\n", show), new UTF8Encoding(false));
+            command.Append($" --show \"{screen}\"");
+        }
         Assert.True(CreateProcessW(null, command, 0, 0, false, 0x10 /* CREATE_NEW_CONSOLE */, 0, null, ref info, out var process), $"CreateProcess {Marshal.GetLastWin32Error()}");
         CloseHandle(process.Thread);
         started.Add(process.Process);
@@ -126,6 +132,78 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Equal(InjectionStatus.Typed, result.Status);
         var got = WaitFor(echo.Log, lines => Keys(lines) is { Count: >= 14 } k ? k : null);
         Assert.Equal(new[] { 27, 91, 65, 13, 111, 107, 13 }, got.Where(k => k.StartsWith("key 1", StringComparison.Ordinal)).Select(k => int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture)));
+    }
+
+    [WindowsFact]
+    public async Task A_Claude_multi_select_and_a_Codex_approval_reach_the_console_as_their_digits_arrows_letters_and_Enters()
+    {
+        var echo = StartEcho();
+        var claude = Claude.Ask(("Which ones?", true, ["a", "b", "c"]));
+        using var input = System.Text.Json.JsonDocument.Parse(claude.ToJsonString());
+        var (form, _) = AgentBridge.Host.Delivery.Claude.ClaudeForm.Read(input.RootElement);
+        var (plan, _) = AgentBridge.Host.Delivery.Claude.ClaudePlanner.Plan(form!, CopilotPlannerTests.Answer(new Dictionary<string, object> { ["Which ones?"] = new[] { "a", "c" } }));
+        var (approve, _, _) = AgentBridge.Host.Delivery.Codex.CodexApproval.Plan(CopilotPlannerTests.Answer(new { decision = "approve" }).Fields);
+        var injector = new WorkerInjector(Worker);
+
+        Assert.Equal(InjectionStatus.Typed, (await injector.InjectAsync(echo.Pid, plan!.Keys)).Status);
+        Assert.Equal(InjectionStatus.Typed, (await injector.InjectAsync(echo.Pid, approve!)).Status);
+
+        // 1, 3, Down x4, Enter; then y, Enter.
+        var down = new[] { 27, 91, 66 };
+        int[] expected = [49, 51, .. down, .. down, .. down, .. down, 13, 121, 13];
+        var got = WaitFor(echo.Log, lines => Keys(lines) is { } k && k.Count >= expected.Length * 2 ? k : null);
+        Assert.Equal(expected, got.Where(k => k.StartsWith("key 1", StringComparison.Ordinal)).Select(k => int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture)));
+    }
+
+    // A Copilot permission prompt drawn on a real console: the worker reads the screen, the
+    // host finds the plain Yes on it, and the digit goes only while that row still reads so.
+    static readonly string[] PermissionPrompt =
+    [
+        "git push origin main --force-with-lease",
+        "Do you want to run this command?",
+        "",
+        "\u276F 1. Yes",
+        "  2. Yes, and don't ask again for `git push` in this directory",
+        "  3. No, and tell Copilot what to do differently (Esc to stop)",
+    ];
+
+    [WindowsFact]
+    public async Task A_permission_prompt_is_read_off_a_real_screen_and_approved_by_its_digit_only_while_the_row_still_reads_so()
+    {
+        var echo = StartEcho(show: PermissionPrompt);
+        var injector = new WorkerInjector(Worker);
+
+        var screen = await injector.ReadScreenAsync(echo.Pid);
+        Assert.Null(screen.Problem);
+        Assert.Equal(PermissionPrompt, screen.Rows!.Take(PermissionPrompt.Length));
+        var (choice, problem) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate(screen.Rows!, approve: true, ["git push origin main --force-with-lease"]);
+        Assert.Null(problem);
+        Assert.Equal(("1", 3), (choice!.Key, choice.Row));
+
+        // The Yes row as it was, but the No row now selected at the machine: nothing is typed.
+        var held = choice.Hold.ToList();
+        held[^1] = held[^1] with { Text = "\u276F" + held[^1].Text[1..] };
+        var moved = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend("1", false, 0, 0, held)]));
+        Assert.Equal(InjectionStatus.NothingTyped, moved.Status);
+        Assert.Contains("changed", moved.Detail);
+
+        var typed = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend(choice.Key, false, 0, 0, choice.Hold)]));
+        Assert.Equal(InjectionStatus.Typed, typed.Status);
+        var got = WaitFor(echo.Log, lines => Keys(lines) is { Count: >= 2 } k ? k : null);
+        Assert.Equal(["key 1 0 49", "key 0 0 49"], got);
+    }
+
+    [WindowsFact]
+    public async Task A_permission_prompt_is_denied_by_a_lone_Escape_key()
+    {
+        var echo = StartEcho(show: PermissionPrompt);
+        var injector = new WorkerInjector(Worker);
+        var (choice, _) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate((await injector.ReadScreenAsync(echo.Pid)).Rows!, approve: false, ["git push origin main --force-with-lease"]);
+
+        var typed = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend(choice!.Key, false, 0, 0, choice.Hold)]));
+
+        Assert.Equal(InjectionStatus.Typed, typed.Status);
+        Assert.Equal(["key 1 0 27", "key 0 0 27"], WaitFor(echo.Log, lines => Keys(lines) is { Count: >= 2 } k ? k : null));
     }
 
     [WindowsFact]

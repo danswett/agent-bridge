@@ -97,20 +97,30 @@ function shell(q, idBase, answerable) {
   return section;
 }
 
-// why: 'truncated' (it didn't arrive whole) or 'machine' (the machine takes no answers
-// from the phone).
+// why: 'truncated' (it didn't arrive whole), 'atMachine' (a prompt only the machine can
+// answer, such as a permission prompt of a kind no host drives), 'approvalOff' (a permission
+// prompt at a machine where approving from the phone is turned off) or 'machine' (the
+// machine takes no answers from the phone).
 export function renderQuestion(q, { machineName, why = 'machine' } = {}) {
   const idBase = `q${++seq}`;
   const section = shell(q, idBase, false);
-  if (q.fields.length) {
+  // A prompt answered at the machine shows what it asks, not choices nobody can make here.
+  const atMachine = why === 'atMachine' || why === 'approvalOff';
+  if (q.fields.length && !atMachine) {
     section.append(h('ol', { class: 'fields' }, q.fields.map((f, k) => readOnlyField(f, `${idBase}-f${k}`))));
   }
   const at = where(machineName);
   section.append(why === 'truncated'
     ? h('p', { class: 'note warn read-only-why', role: 'note' },
       `Part of this question didn't fit in the message from the machine, so it can't be answered from here. Answer at the machine${at}.`)
-    : h('p', { class: 'note read-only-why', role: 'note' },
-      `This machine doesn't take answers from the phone yet. Answer at the machine${at}.`));
+    : why === 'approvalOff'
+      ? h('p', { class: 'note warn read-only-why', role: 'note' },
+        `Approving permission prompts from the phone is turned off on this machine. Answer at the machine${at}.`)
+      : why === 'atMachine'
+        ? h('p', { class: 'note warn read-only-why', role: 'note' },
+          `This prompt can only be answered at the machine${at}.`)
+        : h('p', { class: 'note read-only-why', role: 'note' },
+          `This machine doesn't take answers from the phone yet. Answer at the machine${at}.`));
   return section;
 }
 

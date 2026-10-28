@@ -337,6 +337,29 @@ test('a truncated question and response say so, and point to the machine', async
   await expect(c.locator('.question').locator('button, input, select, textarea')).toHaveCount(0);
 });
 
+test('a permission prompt only the machine can answer shows no buttons and says it is waiting at the machine', async ({ page }) => {
+  // The machine takes answers, just not to this prompt.
+  await openDemo(page);
+  await upsert(page, COPILOT, {
+    updatedAt: later(),
+    question: {
+      id: 'perm-1', kind: 'approval', message: 'Allow **Run a command**?\n\n`rm -rf build`', askedAt: later(), answerAtMachine: true,
+      fields: [{ name: 'decision', type: 'choice', required: true, options: [{ value: 'approve', label: 'Approve' }, { value: 'deny', label: 'Deny' }] }],
+    },
+  });
+  const c = card(page, COPILOT);
+  await expect(c.locator('.status-text')).toHaveText('Waiting at the machine');
+  await expect(c.locator('.question')).toHaveAttribute('data-answerable', 'false');
+  await expect(c.locator('.question .question-head')).toHaveText('Permission requested');
+  await expect(c.locator('.question .question-message')).toContainText('rm -rf build');
+  await expect(c.locator('.question .read-only-why')).toHaveText('This prompt can only be answered at the machine on Demo machine.');
+  await expect(c.locator('.question .field')).toHaveCount(0);
+  await expect(c.locator('.question').locator('button, input, select, textarea')).toHaveCount(0);
+  // Typed words would answer it, so the reply box is held, and says where to go.
+  await expect(c.locator('.reply-held')).toHaveText('The session is waiting at the machine for a prompt only it can answer. Answer it there first, then reply.');
+  await expect(c.locator('.reply-input')).toBeDisabled();
+});
+
 test('opening the tool history fetches the session with session.get', async ({ page }) => {
   await openDemo(page);
   const history = card(page, CLAUDE).locator('details.history');

@@ -28,7 +28,7 @@ internal sealed class Fixture : IDisposable
     public string ClaudeRegistrations => Path.Combine(Runtime, "agent-bridge-claude");
     public string CodexRegistrations => Path.Combine(Runtime, "agent-bridge-codex");
 
-    public SessionSourceOptions Options(long tailBytes = 4 * 1024 * 1024, bool watch = false, long maxSkim = 512L * 1024 * 1024) => new()
+    public SessionSourceOptions Options(long tailBytes = 4 * 1024 * 1024, bool watch = false, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true) => new()
     {
         CopilotHome = CopilotHome,
         ClaudeHome = ClaudeHome,
@@ -39,10 +39,11 @@ internal sealed class Fixture : IDisposable
         InitialTailBytes = tailBytes,
         MaxSkimBytes = maxSkim,
         PollInterval = TimeSpan.FromMilliseconds(200),
+        CopilotRemoteApproval = remoteApproval,
     };
 
-    public SessionSource Source(long tailBytes = 4 * 1024 * 1024, long maxSkim = 512L * 1024 * 1024) =>
-        new(Options(tailBytes, maxSkim: maxSkim), Processes, Time);
+    public SessionSource Source(long tailBytes = 4 * 1024 * 1024, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true) =>
+        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval), Processes, Time);
 
     // session-state/<id>/ with workspace.yaml and, optionally, inuse.<pid>.lock. Returns
     // the events.jsonl path (not created).
@@ -98,6 +99,29 @@ internal sealed class Fixture : IDisposable
             ["Updated"] = (updated ?? T0).ToString("o"),
         };
         File.WriteAllText(Path.Combine(CodexRegistrations, id + ".json"), json.ToJsonString());
+    }
+
+    // agent-ha-bridge's <id>.approval.json, as Write-CodexApprovalMarker writes it, and as
+    // Set-CodexApprovalAttempt rewrites it once it has typed into the approval.
+    public string CodexApprovalMarker(string id, string decisionId, string question = "Needs approval: git push", DateTimeOffset? created = null, JsonNode? attempted = null, string? owner = null)
+    {
+        Directory.CreateDirectory(CodexRegistrations);
+        var json = new JsonObject
+        {
+            ["SessionId"] = owner ?? id,
+            ["DecisionId"] = decisionId,
+            ["Question"] = question,
+            ["Created"] = (created ?? T0).ToString("o"),
+        };
+        if (attempted is not null)
+        {
+            json["DeliveryAttempted"] = attempted;
+            json["DeliveryChoice"] = "Approve";
+            json["DeliveryOutcome"] = "unconfirmed";
+        }
+        var path = Path.Combine(CodexRegistrations, id + ".approval.json");
+        File.WriteAllText(path, json.ToJsonString());
+        return path;
     }
 
     public static void Append(string path, params string[] lines)
@@ -180,6 +204,51 @@ internal static class Copilot
     public static string ToolStart(string id, string name, object arguments, int s, string? agentId = null) =>
         Event("tool.execution_start", new { toolCallId = id, toolName = name, arguments }, s, agentId);
 
+    // permission.requested as Copilot CLI 1.0.10x writes it: what is asked (permissionRequest)
+    // and what its prompt draws (promptRequest), each naming the tool call it gates. The
+    // prompts are synthesized with the field sets real transcripts carry, never copied.
+    public static string Permission(string requestId, string toolCallId, JsonObject prompt, int s, string? agentId = null)
+    {
+        var drawn = prompt.DeepClone().AsObject();
+        drawn["toolCallId"] = toolCallId;
+        var asked = drawn.DeepClone().AsObject();
+        // The shell command and path prompts both come from a shell permission request.
+        if (drawn["kind"]?.GetValue<string>() is "commands" or "path")
+        {
+            asked = new JsonObject
+            {
+                ["kind"] = "shell",
+                ["toolCallId"] = toolCallId,
+                ["fullCommandText"] = drawn["fullCommandText"]?.DeepClone() ?? "Get-Content C:\\elsewhere\\notes.txt",
+                ["intention"] = drawn["intention"]?.DeepClone() ?? "Read notes",
+                ["commands"] = new JsonArray(new JsonObject { ["identifier"] = "git push", ["readOnly"] = false }),
+                ["possiblePaths"] = new JsonArray(),
+                ["possibleUrls"] = new JsonArray(),
+                ["hasWriteFileRedirection"] = false,
+                ["canOfferSessionApproval"] = true,
+            };
+        }
+        var line = JsonNode.Parse(Event("permission.requested", new { requestId }, s, agentId))!.AsObject();
+        line["data"]!["permissionRequest"] = asked;
+        line["data"]!["promptRequest"] = drawn;
+        return line.ToJsonString();
+    }
+
+    public static string PermissionDone(string requestId, string toolCallId, string kind, int s, string? feedback = null) =>
+        Event("permission.completed", new { requestId, toolCallId, result = feedback is null ? (object)new { kind } : new { kind, feedback } }, s);
+
+    // One of each kind of prompt this host drives.
+    public static readonly IReadOnlyDictionary<string, JsonObject> Prompts = new Dictionary<string, JsonObject>
+    {
+        ["commands"] = new() { ["kind"] = "commands", ["fullCommandText"] = "git push origin main --force-with-lease", ["intention"] = "Push the branch", ["commandIdentifiers"] = new JsonArray("git push"), ["canOfferSessionApproval"] = true },
+        ["path"] = new() { ["kind"] = "path", ["accessKind"] = "read", ["paths"] = new JsonArray("C:\\elsewhere\\notes.txt", "C:\\elsewhere\\more") },
+        ["write"] = new() { ["kind"] = "write", ["intention"] = "Edit file", ["fileName"] = "src\\app.js", ["diff"] = "--- a/src/app.js\n+++ b/src/app.js\n@@ -1 +1 @@\n-old()\n+fresh()", ["newFileContents"] = "fresh()\n", ["canOfferSessionApproval"] = true },
+        ["read"] = new() { ["kind"] = "read", ["intention"] = "Read the settings", ["path"] = "C:\\Users\\someone\\settings.json" },
+        ["url"] = new() { ["kind"] = "url", ["url"] = "https://example.com/docs/page", ["intention"] = "Fetch the docs" },
+        ["mcp"] = new() { ["kind"] = "mcp", ["serverName"] = "github", ["toolName"] = "get_file_contents", ["toolTitle"] = "Get file contents", ["args"] = new JsonObject { ["owner"] = "octo", ["path"] = "README.md" } },
+        ["custom-tool"] = new() { ["kind"] = "custom-tool", ["toolName"] = "deploy_site", ["toolDescription"] = "Deploys the site", ["args"] = new JsonObject { ["env"] = "prod" } },
+    };
+
     public static string ToolDone(string id, int s, bool success = true, string? agentId = null) =>
         success ? Event("tool.execution_complete", new { toolCallId = id, success, result = new { content = "ok" } }, s, agentId)
                 : Event("tool.execution_complete", new { toolCallId = id, success, error = new { message = "no", code = "failure" } }, s, agentId);
@@ -233,6 +302,40 @@ internal static class Claude
 
     public static string Assistant(int s, string? stopReason, params JsonObject[] blocks) => AssistantMessage(null, s, stopReason, blocks);
 
+    // AskUserQuestion's input: one entry per question, as (text, multiSelect, options).
+    public static JsonObject Ask(params (string Question, bool Multi, string[] Options)[] questions) => new()
+    {
+        ["questions"] = new JsonArray([.. questions.Select(q => (JsonNode)new JsonObject
+        {
+            ["question"] = q.Question,
+            ["header"] = q.Question.Split(' ')[0],
+            ["multiSelect"] = q.Multi,
+            ["options"] = new JsonArray([.. q.Options.Select(o => (JsonNode)new JsonObject { ["label"] = o, ["description"] = "About " + o })]),
+        })]),
+    };
+
+    // The answer to an AskUserQuestion as Claude Code records it: the tool_result's text,
+    // '"question"="answer"' per question, and the entry's toolUseResult with the answers by
+    // question text (left out, as an older build would).
+    public static string Answered(string id, int s, IReadOnlyDictionary<string, string> answers, bool structured = true, bool error = false)
+    {
+        var text = error
+            ? "The user doesn't want to proceed with this tool use."
+            : $"User has answered your questions: {string.Join(", ", answers.Select(a => $"\"{a.Key}\"=\"{a.Value}\""))}. You can now continue with the user's answers in mind.";
+        var e = Entry("user", new JsonObject
+        {
+            ["role"] = "user",
+            ["content"] = new JsonArray(new JsonObject { ["type"] = "tool_result", ["tool_use_id"] = id, ["content"] = text, ["is_error"] = error }),
+        }, s);
+        if (structured && !error)
+        {
+            var map = new JsonObject();
+            foreach (var (k, v) in answers) { map[k] = v; }
+            e["toolUseResult"] = new JsonObject { ["questions"] = new JsonArray(), ["answers"] = map };
+        }
+        return e.ToJsonString();
+    }
+
     // One API message streamed as several entries shares its message id.
     public static string AssistantMessage(string? id, int s, string? stopReason, params JsonObject[] blocks) =>
         Entry("assistant", new JsonObject
@@ -246,7 +349,7 @@ internal static class Claude
 
     public static JsonObject Text(string text) => new() { ["type"] = "text", ["text"] = text };
     public static JsonObject Thinking(string text) => new() { ["type"] = "thinking", ["thinking"] = text };
-    public static JsonObject ToolUse(string id, string name, JsonObject input) => new() { ["type"] = "tool_use", ["id"] = id, ["name"] = name, ["input"] = input };
+    public static JsonObject ToolUse(string id, string name, JsonObject input) => new() { ["type"] = "tool_use", ["id"] = id, ["name"] = name, ["input"] = input.DeepClone() };
 
     public static string System(string subtype, int s)
     {

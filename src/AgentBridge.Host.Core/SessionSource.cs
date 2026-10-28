@@ -104,6 +104,16 @@ public sealed class SessionSource : ISessionSource
         }
     }
 
+    public SessionFiles? Files(string id)
+    {
+        lock (_gate)
+        {
+            if (!_entries.TryGetValue(id, out var e)) { return null; }
+            var d = e.Tracker.Discovered;
+            return new SessionFiles(d.Agent, d.TranscriptPath, d.Registration?.Path);
+        }
+    }
+
     public SessionSubscription Subscribe()
     {
         lock (_gate)
