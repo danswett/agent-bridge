@@ -86,6 +86,17 @@ public class AnswerTests
     }
 
     [Fact]
+    public void A_request_over_16_KiB_is_refused_even_when_each_text_is_within_its_own_limit()
+    {
+        var fields = Enumerable.Range(0, 5).Select(i => new Field { Name = $"t{i}", Type = FieldType.Text }).ToArray();
+        var text = new string('x', Limits.AnswerText);
+        var each = JsonSerializer.Serialize(fields.ToDictionary(f => f.Name, _ => text));
+
+        Assert.Contains("larger than 16 KiB", Answers.Check(Form(fields), Answer(each)));
+        Assert.Null(Answers.Check(Form(fields.Take(3).ToArray()), Answer(JsonSerializer.Serialize(fields.Take(3).ToDictionary(f => f.Name, _ => text)))));
+    }
+
+    [Fact]
     public void A_truncated_question_is_never_answered_remotely()
     {
         var q = Form(Choice("answer")) with { Truncated = true };

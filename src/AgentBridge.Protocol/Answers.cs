@@ -12,6 +12,12 @@ public static class Answers
     public static string? Check(Question question, AnswerRequest answer)
     {
         if (question.Truncated == true) { return "the question was too large to show in full; answer it at the machine"; }
+        // Per-text limits alone don't bound the request: several text fields, each within
+        // its own limit, can add up to more than a host promised to take.
+        if (JsonSerializer.SerializeToUtf8Bytes(answer, ProtocolJson.Options).Length > Limits.AnswerRequest)
+        {
+            return $"the answer is larger than {Limits.AnswerRequest / 1024} KiB";
+        }
         if (question.Fields.Count == 0)
         {
             if (answer.Fields is { Count: > 0 }) { return "this question takes a text answer, not fields"; }
