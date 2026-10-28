@@ -71,7 +71,7 @@ Request `data`: `{}`. Result:
 }
 ```
 
-`machine.id` is the host's device id (S4). `os` is `windows`, `macos` or `linux`.
+`machine.id` is the host's device id (S4). `os` is `windows`, `macos` or `linux`. `machine` also carries `dev` and `sessions`, for a status line ([v1-usage.md](v1-usage.md#machine-status)).
 `capabilities` lists what this host supports, and a client hides anything missing:
 
 | Capability | Ops |
@@ -82,6 +82,7 @@ Request `data`: `{}`. Result:
 | `sessions.attach` | `attachment.start`, `attachment.chunk`, `attachment.discard`, and `attachments` on `session.reply` ([Attachments](#attachments)). Offered only with `sessions.reply`, by a host that can stage files for the agent. Without it a client offers no way to attach |
 | `sessions.stop` | `session.stop`. Left out on the same terms as `sessions.answer`. A client then offers no End session |
 | `push` | `push.subscribe`, `push.unsubscribe`, `push.list`: Web Push notifications of questions and finished turns ([Notifications](#notifications)) |
+| `usage` | `usage.get`, `usage.subscribe`: how much of each agent's allowance is gone ([v1-usage.md](v1-usage.md)) |
 
 ### `sessions.list`
 

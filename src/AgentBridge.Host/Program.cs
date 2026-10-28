@@ -4,6 +4,7 @@ using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Processes;
+using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Host.Delivery.Windows;
@@ -25,6 +26,8 @@ using AgentBridge.Transport;
 //                                               docs/host-stop.md), and notify subscribed
 //                                               phones of questions and finished turns
 //   agent-bridge-host whoami                    this device and the account it signed in to
+//   agent-bridge-host usage                     ask each agent for its allowance once, as JSON
+//                                               (serve does it on a timer; docs/protocol/v1-usage.md)
 //
 // Roots default to the current user's; --copilot-home, --claude-home and --codex-home
 // point elsewhere. Nothing under them is ever written. sign-in, serve and whoami take
@@ -107,10 +110,24 @@ switch (command)
             Console.WriteLine($"device {Wire.DeviceId(identity.Key.Public)}  account {identity.Account?.Login ?? "(not signed in)"}  relay {RelayUri(identity)?.ToString() ?? "(none)"}  key in {identity.Storage}  folder {identity.Folder}");
             return 0;
         }
+    case "usage":
+        {
+            // One ask of every agent, whatever the pace: what serve would report right now.
+            await using var source = new SessionSource(options);
+            await source.RefreshAsync();
+            using var http = new UsageHttp(TimeSpan.FromSeconds(15));
+            var usageOptions = UsageOptions.For(options);
+            // What it notices goes to stderr: stdout is the report, for whatever parses it.
+            Action<string> note = m => Console.Error.WriteLine($"{DateTime.Now:HH:mm:ss} {m}");
+            await using var monitor = new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: note), source, usageOptions, log: note);
+            await monitor.PassAsync();
+            Console.WriteLine(JsonSerializer.Serialize(monitor.Current.Report, pretty));
+            return 0;
+        }
     case "serve":
         return await ServeAsync();
     default:
-        Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | sign-in --relay <url> | serve [--relay <url>] [--name <name>] | whoami");
+        Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] | whoami");
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");
         return command == "help" ? 0 : 2;
 }
@@ -131,7 +148,7 @@ async Task<int> ServeAsync()
     var relayUri = RelayUri(identity) ?? throw new ArgumentException("--relay is required");
     var profile = Option("--profile") ?? "default";
     var name = Option("--name") ?? $"{Environment.MachineName}{(profile == "default" ? "" : $"/{profile}")}";
-    var machine = new MachineInfo(Wire.DeviceId(identity.Key.Public), name, OsName(), HostVersion());
+    var machine = new MachineInfo(Wire.DeviceId(identity.Key.Public), name, OsName(), HostVersion(), Dev: IsDevBuild() ? true : null);
 
     using var stop = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
@@ -146,7 +163,15 @@ async Task<int> ServeAsync()
     await using var push = new PushNotifier(source, machine,
         PushStore.Load(Path.Combine(identity.Folder, "push-subscriptions.json"), account.AccountId, Log), log: Log);
     push.Start();
-    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops);
+    // Each agent's allowance, asked at the pace its sessions set, and never more often than
+    // the idle pace while agent-ha-bridge is asking the same vendors for this user.
+    using var usageHttp = new UsageHttp(TimeSpan.FromSeconds(15));
+    var usageOptions = UsageOptions.For(options);
+    var haProbe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : null;
+    await using var usageMonitor = new UsageMonitor(UsageMonitor.Collectors(usageOptions, usageHttp, new CommandRunner(), log: Log), source, usageOptions,
+        agentHaBridge: () => OperatingSystem.IsWindows() ? haProbe!.Active() : null, log: Log);
+    usageMonitor.Start();
+    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, new UsageService(usageMonitor, Log));
     Log($"watching {source.Snapshot().Count} live session(s); serving as \"{name}\" ({machine.Id[..8]}) on {relayUri.Host}; {push.Subscribers} device(s) to notify");
 
     var backoff = TimeSpan.FromSeconds(1);
@@ -232,6 +257,12 @@ static string HostVersion()
     var plus = v.IndexOf('+');
     return plus < 0 ? v : v[..plus];
 }
+
+// A release build carries AgentBridgeRelease (set by -p:AgentBridgeRelease=true). Anything
+// else was built from a working copy, and says so beside its version, because the version
+// only moves when a release is cut: two hosts days apart in features would read the same.
+static bool IsDevBuild() =>
+    !typeof(SessionService).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>().Any(a => a.Key == "AgentBridgeRelease" && a.Value == "true");
 
 static void Log(string message) => Console.WriteLine($"{DateTime.Now:HH:mm:ss} {message}");
 

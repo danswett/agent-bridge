@@ -14,7 +14,7 @@ namespace AgentBridge.Host;
 // replier types a prompt into a session's input, with any files sent first by attachment.*,
 // which go to the AttachmentStore) and session.stop (the stopper ends a session). The
 // push.* ops, which register a device for notifications, go to the
-// PushNotifier.
+// PushNotifier, and usage.* to the UsageService.
 public sealed class SessionService
 {
     readonly ISessionSource source;
@@ -25,10 +25,12 @@ public sealed class SessionService
     readonly PushNotifier? push;
     readonly AttachmentStore? attachments;
     readonly ISessionStopper? stops;
+    readonly UsageService? usage;
     readonly ConcurrentDictionary<SecureChannel, Subscriber> subscribers = new();
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
-        ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null)
+        ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
+        UsageService? usage = null)
     {
         this.source = source;
         this.machine = machine;
@@ -38,6 +40,7 @@ public sealed class SessionService
         this.push = push;
         this.attachments = attachments;
         this.stops = stops;
+        this.usage = usage;
     }
 
     // Channels with a subscription running; tests and the host's log read it.
@@ -54,7 +57,7 @@ public sealed class SessionService
                 // Computed for each hello, so it says what is true now: agent-ha-bridge
                 // starting for this user takes sessions.answer and sessions.reply away until
                 // it stops.
-                return new HelloResult(1, machine, Offered());
+                return new HelloResult(1, machine with { Sessions = source.Snapshot().Count }, Offered());
             case Ops.SessionAnswer:
                 return await AnswerAsync(channel, data);
             case Ops.SessionReply:
@@ -65,6 +68,8 @@ public sealed class SessionService
                 return await StopAsync(data);
             case Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList when push is not null:
                 return await push.HandleAsync(channel, op, data);
+            case UsageProtocol.Get or UsageProtocol.Subscribe when usage is not null:
+                return await usage.HandleAsync(channel, op, data);
             case Ops.SessionsList:
                 return source.List(String(data, "cursor"));
             case Ops.SessionGet:
@@ -163,6 +168,7 @@ public sealed class SessionService
         if (attachments is not null && replies?.TakesAttachments == true) { offered.Add(Capabilities.SessionsAttach); }
         if (stops?.Available == true) { offered.Add(Capabilities.SessionsStop); }
         if (push is not null) { offered.Add(Capabilities.Push); }
+        if (usage is not null) { offered.Add(UsageProtocol.Capability); }
         return offered;
     }
 

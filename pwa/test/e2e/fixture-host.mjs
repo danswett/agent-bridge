@@ -7,7 +7,9 @@
 // delivered, and takes an answered question away with an upsert; and session.reply the same
 // way (Replies.Check through the app's mirror, refused while the session asks a question,
 // only Copilot sessions, a repeat typed once). It offers push and records push.subscribe and
-// push.unsubscribe, but sends no notifications. It reuses
+// push.unsubscribe, but sends no notifications. Given a usage report, it offers usage as
+// well (usage.get, usage.subscribe, and usage.update when a test sets a new one) and reports
+// itself as a dev build with its session count. It reuses
 // the app's own relay and Noise code, so it proves the wire format against the real relay
 // and the real browser crypto, not against a copy of either.
 //
@@ -24,7 +26,7 @@ import { readQuestion } from '../../js/protocol.js';
 
 const EMPTY = new Uint8Array(0);
 
-export async function startFixtureHost({ base, name = 'fixture-host', sessions = [], answering = true, replying = answering }) {
+export async function startFixtureHost({ base, name = 'fixture-host', sessions = [], answering = true, replying = answering, usage = null }) {
   const key = await P256KeyPair.generate();
   const deviceId = await deviceIdOf(key.public);
   const account = await (await startDeviceFlow(base)).wait();
@@ -64,7 +66,14 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
     const reply = (result) => sendJson(ch, { re: id, ok: true, result });
     switch (op) {
       case 'hello':
-        return reply({ protocol: 1, machine: { id: deviceId, name, os: 'linux', hostVersion: '0.0.0-fixture' }, capabilities: ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : []), 'push'] });
+        return reply({ protocol: 1, machine: { id: deviceId, name, os: 'linux', hostVersion: '0.0.0-fixture', ...(usage ? { dev: true, sessions: state.size } : {}) }, capabilities: ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : []), 'push', ...(usage ? ['usage'] : [])] });
+      case 'usage.get':
+        if (!usage) { break; }
+        return reply(usage);
+      case 'usage.subscribe':
+        if (!usage) { break; }
+        ch.usage = true;
+        return reply(usage);
       case 'sessions.list':
         return reply({ sessions: [...state.values()].map(listed), revision });
       case 'session.get': {
@@ -193,6 +202,11 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
       state.delete(id);
       revision++;
       return Promise.all(subscribers().map((ch) => event(ch, 'session.remove', { id })));
+    },
+    // A new usage report, sent as usage.update to every channel subscribed to usage.
+    setUsage(report) {
+      usage = report;
+      return Promise.all([...channels.values()].filter((c) => c.usage && c.hs.isComplete).map((ch) => event(ch, 'usage.update', report)));
     },
     close() { relay.close(); },
   };

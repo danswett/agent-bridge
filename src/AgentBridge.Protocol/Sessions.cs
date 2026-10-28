@@ -187,7 +187,9 @@ public enum FieldType { Choice, Multi, Boolean, Text, Number }
 [UnknownAs(Unconfirmed)]
 public enum AnswerOutcome { Delivered, Unconfirmed, Stale, Busy, Refused }
 
-public sealed record MachineInfo(string Id, string Name, string Os, string HostVersion);
+// Dev: built from a working copy rather than released (docs/protocol/v1-usage.md). Sessions:
+// how many were live when hello was answered.
+public sealed record MachineInfo(string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null);
 
 public sealed record HelloResult(int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
 

@@ -14,6 +14,7 @@ const SHELL = [
   './js/answers.js', './js/answer-service.js', './js/replies.js', './js/reply-service.js', './js/attachments.js', './js/stop-service.js',
   './js/ui/dom.js', './js/ui/time.js', './js/ui/fold-store.js', './js/ui/question-view.js',
   './js/ui/reply-view.js', './js/ui/stop-view.js', './js/ui/session-card.js', './js/ui/views.js', './fixtures/sessions-list.json',
+  './js/usage.js', './js/fleet.js', './js/ui/usage-view.js',
 ];
 
 self.addEventListener('install', (e) => {
