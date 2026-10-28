@@ -59,6 +59,7 @@ public sealed class AnswerService : ISessionAnswerer
     readonly Lock gate = new();
     readonly Dictionary<Guid, Remembered> requests = [];
     readonly ConcurrentDictionary<string, Guid> delivering = new(StringComparer.Ordinal);
+    readonly SemaphoreSlim typing = new(1, 1);
 
     sealed class Remembered(Task<AnswerResult> outcome)
     {
@@ -151,34 +152,46 @@ public sealed class AnswerService : ISessionAnswerer
         if (!processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid)) { return Stale("the session's process has ended"); }
         if (guard.Refuse(pid) is { } refused) { return Refused(refused); }
 
-        // Immediately before typing: agent-ha-bridge again, then the question itself, by
-        // its tool call id in the transcript, never by how recent anything looks.
-        if (probe.Active() is { } active) { return Refused(active); }
-        if (source.Get(session.Id)?.Question?.Id != question.Id) { return Stale("the session is no longer asking that question"); }
-        var call = CopilotTranscript.Find(transcript, question.Id);
-        if (call.Arguments is not { } arguments) { return Stale("the session's transcript no longer shows that question"); }
-        if (call.Answer is not null || call.SessionEnded) { return Stale("the question has already been answered"); }
-        if (!call.IsMainAgent) { return Refused("the question was asked by a subagent; answer at the machine"); }
-
-        var (form, unreadable) = CopilotForm.Read(arguments);
-        if (form is null) { return Refused(unreadable!); }
-        if (!form.Matches(question)) { return Refused("the question's form reads differently here than the client was shown; answer at the machine"); }
-        var (plan, problem) = CopilotPlanner.Plan(form, request);
-        if (plan is null) { return Refused(problem!); }
-
+        // One answer typed at a time, across sessions, and the slot is taken before the last
+        // checks: an answer that waited behind another must find its question still asked,
+        // and agent-ha-bridge still stopped, when its own turn comes, not when it arrived.
+        await typing.WaitAsync();
+        CopilotPlan plan;
+        long from;
         InjectionResult typed;
-        try { typed = await injector.InjectAsync(pid, plan.Keys); }
-        catch (Exception e)
+        try
         {
-            return Unconfirmed($"the injector failed while typing ({e.Message}); check at the machine");
+            // Immediately before typing: agent-ha-bridge again, then the question itself, by
+            // its tool call id in the transcript, never by how recent anything looks.
+            if (probe.Active() is { } active) { return Refused(active); }
+            if (source.Get(session.Id)?.Question?.Id != question.Id) { return Stale("the session is no longer asking that question"); }
+            var call = CopilotTranscript.Find(transcript, question.Id);
+            if (call.Arguments is not { } arguments) { return Stale("the session's transcript no longer shows that question"); }
+            if (call.Answer is not null || call.SessionEnded) { return Stale("the question has already been answered"); }
+            if (!call.IsMainAgent) { return Refused("the question was asked by a subagent; answer at the machine"); }
+
+            var (form, unreadable) = CopilotForm.Read(arguments);
+            if (form is null) { return Refused(unreadable!); }
+            if (!form.Matches(question)) { return Refused("the question's form reads differently here than the client was shown; answer at the machine"); }
+            var (planned, problem) = CopilotPlanner.Plan(form, request);
+            if (planned is null) { return Refused(problem!); }
+            (plan, from) = (planned, call.ScannedTo);
+
+            try { typed = await injector.InjectAsync(pid, plan.Keys); }
+            catch (Exception e)
+            {
+                return Unconfirmed($"the injector failed while typing ({e.Message}); check at the machine");
+            }
         }
+        finally { typing.Release(); }
+
         log($"typed into {Short(session.Id)} (pid {pid}): {plan.Keys.Describe()} -> {typed.Status} {typed.Detail}");
         switch (typed.Status)
         {
             case InjectionStatus.NothingTyped: return Refused(typed.Detail);
             case InjectionStatus.Interrupted: return Unconfirmed($"{typed.Detail}; part of the answer may have reached the session, so check at the machine");
         }
-        try { return await ConfirmAsync(transcript, question.Id, call.ScannedTo, plan); }
+        try { return await ConfirmAsync(transcript, question.Id, from, plan); }
         catch (Exception e) { return Unconfirmed($"the answer was typed but could not be checked ({e.Message}); check at the machine"); }
     }
 

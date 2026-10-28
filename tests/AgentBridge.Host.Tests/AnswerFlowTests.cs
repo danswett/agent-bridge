@@ -184,6 +184,35 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_answer_waiting_for_another_sessions_typing_checks_its_question_again_once_its_turn_comes()
+    {
+        const string Second = "77777777-7777-4777-8777-777777777777";
+        var other = f.CopilotSession(Second, 200, name: "Second session");
+        Fixture.Append(other, Copilot.User("go", 1), Ask("r1", 2));
+        f.Processes.Run(AgentKind.Copilot, 200);
+        await source.RefreshAsync();
+        var release = new TaskCompletionSource();
+        injector.Gate = release.Task;
+        injector.OnInject = () => Fixture.Append(events, Recorded("q1", new { pick = "b" }));
+        var ch = await OpenAsync();
+
+        var first = AnswerAsync(ch, new { pick = "b" });
+        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the first answer to start typing", Patience);
+        var waiting = ch.RequestAsync(Ops.SessionAnswer, new { id = Second, question = "r1", request = Guid.NewGuid().ToString(), fields = new { pick = "a" } });
+        await Task.Delay(300);
+        // Only one answer is typed at a time, and the second session's question is answered
+        // at the machine while it waits.
+        Assert.Single(injector.Plans);
+        Fixture.Append(other, Recorded("r1", new { pick = "c" }));
+        release.SetResult();
+
+        Assert.Equal("delivered", (await first).Outcome);
+        var result = (await waiting).GetProperty("result");
+        Assert.Equal(("stale", "the question has already been answered"), (result.GetProperty("outcome").GetString(), result.GetProperty("reason").GetString()));
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
     public async Task A_repeated_request_returns_the_first_outcome_and_never_types_again()
     {
         var release = new TaskCompletionSource();

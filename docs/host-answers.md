@@ -75,9 +75,10 @@ In order, for every answer:
    still being typed waits for that outcome.
 4. The session's process is still the live agent process; it does not run elevated
    (integrity level High or above, or unreadable, is refused).
-5. agent-ha-bridge again, then the transcript: the tool call's start is there, and no
-   `human_response.recorded`, `tool.execution_complete` or session abort/shutdown follows
-   it (`stale` otherwise). Identity, never time.
+5. One answer is typed at a time across sessions, and its turn is taken before these last
+   checks: agent-ha-bridge again, then the transcript: the tool call's start is there, and
+   no `human_response.recorded`, `tool.execution_complete` or session abort/shutdown
+   follows it (`stale` otherwise). Identity, never time.
 6. The worker types the plan. Nothing written (it could not start, attach or open the
    console input) is `refused`. Anything after its first write that is not a clean finish
    (the worker died, hung, or the console closed) is `unconfirmed`, never retried.
