@@ -304,6 +304,13 @@ public sealed class PushNotifier : IAsyncDisposable
             // Back before its resolution went out (it flickered while an answer was typed):
             // the question is still on devices, and still asked.
             if (t.Due is { Kind: NoticeKind.Resolved } r && r.Question == q.Id) { t.Due = null; }
+            // Likewise once the resolution was made but is still waiting to be sent (the rate
+            // limit, or the relay reconnecting): withdrawn, so the question stays on devices.
+            if (t.Shown != q.Id && t.Notified.Contains(q.Id)
+                && outbox.RemoveAll(o => o.Session == s.Id && o.Kind == NoticeKind.Resolved && o.Question == q.Id) > 0)
+            {
+                t.Shown = q.Id;
+            }
             if (!t.Notified.Contains(q.Id) && !(t.Due is { Kind: NoticeKind.Question } d && d.Question == q.Id))
             {
                 t.Due = new Due(NoticeKind.Question, now + options.QuestionDelay, q.Id);

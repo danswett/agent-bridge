@@ -274,3 +274,19 @@ test('signing out unsubscribes at once, even with a registration stuck waiting f
   assert.equal(pm.subscribed.length, 1);
   assert.deepEqual(host.requests, []);
 });
+test('signing out while the permission prompt is up leaves notifications off and nothing subscribed', async () => {
+  const { r, pm, win } = registrar();
+  let grant;
+  win.Notification.requestPermission = () => new Promise((res) => { grant = () => { win.Notification.permission = 'granted'; res('granted'); }; });
+  const host = client();
+
+  const enabling = r.enable(host, host.capabilities);
+  await r.forget();
+  grant();
+  await enabling;
+
+  assert.equal(r.enabled, false);
+  assert.equal(pm.current, null);
+  assert.equal(pm.subscribed.length, 0);
+  assert.deepEqual(host.requests, []);
+});

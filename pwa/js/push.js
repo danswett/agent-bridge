@@ -90,6 +90,8 @@ export class PushRegistrar {
   enable(client = null, capabilities = []) {
     let asked;
     try { asked = this.win.Notification.requestPermission(); } catch (e) { asked = Promise.reject(e); }
+    // Signing out while the prompt is up must win: nothing is subscribed or switched on after.
+    const generation = this.#generation;
     this.busy = 'on';
     this.error = '';
     this.#emit();
@@ -101,7 +103,8 @@ export class PushRegistrar {
             ? 'Notifications are blocked for Agent Bridge. Allow them in Settings, then try again.'
             : 'Notifications were not allowed.');
         }
-        if (!await this.#subscription(true, this.#generation)) { return; }
+        if (generation !== this.#generation || !await this.#subscription(true, generation)) { return; }
+        if (generation !== this.#generation) { return; }
         this.#write('on');
         if (client) { await this.#register(client, capabilities); }
       } catch (e) {

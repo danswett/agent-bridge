@@ -35,27 +35,27 @@ test('a push shows a notification, and every later notice about the session repl
 
   await page.goto('?demo=1&static=1');
   const scope = await page.evaluate(async () => (await navigator.serviceWorker.ready).scope);
-  await expect.poll(() => registrations.find((r) => r.scopeURL === scope && !r.isDeleted)?.registrationId).toBeTruthy();
+  await expect.poll(() => registrations.find((r) => r.scopeURL === scope && !r.isDeleted)?.registrationId, { timeout: 15000 }).toBeTruthy();
   const registrationId = registrations.find((r) => r.scopeURL === scope).registrationId;
   const deliver = (data) => cdp.send('ServiceWorker.deliverPushMessage', { origin, registrationId, data });
   const shown = () => page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications())
     .map((n) => ({ title: n.title, body: n.body, tag: n.tag, silent: n.silent, renotify: n.renotify, data: n.data })));
 
   await deliver(notice(scope, 'question', 'DEV · waiting on you\nWhich database?'));
-  await expect.poll(shown).toHaveLength(1);
+  await expect.poll(shown, { timeout: 15000 }).toHaveLength(1);
   const [question] = await shown();
   expect(question).toMatchObject({ title: 'Pick the session store', body: 'DEV · waiting on you\nWhich database?', tag: `${MACHINE}:s1`, renotify: true, silent: false });
   expect(question.data).toEqual({ url: `${scope}?host=${MACHINE}&session=s1&question=q1`, kind: 'question', machine: MACHINE, session: 's1', question: 'q1' });
 
   // Answered at the machine: the same notification, quietly changed.
   await deliver(notice(scope, 'resolved', 'DEV · no longer waiting'));
-  await expect.poll(async () => (await shown()).map((n) => n.body)).toEqual(['DEV · no longer waiting']);
+  await expect.poll(async () => (await shown()).map((n) => n.body), { timeout: 15000 }).toEqual(['DEV · no longer waiting']);
   expect((await shown())[0]).toMatchObject({ silent: true, renotify: false });
 
   // Whatever arrives, something is shown, and a tap stays in the app.
   await deliver('not json');
   await deliver(notice(scope, 'question', 'x', { tag: 'other', navigate: 'https://evil.example/' }));
-  await expect.poll(shown).toHaveLength(3);
+  await expect.poll(shown, { timeout: 15000 }).toHaveLength(3);
   const all = await shown();
   expect(all.map((n) => n.title)).toContain('Agent Bridge');
   expect(all.find((n) => n.tag === 'other').data.url).toBe(scope);

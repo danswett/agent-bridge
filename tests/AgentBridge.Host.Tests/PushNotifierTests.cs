@@ -387,6 +387,28 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task A_resolution_still_waiting_to_be_sent_is_withdrawn_when_its_question_comes_back()
+    {
+        Start(new PushOptions { MaxPerMinute = 1 });
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        // Gone long enough to be resolved, but the rate limit holds the resolution back...
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(1, notifier.Pending);
+        // ...and before it can go, the question is pending again.
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(60));
+        Assert.Equal(["question"], Received().Select(r => Kind(r.Notification)));
+        Assert.Equal(0, notifier.Pending);
+
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["question", "resolved"], Received().Select(r => Kind(r.Notification)));
+    }
+
+    [Fact]
     public async Task A_host_at_the_rate_limit_sleeps_until_the_window_has_room_instead_of_spinning()
     {
         Start(new PushOptions { MaxPerMinute = 1 });
