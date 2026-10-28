@@ -122,10 +122,13 @@ public static class CopilotPlanner
         }
     }
 
-    // Copilot's checkbox list: "↑/↓ select · space toggle · enter accept". The caret opens
-    // on the first row and only moves down, so the list is walked once, top to bottom,
-    // pressing Space only on rows whose state has to change: the schema default opens
-    // some already ticked, and toggling those blindly would untick them.
+    // Copilot's checkbox list: "↑/↓ select · space toggle · enter accept". It is walked once:
+    // Up far enough to reach the top from any row (Up stops at the first row, as in the
+    // single-choice list), so a caret somebody moved at the terminal cannot shift every
+    // toggle a row, then down to the bottom pressing Space only on rows whose state has to
+    // change: the schema default opens some already ticked, and toggling those blindly
+    // would untick them. Ticks somebody changed at the terminal are in no transcript; see
+    // docs/host-answers.md.
     static (List<string>? Keys, Expected? Record, string? Problem) Multi(CopilotField field, JsonElement value)
     {
         var wanted = new SortedSet<int>();
@@ -141,20 +144,20 @@ public static class CopilotPlanner
             wanted.Add(at);
         }
         if (wanted.Count == 0 && !field.AllowsEmpty) { return ([], null, "choose at least one option"); }
-        var cursor = field.Focus;
-        if (field.Checked.Any(row => row < cursor && !wanted.Contains(row))) { return ([], null, "the list opens with an option ticked above its caret"); }
+        var top = string.Concat(Enumerable.Repeat(KeyPlan.Up, field.Options.Count - 1));
         var keys = new List<string>();
-        for (var row = cursor; row < field.Options.Count; row++)
+        var cursor = 0;
+        for (var row = 0; row < field.Options.Count; row++)
         {
             if (wanted.Contains(row) == field.Checked.Contains(row)) { continue; }
-            keys.Add(string.Concat(Enumerable.Repeat(KeyPlan.Down, row - cursor)) + " ");
+            keys.Add((keys.Count == 0 ? top : "") + string.Concat(Enumerable.Repeat(KeyPlan.Down, row - cursor)) + " ");
             cursor = row;
         }
-        // Nothing to toggle: the defaults are the answer, and Enter accepts them as they are.
-        if (keys.Count == 0) { keys.Add(""); }
+        // Nothing to toggle: the defaults are the answer, and Enter accepts them as they are,
+        // once the caret is back on a row of the list.
+        if (keys.Count == 0) { keys.Add(top); }
         return (keys, new Expected.Set([.. wanted.Select(i => field.Options[i].Raw)]), null);
     }
-
     // Words through a lone option list's "Other (type your answer)". Up far enough to reach
     // the top from any row, then one Down per option: Up stops at the first option, and
     // the Down on the last one opens Other at once, so nothing is pressed after the walk.

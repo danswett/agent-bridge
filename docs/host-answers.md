@@ -41,9 +41,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
   after its keys, 240 ms before the next field):
   * choice and boolean: Up × (N−1) to reach the top row wherever the caret was left (Up
     stops at the first option), then Down to the chosen row. A boolean is a Yes / No list.
-  * multi: one walk down the checkbox list, Space only on rows whose state must change
-    (the default opens some ticked), each toggle its own send 350 ms apart; Enter alone
-    when the defaults are the answer. An empty answer only where `minItems` allows it.
+  * multi: Up × (N−1) to the top row first, then one walk down the checkbox list, Space
+    only on rows whose state must change (the default opens some ticked), each toggle its
+    own send 350 ms apart; just the walk to the top and Enter when the defaults are the
+    answer. An empty answer only where `minItems` allows it. That Up stops at the first
+    row of a checkbox list, as it does in a single-choice list, is assumed rather than
+    seen live: check it on the test VM.
   * text and number: the words (a number as its JSON text). An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.
@@ -68,7 +71,7 @@ and the client says to check at the machine. agent-ha-bridge has the same exposu
 
 The keys are planned from the tool call's own arguments in the transcript, not from the
 `Question` the client saw, because they depend on things a `Question` does not carry
-(where the caret starts, which rows open ticked, `minItems`, the older format). If the two
+(which rows open ticked, `minItems`, the older format). If the two
 readings of the schema disagree on fields, order, types or option values, nothing is typed.
 
 ## Before and after typing

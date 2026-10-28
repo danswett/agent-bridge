@@ -9,21 +9,19 @@ public enum CopilotFieldKind { Choice, Boolean, Multi, Text, Number }
 // schema's scalar, as text), Raw the scalar itself, which is what the CLI records.
 public sealed record CopilotOption(string Value, JsonElement Raw);
 
-// One field of Copilot's ask_user prompt, as the keys have to drive it. Focus is where the
-// caret rests when the field opens (the schema default's row, else the first); Checked
-// the rows a multi-select list opens with ticked.
+// One field of Copilot's ask_user prompt, as the keys have to drive it. Checked is the rows
+// a multi-select list opens with ticked (its schema default).
 public sealed record CopilotField(
     string Name,
     CopilotFieldKind Kind,
     IReadOnlyList<CopilotOption> Options,
-    int Focus,
     IReadOnlyList<int> Checked,
     bool AllowsEmpty);
 
 // The ask_user prompt read from the tool call's own arguments, the way agent-ha-bridge
 // reads it (Get-DecisionSchemaFields), rather than from the Question a client saw: the
-// keys depend on things a Question does not carry (where the caret starts, which rows
-// open ticked, whether an empty list is an answer, the older `choices` format).
+// keys depend on things a Question does not carry (which rows open ticked, whether an
+// empty list is an answer, the older `choices` format).
 public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
 {
     // Null with a reason when the prompt cannot be driven by keys from here.
@@ -81,7 +79,7 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
         {
             if (isArray) { return (null, $"\"{name}\" is a list with no options to choose from"); }
             var kind = type is "number" or "integer" ? CopilotFieldKind.Number : CopilotFieldKind.Text;
-            return (new CopilotField(name, kind, [], 0, [], false), null);
+            return (new CopilotField(name, kind, [], [], false), null);
         }
 
         if (isArray)
@@ -99,19 +97,17 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
                 }
             }
             ticked.Sort();
-            return (new CopilotField(name, CopilotFieldKind.Multi, options, 0, ticked, AllowsEmpty(p)), null);
+            return (new CopilotField(name, CopilotFieldKind.Multi, options, ticked, AllowsEmpty(p)), null);
         }
 
-        var focus = 0;
-        if (hasDefault)
+        // The keys never count from the default (they walk from the top row), but a default
+        // that names no option is a prompt nobody has seen drawn, so it is not typed into.
+        // A null default is the schema not naming one.
+        if (hasDefault && def.ValueKind != JsonValueKind.Null && IndexOf(options, def) < 0)
         {
-            var at = IndexOf(options, def);
-            // A null default that names no option is the schema not saying where the caret
-            // starts; any other default that names none leaves the caret unknown.
-            if (at >= 0) { focus = at; }
-            else if (def.ValueKind != JsonValueKind.Null) { return (null, $"\"{name}\" has a default that is not one of its options, so where its caret starts is unknown"); }
+            return (null, $"\"{name}\" has a default that is not one of its options; answer it at the machine");
         }
-        return (new CopilotField(name, type == "boolean" ? CopilotFieldKind.Boolean : CopilotFieldKind.Choice, options, focus, [], false), null);
+        return (new CopilotField(name, type == "boolean" ? CopilotFieldKind.Boolean : CopilotFieldKind.Choice, options, [], false), null);
     }
 
     // Read as the host's QuestionMapper reads them, so a client's option values are these:

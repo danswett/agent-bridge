@@ -142,24 +142,24 @@ public class CopilotPlannerTests
     }
 
     [Fact]
-    public void A_multi_select_list_is_walked_once_top_to_bottom_toggling_only_rows_that_must_change()
+    public void A_multi_select_list_is_walked_once_from_its_top_row_wherever_the_caret_was_left_toggling_only_rows_that_must_change()
     {
         const string Many = """{ "message": "m", "requestedSchema": { "properties": { "many": { "type": "array", "items": { "enum": ["a", "b", "c", "d"] }, "default": ["b", "c"] } } } }""";
 
         var plan = Plan(Many, Answer(new { many = new[] { "a", "c", "d" } }));
 
-        // a on, b off (it opens ticked), c left alone, d on; only the last carries Enter.
-        Assert.Equal([(" ", false), (D + " ", false), (D + D + " ", true)], Keys(plan));
+        // Up to the top first, then a on, b off (it opens ticked), c left alone, d on; only the last carries Enter.
+        Assert.Equal([(U + U + U + " ", false), (D + " ", false), (D + D + " ", true)], Keys(plan));
         Assert.Equal([CopilotPlanner.ToggleGapMs, CopilotPlanner.ToggleGapMs, CopilotPlanner.AfterFieldMs], plan.Keys.Sends.Select(s => s.PauseAfterMs));
         Assert.Equal(["a", "c", "d"], Assert.IsType<Expected.Set>(plan.Fields[0].Value).Raws.Select(r => r.GetString()));
     }
 
     [Fact]
-    public void A_multi_select_answer_that_is_its_defaults_is_accepted_with_Enter_alone()
+    public void A_multi_select_answer_that_is_its_defaults_is_accepted_with_Enter_after_the_walk_to_the_top()
     {
         const string Many = """{ "message": "m", "requestedSchema": { "properties": { "many": { "type": "array", "items": { "enum": ["a", "b"] }, "default": ["b"] } } } }""";
 
-        Assert.Equal([("", true)], Keys(Plan(Many, Answer(new { many = new[] { "b" } }))));
+        Assert.Equal([(U, true)], Keys(Plan(Many, Answer(new { many = new[] { "b" } }))));
     }
 
     [Fact]
@@ -168,7 +168,7 @@ public class CopilotPlannerTests
         const string AnyOrNone = """{ "message": "m", "requestedSchema": { "properties": { "many": { "type": "array", "items": { "enum": ["a", "b"] } } } } }""";
         const string AtLeastOne = """{ "message": "m", "requestedSchema": { "properties": { "many": { "type": "array", "minItems": 1, "items": { "enum": ["a", "b"] } } } } }""";
 
-        Assert.Equal([("", true)], Keys(Plan(AnyOrNone, Answer(new { many = Array.Empty<string>() }))));
+        Assert.Equal([(U, true)], Keys(Plan(AnyOrNone, Answer(new { many = Array.Empty<string>() }))));
         Assert.Contains("at least one", Refusal(AtLeastOne, Answer(new { many = Array.Empty<string>() })));
     }
 
@@ -223,7 +223,7 @@ public class CopilotPlannerTests
         Assert.Contains("older Copilot format", CopilotForm.Read(legacy.RootElement).Problem);
 
         using var lost = JsonDocument.Parse("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a", "b"], "default": "z" } } } }""");
-        Assert.Contains("caret starts is unknown", CopilotForm.Read(lost.RootElement).Problem);
+        Assert.Contains("not one of its options", CopilotForm.Read(lost.RootElement).Problem);
     }
 
     [Fact]
