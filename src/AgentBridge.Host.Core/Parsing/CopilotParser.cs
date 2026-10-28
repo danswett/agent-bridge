@@ -126,11 +126,13 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time) : Tra
                 S.SetStatus(_turnAskedForTools ? SessionStatus.Working : SessionStatus.Idle);
                 _turnAskedForTools = false;
                 break;
-            case "abort":
+            // A subagent's abort or shutdown ends its own work, not the session's turn:
+            // abandoning on it set the session idle and failed the parent's running tools.
+            case "abort" when !sub:
                 S.Abandon(at);
                 _turnAskedForTools = false;
                 break;
-            case "session.shutdown":
+            case "session.shutdown" when !sub:
                 S.Abandon(at);
                 break;
             case "tool.execution_start":

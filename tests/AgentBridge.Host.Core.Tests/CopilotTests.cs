@@ -136,6 +136,18 @@ public class CopilotTests
     }
 
     [Fact]
+    public async Task A_subagents_abort_leaves_the_session_and_its_own_tools_alone()
+    {
+        await using var s = new Session_();
+
+        var s1 = await s.After(Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.ToolStart("c1", "task", new { description = "Delegate" }, 3),
+            Copilot.Event("abort", new { reason = "user initiated" }, 4, agentId: "sub"), Copilot.ToolDone("c1", 5));
+
+        Assert.Equal(SessionStatus.Working, s1.Status);
+        Assert.Equal(ToolStatus.Done, Assert.Single(s1.Activity.History!).Status);
+    }
+
+    [Fact]
     public async Task A_failed_tool_is_recorded_as_failed()
     {
         await using var s = new Session_();

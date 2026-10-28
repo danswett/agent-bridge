@@ -27,7 +27,10 @@ public interface ISessionSource : IAsyncDisposable
 
     // sessions.subscribe: the result to send, then on Events one session.upsert per live
     // session, sessions.synced, and every live change after that, in order. Dispose the
-    // subscription when the channel closes.
+    // subscription when the channel closes. A second sessions.subscribe on a channel
+    // replaces the first: dispose the old subscription and call this again, which sends
+    // the whole snapshot and sessions.synced afresh. The channel, not this, numbers
+    // events with its own continuing seq.
     SessionSubscription Subscribe();
 
     // One discovery and tailing pass, now. The CLI's `sessions` command and tests use it;

@@ -116,6 +116,31 @@ public class SourceTests
     }
 
     [Fact]
+    public async Task Subscribing_again_resends_the_whole_snapshot_and_the_replaced_subscription_hears_nothing_more()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        Fixture.Append(events, Copilot.User("first", 1));
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        var first = source.Subscribe();
+        Drain(first);
+
+        // What a channel does on a second sessions.subscribe: drop the first, start again.
+        first.Dispose();
+        using var second = source.Subscribe();
+        f.Time.Advance(TimeSpan.FromSeconds(1));
+        Fixture.Append(events, Copilot.Assistant("later", 2));
+        await source.RefreshAsync();
+
+        Assert.Equal(new SubscribeResult(source.Revision - 1, 1), second.Result);
+        Assert.Equal([Events.SessionUpsert, Events.SessionsSynced, Events.SessionUpsert], Drain(second).Select(e => e.Name));
+        Assert.Empty(Drain(first));
+        Assert.True(first.Events.Completion.IsCompleted);
+    }
+
+    [Fact]
     public async Task The_list_is_paged_so_every_page_fits_a_message_and_the_cursor_reaches_every_session()
     {
         using var f = new Fixture();
