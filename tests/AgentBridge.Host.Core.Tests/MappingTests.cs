@@ -80,6 +80,21 @@ public class QuestionMappingTests
     }
 
     [Fact]
+    public void A_question_message_cut_to_its_limit_is_marked_truncated_and_one_that_fits_is_not()
+    {
+        var cut = Ask($$"""{ "message": "{{new string('m', Limits.QuestionMessage + 10)}}" }""");
+        var whole = Ask("""{ "message": "short" }""");
+        var approval = QuestionMapper.Approval("a", new string('p', Limits.QuestionMessage + 1), Fixture.T0);
+        using var claude = JsonDocument.Parse($$"""{ "questions": [ { "question": "{{new string('c', Limits.QuestionMessage + 1)}}", "options": [] } ] }""");
+
+        Assert.True(cut.Truncated);
+        Assert.Equal(Limits.QuestionMessage, Encoding.UTF8.GetByteCount(cut.Message));
+        Assert.Null(whole.Truncated);
+        Assert.True(approval.Truncated);
+        Assert.True(QuestionMapper.FromClaudeAskUserQuestion("c", claude.RootElement, Fixture.T0).Truncated);
+    }
+
+    [Fact]
     public void A_question_round_trips_through_the_wire_format()
     {
         var q = Ask("""{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "number", "default": 1.5 } } } }""");

@@ -9,12 +9,18 @@ internal static class QuestionMapper
 {
     public static readonly IReadOnlyList<Option> ApprovalOptions = [new("approve", "Approve"), new("deny", "Deny")];
 
+    // The contract's message limit. A question whose message had to be cut says so, so a
+    // client shows it read-only and sends the person to the machine for the rest.
+    static string Cut(string message) => Limits.KeepStart(message, Limits.QuestionMessage)!;
+
+    static bool? IsCut(string message) => Cut(message).Length < message.Length ? true : null;
     // A permission prompt: a fixed approve-or-deny choice.
     public static Question Approval(string id, string message, DateTimeOffset askedAt) => new()
     {
         Id = id,
         Kind = QuestionKind.Approval,
-        Message = Limits.KeepStart(message, Limits.QuestionMessage)!,
+        Message = Cut(message),
+            Truncated = IsCut(message),
         Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = ApprovalOptions, Required = true }],
         AskedAt = askedAt,
     };
@@ -51,7 +57,8 @@ internal static class QuestionMapper
         {
             Id = id,
             Kind = QuestionKind.Form,
-            Message = Limits.KeepStart(message, Limits.QuestionMessage)!,
+            Message = Cut(message),
+            Truncated = IsCut(message),
             Fields = fields,
             AskedAt = askedAt,
         };
@@ -219,7 +226,8 @@ internal static class QuestionMapper
         {
             Id = id,
             Kind = QuestionKind.Form,
-            Message = Limits.KeepStart(message, Limits.QuestionMessage)!,
+            Message = Cut(message),
+            Truncated = IsCut(message),
             Fields = fields,
             AskedAt = askedAt,
         };

@@ -178,6 +178,26 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public async Task A_lock_written_before_the_process_now_holding_its_pid_started_is_not_that_process_session()
+    {
+        using var f = new Fixture();
+        // A's lock is a dead CLI's leftover from T0; pid 100 now belongs to a CLI that
+        // started an hour later and whose own session is B.
+        var stale = f.CopilotSession(A, lockPid: 100, lockWrite: Fixture.T0);
+        var current = f.CopilotSession(B, lockPid: 100, lockWrite: Fixture.T0.AddHours(1).AddSeconds(5));
+        Fixture.Append(current, Copilot.User("current", 1));
+        Fixture.Append(stale, Copilot.User("stale", 2));
+        File.SetLastWriteTimeUtc(current, Fixture.T0.AddHours(1).AddMinutes(1).UtcDateTime);
+        File.SetLastWriteTimeUtc(stale, Fixture.T0.AddHours(2).UtcDateTime);
+        f.Processes.Run(AgentKind.Copilot, 100, commandLine: null, startedAt: Fixture.T0.AddHours(1));
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Equal(B, Assert.Single(source.Snapshot()).Id);
+    }
+
+    [Fact]
     public async Task A_registration_older_than_the_process_now_holding_its_pid_is_not_live()
     {
         using var f = new Fixture();

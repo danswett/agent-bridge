@@ -56,10 +56,16 @@ internal static class CopilotDiscovery
                 var name = Path.GetFileName(lockFile);
                 var digits = name.AsSpan("inuse.".Length, name.Length - "inuse.".Length - ".lock".Length);
                 if (!int.TryParse(digits, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var pid)) { continue; }
-                if (!byPid.ContainsKey(pid)) { continue; }
+                if (!byPid.TryGetValue(pid, out var process)) { continue; }
+                var lockWrite = LastWrite(lockFile);
+                // A lock written before the process now holding its pid started is a dead
+                // CLI's leftover, not evidence about this process: pids are reused, and
+                // accepting it brought an ended session back (or let its newer transcript
+                // win this pid's tie-break over the session it is really in).
+                if (process.StartedAt is { } started && lockWrite != DateTime.MinValue && lockWrite < started.UtcDateTime - TimeSpan.FromSeconds(1)) { continue; }
                 // One candidate per live lock: a folder two live CLIs both hold a lock in
                 // used to yield only one of them.
-                candidates.Add(Candidate.Of(dir, pid, LastWrite(lockFile)));
+                candidates.Add(Candidate.Of(dir, pid, lockWrite));
             }
         }
 
