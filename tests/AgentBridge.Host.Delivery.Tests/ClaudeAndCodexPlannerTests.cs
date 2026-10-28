@@ -132,6 +132,20 @@ public class ClaudeAndCodexPlannerTests
     }
 
     [Fact]
+    public void A_multi_select_whose_options_join_into_one_another_is_never_confirmed_by_its_record()
+    {
+        // "A" and "B" ticked and "A, B" ticked are both recorded as "A, B".
+        var input = Claude.Ask(("Which?", true, ["A", "B", "A, B"]));
+        var both = Plan(input, new Dictionary<string, object> { ["Which?"] = new[] { "A", "B" } });
+        var third = Plan(input, new Dictionary<string, object> { ["Which?"] = new[] { "A, B" } });
+        var record = new ClaudeAnswerRecord(false, "\"Which?\"=\"A, B\"", new Dictionary<string, string> { ["Which?"] = "A, B" });
+
+        Assert.False(ClaudeVerifier.Check(both, record).Matched);
+        Assert.Contains("cannot show which", ClaudeVerifier.Check(third, record).Reason);
+        Assert.True(ClaudeVerifier.Check(Plan(Claude.Ask(("Which?", true, ["A", "B"])), new Dictionary<string, object> { ["Which?"] = new[] { "A", "B" } }), record).Matched);
+    }
+
+    [Fact]
     public void Claudes_transcript_is_read_for_the_call_by_its_id_and_an_answer_or_an_interrupt_after_it()
     {
         using var f = new Fixture();

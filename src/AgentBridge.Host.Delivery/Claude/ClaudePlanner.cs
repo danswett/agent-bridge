@@ -57,8 +57,10 @@ public sealed record ClaudeForm(IReadOnlyList<ClaudeField> Fields)
 }
 
 // The keys for one answer, and what Claude should record for each question: the label
-// chosen, or a multi-select's labels in list order joined by ", ".
-public sealed record ClaudePlan(KeyPlan Keys, IReadOnlyList<(string Name, string Answer)> Fields);
+// chosen, or a multi-select's labels in list order joined by ", ". Ambiguous names the
+// multi-selects whose recorded string could also be some other selection, so a match on
+// it proves nothing.
+public sealed record ClaudePlan(KeyPlan Keys, IReadOnlyList<(string Name, string Answer)> Fields, IReadOnlySet<string>? Ambiguous = null);
 
 // Turns an answer into the keys Claude Code's AskUserQuestion prompt takes, as
 // agent-ha-bridge drives it (hooks/decision-inject.ps1, Get-BridgeFormPayloads and
@@ -84,6 +86,7 @@ public static class ClaudePlanner
         var given = answer.Fields ?? new Dictionary<string, JsonElement>();
         var sends = new List<KeySend>();
         var expected = new List<(string, string)>();
+        var ambiguous = new HashSet<string>(StringComparer.Ordinal);
         foreach (var field in form.Fields)
         {
             if (!given.TryGetValue(field.Name, out var value) || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
@@ -116,9 +119,17 @@ public static class ClaudePlanner
             foreach (var index in picked) { sends.Add(new KeySend((index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture), false, 0, ToggleGapMs)); }
             sends.Add(new KeySend(Repeat(KeyPlan.Down, field.Options.Count + 1), true, FieldEnterDelayMs, AfterFieldMs));
             expected.Add((field.Name, string.Join(", ", picked.Select(i => field.Options[i]))));
+            if (Joinable(field)) { ambiguous.Add(field.Name); }
         }
-        return (new ClaudePlan(new KeyPlan(sends), expected), null);
+        return (new ClaudePlan(new KeyPlan(sends), expected, ambiguous), null);
     }
+
+    // Claude records a multi-select as its labels joined by ", ". When a label holds a comma
+    // or two labels read the same, different selections can join to one string ("A", "B"
+    // and "A, B"), and the record cannot say which was ticked.
+    static bool Joinable(ClaudeField field) =>
+        field.Options.Any(o => o.Contains(',', StringComparison.Ordinal))
+        || field.Options.Select(InjectableText.Flatten).Distinct(StringComparer.Ordinal).Count() != field.Options.Count;
 
     static int IndexOf(ClaudeField field, string value)
     {
@@ -142,6 +153,10 @@ public static class ClaudeVerifier
         if (record.IsError) { return (false, "Claude recorded the question as declined or failed, not answered"); }
         foreach (var (name, answer) in plan.Fields)
         {
+            if (plan.Ambiguous?.Contains(name) == true)
+            {
+                return (false, $"\"{name}\" has options that join into one another, so Claude's record cannot show which were ticked");
+            }
             if (record.Answers is { } answers)
             {
                 if (!answers.TryGetValue(name, out var got)) { return (false, "Claude recorded no answer to one of its questions"); }
