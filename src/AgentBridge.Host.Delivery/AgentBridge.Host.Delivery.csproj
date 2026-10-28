@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Answering a session's question: planning the keys (pure, every platform), checking
+       the transcript before and after, and handing the keys to the injector worker
+       (Windows). Nothing here types into a console itself; agent-bridge-injector does. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AgentBridge.Host.Delivery</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AgentBridge.Host.Delivery.Tests" />
+    <InternalsVisibleTo Include="AgentBridge.Host.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AgentBridge.Protocol\AgentBridge.Protocol.csproj" />
+    <ProjectReference Include="..\AgentBridge.Host.Core\AgentBridge.Host.Core.csproj" />
+  </ItemGroup>
+
+</Project>

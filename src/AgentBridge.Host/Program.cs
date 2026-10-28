@@ -3,6 +3,9 @@ using System.Reflection;
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Processes;
+using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Delivery.Windows;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 
@@ -14,7 +17,9 @@ using AgentBridge.Transport;
 //   agent-bridge-host watch [--json]            a line per upsert and removal, until Ctrl+C
 //   agent-bridge-host sign-in --relay <url>     GitHub sign-in through the relay
 //   agent-bridge-host serve [--relay <url>] [--name <name>]
-//                                               serve Protocol v1 sessions, reconnecting
+//                                               serve Protocol v1 sessions, reconnecting, and
+//                                               type answers to their questions (Windows; see
+//                                               docs/host-answers.md)
 //   agent-bridge-host whoami                    this device and the account it signed in to
 //
 // Roots default to the current user's; --copilot-home, --claude-home and --codex-home
@@ -127,7 +132,8 @@ async Task<int> ServeAsync()
     // machine nor loses a change, and every new channel subscribes to the same state.
     await using var source = new SessionSource(options);
     await source.StartAsync(stop.Token);
-    var service = new SessionService(source, machine, Log);
+    var answers = Answerer(source);
+    var service = new SessionService(source, machine, Log, answers);
     Log($"watching {source.Snapshot().Count} live session(s); serving as \"{name}\" ({machine.Id[..8]}) on {relayUri.Host}");
 
     var backoff = TimeSpan.FromSeconds(1);
@@ -176,6 +182,24 @@ async Task<int> ServeAsync()
 
 static string OsName() =>
     OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
+
+// Answers are typed through agent-bridge-injector beside this executable, on Windows only
+// for now, and never while agent-ha-bridge runs for this user (checked again for every
+// hello and every answer; this is only the startup note).
+ISessionAnswerer Answerer(ISessionSource source)
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        Log("answering from other devices is not supported on this platform yet");
+        return new UnsupportedPlatformAnswerer();
+    }
+    var probe = new AgentHaBridgeProbe();
+    var injector = new WorkerInjector();
+    if (!File.Exists(Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName))) { Log($"{WorkerInjector.FileName} is missing beside the host; answers will be refused"); }
+    Log(probe.Active() is { } active ? $"answering is off for now: {active}" : "answering is on");
+    return new AnswerService(source, new SystemProcessInspector(), probe, new TargetGuard(), injector,
+        new AnswerOptions { CopilotHome = options.CopilotHome }, Log);
+}
 
 static string HostVersion()
 {

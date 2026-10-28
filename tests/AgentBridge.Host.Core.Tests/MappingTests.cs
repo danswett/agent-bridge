@@ -71,6 +71,18 @@ public class QuestionMappingTests
     }
 
     [Fact]
+    public void A_question_that_is_one_option_list_also_takes_words_through_Other_and_a_form_does_not()
+    {
+        var lone = Assert.Single(Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] } } } }""").Fields);
+        var form = Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] }, "go": { "type": "boolean" } } } }""");
+        var list = Assert.Single(Ask("""{ "message": "m", "requestedSchema": { "properties": { "many": { "type": "array", "items": { "enum": ["a", "b"] } } } } }""").Fields);
+
+        Assert.True(lone.AllowOther);
+        Assert.Null(form.Fields[0].AllowOther);
+        Assert.Null(list.AllowOther);
+    }
+
+    [Fact]
     public void A_schema_written_as_a_string_is_parsed_and_a_plain_message_has_no_fields()
     {
         var q = Ask("""{ "message": "m", "requestedSchema": "{\"properties\":{\"go\":{\"type\":\"boolean\"}}}" }""");

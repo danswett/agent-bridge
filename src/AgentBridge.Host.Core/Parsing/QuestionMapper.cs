@@ -52,6 +52,10 @@ internal static class QuestionMapper
         else if (Json.Get(arguments, "requestedSchema") is { } schema)
         {
             fields = SchemaFields(schema);
+            // Every Copilot option list ends in "Other (type your answer)", but words reach
+            // it only in a question that is that one list: the Down past its last option
+            // opens Other there, and in a tabbed form or a checkbox list it does not.
+            if (fields is [{ Type: FieldType.Choice } only]) { fields = [only with { AllowOther = true }]; }
         }
         return new Question
         {

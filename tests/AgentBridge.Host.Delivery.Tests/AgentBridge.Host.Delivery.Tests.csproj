@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="9.10.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\AgentBridge.Host.Delivery\AgentBridge.Host.Delivery.csproj" />
+    <!-- Built alongside so the Windows integration tests drive the real worker and a real
+         console program; their executables land in this output folder. -->
+    <ProjectReference Include="..\..\src\AgentBridge.Injector\AgentBridge.Injector.csproj" />
+    <ProjectReference Include="..\AgentBridge.ConsoleEcho\AgentBridge.ConsoleEcho.csproj" />
+    <Compile Include="..\AgentBridge.Host.Core.Tests\Fixture.cs" Link="Fixture.cs" />
+  </ItemGroup>
+
+</Project>

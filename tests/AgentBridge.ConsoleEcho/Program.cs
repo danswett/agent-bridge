@@ -1,0 +1,63 @@
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text;
+
+// agent-bridge-console-echo <log>
+//
+// Writes "ready <pid> <console window>" to <log>, then one line per key event read from
+// its own console input: "key <down> <vk> <char code>". Runs until its console closes or
+// it is stopped. Every line is flushed as it is written, so a test reads them live.
+internal static unsafe partial class Program
+{
+    static int Main(string[] args)
+    {
+        if (args.Length != 1) { return 2; }
+        using var log = new FileStream(args[0], FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+        void Say(string line)
+        {
+            var bytes = Encoding.UTF8.GetBytes(line + "\n");
+            log.Write(bytes);
+            log.Flush();
+        }
+
+        var input = GetStdHandle(-10);
+        Say(string.Create(CultureInfo.InvariantCulture, $"ready {Environment.ProcessId} {GetConsoleWindow()}"));
+        var records = new InputRecord[64];
+        while (true)
+        {
+            uint read;
+            fixed (InputRecord* first = records)
+            {
+                if (!ReadConsoleInputW(input, first, (uint)records.Length, out read)) { return 1; }
+            }
+            for (var i = 0; i < read; i++)
+            {
+                var r = records[i];
+                if (r.EventType != 1) { continue; }
+                Say(string.Create(CultureInfo.InvariantCulture, $"key {r.KeyDown} {r.VirtualKeyCode} {(int)r.UnicodeChar}"));
+            }
+        }
+    }
+
+    [StructLayout(LayoutKind.Explicit, Size = 20)]
+    struct InputRecord
+    {
+        [FieldOffset(0)] public ushort EventType;
+        [FieldOffset(4)] public int KeyDown;
+        [FieldOffset(8)] public ushort RepeatCount;
+        [FieldOffset(10)] public ushort VirtualKeyCode;
+        [FieldOffset(12)] public ushort VirtualScanCode;
+        [FieldOffset(14)] public char UnicodeChar;
+        [FieldOffset(16)] public uint ControlKeyState;
+    }
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial nint GetStdHandle(int which);
+
+    [LibraryImport("kernel32.dll")]
+    private static partial nint GetConsoleWindow();
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool ReadConsoleInputW(nint input, InputRecord* records, uint length, out uint read);
+}
