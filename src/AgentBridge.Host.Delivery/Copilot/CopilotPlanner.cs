@@ -103,7 +103,7 @@ public static class CopilotPlanner
             case CopilotFieldKind.Boolean:
                 {
                     var at = value.ValueKind == JsonValueKind.True ? 0 : 1;
-                    return ([Arrows(field.Focus, at)], new Expected.Flag(at == 0), null);
+                    return ([ToRow(field, at)], new Expected.Flag(at == 0), null);
                 }
             case CopilotFieldKind.Choice:
                 {
@@ -115,7 +115,7 @@ public static class CopilotPlanner
                     }
                     var at = Index(field, value.GetString());
                     if (at < 0) { return ([], null, "not one of the choices"); }
-                    return ([Arrows(field.Focus, at)], new Expected.Option(field.Options[at].Raw), null);
+                    return ([ToRow(field, at)], new Expected.Option(field.Options[at].Raw), null);
                 }
             default:
                 return Multi(field, value);
@@ -173,8 +173,12 @@ public static class CopilotPlanner
         return (new CopilotPlan(keys, null, [(field.Name, new Expected.Words(words))]), null);
     }
 
-    static string Arrows(int from, int to) =>
-        string.Concat(Enumerable.Repeat(to < from ? KeyPlan.Up : KeyPlan.Down, Math.Abs(to - from)));
+    // To a row of an option list from wherever its caret rests: Up far enough to reach the
+    // top from any row (Up stops at the first option, as the Other walk relies on), then
+    // Down to the row. Counting from the schema default instead would land one row off
+    // whenever somebody had moved the caret at the terminal, and Enter would commit it.
+    static string ToRow(CopilotField field, int row) =>
+        string.Concat(Enumerable.Repeat(KeyPlan.Up, field.Options.Count - 1)) + string.Concat(Enumerable.Repeat(KeyPlan.Down, row));
 
     // The option a value names; two options with one value make it ambiguous.
     static int Index(CopilotField field, string? value)

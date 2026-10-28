@@ -88,8 +88,11 @@ public static class CopilotVerifier
         }
         if (Spell(value) is not { } spelling) { return (false, "the session's record of this answer cannot be compared"); }
         // Read bare, as the CLI renders a lone field. Also accepting "name=value" let an
-        // option spelled "pick=x" pass for the option "x".
-        return Same(rest, spelling) ? (true, "") : (false, $"the session recorded a different answer for \"{name}\"");
+        // option spelled "pick=x" pass for the option "x". Only typed words have their
+        // whitespace flattened; an option's value is compared exactly, as options "a b" and
+        // "a  b" are different answers.
+        var same = value is Expected.Words or Expected.Omitted ? Same(rest, spelling) : string.Equals(rest, spelling, StringComparison.Ordinal);
+        return same ? (true, "") : (false, $"the session recorded a different answer for \"{name}\"");
     }
 
     static string? Strip(string? text)

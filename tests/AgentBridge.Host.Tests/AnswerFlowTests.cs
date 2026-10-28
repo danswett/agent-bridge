@@ -127,7 +127,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal(("delivered", (string?)null), (outcome, reason));
         var (pid, plan) = Assert.Single(injector.Plans);
         Assert.Equal(100, pid);
-        Assert.Equal([(KeyPlan.Down, true)], plan.Sends.Select(s => (s.Text, s.Enter)));
+        Assert.Equal([(KeyPlan.Up + KeyPlan.Up + KeyPlan.Down, true)], plan.Sends.Select(s => (s.Text, s.Enter)));
     }
 
     [Fact]

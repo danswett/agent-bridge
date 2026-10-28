@@ -39,8 +39,8 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
 * **Free text:** the words, 300 ms, Enter.
 * **A form,** field by field in schema order, each committed with its own Enter (120 ms
   after its keys, 240 ms before the next field):
-  * choice and boolean: Up or Down from the row the caret opens on (the schema default's,
-    else the first) to the chosen row. A boolean is a Yes / No list.
+  * choice and boolean: Up × (N−1) to reach the top row wherever the caret was left (Up
+    stops at the first option), then Down to the chosen row. A boolean is a Yes / No list.
   * multi: one walk down the checkbox list, Space only on rows whose state must change
     (the default opens some ticked), each toggle its own send 350 ms apart; Enter alone
     when the defaults are the answer. An empty answer only where `minItems` allows it.

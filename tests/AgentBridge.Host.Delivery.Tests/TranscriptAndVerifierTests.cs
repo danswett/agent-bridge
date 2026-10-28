@@ -176,6 +176,15 @@ public class CopilotVerifierTests
     }
 
     [Fact]
+    public void A_rendered_option_is_compared_exactly_and_only_typed_words_have_their_whitespace_flattened()
+    {
+        var plan = Plan("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a b", "a  b"] } } } }""", new { pick = "a b" });
+
+        Assert.True(CopilotVerifier.Check(plan, Rendered("User selected: a b")).Matched);
+        Assert.False(CopilotVerifier.Check(plan, Rendered("User selected: a  b")).Matched);
+    }
+
+    [Fact]
     public void A_lone_fields_rendering_is_read_bare_so_an_option_spelled_like_name_equals_value_cannot_pass_for_another()
     {
         var plan = Plan("""{ "message": "m", "requestedSchema": { "properties": { "choice": { "enum": ["both", "hold"] } } } }""", new { choice = "both" });

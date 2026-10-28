@@ -92,11 +92,11 @@ public class CopilotPlannerTests
     }
 
     [Fact]
-    public void A_choice_moves_from_the_default_row_to_the_chosen_one_then_commits_with_Enter()
+    public void A_choice_walks_up_to_the_top_wherever_the_caret_was_left_then_down_to_the_chosen_row_and_commits_with_Enter()
     {
-        Assert.Equal([(D, true)], Keys(Plan(Pick, Answer(new { pick = "d" }))));
-        Assert.Equal([(U + U, true)], Keys(Plan(Pick, Answer(new { pick = "a" }))));
-        Assert.Equal([("", true)], Keys(Plan(Pick, Answer(new { pick = "c" }))));
+        Assert.Equal([(U + U + U + D + D + D, true)], Keys(Plan(Pick, Answer(new { pick = "d" }))));
+        Assert.Equal([(U + U + U, true)], Keys(Plan(Pick, Answer(new { pick = "a" }))));
+        Assert.Equal([(U + U + U + D + D, true)], Keys(Plan(Pick, Answer(new { pick = "c" }))));
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public class CopilotPlannerTests
               "oneOf": [ { "const": "s4", "title": "S4 relay (Recommended)" }, { "const": "s6", "title": "S6 keys" } ] } } } }
             """, Answer(new { next = "s6" }));
 
-        Assert.Equal([(D, true)], Keys(plan));
+        Assert.Equal([(U + D, true)], Keys(plan));
         var (name, expected) = Assert.Single(plan.Fields);
         Assert.Equal("next", name);
         Assert.Equal("s6", Assert.IsType<Expected.Option>(expected).Raw.GetString());
@@ -124,20 +124,20 @@ public class CopilotPlannerTests
               "count": { "type": "integer" } } } }
             """, Answer(new { colour = "blue", go = true, notes = "note\nhere", count = 42 }));
 
-        Assert.Equal([(D + D, true), (U, true), ("note here", true), ("42", true)], Keys(plan));
+        Assert.Equal([(U + U + D + D, true), (U, true), ("note here", true), ("42", true)], Keys(plan));
         Assert.All(plan.Keys.Sends, s => Assert.Equal((CopilotPlanner.FieldEnterDelayMs, CopilotPlanner.AfterFieldMs), (s.EnterDelayMs, s.PauseAfterMs)));
         Assert.Equal(["colour", "go", "notes", "count"], plan.Fields.Select(f => f.Name));
     }
 
     [Fact]
-    public void A_boolean_is_a_Yes_No_list_whose_caret_starts_on_its_default()
+    public void A_boolean_is_a_Yes_No_list_walked_from_its_top_row_like_any_option_list()
     {
         const string NoByDefault = """{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "boolean", "default": false } } } }""";
         const string Plain = """{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""";
 
         Assert.Equal([(U, true)], Keys(Plan(NoByDefault, Answer(new { go = true }))));
-        Assert.Equal([("", true)], Keys(Plan(NoByDefault, Answer(new { go = false }))));
-        Assert.Equal([(D, true)], Keys(Plan(Plain, Answer(new { go = false }))));
+        Assert.Equal([(U + D, true)], Keys(Plan(NoByDefault, Answer(new { go = false }))));
+        Assert.Equal([(U + D, true)], Keys(Plan(Plain, Answer(new { go = false }))));
         Assert.False(Assert.IsType<Expected.Flag>(Plan(Plain, Answer(new { go = false })).Fields[0].Value).Value);
     }
 
@@ -210,7 +210,7 @@ public class CopilotPlannerTests
         const string Form = """{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a", "b"] }, "notes": { "type": "string" } } } }""";
 
         var plan = Plan(Form, Answer(new { pick = "b" }));
-        Assert.Equal([(D, true), ("", true)], Keys(plan));
+        Assert.Equal([(U + D, true), ("", true)], Keys(plan));
         Assert.IsType<Expected.Omitted>(plan.Fields[1].Value);
 
         Assert.Contains("cannot leave \"pick\" unanswered", Refusal(Form, Answer(new { notes = "hi" })));
@@ -231,7 +231,7 @@ public class CopilotPlannerTests
     {
         var plan = Plan("""{ "message": "m", "requestedSchema": "{\"properties\":{\"pick\":{\"enum\":[\"a\",\"b\"],\"default\":null}}}" }""", Answer(new { pick = "b" }));
 
-        Assert.Equal([(D, true)], Keys(plan));
+        Assert.Equal([(U + D, true)], Keys(plan));
     }
 
     [Fact]
