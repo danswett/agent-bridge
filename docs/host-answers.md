@@ -102,9 +102,10 @@ option, so Enter is never pressed and no option is found by position:
 * Refused, nothing typed: no prompt on screen, more than nine options, a last row that is
   not a "No", or that "No" row highlighted (someone at the machine has its message box
   open, where a digit would be typed as text).
-* The key is sent with the row it was chosen from: inside the same attach, just before
-  writing, the worker reads that row again and writes nothing unless it still reads the
-  same (`fail screen 0`, `refused`, and the prompt stays answerable).
+* The key is sent with every option row as read: inside the same attach, just before
+  writing, the worker reads those rows again and writes nothing unless they all still read
+  the same, highlight included (`fail screen 0`, `refused`, and the prompt stays
+  answerable). So the "No" row selected at the machine in between stops an approval too.
 
 Bound to the request. The question's id is `<requestId>#<digest>`, the digest a hash of
 the message the client was shown. Immediately before typing, the transcript must show
@@ -247,7 +248,7 @@ If neither the namespace listing nor the task scheduler can be read, it counts a
 
 `agent-bridge-injector.exe <pid>` reads the plan on stdin and types it, reporting
 `writing <n>` (flushed) before every console write, so the host always knows whether a key
-may have landed. A send may carry a screen row and its text, written only if that row
+may have landed. A send may carry screen rows and their text, written only if every row
 still reads so. `agent-bridge-injector.exe <pid> --screen` types nothing and prints the
 visible window's rows. It is a separate process because Windows ends every process attached to
 a console when that console's window closes (spike S1). It ignores Ctrl+C, re-registering

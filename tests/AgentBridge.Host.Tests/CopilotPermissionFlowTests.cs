@@ -81,7 +81,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
         Assert.Equal(500, pid);
         var send = Assert.Single(plan.Sends);
         Assert.Equal(("1", false), (send.Text, send.Enter));
-        Assert.Equal(new ScreenRow(2, Prompt[2]), send.Expect);
+        Assert.Equal(Prompt.Skip(2).Select((text, i) => new ScreenRow(i + 2, text)), send.Expect);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
 
         Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), result);
         var send = Assert.Single(Assert.Single(injector.Plans).Plan.Sends);
-        Assert.Equal((KeyPlan.Escape, false, 4), (send.Text, send.Enter, send.Expect!.Row));
+        Assert.Equal((KeyPlan.Escape, false, 3), (send.Text, send.Enter, send.Expect!.Count));
     }
 
     [Theory]

@@ -69,7 +69,13 @@ public static class CopilotPermission
             case "commands" when Json.Str(p, "fullCommandText") is { } command:
                 return Join("Allow **shell**?", intention, Fence(command));
             case "write" when Json.Str(p, "fileName") is { } file:
-                return Join("Allow **edit**?", intention, Fence(file), Json.Str(p, "diff") is { Length: > 0 } diff ? Fence(diff, "diff") : null);
+                {
+                    // The change as the CLI shows it, else the whole new file; an edit whose
+                    // content cannot be shown is not approved from elsewhere.
+                    var change = Json.Str(p, "diff") is { Length: > 0 } diff ? Fence(diff, "diff")
+                        : Json.Str(p, "newFileContents") is { } contents ? Fence(contents) : null;
+                    return change is null ? null : Join("Allow **edit**?", intention, Fence(file), change);
+                }
             case "read" when Json.Str(p, "path") is { } path:
                 return Join("Allow **read**?", intention, Fence(path));
             case "path" when Json.Arr(p, "paths") is { } list:

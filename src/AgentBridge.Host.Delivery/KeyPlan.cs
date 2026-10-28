@@ -13,11 +13,11 @@ namespace AgentBridge.Host.Delivery;
 // characters, the way the old injector sends them and the CLI reads them.
 //
 // Expect, when set, makes the send conditional on the screen: inside the same attach, just
-// before its first key, the worker reads that row of the console's visible window and types
-// nothing unless it still reads exactly so (trailing spaces aside). A permission prompt's
-// option is chosen by what the host read on screen a moment earlier; this proves the row is
-// still there when the key goes.
-public sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, ScreenRow? Expect = null);
+// before its first key, the worker reads those rows of the console's visible window and
+// types nothing unless every one still reads exactly so (trailing spaces aside). A
+// permission prompt's option is chosen by what the host read on screen a moment earlier;
+// this proves the options, and which of them is highlighted, are unchanged when the key goes.
+public sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, IReadOnlyList<ScreenRow>? Expect = null);
 
 // A row of the console's visible window, counted from its top, and its text.
 public sealed record ScreenRow(int Row, string Text);
@@ -43,7 +43,7 @@ public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
                 .Append(' ').Append(send.Enter ? '1' : '0')
                 .Append(' ').Append(send.EnterDelayMs.ToString(CultureInfo.InvariantCulture))
                 .Append(' ').Append(send.PauseAfterMs.ToString(CultureInfo.InvariantCulture));
-            if (send.Expect is { } expect)
+            foreach (var expect in send.Expect ?? [])
             {
                 script.Append(' ').Append(expect.Row.ToString(CultureInfo.InvariantCulture))
                     .Append(' ').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(expect.Text)));
@@ -68,7 +68,7 @@ public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
                 s.Text.EndsWith(' ') ? "space" : null,
             }.Where(k => k is not null))
             : $"{s.Text.Length} chars";
-        return $"{keys}{(s.Enter ? " enter" : "")}{(s.Expect is null ? "" : " (if the screen still shows it)")}".Trim();
+        return $"{keys}{(s.Enter ? " enter" : "")}{(s.Expect is { Count: > 0 } ? " (if the screen still shows it)" : "")}".Trim();
     }));
 
     static int Count(string text, string what) => (text.Length - text.Replace(what, "").Length) / what.Length;

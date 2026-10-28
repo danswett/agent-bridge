@@ -177,14 +177,16 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Equal(PermissionPrompt, screen.Rows!.Take(PermissionPrompt.Length));
         var (choice, problem) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate(screen.Rows!, approve: true);
         Assert.Null(problem);
-        Assert.Equal(("1", 2), (choice!.Key, choice.Row.Row));
+        Assert.Equal(("1", 2), (choice!.Key, choice.Row));
 
-        // A row that no longer reads as it did: nothing is typed.
-        var moved = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend("1", false, 0, 0, new ScreenRow(2, "  1. Yes"))]));
+        // The Yes row as it was, but the No row now selected at the machine: nothing is typed.
+        var held = choice.Hold.ToList();
+        held[^1] = held[^1] with { Text = "\u276F" + held[^1].Text[1..] };
+        var moved = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend("1", false, 0, 0, held)]));
         Assert.Equal(InjectionStatus.NothingTyped, moved.Status);
         Assert.Contains("changed", moved.Detail);
 
-        var typed = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend(choice.Key, false, 0, 0, choice.Row)]));
+        var typed = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend(choice.Key, false, 0, 0, choice.Hold)]));
         Assert.Equal(InjectionStatus.Typed, typed.Status);
         var got = WaitFor(echo.Log, lines => Keys(lines) is { Count: >= 2 } k ? k : null);
         Assert.Equal(["key 1 0 49", "key 0 0 49"], got);
@@ -197,7 +199,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var injector = new WorkerInjector(Worker);
         var (choice, _) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate((await injector.ReadScreenAsync(echo.Pid)).Rows!, approve: false);
 
-        var typed = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend(choice!.Key, false, 0, 0, choice.Row)]));
+        var typed = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend(choice!.Key, false, 0, 0, choice.Hold)]));
 
         Assert.Equal(InjectionStatus.Typed, typed.Status);
         Assert.Equal(["key 1 0 27", "key 0 0 27"], WaitFor(echo.Log, lines => Keys(lines) is { Count: >= 2 } k ? k : null));

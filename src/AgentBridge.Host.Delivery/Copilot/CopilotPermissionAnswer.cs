@@ -113,7 +113,10 @@ public static class CopilotPermissionTranscript
 // No) is not a prompt this host can read, and nothing is typed.
 public static class CopilotPermissionScreen
 {
-    public sealed record Choice(string Key, ScreenRow Row);
+    // Key: what to type. Row: the option it answers. Hold: every row of the options, as read,
+    // which the worker checks again when the key goes, so a change of highlight anywhere in
+    // the list (the No row's message box opened at the machine, say) stops it.
+    public sealed record Choice(string Key, int Row, IReadOnlyList<ScreenRow> Hold);
 
     public static (Choice? Choice, string? Problem) Locate(IReadOnlyList<string> rows, bool approve)
     {
@@ -136,7 +139,8 @@ public static class CopilotPermissionScreen
         if (block.Count > 9) { return (null, "the prompt has more options than can be chosen by a digit"); }
 
         var last = block[^1];
-        var lastLabel = Continued(rows, last.Row, last.Label);
+        var (lastLabel, end) = Continued(rows, last.Row, last.Label);
+        var hold = Enumerable.Range(block[0].Row, end - block[0].Row + 1).Select(r => new ScreenRow(r, rows[r])).ToList();
         if (!lastLabel.StartsWith("No", StringComparison.Ordinal)) { return (null, "the prompt on the session's screen does not end with a No"); }
         // The No row selected is its message box open at the machine: a digit would be typed
         // into it, and Escape would send whatever is there.
@@ -145,7 +149,7 @@ public static class CopilotPermissionScreen
         if (!approve)
         {
             if (!lastLabel.Contains("(Esc", StringComparison.Ordinal)) { return (null, "the prompt on the session's screen does not take Escape for No"); }
-            return (new Choice(KeyPlan.Escape, new ScreenRow(last.Row, rows[last.Row])), null);
+            return (new Choice(KeyPlan.Escape, last.Row, hold), null);
         }
         // A plain "Yes" that runs on to the next row is a longer label wrapped, not this one.
         var yes = block.Take(block.Count - 1)
@@ -153,7 +157,7 @@ public static class CopilotPermissionScreen
             .ToList();
         if (yes.Count != 1) { return (null, "the prompt on the session's screen has no single plain Yes to approve once"); }
         var chosen = yes[0];
-        return (new Choice(chosen.Number.ToString(System.Globalization.CultureInfo.InvariantCulture), new ScreenRow(chosen.Row, rows[chosen.Row])), null);
+        return (new Choice(chosen.Number.ToString(System.Globalization.CultureInfo.InvariantCulture), chosen.Row, hold), null);
     }
 
     static (int Number, string Label, bool Selected)? Item(string row)
@@ -165,16 +169,19 @@ public static class CopilotPermissionScreen
         return number < 1 ? null : (number, s[(dot + 2)..].Trim(), selected);
     }
 
-    // The last option's label with the rows it wraps onto, up to a blank row or three rows.
-    static string Continued(IReadOnlyList<string> rows, int row, string label)
+    // The last option's label with the rows it wraps onto, up to a blank row or three rows,
+    // and the last of those rows.
+    static (string Label, int End) Continued(IReadOnlyList<string> rows, int row, string label)
     {
+        var end = row;
         for (var i = row + 1; i < rows.Count && i <= row + 3; i++)
         {
             var more = Clean(rows[i]).Text;
             if (more.Length == 0 || Item(rows[i]) is not null) { break; }
             label += " " + more;
+            end = i;
         }
-        return label;
+        return (label, end);
     }
 
     static bool Blank(IReadOnlyList<string> rows, int from, int to)

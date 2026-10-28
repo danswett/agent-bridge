@@ -18,8 +18,8 @@ namespace AgentBridge.Injector;
 //   fail <stage> <code>   it stopped: usage, plan, attach, input, write or partial, with
 //                         the Win32 error
 //
-// A send may name a row of the console's visible window and its text: it is typed only if,
-// inside the same attach, that row still reads so; otherwise "fail screen 0" and nothing of
+// A send may name rows of the console's visible window and their text: it is typed only if,
+// inside the same attach, every one still reads so; otherwise "fail screen 0" and nothing of
 // it is written. With --screen nothing is typed at all: it says "row <base64>" for each row
 // of the visible window, top to bottom, then "ok".
 //
@@ -62,7 +62,7 @@ internal static unsafe partial class Program
         return 0;
     }
 
-    sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, int ExpectRow = -1, string? ExpectText = null);
+    sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, List<(int Row, string Text)> Expect);
 
     static List<KeySend>? Read(Stream input)
     {
@@ -76,15 +76,18 @@ internal static unsafe partial class Program
             var line = raw.TrimEnd('\r');
             if (line.Length == 0) { continue; }
             var parts = line.Split(' ');
-            if (parts.Length is not (5 or 7) || parts[0] != "send") { return null; }
+            if (parts.Length < 5 || (parts.Length - 5) % 2 != 0 || parts[0] != "send") { return null; }
             try
             {
                 var text = Encoding.UTF8.GetString(Convert.FromBase64String(parts[1]));
-                var row = parts.Length == 7 ? int.Parse(parts[5], NumberStyles.None, CultureInfo.InvariantCulture) : -1;
-                var expect = parts.Length == 7 ? Encoding.UTF8.GetString(Convert.FromBase64String(parts[6])) : null;
+                var expect = new List<(int, string)>();
+                for (var k = 5; k < parts.Length; k += 2)
+                {
+                    expect.Add((int.Parse(parts[k], NumberStyles.None, CultureInfo.InvariantCulture), Encoding.UTF8.GetString(Convert.FromBase64String(parts[k + 1]))));
+                }
                 sends.Add(new KeySend(text, parts[2] == "1",
                     int.Parse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture),
-                    int.Parse(parts[4], NumberStyles.None, CultureInfo.InvariantCulture), row, expect));
+                    int.Parse(parts[4], NumberStyles.None, CultureInfo.InvariantCulture), expect));
             }
             catch (FormatException) { return null; }
             catch (OverflowException) { return null; }
@@ -110,11 +113,14 @@ internal static unsafe partial class Program
         }
         try
         {
-            if (send.ExpectText is { } expected)
+            if (send.Expect.Count > 0)
             {
                 var (rows, failure) = Window();
                 if (rows is null) { return failure; }
-                if (send.ExpectRow >= rows.Count || !string.Equals(rows[send.ExpectRow], expected.TrimEnd(), StringComparison.Ordinal)) { return "fail screen 0"; }
+                foreach (var (row, expected) in send.Expect)
+                {
+                    if (row >= rows.Count || !string.Equals(rows[row], expected.TrimEnd(), StringComparison.Ordinal)) { return "fail screen 0"; }
+                }
             }
             if (send.Text.Length > 0)
             {

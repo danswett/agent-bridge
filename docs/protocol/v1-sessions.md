@@ -203,7 +203,8 @@ permission prompts goes beyond it, at the user's request:
 #### Copilot permission prompts
 
 A Copilot permission prompt's `message` carries in full what it would allow: the command,
-the path or paths, the file and its diff, the URL, or the tool with its arguments, and the
+the path or paths, the file and its diff (or, without one, its whole new contents; an edit
+showing neither is `answerAtMachine`), the URL, or the tool with its arguments, and the
 intention Copilot gave. One too large to send whole is `truncated`, and refused like any
 truncated question. Its `id` is `<requestId>#<digest>`: Copilot's request id and a hash of
 the message. An answer is bound to both, so the host refuses (`stale`) if that request is
@@ -218,7 +219,8 @@ text, so nothing can be typed into the prompt's message box.
 Immediately before typing, the host checks the transcript (that request still waiting and
 reading as shown, and no other prompt waiting that the screen could be showing instead),
 then reads the session's screen and finds the option by its label, never by its position.
-The key goes only if that row still reads the same at the moment it is typed.
+The key goes only if the options, and which is highlighted, still read the same at the
+moment it is typed.
 `permissions.remoteApproval` in the host's own settings turns this off on a machine
 ([host-answers.md](../host-answers.md)).
 

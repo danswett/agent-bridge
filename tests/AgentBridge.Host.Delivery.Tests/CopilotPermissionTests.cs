@@ -44,7 +44,9 @@ public sealed class CopilotPermissionTests : IDisposable
 
         Assert.Null(problem);
         Assert.Equal("1", choice!.Key);
-        Assert.Equal(new ScreenRow(6, Shell[6]), choice.Row);
+        Assert.Equal(6, choice.Row);
+        // Every option row, the No included, is held: a change of highlight anywhere stops the key.
+        Assert.Equal(Enumerable.Range(6, 3).Select(r => new ScreenRow(r, Shell[r])), choice.Hold);
     }
 
     [Fact]
@@ -53,7 +55,7 @@ public sealed class CopilotPermissionTests : IDisposable
         var (choice, _) = CopilotPermissionScreen.Locate(Path, approve: true);
 
         Assert.Equal("1", choice!.Key);
-        Assert.Equal(2, choice.Row.Row);
+        Assert.Equal(2, choice.Row);
     }
 
     [Fact]
@@ -90,8 +92,8 @@ public sealed class CopilotPermissionTests : IDisposable
         var (path, _) = CopilotPermissionScreen.Locate(Path, approve: false);
         var (none, problem) = CopilotPermissionScreen.Locate(["\u276F 1. Yes", "  2. No"], approve: false);
 
-        Assert.Equal((KeyPlan.Escape, 8), (shell!.Key, shell.Row.Row));
-        Assert.Equal((KeyPlan.Escape, 5), (path!.Key, path.Row.Row));
+        Assert.Equal((KeyPlan.Escape, 8), (shell!.Key, shell.Row));
+        Assert.Equal((KeyPlan.Escape, 5), (path!.Key, path.Row));
         Assert.Null(none);
         Assert.Contains("Escape", problem);
     }
@@ -120,7 +122,7 @@ public sealed class CopilotPermissionTests : IDisposable
 
         var (choice, _) = CopilotPermissionScreen.Locate(screen, approve: true);
 
-        Assert.Equal(7 + 6, choice!.Row.Row);
+        Assert.Equal(7 + 6, choice!.Row);
     }
 
     [Theory]
@@ -145,14 +147,15 @@ public sealed class CopilotPermissionTests : IDisposable
     }
 
     [Fact]
-    public void A_send_that_waits_on_a_row_carries_it_to_the_worker()
+    public void A_send_that_waits_on_rows_carries_each_to_the_worker()
     {
-        var script = new KeyPlan([new KeySend("1", false, 0, 0, new ScreenRow(6, " \u276F 1. Yes"))]).ToWorkerScript();
+        var script = new KeyPlan([new KeySend("1", false, 0, 0, [new ScreenRow(6, " \u276F 1. Yes"), new ScreenRow(7, "   2. No (Esc)")])]).ToWorkerScript();
 
         var line = script.Split('\n')[1].Split(' ');
-        Assert.Equal(7, line.Length);
-        Assert.Equal("6", line[5]);
+        Assert.Equal(9, line.Length);
+        Assert.Equal(("6", "7"), (line[5], line[7]));
         Assert.Equal(" \u276F 1. Yes", System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(line[6])));
+        Assert.Equal("   2. No (Esc)", System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(line[8])));
     }
 
     [Fact]

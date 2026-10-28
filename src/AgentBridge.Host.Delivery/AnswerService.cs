@@ -287,7 +287,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (screen.Rows is not { } rows) { return Refused(screen.Problem ?? "the host could not read the session's screen; answer at the machine"); }
             var (choice, problem) = CopilotPermissionScreen.Locate(rows, approve);
             if (choice is null) { return Refused($"{problem}; answer at the machine"); }
-            keys = new KeyPlan([new KeySend(choice.Key, false, 0, 0, choice.Row)]);
+            keys = new KeyPlan([new KeySend(choice.Key, false, 0, 0, choice.Hold)]);
             from = state.ScannedTo;
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }

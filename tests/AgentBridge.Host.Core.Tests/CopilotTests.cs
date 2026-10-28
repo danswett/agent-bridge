@@ -288,6 +288,25 @@ public class CopilotTests
     }
 
     [Fact]
+    public void An_edit_is_shown_by_its_diff_else_by_its_whole_new_file_and_one_showing_neither_stays_at_the_machine()
+    {
+        static CopilotPermissionPrompt Describe(System.Text.Json.Nodes.JsonObject prompt)
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", prompt, 1));
+            return CopilotPermission.Describe(doc.RootElement.GetProperty("data"))!;
+        }
+        var whole = Copilot.Prompts["write"].DeepClone().AsObject();
+        whole["diff"] = "";
+        var unseen = whole.DeepClone().AsObject();
+        unseen.Remove("newFileContents");
+
+        Assert.Contains("+fresh()", Describe(Copilot.Prompts["write"]).Message);
+        Assert.Null(Describe(whole).AtMachine);
+        Assert.Contains("```\nfresh()\n\n```", Describe(whole).Message);
+        Assert.NotNull(Describe(unseen).AtMachine);
+    }
+
+    [Fact]
     public void A_command_holding_backticks_cannot_close_the_block_it_is_shown_in()
     {
         var prompt = Copilot.Prompts["commands"].DeepClone().AsObject();
