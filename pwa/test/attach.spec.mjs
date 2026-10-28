@@ -185,5 +185,5 @@ test('a machine that takes replies but not files offers no Attach, and a pasted 
   await expect(reply.getByRole('button', { name: 'Attach a file or image' })).toBeHidden();
   await pasteImage(page);
   await expect(reply.locator('.attachment')).toHaveCount(0);
-  expect(await page.evaluate(() => window.agentBridgeDemo.host.capabilities)).toEqual(['sessions.read', 'sessions.answer', 'sessions.reply']);
+  expect(await page.evaluate(() => window.agentBridgeDemo.host.capabilities)).  toEqual(['sessions.read', 'sessions.answer', 'sessions.reply', 'sessions.stop']);
 });
