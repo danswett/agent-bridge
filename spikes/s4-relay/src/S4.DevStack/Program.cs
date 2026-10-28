@@ -328,6 +328,39 @@ if (mode == "check")
         return (reply.GetProperty("ok").GetBoolean(), "Msg1 was held until the hub attached");
     });
 
+    await Check("a relay that sends an oversized frame ends the connection cleanly, so the device reconnects", async () =>
+    {
+        // A hostile relay: admits the device without checking anything, then sends one frame
+        // over the size limit.
+        var b = WebApplication.CreateSlimBuilder();
+        b.WebHost.UseUrls("http://127.0.0.1:0");
+        b.Logging.ClearProviders();
+        await using var hostile = b.Build();
+        hostile.UseWebSockets();
+        hostile.Map("/v1/ws", async (HttpContext ctx) =>
+        {
+            using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+            var hello = JsonDocument.Parse((await Wire.ReceiveAsync(ws, Wire.MaxControl, default))!.Value.Data).RootElement;
+            using var eph = P256KeyPair.Generate();
+            await ws.SendAsync(JsonSerializer.SerializeToUtf8Bytes(new { t = "challenge", eph = Wire.Hex(eph.Public), nonce = Wire.Hex(new byte[32]), account = "1" }), WebSocketMessageType.Text, true, default);
+            await Wire.ReceiveAsync(ws, Wire.MaxControl, default);
+            var device = Wire.DeviceId(Wire.Unhex(hello.GetProperty("pub").GetString()!));
+            await ws.SendAsync(JsonSerializer.SerializeToUtf8Bytes(new { t = "ready", device, account = "1", login = "x" }), WebSocketMessageType.Text, true, default);
+            try
+            {
+                await ws.SendAsync(new byte[Wire.MaxFrame + 1], WebSocketMessageType.Binary, true, default);
+                await Wire.ReceiveAsync(ws, Wire.MaxFrame, default);
+            }
+            catch (WebSocketException) { }
+        });
+        await hostile.StartAsync();
+        await using var victim = await RelayClient.ConnectAsync(new Uri(hostile.Urls.First()), "t", P256KeyPair.Generate(), "victim", "host");
+        Exception? fault = null;
+        try { await victim.Completion.WaitAsync(TimeSpan.FromSeconds(10)); } catch (Exception e) { fault = e; }
+        await hostile.StopAsync();
+        return (fault is null, fault is null ? "Completion ended normally" : $"Completion faulted: {fault.GetType().Name}");
+    });
+
     await Check("the relay's logs carry no tokens or payloads", () =>
     {
         var all = string.Join("\n", logs);

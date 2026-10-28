@@ -58,7 +58,7 @@ Noise ciphertext.
 
 ## Results
 
-### Offline checks (`s4-devstack check`, in CI): 21 of 21 pass
+### Offline checks (`s4-devstack check`, in CI): 22 of 22 pass
 
 | Check | Result |
 |---|---|
@@ -81,6 +81,7 @@ Noise ciphertext.
 | The sign-in API answers CORS preflight for allowed origins only | Pass |
 | A host bounds the channels it keeps: a full table refuses more, unfinished handshakes expire, and a departed peer's channels go | Pass |
 | A channel opened while the target is still attaching its handler is not lost | Pass |
+| A relay that sends an oversized frame ends the connection cleanly, so the device reconnects | Pass |
 | The relay's logs carry no tokens or payloads | Pass |
 | A relay that is stopping tells connected devices to reconnect at once (1012) | Pass |
 
@@ -198,6 +199,10 @@ Review and a flaky check found two more things the product must carry:
   device from presence before it has attached its handler, and Noise never resends a
   lost Msg1, so a dropped frame meant a channel attempt that timed out. The client now
   queues data frames in order until a handler is attached (bounded at 1,024).
+* **Nothing the relay sends can stop a host.** An oversized frame used to fault the
+  client and end the host process. A protocol violation from the relay now ends that
+  connection cleanly, and the host's loop treats any connection failure, other than a
+  refused sign-in, as a reason to reconnect.
 
 ## Limitations
 

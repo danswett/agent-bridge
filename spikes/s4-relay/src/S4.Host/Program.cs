@@ -58,9 +58,13 @@ switch (mode)
                     Log($"refused: {e.Message}; sign in again");
                     return 1;
                 }
-                catch (Exception e) when (e is System.Net.WebSockets.WebSocketException or HttpRequestException or RelayRefusedException or IOException)
+                // Anything else the relay or network does to one connection (malformed control
+                // messages, oversized frames, protocol errors) is a reason to reconnect, never
+                // to exit: the relay is not trusted, and a host that one bad frame can stop is
+                // a denial of service.
+                catch (Exception e) when (e is not OperationCanceledException)
                 {
-                    Log($"connect failed: {e.Message}");
+                    Log($"connection failed: {e.GetType().Name}: {e.Message}");
                 }
                 reconnects++;
                 await Task.Delay(backoff);

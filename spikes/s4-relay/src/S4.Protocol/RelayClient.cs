@@ -178,6 +178,12 @@ public sealed class RelayClient : IAsyncDisposable
             }
         }
         catch (WebSocketException) { }
+        // An oversized frame is a relay protocol violation: end this connection cleanly so
+        // the caller reconnects, rather than faulting Completion and taking the host down.
+        catch (FrameTooLargeException)
+        {
+            try { await ws.CloseOutputAsync((WebSocketCloseStatus)CloseCodes.TooLarge, "frame-too-large", default); } catch (WebSocketException) { }
+        }
         // A malformed control message from the relay ends the connection; the caller reconnects.
         catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException or FormatException) { }
         inbound.Writer.TryComplete();
