@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="AgentBridge.Host.Core.Tests" />
+    <InternalsVisibleTo Include="AgentBridge.Host.Delivery.Tests" />
   </ItemGroup>
 
   <ItemGroup>

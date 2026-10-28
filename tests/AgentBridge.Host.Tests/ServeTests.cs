@@ -119,7 +119,7 @@ public sealed class ServeTests : IAsyncLifetime
 
         var noId = await ch.RequestAsync(Ops.SessionGet, new { });
         Assert.False(noId.GetProperty("ok").GetBoolean());
-        var unknown = await ch.RequestAsync("session.answer", new { id = Id });
+        var unknown = await ch.RequestAsync("session.stop", new { id = Id });
         Assert.False(unknown.GetProperty("ok").GetBoolean());
 
         Assert.True(ch.IsOpen);

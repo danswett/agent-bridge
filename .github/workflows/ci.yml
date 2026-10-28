@@ -24,6 +24,15 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet test AgentBridge.slnx -c Release --nologo
+      - name: The NativeAOT injector types into a real console
+        # The same integration tests again, against the worker as it ships.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          dotnet publish src/AgentBridge.Injector -c Release -r win-x64 -o "$env:RUNNER_TEMP/injector" --nologo
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:AGENT_BRIDGE_INJECTOR = "$env:RUNNER_TEMP/injector/agent-bridge-injector.exe"
+          dotnet test tests/AgentBridge.Host.Delivery.Tests -c Release --no-build --nologo --filter "FullyQualifiedName~InjectorIntegrationTests"
       - name: Relay container builds
         if: runner.os == 'Linux'
         run: docker build -f src/AgentBridge.Relay/Dockerfile -t agent-bridge-relay .

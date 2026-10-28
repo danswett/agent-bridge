@@ -1,25 +1,29 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
-// Protocol v1's sessions ops, served on every channel a client opens to this host. Reads
-// only: nothing a peer sends can change a session or reach the machine.
+// Protocol v1's sessions ops, served on every channel a client opens to this host. Reads,
+// and session.answer: the one op that reaches the machine, and only through the answerer,
+// which types an answer to a pending question and nothing else.
 public sealed class SessionService
 {
     readonly ISessionSource source;
     readonly MachineInfo machine;
     readonly Action<string> log;
+    readonly ISessionAnswerer? answers;
     readonly ConcurrentDictionary<SecureChannel, Subscriber> subscribers = new();
 
-    public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null)
+    public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null)
     {
         this.source = source;
         this.machine = machine;
         this.log = log ?? (_ => { });
+        this.answers = answers;
     }
 
     // Channels with a subscription running; tests and the host's log read it.
@@ -33,7 +37,13 @@ public sealed class SessionService
         switch (op)
         {
             case Ops.Hello:
-                return new HelloResult(1, machine, [Capabilities.SessionsRead]);
+                // Computed for each hello, so it says what is true now: agent-ha-bridge
+                // starting for this user takes sessions.answer away until it stops.
+                return new HelloResult(1, machine, answers?.Available == true
+                    ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer]
+                    : [Capabilities.SessionsRead]);
+            case Ops.SessionAnswer:
+                return await AnswerAsync(data);
             case Ops.SessionsList:
                 return source.List(String(data, "cursor"));
             case Ops.SessionGet:
@@ -109,6 +119,16 @@ public sealed class SessionService
         public readonly SemaphoreSlim Gate = new(1, 1);
         public Feed? Feed;
         public int Registered;
+    }
+
+    async Task<AnswerResult> AnswerAsync(JsonElement data)
+    {
+        // A request without an id, question or request UUID fails as a request; anything
+        // that can be read gets an outcome.
+        if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.answer needs an id, a question and a request"); }
+        var request = data.Deserialize<AnswerRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.answer needs an id, a question and a request");
+        if (answers is null) { return new AnswerResult(AnswerOutcome.Refused, "this host does not take answers; answer at the machine"); }
+        return await answers.AnswerAsync(request);
     }
 
     static string? String(JsonElement data, string name) =>

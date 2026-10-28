@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- agent-bridge-injector: the one process that attaches to an agent's console and types
+       into it, started by the host for each answer. A WinExe, so it starts with no console
+       of its own, and NativeAOT when published, so it starts in milliseconds. The host
+       places it beside itself (publish it into the host's folder). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AgentBridge.Injector</RootNamespace>
+    <AssemblyName>agent-bridge-injector</AssemblyName>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+</Project>
