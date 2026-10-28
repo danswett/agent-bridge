@@ -101,6 +101,42 @@ test('an empty, unreadable or odd push still shows a notification, as iOS requir
   }
 });
 
+// A worker whose fetch and cache are recorded, for the caching tests.
+function cachingWorker() {
+  const handlers = {};
+  const fetched = [];
+  const added = [];
+  const self = {
+    registration: { scope },
+    clients: { claim() {} },
+    addEventListener: (type, fn) => { handlers[type] = fn; },
+    skipWaiting() {},
+  };
+  const cache = { addAll: async (reqs) => { added.push(...reqs); }, put: async () => {} };
+  const caches = { open: async () => cache, keys: async () => [], match: async () => undefined };
+  const fetchStub = async (input, init) => { fetched.push({ input, init }); return { ok: true, clone() { return this; } }; };
+  class Request { constructor(url, init) { Object.assign(this, { url, ...init }); } }
+  vm.runInNewContext(readFileSync(path.join(pwa, 'sw.js'), 'utf8'), { self, location: new URL(scope), URL, caches, fetch: fetchStub, Request });
+  return { handlers, fetched, added };
+}
+
+test('installing fills the shell from the network, never from a browser copy that may predate the deploy', async () => {
+  const sw = cachingWorker();
+  let done;
+  sw.handlers.install({ waitUntil: (p) => { done = p; } });
+  await done;
+  assert.ok(sw.added.length > 0);
+  assert.ok(sw.added.every((r) => r.cache === 'reload'), 'every shell file bypasses the HTTP cache');
+});
+
+test('every app file is checked with the server on each load, so a deploy shows on the next open', async () => {
+  const sw = cachingWorker();
+  let responded;
+  sw.handlers.fetch({ request: { method: 'GET', url: `${scope}js/main.js` }, respondWith: (p) => { responded = p; } });
+  await responded;
+  assert.deepEqual(plain(sw.fetched), [{ input: `${scope}js/main.js`, init: { cache: 'no-cache', credentials: 'same-origin' } }]);
+});
+
 function tapped(data) {
   return { notification: { data, closed: false, close() { this.closed = true; } } };
 }

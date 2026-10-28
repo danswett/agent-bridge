@@ -17,8 +17,13 @@ const SHELL = [
   './js/usage.js', './js/fleet.js', './js/ui/usage-view.js',
 ];
 
+// GitHub Pages lets a browser keep every file for 10 minutes (max-age=600), and a worker's
+// fetch goes through that cache like any other. A phone opened just after a deploy ran the
+// old code, or old modules under a new main.js: usage (#26) was missing on an iPhone for
+// that reason. So the shell is filled straight from the network, and every later fetch asks
+// the server whether its copy is still current (a conditional request, nearly free when it is).
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))));
   self.skipWaiting();
 });
 
@@ -31,7 +36,8 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin || !url.href.startsWith(self.registration.scope) || url.pathname.includes('/v1/')) { return; }
-  e.respondWith(fetch(e.request)
+  // By URL rather than the request itself: a navigation request can't be given a cache mode.
+  e.respondWith(fetch(e.request.url, { cache: 'no-cache', credentials: 'same-origin' })
     .then((r) => {
       if (r.ok) { const copy = r.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }
       return r;
