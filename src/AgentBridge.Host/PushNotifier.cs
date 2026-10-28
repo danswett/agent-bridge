@@ -301,6 +301,9 @@ public sealed class PushNotifier : IAsyncDisposable
         t.Removed = false;
         if (s.Question is { } q)
         {
+            // Back before its resolution went out (it flickered while an answer was typed):
+            // the question is still on devices, and still asked.
+            if (t.Due is { Kind: NoticeKind.Resolved } r && r.Question == q.Id) { t.Due = null; }
             if (!t.Notified.Contains(q.Id) && !(t.Due is { Kind: NoticeKind.Question } d && d.Question == q.Id))
             {
                 t.Due = new Due(NoticeKind.Question, now + options.QuestionDelay, q.Id);
@@ -437,8 +440,10 @@ public sealed class PushNotifier : IAsyncDisposable
         times.AddRange(sessions.Values.Where(t => t.Due is not null).Select(t => t.Due!.At));
         if (sender is { Connected: true } s && s != broken)
         {
-            times.AddRange(outbox.Select(o => o.NotBefore));
-            if (outbox.Count > 0 && recent.Count >= options.MaxPerMinute) { times.Add(recent.Peek() + TimeSpan.FromMinutes(1)); }
+            // A notice held back by the rate limit is ready only once the window has room:
+            // its own time is usually already past, and waking for it would spin.
+            DateTimeOffset? room = recent.Count >= options.MaxPerMinute ? recent.Peek() + TimeSpan.FromMinutes(1) : null;
+            times.AddRange(outbox.Select(o => room is { } r && r > o.NotBefore ? r : o.NotBefore));
         }
         if (times.Count == 0) { return Timeout.InfiniteTimeSpan; }
         var wait = times.Min() - now;
@@ -464,7 +469,8 @@ public sealed class PushNotifier : IAsyncDisposable
                     t.Shown = null;
                     Enqueue(s, NoticeKind.Finished, null, store.All);
                     break;
-                case NoticeKind.Resolved when s is not null:
+                // Checked again as it goes: a question asked once more is not resolved.
+                case NoticeKind.Resolved when s is not null && (t.Removed || s.Question?.Id != due.Question):
                     {
                         var q = due.Question!;
                         t.Shown = null;

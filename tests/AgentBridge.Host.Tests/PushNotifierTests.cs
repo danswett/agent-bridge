@@ -343,6 +343,42 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task A_question_that_flickers_away_and_back_before_its_resolution_goes_is_left_on_the_phone()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+
+        // Briefly not pending (an answer being typed), then pending again: still waiting on you.
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(1));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(5));
+        Assert.Equal(["question"], Received().Select(r => Kind(r.Notification)));
+
+        // And once it really goes, it is resolved.
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["question", "resolved"], Received().Select(r => Kind(r.Notification)));
+    }
+
+    [Fact]
+    public async Task A_host_at_the_rate_limit_sleeps_until_the_window_has_room_instead_of_spinning()
+    {
+        Start(new PushOptions { MaxPerMinute = 1 });
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        time.Advance(TimeSpan.FromSeconds(2));
+
+        var wait = await notifier.PumpAsync();
+
+        Assert.Single(sender.Sent);
+        Assert.Equal(TimeSpan.FromMinutes(1), wait);
+    }
+
+    [Fact]
     public async Task Sends_past_the_rate_limit_wait_for_the_next_minute_rather_than_being_refused()
     {
         Start(new PushOptions { MaxPerMinute = 3 });
