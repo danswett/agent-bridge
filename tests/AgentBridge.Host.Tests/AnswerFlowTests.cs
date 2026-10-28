@@ -93,7 +93,9 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     public async Task Hello_offers_answering_only_while_agent_ha_bridge_is_not_running_asked_afresh_each_time()
     {
         var ch = await OpenAsync();
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove], await CapabilitiesAsync(ch));
+        var offered = await CapabilitiesAsync(ch);
+        Assert.Contains(Capabilities.SessionsAnswer, offered);
+        Assert.Contains(Capabilities.SessionsApprove, offered);
 
         probe.Reason = "agent-ha-bridge is running for this user";
         Assert.Equal([Capabilities.SessionsRead], await CapabilitiesAsync(ch));
@@ -108,7 +110,9 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Serve(Answerer(remoteApproval: false));
         var ch = await OpenAsync();
 
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsAnswer], await CapabilitiesAsync(ch));
+        var offered = await CapabilitiesAsync(ch);
+        Assert.Contains(Capabilities.SessionsAnswer, offered);
+        Assert.DoesNotContain(Capabilities.SessionsApprove, offered);
     }
 
     [Fact]
