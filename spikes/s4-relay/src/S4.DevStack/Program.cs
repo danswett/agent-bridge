@@ -494,6 +494,42 @@ if (mode == "check")
         return (limited > 0 && acceptedFirst && before == 1 && after == 0, $"{limited} of 25 rate-limited (account limit 20/min), subscribers {before} -> {after}");
     });
 
+    await Check("a host's saved push subscriptions belong to one account: another account neither loads nor inherits them", async () =>
+    {
+        var store = Path.Combine(Path.GetTempPath(), $"s5-subs-{Guid.NewGuid():N}.json");
+        var hostKey = P256KeyPair.Generate();
+        var octoHost = await RelayClient.ConnectAsync(url, octoAccount.Token, hostKey, "store-host", "host");
+        var questions = new QuestionService(octoHost, "store-host", null, store);
+        _ = new ChannelHub(octoHost, hostKey, "store-host", "host") { Handler = (c, op, d) => questions.HandleAsync(c, op, d) };
+        using var ua = P256KeyPair.Generate();
+        var phone = await Connect(octoAccount, "store-phone", "pwa");
+        await phone.Relay.WaitForPeerAsync(p => p.Id == octoHost.DeviceId, TimeSpan.FromSeconds(5));
+        var toHost = await phone.Hub.OpenAsync(octoHost.DeviceId);
+        await toHost.RequestAsync("push-subscribe", new { endpoint = $"{pushService.Url}/push/store-1", p256dh = B64Url.Encode(ua.Public), auth = B64Url.Encode(new byte[16]), appUrl = "https://pwa.example/" });
+        await phone.Relay.DisposeAsync();
+        await octoHost.DisposeAsync();
+
+        // The same profile, restarted: once as the same account, once signed in as another.
+        var sameKey = P256KeyPair.Generate();
+        var same = await RelayClient.ConnectAsync(url, octoAccount.Token, sameKey, "store-host", "host");
+        var reloadedSame = new QuestionService(same, "store-host", null, store).Subscribers;
+        var otherKey = P256KeyPair.Generate();
+        var other = await RelayClient.ConnectAsync(url, malloryAccount.Token, otherKey, "store-host", "host");
+        var reloadedOther = new QuestionService(other, "store-host", null, store).Subscribers;
+
+        // A running host whose reconnect arrives under another account drops them too.
+        var running = new QuestionService(same, "store-host", null, store);
+        var beforeSwitch = running.Subscribers;
+        running.Relay = other;
+        var afterSwitch = running.Subscribers;
+        var afterSwitchReload = new QuestionService(same, "store-host", null, store).Subscribers;
+        await same.DisposeAsync();
+        await other.DisposeAsync();
+        File.Delete(store);
+        return (reloadedSame == 1 && reloadedOther == 0 && beforeSwitch == 1 && afterSwitch == 0 && afterSwitchReload == 0,
+            $"same account reloads {reloadedSame}, other account {reloadedOther}; switch while running {beforeSwitch} -> {afterSwitch}, then reloaded as the first account {afterSwitchReload}");
+    });
+
     await Check("the relay's logs carry no tokens or payloads", () =>
     {
         var all = string.Join("\n", logs);

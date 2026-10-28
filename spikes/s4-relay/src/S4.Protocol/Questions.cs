@@ -16,8 +16,28 @@ public sealed class QuestionService
 
     public sealed record Subscriber(PushSubscription Sub, string AppUrl);
 
-    // Replaced on every reconnect; questions and subscriptions outlive a connection.
-    public RelayClient Relay { get; set; }
+    sealed record Store(string Account, Dictionary<string, Subscriber> Subscribers);
+
+    // Replaced on every reconnect; questions and subscriptions outlive a connection - but
+    // only within one account. Push goes straight to the phone, around the relay's
+    // account-scoped routing, so a subscription kept across a change of account would
+    // deliver the new account's questions to the old account's phones.
+    public RelayClient Relay
+    {
+        get => relay;
+        set
+        {
+            if (value.AccountId != account)
+            {
+                subscribers.Clear();
+                account = value.AccountId;
+                Save();
+            }
+            relay = value;
+        }
+    }
+    RelayClient relay;
+    string account;
     readonly string machine;
     readonly Action<string>? log;
     readonly string? storePath;
@@ -26,18 +46,25 @@ public sealed class QuestionService
 
     // Subscriptions persist, so a host that restarts can still reach a phone whose PWA is
     // closed; the phone has no reason to send its subscription again until it is opened.
+    // The store names the account it belongs to, and one written for another account (or
+    // in no account's name) is ignored.
     public QuestionService(RelayClient relay, string machine, Action<string>? log = null, string? storePath = null)
     {
-        Relay = relay; this.machine = machine; this.log = log; this.storePath = storePath;
+        this.relay = relay; account = relay.AccountId; this.machine = machine; this.log = log; this.storePath = storePath;
         if (storePath != null && File.Exists(storePath))
         {
-            foreach (var (k, v) in JsonSerializer.Deserialize<Dictionary<string, Subscriber>>(File.ReadAllText(storePath)) ?? []) { subscribers[k] = v; }
+            Store? store = null;
+            try { store = JsonSerializer.Deserialize<Store>(File.ReadAllText(storePath)); } catch (JsonException) { }
+            if (store?.Account == account && store.Subscribers != null)
+            {
+                foreach (var (k, v) in store.Subscribers) { subscribers[k] = v; }
+            }
         }
     }
 
     void Save()
     {
-        if (storePath != null) { File.WriteAllText(storePath, JsonSerializer.Serialize(subscribers.ToDictionary())); }
+        if (storePath != null) { File.WriteAllText(storePath, JsonSerializer.Serialize(new Store(account, subscribers.ToDictionary()))); }
     }
 
     public int Subscribers => subscribers.Count;

@@ -52,6 +52,7 @@ services (`web.push.apple.com`, `fcm.googleapis.com`, `push.services.mozilla.com
 | A question reaches a phone as an encrypted push through the relay, and its answer comes back over the channel; a second answer is refused; neither the question nor the endpoint appears in the push body or the relay's logs | Pass |
 | The relay refuses push endpoints off its allowlist without making a request (cloud metadata address, foreign host, suffix trick, non-HTTPS, garbage, oversized body) | Pass |
 | Pushes are rate-limited per account, and a gone subscription (410) is dropped | Pass |
+| A host's saved push subscriptions belong to one account: signing the same profile in as another account neither loads nor inherits them | Pass |
 
 `js/test-sw.mjs` (CI) runs the service worker's handlers against a stubbed worker scope;
 headless browsers refuse notification permission, so this is where they are pinned:
@@ -79,6 +80,12 @@ answered in the app, and opening the notification's link connects to that host b
 3. **The PWA's origin is shared.** `danswett.github.io` is the origin, so notification
    permission and storage are shared with any other page on it. The product needs its
    own domain.
+4. **Push goes around the relay's account boundary, so the host must keep it.** A push is
+   delivered straight to a phone, not through the relay's account-scoped routing. A
+   host profile signed in as a second account kept the first account's subscriptions,
+   so the new account's questions would have gone to the old account's phones (found in
+   review). The saved subscriptions now name their account, and a host drops them when
+   its account changes.
 
 ## Limitations
 
