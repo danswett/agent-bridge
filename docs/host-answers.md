@@ -58,6 +58,14 @@ writes each UTF-16 code unit as its own key down and key up with the character i
 `UnicodeChar`, so an emoji is its surrogate pair as two key events and nothing passes
 through a code page.
 
+**What no plan can see.** The keys assume the prompt as the transcript describes it. Input
+somebody left in it at the terminal without submitting (boxes ticked in a checkbox list,
+words half-typed into a text field) is in no transcript, so the keys add to it: ticking
+`b` after `a` was ticked locally submits both. The caret position is normalized (above);
+ticks and typed text cannot be, short of reading the screen. Such an answer is never
+reported as delivered: the structured record differs, so the outcome is `unconfirmed`
+and the client says to check at the machine. agent-ha-bridge has the same exposure.
+
 The keys are planned from the tool call's own arguments in the transcript, not from the
 `Question` the client saw, because they depend on things a `Question` does not carry
 (where the caret starts, which rows open ticked, `minItems`, the older format). If the two
