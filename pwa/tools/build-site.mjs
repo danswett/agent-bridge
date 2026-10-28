@@ -25,8 +25,9 @@ export function contentSecurityPolicy(relay) {
   // 'self' does not cover WebSockets in every Safari, so the socket origin is named too.
   const connect = origin ? ` ${origin} ${origin.replace(/^http/, 'ws')}` : '';
   // Scripts and styles only from this site, network only to the relay: a page that holds
-  // the device key must not be able to load or send anything else.
-  return `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'${connect}; object-src 'none'; base-uri 'none'; form-action 'none'`;
+  // the device key must not be able to load or send anything else. blob: images are the
+  // thumbnails of files about to be attached, made in the page from their own bytes.
+  return `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'${connect}; object-src 'none'; base-uri 'none'; form-action 'none'`;
 }
 
 export function buildSite({ out, relay = '', root = appRoot }) {

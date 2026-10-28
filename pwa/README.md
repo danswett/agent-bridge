@@ -9,10 +9,10 @@ Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflow
 Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/app/?demo=1).
 
 It shows sessions, their activity and their pending questions, answers those questions
-(`session.answer`), replies to sessions (`session.reply`), and notifies the phone when a
-session asks or finishes, even with the app closed (Web Push), per
-[docs/protocol/v1-sessions.md](../docs/protocol/v1-sessions.md). Attachments and launching
-come next.
+(`session.answer`), replies to sessions (`session.reply`) with files and images
+(`attachment.*`), and notifies the phone when a session asks or finishes, even with the app
+closed (Web Push), per [docs/protocol/v1-sessions.md](../docs/protocol/v1-sessions.md).
+Larger files and launching come next.
 
 | Light | Dark | Answering | A permission request |
 |---|---|---|---|
@@ -36,7 +36,8 @@ come next.
 | `js/answers.js` | An answer as the form holds it, as the request sends it, and checked first: `checkAnswer` mirrors the C# `Answers.Check` case for case, with its wording |
 | `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect |
 | `js/replies.js` | A reply checked before it goes: `checkReply` mirrors the C# `Replies.Check`, with its wording |
-| `js/reply-service.js` | Sending replies: `answer-service.js` with `session.reply`, one reply on its way per session |
+| `js/reply-service.js` | Sending replies: `answer-service.js` with `session.reply`, one reply on its way per session, its files sent first |
+| `js/attachments.js` | A file or image for a reply: named, size-checked (a large image is redrawn smaller), hashed, and sent in chunks from where the machine has got to |
 | `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
 | `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
@@ -58,7 +59,8 @@ host frames -> Channel.onmessage -> HostClient -> SessionsStore -> SessionListVi
 host needs only to answer `hello` and `sessions.subscribe` and send `session.upsert`,
 `session.remove` and `sessions.synced` event frames on the channel; `session.get` feeds
 the tool history, `session.answer` (with `sessions.answer` in `hello`) takes answers, and
-`session.reply` (with `sessions.reply`) takes replies.
+`session.reply` (with `sessions.reply`) takes replies, with `attachment.*` (with
+`sessions.attach`) for their files.
 `test/e2e/fixture-host.mjs` is a working example in about 150 lines.
 
 The client resubscribes when `seq` skips, repeats or goes backwards, and replaces its
@@ -131,6 +133,29 @@ what was sent (anything typed meanwhile stays), and every other outcome keeps th
 A host waits up to a minute for a working session to take a reply, so the request waits
 90 s for its response before it counts as lost. Demo mode replies as a host would
 (`window.agentBridgeDemo.scriptReplies(…)`), only to Copilot sessions.
+
+### Attachments
+
+Where the machine's `hello` lists `sessions.attach`, files and images go with a reply:
+pasted into the box (a screenshot, or a file copied from a file manager), dropped on it, or
+picked with **Attach**, which on an iPhone offers the photo library, the camera and Files.
+Each shows as a chip, with a thumbnail for an image, and can be removed until it is sent.
+A reply can be files alone, up to 10 of them.
+
+Each file is at most 256 KiB this way (the blob store will lift that). An image over the
+limit, as most phone photos and screenshots are, is redrawn as a JPEG at most 2048 px on a
+side, then smaller, until it fits, and its chip says it was made smaller. Anything else
+over it is refused with its size. An image the browser can't decode (HEIC outside Safari)
+can't be shrunk, so it goes only if it already fits.
+
+On **Send** the files go first, one 11 KiB chunk at a time, each from where the machine has
+got to, with the percentage shown; then the reply names them. A resend after a reconnect
+sends only what the machine is missing, and nothing for files it already has whole. A file
+the machine turns down fails the reply with its reason and **Try again**. A delivered reply
+takes its files out of the box; any other outcome keeps them, and after `unconfirmed` they
+are sent afresh if sent again, since the machine has let them go. The machine types each as
+`@<path>` ahead of the words, as agent-ha-bridge does. Demo mode keeps the files as a host
+would (`window.agentBridgeDemo.host.attachments`).
 
 ### Notifications
 
@@ -205,6 +230,10 @@ running another checkout's tests at the same time.
   box (keeping what was typed meanwhile), every outcome keeping the words, a resend after a
   lost response (typed once), the box held while a question is pending, the checks before
   sending, 44 px targets, Ctrl/Cmd+Enter, and no box for a machine without `sessions.reply`.
+* `test/attach.spec.mjs`, in demo mode: a picked file and a pasted screenshot shown as
+  chips and typed as `@` mentions ahead of the words, files alone, removing one, the size
+  limit and a large image made smaller, ten at most, progress, a refusal keeping them
+  without sending their bytes again, and no Attach for a machine without `sessions.attach`.
 * `test/ui.spec.mjs`, in demo mode: every field type and status from the worked example,
   glow per status, the delegating state (idle with `background` work), reduced motion,
   Markdown, an XSS payload in every text field, unknown

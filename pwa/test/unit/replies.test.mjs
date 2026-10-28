@@ -32,13 +32,31 @@ test('a slash or bang command is refused wherever leading space or control chara
   assert.equal(checkReply(reply('use /tmp and run !build later')), null);
 });
 
-test('attachments are refused until their slice, but an empty list or null is none', () => {
-  assert.equal(checkReply(reply('see this', { attachments: [{ name: 'shot.png' }] })), 'attachments are not supported yet; send the text alone, or attach at the machine');
-  assert.equal(checkReply(reply('see this', { attachments: {} })), 'attachments are not supported yet; send the text alone, or attach at the machine');
+const A = '0b7e3c1d-5f2a-4c6e-8d9b-1a2b3c4d5e6f';
+const B = '1c8f4d2e-6a3b-4d7f-9eac-2b3c4d5e6f70';
+
+test('with attachments the words are optional, and an empty list or null is none', () => {
+  assert.equal(checkReply(reply('see this', { attachments: [{ id: A }] })), null);
+  assert.equal(checkReply(reply(undefined, { attachments: [{ id: A }, { id: B }] })), null);
+  assert.equal(checkReply(reply(' \n', { attachments: [{ id: A }] })), null);
+  assert.equal(checkReply(reply(' ', { attachments: [] })), 'the reply is empty');
   assert.equal(checkReply(reply('see this', { attachments: [] })), null);
   assert.equal(checkReply(reply('see this', { attachments: null })), null);
 });
 
+test('an attachment is named by its UUID once, and at most ten go with a reply', () => {
+  assert.equal(checkReply(reply('x', { attachments: [{ id: 'shot.png' }] })), 'each attachment must be the UUID of one sent with attachment.start');
+  assert.equal(checkReply(reply('x', { attachments: [null] })), 'each attachment must be the UUID of one sent with attachment.start');
+  assert.equal(checkReply(reply('x', { attachments: [{ id: A }, { id: A.toUpperCase() }] })), 'the same attachment is in the reply twice');
+  const eleven = Array.from({ length: 11 }, (_, i) => ({ id: `${A.slice(0, -2)}${String(i).padStart(2, '0')}` }));
+  assert.equal(checkReply(reply('x', { attachments: eleven })), 'a reply carries at most 10 attachments');
+  assert.match(checkReply(reply('/clear', { attachments: [{ id: A }] })), /cannot start with \//);
+});
+
+test('a reply request names its attachments by id only', () => {
+  assert.deepEqual(replyRequest({ sessionId: 's1', request: 'r1', text: 'look', attachments: [{ id: A, name: 'a.png', bytes: new Uint8Array(3) }] }),
+    { id: 's1', request: 'r1', text: 'look', attachments: [{ id: A }] });
+});
 test('text that would make the request larger than a message is refused before it is sent', () => {
   // 16 KiB of control characters is within the text limit but 96 KiB of JSON.
   assert.equal(checkReply(reply(`go${'\u0001'.repeat(ReplyLimits.text - 2)}`)), 'the reply is too large to send');

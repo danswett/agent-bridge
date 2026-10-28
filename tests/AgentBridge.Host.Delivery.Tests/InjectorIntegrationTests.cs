@@ -203,6 +203,44 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Delivered, (string?)null), (result.Outcome, result.Reason));
     }
 
+    // A reply with a file: staged privately, its path typed as an @ mention ahead of the words
+    // by the real worker, and delivered once the "CLI" records the prompt with it attached.
+    [WindowsFact]
+    public async Task A_reply_with_an_attachment_types_its_staged_path_as_an_at_mention_and_is_delivered_once_attached()
+    {
+        var echo = StartEcho();
+        using var f = new Fixture();
+        const string Id = "44444444-4444-4444-8444-444444444444";
+        var events = f.CopilotSession(Id, echo.Pid);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+        f.Processes.Run(AgentBridge.Protocol.AgentKind.Copilot, echo.Pid);
+        await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
+        await source.RefreshAsync();
+        using var store = new AgentBridge.Host.Delivery.Staging.AttachmentStore(new() { StagingRoot = Path.Combine(f.Root, "attachments") }, sweep: false);
+        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
+            new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) },
+            attachments: store);
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+        var file = Guid.NewGuid().ToString();
+        store.Start("phone", new() { Attachment = file, Name = "shot.png", Size = png.Length, Sha256 = AgentBridge.Protocol.Attachments.Base64Url(System.Security.Cryptography.SHA256.HashData(png)) });
+        store.Chunk("phone", new() { Attachment = file, Offset = 0, Data = Convert.ToBase64String(png) });
+        var cli = Task.Run(() =>
+        {
+            var downs = WaitFor(echo.Log, lines => Keys(lines).Where(k => k.StartsWith("key 1 ", StringComparison.Ordinal)).ToList() is { Count: > 0 } d && d[^1] == "key 1 13 13" ? d : null, seconds: 60);
+            var words = new string([.. downs.SkipLast(1).Select(k => (char)int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture))]);
+            var path = words.Split(' ')[0][1..];
+            Fixture.Append(events, Copilot.Event("user.message", new { content = words, attachments = new[] { new { type = "file", path, displayName = "@" + path } }, delivery = "idle" }, 5));
+            return (words, path);
+        });
+
+        var result = await replies.ReplyAsync(new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = "what is this?", Attachments = [new() { Id = file }] }, "phone");
+
+        var (typedWords, staged) = await cli;
+        Assert.Equal($"@{staged} what is this?", typedWords);
+        Assert.Equal(png, File.ReadAllBytes(staged));
+        Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Delivered, (string?)null), (result.Outcome, result.Reason));
+    }
+
     sealed class NoBridge : IAgentHaBridgeProbe
     {
         public string? Active() => null;

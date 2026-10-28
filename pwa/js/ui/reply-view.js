@@ -7,14 +7,22 @@
 // nowhere or can't be confirmed keeps them, and a delivered one takes out only what was
 // sent, so anything typed meanwhile stays. While the session is asking a question the box
 // is disabled and says to answer first: the words would answer it.
-import { h } from './dom.js';
+//
+// Where the machine takes files too (`sessions.attach`), images and files can be pasted into
+// the box, dropped on it or picked with Attach, and go with the reply: shown as chips, with a
+// thumbnail for an image, until it is delivered. ../attachments.js prepares them, shrinking an
+// image over the limit, and sends them ahead of the reply.
+import { h, icon } from './dom.js';
 import { utf8Bytes } from '../answers.js';
 import { ReplyLimits, checkReply, replyRequest } from '../replies.js';
+import { AttachmentLimits, describeSize, prepareAttachment } from '../attachments.js';
 
 let seq = 0;
 const where = (machineName) => (machineName ? ` on ${machineName}` : '');
 const kib = (n) => `${(n / 1024).toFixed(1)} KiB`;
 const capitalise = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+// Images a browser can show as a thumbnail. HEIC only Safari can, and it says so by loading.
+const SHOWN = /^image\/(png|jpeg|gif|webp|heic|heif)$/;
 
 // After busy, Send comes back after this long, as for an answer.
 export const REPLY_BUSY_PAUSE_MS = 2000;
@@ -32,6 +40,11 @@ export function describeReply(entry, { machineName, working = false } = {}) {
   const at = where(machineName);
   switch (entry.state) {
     case 'sending': {
+      const p = entry.progress;
+      if (p && p.total > 0 && p.sent < p.total) {
+        const files = entry.answer?.attachments?.length ?? 0;
+        return { text: `Sending ${files === 1 ? 'the attachment' : `${files} attachments`}… ${Math.floor((100 * p.sent) / p.total)}%`, tone: 'progress' };
+      }
       const text = entry.attempts > 1 ? 'Sending again…' : 'Sending…';
       return { text: working ? `${text} The session is working, and takes it at its next step.` : text, tone: 'progress' };
     }
@@ -61,20 +74,33 @@ export class ReplyBox {
   #session = null;
   // The busy outcome whose pause has been started, so a re-render does not start another.
   #busyFor = null;
+  // Prepared files waiting to go, in order, and how many are still being read.
+  #files = [];
+  #preparing = 0;
+  #attach = false;
 
-  // replying: { service, hostId, sessionId }.
-  constructor({ machineName, replying }) {
+  // replying: { service, hostId, sessionId }. attach: whether the machine takes files.
+  constructor({ machineName, replying, attach = false, uuid = () => globalThis.crypto.randomUUID() }) {
     this.machineName = machineName;
     this.replying = replying;
+    this.uuid = uuid;
     this.idBase = `r${++seq}`;
+    this.#attach = attach;
     this.#build();
     const { service, hostId, sessionId } = replying;
     this.#unwatch = service.watch(hostId, sessionId, (e) => this.#show(e));
   }
 
-  destroy() { this.#unwatch?.(); clearTimeout(this.#busyTimer); }
+  destroy() {
+    this.#unwatch?.();
+    clearTimeout(this.#busyTimer);
+    for (const f of this.#files) { if (f.url) { URL.revokeObjectURL(f.url); } }
+  }
 
   get text() { return this.els.input.value; }
+
+  // The files waiting to go: { id, name, size, type, resized }.
+  get files() { return this.#files.map(({ id, name, size, type, resized }) => ({ id, name, size, type, resized })); }
 
   get entry() { const { service, hostId, sessionId } = this.replying; return service.get(hostId, sessionId); }
 
@@ -87,10 +113,25 @@ export class ReplyBox {
     e.input.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); this.#send(); }
     });
+    // A pasted screenshot or copied file is attached; pasted text is left to the box.
+    e.input.addEventListener('paste', (ev) => {
+      const files = [...(ev.clipboardData?.items ?? [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile()).filter(Boolean);
+      if (!files.length || !this.#attach) { return; }
+      ev.preventDefault();
+      this.#add(files);
+    });
     e.bytes = h('span', { class: 'bytes', id: `${id}-bytes`, 'aria-live': 'polite' });
     e.hint = h('p', { class: 'note reply-hint', id: `${id}-hint`, hidden: true }, 'Line breaks are sent as spaces: the session gets your reply as one line.');
     e.held = h('p', { class: 'note warn reply-held', id: `${id}-held`, hidden: true }, 'The session is waiting for an answer to its question. Answer that first, then reply.');
     e.error = h('p', { class: 'answer-error reply-error', role: 'alert', hidden: true });
+    e.files = h('ul', { class: 'attachments', 'aria-label': 'Attachments', hidden: true });
+    e.picker = h('input', { type: 'file', multiple: true, class: 'file-picker', hidden: true, tabindex: '-1', 'aria-hidden': 'true' });
+    e.picker.addEventListener('change', () => {
+      const files = [...(e.picker.files ?? [])];
+      e.picker.value = '';
+      this.#add(files);
+    });
+    e.attach = h('button', { type: 'button', class: 'button secondary attach', 'aria-label': 'Attach a file or image', hidden: !this.#attach, onclick: () => e.picker.click() }, icon('paperclip'), h('span', { class: 'attach-label' }, 'Attach'));
     e.send = h('button', { type: 'submit', class: 'button send' }, 'Send');
     e.resend = h('button', { type: 'button', class: 'button secondary resend', hidden: true, onclick: () => this.#resend() }, 'Try again');
     e.status = h('p', { class: 'answer-status reply-status', role: 'status', 'aria-live': 'polite' });
@@ -98,16 +139,28 @@ export class ReplyBox {
       h('label', { for: `${id}-text`, class: 'text-label', id: `${id}-label` }, 'Reply'),
       e.held,
       h('div', { class: 'text-wrap' }, e.input, e.bytes),
+      e.files,
       e.hint, e.error,
-      h('div', { class: 'answer-actions' }, e.send, e.resend),
+      h('div', { class: 'answer-actions' }, e.send, e.attach, e.resend),
+      e.picker,
       e.status);
     e.form.addEventListener('submit', (ev) => { ev.preventDefault(); this.#send(); });
+    // Files dropped on the box, from a desktop.
+    e.form.addEventListener('dragover', (ev) => { if (this.#attach && ev.dataTransfer?.types?.includes('Files')) { ev.preventDefault(); } });
+    e.form.addEventListener('drop', (ev) => {
+      const files = [...(ev.dataTransfer?.files ?? [])];
+      if (!files.length || !this.#attach) { return; }
+      ev.preventDefault();
+      this.#add(files);
+    });
     this.element = e.form;
   }
 
-  // The session as it is now: whether it is asking anything, and whether it is working.
-  update(session) {
+  // The session as it is now: whether it is asking anything, and whether it is working; and
+  // whether the machine takes files.
+  update(session, { attach = this.#attach } = {}) {
     this.#session = session;
+    this.#attach = attach;
     this.#show(this.entry);
   }
 
@@ -125,9 +178,13 @@ export class ReplyBox {
     if (over) { e.input.setAttribute('aria-invalid', 'true'); } else { e.input.removeAttribute('aria-invalid'); }
     e.hint.hidden = !/[\r\n\u2028\u2029]/.test(text);
     const held = this.#held();
+    const pending = this.#pending();
     e.held.hidden = !held;
     e.input.disabled = held;
-    e.send.disabled = held || this.#pending() || !!this.#busyTimer || text.trim() === '';
+    e.attach.hidden = !this.#attach;
+    e.attach.disabled = held || pending || this.#files.length + this.#preparing >= AttachmentLimits.perReply;
+    for (const b of e.files.querySelectorAll('button.remove')) { b.disabled = pending; }
+    e.send.disabled = held || pending || !!this.#busyTimer || this.#preparing > 0 || (text.trim() === '' && this.#files.length === 0);
   }
 
   #clearError() {
@@ -136,21 +193,84 @@ export class ReplyBox {
     this.els.error.textContent = '';
   }
 
+  #error(text) {
+    this.els.error.textContent = text;
+    this.els.error.hidden = false;
+  }
+
+  // Reads picked, pasted or dropped files, and shows each as a chip once it is ready.
+  async #add(files) {
+    this.#clearError();
+    const room = AttachmentLimits.perReply - this.#files.length - this.#preparing;
+    if (files.length > room) {
+      this.#error(`A reply carries at most ${AttachmentLimits.perReply} attachments.`);
+      files = files.slice(0, Math.max(0, room));
+    }
+    const problems = [];
+    this.#preparing += files.length;
+    this.#sync();
+    this.#show(this.entry);
+    for (const file of files) {
+      try {
+        const prepared = await prepareAttachment(file, { uuid: this.uuid });
+        if (prepared.image && SHOWN.test(prepared.type)) { prepared.url = URL.createObjectURL(new Blob([prepared.bytes], { type: prepared.type })); }
+        this.#files.push(prepared);
+      } catch (err) {
+        problems.push(`Couldn't attach ${file.name || 'that'}: ${err?.message ?? err}.`);
+      } finally {
+        this.#preparing--;
+      }
+    }
+    if (problems.length) { this.#error(problems.join(' ')); }
+    this.#renderFiles();
+    this.#show(this.entry);
+  }
+
+  #remove(file) {
+    const i = this.#files.indexOf(file);
+    if (i < 0 || this.#pending()) { return; }
+    this.#files.splice(i, 1);
+    if (file.url) { URL.revokeObjectURL(file.url); }
+    // Sent to the machine before (with a reply that was refused, say): it can let it go now.
+    if (file.offered) { this.replying.service.discard?.(this.replying.hostId, file.id); }
+    this.#renderFiles();
+    this.#sync();
+    this.els.input.focus();
+  }
+
+  #renderFiles() {
+    const e = this.els;
+    e.files.replaceChildren(...this.#files.map((f) => {
+      const preview = f.url
+        ? h('img', { class: 'attachment-thumb', src: f.url, alt: '' })
+        : h('span', { class: 'attachment-thumb file' }, icon('file'));
+      // A thumbnail this browser can't draw (HEIC outside Safari) shows as a file instead.
+      if (f.url) { preview.addEventListener('error', () => preview.replaceWith(h('span', { class: 'attachment-thumb file' }, icon('file'))), { once: true }); }
+      return h('li', { class: 'attachment', dataset: { id: f.id }, title: f.name },
+        preview,
+        h('span', { class: 'attachment-name' }, f.name),
+        h('span', { class: 'attachment-size' }, `${describeSize(f.size)}${f.resized ? ' · made smaller' : ''}`),
+        h('button', { type: 'button', class: 'remove', 'aria-label': `Remove ${f.name}`, onclick: () => this.#remove(f) }, '×'));
+    }));
+    e.files.hidden = this.#files.length === 0;
+  }
+
   #send() {
-    if (this.#held() || this.#pending() || this.#busyTimer) { return; }
+    if (this.#held() || this.#pending() || this.#busyTimer || this.#preparing > 0) { return; }
     const text = this.els.input.value;
+    const files = [...this.#files];
     const { service, hostId, sessionId } = this.replying;
     // Checked as it will be sent, with a stand-in request the length of a real one.
-    const problem = checkReply(replyRequest({ sessionId, request: '00000000-0000-4000-8000-000000000000', text }));
+    const problem = checkReply(replyRequest({ sessionId, request: '00000000-0000-4000-8000-000000000000', text, attachments: files }));
     if (problem) {
-      this.els.error.textContent = `${capitalise(problem)}.`;
-      this.els.error.hidden = false;
+      this.#error(`${capitalise(problem)}.`);
       this.els.input.focus();
       return;
     }
     this.#clearError();
-    const entry = service.submit({ hostId, sessionId, text: replyRequest({ sessionId, request: '', text }).text });
-    this.#sent = { request: entry.request, text };
+    for (const f of files) { f.offered = true; }
+    const entry = service.submit({ hostId, sessionId, text: replyRequest({ sessionId, request: '', text }).text, attachments: files });
+    this.#sent = { request: entry.request, text, files };
   }
 
   #resend() {
@@ -160,14 +280,24 @@ export class ReplyBox {
 
   #show(entry) {
     const e = this.els;
-    // Delivered: what went comes out of the box, and only that. Anything typed while it was
-    // on its way stays; a box no longer beginning with it has been rewritten, and is kept.
-    if (entry?.state === 'done' && entry.outcome === 'delivered' && this.#sent?.request === entry.request) {
-      const value = e.input.value;
-      if (value.startsWith(this.#sent.text)) { e.input.value = value.slice(this.#sent.text.length).replace(/^\s+/, ''); }
+    if (entry?.state === 'done' && this.#sent?.request === entry.request) {
+      if (entry.outcome === 'delivered') {
+        // Delivered: what went comes out of the box, and only that. Anything typed while it was
+        // on its way stays; a box no longer beginning with it has been rewritten, and is kept.
+        const value = e.input.value;
+        if (value.startsWith(this.#sent.text)) { e.input.value = value.slice(this.#sent.text.length).replace(/^\s+/, ''); }
+        for (const f of this.#sent.files) { if (f.url) { URL.revokeObjectURL(f.url); } }
+        this.#files = this.#files.filter((f) => !this.#sent.files.includes(f));
+        this.#renderFiles();
+      } else if (entry.outcome === 'unconfirmed') {
+        // The files went with it, and the machine has let them go: sent again, they are new.
+        for (const f of this.#sent.files) { f.id = this.uuid(); f.offered = false; }
+        this.#renderFiles();
+      }
       this.#sent = null;
     }
     const shown = entry ? describeReply(entry, { machineName: this.machineName, working: this.#session?.status === 'working' }) : { text: '', tone: '' };
+    if (this.#preparing > 0 && !this.#pending(entry)) { shown.text = 'Reading the attachment…'; shown.tone = 'progress'; }
     e.form.dataset.reply = entry ? (entry.state === 'done' ? (OUTCOME_TEXT[entry.outcome] ? entry.outcome : 'unconfirmed') : entry.state) : 'none';
     e.status.textContent = shown.text;
     e.status.className = `answer-status reply-status${shown.tone ? ` ${shown.tone}` : ''}`;

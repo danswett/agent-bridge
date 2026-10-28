@@ -9,6 +9,7 @@
 //   answers.js       building and checking an answer before it is sent
 //   answer-service.js sending answers: one outcome each, resent with the same request
 //   replies.js, reply-service.js  checking and sending replies (session.reply), likewise
+//   attachments.js   preparing files and images for a reply, and sending them first
 //   push.js          notifications: turning them on and off, registering with each machine
 //   sessions-store.js, ui/*  what is shown
 //   demo.js          ?demo=1: a simulated host, no relay
@@ -136,7 +137,9 @@ async function startDemo() {
   $('demo-banner').hidden = false;
   setPill('Demo', 'warn');
   const fixture = await (await fetch('fixtures/sessions-list.json', { cache: 'no-store' })).json();
-  const host = new DemoHost(fixture, { answerDelayMs: Number(params.get('answerDelay') ?? 700), answering: params.get('answer') !== '0', replying: params.get('reply') !== '0' && params.get('answer') !== '0' });
+  const host = new DemoHost(fixture, { answerDelayMs: Number(params.get('answerDelay') ?? 700), answering: params.get('answer') !== '0', replying: params.get('reply') !== '0' && params.get('answer') !== '0', attaching: params.get('attach') !== '0' });
+  // ?attachDelay= slows each file chunk, so its progress can be watched.
+  host.attachmentDelayMs = Number(params.get('attachDelay')) || 0;
   // ?timeout= shortens how long a request waits for its response, for the tests of resends.
   const timeoutMs = Number(params.get('timeout')) || 0;
   const client = new HostClient(host.connect(), { store, ...(timeoutMs ? { timeoutMs, answerTimeoutMs: timeoutMs, replyTimeoutMs: timeoutMs } : {}) });

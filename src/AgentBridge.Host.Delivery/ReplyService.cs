@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Delivery.Copilot;
+using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery;
@@ -12,7 +13,10 @@ public interface ISessionReplier
     // Whether hello offers sessions.reply now; asked per hello, like answers.
     bool Available { get; }
 
-    Task<ReplyResult> ReplyAsync(ReplyRequest request, CancellationToken cancellationToken = default);
+    // Whether hello offers sessions.attach now: replies that carry files.
+    bool TakesAttachments => false;
+
+    Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default);
 }
 
 public sealed class ReplyOptions
@@ -64,9 +68,11 @@ public sealed class ReplyService : ISessionReplier
     // What each session's transcript says is asking, kept between replies so it is read from
     // the start once and then only as it grows. One small entry per session replied to.
     readonly ConcurrentDictionary<string, CopilotInput> inputs = new(StringComparer.Ordinal);
+    readonly AttachmentStore? attachments;
 
     public ReplyService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
-        IConsoleInjector injector, ReplyOptions options, Action<string>? log = null, DeliveryGate? gate = null)
+        IConsoleInjector injector, ReplyOptions options, Action<string>? log = null, DeliveryGate? gate = null,
+        AttachmentStore? attachments = null)
     {
         this.source = source;
         this.processes = processes;
@@ -76,22 +82,27 @@ public sealed class ReplyService : ISessionReplier
         this.options = options;
         this.log = log ?? (_ => { });
         this.gate = gate ?? new DeliveryGate();
+        this.attachments = attachments;
         requests = new OutcomeMemory<ReplyResult>(options.Time, options.RememberFor);
     }
 
     public bool Available => options.PlatformSupported && probe.Active() is null;
 
-    public Task<ReplyResult> ReplyAsync(ReplyRequest request, CancellationToken cancellationToken = default)
+    // Whether hello offers sessions.attach: replies are on and there is somewhere to stage files.
+    public bool TakesAttachments => attachments is not null && Available;
+
+    // peer: the device the request came from. A reply can only use attachments that device sent.
+    public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key))
         {
             return Task.FromResult(Refused("request must be a UUID"));
         }
-        return requests.Once(key, () => DeliverAsync(request, key), result =>
+        return requests.Once(key, () => DeliverAsync(request, key, peer ?? ""), result =>
             log($"reply {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
     }
 
-    async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key)
+    async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer)
     {
         Typed typed;
         try
@@ -99,6 +110,8 @@ public sealed class ReplyService : ISessionReplier
             if (!options.PlatformSupported) { return Refused("replying is not supported on this platform yet; reply at the machine"); }
             if (probe.Active() is { } active) { return Refused(active); }
             if (Replies.Check(request) is { } invalid) { return Refused(invalid); }
+            var refs = request.Attachments ?? [];
+            if (refs.Count > 0 && attachments is null) { return Refused("this host does not take attachments; send the text alone, or attach at the machine"); }
             var session = source.Get(request.Id);
             if (session is null) { return Stale("the session has ended"); }
             if (session.Agent != AgentKind.Copilot)
@@ -106,14 +119,32 @@ public sealed class ReplyService : ISessionReplier
                 return Refused($"replying is not supported for {session.Agent.ToString().ToLowerInvariant()} yet; reply at the machine");
             }
             if (!gate.TryClaim(session.Id, key)) { return Busy(); }
+            Claim? claim = null;
+            var keysWent = false;
             try
             {
                 if (session.Question is not null) { return Asking(); }
-                var outcome = await CopilotAsync(session, request.Text!);
+                if (refs.Count > 0)
+                {
+                    (claim, var problem) = attachments!.Claim(peer, refs);
+                    if (problem is not null) { return Refused(problem); }
+                }
+                var outcome = await CopilotAsync(session, request.Text ?? "", claim);
+                keysWent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result; }
                 typed = outcome.Typed!;
             }
-            finally { gate.Release(session.Id, key); }
+            finally
+            {
+                // Typed, even in part: the files are the agent's now. Not typed: the staged
+                // copies go, and the attachments stay for another try.
+                if (claim is not null)
+                {
+                    if (keysWent) { attachments!.Consume(claim); }
+                    else { attachments!.Release(claim); }
+                }
+                gate.Release(session.Id, key);
+            }
         }
         catch (Exception e)
         {
@@ -129,11 +160,12 @@ public sealed class ReplyService : ISessionReplier
         catch (Exception e) { return Unconfirmed($"the reply was typed but could not be checked ({e.Message}); check at the machine"); }
     }
 
-    sealed record Typed(string Transcript, long From, string Words);
+    sealed record Typed(string Transcript, long From, string Words, IReadOnlyList<string> Attached);
 
-    sealed record Attempt(ReplyResult? Result, Typed? Typed);
+    // KeysWent: some or all of the reply may have reached the session, whatever the result.
+    sealed record Attempt(ReplyResult? Result, Typed? Typed, bool KeysWent = false);
 
-    async Task<Attempt> CopilotAsync(Session session, string text)
+    async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim)
     {
         // The session id names a folder; only the agent's own id shape is accepted.
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Done(Refused("the session's id is not a Copilot session id")); }
@@ -141,6 +173,17 @@ public sealed class ReplyService : ISessionReplier
         if (session.ProcessId is not { } pid) { return Done(Refused("the session's process is not known; reply at the machine")); }
         if (!processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid)) { return Done(Stale("the session's process has ended")); }
         if (guard.Refuse(pid) is { } refused) { return Done(Refused(refused)); }
+        IReadOnlyList<string> staged = [];
+        if (claim is not null)
+        {
+            if (Stage(claim) is { } failed) { return Done(failed); }
+            staged = claim.Staged;
+            if (CopilotReply.WithAttachments(text, staged) is not { } line)
+            {
+                return Done(Refused("an attachment's path has a space in it, which Copilot cannot take as an attachment; attach at the machine"));
+            }
+            text = line;
+        }
         var (keys, words) = CopilotReply.Plan(text);
         // Caught up before the typing turn is taken, so the first reply to a session with a
         // long transcript reads it without holding up every other delivery; the read in the
@@ -170,20 +213,43 @@ public sealed class ReplyService : ISessionReplier
             try { result = await injector.InjectAsync(pid, keys); }
             catch (Exception e)
             {
-                return Done(Unconfirmed($"the injector failed while typing ({e.Message}); check at the machine"));
+                return new Attempt(Unconfirmed($"the injector failed while typing ({e.Message}); check at the machine"), null, KeysWent: true);
             }
         }
         finally { gate.DoneTyping(); }
 
-        log($"typed a reply into {Short(session.Id)} (pid {pid}): {keys.Describe()} -> {result.Status} {result.Detail}");
+        log($"typed a reply into {Short(session.Id)} (pid {pid}){(staged.Count > 0 ? $" with {staged.Count} attachment(s)" : "")}: {keys.Describe()} -> {result.Status} {result.Detail}");
         return result.Status switch
         {
             InjectionStatus.NothingTyped => Done(Refused(result.Detail)),
-            InjectionStatus.Interrupted => Done(Unconfirmed($"{result.Detail}; part of the reply may have reached the session, so check at the machine")),
-            _ => new Attempt(null, new Typed(transcript, from, words)),
+            InjectionStatus.Interrupted => new Attempt(Unconfirmed($"{result.Detail}; part of the reply may have reached the session, so check at the machine"), null, KeysWent: true),
+            _ => new Attempt(null, new Typed(transcript, from, words, staged), KeysWent: true),
         };
 
         static Attempt Done(ReplyResult r) => new(r, null);
+    }
+
+    // Writes a reply's attachments where the agent can read them, or says why it cannot.
+    ReplyResult? Stage(Claim claim)
+    {
+        // Copilot takes @<path> up to the first space, and no quoting is known to work.
+        if (Path.GetFullPath(attachments!.StagingRoot).Any(char.IsWhiteSpace))
+        {
+            log($"cannot stage attachments: the folder {attachments.StagingRoot} has whitespace in its path, which an @ mention cannot carry");
+            return Refused("the host's attachment folder has a space in its path, which Copilot cannot take as an attachment; attach at the machine");
+        }
+        try
+        {
+            var paths = attachments.Stage(claim);
+            log($"staged {paths.Count} attachment(s) ({claim.Bytes / 1024.0:F0} KiB) privately in {attachments.StagingRoot}");
+            return null;
+        }
+        catch (InvalidDataException e) { return Refused(e.Message); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            log($"could not stage attachments: {e.Message}");
+            return Refused($"the host could not stage the attachments privately ({e.Message}); nothing was sent");
+        }
     }
 
     // Watches the transcript, from where it stood before the keys went, for the person's
@@ -198,7 +264,10 @@ public sealed class ReplyService : ISessionReplier
             foreach (var prompt in since.Prompts)
             {
                 if (!CopilotReply.Matches(typed.Words, prompt.Content)) { other = true; continue; }
-                if (Claim(typed.Transcript, prompt.Offset)) { return new ReplyResult(AnswerOutcome.Delivered); }
+                if (!TakePrompt(typed.Transcript, prompt.Offset)) { continue; }
+                return CopilotReply.Attached(typed.Attached, prompt.Attachments)
+                    ? new ReplyResult(AnswerOutcome.Delivered)
+                    : Unconfirmed("the session recorded the reply but did not attach every file to it; check at the machine");
             }
             if (since.SessionEnded) { return Unconfirmed("the session ended before it recorded the reply; check at the machine"); }
             if (options.Time.GetElapsedTime(started) >= options.ConfirmTimeout)
@@ -211,7 +280,7 @@ public sealed class ReplyService : ISessionReplier
         }
     }
 
-    bool Claim(string transcript, long offset)
+    bool TakePrompt(string transcript, long offset)
     {
         var now = options.Time.GetUtcNow();
         foreach (var old in claimed.Where(c => now - c.Value > options.RememberFor).Select(c => c.Key).ToList()) { claimed.TryRemove(old, out _); }
@@ -233,6 +302,6 @@ public sealed class UnsupportedPlatformReplier : ISessionReplier
 {
     public bool Available => false;
 
-    public Task<ReplyResult> ReplyAsync(ReplyRequest request, CancellationToken cancellationToken = default) =>
+    public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default) =>
         Task.FromResult(new ReplyResult(AnswerOutcome.Refused, "replying is not supported on this platform yet; reply at the machine"));
 }

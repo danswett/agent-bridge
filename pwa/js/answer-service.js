@@ -33,8 +33,9 @@ export class AnswerService {
   #listeners = new Map();
   #any = new Set();
 
-  // send(client, data): the op. payload(entry): its request data. final(entry): whether a
-  // settled outcome stands, so that giving the answer again sends nothing.
+  // send(client, data, entry, progress): the op, which may call progress(anything) as it goes.
+  // payload(entry): its request data. final(entry): whether a settled outcome stands, so that
+  // giving the answer again sends nothing.
   constructor({
     current,
     uuid = () => globalThis.crypto.randomUUID(),
@@ -71,7 +72,7 @@ export class AnswerService {
     if (existing && existing.state === 'done' && this.final(existing)) { return this.#snapshot(existing); }
     const entry = {
       key, hostId, sessionId, questionId, answer,
-      request: this.uuid(), state: 'sending', outcome: null, reason: null,
+      request: this.uuid(), state: 'sending', outcome: null, reason: null, progress: null,
       firstSentAt: null, attempts: 0, busyResends: 0, timer: null, token: 0,
     };
     this.#entries.set(key, entry);
@@ -102,8 +103,8 @@ export class AnswerService {
 
   #snapshot(entry) {
     if (!entry) { return null; }
-    const { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts } = entry;
-    return { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts };
+    const { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress } = entry;
+    return { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress };
   }
 
   #set(entry, change) {
@@ -136,11 +137,13 @@ export class AnswerService {
     const client = cur.client;
     entry.attempts++;
     entry.firstSentAt ??= this.now();
-    this.#set(entry, { state: 'sending', reason: null });
+    this.#set(entry, { state: 'sending', reason: null, progress: null });
     const data = this.payload(entry);
+    // What the op has done so far, for one that takes a while (a reply's files going first).
+    const progress = (p) => { if (token === entry.token && entry.state === 'sending') { this.#set(entry, { progress: p }); } };
     let result;
     try {
-      result = await this.send(client, data);
+      result = await this.send(client, data, this.#snapshot(entry), progress);
     } catch (e) {
       if (token !== entry.token) { return; }
       if (e?.fromHost === true) {

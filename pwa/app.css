@@ -326,6 +326,22 @@ summary {
 .bytes { display: block; color: var(--muted); font-size: .8rem; text-align: right; min-height: 0; }
 .bytes:empty { display: none; }
 .bytes.over { color: var(--danger); font-weight: 600; }
+/* Files going with a reply: a chip each, a thumbnail for an image. */
+.attachments { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 0; padding: 0; }
+.attachment {
+  display: grid; grid-template-columns: 40px minmax(0, 1fr) var(--tap); align-items: center; column-gap: 8px;
+  width: 17rem; max-width: 100%; padding: 2px 0 2px 4px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
+}
+.attachment-thumb { grid-row: 1 / 3; width: 40px; height: 40px; border-radius: 6px; object-fit: cover; display: grid; place-items: center; background: var(--surface); color: var(--muted); }
+.attachment-name { grid-column: 2; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-size { grid-column: 2; color: var(--muted); font-size: .8rem; }
+.attachment .remove {
+  grid-column: 3; grid-row: 1 / 3; width: var(--tap); height: var(--tap);
+  border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 1.4rem; cursor: pointer;
+}
+.attachment .remove:disabled { opacity: .4; cursor: default; }
+.button.attach { gap: 6px; }
 .field.invalid > .field-set > legend .field-title, .field.invalid .field-head .field-title { color: var(--danger); }
 
 .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }

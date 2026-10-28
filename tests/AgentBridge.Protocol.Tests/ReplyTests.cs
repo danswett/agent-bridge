@@ -10,7 +10,7 @@ public class ReplyTests
         Id = "s1",
         Request = "6f1c2a9e-4b7d-4f0a-9b8e-2d1c3e4f5a6b",
         Text = text,
-        Attachments = attachmentsJson is null ? null : JsonSerializer.Deserialize<JsonElement>(attachmentsJson),
+        Attachments = attachmentsJson is null ? null : JsonSerializer.Deserialize<List<AttachmentRef>>(attachmentsJson, ProtocolJson.Options),
     };
 
     [Fact]
@@ -43,21 +43,39 @@ public class ReplyTests
         Assert.Null(Replies.Check(Reply("use /tmp and run !build later")));
     }
 
+    const string A = "0b7e3c1d-5f2a-4c6e-8d9b-1a2b3c4d5e6f";
+    const string B = "1c8f4d2e-6a3b-4d7f-9eac-2b3c4d5e6f70";
+
     [Fact]
-    public void Attachments_are_refused_until_the_slice_that_carries_them_but_an_empty_list_is_none()
+    public void With_attachments_the_words_are_optional_and_an_empty_list_is_none()
     {
-        Assert.Contains("attachments are not supported yet", Replies.Check(Reply("see this", """[{"name":"shot.png"}]""")));
-        Assert.Contains("attachments are not supported yet", Replies.Check(Reply("see this", """{"name":"shot.png"}""")));
+        Assert.Null(Replies.Check(Reply("see this", $$"""[{"id":"{{A}}"}]""")));
+        Assert.Null(Replies.Check(Reply(null, $$"""[{"id":"{{A}}"},{"id":"{{B}}"}]""")));
+        Assert.Null(Replies.Check(Reply(" \n", $$"""[{"id":"{{A}}"}]""")));
+        Assert.Equal("the reply is empty", Replies.Check(Reply(" ", "[]")));
         Assert.Null(Replies.Check(Reply("see this", "[]")));
         Assert.Null(Replies.Check(Reply("see this", "null")));
     }
 
     [Fact]
+    public void An_attachment_is_named_by_its_UUID_once_and_at_most_ten_go_with_a_reply()
+    {
+        Assert.Equal("each attachment must be the UUID of one sent with attachment.start", Replies.Check(Reply("x", """[{"id":"shot.png"}]""")));
+        Assert.Equal("each attachment must be the UUID of one sent with attachment.start", Replies.Check(Reply("x", "[null]")));
+        Assert.Equal("the same attachment is in the reply twice", Replies.Check(Reply("x", $$"""[{"id":"{{A}}"},{"id":"{{A.ToUpperInvariant()}}"}]""")));
+        var eleven = "[" + string.Join(",", Enumerable.Range(0, 11).Select(_ => $$"""{"id":"{{Guid.NewGuid()}}"}""")) + "]";
+        Assert.Equal("a reply carries at most 10 attachments", Replies.Check(Reply("x", eleven)));
+        // A command is refused with or without them: the rule does not depend on what leads.
+        Assert.Contains("cannot start with /", Replies.Check(Reply("/clear", $$"""[{"id":"{{A}}"}]""")));
+    }
+    [Fact]
     public void A_reply_request_reads_from_and_writes_to_the_contract_json()
     {
         var json = """{"id":"s1","request":"6f1c2a9e-4b7d-4f0a-9b8e-2d1c3e4f5a6b","text":"go on","future":1}""";
         var read = JsonSerializer.Deserialize<ReplyRequest>(json, ProtocolJson.Options)!;
-        Assert.Equal(("s1", "go on", (JsonElement?)null), (read.Id, read.Text, read.Attachments));
+        Assert.Equal(("s1", "go on", (IReadOnlyList<AttachmentRef>?)null), (read.Id, read.Text, read.Attachments));
+        var withFiles = JsonSerializer.Deserialize<ReplyRequest>($$"""{"id":"s1","request":"r","attachments":[{"id":"{{A}}","via":"blob"}]}""", ProtocolJson.Options)!;
+        Assert.Equal(A, Assert.Single(withFiles.Attachments!).Id);
         Assert.Equal("""{"outcome":"busy","reason":"x"}""", JsonSerializer.Serialize(new ReplyResult(AnswerOutcome.Busy, "x"), ProtocolJson.Options));
         Assert.Equal(AnswerOutcome.Unconfirmed, JsonSerializer.Deserialize<ReplyResult>("""{"outcome":"queued"}""", ProtocolJson.Options)!.Outcome);
     }

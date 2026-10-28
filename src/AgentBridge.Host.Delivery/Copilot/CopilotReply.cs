@@ -14,6 +14,29 @@ public static class CopilotReply
         return (new KeyPlan([new KeySend(words, true, CopilotPlanner.ReplyEnterDelayMs, 0)]), words);
     }
 
+    // The line typed for a reply with attachments, as agent-ha-bridge builds it
+    // (New-BridgeAttachmentPrompt): Copilot CLI attaches a file the prompt mentions as
+    // @<path>, so each staged file leads as one, and the words, trimmed, follow. No quoting of
+    // a path has been established, so one with whitespace in it, which would split into two
+    // broken mentions, is refused (null) rather than sent with some attachments missing.
+    public static string? WithAttachments(string? text, IReadOnlyList<string> paths)
+    {
+        var parts = new List<string>();
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path) || path.Any(char.IsWhiteSpace)) { return null; }
+            parts.Add("@" + path);
+        }
+        var words = InjectableText.Collapse(text ?? "").Trim();
+        if (words.Length > 0) { parts.Add(words); }
+        return string.Join(' ', parts);
+    }
+
+    // Whether Copilot attached every staged file to the prompt it recorded: a mention it could
+    // not read is left as text, and the agent never sees the file.
+    public static bool Attached(IReadOnlyList<string> paths, IReadOnlyList<string>? recorded) =>
+        paths.All(p => recorded?.Any(r => string.Equals(r, p, StringComparison.OrdinalIgnoreCase)) == true);
+
     // Whether a recorded prompt is the reply typed. Whitespace runs are one space and the
     // ends are trimmed, since the CLI may trim what it was given; any other difference is a
     // different prompt.
