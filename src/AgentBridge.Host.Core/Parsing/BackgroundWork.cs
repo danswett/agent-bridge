@@ -34,32 +34,31 @@ internal sealed class BackgroundWork
 
     readonly Dictionary<string, Agent> _agents = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> _agentByCall = new(StringComparer.Ordinal);
-    // Agents known to run in the foreground (sync): their turn holds the session's own tool
-    // call open, so they are the session's work, never background.
-    readonly HashSet<string> _foreground = new(StringComparer.Ordinal);
     readonly Dictionary<string, DateTimeOffset?> _shells = new(StringComparer.Ordinal);
 
     // Moves on every change, so a parser can tell whether an event changed what is shown.
     public int Version { get; private set; }
 
+    // Every id held, for checking that a long session cannot grow it without bound.
+    internal int Tracked => _agents.Count + _agentByCall.Count + _shells.Count;
+
     public void Clear()
     {
         _agents.Clear();
         _agentByCall.Clear();
-        _foreground.Clear();
         _shells.Clear();
         Version++;
     }
 
-    // A start seen only in the skimmed part of the transcript: its mode is a fact worth
-    // keeping (the agent's later events may be in the parsed window), but whether it is
-    // still working is for those events to say.
+    // A start seen only in the skimmed part of the transcript: a background agent's mode is
+    // a fact worth keeping (its later events may be in the parsed window), but whether it is
+    // still working is for those events to say. A sync agent is never kept: only agents
+    // known to be background are tracked, so its events change nothing here, and keeping
+    // its id grew without bound in a session that ran many.
     public void KnowMode(string? callId, string? agentId, bool background)
     {
         var key = agentId ?? callId;
-        if (key is null) { return; }
-        if (!background) { _foreground.Add(key); return; }
-        _foreground.Remove(key);
+        if (key is null || !background) { return; }
         if (callId is not null) { _agentByCall[callId] = key; }
         if (!_agents.ContainsKey(key)) { Add(key, new Agent()); }
     }

@@ -152,6 +152,24 @@ public class BackgroundTests
     }
 
     [Fact]
+    public void Tracking_stays_bounded_however_many_agents_and_shells_a_long_session_starts()
+    {
+        var work = new AgentBridge.Host.Core.Parsing.BackgroundWork();
+        var at = Fixture.T0;
+        for (var i = 0; i < 5000; i++)
+        {
+            at = at.AddSeconds(1);
+            work.KnowMode($"sync-call-{i}", $"sync-{i}", background: false);
+            work.AgentStarted($"call-{i}", $"agent-{i}", at);
+            work.AgentTurnEnded($"agent-{i}", at);
+            work.ShellStarted($"shell-{i}", at);
+        }
+
+        Assert.True(work.Tracked <= 3 * 256, $"{work.Tracked} ids held");
+        Assert.Equal((0, 256), work.Running(null));
+    }
+
+    [Fact]
     public async Task An_agent_idle_notification_alone_also_ends_a_run()
     {
         await using var s = new Session_();

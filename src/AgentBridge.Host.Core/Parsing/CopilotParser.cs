@@ -68,7 +68,8 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time) : Tra
                 break;
             case "subagent.started":
                 // Only the mode: the agent's events in the parsed window say whether it is
-                // still working, and without its mode a sync agent would look like one.
+                // still working, and only an agent known to be background is tracked, so a
+                // sync one's events never look like one.
                 S.Background.KnowMode(Json.Str(data, "toolCallId"), Json.Str(e, "agentId"), Json.Str(data, "executionMode") == "background");
                 break;
         }
@@ -90,7 +91,6 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time) : Tra
         {
             case "subagent.started":
                 if (Json.Str(data, "executionMode") == "background") { work.AgentStarted(Json.Str(data, "toolCallId"), agentId, at); }
-                else { work.KnowMode(Json.Str(data, "toolCallId"), agentId, background: false); }
                 break;
             case "subagent.completed":
                 work.AgentCompleted(Json.Str(data, "toolCallId"));
