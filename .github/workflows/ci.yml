@@ -24,6 +24,9 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet test AgentBridge.slnx -c Release --nologo
+      - name: Relay container builds
+        if: runner.os == 'Linux'
+        run: docker build -f src/AgentBridge.Relay/Dockerfile -t agent-bridge-relay .
   spikes:
     runs-on: windows-latest
     steps:

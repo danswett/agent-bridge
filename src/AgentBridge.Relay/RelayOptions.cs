@@ -1,0 +1,40 @@
+namespace AgentBridge.Relay;
+
+public sealed class RelayOptions
+{
+    public string GitHubClientId { get; set; } = "";
+    // Optional. With it the relay revokes each GitHub token as soon as it has read the
+    // account id, so no GitHub credential outlives sign-in anywhere.
+    public string? GitHubClientSecret { get; set; }
+    public string GitHubBaseUrl { get; set; } = "https://github.com";
+    public string GitHubApiUrl { get; set; } = "https://api.github.com";
+    // Base64, 32 bytes. Without it tokens are signed with a per-process key and every
+    // restart signs everyone out.
+    public string? TokenKey { get; set; }
+    public TimeSpan TokenLifetime { get; set; } = TimeSpan.FromDays(30);
+    public int MaxFramesPerSecond { get; set; } = 200;
+    public int MaxDevicesPerAccount { get; set; } = 32;
+    // Web origins allowed to call the sign-in API and open sockets, such as the PWA on
+    // GitHub Pages. Native clients send no Origin and are unaffected.
+    public string[] AllowedOrigins { get; set; } = [];
+    // Production serves no app code: a relay that could change the PWA it serves could
+    // read what the PWA decrypts. A dev stack can serve one same-origin from wwwroot. Off
+    // unless asked for, and the product image ships no wwwroot (the spike defaulted to on).
+    public bool ServePwa { get; set; }
+
+    // Web Push (spike S5). The relay signs and forwards pushes that hosts have already
+    // encrypted to the browser; it cannot read them. Unset key: pushes are refused.
+    public string? VapidPrivateKey { get; set; }
+    public string VapidSubject { get; set; } = "https://github.com/danswett/agent-bridge";
+    // The relay only ever POSTs to these push services (host or a subdomain of it), over
+    // HTTPS, so a device cannot use it to reach anything else.
+    public string[] PushHosts { get; set; } = ["web.push.apple.com", "fcm.googleapis.com", "push.services.mozilla.com", "notify.windows.com"];
+    // Test only: allows http:// push endpoints, for a local fake push service.
+    public bool AllowInsecurePush { get; set; }
+    public int MaxPushesPerMinute { get; set; } = 30;
+
+    // Test hooks. Tap observes every forwarded payload; Route lets a test play a hostile
+    // relay that redirects or forges routing.
+    public Action<string, string, byte[]>? Tap { get; set; }
+    public Func<string, string, (string From, string To)>? Route { get; set; }
+}
