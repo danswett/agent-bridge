@@ -41,8 +41,11 @@ Inside a channel, as in S4:
 | host → client | `{"re": 7, "ok": false, "error": "unknown op"}` | A failed request |
 | host → client | `{"ev": "session.upsert", "seq": 42, "data": {...}}` | **New:** an event the client subscribed to. It has no `id` or `re` |
 
-`seq` goes up by one for each event on a channel. If a client sees a gap (it shouldn't,
-since Noise is ordered), it calls `sessions.subscribe` again.
+`seq` belongs to the channel, not to a subscription. It goes up by one for each event the
+host sends on that channel, and a later subscribe continues from where it is rather than
+restarting. A client doesn't know the starting value, so it takes the first event it
+receives as its baseline. If it later sees a gap (it shouldn't, since Noise is ordered),
+it calls `sessions.subscribe` again.
 
 ## Ops
 
@@ -95,6 +98,13 @@ Request `data`: `{}`. Result: `{ "revision": 118, "count": 3 }`. Then the host s
 
 A session can change while the snapshot is being sent; its upsert then simply arrives
 again. When a channel closes, the client subscribes again on the new channel.
+
+A channel has at most one subscription. Calling `sessions.subscribe` again on the same
+channel replaces the existing one: the host answers with a new `{revision, count}`, sends
+a complete snapshot ending in `sessions.synced`, then carries on with live changes. It
+never runs two subscriptions side by side, so each change arrives once. This is how a
+client recovers from a gap. Live upserts sent before the new response are covered by
+the snapshot.
 
 ## Types
 
