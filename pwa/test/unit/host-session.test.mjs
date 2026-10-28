@@ -114,3 +114,31 @@ test('going back to a machine while its first attempt is pending keeps only one 
   assert.equal(open.length, 1, `open channels: ${open.map((o) => o.peerId)}`);
   assert.equal(open[0].channel, hosts.client.channel);
 });
+
+test('what the machine supports is kept from hello, and forgotten when another machine is chosen', async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }, { id: 'b', kind: 'host' }]);
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => {
+      const c = fakeClient(ch);
+      c.hello = async () => ({ protocol: 1, machine: { name: ch.peerId }, capabilities: ch.peerId === 'a' ? ['sessions.read', 'sessions.answer'] : ['sessions.read'] });
+      return c;
+    },
+  });
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  await flush();
+  assert.equal(hosts.phase, 'open');
+  assert.deepEqual(hosts.capabilities, ['sessions.read', 'sessions.answer']);
+  hosts.select('b');
+  assert.deepEqual(hosts.capabilities, []);
+  await flush();
+  connection.opens[1].resolve();
+  await flush();
+  await flush();
+  assert.deepEqual(hosts.capabilities, ['sessions.read']);
+  hosts.forget();
+  assert.deepEqual(hosts.capabilities, []);
+});

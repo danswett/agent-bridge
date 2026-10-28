@@ -5,7 +5,7 @@
 // `onmessage(message)` / `onclose(error)` callbacks, carrying already-parsed JSON. In the
 // app that is an end-to-end Noise channel (channels.js); in demo mode and the unit tests
 // it is an in-process fake. Nothing here knows which.
-import { Events, Ops, readHello, readSession } from './protocol.js';
+import { Events, Ops, readAnswerResult, readHello, readSession } from './protocol.js';
 
 export class HostError extends Error {
   // fromHost: the host answered with ok:false. Otherwise the request never got an answer
@@ -23,6 +23,7 @@ export class HostClient {
   #pending = new Map();
   #next = 0;
   #timeoutMs;
+  #answerTimeoutMs;
   #listeners = new Map();
   #lastSeq = null;
   // While a subscription's snapshot is arriving: the ids received since subscribing.
@@ -31,10 +32,13 @@ export class HostClient {
   closed = false;
   synced = false;
 
-  constructor(transport, { store, timeoutMs = 15000 } = {}) {
+  // Typing and confirming an answer can take a host a while, so session.answer gets longer
+  // than other requests before it counts as lost (and is resent with the same request).
+  constructor(transport, { store, timeoutMs = 15000, answerTimeoutMs = Math.max(timeoutMs, 30000) } = {}) {
     this.#transport = transport;
     this.store = store;
     this.#timeoutMs = timeoutMs;
+    this.#answerTimeoutMs = answerTimeoutMs;
     transport.onmessage = (m) => this.#receive(m);
     transport.onclose = (e) => this.#closed(e);
   }
@@ -51,13 +55,13 @@ export class HostClient {
     }
   }
 
-  request(op, data = {}) {
+  request(op, data = {}, { timeoutMs = this.#timeoutMs } = {}) {
     if (this.closed) { return Promise.reject(new HostError(op, 'the channel is closed')); }
     const id = ++this.#next;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.#pending.delete(id)) { reject(new HostError(op, 'timed out')); }
-      }, this.#timeoutMs);
+      }, timeoutMs);
       this.#pending.set(id, { op, resolve, reject, timer });
       // A send that fails (the relay went away under the channel) fails this request at
       // once, rather than leaving it to time out: S5's sleeping-iPhone lesson.
@@ -93,6 +97,12 @@ export class HostClient {
   async getSession(id) {
     const r = await this.request(Ops.sessionGet, { id });
     return r?.missing === true ? null : readSession(r);
+  }
+
+  // Answers a question: data is session.answer's { id, question, request, fields | text }.
+  // Resolves to { outcome, reason }; rejects only when no outcome arrived (HostError).
+  async answer(data, { timeoutMs = this.#answerTimeoutMs } = {}) {
+    return readAnswerResult(await this.request(Ops.sessionAnswer, data, { timeoutMs }));
   }
 
   // Starts (or restarts) the subscription. The host answers {revision, count}, then sends

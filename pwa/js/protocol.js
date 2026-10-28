@@ -13,6 +13,7 @@ export const Ops = Object.freeze({
   sessionsList: 'sessions.list',
   sessionGet: 'session.get',
   sessionsSubscribe: 'sessions.subscribe',
+  sessionAnswer: 'session.answer',
 });
 
 export const Events = Object.freeze({
@@ -21,7 +22,9 @@ export const Events = Object.freeze({
   sessionsSynced: 'sessions.synced',
 });
 
-export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read' });
+export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsAnswer: 'sessions.answer' });
+
+export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 
 const tolerant = (known, fallback) => (v) => (known.includes(v) ? v : fallback);
 export const readAgent = tolerant(['copilot', 'claude', 'codex'], 'unknown');
@@ -29,6 +32,9 @@ export const readStatus = tolerant(['working', 'waiting', 'idle'], 'idle');
 export const readToolStatus = tolerant(['running', 'done', 'failed'], 'done');
 export const readQuestionKind = tolerant(['form', 'approval'], 'form');
 export const readFieldType = tolerant(['choice', 'multi', 'boolean', 'text', 'number'], 'text');
+// An outcome from a newer host is unconfirmed: never delivered, and never a reason to
+// answer again.
+export const readOutcome = tolerant(Outcomes, 'unconfirmed');
 
 // Absent and null mean the same thing, so anything of the wrong type is treated as absent.
 const str = (v) => (typeof v === 'string' ? v : null);
@@ -139,4 +145,11 @@ export function readHello(raw) {
     machine: { id: str(m.id), name: str(m.name), os: str(m.os), hostVersion: str(m.hostVersion) },
     capabilities: Array.isArray(h.capabilities) ? h.capabilities.filter((c) => typeof c === 'string') : [],
   };
+}
+
+// session.answer's result: { outcome, reason }. Anything unreadable is unconfirmed, since
+// the host may have typed it.
+export function readAnswerResult(raw) {
+  const r = obj(raw) ?? {};
+  return { outcome: readOutcome(r.outcome), reason: str(r.reason) };
 }

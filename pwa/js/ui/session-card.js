@@ -7,7 +7,8 @@
 import { h, icon } from './dom.js';
 import { ago, duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
-import { renderQuestion } from './question-view.js';
+import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
+import { answerability } from '../answers.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 const STATUS_TEXT = { working: 'Working', waiting: 'Waiting on you', idle: 'Idle' };
@@ -31,10 +32,15 @@ export class SessionCard {
   #s = null;
   #last = {};
   #history = { loaded: false, loading: false };
+  #panel = null;
+  #receipt = null;
+  #orphan = null;
 
   // fetchDetail(id) -> Promise<Session|null>, for the tool history (session.get).
-  constructor(session, { folds, fetchDetail, machineName }) {
-    Object.assign(this, { folds, fetchDetail, machineName });
+  // answering() -> { service, hostId, capabilities } | null: who answers questions, and
+  // whether the connected machine takes answers at all.
+  constructor(session, { folds, fetchDetail, machineName, answering = () => null }) {
+    Object.assign(this, { folds, fetchDetail, machineName, answering });
     const n = ++seq;
     this.ids = { title: `s${n}-title`, body: `s${n}-body` };
     this.#build();
@@ -132,9 +138,7 @@ export class SessionCard {
       e.toolSummary.textContent = t.summary ?? '';
     }
 
-    if (this.#changed('question', s.question)) {
-      e.question.replaceChildren(s.question ? renderQuestion(s.question, { machineName: this.machineName }) : '');
-    }
+    this.#renderQuestion(s);
     if (this.#changed('response', s.activity.response ?? '')) {
       e.response.replaceChildren(renderMarkdown(s.activity.response ?? ''));
     }
@@ -163,6 +167,94 @@ export class SessionCard {
 
     // An open history follows the session: refetched (at most every 2 s) as it changes.
     if (!first && e.history.open && this.#changed('historyAt', s.updatedAt)) { this.#scheduleHistory(); }
+  }
+
+  // The card is going: its session ended or another machine is shown.
+  dispose() {
+    this.#panel?.destroy();
+    this.#panel = null;
+    this.#dropReceipt();
+    clearTimeout(this.#history.timer);
+  }
+
+  // The machine's capabilities changed (a reconnect to another version of its host).
+  refreshQuestion() { if (this.#s) { this.#renderQuestion(this.#s); } }
+
+  #renderQuestion(s) {
+    const q = s.question;
+    const ctx = this.answering();
+    const able = q ? answerability(q, ctx?.capabilities ?? []) : null;
+    const answerable = !!(able?.ok && ctx?.service);
+    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null])) { return; }
+    const old = this.#panel;
+    const sameQuestion = !!(old && q && old.questionId === q.id && answerable && old.answering.hostId === ctx.hostId);
+    if (old && !sameQuestion) {
+      // The question changed or went while it was being answered. Text the person typed
+      // and hasn't sent is kept on the card, not dropped with the form; an answer that went
+      // keeps saying what became of it.
+      const draft = old.unsentText();
+      const entry = old.entry;
+      if (draft) {
+        this.#orphan = { text: draft, why: !q || q.id !== old.questionId ? 'changed' : 'unanswerable' };
+      } else if (entry) {
+        this.#watchReceipt(old.answering, old.questionId);
+      }
+    }
+    old?.destroy();
+    this.#panel = null;
+    let view = '';
+    if (q && answerable) {
+      this.#panel = new QuestionPanel(q, {
+        machineName: this.machineName,
+        answering: { service: ctx.service, hostId: ctx.hostId, sessionId: s.id },
+        state: sameQuestion ? old.state : null,
+      });
+      view = this.#panel.element;
+    } else if (q) {
+      view = renderQuestion(q, { machineName: this.machineName, why: able.why });
+    }
+    // A new question replaces a receipt that has said its last word.
+    if (q && this.#receipt?.final) { this.#dropReceipt(); }
+    this.els.question.replaceChildren(...[this.#orphanView(), this.#receipt?.element, view].filter(Boolean));
+  }
+
+  #watchReceipt({ service, hostId, sessionId }, questionId) {
+    this.#dropReceipt();
+    const element = h('p', { class: 'answer-receipt', role: 'status', 'aria-live': 'polite' });
+    const receipt = { element, final: false, unwatch: null };
+    const show = (entry) => {
+      if (!entry) { return; }
+      const { text, tone } = describeAnswer(entry, this.machineName);
+      element.className = `answer-receipt ${tone}`;
+      element.dataset.answer = entry.state === 'done' ? entry.outcome : entry.state;
+      element.textContent = `Your answer: ${text}`;
+      receipt.final = entry.state === 'done';
+    };
+    receipt.unwatch = service.watch(hostId, sessionId, questionId, show);
+    show(service.get(hostId, sessionId, questionId));
+    this.#receipt = receipt;
+  }
+
+  #dropReceipt() {
+    this.#receipt?.unwatch?.();
+    this.#receipt?.element.remove();
+    this.#receipt = null;
+  }
+
+  #orphanView() {
+    const o = this.#orphan;
+    if (!o) { return null; }
+    if (!o.element) {
+      const ta = h('textarea', { class: 'text-input', readonly: true, rows: 3, 'aria-label': 'What you typed' });
+      ta.value = o.text;
+      o.element = h('div', { class: 'question-changed', role: 'alert' },
+        h('p', { class: 'note warn' }, o.why === 'changed'
+          ? 'The question changed before you sent your answer. It was answered at the machine, or the agent moved on. What you typed is kept here.'
+          : 'This question can no longer be answered from here. What you typed is kept here.'),
+        ta,
+        h('button', { type: 'button', class: 'button secondary', onclick: () => { this.#orphan = null; o.element.remove(); } }, 'Dismiss'));
+    }
+    return o.element;
   }
 
   refreshTimes(now = Date.now()) {
