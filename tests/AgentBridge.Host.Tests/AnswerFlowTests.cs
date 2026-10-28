@@ -213,6 +213,38 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Refused_stale_and_busy_outcomes_are_remembered_too_and_a_repeat_types_nothing()
+    {
+        var ch = await OpenAsync();
+
+        // Refused while agent-ha-bridge runs; a repeat after it stops is still that outcome.
+        probe.Reason = "agent-ha-bridge is running for this user";
+        var refusedId = Guid.NewGuid().ToString();
+        Assert.Equal("refused", (await AnswerAsync(ch, new { pick = "b" }, refusedId)).Outcome);
+        probe.Reason = null;
+        Assert.Equal(("refused", "agent-ha-bridge is running for this user"), await AnswerAsync(ch, new { pick = "b" }, refusedId));
+
+        // Stale for a question not asked; the same request stays stale.
+        var staleId = Guid.NewGuid().ToString();
+        Assert.Equal("stale", (await AnswerAsync(ch, new { pick = "b" }, staleId, question: "q0")).Outcome);
+        Assert.Equal("stale", (await AnswerAsync(ch, new { pick = "b" }, staleId, question: "q1")).Outcome);
+
+        // Busy behind another answer; repeated once that one has finished, still busy.
+        var release = new TaskCompletionSource();
+        injector.Gate = release.Task;
+        injector.OnInject = () => Fixture.Append(events, Recorded("q1", new { pick = "b" }));
+        var first = AnswerAsync(ch, new { pick = "b" });
+        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the first answer to start typing", Patience);
+        var busyId = Guid.NewGuid().ToString();
+        Assert.Equal("busy", (await AnswerAsync(ch, new { pick = "c" }, busyId)).Outcome);
+        release.SetResult();
+        Assert.Equal("delivered", (await first).Outcome);
+        Assert.Equal("busy", (await AnswerAsync(ch, new { pick = "c" }, busyId)).Outcome);
+
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
     public async Task A_repeated_request_returns_the_first_outcome_and_never_types_again()
     {
         var release = new TaskCompletionSource();

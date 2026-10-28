@@ -70,9 +70,10 @@ In order, for every answer:
 1. Platform, then agent-ha-bridge (below).
 2. The session is live and its current question has the id the client sent (`stale`
    otherwise); the agent and question kind are supported; `Answers.Check` passes.
-3. One answer per session at a time (`busy`). A request UUID's outcome is remembered for
-   15 minutes and returned for a resend, which types nothing; a resend while the first is
-   still being typed waits for that outcome.
+3. One answer per session at a time (`busy` for a different request; a resend of the
+   request being typed waits for its outcome instead). Every request UUID's outcome,
+   whatever it was (`stale`, `refused` and `busy` included), is remembered for 15 minutes
+   and returned for a resend, which types nothing.
 4. The session's process is still the live agent process; it does not run elevated
    (integrity level High or above, or unreadable, is refused).
 5. One answer is typed at a time across sessions, and its turn is taken before these last
