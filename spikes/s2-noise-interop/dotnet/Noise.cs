@@ -34,7 +34,12 @@ public static class NoiseConst
 
 public sealed class P256KeyPair : IDisposable
 {
-    readonly ECDiffieHellman key;
+    readonly ECDiffieHellman? key;
+    // A key whose private half lives elsewhere (a TPM, spike S6): only its public key is
+    // here, and DH is delegated. Everything above this class is unchanged by where the
+    // key lives.
+    readonly Func<byte[], byte[]>? agree;
+    readonly IDisposable? owner;
     public byte[] Public { get; }
 
     P256KeyPair(ECDiffieHellman key)
@@ -44,7 +49,21 @@ public sealed class P256KeyPair : IDisposable
         Public = EncodePoint(p.Q.X!, p.Q.Y!);
     }
 
+    P256KeyPair(byte[] pub, Func<byte[], byte[]> agree, IDisposable? owner)
+    {
+        AssertOnCurve(pub);
+        Public = pub;
+        this.agree = agree;
+        this.owner = owner;
+    }
+
     public static P256KeyPair Generate() => new(ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256));
+
+    // `agree` returns the raw 32-byte X coordinate, as DH below does; it is only ever
+    // called with a point already checked to be on the curve.
+    public static P256KeyPair FromAgreement(byte[] pub, Func<byte[], byte[]> agree, IDisposable? owner = null) => new(pub, agree, owner);
+
+    public bool IsExportable => key != null;
 
     public static P256KeyPair FromParameters(byte[] d, byte[] x, byte[] y)
     {
@@ -55,6 +74,7 @@ public sealed class P256KeyPair : IDisposable
 
     public (byte[] D, byte[] X, byte[] Y) Export()
     {
+        if (key is null) { throw new CryptographicException("this key's private half cannot leave where it is kept"); }
         var p = key.ExportParameters(true);
         return (p.D!, p.Q.X!, p.Q.Y!);
     }
@@ -62,13 +82,19 @@ public sealed class P256KeyPair : IDisposable
     public byte[] Dh(byte[] peerPublic)
     {
         AssertOnCurve(peerPublic);
+        if (agree != null)
+        {
+            var z = agree(peerPublic);
+            if (z.Length != NoiseConst.DhLen) { throw new CryptographicException($"key agreement returned {z.Length} bytes"); }
+            return z;
+        }
         using var peer = ECDiffieHellman.Create();
         peer.ImportParameters(new ECParameters
         {
             Curve = ECCurve.NamedCurves.nistP256,
             Q = new ECPoint { X = peerPublic[1..33], Y = peerPublic[33..65] },
         });
-        return key.DeriveRawSecretAgreement(peer.PublicKey);
+        return key!.DeriveRawSecretAgreement(peer.PublicKey);
     }
 
     // Checked explicitly rather than left to the platform's import, which differs by
@@ -98,7 +124,11 @@ public sealed class P256KeyPair : IDisposable
         return b;
     }
 
-    public void Dispose() => key.Dispose();
+    public void Dispose()
+    {
+        key?.Dispose();
+        owner?.Dispose();
+    }
 }
 
 public sealed class CipherState

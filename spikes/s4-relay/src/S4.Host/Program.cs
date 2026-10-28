@@ -5,7 +5,9 @@
 //   call    --relay URL --to NAME|ID [--count N]
 //                                          open an E2E channel to a peer, snapshot, N pings
 //   whoami
-// Every command takes --profile P (default "default") to keep several identities on one machine.
+// Every command takes --profile P (default "default") to keep several identities on one machine,
+// and --key tpm|dpapi|file to choose where a new profile's device key is kept (default: the
+// TPM when there is one, else DPAPI; spike S6). An existing profile keeps its key where it is.
 using System.Diagnostics;
 using System.Text.Json;
 using S4;
@@ -13,13 +15,20 @@ using S4;
 var mode = args.Length > 0 ? args[0] : "";
 var profile = Arg("--profile") ?? "default";
 var relayArg = Arg("--relay");
-var id = Identity.Load(profile);
+var id = Identity.Load(profile, Arg("--key") switch
+{
+    null => null,
+    "tpm" => S6.KeyStorage.Tpm,
+    "dpapi" => S6.KeyStorage.Dpapi,
+    "file" => S6.KeyStorage.File,
+    var k => throw new ArgumentException($"--key must be tpm, dpapi or file, not {k}"),
+});
 var name = Arg("--name") ?? $"{Environment.MachineName}{(profile == "default" ? "" : $"/{profile}")}";
 
 switch (mode)
 {
     case "whoami":
-        Console.WriteLine($"device {Wire.DeviceId(id.Key.Public)}  account {id.Account?.Login ?? "(not signed in)"}  key file {id.Folder}");
+        Console.WriteLine($"device {Wire.DeviceId(id.Key.Public)}  account {id.Account?.Login ?? "(not signed in)"}  key in {id.Storage}  folder {id.Folder}");
         return 0;
 
     case "sign-in":

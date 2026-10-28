@@ -127,6 +127,10 @@ headless browsers refuse notification permission, so this is where they are pinn
    - fails a send on a dead connection visibly
    - only says "you can lock the phone now" once the host has confirmed the request
 
+   Verified on the iPhone afterwards: the app was connected, the phone was locked for
+   about 30 s, and on unlock the app was back on the relay with a new channel to its
+   host within 6 s, with nothing pressed.
+
    Notifications must never depend on the phone being connected. The host now also
    accepts a question from its own machine (`ask.txt` in the profile folder), as an
    agent's `ask_user` would ask one. The same holds for the host's own connection. A
@@ -152,3 +156,8 @@ headless browsers refuse notification permission, so this is where they are pinn
   it. With several hosts, a phone registers with each one it connects to.
 * Native apps (APNs/FCM directly) would add answer buttons and text input; this spike
   does not change that plan.
+* **An installed PWA keeps running the code it has until it is restarted.** After the
+  reconnect fix was deployed, the phone's app, still open from before, had the old code
+  and had to be force-closed to get the new one. The product's PWA should notice a new
+  version (the service worker sees it) and offer to reload, so a fix reaches phones
+  without the user knowing to force-close.

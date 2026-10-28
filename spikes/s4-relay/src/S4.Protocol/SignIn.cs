@@ -38,36 +38,46 @@ public static class SignIn
     }
 }
 
-// Spike storage: a key file in the profile folder. The product keeps the private key in
-// the TPM or DPAPI (design §5.7, spike S6).
+// A profile folder: the device key, and the account it signed in to. A profile made before
+// S6 keeps its plain key.json; a new one keeps its key in the TPM, or DPAPI without one
+// (spike S6, design §5.7).
 public sealed class Identity
 {
     public string Folder { get; }
     public P256KeyPair Key { get; }
+    public S6.KeyStorage Storage { get; }
     public SignInResult? Account { get; private set; }
 
-    Identity(string folder, P256KeyPair key, SignInResult? account) { Folder = folder; Key = key; Account = account; }
+    Identity(string folder, P256KeyPair key, S6.KeyStorage storage, SignInResult? account) { Folder = folder; Key = key; Storage = storage; Account = account; }
 
-    public static Identity Load(string profile)
+    public static Identity Load(string profile, S6.KeyStorage? prefer = null)
     {
         var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AgentBridgeS4", profile);
         Directory.CreateDirectory(folder);
         var keyFile = Path.Combine(folder, "key.json");
         P256KeyPair key;
+        S6.KeyStorage storage;
         if (File.Exists(keyFile))
         {
             var k = JsonDocument.Parse(File.ReadAllText(keyFile)).RootElement;
             key = P256KeyPair.FromParameters(Wire.Unhex(k.GetProperty("d").GetString()!), Wire.Unhex(k.GetProperty("x").GetString()!), Wire.Unhex(k.GetProperty("y").GetString()!));
+            storage = S6.KeyStorage.File;
+        }
+        else if (S6.DeviceKeys.Exists(folder) || (OperatingSystem.IsWindows() && prefer != S6.KeyStorage.File))
+        {
+            var dk = S6.DeviceKeys.LoadOrCreate(folder, prefer);
+            (key, storage) = (dk.Key, dk.Storage);
         }
         else
         {
             key = P256KeyPair.Generate();
             var (d, x, y) = key.Export();
             File.WriteAllText(keyFile, JsonSerializer.Serialize(new { d = Wire.Hex(d), x = Wire.Hex(x), y = Wire.Hex(y) }));
+            storage = S6.KeyStorage.File;
         }
         var accountFile = Path.Combine(folder, "account.json");
         var account = File.Exists(accountFile) ? JsonSerializer.Deserialize<SignInResult>(File.ReadAllText(accountFile)) : null;
-        return new Identity(folder, key, account);
+        return new Identity(folder, key, storage, account);
     }
 
     public void Save(SignInResult account)
