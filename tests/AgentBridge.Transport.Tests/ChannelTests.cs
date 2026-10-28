@@ -227,6 +227,53 @@ public class ChannelTests
     }
 
     [Fact]
+    public async Task A_channel_whose_peer_leaves_within_the_presence_grace_still_ends_once_the_grace_has_passed()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(1, "octo");
+        var host = await relay.ConnectAsync(token, "host", "host");
+        host.Hub.PresenceGrace = TimeSpan.FromSeconds(1);
+        var accepted = new TaskCompletionSource<SecureChannel>();
+        host.Hub.Accepted += ch => accepted.TrySetResult(ch);
+        var peer = await relay.ConnectAsync(token, "quick", "app");
+        await peer.Relay.WaitForPeerAsync(p => p.Id == host.Id, TimeSpan.FromSeconds(10));
+        await peer.Hub.OpenAsync(host.Id);
+        var atHost = await accepted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Gone well inside the grace, and presence never changes again.
+        await peer.DisposeAsync();
+        await Wait.UntilAsync(() => host.Relay.Presence.All(p => p.Id != peer.Id), "presence to drop the peer");
+        Assert.True(atHost.IsOpen);
+
+        await atHost.Closed.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(0, host.Hub.ChannelCount);
+    }
+
+    [Fact]
+    public async Task A_channel_ends_when_the_relay_says_its_peer_cannot_be_reached()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(1, "octo");
+        var host = await relay.ConnectAsync(token, "host", "host");
+        // Presence alone would never end it: only the relay's undeliverable notice can.
+        host.Hub.PresenceGrace = TimeSpan.FromHours(1);
+        var accepted = new TaskCompletionSource<SecureChannel>();
+        host.Hub.Accepted += ch => accepted.TrySetResult(ch);
+        var peer = await relay.ConnectAsync(token, "gone", "app");
+        await peer.Relay.WaitForPeerAsync(p => p.Id == host.Id, TimeSpan.FromSeconds(10));
+        await peer.Hub.OpenAsync(host.Id);
+        var atHost = await accepted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await peer.DisposeAsync();
+        await Wait.UntilAsync(() => host.Relay.Presence.All(p => p.Id != peer.Id), "presence to drop the peer");
+
+        // The frame leaves (the host cannot know yet); the relay answers undeliverable.
+        await atHost.SendEventAsync("session.upsert", new { });
+
+        await atHost.Closed.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(0, host.Hub.ChannelCount);
+    }
+
+    [Fact]
     public async Task A_channels_requests_fail_at_once_when_its_relay_connection_ends()
     {
         var (relay, host, app) = await PairAsync();

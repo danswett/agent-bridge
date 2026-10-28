@@ -8,6 +8,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/AgentBridge.Host.Core.Tests/AgentBridge.Host.Core.Tests.csproj" />
+    <Project Path="tests/AgentBridge.Host.Tests/AgentBridge.Host.Tests.csproj" />
     <Project Path="tests/AgentBridge.Protocol.Tests/AgentBridge.Protocol.Tests.csproj" />
     <Project Path="tests/AgentBridge.Transport.Tests/AgentBridge.Transport.Tests.csproj" />
   </Folder>

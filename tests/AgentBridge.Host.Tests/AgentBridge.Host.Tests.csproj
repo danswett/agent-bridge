@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="9.10.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The host serves real fixture sessions to a real client through the in-process relay
+         the transport tests run, so this reuses both rather than copying them. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\..\src\AgentBridge.Host\AgentBridge.Host.csproj" />
+    <ProjectReference Include="..\AgentBridge.Transport.Tests\AgentBridge.Transport.Tests.csproj" />
+    <Compile Include="..\AgentBridge.Host.Core.Tests\Fixture.cs" Link="Fixture.cs" />
+  </ItemGroup>
+
+</Project>

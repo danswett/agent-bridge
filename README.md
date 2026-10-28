@@ -34,7 +34,7 @@ The protocol between them is specified in [docs/protocol](docs/protocol/v1-sessi
 |---|---|
 | `src/AgentBridge.Protocol` | Bridge Protocol v1 records and their JSON |
 | `src/AgentBridge.Host.Core` | Discovers the live Copilot, Claude and Codex sessions on a machine and keeps each as a protocol `Session`, strictly read-only: it never writes, locks, renames or deletes anything the agents or agent-ha-bridge own |
-| `src/AgentBridge.Host` | `agent-bridge-host`: for now `sessions` (one scan, as JSON), `get <id>` and `watch` (a line per change), to check what the core sees on a machine |
+| `src/AgentBridge.Host` | `agent-bridge-host`: `sign-in --relay <url>` then `serve` shows the machine's sessions to the user's devices through the relay (Protocol v1, read-only), reconnecting on its own; `sessions`, `get <id>` and `watch` check what the core sees |
 | `src/AgentBridge.Transport` | The end-to-end channel (Noise XX over P-256), the relay client, channels with requests, responses and events, sign-in, device keys (TPM, DPAPI or an owner-only file) and Web Push encryption. Promoted from spikes S2, S4, S5 and S6 |
 | `src/AgentBridge.Relay` | The relay (ASP.NET Core), promoted from S4. `docker build -f src/AgentBridge.Relay/Dockerfile .` from the repository root |
 | `tests/` | `dotnet test AgentBridge.slnx`, on Windows and Linux in CI |
