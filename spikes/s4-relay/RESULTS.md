@@ -58,7 +58,7 @@ Noise ciphertext.
 
 ## Results
 
-### Offline checks (`s4-devstack check`, in CI): 20 of 20 pass
+### Offline checks (`s4-devstack check`, in CI): 21 of 21 pass
 
 | Check | Result |
 |---|---|
@@ -80,6 +80,7 @@ Noise ciphertext.
 | A socket from a web origin that is not allowed is refused | Pass |
 | The sign-in API answers CORS preflight for allowed origins only | Pass |
 | A host bounds the channels it keeps: a full table refuses more, unfinished handshakes expire, and a departed peer's channels go | Pass |
+| A channel opened while the target is still attaching its handler is not lost | Pass |
 | The relay's logs carry no tokens or payloads | Pass |
 | A relay that is stopping tells connected devices to reconnect at once (1012) | Pass |
 
@@ -193,6 +194,10 @@ Review and a flaky check found two more things the product must carry:
   then passed 8 times in 8.
 * The per-account device cap is checked and taken under one lock, so concurrent
   admissions cannot both see room.
+* **A device must hold data that arrives while it is still joining.** Peers learn of a
+  device from presence before it has attached its handler, and Noise never resends a
+  lost Msg1, so a dropped frame meant a channel attempt that timed out. The client now
+  queues data frames in order until a handler is attached (bounded at 1,024).
 
 ## Limitations
 

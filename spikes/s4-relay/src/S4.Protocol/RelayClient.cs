@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using S2.Noise;
 
 namespace S4;
@@ -21,15 +22,34 @@ public sealed class RelayClient : IAsyncDisposable
     readonly ClientWebSocket ws;
     readonly SemaphoreSlim sendLock = new(1, 1);
     Task loop = Task.CompletedTask;
+    Task dispatch = Task.CompletedTask;
+
+    // Data can arrive before anyone is listening: peers learn of a device from presence,
+    // which the relay sends before "ready", and the caller attaches its handler only after
+    // ConnectAsync returns. A dropped Msg1 is never resent, so the channel attempt would
+    // time out. Every data frame goes through this queue, in order, to one dispatcher that
+    // starts once a handler is attached. Bounded so a client that never attaches one cannot
+    // be made to hold unlimited data.
+    readonly Channel<(string From, byte[] Payload)> inbound = System.Threading.Channels.Channel.CreateBounded<(string, byte[])>(
+        new BoundedChannelOptions(1024) { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.DropWrite });
+    readonly TaskCompletionSource<Func<string, byte[], Task>> handler = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public string DeviceId { get; }
     public string AccountId { get; private set; } = "";
     public string Login { get; private set; } = "";
     public IReadOnlyList<PresenceEntry> Presence { get; private set; } = [];
 
-    // Awaited in order on the receive loop, so frames from one sender are handled in the
-    // order they were sent, which Noise transport messages require.
-    public Func<string, byte[], Task>? OnData { get; set; }
+    // Called in order, one frame at a time, so frames from one sender are handled in the
+    // order they were sent, which Noise transport messages require. Set once.
+    public Func<string, byte[], Task>? OnData
+    {
+        get => handler.Task.IsCompletedSuccessfully ? handler.Task.Result : null;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            if (!handler.TrySetResult(value)) { throw new InvalidOperationException("the data handler is already set"); }
+        }
+    }
     public event Action<IReadOnlyList<PresenceEntry>>? PresenceChanged;
     public event Action<string>? Undeliverable;
 
@@ -75,7 +95,27 @@ public sealed class RelayClient : IAsyncDisposable
             throw;
         }
         c.loop = Task.Run(c.RunAsync);
+        c.dispatch = Task.Run(c.DispatchAsync);
         return c;
+    }
+
+    void Enqueue(byte[] data)
+    {
+        if (data.Length > 1 + Wire.IdBytes && data[0] == Wire.DataFrame)
+        {
+            inbound.Writer.TryWrite((Wire.Hex(data.AsSpan(1, Wire.IdBytes)), data[(1 + Wire.IdBytes)..]));
+        }
+    }
+
+    async Task DispatchAsync()
+    {
+        var h = await handler.Task;
+        await foreach (var (from, payload) in inbound.Reader.ReadAllAsync())
+        {
+            // One frame the handler cannot cope with must not stop delivery of the rest.
+            try { await h(from, payload); }
+            catch (Exception) { }
+        }
     }
 
     public async Task SendAsync(string peerId, byte[] payload, CancellationToken ct = default)
@@ -108,7 +148,7 @@ public sealed class RelayClient : IAsyncDisposable
         {
             var frame = await Wire.ReceiveAsync(ws, Wire.MaxFrame, ct)
                 ?? throw new RelayRefusedException(ws.CloseStatus, ws.CloseStatusDescription);
-            if (frame.Type != WebSocketMessageType.Text) { continue; }
+            if (frame.Type != WebSocketMessageType.Text) { Enqueue(frame.Data); continue; }
             var j = JsonDocument.Parse(frame.Data).RootElement;
             var t = j.GetProperty("t").GetString();
             if (t == expected) { return j; }
@@ -134,15 +174,15 @@ public sealed class RelayClient : IAsyncDisposable
                         case "undeliverable": Undeliverable?.Invoke(j.GetProperty("to").GetString()!); break;
                     }
                 }
-                else if (data.Length > 1 + Wire.IdBytes && data[0] == Wire.DataFrame && OnData is { } handler)
-                {
-                    await handler(Wire.Hex(data.AsSpan(1, Wire.IdBytes)), data[(1 + Wire.IdBytes)..]);
-                }
+                else { Enqueue(data); }
             }
         }
         catch (WebSocketException) { }
         // A malformed control message from the relay ends the connection; the caller reconnects.
         catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException or FormatException) { }
+        inbound.Writer.TryComplete();
+        // Lets the dispatcher finish even if nobody ever attached a handler.
+        handler.TrySetResult((_, _) => Task.CompletedTask);
         if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {
             try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, default); } catch (WebSocketException) { }
@@ -183,6 +223,7 @@ public sealed class RelayClient : IAsyncDisposable
             catch (Exception e) when (e is WebSocketException or OperationCanceledException or InvalidOperationException) { }
         }
         try { await loop.WaitAsync(TimeSpan.FromSeconds(2)); } catch (TimeoutException) { }
+        try { await dispatch.WaitAsync(TimeSpan.FromSeconds(2)); } catch (TimeoutException) { }
         ws.Dispose();
     }
 }

@@ -312,6 +312,22 @@ if (mode == "check")
         return (whenFull == 4 && afterExpiry == 1 && withPeer == 2 && afterLeave == 0, $"full {whenFull}, after expiry {afterExpiry}, with peer {withPeer}, after both left {afterLeave}");
     });
 
+    await Check("a channel opened while the target is still attaching its handler is not lost", async () =>
+    {
+        using var lateKey = P256KeyPair.Generate();
+        // Connected, but with no hub yet: the window between ConnectAsync and attaching one.
+        await using var late = await RelayClient.ConnectAsync(url, octoAccount.Token, lateKey, "late-host", "host");
+        var caller = await Connect(octoAccount, "early-caller", "app");
+        await caller.Relay.WaitForPeerAsync(p => p.Id == late.DeviceId, TimeSpan.FromSeconds(5));
+        var open = caller.Hub.OpenAsync(late.DeviceId, TimeSpan.FromSeconds(5));
+        await Task.Delay(500);
+        _ = new ChannelHub(late, lateKey, "late-host", "host") { Handler = (ch, op, data) => DemoService.HandleAsync("late-host", op, data) };
+        var ch = await open;
+        var reply = await ch.RequestAsync("ping");
+        await caller.Relay.DisposeAsync();
+        return (reply.GetProperty("ok").GetBoolean(), "Msg1 was held until the hub attached");
+    });
+
     await Check("the relay's logs carry no tokens or payloads", () =>
     {
         var all = string.Join("\n", logs);
