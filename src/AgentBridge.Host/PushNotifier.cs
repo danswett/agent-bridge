@@ -418,9 +418,13 @@ public sealed class PushNotifier : IAsyncDisposable
         if (r.Status is 404 or 410)
         {
             // The browser unsubscribed, or the subscription expired: it can never be used again.
-            store.Remove(o.Device);
-            Forget(o.Device);
-            log($"push subscription of {sub.Name} is gone ({r.Status}); removed");
+            // Only that subscription: the device may have registered a new one while this push
+            // was on its way, and that one, with what is queued for it, stays.
+            if (store.RemoveIfEndpoint(o.Device, sub.Endpoint))
+            {
+                Forget(o.Device);
+                log($"push subscription of {sub.Name} is gone ({r.Status}); removed");
+            }
             return;
         }
         var transient = r.Status is 429 or >= 500 || (r.Status == 0 && r.Error is "rate-limited" or "unreachable");

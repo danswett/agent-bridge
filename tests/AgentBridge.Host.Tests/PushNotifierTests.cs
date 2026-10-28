@@ -281,6 +281,29 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task A_gone_answer_for_an_old_endpoint_keeps_the_subscription_the_device_registered_meanwhile()
+    {
+        Start();
+        Subscribe(Phone, endpoint: "https://web.push.apple.com/old/" + Phone);
+        // While the push to the old endpoint is on its way, the browser renews its subscription
+        // and the app registers the new one; then the push service says the old one is gone.
+        sender.Respond = e =>
+        {
+            if (!e.Contains("/old/")) { return new PushResult(201, null); }
+            Subscribe(Phone, endpoint: "https://web.push.apple.com/new/" + Phone);
+            return new PushResult(410, null);
+        };
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+
+        Assert.Equal("https://web.push.apple.com/new/" + Phone, Assert.Single(store.All).Endpoint);
+        Assert.Equal(1, PushStore.Load(StorePath, Account).Count);
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal("https://web.push.apple.com/new/" + Phone, Assert.Single(sender.Sent).Endpoint);
+    }
+
+    [Fact]
     public async Task A_notice_lost_to_a_dropped_relay_connection_is_sent_once_after_reconnecting()
     {
         Start();

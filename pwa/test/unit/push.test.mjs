@@ -244,3 +244,33 @@ test('turning notifications off while a registration waits for the relay key lea
   assert.deepEqual(host.requests.map((q) => q.op), ['push.subscribe', 'push.unsubscribe'], 'the machine heard off last');
   assert.equal(host.requests[1].data.endpoint, host.requests[0].data.endpoint);
 });
+test('signing out unsubscribes at once, even with a registration stuck waiting for the relay key, which then stands down', async () => {
+  const win = browser({ permission: 'granted' });
+  const pm = pushManager();
+  const existing = await pm.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlToBytes(KEY) });
+  let release;
+  const keyArrives = new Promise((res) => { release = res; });
+  const store = storage();
+  store.setItem('agent-bridge.app.notify', 'on');
+  const r = new PushRegistrar({
+    win,
+    storage: store,
+    registration: async () => ({ pushManager: pm }),
+    fetchKey: async () => { await keyArrives; return base64UrlToBytes(KEY); },
+    appUrl: 'https://danswett.github.io/agent-bridge/app/',
+    device: 'iPhone · Agent Bridge',
+  });
+  const host = client();
+  const registering = r.register(host, host.capabilities);
+  await new Promise((res) => { setImmediate(res); });
+
+  // The page navigates away soon after; the key never comes before it does.
+  await r.forget();
+  assert.equal(existing.unsubscribed, true, 'unsubscribed before the key arrived');
+
+  release();
+  assert.equal(await registering, false);
+  assert.equal(pm.current, null, 'nothing made again afterwards');
+  assert.equal(pm.subscribed.length, 1);
+  assert.deepEqual(host.requests, []);
+});

@@ -61,6 +61,8 @@ export class PushRegistrar {
   #listeners = new Set();
   #key = null;
   #chain = Promise.resolve();
+  // Goes up when signing out; every operation still in flight checks it before going on.
+  #generation = 0;
   // 'on' or 'off' while turning notifications on or off, '' otherwise; error is the last
   // failure's message, '' after a success.
   busy = '';
@@ -99,7 +101,7 @@ export class PushRegistrar {
             ? 'Notifications are blocked for Agent Bridge. Allow them in Settings, then try again.'
             : 'Notifications were not allowed.');
         }
-        await this.#subscription(true);
+        if (!await this.#subscription(true, this.#generation)) { return; }
         this.#write('on');
         if (client) { await this.#register(client, capabilities); }
       } catch (e) {
@@ -149,7 +151,8 @@ export class PushRegistrar {
 
   async #register(client, capabilities) {
     if (!this.enabled || !capabilities.includes(Capabilities.push)) { return false; }
-    const sub = await this.#subscription(true);
+    const sub = await this.#subscription(true, this.#generation);
+    if (!sub) { return false; }
     const json = sub.toJSON();
     await client.request(Ops.pushSubscribe, {
       endpoint: json.endpoint,
@@ -160,28 +163,36 @@ export class PushRegistrar {
     return true;
   }
 
-  // Signing out: this account's machines must not keep notifying this device.
-  forget() {
+  // Signing out: this account's machines must not keep notifying this device. Not queued
+  // behind a registration, which may wait on the relay for as long as it likes while the
+  // page is about to go: it unsubscribes now, and anything still in flight is told to stand
+  // down (#generation) and undo what it makes.
+  async forget() {
     this.#write(null);
-    return this.#serial(async () => {
-      const sub = await this.#subscription(false).catch(() => null);
-      await sub?.unsubscribe().catch(() => {});
-      this.#emit();
-    });
+    this.#generation++;
+    const sub = await this.#subscription(false).catch(() => null);
+    await sub?.unsubscribe().catch(() => {});
+    this.#emit();
   }
 
   // The browser's subscription, made (or remade, if the relay's key has changed since) when
-  // `create` is set.
-  async #subscription(create) {
+  // `create` is set; null when signing out overtook the making of it.
+  async #subscription(create, generation = this.#generation) {
     const reg = await this.registration();
     let sub = await reg.pushManager.getSubscription();
     if (!create) { return sub; }
     this.#key ??= await this.fetchKey();
+    if (generation !== this.#generation) { return null; }
     if (sub && !sameBytes(sub.options?.applicationServerKey, this.#key)) {
       await sub.unsubscribe().catch(() => {});
       sub = null;
     }
-    return sub ?? reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: this.#key });
+    sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: this.#key });
+    if (generation !== this.#generation) {
+      await sub.unsubscribe().catch(() => {});
+      return null;
+    }
+    return sub;
   }
 
   #setting() { try { return this.storage?.getItem(SETTING) ?? null; } catch { return null; } }

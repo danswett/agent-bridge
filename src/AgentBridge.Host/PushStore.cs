@@ -118,6 +118,19 @@ public sealed class PushStore
         }
     }
 
+    // The device's subscription only if it is still the one at this endpoint: checked and
+    // removed under the lock a registration takes, so a newer one is never lost.
+    public bool RemoveIfEndpoint(string device, string endpoint)
+    {
+        lock (gate)
+        {
+            if (byDevice.GetValueOrDefault(device)?.Endpoint != endpoint) { return false; }
+            byDevice.Remove(device);
+            Save();
+            return true;
+        }
+    }
+
     void Save()
     {
         if (path is null) { return; }
