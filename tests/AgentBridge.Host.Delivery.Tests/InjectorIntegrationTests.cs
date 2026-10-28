@@ -30,18 +30,20 @@ public sealed class WindowsTheoryAttribute : TheoryAttribute
 public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDisposable
 {
     readonly string root = Directory.CreateTempSubdirectory("abinj-").FullName;
-    readonly List<int> started = [];
+    // Each echo by the handle CreateProcess gave, kept open until the end: some tests let an
+    // echo exit, and only a handle, never its id, is sure to reach the process started here.
+    readonly List<nint> started = [];
 
     static string Worker => Environment.GetEnvironmentVariable("AGENT_BRIDGE_INJECTOR") is { Length: > 0 } set
         ? set : Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName);
 
     public void Dispose()
     {
-        foreach (var pid in started)
+        foreach (var handle in started)
         {
-            try { using var p = Process.GetProcessById(pid); p.Kill(); p.WaitForExit(5000); }
-            catch (ArgumentException) { }
-            catch (InvalidOperationException) { }
+            TerminateProcess(handle, 1);
+            WaitForSingleObject(handle, 5000);
+            CloseHandle(handle);
         }
         try { Directory.Delete(root, true); }
         catch (IOException) { }
@@ -51,17 +53,16 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
     sealed record Echo(int Pid, nint Window, string Log);
 
     // Starts the echo program in a console of its own (CREATE_NEW_CONSOLE), hidden, and waits
-    // for it to say it is reading.
-    Echo StartEcho()
+    // for it to say it is reading. With exitOn, it exits once that line is typed and entered.
+    Echo StartEcho(string? exitOn = null)
     {
         var log = Path.Combine(root, $"echo-{Guid.NewGuid():N}.log");
         var exe = Path.Combine(AppContext.BaseDirectory, "agent-bridge-console-echo.exe");
         var info = new StartupInfo { Size = Marshal.SizeOf<StartupInfo>(), Flags = 1 /* STARTF_USESHOWWINDOW */, ShowWindow = 0 /* SW_HIDE */ };
-        var command = new StringBuilder($"\"{exe}\" \"{log}\"");
+        var command = new StringBuilder($"\"{exe}\" \"{log}\"{(exitOn is null ? "" : $" --exit-on \"{exitOn}\"")}");
         Assert.True(CreateProcessW(null, command, 0, 0, false, 0x10 /* CREATE_NEW_CONSOLE */, 0, null, ref info, out var process), $"CreateProcess {Marshal.GetLastWin32Error()}");
         CloseHandle(process.Thread);
-        CloseHandle(process.Process);
-        started.Add(process.ProcessId);
+        started.Add(process.Process);
         var ready = WaitFor(log, lines => lines.FirstOrDefault(l => l.StartsWith("ready ", StringComparison.Ordinal)));
         var parts = ready.Split(' ');
         return new Echo(process.ProcessId, nint.Parse(parts[2], CultureInfo.InvariantCulture), log);
@@ -180,7 +181,8 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var echo = StartEcho();
         using var f = new Fixture();
         const string Id = "33333333-3333-4333-8333-333333333333";
-        var events = f.CopilotSession(Id, echo.Pid);
+        // The lock is newer than the process, as a live CLI's is; an older one is a dead CLI's.
+        var events = f.CopilotSession(Id, echo.Pid, lockWrite: DateTimeOffset.UtcNow);
         Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
         f.Processes.Run(AgentBridge.Protocol.AgentKind.Copilot, echo.Pid);
         await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
@@ -246,6 +248,63 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         public string? Active() => null;
     }
 
+    // Ending a session through the real StopService, the real worker and the real process
+    // control, against an echo program of the tests' own playing the agent. Only processes
+    // started here are ever opened, typed into or terminated.
+    [WindowsTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Ending_an_idle_session_types_exit_and_terminates_it_through_its_handle_only_if_it_does_not_exit(bool exits)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var echo = StartEcho(exits ? "/exit" : null);
+        using var f = new Fixture();
+        const string Id = "44444444-4444-4444-8444-444444444444";
+        // The lock is newer than the process, as a live CLI's is; an older one is a dead CLI's.
+        var events = f.CopilotSession(Id, echo.Pid, lockWrite: DateTimeOffset.UtcNow);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+        using (var p = Process.GetProcessById(echo.Pid))
+        {
+            f.Processes.Run(AgentBridge.Protocol.AgentKind.Copilot, echo.Pid, startedAt: new DateTimeOffset(p.StartTime.ToUniversalTime(), TimeSpan.Zero));
+        }
+        await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
+        await source.RefreshAsync();
+        var stops = new StopService(source, f.Processes, new NoBridge(), new WorkerInjector(Worker), new WindowsProcessControl(),
+            new StopOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, Grace = TimeSpan.FromSeconds(exits ? 15 : 1) });
+
+        var result = await stops.StopAsync(new AgentBridge.Protocol.StopRequest { Id = Id, Request = Guid.NewGuid().ToString() });
+
+        output.WriteLine($"{result.Outcome} {result.Reason} forced={result.Forced}");
+        Assert.Equal((AgentBridge.Protocol.StopOutcome.Ended, exits ? (bool?)null : true), (result.Outcome, result.Forced));
+        var typed = WaitFor(echo.Log, lines => Keys(lines).Where(k => k.StartsWith("key 1 ", StringComparison.Ordinal)).ToList() is { Count: >= 6 } d ? d : null);
+        Assert.Equal("/exit\r", new string([.. typed.Take(6).Select(k => (char)int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture))]));
+        Assert.Equal(exits, WaitFor(echo.Log, lines => lines.Length > 0 ? lines : null).Contains("exiting"));
+        Assert.True(Exited(echo.Pid));
+    }
+
+    [WindowsFact]
+    public void The_process_control_holds_only_the_process_that_started_when_the_session_said_and_never_the_host_itself()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var echo = StartEcho();
+        DateTimeOffset started;
+        using (var p = Process.GetProcessById(echo.Pid)) { started = new DateTimeOffset(p.StartTime.ToUniversalTime(), TimeSpan.Zero); }
+        var control = new WindowsProcessControl();
+
+        using (var held = control.Open(echo.Pid, started).Process)
+        {
+            Assert.NotNull(held);
+            Assert.Equal(echo.Pid, held.Id);
+        }
+        // Another start time is another process that has taken the id: as good as gone.
+        Assert.Equal((null, true, null), Shape(control.Open(echo.Pid, started.AddSeconds(-5))));
+        Assert.Contains("this host", control.Open(Environment.ProcessId, DateTimeOffset.UtcNow).Refusal);
+        // Nothing here was ended.
+        using (var p = Process.GetProcessById(echo.Pid)) { Assert.False(p.HasExited); }
+
+        static (IHeldProcess?, bool, string?) Shape(HeldOpen o) => (o.Process, o.Gone, o.Refusal);
+    }
+
     sealed class NoGuard : ITargetGuard
     {
         public string? Refuse(int processId) => null;
@@ -274,6 +333,12 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
 
     [DllImport("kernel32.dll")]
     static extern bool CloseHandle(nint handle);
+
+    [DllImport("kernel32.dll")]
+    static extern bool TerminateProcess(nint process, uint exitCode);
+
+    [DllImport("kernel32.dll")]
+    static extern uint WaitForSingleObject(nint handle, uint milliseconds);
 
     [DllImport("user32.dll")]
     static extern bool PostMessageW(nint window, uint message, nint w, nint l);

@@ -213,6 +213,6 @@ test('a machine that does not take replies shows no reply box', async ({ page })
   await openDemo(page, '&reply=0');
   await expect(card(page, IDLE)).toBeVisible();
   await expect(page.locator('form.reply')).toHaveCount(0);
-  // It still takes answers.
-  expect(await page.evaluate(() => window.agentBridgeDemo.host.capabilities)).toEqual(['sessions.read', 'sessions.answer']);
+  // It still takes answers, and ends sessions.
+  expect(await page.evaluate(() => window.agentBridgeDemo.host.capabilities)).toEqual(['sessions.read', 'sessions.answer', 'sessions.stop']);
 });

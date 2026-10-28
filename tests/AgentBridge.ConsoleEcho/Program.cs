@@ -2,16 +2,19 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 
-// agent-bridge-console-echo <log>
+// agent-bridge-console-echo <log> [--exit-on <line>]
 //
 // Writes "ready <pid> <console window>" to <log>, then one line per key event read from
 // its own console input: "key <down> <vk> <char code>". Runs until its console closes or
-// it is stopped. Every line is flushed as it is written, so a test reads them live.
+// it is stopped, or, with --exit-on, until that line is typed and Enter pressed, as an agent
+// CLI exits on /exit. Every line is flushed as it is written, so a test reads them live.
 internal static unsafe partial class Program
 {
     static int Main(string[] args)
     {
-        if (args.Length != 1) { return 2; }
+        if (args.Length is not (1 or 3) || (args.Length == 3 && args[1] != "--exit-on")) { return 2; }
+        var exitOn = args.Length == 3 ? args[2] : null;
+        var line = new StringBuilder();
         using var log = new FileStream(args[0], FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
         void Say(string line)
         {
@@ -35,6 +38,10 @@ internal static unsafe partial class Program
                 var r = records[i];
                 if (r.EventType != 1) { continue; }
                 Say(string.Create(CultureInfo.InvariantCulture, $"key {r.KeyDown} {r.VirtualKeyCode} {(int)r.UnicodeChar}"));
+                if (r.KeyDown == 0 || exitOn is null) { continue; }
+                if (r.UnicodeChar != '\r') { line.Append(r.UnicodeChar); continue; }
+                if (line.ToString() == exitOn) { Say("exiting"); return 0; }
+                line.Clear();
             }
         }
     }

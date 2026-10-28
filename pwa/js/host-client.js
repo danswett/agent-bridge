@@ -5,7 +5,7 @@
 // `onmessage(message)` / `onclose(error)` callbacks, carrying already-parsed JSON. In the
 // app that is an end-to-end Noise channel (channels.js); in demo mode and the unit tests
 // it is an in-process fake. Nothing here knows which.
-import { Events, Ops, readAnswerResult, readAttachmentState, readHello, readSession } from './protocol.js';
+import { Events, Ops, readAnswerResult, readAttachmentState, readHello, readSession, readStopResult } from './protocol.js';
 
 export class HostError extends Error {
   // fromHost: the host answered with ok:false. Otherwise the request never got an answer
@@ -25,6 +25,7 @@ export class HostClient {
   #timeoutMs;
   #answerTimeoutMs;
   #replyTimeoutMs;
+  #stopTimeoutMs;
   #listeners = new Map();
   #lastSeq = null;
   // While a subscription's snapshot is arriving: the ids received since subscribing.
@@ -37,12 +38,13 @@ export class HostClient {
   // than other requests before it counts as lost (and is resent with the same request). A
   // reply to a working session is confirmed only once the agent takes it, which a host
   // waits up to a minute for, so session.reply gets longer still.
-  constructor(transport, { store, timeoutMs = 15000, answerTimeoutMs = Math.max(timeoutMs, 30000), replyTimeoutMs = Math.max(answerTimeoutMs, 90000) } = {}) {
+  constructor(transport, { store, timeoutMs = 15000, answerTimeoutMs = Math.max(timeoutMs, 30000), replyTimeoutMs = Math.max(answerTimeoutMs, 90000), stopTimeoutMs = Math.max(answerTimeoutMs, 45000) } = {}) {
     this.#transport = transport;
     this.store = store;
     this.#timeoutMs = timeoutMs;
     this.#answerTimeoutMs = answerTimeoutMs;
     this.#replyTimeoutMs = replyTimeoutMs;
+    this.#stopTimeoutMs = stopTimeoutMs;
     transport.onmessage = (m) => this.#receive(m);
     transport.onclose = (e) => this.#closed(e);
   }
@@ -122,6 +124,14 @@ export class HostClient {
   async attachmentChunk(data) { return readAttachmentState(await this.request(Ops.attachmentChunk, data)); }
 
   async attachmentDiscard(attachment) { return (await this.request(Ops.attachmentDiscard, { attachment }))?.discarded === true; }
+
+  // Ends a session: data is session.stop's { id, request, confirm? }. Resolves to { outcome,
+  // reason, confirm, confirmSeconds, forced }; rejects only when no outcome arrived. A host
+  // gives a session up to 12 s to exit on /exit, then terminates it, so this waits longer
+  // than an answer.
+  async stop(data, { timeoutMs = this.#stopTimeoutMs } = {}) {
+    return readStopResult(await this.request(Ops.sessionStop, data, { timeoutMs }));
+  }
 
   // Starts (or restarts) the subscription. The host answers {revision, count}, then sends
   // one upsert per live session and `sessions.synced`. Upserts are shown as they arrive;

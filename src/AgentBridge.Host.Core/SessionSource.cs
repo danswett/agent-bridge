@@ -24,6 +24,8 @@ public sealed class SessionSource : ISessionSource
     readonly Channel<SessionChange> _changes = Channel.CreateUnbounded<SessionChange>(new UnboundedChannelOptions { SingleReader = true });
     readonly Channel<bool> _wake = Channel.CreateBounded<bool>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
     readonly Dictionary<string, (string? Path, DateTimeOffset At)> _transcriptSearch = new(StringComparer.Ordinal);
+    // Sessions the host is ending, and since when. Under _gate.
+    readonly Dictionary<string, DateTimeOffset> _ending = new(StringComparer.Ordinal);
     readonly List<FileSystemWatcher> _watchers = [];
     readonly CancellationTokenSource _stop = new();
     readonly Task _dispatch;
@@ -37,6 +39,12 @@ public sealed class SessionSource : ISessionSource
         public SessionTracker Tracker { get; } = tracker;
         public Session ListForm = null!;
         public Session GetForm = null!;
+        // What the transcript says, before the ending override; what SetEndingAsync shows
+        // again when a stop fails.
+        public Session Full = null!;
+        // When the ending override last changed, which a client sees, so UpdatedAt never
+        // goes back behind it.
+        public DateTimeOffset? Touched;
         public string Json = "";
         public DateTimeOffset? LastEmit;
         public ITimer? Timer;
@@ -250,10 +258,35 @@ public sealed class SessionSource : ISessionSource
         return path;
     }
 
+    // Under _pass, like every Commit, so a pass that read the transcript before the override
+    // changed cannot commit after it and undo it.
+    public async Task SetEndingAsync(string id, bool ending)
+    {
+        await _pass.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            Entry? entry;
+            lock (_gate)
+            {
+                if (!_entries.TryGetValue(id, out entry)) { return; }
+                var now = _time.GetUtcNow();
+                if (ending ? !_ending.TryAdd(id, now) : !_ending.Remove(id)) { return; }
+                entry.Touched = now;
+            }
+            Commit(entry, entry.Full);
+        }
+        finally { _pass.Release(); }
+    }
+
     void Commit(Entry entry, Session full)
     {
-        var getForm = SessionBudget.Fit(full);
-        var listForm = SessionBudget.Fit(full.WithoutHistory());
+        entry.Full = full;
+        DateTimeOffset? endingSince;
+        lock (_gate) { endingSince = _ending.TryGetValue(full.Id, out var at) ? at : null; }
+        var shown = entry.Touched is { } touched && touched > full.UpdatedAt ? full with { UpdatedAt = touched } : full;
+        if (endingSince is { } since) { shown = shown with { Status = SessionStatus.Ending, StatusSince = since }; }
+        var getForm = SessionBudget.Fit(shown);
+        var listForm = SessionBudget.Fit(shown.WithoutHistory());
         var json = JsonSerializer.Serialize(getForm, ProtocolJson.Options);
         lock (_gate)
         {
@@ -307,6 +340,7 @@ public sealed class SessionSource : ISessionSource
         lock (_gate)
         {
             if (!_entries.Remove(id, out var entry)) { return; }
+            _ending.Remove(id);
             entry.Timer?.Dispose();
             entry.Timer = null;
             _revision++;

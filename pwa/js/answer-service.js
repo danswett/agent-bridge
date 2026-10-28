@@ -22,8 +22,9 @@
 // `current()` says which host is connected and its HostClient, or null. Call ready()
 // whenever a new client for a host is up, and resends go out on it.
 //
-// ReplyService (reply-service.js) is this with three things swapped: the op it sends, the
-// request it builds, and which outcomes are final.
+// ReplyService (reply-service.js) and StopService (stop-service.js) are this with three things
+// swapped: the op it sends, the request it builds, and which outcomes are final. A settled
+// entry's `detail` is the whole result, for ops whose result says more than outcome and reason.
 
 const NO_OUTCOME = 'no outcome came back from the machine in time';
 const MAX_BUSY_RESENDS = 5;
@@ -103,8 +104,8 @@ export class AnswerService {
 
   #snapshot(entry) {
     if (!entry) { return null; }
-    const { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress } = entry;
-    return { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress };
+    const { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress, detail = null } = entry;
+    return { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress, detail };
   }
 
   #set(entry, change) {
@@ -174,6 +175,6 @@ export class AnswerService {
       entry.timer = setTimeout(() => this.#attempt(entry), this.retryMs);
       return;
     }
-    this.#set(entry, { state: 'done', outcome: result.outcome, reason: result.reason });
+    this.#set(entry, { state: 'done', outcome: result.outcome, reason: result.reason, detail: result });
   }
 }

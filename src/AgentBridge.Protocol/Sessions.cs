@@ -170,7 +170,8 @@ public static class SessionBudget
 public enum AgentKind { Copilot, Claude, Codex, Unknown }
 
 [UnknownAs(Idle)]
-public enum SessionStatus { Working, Waiting, Idle }
+// Ending: the host is ending the session (session.stop), until its process has gone.
+public enum SessionStatus { Working, Waiting, Idle, Ending }
 
 [UnknownAs(Done)]
 public enum ToolStatus { Running, Done, Failed }
@@ -324,6 +325,7 @@ public static class Ops
     public const string SessionsSubscribe = "sessions.subscribe";
     public const string SessionAnswer = "session.answer";
     public const string SessionReply = "session.reply";
+    public const string SessionStop = "session.stop";
     public const string PushSubscribe = "push.subscribe";
     public const string PushUnsubscribe = "push.unsubscribe";
     public const string PushList = "push.list";
@@ -370,6 +372,7 @@ public static class Capabilities
     public const string SessionsRead = "sessions.read";
     public const string SessionsAnswer = "sessions.answer";
     public const string SessionsReply = "sessions.reply";
+    public const string SessionsStop = "sessions.stop";
     public const string Push = "push";
     public const string SessionsAttach = "sessions.attach";
 }

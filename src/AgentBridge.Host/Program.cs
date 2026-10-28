@@ -19,9 +19,10 @@ using AgentBridge.Transport;
 //   agent-bridge-host sign-in --relay <url>     GitHub sign-in through the relay
 //   agent-bridge-host serve [--relay <url>] [--name <name>]
 //                                               serve Protocol v1 sessions, reconnecting, and
-//                                               type answers to their questions and replies
-//                                               (Windows; see docs/host-answers.md and
-//                                               docs/host-replies.md), and notify subscribed
+//                                               type answers to their questions and replies,
+//                                               and end sessions (Windows; see
+//                                               docs/host-answers.md, docs/host-replies.md and
+//                                               docs/host-stop.md), and notify subscribed
 //                                               phones of questions and finished turns
 //   agent-bridge-host whoami                    this device and the account it signed in to
 //
@@ -138,14 +139,14 @@ async Task<int> ServeAsync()
     // machine nor loses a change, and every new channel subscribes to the same state.
     await using var source = new SessionSource(options);
     await source.StartAsync(stop.Token);
-    var (answers, replies, attachments) = Typists(source, Path.Combine(identity.Folder, "attachments"));
+    var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"));
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
     // app closed. Subscriptions live in the profile's own folder, for this account only.
     await using var push = new PushNotifier(source, machine,
         PushStore.Load(Path.Combine(identity.Folder, "push-subscriptions.json"), account.AccountId, Log), log: Log);
     push.Start();
-    var service = new SessionService(source, machine, Log, answers, replies, push, attachments);
+    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops);
     Log($"watching {source.Snapshot().Count} live session(s); serving as \"{name}\" ({machine.Id[..8]}) on {relayUri.Host}; {push.Subscribers} device(s) to notify");
 
     var backoff = TimeSpan.FromSeconds(1);
@@ -198,15 +199,16 @@ static string OsName() =>
 
 // Answers and replies are typed through agent-bridge-injector beside this executable, on
 // Windows only for now, and never while agent-ha-bridge runs for this user (checked again
-// for every hello, answer and reply; this is only the startup note). They share one gate,
-// so an answer and a reply never type into one session at once. Files sent with replies are
-// staged in the profile's own folder, private to this user (docs/host-replies.md).
-(ISessionAnswerer, ISessionReplier, AttachmentStore?) Typists(ISessionSource source, string staging)
+// for every hello, answer, reply and stop; this is only the startup note). They share one
+// gate, so an answer, a reply and ending a session (which types /exit) never act on one
+// session at once. Files sent with replies are staged in the profile's own folder, private
+// to this user (docs/host-replies.md).
+(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging)
 {
     if (!OperatingSystem.IsWindows())
     {
-        Log("answering and replying from other devices are not supported on this platform yet");
-        return (new UnsupportedPlatformAnswerer(), new UnsupportedPlatformReplier(), null);
+        Log("answering, replying and ending sessions from other devices are not supported on this platform yet");
+        return (new UnsupportedPlatformAnswerer(), new UnsupportedPlatformReplier(), null, new UnsupportedPlatformStopper());
     }
     var probe = new AgentHaBridgeProbe();
     var injector = new WorkerInjector();
@@ -214,12 +216,13 @@ static string OsName() =>
     var processes = new SystemProcessInspector();
     var gate = new DeliveryGate();
     if (!File.Exists(Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName))) { Log($"{WorkerInjector.FileName} is missing beside the host; answers and replies will be refused"); }
-    Log(probe.Active() is { } active ? $"answering and replying are off for now: {active}" : "answering and replying are on");
+    Log(probe.Active() is { } active ? $"answering, replying and ending sessions are off for now: {active}" : "answering, replying and ending sessions are on");
     var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log);
     return (
         new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome }, Log, gate),
         new ReplyService(source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome }, Log, gate, attachments),
-        attachments);
+        attachments,
+        new StopService(source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log, gate));
 }
 
 static string HostVersion()

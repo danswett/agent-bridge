@@ -36,6 +36,8 @@ const ICONS = {
   machine: [['rect', { x: 3, y: 4, width: 18, height: 12, rx: 2 }], ['path', { d: 'M8 20h8M12 16v4' }]],
   paperclip: [['path', { d: 'M20 11.5l-7.8 7.8a5 5 0 01-7.1-7.1L13 4.4a3.3 3.3 0 014.7 4.7l-7.8 7.8a1.7 1.7 0 01-2.4-2.4l7.1-7.1' }]],
   file: [['path', { d: 'M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z' }], ['path', { d: 'M14 3v5h5M9 13h6M9 17h6' }]],
+  // End session: a stop sign in a circle, as on the old dashboard.
+  stop: [['circle', { cx: 12, cy: 12, r: 9 }], ['rect', { x: 9, y: 9, width: 6, height: 6, rx: 1 }]],
 };
 
 export function icon(name, cls = 'icon') {
