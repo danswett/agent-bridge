@@ -133,7 +133,7 @@ Answers a session's pending question. Request `data`:
 |---|---|
 | `id` | The session |
 | `question` | The `question.id` the client was shown. The host answers only that question: if the session is no longer asking it, nothing is typed |
-| `request` | A fresh UUID per answer the person gives. A host remembers the outcome of each request for at least 10 minutes and returns it again for a repeat, typing nothing more. A client resending after a lost response or a reconnect therefore never answers twice |
+| `request` | A fresh UUID per answer the person gives. A host remembers the outcome of each request, **whatever it was** (`stale`, `busy` and `refused` included), for at least 10 minutes and returns it again for a repeat, typing nothing more. A repeat that arrives while the first copy is still being delivered waits for it and gets the same outcome, never `busy`. A client resending after a lost response or a reconnect therefore never answers twice. After `busy` or `refused`, a client that tries again uses a new `request` |
 | `fields` | One value per field, by `name` (below). Omit a field to leave it unanswered; `required` fields must be present |
 | `text` | Instead of `fields`, for a question with no fields: the free-text answer |
 
@@ -243,7 +243,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string | The id of the tool call that asked it. It stays the same while the question is pending |
-| `kind` | `"form"` \| `"approval"` | `approval` is a permission prompt with fixed choices (Codex approvals, Copilot permission requests) |
+| `kind` | `"form"` \| `"approval"` | `approval` is a permission prompt with fixed choices (Codex approvals, Copilot permission requests). It always has exactly one `choice` field, named `decision`, with the options `approve` and `deny`, so a client can style them |
 | `message` | string (Markdown) | What the agent wrote, at most 8 KiB |
 | `fields` | Field[] | In order. Empty for a plain message |
 | `askedAt` | time | |

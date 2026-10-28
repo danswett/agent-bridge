@@ -28,6 +28,9 @@ using AgentBridge.Transport;
 // own folder (Identity.DefaultRoot), never agent-ha-bridge's. --relay defaults to
 // AGENT_BRIDGE_RELAY, then to the relay the profile signed in to.
 
+// Device names carry characters outside the console's legacy code page ("iPhone · Agent Bridge"),
+// which a redirected log otherwise records as replacement characters.
+Console.OutputEncoding = System.Text.Encoding.UTF8;
 var arguments = args.ToList();
 var command = arguments.Count > 0 ? arguments[0] : "help";
 string? Option(string name)
