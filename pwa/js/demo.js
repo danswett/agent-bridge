@@ -7,15 +7,18 @@
 // window.agentBridgeDemo (demo mode only) lets tests and curious people drive it:
 //   upsert(session), remove(id), frame(rawFrame), calls (ops received), pause(),
 //   script(...outcomes) for the next answers, scriptReplies(...outcomes) for the next replies,
-//   host.attachments and host.attachmentLog for the files sent ahead of replies
+//   host.attachments and host.attachmentLog for the files sent ahead of replies,
+//   scriptStops(...outcomes) for the next presses of End session
 //
 // It answers questions as a host would: the same validation (answers.js mirrors the C#
 // Answers.Check), stale when the session is no longer asking, a request seen before gets
 // its first outcome again, and an answer that is typed takes the question away with an
 // upsert. Replies likewise (replies.js mirrors Replies.Check): refused while the session
 // asks a question and for agents a host can't reply to yet (only Copilot), and a typed one
-// shows as the session's latest message, with the session at work on it. Outcomes are
-// delivered unless a test or curious person scripts others.
+// shows as the session's latest message, with the session at work on it. End session as a
+// host ends one: a session that is not idle takes a second press carrying the token the first
+// was given, then shows as ending and goes. Outcomes are delivered unless a test or curious
+// person scripts others.
 import { checkAnswer } from './answers.js';
 import { checkReply, typedForm } from './replies.js';
 import { readQuestion } from './protocol.js';
@@ -61,13 +64,22 @@ export class DemoHost {
   // attachment op as received.
   attachments = new Map();
   attachmentLog = [];
+  // session.stop: outcomes by request, every request, and the first presses waiting for their
+  // second (by session: tokens and when they were given).
+  stops = new Map();
+  stopLog = [];
+  #stopScript = [];
+  #arms = new Map();
 
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
-  // replying: false, one that can't reply; attaching: false, one that takes no files.
-  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying } = {}) {
+  // replying: false, one that can't reply; attaching: false, one that takes no files;
+  // stopping: false, one that can't end sessions. stopWindowMs is how long a first press of
+  // a busy session waits for its second.
+  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, stopping = answering, stopWindowMs = 10000 } = {}) {
     this.machine = { id: 'demo', name: machineName, os: 'windows', hostVersion: 'demo' };
     this.answerDelayMs = answerDelayMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : [])];
+    this.stopWindowMs = stopWindowMs;
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(stopping ? ['sessions.stop'] : [])];
     this.sessions = new Map();
     for (const s of fixture.sessions ?? []) { this.sessions.set(s.id, s); }
     this.revision = fixture.revision ?? 1;
@@ -108,6 +120,9 @@ export class DemoHost {
       case 'attachment.discard':
         if (!this.capabilities.includes('sessions.attach')) { break; }
         return this.#attachment(op, data).then(reply, (e) => t.deliver({ re: id, ok: false, error: e.message }));
+      case 'session.stop':
+        if (!this.capabilities.includes('sessions.stop')) { break; }
+        return this.#stop(data, reply);
       default:
         return t.deliver({ re: id, ok: false, error: `unknown op ${op}` });
     }
@@ -153,6 +168,55 @@ export class DemoHost {
   scriptAnswers(outcomes) { this.#script.push(...outcomes); }
 
   scriptReplies(outcomes) { this.#replyScript.push(...outcomes); }
+
+  scriptStops(outcomes) { this.#stopScript.push(...outcomes); }
+
+  #stop(data, reply) {
+    this.stopLog.push(clone(data ?? null));
+    const request = typeof data?.request === 'string' ? data.request : '';
+    const known = this.stops.get(request);
+    if (known) { known.result.then(reply); return; }
+    const step = this.#stopScript.shift() ?? null;
+    const scripted = typeof step === 'string' ? { outcome: step } : step;
+    const result = new Promise((resolve) => setTimeout(() => resolve(this.#decideStop(data, scripted)), this.answerDelayMs));
+    this.stops.set(request, { result });
+    result.then((r) => { if (!scripted?.drop) { reply(r); } });
+  }
+
+  // As a host decides: a session that is not idle needs a second press carrying the token the
+  // first was given, within the window; then it shows as ending, and goes.
+  #decideStop(data, scripted) {
+    const s = this.sessions.get(data?.id);
+    if (!s) { return { outcome: 'stale', reason: 'the session has ended' }; }
+    if (scripted && scripted.outcome !== 'ended') {
+      const reasons = {
+        busy: 'an answer or reply to this session is being delivered, or it is already being ended',
+        refused: 'the session runs as administrator, and the host does not end elevated sessions; end it at the machine',
+        stale: 'the session has ended',
+        failed: "the host could not terminate the session's process (Access is denied.)",
+      };
+      return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host' };
+    }
+    const b = s.activity?.background;
+    const doing = s.status === 'working' ? 'this session is still working'
+      : s.status === 'waiting' ? 'this session is waiting on you'
+        : b?.agents ? 'this session is waiting for background agents it started'
+          : b?.shells ? 'this session is waiting for background commands it started' : null;
+    const arms = (this.#arms.get(s.id) ?? []).filter((a) => Date.now() - a.at <= this.stopWindowMs);
+    if (doing && !arms.some((a) => a.token === data.confirm)) {
+      const token = crypto.randomUUID().replaceAll('-', '');
+      this.#arms.set(s.id, [...arms, { token, at: Date.now() }]);
+      const seconds = Math.round(this.stopWindowMs / 1000);
+      const why = data.confirm ? 'the first press has lapsed; ' : '';
+      return { outcome: 'confirm', reason: `${why}${doing}; the confirmation lapses in ${seconds} s`, confirm: token, confirmSeconds: seconds };
+    }
+    this.#arms.delete(s.id);
+    this.upsert({ ...s, status: 'ending', statusSince: now(), updatedAt: now() });
+    return new Promise((resolve) => setTimeout(() => {
+      this.remove(s.id);
+      resolve({ outcome: 'ended', ...(scripted?.forced ? { forced: true } : {}) });
+    }, this.answerDelayMs));
+  }
 
   #reply(data, reply) {
     this.replyLog.push(clone(data ?? null));

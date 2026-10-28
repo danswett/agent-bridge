@@ -10,10 +10,10 @@ JavaScript.
 Scope so far: a host reports sessions, their activity and their pending questions
 (`sessions.read`), can take an answer to a question (`sessions.answer`), can take a
 reply: a prompt typed into a session (`sessions.reply`), with files and images sent ahead
-of it (`sessions.attach`, see [Attachments](#attachments)), and notifies a client's devices
-when a session asks or finishes, even with the app closed (`push`, see
-[Notifications](#notifications)). Larger files through the blob store, launching and
-stopping come next; they will add ops without changing anything here.
+of it (`sessions.attach`, see [Attachments](#attachments)), can end a session
+(`sessions.stop`), and notifies a client's devices when a session asks or finishes, even
+with the app closed (`push`, see [Notifications](#notifications)). Larger files through the
+blob store and launching come next; they will add ops without changing anything here.
 
 ## Rules for every message
 
@@ -80,6 +80,7 @@ Request `data`: `{}`. Result:
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
 | `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
 | `sessions.attach` | `attachment.start`, `attachment.chunk`, `attachment.discard`, and `attachments` on `session.reply` ([Attachments](#attachments)). Offered only with `sessions.reply`, by a host that can stage files for the agent. Without it a client offers no way to attach |
+| `sessions.stop` | `session.stop`. Left out on the same terms as `sessions.answer`. A client then offers no End session |
 | `push` | `push.subscribe`, `push.unsubscribe`, `push.list`: Web Push notifications of questions and finished turns ([Notifications](#notifications)) |
 
 ### `sessions.list`
@@ -111,7 +112,9 @@ Request `data`: `{}`. Result: `{ "revision": 118, "count": 3 }`. Then the host s
    * `session.upsert`, with a full `Session` (without `activity.history`), whenever
      anything a client shows changes. Hosts coalesce bursts to at most one upsert per
      session every 250 ms, and the latest state always arrives.
-   * `session.remove`, with `{ "id": "…" }`, when a session ends and is dropped.
+   * `session.remove`, with `{ "id": "…" }`, when a session ends and is dropped. A session
+     a host is ending (`session.stop`) is first upserted with `status: "ending"`, then
+     removed once its process has gone.
 
 A session can change while the snapshot is being sent; its upsert then simply arrives
 again. When a channel closes, the client subscribes again on the new channel.
@@ -320,6 +323,64 @@ offset, a hash mismatch, too many held) fail as requests (`ok: false`) with the 
 A client sends a reply's files before the reply, and again (from what the host has) on
 every resend of it, so a reply resent after the host restarted still finds them.
 
+### `session.stop`
+
+Ends a session, as agent-ha-bridge's End session button does. Request `data`:
+
+```json
+{
+  "id": "<session id>",
+  "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+  "confirm": "q2vU3dJ7n0x-AbC_9zYw1A"
+}
+```
+
+| Field | Notes |
+|---|---|
+| `id` | The session |
+| `request` | A fresh UUID per press, with exactly `session.answer`'s semantics: every outcome is remembered for at least 10 minutes and returned for a repeat, which does nothing more; a repeat of a press still being acted on waits for it |
+| `confirm` | Only on a second press: the token the first press's `confirm` outcome gave. At most 64 characters of `A–Z a–z 0–9 - _` |
+
+**Two presses when the session is not idle, enforced by the host.** A session that is
+`working`, `waiting`, or `idle` with `activity.background` (delegating) has a turn or work in
+flight that ending it would throw away. The first press only arms: the host answers
+`confirm` with a token, and ends nothing. A second press within the window (10 s, measured on
+the host from when it armed) carrying that token ends it, if the session's process is still
+the very one the first press saw, by id and start time. Anything short of that (no token, a
+lapsed or unknown one, one from another session, a process that has been replaced) is
+another first press: a new `confirm` and token, and nothing ended. Every device and client
+can send `session.stop`, so this is the host's rule, never only a client's. An `idle` session
+with nothing in the background ends on one press; a token sent for one is ignored. The host
+checks the session again immediately before it acts, and one that has started working or
+asking since the press arrived needs a second press after all (`confirm`). Several
+first presses can be waiting at once (two devices); any one confirms, and confirming spends
+them all.
+
+Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
+anything but `ended`, and:
+
+| `outcome` | Meaning | Also |
+|---|---|---|
+| `ended` | The session's process has exited. The host removes the session (`session.remove`) as soon as it sees that, normally before this result arrives | `forced: true` when it did not exit on its own and the host terminated it |
+| `confirm` | Press again to end it. `reason` says what a second press interrupts ("this session is still working; the confirmation lapses in 10 s"), led by why an earlier press did not confirm, if one was sent | `confirm` (the token) and `confirmSeconds` (the window) |
+| `stale` | The session, or its process, had already gone | |
+| `busy` | An answer or a reply to this session is being typed, or another press is ending it already | |
+| `refused` | The host will not end it: an invalid request, an elevated session or another user's, a process whose start time it cannot read (so cannot tell from a later one with the same id), the host itself, a platform without it yet, or agent-ha-bridge active for this user. Refused on the first press, before anything is armed | |
+| `failed` | The host tried, and the session's process is still running (it could not be terminated, or agent-ha-bridge started meanwhile) | |
+
+A client treats an outcome it doesn't know as `failed`, never as `ended` or `confirm`; a
+`confirm` without a token it can send back is `failed` too.
+
+**How a host ends it.** Gracefully first, as agent-ha-bridge does: `/exit` typed into the
+agent's own input, so the CLI writes its transcript and releases its lock, and the session
+stays resumable. If it has not exited within 12 s, the agent's process alone (never its
+tree) is terminated. A session asking anything, in what the host reports or in its
+transcript, is terminated without `/exit`, which would land in the question's input. From
+the moment it starts until the outcome, the session is upserted as `ending`, and the host
+holds it against answers and replies (`busy`), which share the per-session serialization.
+The terminal window or tab the agent ran in is left open: the person may have other work in
+it.
+
 ### `push.subscribe`
 
 Registers this device for notifications from this host. A client sends it on every
@@ -476,7 +537,7 @@ open a channel and read `sessions.list`, so `push` gives it nothing more.
 | `repository` | string? | `owner/name`, if known |
 | `branch` | string? | |
 | `model` | string? | The model used for the latest turn, e.g. `claude-opus-5.5` |
-| `status` | `"working"` \| `"waiting"` \| `"idle"` | `waiting` exactly when `question` is present |
+| `status` | `"working"` \| `"waiting"` \| `"idle"` \| `"ending"` | `waiting` exactly when `question` is present, unless `ending`. `ending`: the host is ending the session (`session.stop`); it is removed once its process has gone, or shows its own status again if that fails. A client that does not know `ending` reads it as `idle` |
 | `statusSince` | time | When `status` last changed |
 | `startedAt` | time? | |
 | `updatedAt` | time | When something a client shows last changed. Events that change nothing visible (hook runs, usage records, model internals) do **not** move it, so they never cause an upsert |

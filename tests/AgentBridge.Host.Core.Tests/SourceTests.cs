@@ -9,6 +9,34 @@ public class SourceTests
     static List<SessionEvent> Drain(SessionSubscription s) => DiscoveryTests.Drain(s);
 
     [Fact]
+    public async Task A_session_shown_as_ending_stays_so_as_its_transcript_moves_and_shows_its_own_status_again_if_ending_fails()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source();
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2));
+        await source.RefreshAsync();
+        var marked = f.Time.GetUtcNow();
+
+        await source.SetEndingAsync(Id, true);
+        Assert.Equal((SessionStatus.Ending, marked, marked), (source.Get(Id)!.Status, source.Get(Id)!.StatusSince, source.Get(Id)!.UpdatedAt));
+        f.Time.Advance(TimeSpan.FromSeconds(1));
+        Fixture.Append(events, Copilot.Assistant("still going", 3));
+        await source.RefreshAsync();
+        Assert.Equal((SessionStatus.Ending, marked, "still going"), (source.Get(Id)!.Status, source.Get(Id)!.StatusSince, source.Get(Id)!.Activity.Response));
+
+        await source.SetEndingAsync(Id, false);
+        var back = source.Get(Id)!;
+        Assert.Equal(SessionStatus.Working, back.Status);
+        // Something a client shows changed, so it is newer than the ending it replaces.
+        Assert.Equal(marked.AddSeconds(1), back.UpdatedAt);
+        // A session that has gone is not brought back.
+        await source.SetEndingAsync("00000000-0000-4000-8000-000000000000", true);
+        Assert.Null(source.Get("00000000-0000-4000-8000-000000000000"));
+    }
+
+    [Fact]
     public async Task Upserts_for_one_session_are_coalesced_to_one_per_interval_and_the_latest_state_arrives()
     {
         using var f = new Fixture();

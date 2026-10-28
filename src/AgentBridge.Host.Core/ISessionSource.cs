@@ -39,7 +39,19 @@ public interface ISessionSource : IAsyncDisposable
 
     // Starts watching: a pass now, then on every file change and every PollInterval.
     Task StartAsync(CancellationToken cancellationToken = default);
+
+    // Shows a session as ending (status Ending) while the host ends it, or no longer, if
+    // ending it failed. A session that has gone is removed as usual; a source that cannot
+    // show it does nothing.
+    Task SetEndingAsync(string id, bool ending) => Task.CompletedTask;
+
+    // The process discovery bound a session to: its id, and its start time, which is what
+    // tells it from a later process given the same id before the next discovery pass
+    // notices. Null when the session has gone or the source cannot say.
+    SessionProcess? ProcessOf(string id) => null;
 }
+
+public sealed record SessionProcess(int Id, DateTimeOffset? StartedAt);
 
 public enum SessionChangeKind { Upserted, Removed }
 

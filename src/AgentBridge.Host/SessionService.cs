@@ -9,10 +9,11 @@ using AgentBridge.Transport;
 namespace AgentBridge.Host;
 
 // Protocol v1's sessions ops, served on every channel a client opens to this host. Reads,
-// and the two ops that reach the machine, each only through its own service: session.answer
-// (the answerer types an answer to a pending question) and session.reply (the replier types
-// a prompt into a session's input, with any files sent first by attachment.*, which go to the
-// AttachmentStore). The push.* ops, which register a device for notifications, go to the
+// and the three ops that reach the machine, each only through its own service:
+// session.answer (the answerer types an answer to a pending question), session.reply (the
+// replier types a prompt into a session's input, with any files sent first by attachment.*,
+// which go to the AttachmentStore) and session.stop (the stopper ends a session). The
+// push.* ops, which register a device for notifications, go to the
 // PushNotifier.
 public sealed class SessionService
 {
@@ -23,10 +24,11 @@ public sealed class SessionService
     readonly ISessionReplier? replies;
     readonly PushNotifier? push;
     readonly AttachmentStore? attachments;
+    readonly ISessionStopper? stops;
     readonly ConcurrentDictionary<SecureChannel, Subscriber> subscribers = new();
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
-        ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null)
+        ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null)
     {
         this.source = source;
         this.machine = machine;
@@ -35,6 +37,7 @@ public sealed class SessionService
         this.replies = replies;
         this.push = push;
         this.attachments = attachments;
+        this.stops = stops;
     }
 
     // Channels with a subscription running; tests and the host's log read it.
@@ -58,6 +61,8 @@ public sealed class SessionService
                 return await ReplyAsync(channel, data);
             case Ops.AttachmentStart or Ops.AttachmentChunk or Ops.AttachmentDiscard when attachments is not null:
                 return Attach(channel, op, data);
+            case Ops.SessionStop:
+                return await StopAsync(data);
             case Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList when push is not null:
                 return await push.HandleAsync(channel, op, data);
             case Ops.SessionsList:
@@ -156,6 +161,7 @@ public sealed class SessionService
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }
         if (attachments is not null && replies?.TakesAttachments == true) { offered.Add(Capabilities.SessionsAttach); }
+        if (stops?.Available == true) { offered.Add(Capabilities.SessionsStop); }
         if (push is not null) { offered.Add(Capabilities.Push); }
         return offered;
     }
@@ -181,6 +187,16 @@ public sealed class SessionService
             Ops.AttachmentChunk => attachments!.Chunk(channel.PeerId, data.Deserialize<AttachmentChunk>(ProtocolJson.Options)!),
             _ => new AttachmentDiscarded(attachments!.Discard(channel.PeerId, data.Deserialize<AttachmentDiscard>(ProtocolJson.Options)!.Attachment)),
         };
+    }
+
+    async Task<StopResult> StopAsync(JsonElement data)
+    {
+        // As for answers: a request without an id or request UUID fails as a request, and
+        // anything that can be read gets an outcome.
+        if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.stop needs an id and a request"); }
+        var request = data.Deserialize<StopRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.stop needs an id and a request");
+        if (stops is null) { return new StopResult(StopOutcome.Refused, "this host does not end sessions; end it at the machine"); }
+        return await stops.StopAsync(request);
     }
 
     static string? String(JsonElement data, string name) =>

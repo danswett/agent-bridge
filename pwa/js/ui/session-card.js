@@ -1,18 +1,20 @@
 // One session's card: the old dashboard's session card, rebuilt for the phone. A surface
 // whose edge and glow say what the session is doing (blue and breathing while it works,
-// amber while it waits on you, calm when idle, and a still, dashed blue edge while it is
-// idle but delegating: its own turn is over and work it started in the background is not),
-// with a header that stays visible when the card is folded, and the response, reasoning,
-// history and question below it, and a box to reply to the session.
+// amber while it waits on you, calm when idle, a still, dashed blue edge while it is
+// idle but delegating: its own turn is over and work it started in the background is not,
+// and a dotted grey one while the machine ends it), with a header that stays visible when
+// the card is folded, and the response, reasoning, history and question below it, a box to
+// reply to the session, and End session at the foot.
 import { h, icon } from './dom.js';
 import { ago, duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
 import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
 import { answerability } from '../answers.js';
 import { ReplyBox } from './reply-view.js';
+import { EndSession } from './stop-view.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
-const STATUS_TEXT = { working: 'Working', waiting: 'Waiting on you', idle: 'Idle' };
+const STATUS_TEXT = { working: 'Working', waiting: 'Waiting on you', idle: 'Idle', ending: 'Ending session…' };
 const TOOL_MARK = { running: '⟳', done: '✓', failed: '✗' };
 
 // What the card shows: the status, except that an idle session still waiting on work it
@@ -41,10 +43,13 @@ export class SessionCard {
   // stopped taking replies for a moment, say), so it comes back with the words in it.
   #replyHost = null;
   #replyDraft = { hostId: null, text: '' };
+  #stop = null;
+  #stopHost = null;
 
   // fetchDetail(id) -> Promise<Session|null>, for the tool history (session.get).
-  // answering() -> { service, replies, hostId, capabilities } | null: who answers questions
-  // and sends replies, and whether the connected machine takes either at all.
+  // answering() -> { service, replies, stops, hostId, capabilities } | null: who answers
+  // questions, sends replies and ends sessions, and whether the connected machine takes
+  // each at all.
   constructor(session, { folds, fetchDetail, machineName, answering = () => null }) {
     Object.assign(this, { folds, fetchDetail, machineName, answering });
     const n = ++seq;
@@ -86,8 +91,10 @@ export class SessionCard {
     e.history.addEventListener('toggle', () => { if (e.history.open) { this.#loadHistory(); } });
     e.facts = h('p', { class: 'facts' });
     e.reply = h('div', { class: 'reply-slot' });
+    // End session is the card's footer, last and furthest from Send, as on the old dashboard.
+    e.stop = h('div', { class: 'stop-slot' });
     e.body = h('div', { class: 'body', id: this.ids.body },
-      e.question, e.truncated, e.response, e.reasoning, e.user, e.reply, e.history, e.facts);
+      e.question, e.truncated, e.response, e.reasoning, e.user, e.reply, e.history, e.facts, e.stop);
 
     e.frame = h('div', { class: 'frame' },
       h('header', { class: 'head' }, h('h3', { class: 'title' }, e.fold), e.meta, e.statusLine, e.tool),
@@ -114,7 +121,7 @@ export class SessionCard {
     const state = cardState(s);
     root.dataset.view = state.view;
     // Toggled, not assigned: the frame also carries 'collapsed', which only folding changes.
-    for (const st of ['working', 'waiting', 'idle', 'delegating']) { e.frame.classList.toggle(st, st === state.view); }
+    for (const st of ['working', 'waiting', 'idle', 'delegating', 'ending']) { e.frame.classList.toggle(st, st === state.view); }
 
     if (this.#changed('agent', s.agent)) {
       e.badge.className = `agent-badge agent-${s.agent}`;
@@ -147,6 +154,7 @@ export class SessionCard {
 
     this.#renderQuestion(s);
     this.#renderReply(s);
+    this.#renderStop(s);
     if (this.#changed('response', s.activity.response ?? '')) {
       e.response.replaceChildren(renderMarkdown(s.activity.response ?? ''));
     }
@@ -183,6 +191,8 @@ export class SessionCard {
     this.#panel = null;
     this.#reply?.destroy();
     this.#reply = null;
+    this.#stop?.destroy();
+    this.#stop = null;
     this.#dropReceipt();
     clearTimeout(this.#history.timer);
   }
@@ -192,6 +202,20 @@ export class SessionCard {
     if (!this.#s) { return; }
     this.#renderQuestion(this.#s);
     this.#renderReply(this.#s);
+    this.#renderStop(this.#s);
+  }
+
+  // End session, while the connected machine can end sessions.
+  #renderStop(s) {
+    const ctx = this.answering();
+    const hostId = ctx?.stops && ctx.capabilities?.includes('sessions.stop') ? ctx.hostId : null;
+    if (this.#stopHost !== hostId || (hostId && !this.#stop)) {
+      this.#stop?.destroy();
+      this.#stop = hostId ? new EndSession({ machineName: this.machineName, stopping: { service: ctx.stops, hostId, sessionId: s.id } }) : null;
+      this.#stopHost = hostId;
+      this.els.stop.replaceChildren(...(this.#stop ? [this.#stop.element] : []));
+    }
+    this.#stop?.update(s);
   }
 
   // The reply box, while the connected machine takes replies.

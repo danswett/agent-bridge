@@ -10,9 +10,10 @@ Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/ap
 
 It shows sessions, their activity and their pending questions, answers those questions
 (`session.answer`), replies to sessions (`session.reply`) with files and images
-(`attachment.*`), and notifies the phone when a session asks or finishes, even with the app
-closed (Web Push), per [docs/protocol/v1-sessions.md](../docs/protocol/v1-sessions.md).
-Larger files and launching come next.
+(`attachment.*`), ends them (`session.stop`), and notifies the phone when a session asks or
+finishes, even with the app closed (Web Push), per
+[docs/protocol/v1-sessions.md](../docs/protocol/v1-sessions.md). Larger files and launching
+come next.
 
 | Light | Dark | Answering | A permission request |
 |---|---|---|---|
@@ -38,11 +39,12 @@ Larger files and launching come next.
 | `js/replies.js` | A reply checked before it goes: `checkReply` mirrors the C# `Replies.Check`, with its wording |
 | `js/reply-service.js` | Sending replies: `answer-service.js` with `session.reply`, one reply on its way per session, its files sent first |
 | `js/attachments.js` | A file or image for a reply: named, size-checked (a large image is redrawn smaller), hashed, and sent in chunks from where the machine has got to |
+| `js/stop-service.js` | Ending sessions: `answer-service.js` with `session.stop`, one press on its way per session, the second press carrying the first's token |
 | `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
 | `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
-| `js/ui/*` | Session cards, the question and its answer form, the reply box, machines list, fold state, relative times |
-| `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering and replying included |
+| `js/ui/*` | Session cards, the question and its answer form, the reply box, End session, machines list, fold state, relative times |
+| `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering, replying and ending sessions included |
 | `tools/build-site.mjs` | Assembles the site for Pages: `config.js` with the relay, CSP in the page, and `sw.js` stamped with a hash of everything served, so any change reaches an open app as an update (the app then offers Reload) |
 
 ### Connecting a host
@@ -158,6 +160,33 @@ are sent afresh if sent again, since the machine has let them go. The machine ty
 `@<path>` ahead of the words, as agent-ha-bridge does. Demo mode keeps the files as a host
 would (`window.agentBridgeDemo.host.attachments`).
 
+### Ending a session
+
+Each card ends with **End session** when the machine's `hello` lists `sessions.stop`: a
+small, muted footer link at the bottom left, furthest from Send, as on the old dashboard.
+An idle session ends on one press. One that is working, waiting on you, or waiting for
+background work it started takes two, and the machine enforces it: the first press comes
+back asking for a second ("Press End session again to end it: this session is still
+working; …", with the seconds left), and only a second press within the window, carrying
+the token the first was given, ends it. After the window it says "End session NOT
+confirmed", and the next press asks again.
+
+While the machine ends it the card reads "Ending session…" (status `ending`), then goes.
+
+| Outcome | Shown |
+|---|---|
+| `ended` | Session ended. (and, if `forced`, that the machine terminated it) |
+| `confirm` | Press End session again to end it: *reason*. *n* s left. |
+| `stale` | This session had already ended. |
+| `busy` | Not ended: an answer or reply is being delivered, or it is already being ended. End session comes back after 2 s |
+| `refused` | The machine refused to end this session: *reason* |
+| `failed`, or unknown | Couldn't end the session: *reason* |
+
+A press is resent with the same `request` after a lost response, like an answer, and waits
+45 s for its outcome (a host gives `/exit` 12 s, then terminates). Demo mode ends sessions
+as a host would (`?stopWindow=` sets the window in ms; `window.agentBridgeDemo.scriptStops(…)`
+scripts outcomes).
+
 ### Notifications
 
 **Turn on notifications** (under the sessions) asks for permission, which browsers allow
@@ -236,6 +265,10 @@ running another checkout's tests at the same time.
   limit and a large image made smaller, ten at most, progress, Try again withdrawn once the
   files change after a failure, a refusal keeping them
   without sending their bytes again, and no Attach for a machine without `sessions.attach`.
+* `test/stop.spec.mjs`, in demo mode: an idle session ended on one press (shown as ending,
+  then gone), a working or delegating one only on a second press that carries the first's
+  token, a lapsed window asking again, refusals and failures, an unknown outcome as failed,
+  a resend after a lost response, 44 px, and no End session without `sessions.stop`.
 * `test/ui.spec.mjs`, in demo mode: every field type and status from the worked example,
   glow per status, the delegating state (idle with `background` work), reduced motion,
   Markdown, an XSS payload in every text field, unknown

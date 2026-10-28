@@ -10,6 +10,7 @@
 //   answer-service.js sending answers: one outcome each, resent with the same request
 //   replies.js, reply-service.js  checking and sending replies (session.reply), likewise
 //   attachments.js   preparing files and images for a reply, and sending them first
+//   stop-service.js  ending sessions (session.stop), likewise, two presses when not idle
 //   push.js          notifications: turning them on and off, registering with each machine
 //   sessions-store.js, ui/*  what is shown
 //   demo.js          ?demo=1: a simulated host, no relay
@@ -22,6 +23,7 @@ import { HostClient } from './host-client.js';
 import { SessionsStore } from './sessions-store.js';
 import { AnswerService } from './answer-service.js';
 import { ReplyService } from './reply-service.js';
+import { StopService } from './stop-service.js';
 import { PushRegistrar, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities } from './protocol.js';
 import { SessionListView, renderMachines } from './ui/views.js';
@@ -34,8 +36,8 @@ const BASE = RELAY || location.origin;
 const store = new SessionsStore();
 let currentClient = null;
 let machineName = '';
-// Who answers questions and sends replies now: { service, replies, hostId, capabilities },
-// or null.
+// Who answers questions, sends replies and ends sessions now: { service, replies, stops,
+// hostId, capabilities }, or null.
 let answering = () => null;
 
 const view = new SessionListView($('session-list'), store, {
@@ -137,19 +139,27 @@ async function startDemo() {
   $('demo-banner').hidden = false;
   setPill('Demo', 'warn');
   const fixture = await (await fetch('fixtures/sessions-list.json', { cache: 'no-store' })).json();
-  const host = new DemoHost(fixture, { answerDelayMs: Number(params.get('answerDelay') ?? 700), answering: params.get('answer') !== '0', replying: params.get('reply') !== '0' && params.get('answer') !== '0', attaching: params.get('attach') !== '0' });
+  const host = new DemoHost(fixture, {
+    answerDelayMs: Number(params.get('answerDelay') ?? 700),
+    answering: params.get('answer') !== '0',
+    replying: params.get('reply') !== '0' && params.get('answer') !== '0',
+    attaching: params.get('attach') !== '0',
+    stopping: params.get('stop') !== '0' && params.get('answer') !== '0',
+    stopWindowMs: Number(params.get('stopWindow')) || 10000,
+  });
   // ?attachDelay= slows each file chunk, so its progress can be watched.
   host.attachmentDelayMs = Number(params.get('attachDelay')) || 0;
   // ?timeout= shortens how long a request waits for its response, for the tests of resends.
   const timeoutMs = Number(params.get('timeout')) || 0;
-  const client = new HostClient(host.connect(), { store, ...(timeoutMs ? { timeoutMs, answerTimeoutMs: timeoutMs, replyTimeoutMs: timeoutMs } : {}) });
+  const client = new HostClient(host.connect(), { store, ...(timeoutMs ? { timeoutMs, answerTimeoutMs: timeoutMs, replyTimeoutMs: timeoutMs, stopTimeoutMs: timeoutMs } : {}) });
   currentClient = client;
   const hello = await client.hello();
   const current = () => ({ client, hostId: hello.machine.id });
   const retryMs = Number(params.get('retry')) || 3000;
   const answers = new AnswerService({ current, retryMs });
   const replies = new ReplyService({ current, retryMs });
-  answering = () => ({ service: answers, replies, hostId: hello.machine.id, capabilities: hello.capabilities });
+  const stops = new StopService({ current, retryMs });
+  answering = () => ({ service: answers, replies, stops, hostId: hello.machine.id, capabilities: hello.capabilities });
   $('machines').hidden = false;
   renderMachines($('machine-list'), {
     presence: [{ id: hello.machine.id, name: hello.machine.name, kind: 'host' }],
@@ -162,13 +172,15 @@ async function startDemo() {
   await client.subscribe();
   const script = params.get('static') === '1' ? null : runScript(host, { tickMs: Number(params.get('tick')) || 4000 });
   window.agentBridgeDemo = {
-    host, client, store, view, answers, replies,
+    host, client, store, view, answers, replies, stops,
     // The next answers' outcomes, in order: 'delivered' (the default once these run out),
     // 'unconfirmed', 'stale', 'busy', 'refused', an unknown one, or { outcome, reason,
     // drop: true } to lose the response the first time, as a dropped channel would.
     script: (...outcomes) => host.scriptAnswers(outcomes),
     // The same, for the next replies.
     scriptReplies: (...outcomes) => host.scriptReplies(outcomes),
+    // The same, for the next stops; none scripted, the host decides as a real one would.
+    scriptStops: (...outcomes) => host.scriptStops(outcomes),
     upsert: (s) => host.upsert(s),
     remove: (id) => host.remove(id),
     frame: (f) => host.frame(f),
@@ -239,7 +251,8 @@ function begin(account) {
   const current = () => (hosts.phase === 'open' && hosts.client ? { client: hosts.client, hostId: hosts.targetId } : null);
   const answers = new AnswerService({ current });
   const replies = new ReplyService({ current });
-  answering = () => (hosts.targetId ? { service: answers, replies, hostId: hosts.targetId, capabilities: hosts.capabilities } : null);
+  const stops = new StopService({ current });
+  answering = () => (hosts.targetId ? { service: answers, replies, stops, hostId: hosts.targetId, capabilities: hosts.capabilities } : null);
   let shownCapabilities = '';
 
   // ---- notifications ----
@@ -340,6 +353,7 @@ function begin(account) {
     hosts.forget();
     answers.clear();
     replies.clear();
+    stops.clear();
     currentClient = null;
     accountStore.clear();
     connection.stop();
@@ -353,7 +367,7 @@ function begin(account) {
     currentClient = hosts.client;
     const caps = `${hosts.targetId}:${hosts.capabilities.join(' ')}`;
     if (caps !== shownCapabilities) { shownCapabilities = caps; view.refreshQuestions(); }
-    if (hosts.phase === 'open') { answers.ready(); replies.ready(); }
+    if (hosts.phase === 'open') { answers.ready(); replies.ready(); stops.ready(); }
     registerHere();
     drawNotify();
     drawMachines();
@@ -374,6 +388,7 @@ function begin(account) {
     hosts.forget();
     answers.clear();
     replies.clear();
+    stops.clear();
     accountStore.clear();
     connection.stop();
     // Not for long: signing out must not wait on a service worker that isn't running.
@@ -383,7 +398,7 @@ function begin(account) {
 
   // For the E2E tests and debugging from the console. Holds no secrets beyond what the
   // page already has.
-  window.agentBridge = { connection, hosts, store, answers, replies, notices };
+  window.agentBridge = { connection, hosts, store, answers, replies, stops, notices };
   drawNotify();
   connection.start();
 }

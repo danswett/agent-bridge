@@ -391,6 +391,24 @@ summary {
   .answer-status.progress::before, .answer-receipt.progress::before { animation: none; }
 }
 
+/* ---- ending a session ---- */
+/* A footer link rather than another control in the stack: small, muted and pinned left,
+   furthest from Send, behind a hairline that closes the card off, as on the old dashboard. */
+.stop-slot:empty { display: none; }
+.end-session { margin-top: 10px; padding-top: 2px; border-top: 1px solid var(--border); }
+.end-button {
+  display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); padding: 6px 2px;
+  font: inherit; font-size: .88rem; color: var(--muted); background: none; border: 0; cursor: pointer;
+}
+.end-button .icon { width: 18px; height: 18px; }
+.end-button:disabled { opacity: .55; cursor: default; }
+.end-session[data-stop="confirm"] .end-button { color: var(--warning-text); font-weight: 600; }
+.end-session .stop-status { margin: 0 0 6px; }
+.end-session .resend { margin-bottom: 6px; }
+/* Being ended: still, grey and dotted, neither working nor finished. */
+.frame.ending { border-color: var(--muted); border-style: dotted; }
+.session[data-status="ending"] .status-text { color: var(--muted); }
+
 /* ---- account ---- */
 .account { margin: 24px 0 0; color: var(--muted); font-size: .88rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .account p { margin: 0; }

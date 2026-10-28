@@ -15,6 +15,7 @@ export const Ops = Object.freeze({
   sessionsSubscribe: 'sessions.subscribe',
   sessionAnswer: 'session.answer',
   sessionReply: 'session.reply',
+  sessionStop: 'session.stop',
   pushSubscribe: 'push.subscribe',
   pushUnsubscribe: 'push.unsubscribe',
   pushList: 'push.list',
@@ -29,19 +30,25 @@ export const Events = Object.freeze({
   sessionsSynced: 'sessions.synced',
 });
 
-export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', push: 'push' });
+export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsStop: 'sessions.stop', push: 'push' });
 
 export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 
 const tolerant = (known, fallback) => (v) => (known.includes(v) ? v : fallback);
 export const readAgent = tolerant(['copilot', 'claude', 'codex'], 'unknown');
-export const readStatus = tolerant(['working', 'waiting', 'idle'], 'idle');
+// ending: the host is ending the session (session.stop).
+export const readStatus = tolerant(['working', 'waiting', 'idle', 'ending'], 'idle');
 export const readToolStatus = tolerant(['running', 'done', 'failed'], 'done');
 export const readQuestionKind = tolerant(['form', 'approval'], 'form');
 export const readFieldType = tolerant(['choice', 'multi', 'boolean', 'text', 'number'], 'text');
 // An outcome from a newer host is unconfirmed: never delivered, and never a reason to
 // answer again.
 export const readOutcome = tolerant(Outcomes, 'unconfirmed');
+
+export const StopOutcomes = Object.freeze(['ended', 'confirm', 'stale', 'busy', 'refused', 'failed']);
+// A stop outcome from a newer host is failed: never ended, and never confirm, which would
+// invite a press that confirms nothing.
+export const readStopOutcome = tolerant(StopOutcomes, 'failed');
 
 // Absent and null mean the same thing, so anything of the wrong type is treated as absent.
 const str = (v) => (typeof v === 'string' ? v : null);
@@ -166,4 +173,22 @@ export function readAnswerResult(raw) {
 export function readAttachmentState(raw) {
   const r = obj(raw) ?? {};
   return { received: Number.isSafeInteger(r.received) && r.received >= 0 ? r.received : 0, complete: r.complete === true };
+}
+
+// session.stop's result: { outcome, reason, confirm, confirmSeconds, forced }. confirm is the
+// token a second press sends, and comes only with the confirm outcome; a confirm without a
+// usable one reads as failed, since no press could confirm it.
+export function readStopResult(raw) {
+  const r = obj(raw) ?? {};
+  let outcome = readStopOutcome(r.outcome);
+  const confirm = outcome === 'confirm' && typeof r.confirm === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(r.confirm) ? r.confirm : null;
+  if (outcome === 'confirm' && !confirm) { outcome = 'failed'; }
+  const seconds = num(r.confirmSeconds);
+  return {
+    outcome,
+    reason: str(r.reason),
+    confirm,
+    confirmSeconds: confirm ? (seconds !== null && seconds > 0 && seconds <= 600 ? seconds : 10) : null,
+    forced: r.forced === true,
+  };
 }
