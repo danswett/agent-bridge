@@ -7,11 +7,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>AgentBridge.Host</RootNamespace>
     <AssemblyName>agent-bridge-host</AssemblyName>
+    <!-- Reported to clients as hello's machine.hostVersion. -->
+    <Version>0.1.0</Version>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\AgentBridge.Host.Core\AgentBridge.Host.Core.csproj" />
+    <ProjectReference Include="..\AgentBridge.Transport\AgentBridge.Transport.csproj" />
   </ItemGroup>
 
 </Project>

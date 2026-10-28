@@ -47,13 +47,15 @@ public sealed class ChannelHub
         this.key = key;
         intro = JsonSerializer.SerializeToUtf8Bytes(new { name, kind });
         relay.OnData = OnDataAsync;
-        relay.PresenceChanged += present =>
+        relay.PresenceChanged += DropAbsent;
+        // The relay could not deliver a frame because the peer has no connection. A peer's
+        // channels never outlive its connection (a reconnect makes a new hub), so none of
+        // them can carry anything again.
+        relay.Undeliverable += peer =>
         {
-            var online = present.Select(p => p.Id).ToHashSet();
-            var settled = Environment.TickCount64 - (long)PresenceGrace.TotalMilliseconds;
             foreach (var (k, ch) in channels)
             {
-                if (!online.Contains(k.Peer) && ch.CreatedAt < settled) { Forget(ch, new IOException("peer left")); }
+                if (k.Peer == peer) { Forget(ch, new IOException("peer is not connected")); }
             }
         };
         // Nothing crosses a channel once its relay connection has gone, and a reconnect makes
@@ -68,6 +70,31 @@ public sealed class ChannelHub
     {
         channels.TryRemove(new KeyValuePair<(string, ulong), SecureChannel>((ch.PeerId, ch.Id), ch));
         ch.Fail(e);
+    }
+
+    void DropAbsent(IReadOnlyList<PresenceEntry> present)
+    {
+        var online = present.Select(p => p.Id).ToHashSet();
+        var settled = Environment.TickCount64 - (long)PresenceGrace.TotalMilliseconds;
+        var spared = false;
+        foreach (var (k, ch) in channels)
+        {
+            if (online.Contains(k.Peer)) { continue; }
+            if (ch.CreatedAt < settled) { Forget(ch, new IOException("peer left")); }
+            else { spared = true; }
+        }
+        // A spared channel's peer may really have gone, and presence only says so again on
+        // its next change, which could be never: a phone that drops within the grace of
+        // opening a channel would leave it (and a host's subscription on it) running until
+        // the host restarts. So look again once the grace has passed, at presence as it is
+        // then.
+        if (spared)
+        {
+            _ = Task.Delay(PresenceGrace + TimeSpan.FromMilliseconds(50)).ContinueWith(_ =>
+            {
+                if (!relay.Completion.IsCompleted) { DropAbsent(relay.Presence); }
+            }, TaskScheduler.Default);
+        }
     }
 
     void PruneHandshakes()

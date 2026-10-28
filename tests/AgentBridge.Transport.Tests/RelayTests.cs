@@ -62,7 +62,9 @@ public class RelayTests
         var refused = await undeliverable.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(host.Id, refused);
-        await Assert.ThrowsAsync<TimeoutException>(() => open);
+        // The relay's undeliverable notice ends the attempt at once, not at its timeout.
+        var e = await Assert.ThrowsAsync<IOException>(() => open);
+        Assert.Equal("peer is not connected", e.Message);
         Assert.DoesNotContain(other.Relay.Presence, p => p.Id == host.Id);
         Assert.DoesNotContain(host.Relay.Presence, p => p.Id == other.Id);
     }
