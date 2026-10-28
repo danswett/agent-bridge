@@ -74,6 +74,18 @@ public class CopilotTests
     }
 
     [Fact]
+    public async Task A_whole_turn_between_two_reads_still_moves_statusSince_to_when_the_new_idle_began()
+    {
+        await using var s = new Session_();
+
+        await s.After(Copilot.User("one", 1), Copilot.TurnStart(2), Copilot.Assistant("first", 3), Copilot.TurnEnd(4));
+        var second = await s.After(Copilot.User("two", 10), Copilot.TurnStart(11), Copilot.Assistant("second", 12), Copilot.TurnEnd(14));
+
+        Assert.Equal(SessionStatus.Idle, second.Status);
+        Assert.Equal(Fixture.T0.AddSeconds(14), second.StatusSince);
+    }
+
+    [Fact]
     public async Task A_pending_ask_user_makes_it_waiting_until_the_human_response_is_recorded()
     {
         await using var s = new Session_();

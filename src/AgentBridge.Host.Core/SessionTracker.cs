@@ -127,7 +127,16 @@ internal sealed class SessionTracker
 
         var effective = question is not null ? SessionStatus.Waiting : status;
         DateTimeOffset since;
-        if (_lastStatus == effective) { since = _lastSince; }
+        if (_lastStatus == effective)
+        {
+            // Same status as last read, but it may have ended and begun again in between
+            // (a whole turn appended between two reads): the transcript's own time for the
+            // current status, when later, is when it began.
+            since = _lastSince;
+            DateTimeOffset? began = effective == _state.Effective ? _state.EffectiveSince
+                : effective == SessionStatus.Waiting ? question?.AskedAt : null;
+            if (began is { } b && b > since) { since = b; }
+        }
         else
         {
             since = effective == _state.Effective && _state.EffectiveSince is { } s ? s
