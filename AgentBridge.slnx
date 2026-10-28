@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AgentBridge.Protocol/AgentBridge.Protocol.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AgentBridge.Protocol.Tests/AgentBridge.Protocol.Tests.csproj" />
+  </Folder>
+</Solution>
