@@ -128,6 +128,8 @@ export class DemoHost {
     }
     if (!f || f.used) { throw new Error(`attachment ${String(data?.attachment).slice(0, 8)} is not on the host (it expired, was removed, or never arrived); attach it again`); }
     if (this.attachmentDelayMs) { await new Promise((r) => setTimeout(r, this.attachmentDelayMs)); }
+    // failNextChunk: the next chunk is turned down with this reason, as a host would on a fault.
+    if (this.failNextChunk) { const reason = this.failNextChunk; this.failNextChunk = null; throw new Error(reason); }
     const bytes = Uint8Array.from(atob(data.data), (ch) => ch.charCodeAt(0));
     if (data.offset + bytes.length <= f.received) { return { received: f.received, complete: f.complete }; }
     if (data.offset !== f.received) { throw new Error(`expected the chunk at offset ${f.received}`); }

@@ -78,6 +78,9 @@ export class ReplyBox {
   #files = [];
   #preparing = 0;
   #attach = false;
+  // A failed reply whose files have changed since: Try again would send the old set, so it
+  // goes, and Send sends what the box shows.
+  #edited = null;
 
   // replying: { service, hostId, sessionId }. attach: whether the machine takes files.
   constructor({ machineName, replying, attach = false, uuid = () => globalThis.crypto.randomUUID() }) {
@@ -215,6 +218,7 @@ export class ReplyBox {
         const prepared = await prepareAttachment(file, { uuid: this.uuid });
         if (prepared.image && SHOWN.test(prepared.type)) { prepared.url = URL.createObjectURL(new Blob([prepared.bytes], { type: prepared.type })); }
         this.#files.push(prepared);
+        this.#filesChanged();
       } catch (err) {
         problems.push(`Couldn't attach ${file.name || 'that'}: ${err?.message ?? err}.`);
       } finally {
@@ -230,12 +234,18 @@ export class ReplyBox {
     const i = this.#files.indexOf(file);
     if (i < 0 || this.#pending()) { return; }
     this.#files.splice(i, 1);
+    this.#filesChanged();
     if (file.url) { URL.revokeObjectURL(file.url); }
     // Sent to the machine before (with a reply that was refused, say): it can let it go now.
     if (file.offered) { this.replying.service.discard?.(this.replying.hostId, file.id); }
     this.#renderFiles();
-    this.#sync();
+    this.#show(this.entry);
     this.els.input.focus();
+  }
+
+  #filesChanged() {
+    const entry = this.entry;
+    if (entry?.state === 'failed') { this.#edited = entry.request; }
   }
 
   #renderFiles() {
@@ -274,6 +284,7 @@ export class ReplyBox {
   }
 
   #resend() {
+    if (this.entry?.request === this.#edited) { return; }
     const { service, hostId, sessionId } = this.replying;
     service.resend(hostId, sessionId);
   }
@@ -302,7 +313,7 @@ export class ReplyBox {
     e.status.textContent = shown.text;
     e.status.className = `answer-status reply-status${shown.tone ? ` ${shown.tone}` : ''}`;
     e.form.setAttribute('aria-busy', shown.tone === 'progress' ? 'true' : 'false');
-    e.resend.hidden = entry?.state !== 'failed';
+    e.resend.hidden = entry?.state !== 'failed' || entry.request === this.#edited;
     if (entry?.state === 'done' && entry.outcome === 'busy' && !this.#busyTimer && this.#busyFor !== entry.request) {
       this.#busyFor = entry.request;
       this.#busyTimer = setTimeout(() => { this.#busyTimer = null; this.#sync(); }, REPLY_BUSY_PAUSE_MS);

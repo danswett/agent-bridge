@@ -145,6 +145,22 @@ test.describe('on a phone', () => {
     expect((await ops(page)).filter((o) => o === 'attachment.chunk')).toHaveLength(4);
   });
 
+  test('after a file is turned down, taking one out means Try again cannot send it: Send sends what is shown', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page);
+    await pick(page, textFile('keep.md'), textFile('drop.md'));
+    await page.evaluate(() => { window.agentBridgeDemo.host.failNextChunk = 'the host could not take it'; });
+    await reply.getByRole('button', { name: 'Send' }).tap();
+    await expect(reply.locator('.reply-status')).toHaveText("Couldn't send it: the host could not take it.");
+    await expect(reply.getByRole('button', { name: 'Try again' })).toBeVisible();
+
+    await reply.getByRole('button', { name: 'Remove drop.md' }).tap();
+    await expect(reply.getByRole('button', { name: 'Try again' })).toBeHidden();
+    await reply.getByRole('button', { name: 'Send' }).tap();
+    await expect(reply).toHaveAttribute('data-reply', 'delivered');
+    expect((await typed(page))[0].files.map((f) => f.name)).toEqual(['keep.md']);
+  });
+
   test('a refused reply keeps its files, and sending again does not send their bytes again', async ({ page }) => {
     await openDemo(page);
     await page.evaluate(() => window.agentBridgeDemo.scriptReplies('refused'));

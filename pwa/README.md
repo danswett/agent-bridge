@@ -151,7 +151,8 @@ can't be shrunk, so it goes only if it already fits.
 On **Send** the files go first, one 11 KiB chunk at a time, each from where the machine has
 got to, with the percentage shown; then the reply names them. A resend after a reconnect
 sends only what the machine is missing, and nothing for files it already has whole. A file
-the machine turns down fails the reply with its reason and **Try again**. A delivered reply
+the machine turns down fails the reply with its reason and **Try again**, which goes once a
+file is added or removed, so that Send sends what the box shows. A delivered reply
 takes its files out of the box; any other outcome keeps them, and after `unconfirmed` they
 are sent afresh if sent again, since the machine has let them go. The machine types each as
 `@<path>` ahead of the words, as agent-ha-bridge does. Demo mode keeps the files as a host
@@ -232,7 +233,8 @@ running another checkout's tests at the same time.
   sending, 44 px targets, Ctrl/Cmd+Enter, and no box for a machine without `sessions.reply`.
 * `test/attach.spec.mjs`, in demo mode: a picked file and a pasted screenshot shown as
   chips and typed as `@` mentions ahead of the words, files alone, removing one, the size
-  limit and a large image made smaller, ten at most, progress, a refusal keeping them
+  limit and a large image made smaller, ten at most, progress, Try again withdrawn once the
+  files change after a failure, a refusal keeping them
   without sending their bytes again, and no Attach for a machine without `sessions.attach`.
 * `test/ui.spec.mjs`, in demo mode: every field type and status from the worked example,
   glow per status, the delegating state (idle with `background` work), reduced motion,
