@@ -13,14 +13,20 @@ ops without changing anything here.
 ## Rules for every message
 
 * JSON, UTF-8, `camelCase` names. A field that is absent and one that is `null` mean
-  the same thing.
-* **Clients ignore fields and enum values they don't know**, and show an unknown
-  `status` as `idle`. Hosts never remove or rename a field within a protocol version.
+  the same thing. Non-ASCII text is sent as UTF-8, not as `\u` escapes.
+* **Clients ignore fields and enum values they don't know.** An unknown value reads as:
+  `agent` → `unknown` (shown generically), `status` → `idle`, tool `status` → `done`,
+  question `kind` → `form`, field `type` → `text`. Hosts never remove or rename a field
+  within a protocol version.
 * Times are UTC with milliseconds and a `Z`, always in this exact form:
   `2026-10-28T04:22:43.182Z`. Clients can compare them as strings.
-* **No single message exceeds 48 KiB of JSON**, so it always fits in one Noise transport
-  message (65,535 bytes) with room to spare. Long text is cut and flagged as truncated,
-  never mid-character. Each type below gives its limits.
+* **Sizes are UTF-8 bytes of the JSON as sent.** No single message exceeds **48 KiB**, so
+  it always fits one Noise transport message (65,535 bytes) with room to spare. **Every
+  `Session` as sent fits 40 KiB**: in a list page, an event or `session.get`. Each type
+  below gives per-field limits. Those alone can't promise the budget (question options,
+  history), so a host finishes with the trimming order in
+  [Session budget](#session-budget). Long text is cut and flagged, never
+  mid-character.
 * Text is Markdown where the type says so (agent responses, questions), otherwise plain.
   Clients render Markdown without raw HTML.
 
@@ -36,7 +42,7 @@ Inside a channel, as in S4:
 | host → client | `{"ev": "session.upsert", "seq": 42, "data": {...}}` | **New:** an event the client subscribed to. It has no `id` or `re` |
 
 `seq` goes up by one for each event on a channel. If a client sees a gap (it shouldn't,
-since Noise is ordered), it calls `sessions.list` again.
+since Noise is ordered), it calls `sessions.subscribe` again.
 
 ## Ops
 
@@ -58,11 +64,15 @@ slice has only `sessions.read`.
 
 ### `sessions.list`
 
-Request `data`: `{}`. Result: `{ "sessions": [Session…], "revision": 118 }`. It lists
-live sessions only, most recently updated first. Each `Session` here **omits
-`activity.history`** to keep the list small; `session.get` includes it.
+Request `data`: `{}` for the first page, then `{ "cursor": "<next>" }`. Result:
+`{ "sessions": [Session…], "revision": 118, "next": "<cursor>" }`. It lists live
+sessions only, most recently updated first, as many as fit in one message (always at
+least one). `next` is absent on the last page. Each `Session` here **omits
+`activity.history`**; `session.get` includes it.
 
-`revision` is the host's change counter. It changes whenever any session changes.
+`revision` is the host's change counter. It changes whenever any session changes. If it
+changes between pages, the pages may overlap or miss a session; a client that needs a
+consistent list uses `sessions.subscribe`.
 
 ### `session.get`
 
@@ -71,16 +81,20 @@ Request `data`: `{ "id": "<session id>" }`. Result: the full `Session`, or
 
 ### `sessions.subscribe`
 
-Request `data`: `{}`. Result: the same as `sessions.list`. After that, until the channel
-closes, the host sends two events:
+Request `data`: `{}`. Result: `{ "revision": 118, "count": 3 }`. Then the host sends:
 
-* `session.upsert`, with a full `Session` (without `activity.history`), whenever
-  anything a client shows changes. Hosts coalesce bursts to at most one upsert per
-  session every 250 ms, and the latest state always arrives.
-* `session.remove`, with `{ "id": "…" }`, when a session ends and is dropped.
+1. **The snapshot:** one `session.upsert` for each of the `count` live sessions, then
+   `sessions.synced` with `{ "revision": … }`. On `sessions.synced` a client replaces its
+   list with the sessions it received since subscribing, which drops any it had from
+   before that no longer exist.
+2. **Live changes, until the channel closes:**
+   * `session.upsert`, with a full `Session` (without `activity.history`), whenever
+     anything a client shows changes. Hosts coalesce bursts to at most one upsert per
+     session every 250 ms, and the latest state always arrives.
+   * `session.remove`, with `{ "id": "…" }`, when a session ends and is dropped.
 
-When a channel closes, the client subscribes again on the new channel and replaces its
-whole list with the result.
+A session can change while the snapshot is being sent; its upsert then simply arrives
+again. When a channel closes, the client subscribes again on the new channel.
 
 ## Types
 
@@ -89,8 +103,8 @@ whole list with the result.
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string | The agent's own session id: the Copilot session-state folder name, or the Claude or Codex session id |
-| `agent` | `"copilot"` \| `"claude"` \| `"codex"` | |
-| `title` | string? | The session's name if it has one (Copilot's `workspace.yaml` `name`). Otherwise the first user message, cut to 120 characters |
+| `agent` | `"copilot"` \| `"claude"` \| `"codex"` | Hosts send only these. A client reads anything else as `unknown` |
+| `title` | string? | The session's name if it has one (Copilot's `workspace.yaml` `name`). Otherwise the first user message, cut to 240 bytes |
 | `cwd` | string? | Working directory |
 | `repository` | string? | `owner/name`, if known |
 | `branch` | string? | |
@@ -107,12 +121,12 @@ whole list with the result.
 
 | Field | Type | Notes |
 |---|---|---|
-| `response` | string? (Markdown) | The latest assistant text, at most 16,000 characters. When it's longer, the **end** is kept and `responseTruncated` is true |
+| `response` | string? (Markdown) | The latest assistant text, at most 16 KiB. When it's longer, the **end** is kept and `responseTruncated` is true |
 | `responseTruncated` | bool? | |
-| `reasoning` | string? | The latest reasoning text, at most 4,000 characters (the end is kept) |
+| `reasoning` | string? | The latest reasoning text, at most 4 KiB (the end is kept) |
 | `currentTool` | ToolCall? | The tool running now, while `working` |
 | `history` | ToolCall[]? | Only in `session.get`: the latest 50 tool calls, oldest first |
-| `userMessage` | string? | The latest user message, at most 2,000 characters |
+| `userMessage` | string? | The latest user message, at most 2 KiB |
 | `turnCount` | number? | Completed assistant turns |
 | `compactions` | number? | Context compactions so far |
 
@@ -122,7 +136,7 @@ whole list with the result.
 |---|---|---|
 | `id` | string | The agent's tool call id |
 | `name` | string | Tool name, e.g. `powershell`, `edit`, `Bash` |
-| `summary` | string? | One line for display: the tool's `description` argument if it has one, else a short form of its main argument. At most 200 characters |
+| `summary` | string? | One line for display: the tool's `description` argument if it has one, else a short form of its main argument. At most 200 bytes |
 | `status` | `"running"` \| `"done"` \| `"failed"` | |
 | `startedAt` | time | |
 | `endedAt` | time? | |
@@ -138,9 +152,10 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 |---|---|---|
 | `id` | string | The id of the tool call that asked it. It stays the same while the question is pending |
 | `kind` | `"form"` \| `"approval"` | `approval` is a permission prompt with fixed choices (Codex approvals, Copilot permission requests) |
-| `message` | string (Markdown) | What the agent wrote, at most 8,000 characters |
+| `message` | string (Markdown) | What the agent wrote, at most 8 KiB |
 | `fields` | Field[] | In order. Empty for a plain message |
 | `askedAt` | time | |
+| `truncated` | bool? | The host had to cut `message` or drop `fields` to fit the budget. A client shows what it has and says to answer at the machine |
 
 ### Field
 
@@ -159,6 +174,23 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 
 `{ "value": "s6", "label": "S6: TPM-backed device keys (Recommended)" }`. `label` is what
 to show; if it's absent, show `value`.
+
+## Session budget
+
+After applying the field limits, a host checks the size of each `Session` it sends. If
+it is over 40 KiB, the host trims in this order until it fits, which loses the least for
+a reader (`SessionBudget.Fit` in C#):
+
+1. Tool history, oldest first.
+2. `reasoning`.
+3. `userMessage`.
+4. `response`, to its last 4 KiB (`responseTruncated` set).
+5. The question's `message`, to its first 2 KiB (`truncated` set).
+6. The question's `fields` (`truncated` set).
+7. `response` and `currentTool`.
+
+A list page holds as many sessions as fit in 48 KiB, and always at least one, since every
+session is at most 40 KiB.
 
 ## Where a host gets each field (read-only)
 
