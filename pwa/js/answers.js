@@ -220,11 +220,15 @@ export function initialState(question) {
   return Object.fromEntries(question.fields.map((f) => [f.name, initialField(f)]));
 }
 
+// A lone surrogate can't be read by the C# host at all (System.Text.Json throws on one),
+// so text goes as well-formed UTF-16, with U+FFFD in its place, as a browser would encode it.
+export const wellFormed = (s) => s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
+
 // What the form says, as the request's { fields } or { text }, plus problems only the form
 // can see (a number box holding something else). Blank text is no answer; an Other ticked
 // with nothing in it is sent as such, for checkAnswer to name.
 export function buildAnswer(question, state) {
-  if (question.fields.length === 0) { return { answer: { text: state.text ?? '' }, problems: [] }; }
+  if (question.fields.length === 0) { return { answer: { text: wellFormed(state.text ?? '') }, problems: [] }; }
   const fields = {};
   const problems = [];
   for (const field of question.fields) {
@@ -232,12 +236,12 @@ export function buildAnswer(question, state) {
     if (!st) { continue; }
     switch (field.type) {
       case 'choice':
-        if (st.otherChosen) { fields[field.name] = { other: st.other }; } else if (st.selected !== null) { fields[field.name] = st.selected; }
+        if (st.otherChosen) { fields[field.name] = { other: wellFormed(st.other) }; } else if (st.selected !== null) { fields[field.name] = st.selected; }
         break;
       case 'multi': {
         const order = field.options.map((o) => o.value);
         const list = order.filter((v) => st.selected.includes(v));
-        if (st.otherChosen) { list.push({ other: st.other }); }
+        if (st.otherChosen) { list.push({ other: wellFormed(st.other) }); }
         if (list.length) { fields[field.name] = list; }
         break;
       }
@@ -253,7 +257,7 @@ export function buildAnswer(question, state) {
         break;
       }
       default:
-        if (!blank(st.text)) { fields[field.name] = st.text; }
+        if (!blank(st.text)) { fields[field.name] = wellFormed(st.text); }
         break;
     }
   }

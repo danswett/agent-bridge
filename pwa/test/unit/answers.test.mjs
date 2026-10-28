@@ -225,3 +225,13 @@ test('only text the person typed counts as a draft worth keeping', () => {
   assert.equal(draftText(q, st), 'notes: my notes\nanswer: my own');
   assert.equal(draftText(form(), { text: 'just text' }), 'just text');
 });
+
+test('text is sent well-formed: a lone surrogate, which the C# host cannot read, becomes U+FFFD', () => {
+  const q = form({ name: 't', type: 'text' }, choice('c', { other: true }));
+  const st = initialState(q);
+  st.t.text = 'a\ud800b \udc00 😀';
+  st.c.otherChosen = true;
+  st.c.other = '\ud83d';
+  assert.deepEqual(buildAnswer(q, st).answer.fields, { t: 'a\ufffdb \ufffd 😀', c: { other: '\ufffd' } });
+  assert.deepEqual(buildAnswer(form(), { text: 'x\udbff' }).answer, { text: 'x\ufffd' });
+});
