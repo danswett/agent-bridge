@@ -1,14 +1,15 @@
-# Bridge Protocol v1: sessions (read-only slice)
+# Bridge Protocol v1: sessions
 
 The contract between a **Bridge Host** and its clients: the PWA now, and later the
 WinUI 3 and SwiftUI apps and the native phone apps. It is how a client sees a machine's
-agent sessions. It travels inside the end-to-end Noise channel from spike S4, so the
-relay never sees any of it. C# records matching this document are in
-`src/AgentBridge.Protocol/Sessions.cs`, and the PWA mirrors them in JavaScript.
+agent sessions and answers their questions. It travels inside the end-to-end Noise
+channel from spike S4, so the relay never sees any of it. C# records matching this
+document are in `src/AgentBridge.Protocol/Sessions.cs`, and the PWA mirrors them in
+JavaScript.
 
-Scope of this slice: **read-only**. A host reports sessions, their activity and their
-pending questions. Answering, replying, launching and stopping come next; they will add
-ops without changing anything here.
+Scope so far: a host reports sessions, their activity and their pending questions
+(`sessions.read`), and can take an answer to a question (`sessions.answer`). Replying,
+launching and stopping come next; they will add ops without changing anything here.
 
 ## Rules for every message
 
@@ -67,8 +68,12 @@ Request `data`: `{}`. Result:
 ```
 
 `machine.id` is the host's device id (S4). `os` is `windows`, `macos` or `linux`.
-`capabilities` lists what this host supports, and a client hides anything missing. This
-slice has only `sessions.read`.
+`capabilities` lists what this host supports, and a client hides anything missing:
+
+| Capability | Ops |
+|---|---|
+| `sessions.read` | `sessions.list`, `session.get`, `sessions.subscribe` |
+| `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
 
 ### `sessions.list`
 
@@ -110,6 +115,59 @@ a complete snapshot ending in `sessions.synced`, then carries on with live chang
 never runs two subscriptions side by side, so each change arrives once. This is how a
 client recovers from a gap. Live upserts sent before the new response are covered by
 the snapshot.
+
+### `session.answer`
+
+Answers a session's pending question. Request `data`:
+
+```json
+{
+  "id": "<session id>",
+  "question": "<question id>",
+  "request": "6f1c2a9e-4b7d-4f0a-9b8e-2d1c3e4f5a6b",
+  "fields": { "answer": "s6" }
+}
+```
+
+| Field | Notes |
+|---|---|
+| `id` | The session |
+| `question` | The `question.id` the client was shown. The host answers only that question: if the session is no longer asking it, nothing is typed |
+| `request` | A fresh UUID per answer the person gives. A host remembers the outcome of each request for at least 10 minutes and returns it again for a repeat, typing nothing more. A client resending after a lost response or a reconnect therefore never answers twice |
+| `fields` | One value per field, by `name` (below). Omit a field to leave it unanswered; `required` fields must be present |
+| `text` | Instead of `fields`, for a question with no fields: the free-text answer |
+
+A field's value, by type:
+
+| `type` | Value |
+|---|---|
+| `choice` | One option's `value`, or `{ "other": "<text>" }` when `allowOther` |
+| `multi` | An array of option values, which may also hold one `{ "other": "<text>" }` when `allowOther` |
+| `boolean` | `true` or `false` |
+| `text` | A string |
+| `number` | A number |
+
+Free text, in `text` or `other`, is at most 4 KiB of UTF-8; the whole request is at most
+16 KiB. A host collapses control characters and line breaks to spaces before typing.
+`Answers.Check` in C# is the validation every host applies before typing anything.
+
+Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
+anything but `delivered`:
+
+| `outcome` | Meaning | Typed? |
+|---|---|---|
+| `delivered` | The host typed the answer and the agent's transcript recorded it | Yes |
+| `unconfirmed` | The host typed it, but could not confirm the agent recorded it (for example the session stopped answering). It never retries on its own; the client says to check at the machine | Yes |
+| `stale` | The session is no longer asking that question: answered at the machine or by another device, or gone | No |
+| `busy` | Another answer to this session is being delivered | No |
+| `refused` | The host will not type it: an invalid answer, a question the client should not answer remotely (`truncated`), an elevated or otherwise unreachable session, an agent or platform without delivery, or agent-ha-bridge active for this user | No |
+
+A client treats an outcome it doesn't know as `unconfirmed`, never as `delivered`. The
+session's next `session.upsert` shows the question gone whatever the outcome.
+
+Typing into a live session is a single writer's job, and the host serializes it: one
+answer per session at a time (`busy` otherwise), checked against the transcript
+immediately before typing and confirmed by identity, never by clock, after.
 
 ## Types
 
@@ -226,7 +284,7 @@ a reader (`SessionBudget.Fit` in C#):
 A list page holds as many sessions as fit in 48 KiB, and always at least one, since every
 session is at most 40 KiB.
 
-## Where a host gets each field (read-only)
+## Where a host gets each field
 
 | Agent | Sessions | Activity and status | Question |
 |---|---|---|---|

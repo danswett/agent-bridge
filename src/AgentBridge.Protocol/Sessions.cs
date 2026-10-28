@@ -84,6 +84,9 @@ public static class Limits
     public const int ToolSummary = 200;
     public const int QuestionMessage = 8 * 1024;
     public const int History = 50;
+    // Free text in an answer (session.answer's text, or a field's other), and the request.
+    public const int AnswerText = 4 * 1024;
+    public const int AnswerRequest = 16 * 1024;
 
     // Keeps the end of the text, as clients show the most recent part. Never splits a
     // character (UTF-8 sequence or surrogate pair).
@@ -175,6 +178,11 @@ public enum QuestionKind { Form, Approval }
 
 [UnknownAs(Text)]
 public enum FieldType { Choice, Multi, Boolean, Text, Number }
+
+// An outcome a client does not know reads as Unconfirmed: never as Delivered, and never as
+// a reason to answer again.
+[UnknownAs(Unconfirmed)]
+public enum AnswerOutcome { Delivered, Unconfirmed, Stale, Busy, Refused }
 
 public sealed record MachineInfo(string Id, string Name, string Os, string HostVersion);
 
@@ -278,12 +286,27 @@ public sealed record SessionsSynced(long Revision);
 
 public sealed record SessionRemoved(string Id);
 
+// session.answer. Fields holds one value per field name, shaped by the field's type (see
+// the contract); Text answers a question without fields. Request is the client's UUID for
+// this answer, which makes a resend return the first outcome instead of typing again.
+public sealed record AnswerRequest
+{
+    public required string Id { get; init; }
+    public required string Question { get; init; }
+    public required string Request { get; init; }
+    public IReadOnlyDictionary<string, JsonElement>? Fields { get; init; }
+    public string? Text { get; init; }
+}
+
+public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null);
+
 public static class Ops
 {
     public const string Hello = "hello";
     public const string SessionsList = "sessions.list";
     public const string SessionGet = "session.get";
     public const string SessionsSubscribe = "sessions.subscribe";
+    public const string SessionAnswer = "session.answer";
 }
 
 public static class Events
@@ -322,4 +345,5 @@ public static class Paging
 public static class Capabilities
 {
     public const string SessionsRead = "sessions.read";
+    public const string SessionsAnswer = "sessions.answer";
 }
