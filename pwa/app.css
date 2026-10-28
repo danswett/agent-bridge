@@ -1,0 +1,296 @@
+/* Agent Bridge PWA. Mobile first (an iPhone on the Home Screen), fine on a desktop.
+   Colours follow the old Home Assistant cards: blue while working, amber while waiting
+   on you, calm when idle. Both schemes keep body text at 7:1 and secondary text above
+   4.5:1. No inline styles anywhere, so the CSP can say style-src 'self'. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #f6f8fa;
+  --surface: #ffffff;
+  --surface-2: #f0f3f6;
+  --text: #1f2328;
+  --muted: #59636e;
+  --border: #d1d9e0;
+  --primary: #0969da;
+  --primary-text: #ffffff;
+  --warning: #bf8700;
+  --warning-text: #8a5a00;
+  --danger: #cf222e;
+  --ok: #1a7f37;
+  --code-bg: #eff2f5;
+  --radius: 14px;
+  --tap: 44px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --surface: #151b23;
+    --surface-2: #1c232c;
+    --text: #e6edf3;
+    --muted: #9ea7b3;
+    --border: #3d444d;
+    --primary: #4493f8;
+    --primary-text: #0d1117;
+    --warning: #d29922;
+    --warning-text: #e3b341;
+    --danger: #f85149;
+    --ok: #3fb950;
+    --code-bg: #0d1117;
+  }
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  /* The notch and the home indicator: content stays clear of both on an iPhone. */
+  padding: 0 max(12px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+}
+
+main { max-width: 760px; margin: 0 auto; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.skip { position: absolute; left: -999px; top: 0; }
+.skip:focus { left: 12px; top: max(8px, env(safe-area-inset-top)); z-index: 10; background: var(--surface); padding: 8px 12px; border-radius: 8px; }
+
+a { color: var(--primary); }
+:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+
+/* ---- top bar ---- */
+.topbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  max-width: 760px; margin: 0 auto;
+  padding: max(10px, env(safe-area-inset-top)) 2px 10px;
+  background: var(--bg);
+}
+.topbar h1 { font-size: 1.25rem; margin: 0; }
+.pill {
+  margin: 0; padding: 4px 10px; border-radius: 999px; font-size: .85rem;
+  border: 1px solid var(--border); color: var(--muted); background: var(--surface);
+  max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pill.ok { color: var(--ok); border-color: currentColor; }
+.pill.warn { color: var(--warning-text); border-color: currentColor; }
+.pill.bad { color: var(--danger); border-color: currentColor; }
+
+/* ---- shared ---- */
+.panel, .banner {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px; margin: 10px 0;
+}
+.panel h2, .sessions h2 { font-size: 1.05rem; margin: 0 0 8px; }
+.banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.banner.demo { border-style: dashed; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.note { color: var(--muted); font-size: .9rem; margin: 6px 0; }
+.note.warn { color: var(--warning-text); }
+.code { font: 600 1.7rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .12em; margin: 4px 0; }
+
+.button {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--tap); padding: 8px 16px; border-radius: 10px;
+  font: inherit; font-weight: 600; text-decoration: none; cursor: pointer;
+  border: 1px solid var(--primary); background: var(--primary); color: var(--primary-text);
+}
+.button.secondary { background: transparent; color: var(--primary); }
+.button:disabled { opacity: .55; cursor: default; }
+
+/* ---- machines ---- */
+.machines { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.machine-button {
+  width: 100%; min-height: var(--tap); display: grid;
+  grid-template-columns: auto 1fr auto; grid-template-rows: auto auto; column-gap: 10px;
+  align-items: center; text-align: left; padding: 8px 12px;
+  font: inherit; color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 10px; cursor: pointer;
+}
+.machine-button .icon { grid-row: 1 / 3; width: 24px; height: 24px; }
+.machine-name { font-weight: 600; }
+.machine-id { grid-column: 2; grid-row: 2; color: var(--muted); font: .8rem ui-monospace, monospace; }
+.machine-state { grid-column: 3; grid-row: 1 / 3; color: var(--ok); font-size: .85rem; }
+.machine-button.selected { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.machine-button.selected .machine-state { color: var(--primary); }
+
+.icon { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* ---- sessions ---- */
+.sessions { margin-top: 16px; }
+.sessions:focus { outline: none; }
+.sessions-head { display: flex; align-items: baseline; gap: 8px; }
+.count { color: var(--muted); font-size: .9rem; }
+.session-list { display: grid; gap: 14px; }
+
+.session { position: relative; }
+.frame {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 14px 12px;
+  overflow: hidden;
+  transition: border-color .4s ease, box-shadow .4s ease;
+}
+/* The steady core of the glow, painted once per state change; the breathing halo is
+   .glow, below. */
+.frame.working { border-color: var(--primary); box-shadow: 0 0 6px 0 var(--primary); }
+.frame.waiting { border-color: var(--warning); box-shadow: 0 0 6px 0 var(--warning); }
+
+/* The halo is its own layer with a shadow that never changes, faded by opacity. Animating
+   box-shadow on the card itself repaints the whole card on the main thread every frame;
+   that hung Home Assistant tabs with a few sessions working (old card, 1.37). Opacity is
+   composited. It is a sibling of the frame because the frame's overflow would clip it. */
+.glow {
+  position: absolute; inset: 0; border-radius: var(--radius);
+  opacity: 0; pointer-events: none;
+}
+.frame.working ~ .glow,
+.frame.waiting ~ .glow { animation: glow 1.6s ease-in-out infinite; will-change: opacity; }
+.frame.working ~ .glow { box-shadow: 0 0 16px 2px var(--primary); }
+.frame.waiting ~ .glow { box-shadow: 0 0 18px 3px var(--warning); }
+@keyframes glow { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+
+.head { padding-top: 6px; }
+.title { margin: 0; font-size: 1.05rem; }
+.fold {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: var(--tap); padding: 6px 0; margin: 0;
+  font: inherit; font-weight: 600; color: var(--text); text-align: left;
+  background: none; border: 0; cursor: pointer;
+}
+.title-text { flex: 1; overflow-wrap: anywhere; }
+.chevron { transition: transform .2s ease; color: var(--muted); }
+.collapsed .chevron { transform: rotate(-90deg); }
+
+.agent-badge {
+  display: inline-grid; place-items: center; width: 30px; height: 30px; flex: none;
+  border-radius: 8px; color: #fff; background: #6e7781;
+}
+.agent-badge .icon { width: 18px; height: 18px; }
+.agent-copilot { background: #24292f; }
+.agent-claude { background: #c15f3c; }
+.agent-codex { background: #10a37f; }
+@media (prefers-color-scheme: dark) {
+  .agent-copilot { background: #f0f6fc; color: #24292f; }
+}
+
+.meta { margin: 0 0 2px; color: var(--muted); font-size: .88rem; display: flex; flex-wrap: wrap; gap: 0 6px; }
+.meta > * + *::before { content: "·"; margin-right: 6px; }
+.agent-name { color: var(--text); font-weight: 600; }
+.repo, .branch, .model { overflow-wrap: anywhere; }
+.branch { font-family: ui-monospace, monospace; font-size: .82rem; }
+
+.status-line { margin: 2px 0; font-size: .9rem; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; }
+.status-text { font-weight: 600; color: var(--text); }
+.status-line .since:not(:empty)::before, .status-line .updated:not(:empty)::before { content: "·"; margin: 0 6px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); margin-right: 7px; flex: none; }
+.session[data-status="working"] .dot { background: var(--primary); }
+.session[data-status="working"] .status-text { color: var(--primary); }
+.session[data-status="waiting"] .dot { background: var(--warning); }
+.session[data-status="waiting"] .status-text { color: var(--warning-text); }
+
+.tool-line { margin: 4px 0 0; font-size: .88rem; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+.tool-line .tool-name { font-weight: 600; font-family: ui-monospace, monospace; }
+.tool-line .tool-summary { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.spinner {
+  width: 10px; height: 10px; flex: none; align-self: center;
+  border: 2px solid var(--primary); border-right-color: transparent; border-radius: 50%;
+}
+.tool-line[data-status="running"] .spinner { animation: spin 1s linear infinite; }
+.tool-line:not([data-status="running"]) .spinner { border-right-color: var(--primary); }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* The breathing and spinning are decoration. A viewer who asked for less motion keeps the
+   colours and the glow, held at the middle of the pulse. */
+@media (prefers-reduced-motion: reduce) {
+  .frame.working ~ .glow,
+  .frame.waiting ~ .glow { animation: none; opacity: .6; will-change: auto; }
+  .tool-line[data-status="running"] .spinner { animation: none; }
+  .frame, .chevron { transition: none; }
+}
+
+.body { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 4px; }
+.note.truncated { font-style: italic; }
+.plain { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
+.facts { color: var(--muted); font-size: .8rem; margin: 10px 0 0; overflow-wrap: anywhere; }
+
+details { margin: 8px 0; }
+summary {
+  min-height: var(--tap); padding: 10px 0; cursor: pointer;
+  color: var(--muted); font-weight: 600; font-size: .92rem;
+}
+
+.tools { list-style: none; margin: 0; padding: 0; font-size: .86rem; }
+.tool { display: grid; grid-template-columns: 1.4em auto 1fr auto; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--border); align-items: baseline; }
+.tool:last-child { border-bottom: 0; }
+.tool .tool-name { font-family: ui-monospace, monospace; font-weight: 600; }
+.tool .tool-summary { color: var(--muted); overflow-wrap: anywhere; }
+.tool .tool-time { color: var(--muted); font-size: .78rem; white-space: nowrap; }
+.tool.done .tool-mark { color: var(--ok); }
+.tool.failed .tool-mark { color: var(--danger); }
+.tool.running .tool-mark { color: var(--primary); }
+
+/* ---- Markdown ---- */
+.md { overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 8px; }
+.md p, .md ul, .md ol, .md blockquote, .md pre, .md .md-table { margin: 8px 0; }
+.md ul, .md ol { padding-left: 1.4em; }
+.md h4, .md h5, .md h6 { margin: 12px 0 4px; font-size: 1rem; }
+.md code { font: .86em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+.md pre { background: var(--code-bg); padding: 10px; border-radius: 8px; overflow-x: auto; border: 1px solid var(--border); }
+.md pre code { background: none; padding: 0; white-space: pre; }
+.md blockquote { border-left: 3px solid var(--border); padding-left: 10px; color: var(--muted); margin-left: 0; }
+.md hr { border: 0; border-top: 1px solid var(--border); }
+.md-table { overflow-x: auto; }
+.md table { border-collapse: collapse; font-size: .9rem; }
+.md th, .md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.md .al-c { text-align: center; }
+.md .al-r { text-align: right; }
+
+/* ---- the pending question (read-only) ---- */
+.question {
+  margin: 8px 0; padding: 4px 12px 8px; border-radius: 10px;
+  border: 1px solid var(--warning); background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+}
+.question-head { margin: 8px 0 0; font-size: .95rem; color: var(--warning-text); }
+.question[data-kind="approval"] .question-head::before { content: "🔒 "; }
+.fields { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 12px; }
+.field-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.field-title { font-weight: 600; }
+.field-type { color: var(--muted); font-size: .8rem; margin-left: auto; }
+.field-desc { color: var(--muted); font-size: .88rem; margin: 2px 0; }
+.opts { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.opts.inline { grid-template-columns: 1fr 1fr; }
+.opt {
+  display: flex; align-items: center; gap: 8px; min-height: var(--tap); padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+}
+.opt.chosen { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.opt.other { border-style: dashed; }
+.opt .mark { color: var(--muted); }
+.opt.chosen .mark { color: var(--primary); }
+.opt .label { flex: 1; overflow-wrap: anywhere; }
+.badge { font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--primary); border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; }
+.badge.req { color: var(--warning-text); }
+.answer-box { margin-top: 6px; min-height: var(--tap); padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); overflow-wrap: anywhere; }
+.answer-box.empty { color: var(--muted); font-style: italic; }
+
+/* ---- account ---- */
+.account { margin: 24px 0 0; color: var(--muted); font-size: .88rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.account p { margin: 0; }
+
+@media (min-width: 900px) {
+  main, .topbar { max-width: 860px; }
+}

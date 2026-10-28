@@ -5,11 +5,11 @@ name: Pages
 on:
   push:
     branches: [main]
-    paths: ['spikes/**/web/**', '.github/workflows/pages.yml']
+    paths: ['spikes/**/web/**', 'pwa/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 env:
-  # The S4 PWA's relay. The page is served from here, not by the relay, so a relay operator
+  # The PWAs' relay. The pages are served from here, not by the relay, so a relay operator
   # cannot change the code that holds the keys.
   S4_RELAY: https://agent-bridge-relay.agreeablepebble-329880d4.westus2.azurecontainerapps.io
 
@@ -30,6 +30,9 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Assemble site
         run: |
           mkdir -p _site/s2 _site/s4
@@ -43,13 +46,19 @@ jobs:
           csp="default-src 'self'; script-src 'self'; connect-src 'self' $S4_RELAY $relay_ws; img-src 'self' data:; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'"
           sed -i "s|<meta charset=\"utf-8\">|<meta charset=\"utf-8\">\n  <meta http-equiv=\"Content-Security-Policy\" content=\"$csp\">|" _site/s4/index.html
           grep -q 'Content-Security-Policy' _site/s4/index.html
+          # The product PWA, at /app/. Its build writes config.js and the same policy,
+          # with no inline styles allowed; the tests run against this exact output.
+          node pwa/tools/build-site.mjs --out _site/app --relay "$S4_RELAY"
+          grep -q 'Content-Security-Policy' _site/app/index.html
+          grep -q "$S4_RELAY" _site/app/config.js
           cat > _site/index.html <<'EOF'
           <!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>agent-bridge spikes</title>
-          <h1>agent-bridge spike self-tests</h1>
+          <title>agent-bridge</title>
+          <h1>agent-bridge</h1>
           <ul>
+          <li><a href="app/">The app: your machines' agent sessions</a> (<a href="app/?demo=1">demo</a>)</li>
           <li><a href="s2/">S2: end-to-end encryption interop (Noise_XX_P256_AESGCM_SHA256)</a></li>
-          <li><a href="s4/">S4: the PWA, through the relay to your hosts (test data only)</a></li>
+          <li><a href="s4/">S4: the spike PWA, through the relay to your hosts (test data only)</a></li>
           </ul>
           EOF
       - uses: actions/configure-pages@v5

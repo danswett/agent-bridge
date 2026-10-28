@@ -1,0 +1,89 @@
+{
+  "sessions": [
+    {
+      "id": "02d9e5d5-6b35-49bd-b083-39572fbff648",
+      "agent": "copilot",
+      "title": "Plan Migration to Windows App",
+      "cwd": "C:\\Users\\dswett\\repos\\wt\\agent-ha-bridge-20261027-131443",
+      "repository": "danswett/agent-ha-bridge",
+      "branch": "detached@5e59309",
+      "model": "claude-opus-5.5",
+      "status": "waiting",
+      "statusSince": "2026-10-28T04:22:43.182Z",
+      "startedAt": "2026-10-27T20:14:59.231Z",
+      "updatedAt": "2026-10-28T04:22:43.182Z",
+      "processId": 39844,
+      "activity": {
+        "response": "The map is back, and it settles the safe boundary for today:\n\n- **Safe to read:** Copilot session folders and locks, transcripts.\n- **Not safe:** the hook spool.",
+        "reasoning": "Plan: contract first, then parallel delegates.",
+        "userMessage": "Feel free to spawn delegates to parallelize things if it’s more efficient. Use opus 5.5",
+        "turnCount": 412,
+        "compactions": 1
+      },
+      "question": {
+        "id": "toolu_013DTzyjWNxfVUARbPqTnLLu",
+        "kind": "form",
+        "message": "Proposed plan for today: the first real slice of the bridge and the PWA.\n\nIs that the right focus?",
+        "fields": [
+          {
+            "name": "plan",
+            "title": "Today's plan",
+            "type": "choice",
+            "options": [
+              { "value": "go", "label": "Go: protocol, read-only host, PWA cards in parallel (Recommended)" },
+              { "value": "change", "label": "Change the plan (describe below)" }
+            ],
+            "allowOther": true,
+            "default": "go",
+            "required": true
+          },
+          {
+            "name": "areas",
+            "title": "Areas",
+            "type": "multi",
+            "options": [ { "value": "host" }, { "value": "pwa" } ]
+          },
+          { "name": "urgent", "title": "Urgent", "type": "boolean", "default": false },
+          { "name": "notes", "title": "Notes (optional)", "type": "text" },
+          { "name": "count", "title": "Count", "type": "number" }
+        ],
+        "askedAt": "2026-10-28T04:22:43.182Z"
+      }
+    },
+    {
+      "id": "6f1c2b7e-claude-example",
+      "agent": "claude",
+      "title": "Refactor the relay client",
+      "cwd": "/Users/dan/repos/agent-bridge",
+      "model": "claude-sonnet-5",
+      "status": "working",
+      "statusSince": "2026-10-28T04:20:01.000Z",
+      "updatedAt": "2026-10-28T04:22:40.000Z",
+      "activity": {
+        "response": "Splitting `RelayClient` into a transport and a session layer.",
+        "currentTool": {
+          "id": "toolu_01ABC",
+          "name": "Bash",
+          "summary": "dotnet test",
+          "status": "running",
+          "startedAt": "2026-10-28T04:22:38.000Z"
+        },
+        "turnCount": 7
+      }
+    },
+    {
+      "id": "019a1b2c-codex-example",
+      "agent": "codex",
+      "title": "Fix flaky test",
+      "model": "gpt-5.6-sol",
+      "status": "idle",
+      "statusSince": "2026-10-28T03:58:12.000Z",
+      "updatedAt": "2026-10-28T03:58:12.000Z",
+      "activity": {
+        "response": "Done. The test now waits for the socket to drain.",
+        "turnCount": 3
+      }
+    }
+  ],
+  "revision": 118
+}

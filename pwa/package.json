@@ -1,0 +1,13 @@
+{
+  "name": "agent-bridge-pwa",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:unit": "node --test "test/unit/*.test.mjs"",
+    "test:ui": "playwright test",
+    "test": "node --test "test/unit/*.test.mjs" && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}
