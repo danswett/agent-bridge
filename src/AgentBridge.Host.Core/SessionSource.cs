@@ -319,9 +319,14 @@ public sealed class SessionSource : ISessionSource
     {
         await foreach (var change in _changes.Reader.ReadAllAsync().ConfigureAwait(false))
         {
-            // A handler that throws must not stop the others from hearing later changes.
-            try { Changed?.Invoke(this, change); }
-            catch (Exception) { }
+            if (Changed is not { } handlers) { continue; }
+            // Each handler on its own: one that throws must not keep the handlers after it
+            // (or later changes) from being heard.
+            foreach (var handler in handlers.GetInvocationList().Cast<EventHandler<SessionChange>>())
+            {
+                try { handler(this, change); }
+                catch (Exception) { }
+            }
         }
     }
 

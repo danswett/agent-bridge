@@ -186,6 +186,23 @@ public class SourceTests
     }
 
     [Fact]
+    public async Task A_Changed_handler_that_throws_does_not_stop_the_handlers_after_it()
+    {
+        using var f = new Fixture();
+        Fixture.Append(f.CopilotSession(Id, 100), Copilot.User("go", 1));
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source();
+        var heard = new TaskCompletionSource<SessionChange>(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.Changed += (_, _) => throw new InvalidOperationException("first handler fails");
+        source.Changed += (_, change) => heard.TrySetResult(change);
+
+        await source.RefreshAsync();
+
+        var change = await heard.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal((SessionChangeKind.Upserted, Id), (change.Kind, change.Id));
+    }
+
+    [Fact]
     public async Task Discovery_still_runs_every_poll_interval_while_transcript_writes_keep_waking_the_loop()
     {
         using var f = new Fixture();

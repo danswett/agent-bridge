@@ -178,6 +178,23 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public async Task A_registration_older_than_the_process_now_holding_its_pid_is_not_live()
+    {
+        using var f = new Fixture();
+        f.ClaudeRegistration(A, 700, f.ClaudeTranscript(A));
+        // The registration was last written at T0; pid 700 now belongs to a process that
+        // started an hour later, so it cannot be the session that wrote it.
+        f.Processes.Run(AgentKind.Claude, 700, startedAt: Fixture.T0.AddHours(1));
+        f.CodexRegistration(B, 800, f.CodexTranscript(B));
+        f.Processes.Run(AgentKind.Codex, 800, startedAt: Fixture.T0.AddHours(1));
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+    }
+
+    [Fact]
     public void The_Copilot_session_id_is_read_from_the_options_and_not_from_a_prompt_that_mentions_one()
     {
         Assert.Equal(A, CommandLine.CopilotSessionId($"copilot --session-id {A} --model x"));

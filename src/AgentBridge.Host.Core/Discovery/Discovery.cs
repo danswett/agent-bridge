@@ -149,7 +149,7 @@ internal static class RegistrationDiscovery
     public static IReadOnlyList<DiscoveredSession> Find(
         AgentKind agent, IReadOnlyList<string> roots, IReadOnlyList<AgentProcess> processes, Func<string, string?> findTranscript)
     {
-        var livePids = processes.Select(p => p.Id).ToHashSet();
+        var running = processes.ToDictionary(p => p.Id);
         var best = new Dictionary<string, Registration>(StringComparer.Ordinal);
         foreach (var root in roots)
         {
@@ -165,7 +165,12 @@ internal static class RegistrationDiscovery
         var live = new List<DiscoveredSession>();
         foreach (var r in best.Values)
         {
-            if (r.Ended || r.ProcessId <= 0 || !livePids.Contains(r.ProcessId)) { continue; }
+            if (r.Ended || r.ProcessId <= 0 || !running.TryGetValue(r.ProcessId, out var process)) { continue; }
+            // A pid is reused. A registration last written before the process now holding
+            // its pid started belongs to a session that is gone, and would otherwise come
+            // back, old question and all, for as long as the newcomer runs. A second of
+            // slack covers start times the OS rounds.
+            if (r.Updated is { } updated && process.StartedAt is { } started && updated < started - TimeSpan.FromSeconds(1)) { continue; }
             // Claude creates its transcript at the first message, so a missing file is a
             // live session with nothing to show yet, not a dead one.
             var transcript = string.IsNullOrWhiteSpace(r.TranscriptPath) ? findTranscript(r.SessionId) : r.TranscriptPath;
