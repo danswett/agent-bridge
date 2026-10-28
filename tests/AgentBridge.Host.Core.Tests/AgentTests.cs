@@ -265,6 +265,26 @@ public class CodexTests
     }
 
     [Fact]
+    public async Task A_command_that_failed_stays_failed_when_its_output_arrives_in_the_response_stream()
+    {
+        using var f = new Fixture();
+        var rollout = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, rollout);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(rollout, Codex.Event(new { type = "task_started" }, 1),
+            Codex.Item(new { type = "function_call", name = "shell", call_id = "call3", arguments = "{\"command\":[\"false\"]}" }, 2),
+            Codex.Event(new { type = "exec_command_begin", call_id = "call3", command = new[] { "false" } }, 2),
+            Codex.Event(new { type = "exec_command_end", call_id = "call3", exit_code = 1 }, 3),
+            Codex.Item(new { type = "function_call_output", call_id = "call3", output = "exit 1" }, 4));
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        var tool = Assert.Single(source.Get(Id)!.Activity.History!);
+        Assert.Equal((ToolStatus.Failed, Fixture.T0.AddSeconds(3)), (tool.Status, tool.EndedAt));
+    }
+
+    [Fact]
     public async Task An_approval_marker_beside_the_registration_is_an_approval_question()
     {
         using var f = new Fixture();

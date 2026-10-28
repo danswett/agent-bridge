@@ -186,6 +186,26 @@ public class SourceTests
     }
 
     [Fact]
+    public async Task Discovery_still_runs_every_poll_interval_while_transcript_writes_keep_waking_the_loop()
+    {
+        using var f = new Fixture();
+        await using var source = f.Source();
+        var woken = 0;
+        var discovered = 0;
+
+        // Transcript appends wake the loop every 50 ms, more often than the 200 ms poll.
+        for (var i = 0; i < 20; i++)
+        {
+            f.Time.Advance(TimeSpan.FromMilliseconds(50));
+            woken++;
+            if (source.DiscoveryDue(woke: true)) { discovered++; }
+        }
+
+        Assert.Equal(20, woken);
+        Assert.InRange(discovered, 4, 5);
+    }
+
+    [Fact]
     public async Task A_full_scan_and_watch_cycle_never_writes_under_the_agent_and_bridge_roots()
     {
         using var f = new Fixture();

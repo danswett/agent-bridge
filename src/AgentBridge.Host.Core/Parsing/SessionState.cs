@@ -123,9 +123,12 @@ internal sealed class ToolHistory
         }
     }
 
+    // The first report of a call's end wins. Codex reports one call in both its streams,
+    // and the response stream's output says nothing about success: letting it overwrite
+    // a failure the event stream recorded showed failed commands as done.
     public bool End(string? id, bool succeeded, DateTimeOffset? at)
     {
-        if (id is null || !_byId.TryGetValue(id, out var entry)) { return false; }
+        if (id is null || !_byId.TryGetValue(id, out var entry) || entry.Status != ToolStatus.Running) { return false; }
         entry.Status = succeeded ? ToolStatus.Done : ToolStatus.Failed;
         entry.EndedAt = at ?? entry.EndedAt;
         return true;

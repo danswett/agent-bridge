@@ -30,6 +30,7 @@ public sealed class SessionSource : ISessionSource
     Task? _loop;
     long _revision;
     volatile bool _discoverRequested;
+    DateTimeOffset _nextDiscovery;
 
     sealed class Entry(SessionTracker tracker)
     {
@@ -145,8 +146,7 @@ public sealed class SessionSource : ISessionSource
                 if (woke) { await Task.Delay(WakeDebounce, _time, token).ConfigureAwait(false); }
                 // Discovery lists processes, which costs more than tailing: a file change
                 // only re-reads the transcripts unless it was a lock or registration.
-                var discover = !woke || _discoverRequested;
-                _discoverRequested = false;
+                var discover = DiscoveryDue(woke);
                 await _pass.WaitAsync(token).ConfigureAwait(false);
                 try { Pass(discover); }
                 finally { _pass.Release(); }
@@ -157,6 +157,19 @@ public sealed class SessionSource : ISessionSource
                 // A bug in one pass must not end watching for good; the next pass retries.
             }
         }
+    }
+
+    // Discovery runs on a fixed deadline as well as when a watcher saw a lock or
+    // registration change. Without the deadline, transcript writes arriving faster than
+    // the poll interval kept every pass a tail-only one, so a session that ended without
+    // touching its lock stayed listed and a missed creation event was never recovered.
+    internal bool DiscoveryDue(bool woke)
+    {
+        var now = _time.GetUtcNow();
+        var due = !woke || _discoverRequested || now >= _nextDiscovery;
+        _discoverRequested = false;
+        if (due) { _nextDiscovery = now + _options.PollInterval; }
+        return due;
     }
 
     void Pass(bool discover)
