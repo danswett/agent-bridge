@@ -3,6 +3,7 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY s2-noise-interop/dotnet/Noise.cs s2-noise-interop/dotnet/
+COPY s6-tpm-keys/src/DeviceKeys.cs s6-tpm-keys/src/
 COPY s2-noise-interop/web/noise-p256.js s2-noise-interop/web/
 COPY s4-relay/src/S4.Protocol s4-relay/src/S4.Protocol
 COPY s4-relay/src/S4.Relay s4-relay/src/S4.Relay

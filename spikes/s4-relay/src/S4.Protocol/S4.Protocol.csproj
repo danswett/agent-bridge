@@ -10,6 +10,12 @@
   <ItemGroup>
     <!-- One implementation of the secure channel: S2's, checked byte for byte against WebCrypto. -->
     <Compile Include="..\..\..\s2-noise-interop\dotnet\Noise.cs" Link="Noise.cs" />
+    <!-- Device keys in the TPM, or DPAPI without one (spike S6). -->
+    <Compile Include="..\..\..\s6-tpm-keys\src\DeviceKeys.cs" Link="DeviceKeys.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.2" />
   </ItemGroup>
 
 </Project>

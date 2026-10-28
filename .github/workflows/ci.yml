@@ -43,6 +43,10 @@ jobs:
           dotnet publish spikes/s3-winui-velopack/App/AgentBridgeS3.csproj -c Release -o "$env:RUNNER_TEMP/s3" --nologo
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           if (-not (Test-Path "$env:RUNNER_TEMP/s3/AgentBridgeS3.pri")) { Write-Error 'AgentBridgeS3.pri is missing from the publish output'; exit 1 }
+      - name: S6 device keys
+        # A runner may have no TPM; the TPM checks then report SKIP and the DPAPI ones still run.
+        shell: pwsh
+        run: dotnet spikes/s6-tpm-keys/src/S6.Check/bin/Release/net10.0-windows/s6-check.dll check
 
   s2-noise-interop:
     # The .NET and WebCrypto implementations must keep agreeing byte for byte, in
