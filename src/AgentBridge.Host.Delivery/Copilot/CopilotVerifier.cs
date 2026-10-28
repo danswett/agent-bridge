@@ -87,7 +87,8 @@ public static class CopilotVerifier
             return (false, "the session recorded only a rendering of the form, without the structured answer that could confirm it");
         }
         if (Spell(value) is not { } spelling) { return (false, "the session's record of this answer cannot be compared"); }
-        if (rest.StartsWith(name + "=", StringComparison.Ordinal) && !Same(rest, spelling)) { rest = rest[(name.Length + 1)..]; }
+        // Read bare, as the CLI renders a lone field. Also accepting "name=value" let an
+        // option spelled "pick=x" pass for the option "x".
         return Same(rest, spelling) ? (true, "") : (false, $"the session recorded a different answer for \"{name}\"");
     }
 

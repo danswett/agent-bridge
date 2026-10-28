@@ -176,13 +176,14 @@ public class CopilotVerifierTests
     }
 
     [Fact]
-    public void A_lone_fields_rendering_may_be_bare_or_named()
+    public void A_lone_fields_rendering_is_read_bare_so_an_option_spelled_like_name_equals_value_cannot_pass_for_another()
     {
         var plan = Plan("""{ "message": "m", "requestedSchema": { "properties": { "choice": { "enum": ["both", "hold"] } } } }""", new { choice = "both" });
+        var collide = Plan("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["x", "pick=x"] } } } }""", new { pick = "x" });
 
         Assert.True(CopilotVerifier.Check(plan, Rendered("User responded: both")).Matched);
-        Assert.True(CopilotVerifier.Check(plan, Rendered("User responded: choice=both")).Matched);
         Assert.False(CopilotVerifier.Check(plan, Rendered("User responded: hold")).Matched);
+        Assert.False(CopilotVerifier.Check(collide, Rendered("User selected: pick=x")).Matched);
     }
 }
 
