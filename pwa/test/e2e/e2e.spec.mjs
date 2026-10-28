@@ -113,7 +113,9 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   expect(violations).toEqual([]);
 });
 
-test('a machine from before the sessions protocol is reported, and ?host= opens a machine directly', async ({ page, context }) => {
+test('a machine from before the sessions protocol is reported, ?host= opens a machine directly, and a refused sign-in leaves nothing behind', async ({ page, context }) => {
+  const sockets = [];
+  await context.routeWebSocket(/\/v1\/ws$/, (ws) => { ws.connectToServer(); sockets.push(ws); });
   await signIn(page);
   await page.click('[data-device-name="demo-host"] button');
   await expect(page.locator('#host-state')).toContainText("doesn't support Agent Bridge sessions yet", { timeout: 30000 });
@@ -125,4 +127,17 @@ test('a machine from before the sessions protocol is reported, and ?host= opens 
   await opened.goto(`${appUrl}?host=${host.deviceId}`);
   await expect(opened.locator('#sessions-h')).toHaveText('Sessions on fixture-host', { timeout: 30000 });
   await expect(opened.locator('.session').first()).toBeVisible();
+
+  // The relay stops accepting this sign-in. Nothing from it may stay on screen or carry
+  // over to the next account: not the sessions, nor the remembered machine.
+  for (const ws of sockets.splice(0)) { await ws.close({ code: 4001, reason: 'auth' }); }
+  await expect(opened.locator('#signin')).toBeVisible({ timeout: 15000 });
+  await expect(opened.locator('#sessions')).toBeHidden();
+  expect(await opened.evaluate(() => window.agentBridge.store.size)).toBe(0);
+  expect(await opened.evaluate(() => localStorage.getItem('agent-bridge.app.lastHost'))).toBeNull();
+  await opened.click('#signin-button');
+  await expect(opened.locator('#conn')).toHaveText('Connected', { timeout: 30000 });
+  await expect(opened.locator('[data-device-name="fixture-host"] button')).toBeVisible();
+  await expect(opened.locator('#sessions')).toBeHidden();
+  await expect(opened.locator('.session')).toHaveCount(0);
 });

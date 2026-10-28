@@ -118,7 +118,8 @@ export class ChannelSet {
         ch.resolveReady(ch);
       } else if (kind === KIND.transport && ch.hs.isComplete) {
         const message = JSON.parse(fromUtf8.decode(await ch.hs.receive.decryptWithAd(EMPTY, body)));
-        ch.onmessage?.(message);
+        // The channel may have been closed while this was being decrypted.
+        if (!ch.closed) { ch.onmessage?.(message); }
       } else if (kind === KIND.close) {
         ch.fail(new Error('the host closed the channel'));
       }

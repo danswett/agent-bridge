@@ -154,6 +154,17 @@ test('unknown events are ignored but still count for seq', async () => {
   assert.equal(t.sent.filter((m) => m.op === 'sessions.subscribe').length, 1, 'no resubscribe: seq was continuous');
 });
 
+test('a message that arrives after the client closed is ignored', async () => {
+  const t = fakeTransport();
+  const store = new SessionsStore();
+  const client = await subscribed(t, store);
+  client.close();
+  store.clear();
+  // A frame from the old machine that was still being decrypted when the user switched.
+  t.host({ ev: 'session.upsert', seq: 1, data: session('from-the-old-machine') });
+  assert.equal(store.size, 0);
+});
+
 test('malformed frames are ignored without breaking the client', async () => {
   const t = fakeTransport();
   const store = new SessionsStore();

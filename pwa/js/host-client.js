@@ -119,6 +119,9 @@ export class HostClient {
   }
 
   #receive(m) {
+    // Closed means this client's machine is no longer shown. A frame still being decrypted
+    // when the user switched must not put the old machine's sessions back in the store.
+    if (this.closed) { return; }
     if (m === null || typeof m !== 'object' || Array.isArray(m)) { return; }
     if (Number.isInteger(m.re)) {
       const p = this.#pending.get(m.re);

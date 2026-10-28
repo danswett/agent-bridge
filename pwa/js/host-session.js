@@ -53,6 +53,18 @@ export class HostSession {
     return !!this.targetId && this.connection.presence.some((d) => d.id === this.targetId);
   }
 
+  // Ends everything tied to the signed-in account: the channel, the sessions shown and the
+  // remembered machine, which belongs to that account and must not carry over to the next.
+  forget() {
+    this.#opening = null; // any attempt in flight is now stale and closes its own channel
+    this.#detach();
+    this.targetId = null;
+    this.machine = null;
+    this.store.clear();
+    try { this.storage?.removeItem(LAST_HOST); } catch { /* a nicety */ }
+    this.#set('none');
+  }
+
   select(deviceId) {
     if (deviceId === this.targetId && (this.phase === 'open' || this.phase === 'opening')) { return; }
     this.#detach();

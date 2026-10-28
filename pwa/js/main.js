@@ -105,6 +105,17 @@ async function startDemo() {
 // ---- live ----
 let identity;
 
+// A link's ?host= (a notification tap) picks the machine once. It is taken out of the
+// address, so neither a reload nor a later sign-in, possibly as another account, reuses it.
+function takeLinkedHost() {
+  const id = params.get('host');
+  if (id === null) { return null; }
+  params.delete('host');
+  const rest = params.toString();
+  history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`);
+  return /^[0-9a-f]{32}$/.test(id) ? id : null;
+}
+
 function showSignIn(error) {
   $('signin').hidden = false;
   $('machines').hidden = true;
@@ -147,8 +158,7 @@ function begin(account) {
 
   const connection = new BridgeConnection({ base: BASE, key: identity.key, deviceId: identity.deviceId, name: deviceName(), account });
   const hosts = new HostSession({ connection, store });
-  const fromLink = /^[0-9a-f]{32}$/.test(params.get('host') ?? '') ? params.get('host') : null;
-  hosts.restoreTarget(fromLink);
+  hosts.restoreTarget(takeLinkedHost());
 
   const nameOf = (id) => connection.presence.find((d) => d.id === id)?.name;
   const drawMachines = () => {
@@ -173,6 +183,10 @@ function begin(account) {
     }
   });
   connection.on('signed-out', () => {
+    // The account's sessions and remembered machine go with it; a reconnect within the
+    // same sign-in keeps them, but a new sign-in may be a different account.
+    hosts.forget();
+    currentClient = null;
     accountStore.clear();
     connection.stop();
     showSignIn('The relay no longer accepts this sign-in. Sign in again.');
@@ -196,6 +210,7 @@ function begin(account) {
   });
 
   $('signout').onclick = () => {
+    hosts.forget();
     accountStore.clear();
     connection.stop();
     location.replace(location.pathname);
