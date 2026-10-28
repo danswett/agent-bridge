@@ -112,7 +112,7 @@ again. When a channel closes, the client subscribes again on the new channel.
 | `status` | `"working"` \| `"waiting"` \| `"idle"` | `waiting` exactly when `question` is present |
 | `statusSince` | time | When `status` last changed |
 | `startedAt` | time? | |
-| `updatedAt` | time | The time of the latest transcript event the host has read |
+| `updatedAt` | time | When something a client shows last changed. Events that change nothing visible (hook runs, usage records, model internals) do **not** move it, so they never cause an upsert |
 | `processId` | number? | The agent's process, when known |
 | `activity` | Activity | |
 | `question` | Question? | The question the agent is waiting on, if any |
