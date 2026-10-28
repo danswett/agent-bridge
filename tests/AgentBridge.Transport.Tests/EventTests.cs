@@ -221,6 +221,27 @@ public class EventTests
     }
 
     [Fact]
+    public async Task Cancelling_an_event_still_waiting_its_turn_at_the_relay_gives_up_without_sending_it_and_the_channel_keeps_working()
+    {
+        var (relay, host, atHost, atClient) = await ChannelAsync();
+        await using var _ = relay;
+        host.Relay.MaxFramesPerSecond = 2;
+        await atHost.SendEventAsync("a");
+        await atHost.SendEventAsync("b");
+
+        // The pacing window is full, so this one waits for about a second; cancel it first.
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => atHost.SendEventAsync("cancelled", null, cts.Token));
+        var after = await atHost.SendEventAsync("after");
+        var got = await ReadAsync(atClient, 3);
+
+        Assert.Equal(3, after);
+        Assert.Equal(["a", "b", "after"], got.Select(e => e.Name));
+        Assert.Equal([1L, 2, 3], got.Select(e => e.Seq));
+        Assert.True(atHost.IsOpen);
+    }
+
+    [Fact]
     public async Task Events_use_the_hubs_serializer_options()
     {
         var (relay, host, atHost, atClient) = await ChannelAsync();

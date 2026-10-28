@@ -144,14 +144,21 @@ public sealed class RelayClient : IAsyncDisposable
         }
     }
 
-    public async Task SendAsync(string peerId, byte[] payload, CancellationToken ct = default)
+    public Task SendAsync(string peerId, byte[] payload, CancellationToken ct = default) => SendAsync(peerId, () => payload, ct);
+
+    // payload is called only once this frame's turn has come: after the lock and the
+    // pacing, both of which ct can cancel. A channel encrypts there, so a send cancelled
+    // while it waits spends no Noise nonce. Once the frame is made it is written whole,
+    // never cut off part way, which would corrupt the socket for every other channel.
+    internal async Task SendAsync(string peerId, Func<byte[]> payload, CancellationToken ct)
     {
-        var frame = Wire.DataFrameBytes(peerId, payload);
+        if (!Wire.IsDeviceId(peerId)) { throw new ArgumentException("not a device id", nameof(peerId)); }
         await sendLock.WaitAsync(ct);
         try
         {
             await PaceAsync(ct);
-            await ws.SendAsync(frame, WebSocketMessageType.Binary, true, ct);
+            var frame = Wire.DataFrameBytes(peerId, payload());
+            await ws.SendAsync(frame, WebSocketMessageType.Binary, true, CancellationToken.None);
         }
         finally { sendLock.Release(); }
     }

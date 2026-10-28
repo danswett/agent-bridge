@@ -101,7 +101,7 @@ public sealed class SecureChannel
         try
         {
             var seq = lastEventSeq + 1;
-            await SendLockedAsync(Serialize(new { ev = name, seq, data }));
+            await SendLockedAsync(Serialize(new { ev = name, seq, data }), ct);
             lastEventSeq = seq;
             return seq;
         }
@@ -115,22 +115,39 @@ public sealed class SecureChannel
     internal async Task SendAsync(byte[] plain, CancellationToken ct = default)
     {
         await sendLock.WaitAsync(ct);
-        try { await SendLockedAsync(plain); }
+        try { await SendLockedAsync(plain, ct); }
         finally { sendLock.Release(); }
     }
 
-    async Task SendLockedAsync(byte[] plain)
+    async Task SendLockedAsync(byte[] plain, CancellationToken ct)
     {
         // Checked before encrypting, so a refused message does not spend a nonce.
         if (plain.Length > MaxMessageBytes) { throw new MessageTooLargeException(plain.Length); }
         ThrowIfClosed();
         var send = Handshake.Send ?? throw new InvalidOperationException("the channel is not open yet");
-        var cipher = send.EncryptWithAd([], plain);
-        try { await hub.SendAsync(this, ChannelKind.Transport, cipher); }
-        catch (Exception e)
+        var encrypted = false;
+        try
+        {
+            // Encrypted only when the relay is ready to write it, so cancelling a send that
+            // is still waiting (behind other channels, or the relay's pacing) spends nothing
+            // and leaves the channel usable.
+            await hub.SendAsync(this, ChannelKind.Transport, () =>
+            {
+                encrypted = true;
+                return send.EncryptWithAd([], plain);
+            }, ct);
+        }
+        catch (Exception e) when (encrypted)
         {
             // The nonce is spent whether or not the frame left, and Noise cannot skip one:
             // the peer could decrypt nothing more from this channel, so it is over.
+            var gone = new IOException("the channel could not send", e);
+            hub.Forget(this, gone);
+            throw gone;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // Never reached the relay (its connection is gone): nothing more will cross.
             var gone = new IOException("the channel could not send", e);
             hub.Forget(this, gone);
             throw gone;

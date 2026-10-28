@@ -188,8 +188,11 @@ public class ChannelTests
         await using var _ = attacker;
         for (int i = 0; i < 4; i++) { await SendMsg1Async(attacker, host.Id); }
         await Wait.UntilAsync(() => msg2.Count == 4, "the table to fill");
+        var filled = Environment.TickCount64;
 
-        host.Hub.HandshakeTimeout = TimeSpan.FromMilliseconds(1);
+        host.Hub.HandshakeTimeout = TimeSpan.FromMilliseconds(50);
+        // The clock the hub reads ticks every 15.6 ms on Windows: wait for it, not a guess.
+        await Wait.UntilAsync(() => Environment.TickCount64 - filled > 100, "the handshakes to be older than the timeout");
         // Expiry is checked when a handshake arrives, so this one makes room for itself.
         var late = await SendMsg1Async(attacker, host.Id);
         await Wait.UntilAsync(() => msg2.Contains(late), "the new handshake to be admitted");
@@ -210,6 +213,10 @@ public class ChannelTests
         await peer.Relay.WaitForPeerAsync(p => p.Id == host.Id, TimeSpan.FromSeconds(10));
         await peer.Hub.OpenAsync(host.Id);
         var atHost = await accepted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var opened = Environment.TickCount64;
+        // With no grace, a channel is still spared within the clock tick it was made in
+        // (15.6 ms on Windows), so let one pass.
+        await Wait.UntilAsync(() => Environment.TickCount64 - opened > 20, "the clock to move past the channel's creation");
 
         await peer.DisposeAsync();
 

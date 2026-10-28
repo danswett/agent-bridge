@@ -115,14 +115,17 @@ public sealed class ChannelHub
         }
     }
 
-    internal Task SendAsync(SecureChannel ch, ChannelKind kind, byte[] body)
+    internal Task SendAsync(SecureChannel ch, ChannelKind kind, byte[] body) => SendAsync(ch, kind, () => body, default);
+
+    internal Task SendAsync(SecureChannel ch, ChannelKind kind, Func<byte[]> body, CancellationToken ct) => relay.SendAsync(ch.PeerId, () =>
     {
-        var payload = new byte[Wire.ChannelHeader + body.Length];
+        var b = body();
+        var payload = new byte[Wire.ChannelHeader + b.Length];
         payload[0] = (byte)kind;
         BinaryPrimitives.WriteUInt64BigEndian(payload.AsSpan(1, 8), ch.Id);
-        body.CopyTo(payload, Wire.ChannelHeader);
-        return relay.SendAsync(ch.PeerId, payload);
-    }
+        b.CopyTo(payload, Wire.ChannelHeader);
+        return payload;
+    }, ct);
 
     async Task OnDataAsync(string from, byte[] payload)
     {
