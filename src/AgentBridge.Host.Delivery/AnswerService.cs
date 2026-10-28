@@ -208,14 +208,12 @@ public sealed class AnswerService : ISessionAnswerer
             if (state.Answer is { } record)
             {
                 // Current builds write the structured answer and the call's completion side by
-                // side. The structured answer is the one compared exactly, and the completion
-                // says whether the call failed, so a moment is allowed for whichever is still
-                // missing; a form of several fields, whose rendering cannot confirm it, waits
-                // for its structured answer as long as it takes.
+                // side. A form is confirmed only by its structured answer, so it waits for that
+                // up to the timeout; and the completion says whether the call failed, so a
+                // moment is allowed for it to follow.
                 var grace = elapsed - (firstSeen ??= elapsed) < TimeSpan.FromSeconds(1);
                 var wait = elapsed < options.ConfirmTimeout
-                    && ((record.HumanContent is null && plan.Text is null && (plan.Fields.Count > 1 || grace))
-                        || (!record.Completed && grace));
+                    && ((record.HumanContent is null && plan.Text is null) || (!record.Completed && grace));
                 if (!wait)
                 {
                     var (matched, reason) = CopilotVerifier.Check(plan, record);

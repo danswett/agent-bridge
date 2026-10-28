@@ -69,52 +69,25 @@ public static class CopilotVerifier
         return true;
     }
 
-    // tool.execution_complete alone: "User responded: <words>" or "User selected: <option>",
-    // which is trusted only where it can be read one way. A form of several fields renders
-    // as "a=x, b=y", which is equally a="x, b=y" with b left out, so only its structured
-    // record (human_response.recorded, which current builds write) can confirm it.
+    // tool.execution_complete alone. Only a question without fields is confirmed from it,
+    // as "User responded: <words>", compared like any typed words. A form, even of one
+    // field, is not: its rendering trims, flattens "a=x, b=y" (equally a="x, b=y"), and
+    // cannot tell options "x", "x " and "pick=x" apart. Current builds write the
+    // structured human_response.recorded for every form, and that is what confirms one.
     static (bool, string) Rendered(CopilotPlan plan, string? text)
     {
-        var rest = Strip(text?.Trim());
-        if (rest is null)
-        {
-            return (false, text?.Trim() == "User skipped question"
-                ? "the session recorded the question as skipped"
-                : "the session recorded the answer in a form the host could not compare");
-        }
-        if (plan.Text is { } words) { return Same(rest, words) ? (true, "") : (false, "the session recorded different words"); }
-        if (plan.Fields is not [var (name, value)])
+        if (plan.Text is null)
         {
             return (false, "the session recorded only a rendering of the form, without the structured answer that could confirm it");
         }
-        if (Spell(value) is not { } spelling) { return (false, "the session's record of this answer cannot be compared"); }
-        // Read bare, as the CLI renders a lone field. Also accepting "name=value" let an
-        // option spelled "pick=x" pass for the option "x". Only typed words have their
-        // whitespace flattened; an option's value is compared exactly, as options "a b" and
-        // "a  b" are different answers.
-        var same = value is Expected.Words or Expected.Omitted ? Same(rest, spelling) : string.Equals(rest, spelling, StringComparison.Ordinal);
-        return same ? (true, "") : (false, $"the session recorded a different answer for \"{name}\"");
-    }
-
-    static string? Strip(string? text)
-    {
-        foreach (var prefix in (string[])["User responded: ", "User selected: "])
+        var trimmed = text?.Trim();
+        if (trimmed?.StartsWith("User responded: ", StringComparison.Ordinal) != true)
         {
-            if (text?.StartsWith(prefix, StringComparison.Ordinal) == true) { return text[prefix.Length..]; }
+            return (false, trimmed == "User skipped question"
+                ? "the session recorded the question as skipped"
+                : "the session recorded the answer in a form the host could not compare");
         }
-        return null;
+        return Same(trimmed["User responded: ".Length..], plan.Text) ? (true, "") : (false, "the session recorded different words");
     }
-
-    // How a value reads in the rendering, or null when it has no single spelling.
-    static string? Spell(Expected expected) => expected switch
-    {
-        Expected.Omitted => "",
-        Expected.Option o => CopilotForm.Scalar(o.Raw),
-        Expected.Words w => w.Text,
-        Expected.Number n => n.Raw.GetRawText(),
-        Expected.Flag f => f.Value ? "true" : "false",
-        _ => null,
-    };
-
     static bool Same(string recorded, string typed) => InjectableText.Flatten(recorded) == InjectableText.Flatten(typed);
 }

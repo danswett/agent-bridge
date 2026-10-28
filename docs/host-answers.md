@@ -94,10 +94,11 @@ In order, for every answer:
 7. Up to 15 s, the transcript after the point read in step 5 is watched for that tool
    call. `delivered` only when the session recorded the answer typed: the structured
    `human_response.recorded` content field by field (choices by value, words with
-   whitespace runs collapsed, lists as sets), or, for free text or a one-field question,
-   the rendered `User responded: …`. A form of several fields needs the structured record,
-   since its rendering `a=x, b=y` is also `a="x, b=y"`. A different record, an error, a
-   skip, the session ending, or nothing is `unconfirmed` with the reason.
+   whitespace runs collapsed, lists as sets), or, for free text only, the rendered
+   `User responded: …`. A form, even of one field, needs the structured record: its
+   rendering trims, renders `a=x, b=y` (equally `a="x, b=y"`), and cannot tell options
+   `x`, `x ` and `pick=x` apart. A different record, an error, a skip, the session
+   ending, or nothing is `unconfirmed` with the reason.
 
 ## agent-ha-bridge (design G5)
 

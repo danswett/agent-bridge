@@ -173,41 +173,26 @@ public class CopilotVerifierTests
         Assert.Contains("error", CopilotVerifier.Check(plan, Rendered("", ok: false)).Reason);
     }
 
-    [Fact]
-    public void A_form_of_several_fields_is_never_confirmed_from_its_rendering_alone()
+    [Theory]
+    // a="x", b="y" or a="x, b=y" with b left out.
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "a": { "type": "string" }, "b": { "type": "string" } } } }""", """{ "a": "x", "b": "y" }""", "User responded: a=x, b=y")]
+    // Options "x" and "x ": the rendering is trimmed.
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["x", "x "] } } } }""", """{ "pick": "x" }""", "User selected: x ")]
+    // Options "x" and "pick=x": bare or named.
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["x", "pick=x"] } } } }""", """{ "pick": "x" }""", "User selected: pick=x")]
+    // Options "a b" and "a  b".
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a b", "a  b"] } } } }""", """{ "pick": "a b" }""", "User selected: a  b")]
+    public void A_question_with_fields_is_never_confirmed_from_its_rendering_only_from_its_structured_answer(string arguments, string fields, string rendering)
     {
-        const string Two = """{ "message": "m", "requestedSchema": { "properties": { "a": { "type": "string" }, "b": { "type": "string" } } } }""";
+        var plan = Plan(arguments, JsonSerializer.Deserialize<Dictionary<string, string>>(fields));
 
-        // The same text is a="x", b="y", or a="x, b=y" with b left out: only the structured
-        // record can tell them apart.
-        var (matched, reason) = CopilotVerifier.Check(Plan(Two, new { a = "x", b = "y" }), Rendered("User responded: a=x, b=y"));
+        var (matched, reason) = CopilotVerifier.Check(plan, Rendered(rendering));
 
         Assert.False(matched);
         Assert.Contains("structured", reason);
-        Assert.True(CopilotVerifier.Check(Plan(Two, new { a = "x", b = "y" }), Human("""{ "a": "x", "b": "y" }""")).Matched);
-    }
-
-    [Fact]
-    public void A_rendered_option_is_compared_exactly_and_only_typed_words_have_their_whitespace_flattened()
-    {
-        var plan = Plan("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a b", "a  b"] } } } }""", new { pick = "a b" });
-
-        Assert.True(CopilotVerifier.Check(plan, Rendered("User selected: a b")).Matched);
-        Assert.False(CopilotVerifier.Check(plan, Rendered("User selected: a  b")).Matched);
-    }
-
-    [Fact]
-    public void A_lone_fields_rendering_is_read_bare_so_an_option_spelled_like_name_equals_value_cannot_pass_for_another()
-    {
-        var plan = Plan("""{ "message": "m", "requestedSchema": { "properties": { "choice": { "enum": ["both", "hold"] } } } }""", new { choice = "both" });
-        var collide = Plan("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["x", "pick=x"] } } } }""", new { pick = "x" });
-
-        Assert.True(CopilotVerifier.Check(plan, Rendered("User responded: both")).Matched);
-        Assert.False(CopilotVerifier.Check(plan, Rendered("User responded: hold")).Matched);
-        Assert.False(CopilotVerifier.Check(collide, Rendered("User selected: pick=x")).Matched);
+        Assert.True(CopilotVerifier.Check(plan, Human(fields)).Matched);
     }
 }
-
 public class InjectableTextTests
 {
     [Fact]
