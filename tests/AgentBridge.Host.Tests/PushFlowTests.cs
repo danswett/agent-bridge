@@ -191,7 +191,8 @@ public sealed class PushFlowTests : IAsyncLifetime
         await AskAsync("q1");
         await Wait.UntilAsync(() => store.Count == 0, "the gone subscription to be dropped", Patience);
         Assert.Equal(0, Result(await ch.RequestAsync(Ops.PushList, new { })).GetProperty("devices").GetArrayLength());
-        lock (hostLog) { Assert.Contains(hostLog, l => l.Contains("is gone (410)")); }
+        // Logged just after the store drops it, so waited for rather than raced.
+        await Wait.UntilAsync(() => { lock (hostLog) { return hostLog.Any(l => l.Contains("is gone (410)")); } }, "the drop to be logged", Patience);
     }
 
     [Fact]
