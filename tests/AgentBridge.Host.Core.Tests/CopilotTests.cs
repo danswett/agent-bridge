@@ -158,23 +158,48 @@ public class CopilotTests
     }
 
     [Fact]
-    public async Task A_subagents_turns_and_words_are_not_the_sessions_but_its_tool_calls_appear_in_the_history()
+    public async Task A_subagents_words_and_tools_reach_the_card_but_its_turns_prompt_and_model_are_not_the_sessions()
     {
         await using var s = new Session_();
         const string sub = "agent-1";
 
         var s1 = await s.After(Copilot.User("delegate", 1), Copilot.TurnStart(2), Copilot.Assistant("handing off", 3, tools: ["t1"]),
             Copilot.ToolStart("t1", "task", new { description = "Investigate", prompt = "long prompt" }, 3),
-            Copilot.TurnStart(4, sub), Copilot.User("subagent task prompt", 4, sub), Copilot.Assistant("sub reply", 5, model: "sub-model", agentId: sub),
+            Copilot.TurnStart(4, sub), Copilot.User("subagent task prompt", 4, sub),
+            Copilot.Assistant("sub reply", 5, model: "sub-model", reasoning: "sub is thinking", agentId: sub),
             Copilot.ToolStart("s1", "powershell", new { command = "ls" }, 5, sub), Copilot.TurnEnd(6, sub),
             Copilot.Event("session.model_change", new { newModel = "sub-model-2" }, 6, sub));
 
         Assert.Equal(SessionStatus.Working, s1.Status);
-        Assert.Equal("handing off", s1.Activity.Response);
+        // As agent-ha-bridge does: a delegated job is not a silent one. What a subagent
+        // says and thinks reaches the card; only the turn bookkeeping is the session's.
+        Assert.Equal(("sub reply", "sub is thinking"), (s1.Activity.Response, s1.Activity.Reasoning));
         Assert.Equal("delegate", s1.Activity.UserMessage);
         Assert.Equal("fixture-model", s1.Model);
         Assert.Equal(["t1", "s1"], s1.Activity.History!.Select(t => t.Id));
         Assert.Equal(0, s1.Activity.TurnCount);
+
+        var s2 = await s.After(Copilot.Assistant("back to you", 7));
+        Assert.Equal("back to you", s2.Activity.Response);
+    }
+
+    [Fact]
+    public async Task A_background_agents_words_keep_reaching_the_card_after_the_session_goes_idle()
+    {
+        await using var s = new Session_();
+        const string sub = "agent-bg";
+
+        var idle = await s.After(Copilot.User("delegate", 1), Copilot.TurnStart(2), Copilot.Assistant("started it", 3, tools: ["t1"]),
+            Copilot.Event("subagent.started", new { toolCallId = "t1", agentName = "general-purpose", executionMode = "background" }, 3),
+            Copilot.ToolDone("t1", 4), Copilot.TurnStart(5), Copilot.Assistant("waiting on it", 6), Copilot.TurnEnd(7));
+        Assert.Equal(SessionStatus.Idle, idle.Status);
+
+        var later = await s.After(Copilot.Assistant("", 20, reasoning: "checking line 217", agentId: sub));
+
+        Assert.Equal(SessionStatus.Idle, later.Status);
+        Assert.Equal("checking line 217", later.Activity.Reasoning);
+        Assert.Equal("waiting on it", later.Activity.Response);
+        Assert.True(later.UpdatedAt > idle.UpdatedAt);
     }
 
     [Fact]
