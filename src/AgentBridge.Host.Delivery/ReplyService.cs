@@ -61,6 +61,9 @@ public sealed class ReplyService : ISessionReplier
     // Prompts already taken as the record of a reply, by transcript and line offset: two
     // replies of the same words are two prompts, and each confirms one.
     readonly ConcurrentDictionary<(string Transcript, long Offset), DateTimeOffset> claimed = new();
+    // What each session's transcript says is asking, kept between replies so it is read from
+    // the start once and then only as it grows. One small entry per session replied to.
+    readonly ConcurrentDictionary<string, CopilotInput> inputs = new(StringComparer.Ordinal);
 
     public ReplyService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
         IConsoleInjector injector, ReplyOptions options, Action<string>? log = null, DeliveryGate? gate = null)
@@ -139,6 +142,11 @@ public sealed class ReplyService : ISessionReplier
         if (!processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid)) { return Done(Stale("the session's process has ended")); }
         if (guard.Refuse(pid) is { } refused) { return Done(Refused(refused)); }
         var (keys, words) = CopilotReply.Plan(text);
+        // Caught up before the typing turn is taken, so the first reply to a session with a
+        // long transcript reads it without holding up every other delivery; the read in the
+        // turn only covers what has been written since.
+        var input = inputs.GetOrAdd(transcript, path => new CopilotInput(path));
+        input.Read();
 
         // One delivery typed at a time across sessions, and the last checks are made once its
         // turn has come, not when it arrived.
@@ -152,8 +160,10 @@ public sealed class ReplyService : ISessionReplier
             if (now is null) { return Done(Stale("the session has ended")); }
             if (now.Question is not null) { return Done(Asking()); }
             // The transcript, read now, may be ahead of the session source: a question asked a
-            // moment ago is there first.
-            var before = CopilotPrompts.Before(transcript);
+            // moment ago is there first, and a subagent's is only there. One that cannot be
+            // read cannot say nothing is asking.
+            var before = input.Read();
+            if (!before.Readable) { return Done(Refused("the session's transcript could not be read, so nothing is typed; reply at the machine")); }
             if (before.Asking) { return Done(Asking()); }
             from = before.ScannedTo;
 

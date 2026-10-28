@@ -62,6 +62,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     AnswerService Answerer() => new(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
     {
         CopilotHome = f.CopilotHome,
+        // Set, not left to the default (Windows only), so these run the same on Linux.
+        PlatformSupported = true,
         ConfirmTimeout = TimeSpan.FromSeconds(2),
         PollInterval = TimeSpan.FromMilliseconds(25),
     }, gate: gate);
@@ -217,6 +219,16 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Fixture.Append(events, Copilot.Answered("q1", second++), Copilot.ToolDone("q1", second++),
             Copilot.Event("permission.requested", new { requestId = "r1", permissionRequest = new { kind = "shell", toolCallId = "c9" } }, second++));
         Assert.Equal("refused", (await ReplyAsync(ch, "hello")).Outcome);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_transcript_that_cannot_be_read_cannot_say_nothing_is_asking_so_nothing_is_typed()
+    {
+        var ch = await OpenAsync();
+        File.Move(events, events + ".away");
+
+        Assert.Equal(("refused", "the session's transcript could not be read, so nothing is typed; reply at the machine"), await ReplyAsync(ch, "hello"));
         Assert.Empty(injector.Plans);
     }
 

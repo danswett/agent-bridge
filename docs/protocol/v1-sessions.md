@@ -210,7 +210,7 @@ Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`:
 | `unconfirmed` | The host typed it but saw no such prompt: the agent recorded something else, the session ended, or nothing came within the host's wait. A session that is working takes a prompt typed now at its next step (Copilot records it then, as `delivery: "steering"`), so a host waits for up to a minute. Never retried | Yes |
 | `stale` | The session has ended, or its process has | No |
 | `busy` | An answer or another reply to this session is being typed | No |
-| `refused` | The host will not type it: an invalid reply (above), **a question or permission prompt pending in the session** (the words would answer it, and Enter accept it; answer it first), an elevated or otherwise unreachable session, an agent or platform without delivery yet, or agent-ha-bridge active for this user | No |
+| `refused` | The host will not type it: an invalid reply (above), **a question or permission prompt pending in the session** (the words would answer it, and Enter accept it; answer it first), a transcript the host cannot read to rule that out, an elevated or otherwise unreachable session, an agent or platform without delivery yet, or agent-ha-bridge active for this user | No |
 
 A reply is never typed while the session is asking anything, which a host checks both in
 what it reports and, immediately before typing, in the transcript itself. The per-session

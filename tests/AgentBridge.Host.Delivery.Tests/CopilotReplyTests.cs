@@ -64,6 +64,32 @@ public sealed class CopilotReplyTests : IDisposable
     }
 
     [Fact]
+    public void A_subagents_open_question_still_asks_after_any_amount_written_since_and_is_kept_between_reads()
+    {
+        Fixture.Append(events, Copilot.User("go", 1), Ask("q1", 2, agentId: "helper"));
+        // More than any window of the end of the file: other work goes on after the question.
+        var chatter = Copilot.Assistant(new string('x', 64 * 1024), 3, agentId: "other");
+        Fixture.Append(events, [.. Enumerable.Repeat(chatter, 17 * 16)]);
+        Assert.True(new FileInfo(events).Length > 17L << 20);
+
+        var input = new CopilotInput(events);
+        Assert.True(input.Read().Asking);
+        // Read again, only what was added is read, and the open question is remembered.
+        Fixture.Append(events, chatter);
+        var again = input.Read();
+        Assert.Equal((true, true, new FileInfo(events).Length), (again.Readable, again.Asking, again.ScannedTo));
+        Fixture.Append(events, Copilot.ToolDone("q1", 4, agentId: "helper"));
+        Assert.False(input.Read().Asking);
+    }
+
+    [Fact]
+    public void A_transcript_that_cannot_be_read_is_never_taken_to_say_nothing_is_asking()
+    {
+        var state = CopilotPrompts.Before(events + ".missing");
+        Assert.Equal((false, true), (state.Readable, state.Asking));
+    }
+
+    [Fact]
     public void A_permission_prompt_asks_until_it_completes_and_an_abort_ends_everything_open()
     {
         Fixture.Append(events, Copilot.Event("permission.requested", new { requestId = "r1", permissionRequest = new { kind = "shell", toolCallId = "c9" } }, 1));

@@ -56,9 +56,12 @@ In order, for every reply:
 5. The single typing turn is taken, then, immediately before typing: agent-ha-bridge again,
    the session again, and its transcript: no `ask_user` from any agent without its
    completion or `human_response.recorded`, and no `permission.requested` without its
-   `permission.completed`, since the last abort or shutdown (the last 16 MiB are read; a
-   question stops the main agent, so it is normally the last thing written). The point read
-   up to is where confirmation starts.
+   `permission.completed`, since the last abort or shutdown. The whole transcript counts,
+   since a subagent's question stops only that subagent and other work can write any
+   amount after it (and the session source does not report a subagent's question): it is
+   read from the start once per session, before the typing turn, and from where it was
+   left on every later read. A transcript that cannot be read is `refused`, never taken to
+   mean nothing is asking. The point read up to is where confirmation starts.
 6. The worker types it. Nothing written is `refused`; a worker that stopped after its first
    write is `unconfirmed`, never retried. The session is released for answers.
 7. Up to 60 s, the transcript after that point is watched for a main-agent `user.message`
