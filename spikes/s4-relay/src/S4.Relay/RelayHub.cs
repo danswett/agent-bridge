@@ -15,6 +15,11 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, ILogger<RelayH
 
     public int Online => accounts.Values.Sum(a => a.Count);
 
+    // On shutdown, tell every device to reconnect now. A rolling deploy otherwise leaves old
+    // sockets on the draining replica for up to its drain timeout (about 90 s observed on
+    // Container Apps) while new devices land on the new one, and neither half sees the other.
+    public Task CloseAllAsync() => Task.WhenAll(accounts.Values.SelectMany(a => a.Values).Select(c => c.CloseAsync(1012, "restarting")));
+
     sealed class Connection(WebSocket ws, Account account, string deviceId, string name, string kind)
     {
         readonly SemaphoreSlim sendLock = new(1, 1);

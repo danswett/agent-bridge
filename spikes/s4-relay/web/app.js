@@ -2,6 +2,9 @@
 // online devices, and talk to a host over Noise end to end. The relay only ever sees
 // routing ids and ciphertext. Wire format: see src/S4.Protocol/Wire.cs.
 import { P256KeyPair, XXHandshake, hex, unhex } from './noise-p256.js';
+import { RELAY } from './config.js';
+
+const BASE = RELAY || location.origin;
 
 const $ = (id) => document.getElementById(id);
 const enc = new TextEncoder(), dec = new TextDecoder();
@@ -54,7 +57,7 @@ const deviceIdOf = async (pub) => hex(new Uint8Array(await subtle.digest('SHA-25
 // ---- sign-in: GitHub device flow, through the relay ----
 async function signIn() {
   $('signin').disabled = true;
-  const s = await (await fetch('/v1/auth/device', { method: 'POST' })).json();
+  const s = await (await fetch(`${BASE}/v1/auth/device`, { method: 'POST' })).json();
   $('code').textContent = s.userCode;
   $('verify').href = s.verificationUri;
   $('verify').textContent = s.verificationUri.replace(/^https?:\/\//, '');
@@ -63,7 +66,7 @@ async function signIn() {
   const deadline = Date.now() + s.expiresIn * 1000;
   while (Date.now() < deadline) {
     await sleep(interval * 1000);
-    const r = await fetch('/v1/auth/token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deviceCode: s.deviceCode }) });
+    const r = await fetch(`${BASE}/v1/auth/token`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deviceCode: s.deviceCode }) });
     const j = await r.json();
     if (r.status === 202) { if (j.interval) { interval = j.interval; } continue; }
     if (!r.ok) { throw new Error(`sign-in failed: ${j.error}`); }
@@ -80,7 +83,7 @@ class Relay {
 
   connect(token, name) {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/v1/ws`);
+      const ws = new WebSocket(`${BASE.replace(/^http/, 'ws')}/v1/ws`);
       this.ws = ws;
       ws.binaryType = 'arraybuffer';
       ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', token, pub: hex(this.key.public), name, kind: 'pwa' }));

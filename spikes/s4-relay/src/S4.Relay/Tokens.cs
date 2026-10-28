@@ -18,6 +18,12 @@ public sealed class RelayOptions
     public TimeSpan TokenLifetime { get; set; } = TimeSpan.FromDays(30);
     public int MaxFramesPerSecond { get; set; } = 200;
     public int MaxDevicesPerAccount { get; set; } = 32;
+    // Web origins allowed to call the sign-in API and open sockets, such as the PWA on
+    // GitHub Pages. Native clients send no Origin and are unaffected.
+    public string[] AllowedOrigins { get; set; } = [];
+    // Production serves no app code: a relay that could change the PWA it serves could
+    // read what the PWA decrypts. The dev stack and CI serve it same-origin.
+    public bool ServePwa { get; set; } = true;
 
     // Test hooks. Tap observes every forwarded payload; Route lets a test play a hostile
     // relay that redirects or forges routing.

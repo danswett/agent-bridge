@@ -40,6 +40,7 @@ public static class RelayApp
                 ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
                 _ => new FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1) }));
         });
+        builder.Services.AddCors(o => o.AddPolicy("pwa", p => p.WithOrigins(options.AllowedOrigins).WithMethods("POST").WithHeaders("content-type")));
         builderHook?.Invoke(builder);
 
         var app = builder.Build();
@@ -55,16 +56,27 @@ public static class RelayApp
             await next();
         });
         app.UseRateLimiter();
-        app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
-        app.UseDefaultFiles();
-        app.UseStaticFiles(new StaticFileOptions
+        app.UseCors();
+        app.UseWebSockets(new WebSocketOptions
         {
-            OnPrepareResponse = c =>
-            {
-                if (c.File.Name.EndsWith(".webmanifest")) { c.Context.Response.ContentType = "application/manifest+json"; }
-                c.Context.Response.Headers.CacheControl = "no-cache";
-            },
+            KeepAliveInterval = TimeSpan.FromSeconds(20),
+            // Ping and require a pong, so a connection that died without a close frame is dropped.
+            KeepAliveTimeout = TimeSpan.FromSeconds(30),
         });
+        app.Lifetime.ApplicationStopping.Register(() => app.Services.GetRequiredService<RelayHub>().CloseAllAsync().Wait(TimeSpan.FromSeconds(5)));
+        if (options.ServePwa)
+        {
+            app.UseDefaultFiles();
+            app.UseStaticFiles(new StaticFileOptions
+            {
+                OnPrepareResponse = c =>
+                {
+                    if (c.File.Name.EndsWith(".webmanifest")) { c.Context.Response.ContentType = "application/manifest+json"; }
+                    c.Context.Response.Headers.CacheControl = "no-cache";
+                },
+            });
+        }
+        else { app.MapGet("/", () => Results.Text("Agent Bridge relay (spike S4). It serves no app code; the PWA is published separately.")); }
 
         app.MapGet("/healthz", (RelayHub hub) => Results.Ok(new { ok = true, online = hub.Online }));
 
@@ -84,7 +96,7 @@ public static class RelayApp
                 interval = j.GetProperty("interval").GetInt32(),
                 expiresIn = j.GetProperty("expires_in").GetInt32(),
             });
-        }).RequireRateLimiting("auth");
+        }).RequireRateLimiting("auth").RequireCors("pwa");
 
         app.MapPost("/v1/auth/token", async (TokenRequest req, IHttpClientFactory f, Tokens tokens, ILoggerFactory lf) =>
         {
@@ -119,11 +131,20 @@ public static class RelayApp
             var (token, expires) = tokens.Issue(account);
             log.LogInformation("signed in {Login} ({Id})", account.Login, account.Id);
             return Results.Ok(new { token, accountId = account.Id, login = account.Login, expiresAt = expires });
-        }).RequireRateLimiting("auth");
+        }).RequireRateLimiting("auth").RequireCors("pwa");
 
         app.Map("/v1/ws", async (HttpContext ctx, RelayHub hub) =>
         {
             if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+            // Browsers always send Origin; only the relay's own page and the allowed origins
+            // may open a socket. Native clients send none.
+            var origin = ctx.Request.Headers.Origin.ToString();
+            if (origin.Length > 0 && !options.AllowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase)
+                && !(Uri.TryCreate(origin, UriKind.Absolute, out var o) && o.Authority.Equals(ctx.Request.Host.Value, StringComparison.OrdinalIgnoreCase)))
+            {
+                ctx.Response.StatusCode = 403;
+                return;
+            }
             using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
             await hub.RunAsync(ws, ctx.RequestAborted);
         });

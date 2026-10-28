@@ -74,6 +74,7 @@ if (mode == "check")
         o.GitHubClientId = "fake-client";
         o.GitHubClientSecret = "fake-secret";
         o.MaxFramesPerSecond = 200;
+        o.AllowedOrigins = ["https://pwa.example"];
         o.Tap = (_, _, payload) => taps.Enqueue(payload);
         o.Route = (f, t) => route?.Invoke(f, t) ?? (f, t);
     }, b =>
@@ -247,6 +248,36 @@ if (mode == "check")
         return (listedBefore && !listedAfter, $"before {listedBefore}, after {listedAfter}, {sw.ElapsedMilliseconds} ms");
     });
 
+    await Check("a socket from a web origin that is not allowed is refused; an allowed one opens", async () =>
+    {
+        async Task<string> Try(string origin)
+        {
+            using var ws = new ClientWebSocket();
+            ws.Options.SetRequestHeader("Origin", origin);
+            try { await ws.ConnectAsync(RelayClient.SocketUri(url), default); return "open"; }
+            catch (WebSocketException) { return "refused"; }
+        }
+        var evil = await Try("https://evil.example");
+        var good = await Try("https://pwa.example");
+        return (evil == "refused" && good == "open", $"evil {evil}, allowed {good}");
+    });
+
+    await Check("the sign-in API answers CORS preflight for allowed origins only", async () =>
+    {
+        async Task<string?> Preflight(string origin)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Options, new Uri(url, "/v1/auth/token"));
+            req.Headers.Add("Origin", origin);
+            req.Headers.Add("Access-Control-Request-Method", "POST");
+            req.Headers.Add("Access-Control-Request-Headers", "content-type");
+            using var r = await http.SendAsync(req);
+            return r.Headers.TryGetValues("Access-Control-Allow-Origin", out var v) ? v.First() : null;
+        }
+        var good = await Preflight("https://pwa.example");
+        var evil = await Preflight("https://evil.example");
+        return (good == "https://pwa.example" && evil is null, $"allowed {good ?? "none"}, evil {evil ?? "none"}");
+    });
+
     await Check("the relay's logs carry no tokens or payloads", () =>
     {
         var all = string.Join("\n", logs);
@@ -255,7 +286,14 @@ if (mode == "check")
     });
 
     await other.Relay.DisposeAsync();
+    var last = await Connect(octoAccount, "last", "test");
+    var stopwatch = Stopwatch.StartNew();
     await relay.StopAsync();
+    await Check("a relay that is stopping tells connected devices to reconnect at once (1012)", async () =>
+    {
+        await last.Relay.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        return ((int?)last.Relay.CloseStatus == 1012, $"close {(int?)last.Relay.CloseStatus} {last.Relay.CloseReason} after {stopwatch.ElapsedMilliseconds} ms");
+    });
     Console.WriteLine(failed == 0 ? "all checks passed" : $"{failed} check(s) failed");
     return failed == 0 ? 0 : 1;
 

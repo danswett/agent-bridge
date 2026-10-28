@@ -48,8 +48,11 @@ public sealed class RelayClient : IAsyncDisposable
     public static async Task<RelayClient> ConnectAsync(Uri relay, string token, P256KeyPair key, string name, string kind, CancellationToken ct = default)
     {
         var ws = new ClientWebSocket();
-        // Keeps NATs, proxies and the hosting ingress from timing out an idle host.
+        // Keeps NATs, proxies and the hosting ingress from timing out an idle host. The timeout
+        // makes it a ping that must be answered: a relay replica that vanished without a close
+        // frame otherwise leaves the socket open, and the host unreachable, indefinitely.
         ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
+        ws.Options.KeepAliveTimeout = TimeSpan.FromSeconds(30);
         await ws.ConnectAsync(SocketUri(relay), ct);
         var c = new RelayClient(ws, Wire.DeviceId(key.Public));
         try

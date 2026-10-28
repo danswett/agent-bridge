@@ -1,7 +1,7 @@
 // Network first, so a new relay deployment's PWA takes effect on the next load, with the
 // cached shell as the offline fallback. The API and socket are never cached.
 const CACHE = 's4-shell-v1';
-const SHELL = ['./', './index.html', './app.js', './noise-p256.js', './manifest.webmanifest', './icon.svg'];
+const SHELL = ['./', './index.html', './app.js', './config.js', './noise-p256.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
