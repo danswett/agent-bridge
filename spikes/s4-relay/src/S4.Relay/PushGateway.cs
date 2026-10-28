@@ -64,7 +64,8 @@ public sealed class PushGateway(RelayOptions options, IHttpClientFactory http, I
         req.Headers.TryAddWithoutValidation("TTL", ttl.ToString());
         req.Headers.TryAddWithoutValidation("Urgency", urgency);
         // A topic lets a newer push replace an undelivered older one (a question superseded).
-        if (message.TryGetProperty("topic", out var tp) && tp.GetString() is { Length: > 0 and <= 32 } topic && topic.All(char.IsAsciiLetterOrDigit))
+        // It is optional, so one a push service would refuse is dropped, not sent.
+        if (message.TryGetProperty("topic", out var tp) && tp.GetString() is { } topic && PushTopic.IsValid(topic))
         {
             req.Headers.TryAddWithoutValidation("Topic", topic);
         }

@@ -442,7 +442,7 @@ if (mode == "check")
         var got = await answered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var headersOk = push.Headers["Content-Encoding"] == "aes128gcm" && push.Headers["Urgency"] == "high" && push.Headers["TTL"] == "3600"
-            && push.Headers["Authorization"].StartsWith("vapid t=") && push.Headers["Topic"] == $"q{qid}";
+            && push.Headers["Authorization"].StartsWith("vapid t=") && push.Headers["Topic"] == PushTopic.From(Convert.FromHexString(qid)) && PushTopic.IsValid(push.Headers["Topic"]);
         var plaintextHidden = !Encoding.UTF8.GetString(push.Body).Contains("database") && !logs.Any(l => l.Contains(text) || l.Contains(endpoint));
         await phone.Relay.DisposeAsync();
         await hostRelay.DisposeAsync();
@@ -465,6 +465,20 @@ if (mode == "check")
         await c.Relay.DisposeAsync();
         var refusedAll = results.All(r => r.StartsWith("0:endpoint") || r.StartsWith("0:bad-endpoint"));
         return (refusedAll && big.Error == "bad-body-size" && pushService.Received.IsEmpty, string.Join(", ", results) + $", oversized {big.Error}");
+    });
+
+    await Check("a push topic Apple would refuse (a length base64 cannot have) is dropped, and the push still goes", async () =>
+    {
+        var c = await Connect(octoAccount, "topic-pusher", "host");
+        pushService.Received.Clear();
+        var bad = await c.Relay.PushAsync($"{pushService.Url}/push/topic", new byte[64], topic: "q7fe69a91e0b1");
+        var good = await c.Relay.PushAsync($"{pushService.Url}/push/topic", new byte[64], topic: "q7fe69a91e0b");
+        await c.Relay.DisposeAsync();
+        var sent = pushService.Received.ToArray();
+        var badHasTopic = sent.Length > 0 && sent[0].Headers.ContainsKey("Topic");
+        var goodTopic = sent.Length > 1 && sent[1].Headers.TryGetValue("Topic", out var gt) ? gt : null;
+        return (bad.Status == 201 && good.Status == 201 && sent.Length == 2 && !badHasTopic && goodTopic == "q7fe69a91e0b",
+            $"13-character topic sent {badHasTopic}, 12-character topic {goodTopic}");
     });
 
     await Check("pushes are rate-limited per account, and a gone subscription (410) is dropped", async () =>
@@ -528,6 +542,43 @@ if (mode == "check")
         File.Delete(store);
         return (reloadedSame == 1 && reloadedOther == 0 && beforeSwitch == 1 && afterSwitch == 0 && afterSwitchReload == 0,
             $"same account reloads {reloadedSame}, other account {reloadedOther}; switch while running {beforeSwitch} -> {afterSwitch}, then reloaded as the first account {afterSwitchReload}");
+    });
+
+    await Check("a question asked while the host's relay connection is down still notifies the phone once the host reconnects", async () =>
+    {
+        var hostKey = P256KeyPair.Generate();
+        var first = await RelayClient.ConnectAsync(url, malloryAccount.Token, hostKey, "retry-host", "host");
+        var questions = new QuestionService(first, "retry-host");
+        _ = new ChannelHub(first, hostKey, "retry-host", "host") { Handler = (c, op, d) => questions.HandleAsync(c, op, d) };
+        using var ua = P256KeyPair.Generate();
+        var phone = await Connect(malloryAccount, "retry-phone", "pwa");
+        await phone.Relay.WaitForPeerAsync(p => p.Id == first.DeviceId, TimeSpan.FromSeconds(5));
+        var toHost = await phone.Hub.OpenAsync(first.DeviceId);
+        await toHost.RequestAsync("push-subscribe", new { endpoint = $"{pushService.Url}/push/retry-1", p256dh = B64Url.Encode(ua.Public), auth = B64Url.Encode(new byte[16]), appUrl = "https://pwa.example/" });
+        await phone.Relay.DisposeAsync();
+
+        // The connection drops; the agent asks anyway; the phone is asleep and offline.
+        await first.DisposeAsync();
+        pushService.Received.Clear();
+        var q = await questions.AskAsync("asked while reconnecting?", ["yes"]);
+        var whileDown = pushService.Received.Count;
+
+        var second = await RelayClient.ConnectAsync(url, malloryAccount.Token, hostKey, "retry-host", "host");
+        questions.Relay = second;
+        var sw = Stopwatch.StartNew();
+        while (pushService.Received.IsEmpty && sw.Elapsed < TimeSpan.FromSeconds(10)) { await Task.Delay(50); }
+        await Task.Delay(300);
+        var after = pushService.Received.ToArray();
+        // A later reconnect does not send it again.
+        var third = await RelayClient.ConnectAsync(url, malloryAccount.Token, hostKey, "retry-host", "host");
+        questions.Relay = third;
+        await Task.Delay(500);
+        var total = pushService.Received.Count;
+        await third.DisposeAsync();
+        await second.DisposeAsync();
+        var notice = after.Length == 1 ? JsonDocument.Parse(WebPushCrypto.Decrypt(after[0].Body, ua, new byte[16])).RootElement.GetProperty("notification").GetProperty("body").GetString() : null;
+        return (whileDown == 0 && after.Length == 1 && notice == q.Text && total == 1,
+            $"pushes while down {whileDown}, after reconnect {after.Length} (\"{notice}\"), after another reconnect {total}");
     });
 
     await Check("the relay's logs carry no tokens or payloads", () =>

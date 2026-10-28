@@ -1,10 +1,19 @@
 # S5: Web Push to the phone, end to end encrypted
 
-**Verdict: pending the real-iPhone run.** Everything up to the phone passes:
+**Verdict: GO, on a real iPhone.** A question asked on a Windows host reached a locked
+iPhone's lock screen through the live relay and Apple's push service. Tapping it opened
+the PWA, which connected to that host by itself, and the answer was back on the host
+10 seconds after the push. The relay and Apple saw only ciphertext. Getting there took
+three fixes, all from the first iPhone run (findings 5 and 6 below):
+- the app reconnecting after the phone sleeps
+- the host triggering the question itself, not the phone
+- a push header Apple is stricter about than the standard
+
+How it works:
 - A host encrypts a question notice to the phone's own push key (RFC 8291, checked byte
   for byte against the RFC's example).
 - The relay signs it with VAPID and forwards it, refusing anything off its allowlist.
-- The service worker shows it, and a tap opens the app at the question.
+- The phone shows it, and a tap opens the app at the question.
 - The answer goes back over the end-to-end channel, first answer wins.
 
 Built on S4's relay, host and PWA (`spikes/s4-relay`); this folder holds the results.
@@ -43,6 +52,21 @@ services (`web.push.apple.com`, `fcm.googleapis.com`, `push.services.mozilla.com
 
 ## Results
 
+### Real iPhone (live relay on Azure, PWA on GitHub Pages, host on a corporate-network VM)
+
+The PWA was added to the Home Screen and notifications were enabled from it. The phone
+was then locked, and the host asked from its own machine (`ask.txt`), as an agent would.
+
+| Time (PT) | What happened |
+|---|---|
+| 20:04:51 | Host asks; the relay forwards the encrypted push; Apple answers 201 |
+| (lock screen) | The notification is shown on the locked phone: "DSWETT-DEV-VM1 asks", with the question |
+| 20:04:59 | Tapped: the PWA opens, connects to the relay and opens a channel to the asking host by itself |
+| 20:05:01 | The answer, tapped in the app, reaches the host |
+
+An earlier run, at 20:02, delivered and was answered the same way, but the phone may not
+have been locked when the notice arrived, so it was repeated.
+
 `s4-devstack check` (CI): the S5 checks, alongside S4's 22.
 
 | Check | Result |
@@ -53,6 +77,8 @@ services (`web.push.apple.com`, `fcm.googleapis.com`, `push.services.mozilla.com
 | The relay refuses push endpoints off its allowlist without making a request (cloud metadata address, foreign host, suffix trick, non-HTTPS, garbage, oversized body) | Pass |
 | Pushes are rate-limited per account, and a gone subscription (410) is dropped | Pass |
 | A host's saved push subscriptions belong to one account: signing the same profile in as another account neither loads nor inherits them | Pass |
+| A push topic Apple would refuse (a length base64 cannot have) is dropped, and the push still goes | Pass |
+| A question asked while the host's relay connection is down still notifies the phone once the host reconnects, exactly once | Pass |
 
 `js/test-sw.mjs` (CI) runs the service worker's handlers against a stubbed worker scope;
 headless browsers refuse notification permission, so this is where they are pinned:
@@ -64,8 +90,12 @@ headless browsers refuse notification permission, so this is where they are pinn
 | An empty or unreadable push still shows a notification | Pass |
 | A tap opens the app at the question, or moves an open app to it | Pass |
 
-`js/test-pwa.mjs` (CI, Chromium and WebKit): a question asked by the host appears and is
-answered in the app, and opening the notification's link connects to that host by itself.
+`js/test-pwa.mjs` (CI, Chromium and WebKit):
+- A question asked by the host appears and is answered in the app.
+- After the relay socket is dropped, the app reconnects and reopens its channel without
+  a reload.
+- Reopened later, the app goes back to the last host.
+- Opening the notification's link connects to that host by itself.
 
 ## Findings
 
@@ -86,6 +116,33 @@ answered in the app, and opening the notification's link connects to that host b
    so the new account's questions would have gone to the old account's phones (found in
    review). The saved subscriptions now name their account, and a host drops them when
    its account changes.
+5. **A phone kills the app's connection every time it locks** (found on the first iPhone
+   run). The socket closed with 1006 and the app never reconnected. Worse, a WebSocket
+   drops data sent on a closed socket without an error, so every later Connect "timed
+   out" and the "Ask me" request was silently lost before it reached the host. The app
+   now:
+   - reconnects with backoff, and at once when it comes back to the front or the
+     network returns
+   - reopens the channel it had open
+   - fails a send on a dead connection visibly
+   - only says "you can lock the phone now" once the host has confirmed the request
+
+   Notifications must never depend on the phone being connected. The host now also
+   accepts a question from its own machine (`ask.txt` in the profile folder), as an
+   agent's `ask_user` would ask one. The same holds for the host's own connection. A
+   notice that couldn't be sent because the host was reconnecting is sent on the next
+   connection (found in review). Before, it was lost, and a sleeping phone would never
+   have heard. The app also remembers the last host and goes
+   straight back to it, so opening it from the Home Screen needs no Connect.
+6. **Apple is stricter than RFC 8030 about the `Topic` header.** Every real push was
+   refused with 400 `BadWebPushTopic`, though the fake push service and the RFC accepted
+   it. Reproducing the push directly showed the cause: Apple decodes the topic, and the
+   13-character `q` plus question id is a length no base64 encodes to. A 12-character
+   topic was accepted. Topics are now made by base64url-encoding the question id's
+   bytes. The relay drops any topic that couldn't decode, rather than sending a push
+   that will fail; a topic is optional. The relay also returned only the status, so
+   Apple's reason was invisible to the host. The product's gateway should pass the push
+   service's reason back (it is not sensitive).
 
 ## Limitations
 

@@ -17,6 +17,18 @@ public static class B64Url
     }
 }
 
+public static class PushTopic
+{
+    // RFC 8030 asks only for at most 32 base64url characters. Apple also decodes it, and
+    // answers 400 BadWebPushTopic for a length no base64 encodes to (4n + 1): "q" plus a
+    // 12-character id was refused on a real iPhone. A topic is therefore always made by
+    // encoding bytes, and checked as decodable before it is sent.
+    public static string From(ReadOnlySpan<byte> id) => B64Url.Encode(id);
+
+    public static bool IsValid(string? t) =>
+        t is { Length: > 0 and <= 32 } && t.Length % 4 != 1 && t.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
+}
+
 // A browser's push subscription: where to send, and the keys only that browser can decrypt with.
 public sealed record PushSubscription(string Endpoint, string P256dh, string Auth);
 
