@@ -18,8 +18,9 @@ using AgentBridge.Transport;
 //   agent-bridge-host sign-in --relay <url>     GitHub sign-in through the relay
 //   agent-bridge-host serve [--relay <url>] [--name <name>]
 //                                               serve Protocol v1 sessions, reconnecting, and
-//                                               type answers to their questions (Windows; see
-//                                               docs/host-answers.md)
+//                                               type answers to their questions and replies
+//                                               (Windows; see docs/host-answers.md and
+//                                               docs/host-replies.md)
 //   agent-bridge-host whoami                    this device and the account it signed in to
 //
 // Roots default to the current user's; --copilot-home, --claude-home and --codex-home
@@ -135,8 +136,8 @@ async Task<int> ServeAsync()
     // machine nor loses a change, and every new channel subscribes to the same state.
     await using var source = new SessionSource(options);
     await source.StartAsync(stop.Token);
-    var answers = Answerer(source);
-    var service = new SessionService(source, machine, Log, answers);
+    var (answers, replies) = Typists(source);
+    var service = new SessionService(source, machine, Log, answers, replies);
     Log($"watching {source.Snapshot().Count} live session(s); serving as \"{name}\" ({machine.Id[..8]}) on {relayUri.Host}");
 
     var backoff = TimeSpan.FromSeconds(1);
@@ -186,22 +187,27 @@ async Task<int> ServeAsync()
 static string OsName() =>
     OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
 
-// Answers are typed through agent-bridge-injector beside this executable, on Windows only
-// for now, and never while agent-ha-bridge runs for this user (checked again for every
-// hello and every answer; this is only the startup note).
-ISessionAnswerer Answerer(ISessionSource source)
+// Answers and replies are typed through agent-bridge-injector beside this executable, on
+// Windows only for now, and never while agent-ha-bridge runs for this user (checked again
+// for every hello, answer and reply; this is only the startup note). They share one gate,
+// so an answer and a reply never type into one session at once.
+(ISessionAnswerer, ISessionReplier) Typists(ISessionSource source)
 {
     if (!OperatingSystem.IsWindows())
     {
-        Log("answering from other devices is not supported on this platform yet");
-        return new UnsupportedPlatformAnswerer();
+        Log("answering and replying from other devices are not supported on this platform yet");
+        return (new UnsupportedPlatformAnswerer(), new UnsupportedPlatformReplier());
     }
     var probe = new AgentHaBridgeProbe();
     var injector = new WorkerInjector();
-    if (!File.Exists(Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName))) { Log($"{WorkerInjector.FileName} is missing beside the host; answers will be refused"); }
-    Log(probe.Active() is { } active ? $"answering is off for now: {active}" : "answering is on");
-    return new AnswerService(source, new SystemProcessInspector(), probe, new TargetGuard(), injector,
-        new AnswerOptions { CopilotHome = options.CopilotHome }, Log);
+    var guard = new TargetGuard();
+    var processes = new SystemProcessInspector();
+    var gate = new DeliveryGate();
+    if (!File.Exists(Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName))) { Log($"{WorkerInjector.FileName} is missing beside the host; answers and replies will be refused"); }
+    Log(probe.Active() is { } active ? $"answering and replying are off for now: {active}" : "answering and replying are on");
+    return (
+        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome }, Log, gate),
+        new ReplyService(source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome }, Log, gate));
 }
 
 static string HostVersion()

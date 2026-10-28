@@ -87,6 +87,8 @@ public static class Limits
     // Free text in an answer (session.answer's text, or a field's other), and the request.
     public const int AnswerText = 4 * 1024;
     public const int AnswerRequest = 16 * 1024;
+    // The text of a session.reply.
+    public const int ReplyText = 16 * 1024;
 
     // Keeps the end of the text, as clients show the most recent part. Never splits a
     // character (UTF-8 sequence or surrogate pair).
@@ -300,6 +302,20 @@ public sealed record AnswerRequest
 
 public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null);
 
+// session.reply: a prompt for the session, typed into its own input as if at the machine.
+// Request is the client's UUID for this reply, as for an answer. Attachments is reserved
+// for the slice that carries files; until then a host refuses a reply that has any.
+public sealed record ReplyRequest
+{
+    public required string Id { get; init; }
+    public required string Request { get; init; }
+    public string? Text { get; init; }
+    public JsonElement? Attachments { get; init; }
+}
+
+// The same outcomes as an answer, read the same way.
+public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null);
+
 public static class Ops
 {
     public const string Hello = "hello";
@@ -307,6 +323,7 @@ public static class Ops
     public const string SessionGet = "session.get";
     public const string SessionsSubscribe = "sessions.subscribe";
     public const string SessionAnswer = "session.answer";
+    public const string SessionReply = "session.reply";
 }
 
 public static class Events
@@ -346,4 +363,5 @@ public static class Capabilities
 {
     public const string SessionsRead = "sessions.read";
     public const string SessionsAnswer = "sessions.answer";
+    public const string SessionsReply = "sessions.reply";
 }

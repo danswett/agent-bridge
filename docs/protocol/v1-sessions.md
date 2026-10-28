@@ -2,14 +2,15 @@
 
 The contract between a **Bridge Host** and its clients: the PWA now, and later the
 WinUI 3 and SwiftUI apps and the native phone apps. It is how a client sees a machine's
-agent sessions and answers their questions. It travels inside the end-to-end Noise
+agent sessions, answers their questions and replies to them. It travels inside the end-to-end Noise
 channel from spike S4, so the relay never sees any of it. C# records matching this
 document are in `src/AgentBridge.Protocol/Sessions.cs`, and the PWA mirrors them in
 JavaScript.
 
 Scope so far: a host reports sessions, their activity and their pending questions
-(`sessions.read`), and can take an answer to a question (`sessions.answer`). Replying,
-launching and stopping come next; they will add ops without changing anything here.
+(`sessions.read`), can take an answer to a question (`sessions.answer`), and can take a
+reply: a prompt typed into a session (`sessions.reply`). Attachments, launching and
+stopping come next; they will add ops without changing anything here.
 
 ## Rules for every message
 
@@ -74,6 +75,7 @@ Request `data`: `{}`. Result:
 |---|---|
 | `sessions.read` | `sessions.list`, `session.get`, `sessions.subscribe` |
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
+| `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
 
 ### `sessions.list`
 
@@ -159,15 +161,62 @@ anything but `delivered`:
 | `delivered` | The host typed the answer and the agent's transcript recorded it | Yes |
 | `unconfirmed` | The host typed it, but could not confirm the agent recorded it (for example the session stopped answering). It never retries on its own; the client says to check at the machine | Yes |
 | `stale` | The session is no longer asking that question: answered at the machine or by another device, or gone | No |
-| `busy` | Another answer to this session is being delivered | No |
+| `busy` | Another answer or a reply to this session is being delivered | No |
 | `refused` | The host will not type it: an invalid answer, a question the client should not answer remotely (`truncated`), an elevated or otherwise unreachable session, an agent or platform without delivery, or agent-ha-bridge active for this user | No |
 
 A client treats an outcome it doesn't know as `unconfirmed`, never as `delivered`. The
 session's next `session.upsert` shows the question gone whatever the outcome.
 
 Typing into a live session is a single writer's job, and the host serializes it: one
-answer per session at a time (`busy` otherwise), checked against the transcript
+answer or reply per session at a time (`busy` otherwise), checked against the transcript
 immediately before typing and confirmed by identity, never by clock, after.
+
+### `session.reply`
+
+Sends a session a prompt, typed into the agent's own input as if at the machine, whether
+the session is idle or still working. Request `data`:
+
+```json
+{
+  "id": "<session id>",
+  "request": "0b7e3c1d-5f2a-4c6e-8d9b-1a2b3c4d5e6f",
+  "text": "Looks good. Open the pull request."
+}
+```
+
+| Field | Notes |
+|---|---|
+| `id` | The session |
+| `request` | A fresh UUID per reply the person sends, with exactly `session.answer`'s semantics: every outcome is remembered for at least 10 minutes and returned for a repeat, which types nothing; a repeat of a reply still being delivered waits for it |
+| `text` | The prompt: at most 16 KiB of UTF-8, and not blank |
+| `attachments` | Reserved for files and images (a later slice). Until a host offers them, a reply carrying any (anything but an empty array or `null`) is `refused` |
+
+**Line breaks become spaces.** Every control character, line breaks and tabs included,
+and the Unicode line and paragraph separators are typed as spaces, so a reply always
+reaches the agent as one line. This is agent-ha-bridge's behaviour, kept exactly: its
+reply path (`Get-CopilotInjectableText`) replaces every control character with a space,
+because an Enter inside the words would submit part of the reply. A client may let the
+person type several lines, and says they will arrive as one.
+
+A reply whose first character, after spaces and control characters, is `/` or `!` is
+`refused`: Copilot CLI and Claude Code would run it as a slash command or a shell command
+on the machine, not give it to the agent, and nothing could confirm it.
+
+Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`:
+
+| `outcome` | Meaning | Typed? |
+|---|---|---|
+| `delivered` | The host typed the reply, and the agent's transcript then recorded a prompt from the person (not a subagent's, a scheduled one or any with another source) whose text is the reply as typed, whitespace runs aside. Each recorded prompt confirms one reply only | Yes |
+| `unconfirmed` | The host typed it but saw no such prompt: the agent recorded something else, the session ended, or nothing came within the host's wait. A session that is working takes a prompt typed now at its next step (Copilot records it then, as `delivery: "steering"`), so a host waits for up to a minute. Never retried | Yes |
+| `stale` | The session has ended, or its process has | No |
+| `busy` | An answer or another reply to this session is being typed | No |
+| `refused` | The host will not type it: an invalid reply (above), **a question or permission prompt pending in the session** (the words would answer it, and Enter accept it; answer it first), an elevated or otherwise unreachable session, an agent or platform without delivery yet, or agent-ha-bridge active for this user | No |
+
+A reply is never typed while the session is asking anything, which a host checks both in
+what it reports and, immediately before typing, in the transcript itself. The per-session
+serialization is shared with answers, but it ends once the reply's keys have gone: a
+question the agent asks while the host waits for its prompt to be recorded can be answered
+at once.
 
 ## Types
 

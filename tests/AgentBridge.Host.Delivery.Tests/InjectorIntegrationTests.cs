@@ -15,6 +15,14 @@ public sealed class WindowsFactAttribute : FactAttribute
     }
 }
 
+public sealed class WindowsTheoryAttribute : TheoryAttribute
+{
+    public WindowsTheoryAttribute()
+    {
+        if (!OperatingSystem.IsWindows()) { Skip = "needs Windows consoles"; }
+    }
+}
+
 // The real injector worker typing into a real console: a console program of the tests' own
 // (agent-bridge-console-echo), started in a new hidden console, which writes down every key
 // event it reads. Nothing here touches any console the tests did not create.
@@ -156,6 +164,53 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var result = await new WorkerInjector(Path.Combine(root, "absent.exe")).InjectAsync(1, new KeyPlan([new KeySend("x", true, 10, 0)]));
 
         Assert.Equal((InjectionStatus.NothingTyped, true), (result.Status, result.Detail.Contains(WorkerInjector.FileName)));
+    }
+
+    // A reply through the real ReplyService and the real worker into a real console. The
+    // echo program plays Copilot: once Enter arrives, what was typed before it is written to
+    // the transcript as the person's prompt, which is how the reply is confirmed.
+    [WindowsTheory]
+    [InlineData("Looks good.\r\nNow open the PR – 世界 🚀 \"q\" \\", "Looks good.  Now open the PR – 世界 🚀 \"q\" \\")]
+    [InlineData(null, null)]
+    public async Task A_reply_is_typed_into_the_console_as_one_line_then_Enter_and_is_delivered_once_recorded(string? text, string? typed)
+    {
+        // The longest reply allowed: 16 KiB of UTF-8, every byte a key down and up.
+        text ??= string.Concat(Enumerable.Repeat("abcdefgh", AgentBridge.Protocol.Limits.ReplyText / 8));
+        typed ??= text;
+        var echo = StartEcho();
+        using var f = new Fixture();
+        const string Id = "33333333-3333-4333-8333-333333333333";
+        var events = f.CopilotSession(Id, echo.Pid);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+        f.Processes.Run(AgentBridge.Protocol.AgentKind.Copilot, echo.Pid);
+        await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
+        await source.RefreshAsync();
+        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
+            new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) });
+        var keyDowns = text.Length + 1;
+        var cli = Task.Run(() =>
+        {
+            var downs = WaitFor(echo.Log, lines => Keys(lines).Where(k => k.StartsWith("key 1 ", StringComparison.Ordinal)).ToList() is { } d && d.Count >= keyDowns ? d : null, seconds: 60);
+            Assert.Equal("key 1 13 13", downs[^1]);
+            var words = new string([.. downs.SkipLast(1).Select(k => (char)int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture))]);
+            Fixture.Append(events, Copilot.Event("user.message", new { content = words, delivery = "idle" }, 5));
+            return words;
+        });
+
+        var result = await replies.ReplyAsync(new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = text });
+
+        Assert.Equal(typed, await cli);
+        Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Delivered, (string?)null), (result.Outcome, result.Reason));
+    }
+
+    sealed class NoBridge : IAgentHaBridgeProbe
+    {
+        public string? Active() => null;
+    }
+
+    sealed class NoGuard : ITargetGuard
+    {
+        public string? Refuse(int processId) => null;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
