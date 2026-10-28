@@ -43,7 +43,7 @@ come next.
 | `js/stop-service.js` | Ending sessions: `answer-service.js` with `session.stop`, one press on its way per session, the second press carrying the first's token |
 | `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
 | `js/usage.js` | Agent usage: the tolerant reader, merging every machine's reports into one row per allowance (a reading beats a failure, then the freshest wins), and the card's words: colours at 75% and 90%, pace, resets, ages |
-| `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`) and usage: the viewed machine's on its channel (`usage.subscribe`), every other online machine's by a short channel (`hello`, `usage.get`) at most once a minute while the app is in front |
+| `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`) and usage: the viewed machine's on its channel (`usage.subscribe`), every other online machine's by a short channel (`hello`, `usage.get`) once a minute while the app is in front |
 | `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
 | `js/ui/*` | Session cards, the question and its answer form, the reply box, End session, machines list, the usage panel, fold state, relative times |

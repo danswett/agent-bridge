@@ -27,25 +27,35 @@ public sealed class CodexUsageCollector(UsageOptions options) : IUsageCollector
                 .OrderByDescending(f => f.LastWriteTimeUtc).Take(options.CodexFiles)];
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        // Each candidate's latest reading, and the newest of those: with several sessions, the
+        // file written last need not be the one that heard of the limits last.
+        AgentUsage? newest = null;
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (file.Length > options.MaxStateBytes) { continue; }
             string[] lines;
             try
             {
                 using var stream = new FileStream(file.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                // A transcript is conversation and tool output, so its size says nothing about
+                // whether its latest limits are worth reading: a long one is read from its
+                // tail, the first (partial) line of which is dropped.
+                var partial = stream.Length > options.MaxStateBytes;
+                if (partial) { stream.Seek(-options.MaxStateBytes, SeekOrigin.End); }
                 using var reader = new StreamReader(stream, Encoding.UTF8);
                 lines = reader.ReadToEnd().Split('\n');
+                if (partial && lines.Length > 0) { lines[0] = ""; }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
             for (var i = lines.Length - 1; i >= 0; i--)
             {
                 if (!lines[i].Contains("\"rate_limits\"", StringComparison.Ordinal)) { continue; }
-                if (Parse(lines[i], file.LastWriteTimeUtc) is { } usage) { return usage; }
+                if (Parse(lines[i], file.LastWriteTimeUtc) is not { } usage) { continue; }
+                if (newest is null || usage.MeasuredAt > newest.MeasuredAt) { newest = usage; }
+                break;
             }
         }
-        return null;
+        return newest;
     }
 
     // Without a timestamp on the event, the file's last write is the latest it can have been.

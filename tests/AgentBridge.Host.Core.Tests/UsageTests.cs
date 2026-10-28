@@ -364,6 +364,39 @@ public sealed class UsageTests : IDisposable
         Assert.All(usage.Windows, w => Assert.Null(w.StartsAt));
     }
 
+    static string Limits(double percent, int second) =>
+        Codex.Event(new { type = "token_count", rate_limits = new { primary = new { used_percent = percent } } }, second);
+
+    [Fact]
+    public async Task Codex_takes_the_newest_reading_across_its_transcripts_not_the_file_written_last()
+    {
+        var heardLast = f.CodexTranscript("heard-last");
+        Fixture.Append(heardLast, Limits(30, 100));
+        File.SetLastWriteTimeUtc(heardLast, Now.AddMinutes(-5).UtcDateTime);
+        // Written to more recently, by a tool result, but its own limits are older.
+        var writtenLast = f.CodexTranscript("written-last");
+        Fixture.Append(writtenLast, Limits(20, 50), Codex.Event(new { type = "exec_command_end", stdout = "ok" }, 200));
+        File.SetLastWriteTimeUtc(writtenLast, Now.UtcDateTime);
+
+        var usage = await new CodexUsageCollector(Options()).CollectAsync();
+
+        Assert.Equal(30, Assert.Single(usage!.Windows).Percent);
+        Assert.Equal(Fixture.T0.AddSeconds(100), usage.MeasuredAt);
+    }
+
+    [Fact]
+    public async Task Codex_reads_the_latest_limits_from_the_end_of_a_transcript_too_long_to_read_whole()
+    {
+        var transcript = f.CodexTranscript("long");
+        var output = new string('x', 4000);
+        Fixture.Append(transcript, [Limits(10, 1), .. Enumerable.Range(0, 100).Select(i => Codex.Event(new { type = "exec_command_end", stdout = output }, 2 + i)), Limits(47, 500)]);
+
+        var usage = await new CodexUsageCollector(new UsageOptions { CopilotHome = f.CopilotHome, ClaudeHome = f.ClaudeHome, CodexHome = f.CodexHome, MaxStateBytes = 64 * 1024 }).CollectAsync();
+
+        Assert.True(new FileInfo(transcript).Length > 64 * 1024);
+        Assert.Equal(47, Assert.Single(usage!.Windows).Percent);
+    }
+
     [Fact]
     public async Task Codex_that_has_never_run_here_is_left_off()
     {
@@ -523,6 +556,30 @@ public sealed class UsageTests : IDisposable
 
         Assert.Equal([1L, 2L], versions);
         Assert.Equal(11, monitor.Current.Report.Agents[0].Windows[0].Percent);
+    }
+
+    [Fact]
+    public async Task Credits_spent_without_moving_the_percent_by_a_tenth_are_announced_too()
+    {
+        var used = 1000.0;
+        var copilot = new FakeCollector(AgentKind.Copilot, () => new AgentUsage
+        {
+            Agent = AgentKind.Copilot,
+            Label = "GitHub Copilot",
+            Source = UsageSource.Api,
+            Windows = [new UsageWindow { Key = "plan", Label = "Plan", Percent = 40, Used = used, Limit = 1500000 }],
+            MeasuredAt = time.GetUtcNow(),
+        });
+        await using var monitor = Monitor(new FakeSessions(), null, copilot);
+        var versions = new List<long>();
+        monitor.Changed += (_, v) => versions.Add(v);
+        await monitor.PassAsync();
+
+        used = 1001;
+        time.Advance(TimeSpan.FromMinutes(15));
+        await monitor.PassAsync();
+
+        Assert.Equal([1L, 2L], versions);
     }
 
     [Fact]

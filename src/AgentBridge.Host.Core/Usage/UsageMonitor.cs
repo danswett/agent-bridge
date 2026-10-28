@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Core.Usage;
@@ -187,11 +188,11 @@ public sealed class UsageMonitor : IAsyncDisposable
         log($"usage: {agent.ToString().ToLowerInvariant()} {said}");
     }
 
-    // Everything about a reading but when it was taken: the same windows under another
-    // account are another reading.
+    // Everything a client shows about a reading but when it was taken: the same windows under
+    // another account are another reading, and credits spent can move the amount before they
+    // move the percent by a tenth.
     static string Signature(AgentUsage a) =>
-        string.Join('|', a.Agent, a.Account, a.AccountKey, a.Plan, a.Source, a.Error,
-            string.Join(',', a.Windows.Select(w => $"{w.Key}={w.Percent.ToString(System.Globalization.CultureInfo.InvariantCulture)}@{w.ResetsAt?.ToUnixTimeSeconds()}")));
+        JsonSerializer.Serialize(a with { MeasuredAt = DateTimeOffset.UnixEpoch }, ProtocolJson.Options);
 
     public async ValueTask DisposeAsync()
     {

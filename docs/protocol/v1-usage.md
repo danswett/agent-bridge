@@ -25,7 +25,8 @@ A machine is **online** while it is in the relay's presence list, as before. `he
 
 A client shows a machine as `3 sessions · 0.1.0 (dev)`, and an offline one as `offline`.
 It can learn this about a machine it is not viewing with a short channel: `hello`, then
-`usage.get` if offered, then close.
+`usage.get` if offered, then close. The PWA does that once a minute for each other online
+machine while it is in front, and never more often.
 
 ## Capability
 
@@ -43,8 +44,8 @@ Request `data`: `{}`. Result: a [Usage](#usage) report, as the host last read it
 Request `data`: `{}`. Result: the current Usage. Then, until the channel closes, the host
 sends `usage.update` with the whole Usage whenever what a client shows changes:
 
-* a reading changed in anything but when it was taken (a window's percent or reset, the
-  source, the error, the account), or
+* a reading changed in anything a client shows but when it was taken (a window's percent,
+  amounts or ends, the source, the error, the account or plan), or
 * an unchanged reading was last sent 30 minutes ago, so its `measuredAt` stays inside the hour
   after which a client calls it stale.
 
@@ -118,7 +119,7 @@ Agent-ha-bridge's usage card, kept exactly:
 |---|---|---|
 | Copilot | `GET https://api.github.com/copilot_internal/user`, `quota_snapshots.premium_interactions`: `entitlement` is the limit, `entitlement − remaining` is used, `quota_reset_date_utc` the reset, a month before it the start. Failing that, the CLI's own cache, `copilot-user-cache.json` (the newest entry for the login), with the failure as `error` | The account is the login in `~/.copilot/config.json` `loggedInUsers` (`lastLoggedInUser` when there are several). Its token, in the CLI's own order: `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, the CLI's stored login (Windows Credential Manager, `https://github.com:<login>.copilot-cli`), then `gh auth token --hostname github.com --user <login>` |
 | Claude | `GET https://api.anthropic.com/api/oauth/usage`, `limits[]`: `kind`, `percent`, `resets_at`; `seven_day_breakdown.window_started_at` starts the weekly windows | `claudeAiOauth.accessToken` in `~/.claude/.credentials.json`. The account key from `~/.claude.json` `oauthAccount` |
-| Codex | The newest `rate_limits` in the last 5 transcripts under `~/.codex/sessions`: `primary` and `secondary`, `used_percent`, `window_minutes`, `resets_at`, `plan_type` | None: no request leaves the machine |
+| Codex | The newest `rate_limits` (by its event's time) in the 5 most recently written transcripts under `~/.codex/sessions`, searching the last 8 MiB of each: `primary` and `secondary`, `used_percent`, `window_minutes`, `resets_at`, `plan_type` | None: no request leaves the machine |
 
 **Pace.** A host asks about an agent every 2 minutes while a session of it is open on the
 machine, and every 15 minutes while none is: the allowance belongs to the account, and only a

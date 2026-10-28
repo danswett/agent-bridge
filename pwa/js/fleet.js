@@ -2,8 +2,8 @@
 // (docs/protocol/v1-usage.md):
 //   * the machine being viewed: its hello, its live session count, and a usage subscription
 //     on the channel already open to it;
-//   * every other online machine: a short channel now and then (hello, usage.get, close),
-//     at most once a minute each and only while the app is in front, so the list says
+//   * every other online machine: a short channel (hello, usage.get, close) once a minute
+//     each while the app is in front, and never more often, so the list says
 //     "3 sessions · 0.1.0 (dev)" for each and usage is merged across machines as
 //     agent-ha-bridge's card merged them.
 import { HostClient } from './host-client.js';
@@ -15,6 +15,8 @@ export class FleetStatus {
   #queue = Promise.resolve();
   #queued = new Set();
   #viewed = null;
+  #timer = null;
+  #started = false;
 
   constructor({ connection, hosts, store, book, me, probeEveryMs = 60000, now = () => Date.now(), doc = globalThis.document, makeClient = (ch) => new HostClient(ch) }) {
     Object.assign(this, { connection, hosts, store, book, me, probeEveryMs, now, doc, makeClient });
@@ -22,7 +24,28 @@ export class FleetStatus {
     connection.on('ready', () => this.probe());
     hosts.onChange(() => this.#onHosts());
     store.onChange(() => this.#emit());
-    doc?.addEventListener?.('visibilitychange', () => { if (doc.visibilityState === 'visible') { this.probe(); } });
+    doc?.addEventListener?.('visibilitychange', () => {
+      if (doc.visibilityState === 'hidden') { this.#stopTimer(); return; }
+      this.probe();
+      this.#startTimer();
+    });
+  }
+
+  // Looks again every probeEveryMs while the app is in front: presence changes only when a
+  // device comes or goes, so a machine left alone would otherwise never be looked at again.
+  start() {
+    this.#started = true;
+    this.#startTimer();
+  }
+
+  #startTimer() {
+    if (!this.#started || this.#timer || this.doc?.visibilityState === 'hidden') { return; }
+    this.#timer = setInterval(() => this.probe(), this.probeEveryMs);
+  }
+
+  #stopTimer() {
+    clearInterval(this.#timer);
+    this.#timer = null;
   }
 
   onChange(fn) { this.#listeners.add(fn); return () => this.#listeners.delete(fn); }
@@ -43,6 +66,8 @@ export class FleetStatus {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    this.#started = false;
+    this.#stopTimer();
     this.#machines.clear();
     this.#queued.clear();
     this.#viewed = null;

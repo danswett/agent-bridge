@@ -123,3 +123,33 @@ test('the machine being viewed is never probed; its usage comes on its own chann
   assert.equal(book.size, 0);
   assert.equal(fleet.status('v'), '');
 });
+
+test('a machine left alone is looked at again every minute while the app is in front, and not while it is hidden', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let now = 0;
+  const doc = { visibilityState: 'visible', listeners: [], addEventListener(type, fn) { this.listeners.push(fn); } };
+  const connection = fakeConnection({ a: { machine: { hostVersion: '0.1.0', sessions: 1 }, capabilities: [] } });
+  const fleet = new FleetStatus({ connection, hosts: fakeHosts(), store: new SessionsStore(), book: new UsageBook(), me: 'me', now: () => now, doc, makeClient: fakeClient(connection) });
+  fleet.start();
+  fleet.probe();
+  await fleet.idle();
+  assert.deepEqual(connection.opened, ['a']);
+
+  now = 60000;
+  t.mock.timers.tick(60000);
+  await fleet.idle();
+  assert.deepEqual(connection.opened, ['a', 'a']);
+
+  doc.visibilityState = 'hidden';
+  for (const fn of doc.listeners) { fn(); }
+  now = 180000;
+  t.mock.timers.tick(120000);
+  await fleet.idle();
+  assert.deepEqual(connection.opened, ['a', 'a']);
+
+  doc.visibilityState = 'visible';
+  for (const fn of doc.listeners) { fn(); }
+  await fleet.idle();
+  assert.deepEqual(connection.opened, ['a', 'a', 'a']);
+  fleet.clear();
+});

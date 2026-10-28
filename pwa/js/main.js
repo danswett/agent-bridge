@@ -353,6 +353,7 @@ function begin(account) {
     $('machines-empty').hidden = n !== 0 || !connection.ready;
   };
   fleet.onChange(drawMachines);
+  fleet.start();
 
   connection.on('presence', drawMachines);
   connection.on('log', (line) => console.log(line));

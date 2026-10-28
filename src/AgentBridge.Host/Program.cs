@@ -117,7 +117,9 @@ switch (command)
             await source.RefreshAsync();
             using var http = new UsageHttp(TimeSpan.FromSeconds(15));
             var usageOptions = UsageOptions.For(options);
-            await using var monitor = new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: Log), source, usageOptions, log: Log);
+            // What it notices goes to stderr: stdout is the report, for whatever parses it.
+            Action<string> note = m => Console.Error.WriteLine($"{DateTime.Now:HH:mm:ss} {m}");
+            await using var monitor = new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: note), source, usageOptions, log: note);
             await monitor.PassAsync();
             Console.WriteLine(JsonSerializer.Serialize(monitor.Current.Report, pretty));
             return 0;

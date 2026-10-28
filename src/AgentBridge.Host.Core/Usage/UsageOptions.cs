@@ -55,7 +55,8 @@ public sealed class UsageOptions
     public TimeSpan GhHold { get; init; } = TimeSpan.FromHours(6);
     public TimeSpan GhPresent { get; init; } = TimeSpan.FromMinutes(15);
 
-    // Enough to refuse a file that is not the small state document it should be.
+    // Enough to refuse a file that is not the small state document it should be, and how much
+    // of the end of a long Codex transcript is searched for its latest limits.
     public long MaxStateBytes { get; init; } = 8L * 1024 * 1024;
 
     // How many of Codex's newest transcripts are searched for a rate-limit event.
