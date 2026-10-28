@@ -114,8 +114,9 @@ export class HostSession {
         setTimeout(() => this.#maybeOpen(), 1000);
       });
       const hello = await client.hello().catch((e) => {
-        // Hosts from before this protocol (the S4 demo host) answer "unknown op".
-        throw Object.assign(e, { unsupported: true });
+        // Hosts from before this protocol (the S4 demo host) answer "unknown op". Only such
+        // an answer means unsupported; a timeout or a dropped channel is retried below.
+        throw Object.assign(e, { unsupported: e.fromHost === true });
       });
       this.machine = { ...hello.machine, name: hello.machine.name ?? channel.peerName };
       if (hello.protocol !== PROTOCOL_VERSION || !hello.capabilities.includes(Capabilities.sessionsRead)) {

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HostSession } from '../../js/host-session.js';
+import { HostError } from '../../js/host-client.js';
 import { SessionsStore } from '../../js/sessions-store.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
@@ -40,6 +41,45 @@ function session(presence) {
   const hosts = new HostSession({ connection, store: new SessionsStore(), storage: null, makeClient: (ch) => fakeClient(ch) });
   return { connection, hosts };
 }
+
+test('a hello that times out is retried, not taken for an old host', async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
+  const clients = [];
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => {
+      const c = fakeClient(ch);
+      c.hello = async () => { throw Object.assign(new Error('hello: timed out'), { reason: 'timed out' }); };
+      clients.push(c);
+      return c;
+    },
+  });
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  assert.equal(hosts.phase, 'failed');
+  assert.equal(hosts.client, null);
+  assert.equal(clients[0].closed, true);
+});
+
+test('a host that refuses hello is reported as not supporting sessions', async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => {
+      const c = fakeClient(ch);
+      c.hello = async () => { throw new HostError('hello', 'unknown op hello', { fromHost: true }); };
+      return c;
+    },
+  });
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  assert.equal(hosts.phase, 'unsupported');
+  assert.match(hosts.error, /unknown op hello/);
+});
 
 test('switching machines while a handshake is pending opens the new machine', async () => {
   const { connection, hosts } = session([{ id: 'a', kind: 'host' }, { id: 'b', kind: 'host' }]);

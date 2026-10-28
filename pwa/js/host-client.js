@@ -8,10 +8,13 @@
 import { Events, Ops, readHello, readSession } from './protocol.js';
 
 export class HostError extends Error {
-  constructor(op, message) {
+  // fromHost: the host answered with ok:false. Otherwise the request never got an answer
+  // (timeout, closed channel, failed send), which says nothing about what the host supports.
+  constructor(op, message, { fromHost = false } = {}) {
     super(`${op}: ${message}`);
     this.op = op;
     this.reason = message;
+    this.fromHost = fromHost;
   }
 }
 
@@ -123,7 +126,7 @@ export class HostClient {
       this.#pending.delete(m.re);
       clearTimeout(p.timer);
       if (m.ok === true) { p.resolve(m.result); }
-      else { p.reject(new HostError(p.op, typeof m.error === 'string' ? m.error : 'failed')); }
+      else { p.reject(new HostError(p.op, typeof m.error === 'string' ? m.error : 'failed', { fromHost: true })); }
       return;
     }
     if (typeof m.ev === 'string') { this.#event(m); }

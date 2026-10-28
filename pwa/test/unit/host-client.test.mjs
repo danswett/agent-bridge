@@ -38,7 +38,12 @@ test('a response settles the request it answers, by id', async () => {
   t.host({ re: t.sent[1].id, ok: true, result: 'second' });
   t.host({ re: t.sent[0].id, ok: false, error: 'nope' });
   assert.equal(await b, 'second');
-  await assert.rejects(a, /one: nope/);
+  await assert.rejects(a, (e) => /one: nope/.test(e.message) && e.fromHost === true);
+});
+
+test('a timeout is not an answer from the host', async () => {
+  const client = new HostClient(fakeTransport(), { timeoutMs: 10 });
+  await assert.rejects(client.request('hello'), (e) => /timed out/.test(e.message) && e.fromHost === false);
 });
 
 test('a request on a dead transport fails at once instead of timing out', async () => {
