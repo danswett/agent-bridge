@@ -23,6 +23,12 @@ internal sealed class BackgroundWork
     {
         public bool Working;
         public bool AskedForTools;
+        public bool Completed;
+        // Runs that ended before their agent_idle notification arrived. The parent takes
+        // notifications when it next can, which was 90 minutes later in one transcript,
+        // so a message may wake the agent first; that late notice belongs to the run
+        // before and must not end the one now going.
+        public int IdleOwed;
         public DateTimeOffset? Since;
     }
 
@@ -84,18 +90,39 @@ internal sealed class BackgroundWork
     public void AgentTurnEnded(string agentId, DateTimeOffset? at)
     {
         if (!_agents.TryGetValue(agentId, out var agent)) { return; }
-        if (!agent.AskedForTools) { Set(agent, working: false, at); }
+        if (!agent.AskedForTools) { EndRun(agent); }
         agent.AskedForTools = false;
     }
 
-    public void AgentStopped(string? agentId)
+    // The agent's own abort or shutdown: its run is over, and nothing else of the session's.
+    public void AgentEnded(string agentId)
     {
-        if (agentId is not null && _agents.TryGetValue(agentId, out var agent)) { Set(agent, working: false, null); }
+        if (_agents.TryGetValue(agentId, out var agent)) { EndRun(agent); agent.AskedForTools = false; }
     }
 
+    // agent_idle: spent on the oldest run still owed one; only a notice no run is owed
+    // ends the current run (one whose end its own events never showed).
+    public void AgentIdle(string? agentId)
+    {
+        if (agentId is null || !_agents.TryGetValue(agentId, out var agent)) { return; }
+        if (agent.IdleOwed > 0) { agent.IdleOwed--; return; }
+        Set(agent, working: false, null);
+    }
+
+    // Written once, after the agent's first run; written again for every agent as the
+    // session shuts down, which session.shutdown itself settles. Only the first ends a run.
     public void AgentCompleted(string? callId)
     {
-        if (callId is not null && _agentByCall.TryGetValue(callId, out var key)) { AgentStopped(key); }
+        if (callId is null || !_agentByCall.TryGetValue(callId, out var key) || !_agents.TryGetValue(key, out var agent) || agent.Completed) { return; }
+        agent.Completed = true;
+        EndRun(agent);
+    }
+
+    void EndRun(Agent agent)
+    {
+        if (!agent.Working) { return; }
+        Set(agent, working: false, null);
+        agent.IdleOwed++;
     }
 
     public void ShellStarted(string id, DateTimeOffset? at)
@@ -122,7 +149,7 @@ internal sealed class BackgroundWork
     {
         var any = _shells.Count > 0 || _agents.Values.Any(a => a.Working);
         _shells.Clear();
-        foreach (var a in _agents.Values) { a.Working = false; a.AskedForTools = false; }
+        foreach (var a in _agents.Values) { a.Working = false; a.AskedForTools = false; a.IdleOwed = 0; }
         if (any) { Version++; }
     }
 

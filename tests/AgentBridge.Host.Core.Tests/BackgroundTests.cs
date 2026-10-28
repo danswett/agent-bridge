@@ -115,6 +115,43 @@ public class BackgroundTests
     }
 
     [Fact]
+    public async Task A_late_idle_notification_for_an_earlier_run_does_not_end_the_run_after_it()
+    {
+        await using var s = new Session_();
+
+        await s.After([.. Delegate("t1", "a1", 1), Copilot.Assistant("Report.", 10, agentId: "a1"), Copilot.TurnEnd(11, "a1"), Copilot.SubagentCompleted("t1", "a1", 11)]);
+        // Woken before the parent took the first run's notification: it then arrives in
+        // the middle of the second run, which is waiting on a long tool.
+        var woken = await s.After(Copilot.User("one more thing", 20, "a1"), Copilot.TurnStart(20, "a1"), Copilot.Assistant("", 21, tools: ["s1"], agentId: "a1"),
+            Copilot.ToolStart("s1", "powershell", new { command = "dotnet test" }, 21, "a1"), Copilot.AgentIdle("a1", 25));
+        Assert.Equal(new Background { Agents = 1 }, woken.Activity.Background);
+
+        var done = await s.After(Copilot.ToolDone("s1", 90, agentId: "a1"), Copilot.TurnEnd(90, "a1"), Copilot.TurnStart(91, "a1"),
+            Copilot.Assistant("Tests pass.", 92, agentId: "a1"), Copilot.TurnEnd(93, "a1"), Copilot.AgentIdle("a1", 95));
+        Assert.Null(done.Activity.Background);
+
+        // Each run's notification is spent once: a third run is not ended by the second's.
+        var third = await s.After(Copilot.User("and another", 100, "a1"), Copilot.TurnStart(100, "a1"), Copilot.Assistant("", 101, tools: ["s2"], agentId: "a1"));
+        Assert.Equal(new Background { Agents = 1 }, third.Activity.Background);
+    }
+
+    [Fact]
+    public async Task An_agent_that_aborts_or_shuts_down_on_its_own_stops_without_ending_the_sessions_other_work()
+    {
+        await using var s = new Session_();
+
+        var before = await s.After([.. Delegate("t1", "a1", 1), .. Delegate("t2", "a2", 20), Copilot.ToolResult("c1", "<command started in background with shellId: ci>", 30)]);
+        Assert.Equal(new Background { Agents = 2, Shells = 1 }, before.Activity.Background);
+
+        var aborted = await s.After(Copilot.Event("abort", new { reason = "user initiated" }, 40, agentId: "a1"));
+        Assert.Equal(new Background { Agents = 1, Shells = 1 }, aborted.Activity.Background);
+
+        var shut = await s.After(Copilot.Event("session.shutdown", new { shutdownType = "routine" }, 41, agentId: "a2"));
+        Assert.Equal(new Background { Shells = 1 }, shut.Activity.Background);
+        Assert.Equal(SessionStatus.Idle, shut.Status);
+    }
+
+    [Fact]
     public async Task An_agent_idle_notification_alone_also_ends_a_run()
     {
         await using var s = new Session_();

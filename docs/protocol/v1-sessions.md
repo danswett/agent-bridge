@@ -253,11 +253,15 @@ that added `background`).
   It is working until its own turn bookkeeping says it has stopped: an
   `assistant.turn_end` stamped with its `agentId` whose turn asked for no tools. A later
   `user.message` stamped with its `agentId` (a message sent to it) makes it work again.
-  `subagent.completed` (by `toolCallId`) and a `system.notification` of kind
+  Its own `abort` or `session.shutdown` (stamped with its `agentId`) ends its run and
+  nothing else. `subagent.completed` (by `toolCallId`) and a `system.notification` of kind
   `agent_idle` (by `kind.agentId`) also end a run, but neither is enough alone:
   `subagent.completed` is written once, after the first run only, and again for every
-  agent at shutdown; `agent_idle` arrives when the parent next takes notifications,
-  which was up to 90 minutes late, and for 3 of 44 later runs never.
+  agent at shutdown (only the first counts); `agent_idle` arrives when the parent next
+  takes notifications, which was up to 90 minutes late, and for 3 of 44 later runs never.
+  A late one can arrive after a message has woken the agent again, so each is spent on a
+  run that already ended without one, and only a notice no run is owed ends the current
+  run.
 * **Shells, likewise by id.** A main-agent `tool.execution_complete` whose whole result is
   `<command started in background with shellId: X>` or `<command with shellId: X moved to
   background by the user…>`, or whose last line is `<command with shellId: X is still

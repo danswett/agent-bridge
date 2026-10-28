@@ -98,12 +98,18 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time) : Tra
             case "system.notification" when Json.Obj(data, "kind") is { } kind:
                 switch (Json.Str(kind, "type"))
                 {
-                    case "agent_idle": work.AgentStopped(Json.Str(kind, "agentId")); break;
+                    case "agent_idle": work.AgentIdle(Json.Str(kind, "agentId")); break;
                     case "shell_completed": work.ShellEnded(Json.Str(kind, "shellId")); break;
                 }
                 break;
             case "session.shutdown" when agentId is null:
                 work.EndAll();
+                break;
+            // A subagent's own abort or shutdown ends its run and nothing else: none were in
+            // two months of real transcripts, but a woken agent writes no second
+            // subagent.completed, so missing one would leave it working for good.
+            case "abort" or "session.shutdown" when agentId is not null:
+                work.AgentEnded(agentId);
                 break;
             case "user.message" or "assistant.turn_start" or "tool.execution_start" when agentId is not null:
                 work.AgentActive(agentId, at);
