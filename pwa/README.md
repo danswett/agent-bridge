@@ -8,9 +8,10 @@ and network access to the relay only.
 Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflows/pages.yml`.
 Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/app/?demo=1).
 
-It shows sessions, their activity and their pending questions, and answers those questions
-(`session.answer`), per [docs/protocol/v1-sessions.md](../docs/protocol/v1-sessions.md).
-Replying, launching and notifications come next.
+It shows sessions, their activity and their pending questions, answers those questions
+(`session.answer`) and replies to sessions (`session.reply`), per
+[docs/protocol/v1-sessions.md](../docs/protocol/v1-sessions.md). Attachments, launching and
+notifications come next.
 
 | Light | Dark | Answering | A permission request |
 |---|---|---|---|
@@ -33,9 +34,11 @@ Replying, launching and notifications come next.
 | `js/sessions-store.js` | The live sessions, most recently updated first |
 | `js/answers.js` | An answer as the form holds it, as the request sends it, and checked first: `checkAnswer` mirrors the C# `Answers.Check` case for case, with its wording |
 | `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect |
+| `js/replies.js` | A reply checked before it goes: `checkReply` mirrors the C# `Replies.Check`, with its wording |
+| `js/reply-service.js` | Sending replies: `answer-service.js` with `session.reply`, one reply on its way per session |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
-| `js/ui/*` | Session cards, the question and its answer form, machines list, fold state, relative times |
-| `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering included |
+| `js/ui/*` | Session cards, the question and its answer form, the reply box, machines list, fold state, relative times |
+| `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering and replying included |
 | `tools/build-site.mjs` | Assembles the site for Pages: `config.js` with the relay, CSP in the page, and `sw.js` stamped with a hash of everything served, so any change reaches an open app as an update (the app then offers Reload) |
 
 ### Connecting a host
@@ -51,7 +54,8 @@ host frames -> Channel.onmessage -> HostClient -> SessionsStore -> SessionListVi
 `HostSession.select(deviceId)` does all of that and redoes it after every reconnect. A
 host needs only to answer `hello` and `sessions.subscribe` and send `session.upsert`,
 `session.remove` and `sessions.synced` event frames on the channel; `session.get` feeds
-the tool history, and `session.answer` (with `sessions.answer` in `hello`) takes answers.
+the tool history, `session.answer` (with `sessions.answer` in `hello`) takes answers, and
+`session.reply` (with `sessions.reply`) takes replies.
 `test/e2e/fixture-host.mjs` is a working example in about 150 lines.
 
 The client resubscribes when `seq` skips, repeats or goes backwards, and replaces its
@@ -97,6 +101,34 @@ with the arrow keys, and Ctrl+Enter (Cmd+Enter) sends from a text box.
 Demo mode answers as a host would (`window.agentBridgeDemo.script('busy', …)` scripts the
 next outcomes), and asks a follow-up question a little after each answer.
 
+### Replying
+
+Each card has a reply box when the machine's `hello` lists `sessions.reply`: a prompt for
+the session, typed into its input on the machine, whether it is idle or working. Enter is
+a new line and Ctrl+Enter (Cmd+Enter) or Send sends; the host types line breaks as spaces,
+and the box says so when there are any. Before it goes the reply is checked as the host
+will check it: not blank, 16 KiB of UTF-8 at most (a counter appears near the limit), and
+not starting with `/` or `!`, which the agent would run as a command on the machine.
+
+While the session is asking a question the box is disabled and says to answer first: the
+words would answer it. Anything typed stays.
+
+One reply per session is on its way at a time, resent with the same `request` like an
+answer. The words stay in the box until the session has them: a delivered reply takes out
+what was sent (anything typed meanwhile stays), and every other outcome keeps them.
+
+| Outcome | Shown | Then |
+|---|---|---|
+| `delivered` | Delivered. The session has your reply. | The session's upsert shows it as your last message |
+| `unconfirmed`, or unknown | Sent, but not confirmed. Check at the machine before sending it again. | The words stay; sending them again is a new reply |
+| `stale` | Not sent: the session has ended. | |
+| `busy` | Not sent: an answer or another reply is being delivered. | Send comes back after 2 s |
+| `refused` | The machine refused this reply: *reason* (a question pending, an agent it can't reply to yet) | |
+
+A host waits up to a minute for a working session to take a reply, so the request waits
+90 s for its response before it counts as lost. Demo mode replies as a host would
+(`window.agentBridgeDemo.scriptReplies(…)`), only to Copilot sessions.
+
 ### Markdown
 
 Agent text is rendered by `js/markdown.js`, written for this app rather than vendored.
@@ -125,11 +157,17 @@ Locally, if the public registry is blocked:
 
 Every Playwright test serves the output of `tools/build-site.mjs` under
 `/agent-bridge/app/`, so the published CSP is in force and a violation fails the test.
+`PWA_TEST_PORT` (8790) and `PWA_E2E_PORT` (8800) move the servers' ports, for a machine
+running another checkout's tests at the same time.
 
 * `test/answer.spec.mjs`, in demo mode at a phone's size: answering every field type and
   kind, defaults, required fields, the byte limit, every outcome, a resend after a lost
   response (typed once), a question changing or going while being answered, a card moving
   while in use, 44 px targets, and the keyboard.
+* `test/reply.spec.mjs`, in demo mode: a reply delivered as one line and taken out of the
+  box (keeping what was typed meanwhile), every outcome keeping the words, a resend after a
+  lost response (typed once), the box held while a question is pending, the checks before
+  sending, 44 px targets, Ctrl/Cmd+Enter, and no box for a machine without `sessions.reply`.
 * `test/ui.spec.mjs`, in demo mode: every field type and status from the worked example,
   glow per status, the delegating state (idle with `background` work), reduced motion,
   Markdown, an XSS payload in every text field, unknown
@@ -141,7 +179,8 @@ Every Playwright test serves the output of `tools/build-site.mjs` under
   ended meanwhile disappears), returning to the last host, `?host=` links, the S4
   demo host reported as not supporting sessions, and answering: delivered, an answer in
   flight when the socket drops resent with the same request and typed once, and the
-  fixture host's own validation (stale and refused).
+  fixture host's own validation (stale and refused); and replying, the same way, with a
+  reply refused while the session asks a question.
 
 Not covered end to end: the C# Bridge Host (it is not wired yet; the fixture host speaks
 the same contract), the live relay and GitHub, real phones, and Web Push.

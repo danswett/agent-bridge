@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
+import { cpSync, readFileSync, readdirSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSite } from '../../tools/build-site.mjs';
@@ -37,4 +37,12 @@ test('the service worker changes whenever anything the site serves changes', () 
   const js = buildSite({ root, out: out('js'), relay: 'https://relay.example' });
   assert.notEqual(sw(js), sw(css), 'a script change is a new version');
   rmSync(scratch, { recursive: true, force: true });
+});
+
+test('the offline shell holds every script the app is made of, so it starts with no network', () => {
+  const shell = new Set([...readFileSync(path.join(pwa, 'sw.js'), 'utf8').matchAll(/'\.\/(js\/[^']+)'/g)].map((m) => m[1]));
+  const scripts = readdirSync(path.join(pwa, 'js'), { recursive: true })
+    .map((f) => `js/${f.split(path.sep).join('/')}`)
+    .filter((f) => f.endsWith('.js'));
+  assert.deepEqual(scripts.filter((f) => !shell.has(f)), []);
 });

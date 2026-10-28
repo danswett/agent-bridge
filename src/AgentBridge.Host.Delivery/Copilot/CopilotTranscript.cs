@@ -27,12 +27,10 @@ public static class CopilotTranscript
     // found: a pending question is normally the last thing the session wrote.
     static readonly long[] Windows = [4L << 20, 64L << 20, long.MaxValue];
 
-    const int MaxLineBytes = 32 << 20;
-
     // Finds the call from the end of the file, widening the window until its start is seen.
     public static CopilotCallState Find(string path, string toolCallId)
     {
-        var length = Length(path);
+        var length = Jsonl.Length(path);
         CopilotCallState? state = null;
         foreach (var window in Windows)
         {
@@ -46,12 +44,6 @@ public static class CopilotTranscript
     // Reads from a known line boundary (an earlier ScannedTo) for records of the call.
     public static CopilotCallState Since(string path, string toolCallId, long from) => Scan(path, toolCallId, from, requireStart: false);
 
-    static long Length(string path)
-    {
-        try { return new FileInfo(path).Length; }
-        catch (IOException) { return 0; }
-    }
-
     static CopilotCallState Scan(string path, string toolCallId, long from, bool requireStart)
     {
         var id = Encoding.UTF8.GetBytes($"\"{toolCallId}\"");
@@ -61,46 +53,18 @@ public static class CopilotTranscript
         CopilotAnswerRecord? completed = null;
         var ended = false;
         var started = !requireStart;
-        long scannedTo = from;
 
-        using var stream = Open(path);
-        if (stream is null) { return new CopilotCallState(null, true, null, false, from); }
-        stream.Seek(from, SeekOrigin.Begin);
         // A window starting inside a line skips that partial line; Since starts on a boundary.
-        var skipping = requireStart && from > 0;
-        var line = new List<byte>(4096);
-        var oversized = false;
-        var buffer = new byte[64 * 1024];
-        long position = from;
-        int read;
-        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        // A trailing line without its newline is still being written; ScannedTo stays before
+        // it so the next scan reads it whole.
+        if (Jsonl.Lines(path, from, skipFirst: requireStart, Line) is not { } scannedTo)
         {
-            for (var i = 0; i < read; i++)
-            {
-                var b = buffer[i];
-                position++;
-                if (b != (byte)'\n')
-                {
-                    if (!skipping && !oversized)
-                    {
-                        if (line.Count >= MaxLineBytes) { oversized = true; line.Clear(); }
-                        else { line.Add(b); }
-                    }
-                    continue;
-                }
-                if (skipping) { skipping = false; }
-                else if (!oversized) { Line(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(line)); }
-                line.Clear();
-                oversized = false;
-                scannedTo = position;
-            }
+            return new CopilotCallState(null, true, null, false, from);
         }
-        // A trailing line without its newline is still being written; ScannedTo stays
-        // before it so the next scan reads it whole.
         var answer = human is { } h ? new CopilotAnswerRecord(h, completed is not null, completed?.Succeeded ?? true, completed?.ResultText) : completed;
         return new CopilotCallState(arguments, main, started ? answer : null, started && ended, scannedTo);
 
-        void Line(ReadOnlySpan<byte> bytes)
+        void Line(ReadOnlySpan<byte> bytes, long start)
         {
             var named = bytes.IndexOf(id) >= 0;
             var ending = !named && (bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0);
@@ -148,12 +112,6 @@ public static class CopilotTranscript
                 }
             }
         }
-    }
-
-    static FileStream? Open(string path)
-    {
-        try { return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.SequentialScan); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
     static string? Str(JsonElement e, string name) =>

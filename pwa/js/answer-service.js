@@ -21,6 +21,9 @@
 //
 // `current()` says which host is connected and its HostClient, or null. Call ready()
 // whenever a new client for a host is up, and resends go out on it.
+//
+// ReplyService (reply-service.js) is this with three things swapped: the op it sends, the
+// request it builds, and which outcomes are final.
 
 const NO_OUTCOME = 'no outcome came back from the machine in time';
 const MAX_BUSY_RESENDS = 5;
@@ -30,14 +33,19 @@ export class AnswerService {
   #listeners = new Map();
   #any = new Set();
 
+  // send(client, data): the op. payload(entry): its request data. final(entry): whether a
+  // settled outcome stands, so that giving the answer again sends nothing.
   constructor({
     current,
     uuid = () => globalThis.crypto.randomUUID(),
     now = () => Date.now(),
     retryMs = 3000,
     giveUpMs = 9 * 60 * 1000,
+    send = (client, data) => client.answer(data),
+    payload = (e) => ({ id: e.sessionId, question: e.questionId, request: e.request, ...e.answer }),
+    final = (e) => !['busy', 'refused'].includes(e.outcome),
   }) {
-    Object.assign(this, { current, uuid, now, retryMs, giveUpMs });
+    Object.assign(this, { current, uuid, now, retryMs, giveUpMs, send, payload, final });
   }
 
   static key(hostId, sessionId, questionId) { return JSON.stringify([hostId, sessionId, questionId]); }
@@ -60,7 +68,7 @@ export class AnswerService {
     const key = AnswerService.key(hostId, sessionId, questionId);
     const existing = this.#entries.get(key);
     if (existing && (existing.state === 'sending' || existing.state === 'waiting')) { return this.#snapshot(existing); }
-    if (existing && existing.state === 'done' && !['busy', 'refused'].includes(existing.outcome)) { return this.#snapshot(existing); }
+    if (existing && existing.state === 'done' && this.final(existing)) { return this.#snapshot(existing); }
     const entry = {
       key, hostId, sessionId, questionId, answer,
       request: this.uuid(), state: 'sending', outcome: null, reason: null,
@@ -129,10 +137,10 @@ export class AnswerService {
     entry.attempts++;
     entry.firstSentAt ??= this.now();
     this.#set(entry, { state: 'sending', reason: null });
-    const data = { id: entry.sessionId, question: entry.questionId, request: entry.request, ...entry.answer };
+    const data = this.payload(entry);
     let result;
     try {
-      result = await client.answer(data);
+      result = await this.send(client, data);
     } catch (e) {
       if (token !== entry.token) { return; }
       if (e?.fromHost === true) {

@@ -3,7 +3,8 @@ import { defineConfig, devices } from '@playwright/test';
 // The PWA in Chromium and WebKit (Safari's engine), served as GitHub Pages serves it:
 // built by tools/build-site.mjs, under /agent-bridge/app/, with the CSP in the page.
 // test/e2e/ also needs the spike dev stack built (see test/e2e/e2e.spec.mjs).
-const PORT = 8790;
+// PWA_TEST_PORT moves it, for a machine running another checkout's tests at the same time.
+const PORT = Number(process.env.PWA_TEST_PORT) || 8790;
 
 export default defineConfig({
   testDir: 'test',

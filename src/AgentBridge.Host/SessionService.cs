@@ -8,22 +8,26 @@ using AgentBridge.Transport;
 namespace AgentBridge.Host;
 
 // Protocol v1's sessions ops, served on every channel a client opens to this host. Reads,
-// and session.answer: the one op that reaches the machine, and only through the answerer,
-// which types an answer to a pending question and nothing else.
+// and the two ops that reach the machine, each only through its own service: session.answer
+// (the answerer types an answer to a pending question) and session.reply (the replier types
+// a prompt into a session's input).
 public sealed class SessionService
 {
     readonly ISessionSource source;
     readonly MachineInfo machine;
     readonly Action<string> log;
     readonly ISessionAnswerer? answers;
+    readonly ISessionReplier? replies;
     readonly ConcurrentDictionary<SecureChannel, Subscriber> subscribers = new();
 
-    public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null)
+    public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
+        ISessionReplier? replies = null)
     {
         this.source = source;
         this.machine = machine;
         this.log = log ?? (_ => { });
         this.answers = answers;
+        this.replies = replies;
     }
 
     // Channels with a subscription running; tests and the host's log read it.
@@ -38,12 +42,13 @@ public sealed class SessionService
         {
             case Ops.Hello:
                 // Computed for each hello, so it says what is true now: agent-ha-bridge
-                // starting for this user takes sessions.answer away until it stops.
-                return new HelloResult(1, machine, answers?.Available == true
-                    ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer]
-                    : [Capabilities.SessionsRead]);
+                // starting for this user takes sessions.answer and sessions.reply away until
+                // it stops.
+                return new HelloResult(1, machine, Offered());
             case Ops.SessionAnswer:
                 return await AnswerAsync(data);
+            case Ops.SessionReply:
+                return await ReplyAsync(data);
             case Ops.SessionsList:
                 return source.List(String(data, "cursor"));
             case Ops.SessionGet:
@@ -129,6 +134,24 @@ public sealed class SessionService
         var request = data.Deserialize<AnswerRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.answer needs an id, a question and a request");
         if (answers is null) { return new AnswerResult(AnswerOutcome.Refused, "this host does not take answers; answer at the machine"); }
         return await answers.AnswerAsync(request);
+    }
+
+    List<string> Offered()
+    {
+        List<string> offered = [Capabilities.SessionsRead];
+        if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
+        if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }
+        return offered;
+    }
+
+    async Task<ReplyResult> ReplyAsync(JsonElement data)
+    {
+        // As for answers: a request without an id or request UUID fails as a request, and
+        // anything that can be read gets an outcome.
+        if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.reply needs an id, a request and text"); }
+        var request = data.Deserialize<ReplyRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.reply needs an id, a request and text");
+        if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
+        return await replies.ReplyAsync(request);
     }
 
     static string? String(JsonElement data, string name) =>

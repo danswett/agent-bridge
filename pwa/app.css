@@ -314,6 +314,13 @@ summary {
 }
 .text-input[aria-invalid="true"], .field.invalid .text-input, .field.invalid .number-input { border-color: var(--danger); }
 .text-input[readonly] { background: var(--surface-2); }
+.text-input:disabled { background: var(--surface-2); color: var(--muted); }
+
+/* ---- replying ---- */
+.reply-slot:empty { display: none; }
+.reply { margin: 12px 0 4px; padding-top: 10px; border-top: 1px solid var(--border); }
+.reply .text-wrap { margin-top: 0; }
+.reply .note { margin: 4px 0; }
 .bytes { display: block; color: var(--muted); font-size: .8rem; text-align: right; min-height: 0; }
 .bytes:empty { display: none; }
 .bytes.over { color: var(--danger); font-weight: 600; }

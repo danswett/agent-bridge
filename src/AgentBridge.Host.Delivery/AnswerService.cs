@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Delivery.Copilot;
@@ -41,8 +40,9 @@ public sealed class AnswerOptions
 // happened. The rules, all from the design:
 //   * Never while agent-ha-bridge's daemon is active for this user (G5), checked when
 //     the request arrives and again immediately before typing.
-//   * One answer per session at a time (busy), and one request is typed at most once: its
-//     outcome is remembered and returned again for a resend.
+//   * One answer or reply per session at a time (busy), shared with replies through the
+//     DeliveryGate, and one request is typed at most once: its outcome is remembered and
+//     returned again for a resend.
 //   * Immediately before typing, the transcript must still show that very question
 //     unanswered (stale otherwise, and nothing is typed).
 //   * After typing, delivered only when the transcript records the answer to that tool
@@ -56,19 +56,13 @@ public sealed class AnswerService : ISessionAnswerer
     readonly IConsoleInjector injector;
     readonly AnswerOptions options;
     readonly Action<string> log;
-    readonly Lock gate = new();
-    readonly Dictionary<Guid, Remembered> requests = [];
-    readonly ConcurrentDictionary<string, Guid> delivering = new(StringComparer.Ordinal);
-    readonly SemaphoreSlim typing = new(1, 1);
+    readonly DeliveryGate gate;
+    readonly OutcomeMemory<AnswerResult> requests;
 
-    sealed class Remembered(Task<AnswerResult> outcome)
-    {
-        public Task<AnswerResult> Outcome { get; } = outcome;
-        public DateTimeOffset? Settled;
-    }
-
+    // gate: the one the host's ReplyService shares, so an answer and a reply never type into
+    // one session at once; a service of its own when none is given (tests).
     public AnswerService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, ITargetGuard guard,
-        IConsoleInjector injector, AnswerOptions options, Action<string>? log = null)
+        IConsoleInjector injector, AnswerOptions options, Action<string>? log = null, DeliveryGate? gate = null)
     {
         this.source = source;
         this.processes = processes;
@@ -77,6 +71,8 @@ public sealed class AnswerService : ISessionAnswerer
         this.injector = injector;
         this.options = options;
         this.log = log ?? (_ => { });
+        this.gate = gate ?? new DeliveryGate();
+        requests = new OutcomeMemory<AnswerResult>(options.Time, options.RememberFor);
     }
 
     public bool Available => options.PlatformSupported && probe.Active() is null;
@@ -87,32 +83,8 @@ public sealed class AnswerService : ISessionAnswerer
         {
             return Task.FromResult(Refused("request must be a UUID"));
         }
-        TaskCompletionSource<AnswerResult> outcome;
-        Remembered entry;
-        lock (gate)
-        {
-            Forget();
-            if (requests.TryGetValue(key, out var known)) { return known.Outcome; }
-            outcome = new TaskCompletionSource<AnswerResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-            entry = new Remembered(outcome.Task);
-            requests[key] = entry;
-        }
-        // Not tied to the request's channel: a channel that closes mid-delivery must not cut
-        // the delivery short, and a resend on the next channel gets the outcome.
-        _ = Task.Run(async () =>
-        {
-            var result = await DeliverAsync(request, key);
-            lock (gate) { entry.Settled = options.Time.GetUtcNow(); }
-            log($"answer {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
-            outcome.SetResult(result);
-        }, CancellationToken.None);
-        return outcome.Task;
-    }
-
-    void Forget()
-    {
-        var before = options.Time.GetUtcNow() - options.RememberFor;
-        foreach (var (key, entry) in requests.Where(r => r.Value.Settled < before).ToList()) { requests.Remove(key); }
+        return requests.Once(key, () => DeliverAsync(request, key), result =>
+            log($"answer {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
     }
 
     async Task<AnswerResult> DeliverAsync(AnswerRequest request, Guid key)
@@ -131,9 +103,9 @@ public sealed class AnswerService : ISessionAnswerer
             if (question.Kind == QuestionKind.Approval) { return Refused("answering Copilot permission prompts is not supported yet; answer at the machine"); }
             if (Answers.Check(question, request) is { } invalid) { return Refused(invalid); }
 
-            if (!delivering.TryAdd(session.Id, key)) { return Busy(); }
+            if (!gate.TryClaim(session.Id, key)) { return Busy(); }
             try { return await CopilotAsync(session, question, request); }
-            finally { delivering.TryRemove(session.Id, out _); }
+            finally { gate.Release(session.Id, key); }
         }
         catch (Exception e)
         {
@@ -155,7 +127,7 @@ public sealed class AnswerService : ISessionAnswerer
         // One answer typed at a time, across sessions, and the slot is taken before the last
         // checks: an answer that waited behind another must find its question still asked,
         // and agent-ha-bridge still stopped, when its own turn comes, not when it arrived.
-        await typing.WaitAsync();
+        await gate.WaitToTypeAsync();
         CopilotPlan plan;
         long from;
         InjectionResult typed;
@@ -183,7 +155,7 @@ public sealed class AnswerService : ISessionAnswerer
                 return Unconfirmed($"the injector failed while typing ({e.Message}); check at the machine");
             }
         }
-        finally { typing.Release(); }
+        finally { gate.DoneTyping(); }
 
         log($"typed into {Short(session.Id)} (pid {pid}): {plan.Keys.Describe()} -> {typed.Status} {typed.Detail}");
         switch (typed.Status)
@@ -233,7 +205,7 @@ public sealed class AnswerService : ISessionAnswerer
 
     static AnswerResult Refused(string reason) => new(AnswerOutcome.Refused, reason);
     static AnswerResult Stale(string reason) => new(AnswerOutcome.Stale, reason);
-    static AnswerResult Busy() => new(AnswerOutcome.Busy, "another answer to this session is being delivered");
+    static AnswerResult Busy() => new(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");
     static AnswerResult Unconfirmed(string reason) => new(AnswerOutcome.Unconfirmed, reason);
 }
 

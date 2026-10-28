@@ -14,6 +14,7 @@ export const Ops = Object.freeze({
   sessionGet: 'session.get',
   sessionsSubscribe: 'sessions.subscribe',
   sessionAnswer: 'session.answer',
+  sessionReply: 'session.reply',
 });
 
 export const Events = Object.freeze({
@@ -22,7 +23,7 @@ export const Events = Object.freeze({
   sessionsSynced: 'sessions.synced',
 });
 
-export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsAnswer: 'sessions.answer' });
+export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply' });
 
 export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 
@@ -147,8 +148,8 @@ export function readHello(raw) {
   };
 }
 
-// session.answer's result: { outcome, reason }. Anything unreadable is unconfirmed, since
-// the host may have typed it.
+// session.answer's and session.reply's result: { outcome, reason }. Anything unreadable is
+// unconfirmed, since the host may have typed it.
 export function readAnswerResult(raw) {
   const r = obj(raw) ?? {};
   return { outcome: readOutcome(r.outcome), reason: str(r.reason) };
