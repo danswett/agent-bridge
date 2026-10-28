@@ -5,7 +5,7 @@
 // `onmessage(message)` / `onclose(error)` callbacks, carrying already-parsed JSON. In the
 // app that is an end-to-end Noise channel (channels.js); in demo mode and the unit tests
 // it is an in-process fake. Nothing here knows which.
-import { Events, Ops, readAnswerResult, readHello, readSession } from './protocol.js';
+import { Events, Ops, readAnswerResult, readAttachmentState, readHello, readSession } from './protocol.js';
 
 export class HostError extends Error {
   // fromHost: the host answered with ok:false. Otherwise the request never got an answer
@@ -109,11 +109,19 @@ export class HostClient {
     return readAnswerResult(await this.request(Ops.sessionAnswer, data, { timeoutMs }));
   }
 
-  // Sends a session a prompt: data is session.reply's { id, request, text }. Resolves to
-  // { outcome, reason }; rejects only when no outcome arrived (HostError).
+  // Sends a session a prompt: data is session.reply's { id, request, text, attachments? }.
+  // Resolves to { outcome, reason }; rejects only when no outcome arrived (HostError).
   async reply(data, { timeoutMs = this.#replyTimeoutMs } = {}) {
     return readAnswerResult(await this.request(Ops.sessionReply, data, { timeoutMs }));
   }
+
+  // Sends a file ahead of a reply (attachments.js does the chunking). Each resolves to
+  // { received, complete }, or rejects: a HostError fromHost says why the host turned it down.
+  async attachmentStart(data) { return readAttachmentState(await this.request(Ops.attachmentStart, data)); }
+
+  async attachmentChunk(data) { return readAttachmentState(await this.request(Ops.attachmentChunk, data)); }
+
+  async attachmentDiscard(attachment) { return (await this.request(Ops.attachmentDiscard, { attachment }))?.discarded === true; }
 
   // Starts (or restarts) the subscription. The host answers {revision, count}, then sends
   // one upsert per live session and `sessions.synced`. Upserts are shown as they arrive;

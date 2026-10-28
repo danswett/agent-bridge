@@ -6,7 +6,8 @@
 //
 // window.agentBridgeDemo (demo mode only) lets tests and curious people drive it:
 //   upsert(session), remove(id), frame(rawFrame), calls (ops received), pause(),
-//   script(...outcomes) for the next answers, scriptReplies(...outcomes) for the next replies
+//   script(...outcomes) for the next answers, scriptReplies(...outcomes) for the next replies,
+//   host.attachments and host.attachmentLog for the files sent ahead of replies
 //
 // It answers questions as a host would: the same validation (answers.js mirrors the C#
 // Answers.Check), stale when the session is no longer asking, a request seen before gets
@@ -56,13 +57,17 @@ export class DemoHost {
   typedReplies = [];
   #replyScript = [];
   onReplied = null;
+  // Files sent ahead of replies (attachment.*), by id, as a host holds them; and every
+  // attachment op as received.
+  attachments = new Map();
+  attachmentLog = [];
 
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
-  // replying: false, one that can't reply.
-  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering } = {}) {
+  // replying: false, one that can't reply; attaching: false, one that takes no files.
+  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying } = {}) {
     this.machine = { id: 'demo', name: machineName, os: 'windows', hostVersion: 'demo' };
     this.answerDelayMs = answerDelayMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : [])];
     this.sessions = new Map();
     for (const s of fixture.sessions ?? []) { this.sessions.set(s.id, s); }
     this.revision = fixture.revision ?? 1;
@@ -98,9 +103,51 @@ export class DemoHost {
       case 'session.reply':
         if (!this.capabilities.includes('sessions.reply')) { break; }
         return this.#reply(data, reply);
+      case 'attachment.start':
+      case 'attachment.chunk':
+      case 'attachment.discard':
+        if (!this.capabilities.includes('sessions.attach')) { break; }
+        return this.#attachment(op, data).then(reply, (e) => t.deliver({ re: id, ok: false, error: e.message }));
       default:
         return t.deliver({ re: id, ok: false, error: `unknown op ${op}` });
     }
+    return t.deliver({ re: id, ok: false, error: `unknown op ${op}` });
+  }
+
+  // The host's AttachmentStore, simplified: one file per id, chunks in order, checked
+  // against its sha256 once whole. attachmentDelayMs slows each chunk, for watching progress.
+  async #attachment(op, data) {
+    this.attachmentLog.push({ op, attachment: data?.attachment, offset: data?.offset, size: data?.size });
+    const f = this.attachments.get(data?.attachment);
+    if (op === 'attachment.discard') { return { discarded: !!f && !f.used && this.attachments.delete(data.attachment) }; }
+    if (op === 'attachment.start') {
+      if (!(data.size > 0 && data.size <= 256 * 1024)) { throw new Error(data.size > 0 ? 'the attachment is larger than 256 KiB' : 'the attachment is empty'); }
+      if (f) { return { received: f.used ? f.size : f.received, complete: f.used || f.complete }; }
+      this.attachments.set(data.attachment, { name: data.name, type: data.type, size: data.size, sha256: data.sha256, parts: [], received: 0, complete: false, used: false });
+      return { received: 0, complete: false };
+    }
+    if (!f || f.used) { throw new Error(`attachment ${String(data?.attachment).slice(0, 8)} is not on the host (it expired, was removed, or never arrived); attach it again`); }
+    if (this.attachmentDelayMs) { await new Promise((r) => setTimeout(r, this.attachmentDelayMs)); }
+    // failNextChunk: the next chunk is turned down with this reason, as a host would on a fault.
+    if (this.failNextChunk) { const reason = this.failNextChunk; this.failNextChunk = null; throw new Error(reason); }
+    const bytes = Uint8Array.from(atob(data.data), (ch) => ch.charCodeAt(0));
+    if (data.offset + bytes.length <= f.received) { return { received: f.received, complete: f.complete }; }
+    if (data.offset !== f.received) { throw new Error(`expected the chunk at offset ${f.received}`); }
+    f.parts.push(bytes);
+    f.received += bytes.length;
+    if (f.received < f.size) { return { received: f.received, complete: false }; }
+    const whole = new Uint8Array(f.size);
+    let at = 0;
+    for (const p of f.parts) { whole.set(p, at); at += p.length; }
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', whole));
+    const hash = btoa(String.fromCharCode(...digest)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    if (hash !== f.sha256) {
+      this.attachments.delete(data.attachment);
+      throw new Error("the attachment's bytes do not match its sha256, so it was dropped; send it again");
+    }
+    f.complete = true;
+    f.bytes = whole;
+    return { received: f.received, complete: true };
   }
 
   scriptAnswers(outcomes) { this.#script.push(...outcomes); }
@@ -126,13 +173,25 @@ export class DemoHost {
     if (!s) { return { outcome: 'stale', reason: 'the session has ended' }; }
     if (s.agent !== 'copilot') { return { outcome: 'refused', reason: `replying is not supported for ${s.agent} yet; reply at the machine` }; }
     if (s.question) { return { outcome: 'refused', reason: 'the session is waiting for an answer to its question; answer that first' }; }
+    // The files it names, as the host claims them: held, whole, and not gone with another reply.
+    const files = [];
+    for (const { id } of data.attachments ?? []) {
+      const f = this.attachments.get(id);
+      if (!f) { return { outcome: 'refused', reason: `attachment ${id.slice(0, 8)} is not on the host (it expired, was removed, or never arrived); attach it again` }; }
+      if (f.used) { return { outcome: 'refused', reason: `attachment ${id.slice(0, 8)} went with an earlier reply; attach it again` }; }
+      if (!f.complete) { return { outcome: 'refused', reason: `attachment ${id.slice(0, 8)} has not finished arriving; send it again` }; }
+      files.push(f);
+    }
     const { outcome } = scripted;
     if (outcome === 'stale') { return { outcome, reason: scripted.reason ?? 'the session has ended' }; }
     if (outcome === 'busy') { return { outcome, reason: scripted.reason ?? 'another answer or reply to this session is being delivered' }; }
     if (outcome === 'refused') { return { outcome, reason: scripted.reason ?? 'the session is running elevated' }; }
-    // Typed: the session has a new message from you, and works on it.
-    const said = typedForm(data.text);
-    this.typedReplies.push({ id: s.id, request: data.request, said });
+    // Typed: the session has a new message from you, and works on it. Files lead as the host
+    // types them, @ and the path it staged them at.
+    for (const f of files) { f.used = true; }
+    const mentions = files.map((f) => `@C:\\Users\\demo\\AppData\\Local\\AgentBridge\\default\\attachments\\${stagedName(f.name)}`);
+    const said = files.length ? [...mentions, typedForm(data.text ?? '').trim()].filter(Boolean).join(' ') : typedForm(data.text);
+    this.typedReplies.push({ id: s.id, request: data.request, said, files: files.map(({ name, type, size }) => ({ name, type, size })) });
     this.upsert({ ...s, status: 'working', statusSince: now(), updatedAt: now(), activity: { ...s.activity, userMessage: said } });
     this.onReplied?.(s.id, said);
     if (outcome === 'delivered') { return { outcome }; }
@@ -199,6 +258,16 @@ export class DemoHost {
   }
 
   get(id) { return this.sessions.get(id); }
+}
+
+// The name the host stages a file under: a random prefix, then the name made safe to mention.
+function stagedName(name) {
+  const leaf = String(name ?? '').replace(/^.*[\\/]/, '');
+  const dot = leaf.lastIndexOf('.');
+  const ext = dot > 0 && /^\.[0-9A-Za-z]{1,12}$/.test(leaf.slice(dot)) ? leaf.slice(dot).toLowerCase() : '';
+  const stem = (ext ? leaf.slice(0, dot) : leaf).replace(/[^0-9A-Za-z._-]/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 48) || 'attachment';
+  const prefix = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${prefix}-${stem}${ext}`;
 }
 
 function withoutHistory(s) {

@@ -303,14 +303,14 @@ public sealed record AnswerRequest
 public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null);
 
 // session.reply: a prompt for the session, typed into its own input as if at the machine.
-// Request is the client's UUID for this reply, as for an answer. Attachments is reserved
-// for the slice that carries files; until then a host refuses a reply that has any.
+// Request is the client's UUID for this reply, as for an answer. Attachments name files the
+// same device sent first (Attachments.cs); with any, the text may be blank.
 public sealed record ReplyRequest
 {
     public required string Id { get; init; }
     public required string Request { get; init; }
     public string? Text { get; init; }
-    public JsonElement? Attachments { get; init; }
+    public IReadOnlyList<AttachmentRef>? Attachments { get; init; }
 }
 
 // The same outcomes as an answer, read the same way.
@@ -327,6 +327,9 @@ public static class Ops
     public const string PushSubscribe = "push.subscribe";
     public const string PushUnsubscribe = "push.unsubscribe";
     public const string PushList = "push.list";
+    public const string AttachmentStart = "attachment.start";
+    public const string AttachmentChunk = "attachment.chunk";
+    public const string AttachmentDiscard = "attachment.discard";
 }
 
 public static class Events
@@ -368,4 +371,5 @@ public static class Capabilities
     public const string SessionsAnswer = "sessions.answer";
     public const string SessionsReply = "sessions.reply";
     public const string Push = "push";
+    public const string SessionsAttach = "sessions.attach";
 }

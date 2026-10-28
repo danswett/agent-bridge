@@ -205,13 +205,13 @@ export class SessionCard {
         this.#reply = null;
       }
       if (hostId) {
-        this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id } });
+        this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id }, attach: ctx.capabilities.includes('sessions.attach') });
         if (this.#replyDraft.hostId === hostId) { this.#reply.els.input.value = this.#replyDraft.text; }
       }
       this.#replyHost = hostId;
       this.els.reply.replaceChildren(...(this.#reply ? [this.#reply.element] : []));
     }
-    this.#reply?.update(s);
+    this.#reply?.update(s, { attach: ctx?.capabilities?.includes('sessions.attach') === true });
   }
 
   #renderQuestion(s) {

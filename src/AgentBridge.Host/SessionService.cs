@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 
@@ -10,8 +11,9 @@ namespace AgentBridge.Host;
 // Protocol v1's sessions ops, served on every channel a client opens to this host. Reads,
 // and the two ops that reach the machine, each only through its own service: session.answer
 // (the answerer types an answer to a pending question) and session.reply (the replier types
-// a prompt into a session's input). The push.* ops, which register a device for
-// notifications, go to the PushNotifier.
+// a prompt into a session's input, with any files sent first by attachment.*, which go to the
+// AttachmentStore). The push.* ops, which register a device for notifications, go to the
+// PushNotifier.
 public sealed class SessionService
 {
     readonly ISessionSource source;
@@ -20,10 +22,11 @@ public sealed class SessionService
     readonly ISessionAnswerer? answers;
     readonly ISessionReplier? replies;
     readonly PushNotifier? push;
+    readonly AttachmentStore? attachments;
     readonly ConcurrentDictionary<SecureChannel, Subscriber> subscribers = new();
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
-        ISessionReplier? replies = null, PushNotifier? push = null)
+        ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null)
     {
         this.source = source;
         this.machine = machine;
@@ -31,6 +34,7 @@ public sealed class SessionService
         this.answers = answers;
         this.replies = replies;
         this.push = push;
+        this.attachments = attachments;
     }
 
     // Channels with a subscription running; tests and the host's log read it.
@@ -51,7 +55,9 @@ public sealed class SessionService
             case Ops.SessionAnswer:
                 return await AnswerAsync(channel, data);
             case Ops.SessionReply:
-                return await ReplyAsync(data);
+                return await ReplyAsync(channel, data);
+            case Ops.AttachmentStart or Ops.AttachmentChunk or Ops.AttachmentDiscard when attachments is not null:
+                return Attach(channel, op, data);
             case Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList when push is not null:
                 return await push.HandleAsync(channel, op, data);
             case Ops.SessionsList:
@@ -149,18 +155,32 @@ public sealed class SessionService
         List<string> offered = [Capabilities.SessionsRead];
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }
+        if (attachments is not null && replies?.TakesAttachments == true) { offered.Add(Capabilities.SessionsAttach); }
         if (push is not null) { offered.Add(Capabilities.Push); }
         return offered;
     }
 
-    async Task<ReplyResult> ReplyAsync(JsonElement data)
+    async Task<ReplyResult> ReplyAsync(SecureChannel channel, JsonElement data)
     {
         // As for answers: a request without an id or request UUID fails as a request, and
         // anything that can be read gets an outcome.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.reply needs an id, a request and text"); }
         var request = data.Deserialize<ReplyRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.reply needs an id, a request and text");
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
-        return await replies.ReplyAsync(request);
+        return await replies.ReplyAsync(request, channel.PeerId);
+    }
+
+    // attachment.*: the files a reply will carry, held for the device that sends them. A check
+    // that fails fails the request, with the reason.
+    object Attach(SecureChannel channel, string op, JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException($"{op} needs an attachment"); }
+        return op switch
+        {
+            Ops.AttachmentStart => attachments!.Start(channel.PeerId, data.Deserialize<AttachmentStart>(ProtocolJson.Options)!),
+            Ops.AttachmentChunk => attachments!.Chunk(channel.PeerId, data.Deserialize<AttachmentChunk>(ProtocolJson.Options)!),
+            _ => new AttachmentDiscarded(attachments!.Discard(channel.PeerId, data.Deserialize<AttachmentDiscard>(ProtocolJson.Options)!.Attachment)),
+        };
     }
 
     static string? String(JsonElement data, string name) =>

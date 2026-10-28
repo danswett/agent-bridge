@@ -6,9 +6,10 @@ namespace AgentBridge.Host.Delivery.Copilot;
 // anything is asking the person, and the line boundary later records are read from.
 public sealed record CopilotInputState(bool Readable, bool Asking, long ScannedTo);
 
-// A prompt the person gave: a main-agent user.message with no other source, and the offset
-// its line starts at, which identifies it.
-public sealed record CopilotPrompt(long Offset, string Content);
+// A prompt the person gave: a main-agent user.message with no other source, the offset its
+// line starts at, which identifies it, and the paths of the files Copilot attached to it
+// (data.attachments[].path: one for each @<path> it took).
+public sealed record CopilotPrompt(long Offset, string Content, IReadOnlyList<string>? Attachments = null);
 
 public sealed record CopilotPromptsSince(IReadOnlyList<CopilotPrompt> Prompts, bool SessionEnded, long ScannedTo);
 
@@ -115,9 +116,22 @@ public static class CopilotPrompts
                 if (e.Type == "session.shutdown") { ended = true; return; }
                 if (e.Type != "user.message" || e.Data.ValueKind != JsonValueKind.Object) { return; }
                 if (Str(e.Data, "source") is { Length: > 0 }) { return; }
-                if (Str(e.Data, "content") is { } content) { prompts.Add(new CopilotPrompt(start, content)); }
+                if (Str(e.Data, "content") is { } content) { prompts.Add(new CopilotPrompt(start, content, AttachedPaths(e.Data))); }
             }
         }
+    }
+
+    static List<string> AttachedPaths(JsonElement data)
+    {
+        var paths = new List<string>();
+        if (data.TryGetProperty("attachments", out var list) && list.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var a in list.EnumerateArray())
+            {
+                if (Str(a, "path") is { Length: > 0 } path) { paths.Add(path); }
+            }
+        }
+        return paths;
     }
 
     internal sealed record Event(JsonDocument Doc, string? Type, JsonElement Data, string? AgentId);

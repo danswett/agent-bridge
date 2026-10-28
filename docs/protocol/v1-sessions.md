@@ -9,10 +9,11 @@ JavaScript.
 
 Scope so far: a host reports sessions, their activity and their pending questions
 (`sessions.read`), can take an answer to a question (`sessions.answer`), can take a
-reply: a prompt typed into a session (`sessions.reply`), and notifies a client's devices
+reply: a prompt typed into a session (`sessions.reply`), with files and images sent ahead
+of it (`sessions.attach`, see [Attachments](#attachments)), and notifies a client's devices
 when a session asks or finishes, even with the app closed (`push`, see
-[Notifications](#notifications)). Attachments, launching and stopping come next; they will
-add ops without changing anything here.
+[Notifications](#notifications)). Larger files through the blob store, launching and
+stopping come next; they will add ops without changing anything here.
 
 ## Rules for every message
 
@@ -78,6 +79,7 @@ Request `data`: `{}`. Result:
 | `sessions.read` | `sessions.list`, `session.get`, `sessions.subscribe` |
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
 | `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
+| `sessions.attach` | `attachment.start`, `attachment.chunk`, `attachment.discard`, and `attachments` on `session.reply` ([Attachments](#attachments)). Offered only with `sessions.reply`, by a host that can stage files for the agent. Without it a client offers no way to attach |
 | `push` | `push.subscribe`, `push.unsubscribe`, `push.list`: Web Push notifications of questions and finished turns ([Notifications](#notifications)) |
 
 ### `sessions.list`
@@ -191,8 +193,8 @@ the session is idle or still working. Request `data`:
 |---|---|
 | `id` | The session |
 | `request` | A fresh UUID per reply the person sends, with exactly `session.answer`'s semantics: every outcome is remembered for at least 10 minutes and returned for a repeat, which types nothing; a repeat of a reply still being delivered waits for it |
-| `text` | The prompt: at most 16 KiB of UTF-8, and not blank |
-| `attachments` | Reserved for files and images (a later slice). Until a host offers them, a reply carrying any (anything but an empty array or `null`) is `refused` |
+| `text` | The prompt: at most 16 KiB of UTF-8. Not blank, unless the reply has attachments |
+| `attachments` | Optional. Files and images for the agent, in order: `[{ "id": "<attachment>" }]`, at most 10, each sent whole by **this device** with `attachment.start` and `attachment.chunk` first ([Attachments](#attachments)). Absent, `null` and `[]` mean none. A host without `sessions.attach` refuses a reply that has any |
 
 **Line breaks become spaces.** Every control character, line breaks and tabs included,
 and the Unicode line and paragraph separators are typed as spaces, so a reply always
@@ -209,17 +211,114 @@ Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`:
 
 | `outcome` | Meaning | Typed? |
 |---|---|---|
-| `delivered` | The host typed the reply, and the agent's transcript then recorded a prompt from the person (not a subagent's, a scheduled one or any with another source) whose text is the reply as typed, whitespace runs aside. Each recorded prompt confirms one reply only | Yes |
-| `unconfirmed` | The host typed it but saw no such prompt: the agent recorded something else, the session ended, or nothing came within the host's wait. A session that is working takes a prompt typed now at its next step (Copilot records it then, as `delivery: "steering"`), so a host waits for up to a minute. Never retried | Yes |
+| `delivered` | The host typed the reply, and the agent's transcript then recorded a prompt from the person (not a subagent's, a scheduled one or any with another source) whose text is the reply as typed, whitespace runs aside, **with every attachment attached**. Each recorded prompt confirms one reply only | Yes |
+| `unconfirmed` | The host typed it but saw no such prompt: the agent recorded something else, or the reply without all its files, the session ended, or nothing came within the host's wait. A session that is working takes a prompt typed now at its next step (Copilot records it then, as `delivery: "steering"`), so a host waits for up to a minute. Never retried | Yes |
 | `stale` | The session has ended, or its process has | No |
 | `busy` | An answer or another reply to this session is being typed | No |
-| `refused` | The host will not type it: an invalid reply (above), **a question or permission prompt pending in the session** (the words would answer it, and Enter accept it; answer it first), a transcript the host cannot read to rule that out, an elevated or otherwise unreachable session, an agent or platform without delivery yet, or agent-ha-bridge active for this user | No |
+| `refused` | The host will not type it: an invalid reply (above), **a question or permission prompt pending in the session** (the words would answer it, and Enter accept it; answer it first), a transcript the host cannot read to rule that out, an attachment the host does not hold (expired, removed, sent by another device, still arriving, or gone with an earlier reply) or cannot hand over, an elevated or otherwise unreachable session, an agent or platform without delivery yet, or agent-ha-bridge active for this user | No |
 
 A reply is never typed while the session is asking anything, which a host checks both in
 what it reports and, immediately before typing, in the transcript itself. The per-session
 serialization is shared with answers, but it ends once the reply's keys have gone: a
 question the agent asks while the host waits for its prompt to be recorded can be answered
 at once.
+
+### Attachments
+
+Files and images go with a reply, as they can be pasted or attached at the machine. A
+client sends each file to the host first, in small chunks inside the channel, then names
+them in `session.reply`. Each file is at most **256 KiB** this way; larger ones will travel
+through the blob store (a later op), and a reply will name those the same way, by `id`.
+
+**What the agent is given (Copilot).** The host writes each file into a private folder
+(below) and types the reply as agent-ha-bridge does: `@<path>` for each file, in order,
+then the text, one line, then Enter: `@C:\…\attachments\9f2c…-screenshot.png What do you
+see?`. Copilot CLI attaches a file a prompt mentions that way. A path can't hold
+whitespace (nothing quotes it), so a host whose folder has a space in its path refuses
+replies with attachments. The text rules above apply to the text alone, so a reply of
+files only is allowed, and one whose text starts with `/` or `!` is still refused.
+
+**Names and types.** Any file is accepted. A host keeps a safe form of the name: the
+last path segment, letters, digits, `.`, `-` and `_` (anything else becomes `-`), a stem
+of at most 48 characters, and an extension only if it is 1 to 12 letters or digits.
+Copilot decides how to read a file from its extension, so for PNG, JPEG, GIF, WebP,
+HEIC/HEIF and PDF the host goes by the file's own bytes: it gives them the matching
+extension (a pasted `image` becomes `image.png`), and refuses a reply whose file is named
+as one of these formats but is not one. `type` is informational only.
+
+#### `attachment.start`
+
+Request `data`:
+
+```json
+{
+  "attachment": "4c1d7e2a-9b3f-4e6a-8c5d-0f1e2d3c4b5a",
+  "name": "Screenshot 2026-10-28.png",
+  "type": "image/png",
+  "size": 183204,
+  "sha256": "n4bQgYhMfWWaL-qgxVrQFaO_TxsrC4Is0V1sFbDwCgg"
+}
+```
+
+| Field | Notes |
+|---|---|
+| `attachment` | A fresh UUID for this file, the client's. Starting again with the same id and the same `name`, `size` and `sha256` resumes it (after a reconnect, say) |
+| `name` | 1 to 255 bytes of UTF-8. A pasted image with no name is sent as `image.png` or similar |
+| `type` | Optional MIME type, at most 127 bytes |
+| `size` | Bytes, 1 to 262,144 |
+| `sha256` | The SHA-256 of the whole file, base64url without padding (43 characters) |
+
+Result: `{ "received": 0, "complete": false }`: how many bytes the host has, and whether
+that is the whole file. A file a typed reply has already used reads as complete, so a
+client resending after a lost response sends nothing again. A host holds at most 32
+attachments at once across devices; one more fails.
+
+#### `attachment.chunk`
+
+Request `data`: `{ "attachment": "<id>", "offset": 11264, "data": "<base64>" }`. `data` is
+standard base64 of at most **11 KiB** (11,264 bytes), which keeps the request under 16 KiB
+as sent: a chunk never holds an answer or a reply back by more than one small record. A
+client sends one chunk at a time per file, each at the `received` the host last gave, and
+waits for its response. A chunk the host already has (a resend) changes nothing; one at
+any other offset fails, saying the offset expected.
+
+Result: `{ "received": 22528, "complete": false }`. When the last byte arrives, the host
+checks the size and SHA-256: `complete: true` if they match. If they don't, the request
+fails and the host drops the file; the client starts it again with a new id.
+
+#### `attachment.discard`
+
+Request `data`: `{ "attachment": "<id>" }`. Result: `{ "discarded": true }`, or `false` for
+an id the host does not hold for this device. A client sends it when the person removes a
+file before sending, so the host frees it at once rather than when it expires.
+
+**Failures.** `attachment.*` requests that fail a check (a field out of range, a wrong
+offset, a hash mismatch, too many held) fail as requests (`ok: false`) with the reason, as
+`push.*` do. A host without `sessions.attach` answers them `unknown op`.
+
+#### Lifetime and privacy
+
+* **One device's.** An attachment belongs to the device that sent it (the channel's peer).
+  Another device can neither add to it, use it, see it nor remove it.
+* **In memory until used.** A host keeps a file in memory while it arrives and until a
+  reply uses it. One no reply uses within **15 minutes** of its last chunk is dropped.
+* **Staged only to be typed.** Just before typing, the host writes the reply's files into a
+  folder of its own profile that only the user can open: on Windows a DACL that inherits
+  nothing and grants only the user, as owner; elsewhere mode `0700`, files `0600`. Names
+  start with a random 128-bit prefix, so nothing is ever overwritten. A folder that can't be
+  made private, or is a link, is never written to and the reply is `refused`.
+* **Gone after use.** Once the reply is typed (`delivered` or `unconfirmed`), its files leave
+  the host's memory and cannot be used again. The staged copies stay **24 hours**, since a
+  working session reads the file only when it takes the prompt, then are deleted by a sweep
+  that also runs when the host starts. A reply that types nothing (`refused`, `busy`,
+  `stale`) deletes its staged copies at once and leaves the files held, so the person can
+  send again with a new request.
+* **Never in the clear outside the two ends.** Chunks travel inside the end-to-end channel,
+  so the relay sees only frames of about 15 KiB. A host never logs names or contents, only
+  counts and sizes.
+
+A client sends a reply's files before the reply, and again (from what the host has) on
+every resend of it, so a reply resent after the host restarted still finds them.
 
 ### `push.subscribe`
 

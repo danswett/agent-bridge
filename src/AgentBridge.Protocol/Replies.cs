@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 
 namespace AgentBridge.Protocol;
 
@@ -11,14 +10,15 @@ public static class Replies
     // session can take it now (a question pending, the agent, the platform) is the host's.
     public static string? Check(ReplyRequest reply)
     {
-        if (reply.Attachments is { } a && a.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined)
-            && !(a.ValueKind == JsonValueKind.Array && a.GetArrayLength() == 0))
-        {
-            return "attachments are not supported yet; send the text alone, or attach at the machine";
-        }
-        var text = reply.Text;
-        // Control characters are typed as spaces, so text of nothing else is empty too.
-        if (text is null || text.All(c => char.IsWhiteSpace(c) || char.IsControl(c))) { return "the reply is empty"; }
+        var attachments = reply.Attachments ?? [];
+        if (attachments.Count > AttachmentLimits.PerReply) { return $"a reply carries at most {AttachmentLimits.PerReply} attachments"; }
+        if (attachments.Any(a => a is null || !Attachments.IsId(a.Id))) { return "each attachment must be the UUID of one sent with attachment.start"; }
+        if (attachments.Select(a => a.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != attachments.Count) { return "the same attachment is in the reply twice"; }
+        var text = reply.Text ?? "";
+        // Control characters are typed as spaces, so text of nothing else is empty too. With
+        // attachments the words are optional, as at the machine.
+        var blank = text.All(c => char.IsWhiteSpace(c) || char.IsControl(c));
+        if (blank && attachments.Count == 0) { return "the reply is empty"; }
         if (Encoding.UTF8.GetByteCount(text) > Limits.ReplyText) { return $"the reply is longer than {Limits.ReplyText / 1024} KiB"; }
         // What the agent's input sees first once control characters have become spaces and
         // it has trimmed the line. A prompt beginning with / is a slash command and one

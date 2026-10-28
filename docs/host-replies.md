@@ -42,17 +42,60 @@ right after a turn start), or `queued` after the turn ends. One typed while idle
 at once (`delivery: "idle"`). The host therefore waits up to 60 s for the prompt, and frees
 the session for answers as soon as the keys have gone.
 
+## Attachments (Copilot)
+
+Ported from agent-ha-bridge (`hooks/daemon-replies.ps1`: `New-BridgeAttachmentPrompt`,
+`Save-BridgeReplyFile`, `Get-BridgeAttachmentFileName`, `Remove-BridgeStaleAttachment`).
+The phone sends each file ahead of the reply (`attachment.start`, `attachment.chunk`); the
+`AttachmentStore` holds it in memory for that device, checks its SHA-256, and stages it
+only when a reply that names it is about to be typed.
+
+**How Copilot gets the file.** Exactly as agent-ha-bridge does it: the staged path as an
+`@<path>` mention for each file, in order, then the words, trimmed, as one line, typed as
+any reply is (one burst, then Enter). Copilot CLI records such a prompt with the mentions
+in `content` and one `data.attachments` entry (`type: "file"`, `path`, `displayName`,
+`mentionIndex`) for each file it attached, as agent-ha-bridge's replies with images in this
+machine's transcripts show. A mention cannot be quoted, so a path with
+whitespace is refused rather than sent with some files missing, as there.
+
+**Staging.** `<profile>\attachments` (by default `%LOCALAPPDATA%\AgentBridge\default\attachments`),
+narrowed by `PrivateFolder` the way agent-ha-bridge's `Protect-BridgeSecretFile` narrows its
+own: a protected DACL granting only the user (as owner) full control, inherited by the
+files; mode 0700 and 0600 elsewhere. A link, or a folder that stays readable by anyone else,
+is never written to. File names are `<32 random hex>-<safe name>`, the safe name as
+agent-ha-bridge makes it (letters, digits, `.`, `-`, `_`; a 48-character stem; a short
+alphanumeric extension), with one addition: for PNG, JPEG, GIF, WebP, HEIC/HEIF and PDF the
+extension comes from the file's bytes, since Copilot goes by it. agent-ha-bridge gets the
+same from Home Assistant's image store, which only takes real images and falls back to
+`.png`.
+
+**Cleanup.** The staged copies of a typed reply stay 24 hours (agent-ha-bridge's
+`Remove-BridgeStaleAttachment` cutoff), because a working session reads a file only when it
+takes the prompt; a sweep at start-up and every 10 minutes deletes older ones. It deletes only
+files named as the store names them, and nothing at all when the folder has been replaced by
+a link. A reply that
+types nothing deletes its copies at once. Held files no reply uses go after 15 minutes. The
+log says how many files and how many KiB, never their names.
+
+**Differences from agent-ha-bridge.** Images and other files take one path, up to 256 KiB
+each, through the end-to-end channel; Home Assistant's image store took images of any size.
+The phone shrinks a larger photo or screenshot to fit before sending it (see the PWA), and
+the blob store will lift the limit. Only Copilot sessions take replies here, so only they
+take attachments; agent-ha-bridge also typed them into Claude Code and Codex.
+
 ## Before and after typing
 
 In order, for every reply:
 
-1. Platform, agent-ha-bridge, then `Replies.Check` (blank, over 16 KiB, a leading `/` or
-   `!`, attachments).
+1. Platform, agent-ha-bridge, then `Replies.Check` (blank without attachments, over 16 KiB,
+   a leading `/` or `!`, more than 10 attachments or a malformed one).
 2. The session is live (`stale` otherwise) and is a Copilot session (`refused` otherwise).
 3. One delivery per session (`busy`), shared with answers. Every request's outcome is
    remembered for 15 minutes and returned for a resend, which types nothing.
 4. No question or permission prompt in the session as reported (`refused`: "answer that
-   first"). The process is the live agent process, and not elevated.
+   first"). Its attachments are held, complete, for this device (`refused` otherwise), and
+   are reserved for this reply. The process is the live agent process, and not elevated.
+   The attachments are staged (below).
 5. The single typing turn is taken, then, immediately before typing: agent-ha-bridge again,
    the session again, and its transcript: no `ask_user` from any agent without its
    completion or `human_response.recorded`, and no `permission.requested` without its
@@ -62,13 +105,17 @@ In order, for every reply:
    read from the start once per session, before the typing turn, and from where it was
    left on every later read. A transcript that cannot be read is `refused`, never taken to
    mean nothing is asking. The point read up to is where confirmation starts.
-6. The worker types it. Nothing written is `refused`; a worker that stopped after its first
-   write is `unconfirmed`, never retried. The session is released for answers.
+6. The worker types it. Nothing written is `refused`, and the staged files are deleted with
+   the attachments kept for another try; a worker that stopped after its first write is
+   `unconfirmed`, never retried. Either way once a key may have gone the attachments leave
+   memory. The session is released for answers.
 7. Up to 60 s, the transcript after that point is watched for a main-agent `user.message`
    with no `source`, whose content equals the typed words with whitespace runs collapsed.
    Each such prompt confirms one reply (claimed by its line's offset), so two replies of the
-   same words need two prompts. `delivered` on one; a `session.shutdown`, or the wait
-   running out, is `unconfirmed`, saying whether something else was recorded instead.
+   same words need two prompts. `delivered` on one whose `attachments` list every staged
+   path; `unconfirmed` on one that lacks any (Copilot leaves a mention it could not read as
+   text); a `session.shutdown`, or the wait running out, is `unconfirmed`, saying whether
+   something else was recorded instead.
 
 **What no check can see.** Words somebody left half-typed in the CLI's input are in no
 transcript; the reply is added to them, and the prompt recorded differs, so the outcome is

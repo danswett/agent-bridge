@@ -1,9 +1,11 @@
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
+using System.Text.RegularExpressions;
 using Xunit;
 
 // session.reply end to end: a fixture Copilot session read by the real SessionSource, a
@@ -68,8 +70,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         PollInterval = TimeSpan.FromMilliseconds(25),
     }, gate: gate);
 
-    void Serve(ISessionAnswerer? answers, ISessionReplier? replies) =>
-        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: answers, replies: replies).HandleAsync;
+    void Serve(ISessionAnswerer? answers, ISessionReplier? replies, AttachmentStore? attachments = null) =>
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: answers, replies: replies, attachments: attachments).HandleAsync;
 
     string Prompt(string text, string delivery = "idle") => Copilot.Event("user.message", new { content = text, delivery }, second++);
 
@@ -317,7 +319,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Equal(("refused", "the reply is empty"), await ReplyAsync(ch, " \n "));
         Assert.Equal(("refused", "the reply is longer than 16 KiB"), await ReplyAsync(ch, new string('x', Limits.ReplyText + 1)));
         Assert.Contains("cannot start with /", (await ReplyAsync(ch, "/clear")).Reason);
-        Assert.Contains("attachments are not supported yet", (await ReplyAsync(ch, "see this", attachments: new[] { new { name = "a.png" } })).Reason);
+        Assert.Equal(("refused", "this host does not take attachments; send the text alone, or attach at the machine"), await ReplyAsync(ch, "see this", attachments: new[] { new { id = Guid.NewGuid() } }));
         Assert.Equal(("refused", "request must be a UUID"), await ReplyAsync(ch, "hello", request: "7"));
         Assert.Equal(("refused", "replying is not supported for claude yet; reply at the machine"), await ReplyAsync(ch, "hello", id: ClaudeId));
         Assert.Empty(injector.Plans);
@@ -337,6 +339,166 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Equal(("refused", "the session runs as administrator"), await ReplyAsync(ch, "hello again"));
     }
 
+    // ---- attachments ----
+
+    string Staging => Path.Combine(f.Root, "profile", "attachments");
+
+    AttachmentStore Store() => new(new AttachmentOptions { StagingRoot = Staging }, sweep: false);
+
+    // Serves replies with attachments, and plays the CLI as it records a prompt with files in
+    // it: one attachment per @<path> it could read.
+    AttachmentStore ServeAttachments()
+    {
+        var store = Store();
+        Serve(Answerer(), new ReplyService(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+            ConfirmTimeout = TimeSpan.FromSeconds(2),
+            PollInterval = TimeSpan.FromMilliseconds(25),
+        }, gate: gate, attachments: store), store);
+        injector.OnInject = plan => Fixture.Append(events, WithFiles(plan.Sends[0].Text));
+        return store;
+    }
+
+    string WithFiles(string text, bool attach = true) => Copilot.Event("user.message", new
+    {
+        content = text,
+        attachments = attach
+            ? text.Split(' ').Where(w => w.StartsWith('@') && File.Exists(w[1..])).Select((w, i) => new { type = "file", path = w[1..], displayName = w, mentionIndex = i }).ToArray()
+            : [],
+        delivery = "idle",
+    }, second++);
+
+    static byte[] Png(int size)
+    {
+        var bytes = new byte[size];
+        Random.Shared.NextBytes(bytes);
+        new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }.CopyTo(bytes, 0);
+        return bytes;
+    }
+
+    // As a client sends one: start, then one chunk at a time from where the host is.
+    static async Task<string> UploadAsync(SecureChannel ch, byte[] bytes, string name = "shot.png")
+    {
+        var id = Guid.NewGuid().ToString();
+        var state = Ok(await ch.RequestAsync(Ops.AttachmentStart, new { attachment = id, name, type = "image/png", size = bytes.Length, sha256 = Attachments.Base64Url(System.Security.Cryptography.SHA256.HashData(bytes)) }));
+        while (!state.GetProperty("complete").GetBoolean())
+        {
+            var at = state.GetProperty("received").GetInt32();
+            var n = Math.Min(AttachmentLimits.Chunk, bytes.Length - at);
+            state = Ok(await ch.RequestAsync(Ops.AttachmentChunk, new { attachment = id, offset = at, data = Convert.ToBase64String(bytes, at, n) }));
+        }
+        return id;
+    }
+
+    static System.Text.Json.JsonElement Ok(System.Text.Json.JsonElement response)
+    {
+        Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
+        return response.GetProperty("result");
+    }
+
+    static object Files(params string[] ids) => ids.Select(id => new { id }).ToArray();
+
+    [Fact]
+    public async Task Hello_offers_attachments_with_replies_only_on_a_host_that_has_somewhere_to_stage_them()
+    {
+        ServeAttachments();
+        var ch = await OpenAsync();
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsReply, Capabilities.SessionsAttach], await CapabilitiesAsync(ch));
+
+        probe.Reason = "agent-ha-bridge is running for this user";
+        Assert.Equal([Capabilities.SessionsRead], await CapabilitiesAsync(ch));
+        probe.Reason = null;
+
+        // Without a store the ops are unknown, as on a host that predates them.
+        Serve(Answerer(), Replier());
+        Assert.DoesNotContain(Capabilities.SessionsAttach, await CapabilitiesAsync(ch));
+        var unknown = await ch.RequestAsync(Ops.AttachmentStart, new { attachment = Guid.NewGuid().ToString(), name = "a.png", size = 1, sha256 = new string('A', 43) });
+        Assert.Equal("unknown op attachment.start", unknown.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task A_reply_with_files_sent_first_mentions_each_ahead_of_the_words_and_is_delivered_once_copilot_attaches_them()
+    {
+        using var store = ServeAttachments();
+        var ch = await OpenAsync();
+        var shot = Png(AttachmentLimits.Bytes);
+        var notes = "# plan\n"u8.ToArray();
+        var a = await UploadAsync(ch, shot, "Screen Shot.png");
+        var b = await UploadAsync(ch, notes, "plan.md");
+
+        var (outcome, reason) = await ReplyAsync(ch, "What do\nyou see?", attachments: Files(a, b));
+
+        Assert.Equal(("delivered", (string?)null), (outcome, reason));
+        var typed = Assert.Single(injector.Plans).Plan.Sends.Single().Text;
+        var root = Regex.Escape(Path.GetFullPath(Staging) + Path.DirectorySeparatorChar);
+        Assert.Matches($"^@{root}[0-9a-f]{{32}}-Screen-Shot\\.png @{root}[0-9a-f]{{32}}-plan\\.md What do you see\\?$", typed);
+        var paths = typed.Split(' ').Take(2).Select(w => w[1..]).ToArray();
+        Assert.Equal(shot, File.ReadAllBytes(paths[0]));
+        Assert.Equal(notes, File.ReadAllBytes(paths[1]));
+        // The files are the agent's now: gone from the host's memory, and not reusable.
+        Assert.Equal(0, store.Count);
+        Assert.Contains("went with an earlier reply", (await ReplyAsync(ch, "again", attachments: Files(a))).Reason);
+    }
+
+    [Fact]
+    public async Task Files_alone_are_a_reply_and_one_copilot_did_not_attach_is_unconfirmed()
+    {
+        ServeAttachments();
+        var ch = await OpenAsync();
+        injector.OnInject = plan => Fixture.Append(events, WithFiles(plan.Sends[0].Text, attach: false));
+
+        var (outcome, reason) = await ReplyAsync(ch, "", attachments: Files(await UploadAsync(ch, Png(64))));
+
+        Assert.Equal("unconfirmed", outcome);
+        Assert.Contains("did not attach every file", reason);
+        Assert.StartsWith("@", Assert.Single(injector.Plans).Plan.Sends.Single().Text);
+    }
+
+    [Fact]
+    public async Task A_reply_that_types_nothing_deletes_its_staged_copies_and_keeps_its_files_for_the_next_try()
+    {
+        using var store = ServeAttachments();
+        Fixture.Append(events, Ask("q1", second++));
+        var ch = await OpenAsync();
+        var id = await UploadAsync(ch, Png(100));
+
+        Assert.Equal("refused", (await ReplyAsync(ch, "look", attachments: Files(id))).Outcome);
+        // The question was only in the transcript, so the files had been staged; now they are not.
+        Assert.Empty(Directory.Exists(Staging) ? Directory.GetFiles(Staging) : []);
+        Assert.Equal(1, store.Count);
+
+        Fixture.Append(events, Copilot.Answered("q1", second++), Copilot.ToolDone("q1", second++));
+        await source.RefreshAsync();
+        Assert.Equal("delivered", (await ReplyAsync(ch, "look", attachments: Files(id))).Outcome);
+        Assert.Single(Directory.GetFiles(Staging));
+    }
+
+    [Fact]
+    public async Task Files_are_the_sending_devices_alone_and_bad_ones_fail_as_requests()
+    {
+        ServeAttachments();
+        var ch = await OpenAsync();
+        var id = await UploadAsync(ch, Png(100));
+        await using var laptop = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "Laptop", "pwa");
+        await laptop.Relay.WaitForPeerAsync(p => p.Id == host.Id, Patience);
+        var other = await laptop.Hub.OpenAsync(host.Id);
+
+        var (outcome, reason) = await ReplyAsync(other, "mine now", attachments: Files(id));
+        Assert.Equal("refused", outcome);
+        Assert.Contains("is not on the host", reason);
+
+        var bytes = Png(100);
+        var badId = Guid.NewGuid().ToString();
+        Ok(await ch.RequestAsync(Ops.AttachmentStart, new { attachment = badId, name = "a.png", size = 100, sha256 = Attachments.Base64Url(System.Security.Cryptography.SHA256.HashData(Png(100))) }));
+        var bad = await ch.RequestAsync(Ops.AttachmentChunk, new { attachment = badId, offset = 0, data = Convert.ToBase64String(bytes) });
+        Assert.False(bad.GetProperty("ok").GetBoolean());
+        Assert.Contains("do not match its sha256", bad.GetProperty("error").GetString());
+        var big = await ch.RequestAsync(Ops.AttachmentStart, new { attachment = Guid.NewGuid().ToString(), name = "big.bin", size = AttachmentLimits.Bytes + 1, sha256 = new string('A', 43) });
+        Assert.Equal("the attachment is larger than 256 KiB", big.GetProperty("error").GetString());
+        Assert.Empty(injector.Plans);
+    }
     sealed class FakeProbe : IAgentHaBridgeProbe
     {
         public string? Reason;

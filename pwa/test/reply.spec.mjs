@@ -134,7 +134,8 @@ test.describe('on a phone', () => {
     await box(page, IDLE).getByRole('textbox', { name: 'Reply' }).fill('x');
     const sizes = await box(page, IDLE).evaluate((f) => [...f.querySelectorAll('button:not([hidden]), textarea')]
       .map((e) => ({ what: e.className || e.tagName, h: e.getBoundingClientRect().height })));
-    expect(sizes.length).toBe(2);
+    // The box, Send and Attach.
+    expect(sizes.length).toBe(3);
     for (const s of sizes) { expect(s.h, s.what).toBeGreaterThanOrEqual(44); }
   });
 });

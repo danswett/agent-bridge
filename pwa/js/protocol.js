@@ -18,6 +18,9 @@ export const Ops = Object.freeze({
   pushSubscribe: 'push.subscribe',
   pushUnsubscribe: 'push.unsubscribe',
   pushList: 'push.list',
+  attachmentStart: 'attachment.start',
+  attachmentChunk: 'attachment.chunk',
+  attachmentDiscard: 'attachment.discard',
 });
 
 export const Events = Object.freeze({
@@ -26,7 +29,7 @@ export const Events = Object.freeze({
   sessionsSynced: 'sessions.synced',
 });
 
-export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', push: 'push' });
+export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', push: 'push' });
 
 export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 
@@ -156,4 +159,11 @@ export function readHello(raw) {
 export function readAnswerResult(raw) {
   const r = obj(raw) ?? {};
   return { outcome: readOutcome(r.outcome), reason: str(r.reason) };
+}
+
+// attachment.start's and attachment.chunk's result: { received, complete }. A count that is
+// not a whole number reads as nothing received, so a client starts again from the top.
+export function readAttachmentState(raw) {
+  const r = obj(raw) ?? {};
+  return { received: Number.isSafeInteger(r.received) && r.received >= 0 ? r.received : 0, complete: r.complete === true };
 }
