@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { readSession, readHello } from '../../js/protocol.js';
+import { readSession, readHello, readBackground } from '../../js/protocol.js';
+import { cardState } from '../../js/ui/session-card.js';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 
@@ -14,7 +15,7 @@ test('the demo fixture is the protocol\'s worked example, unchanged', () => {
 
 test('every session in the worked example reads with its fields intact', () => {
   const { sessions } = JSON.parse(readFileSync(here('../../fixtures/sessions-list.json'), 'utf8'));
-  const [copilot, claude, codex] = sessions.map(readSession);
+  const [copilot, claude, codex, delegating] = sessions.map(readSession);
   assert.equal(copilot.agent, 'copilot');
   assert.equal(copilot.status, 'waiting');
   assert.equal(copilot.question.fields.length, 5);
@@ -22,6 +23,31 @@ test('every session in the worked example reads with its fields intact', () => {
   assert.equal(copilot.question.fields[1].options[0].label, 'host', 'an option without a label shows its value');
   assert.equal(claude.activity.currentTool.name, 'Bash');
   assert.equal(codex.status, 'idle');
+  assert.equal(codex.activity.background, null);
+  assert.equal(delegating.status, 'idle');
+  assert.deepEqual(delegating.activity.background, { agents: 2, shells: 1 });
+});
+
+test('background is read tolerantly: anything but whole counts above zero is none, and none at all is absent', () => {
+  assert.deepEqual(readBackground({ agents: 1, shells: 0 }), { agents: 1, shells: 0 });
+  assert.deepEqual(readBackground({ shells: 3, extra: true }), { agents: 0, shells: 3 });
+  assert.deepEqual(readBackground({ agents: -2, shells: 1.5 }), null);
+  assert.deepEqual(readBackground({ agents: '2', shells: Infinity }), null);
+  assert.equal(readBackground({ agents: 0, shells: 0 }), null);
+  assert.equal(readBackground([1, 2]), null);
+  assert.equal(readBackground(undefined), null);
+  assert.equal(readSession({ id: 'x', activity: { background: 'lots' } }).activity.background, null);
+});
+
+test('only an idle session with background work reads as delegating, naming agents before commands', () => {
+  const s = (status, background) => readSession({ id: 'x', status, activity: { background } });
+  assert.deepEqual(cardState(s('idle', { agents: 2, shells: 1 })), { view: 'delegating', text: 'Waiting for background agents' });
+  assert.deepEqual(cardState(s('idle', { agents: 0, shells: 1 })), { view: 'delegating', text: 'Waiting for background commands' });
+  assert.deepEqual(cardState(s('idle', { agents: 0, shells: 0 })), { view: 'idle', text: 'Idle' });
+  assert.deepEqual(cardState(s('working', { agents: 1 })), { view: 'working', text: 'Working' });
+  assert.deepEqual(cardState(s('waiting', { shells: 1 })), { view: 'waiting', text: 'Waiting on you' });
+  // A newer status a client doesn't know reads as idle, and then background still counts.
+  assert.deepEqual(cardState(s('paused', { agents: 1 })), { view: 'delegating', text: 'Waiting for background agents' });
 });
 
 test('unknown enum values read as the C# reader reads them', () => {

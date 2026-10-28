@@ -1,6 +1,6 @@
 /* Agent Bridge PWA. Mobile first (an iPhone on the Home Screen), fine on a desktop.
    Colours follow the old Home Assistant cards: blue while working, amber while waiting
-   on you, calm when idle. Both schemes keep body text at 7:1 and secondary text above
+   on you, calm when idle, and a still blue edge while idle but delegating. Both schemes keep body text at 7:1 and secondary text above
    4.5:1. No inline styles anywhere, so the CSP can say style-src 'self'. */
 
 :root {
@@ -147,6 +147,10 @@ a { color: var(--primary); }
    .glow, below. */
 .frame.working { border-color: var(--primary); box-shadow: 0 0 6px 0 var(--primary); }
 .frame.waiting { border-color: var(--warning); box-shadow: 0 0 6px 0 var(--warning); }
+/* Delegating: the session's own turn is over but work it started is still running. Blue,
+   as on the old dashboard, but still and dashed, so it can't be mistaken for working at a
+   glance and doesn't read as finished either. */
+.frame.delegating { border-color: var(--primary); border-style: dashed; }
 
 /* The halo is its own layer with a shadow that never changes, faded by opacity. Animating
    box-shadow on the card itself repaints the whole card on the main thread every frame;
@@ -200,6 +204,8 @@ a { color: var(--primary); }
 .session[data-status="working"] .status-text { color: var(--primary); }
 .session[data-status="waiting"] .dot { background: var(--warning); }
 .session[data-status="waiting"] .status-text { color: var(--warning-text); }
+.session[data-view="delegating"] .dot { background: transparent; box-shadow: inset 0 0 0 2px var(--primary); }
+.session[data-view="delegating"] .status-text { color: var(--primary); }
 
 .tool-line { margin: 4px 0 0; font-size: .88rem; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
 .tool-line .tool-name { font-weight: 600; font-family: ui-monospace, monospace; }

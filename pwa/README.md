@@ -85,7 +85,8 @@ Every Playwright test serves the output of `tools/build-site.mjs` under
 `/agent-bridge/app/`, so the published CSP is in force and a violation fails the test.
 
 * `test/ui.spec.mjs`, in demo mode: every field type and status from the worked example,
-  glow per status, reduced motion, Markdown, an XSS payload in every text field, unknown
+  glow per status, the delegating state (idle with `background` work), reduced motion,
+  Markdown, an XSS payload in every text field, unknown
   status/agent/fields/events, a `seq` gap, reordering and removal, fold persistence and
   auto-unfold, truncation notes, tool history via `session.get`, the worker's scope.
 * `test/e2e/e2e.spec.mjs`, through the spike dev stack's real relay with a fake GitHub:

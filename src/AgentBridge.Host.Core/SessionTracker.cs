@@ -157,6 +157,7 @@ internal sealed class SessionTracker
         };
         var (response, responseCut) = Limits.KeepEnd(_state.Response, Limits.Response);
         var history = _state.Tools.Count > 0 ? _state.Tools.Latest(Limits.History) : null;
+        var (agents, shells) = _state.Background.Running(d.ProcessStartedAt);
 
         return new Session
         {
@@ -183,6 +184,7 @@ internal sealed class SessionTracker
                 UserMessage = Limits.KeepStart(_state.UserMessage, Limits.UserMessage),
                 TurnCount = _state.Seen ? Math.Max(0, _state.Prompts - (effective == SessionStatus.Idle ? 0 : 1)) : null,
                 Compactions = _state.Seen ? _state.Compactions : null,
+                Background = Protocol.Background.Of(agents, shells),
             },
         };
     }

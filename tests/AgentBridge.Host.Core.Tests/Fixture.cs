@@ -180,12 +180,30 @@ internal static class Copilot
     public static string ToolStart(string id, string name, object arguments, int s, string? agentId = null) =>
         Event("tool.execution_start", new { toolCallId = id, toolName = name, arguments }, s, agentId);
 
-    public static string ToolDone(string id, int s, bool success = true) =>
-        success ? Event("tool.execution_complete", new { toolCallId = id, success, result = new { content = "ok" } }, s)
-                : Event("tool.execution_complete", new { toolCallId = id, success, error = new { message = "no", code = "failure" } }, s);
+    public static string ToolDone(string id, int s, bool success = true, string? agentId = null) =>
+        success ? Event("tool.execution_complete", new { toolCallId = id, success, result = new { content = "ok" } }, s, agentId)
+                : Event("tool.execution_complete", new { toolCallId = id, success, error = new { message = "no", code = "failure" } }, s, agentId);
+
+    // A tool call's result as Copilot records it, e.g. a shell tool's marker line.
+    public static string ToolResult(string id, string content, int s, string? agentId = null) =>
+        Event("tool.execution_complete", new { toolCallId = id, success = true, result = new { content } }, s, agentId);
 
     public static string Answered(string id, int s) =>
         Event("human_response.recorded", new { toolCallId = id, requestId = "r", actor = "human_response", response = new { responseKind = "ask_user", content = new { choice = "a" } } }, s);
+
+    // A task agent: stamped with its own agentId, keyed by the task tool call that started it.
+    public static string SubagentStarted(string callId, string agentId, int s, string mode = "background") =>
+        Event("subagent.started", new { toolCallId = callId, agentName = "general-purpose", agentDisplayName = "helper-" + agentId, agentDescription = "Help out", model = "fixture-model", agentType = "general-purpose", executionMode = mode }, s, agentId);
+
+    public static string SubagentCompleted(string callId, string agentId, int s) =>
+        Event("subagent.completed", new { toolCallId = callId, agentName = "general-purpose", agentDisplayName = "helper-" + agentId, model = "fixture-model", totalToolCalls = 3, totalTokens = 1000, durationMs = 5000 }, s, agentId);
+
+    // Notifications are the session's own events: the subject is named inside kind.
+    public static string AgentIdle(string agentId, int s) =>
+        Event("system.notification", new { content = $"<system_notification>\nAgent \"helper-{agentId}\" (general-purpose) has finished processing and is now idle.\n</system_notification>", kind = new { type = "agent_idle", agentId, agentType = "general-purpose", displayName = "helper-" + agentId } }, s);
+
+    public static string ShellCompleted(string shellId, int s) =>
+        Event("system.notification", new { content = $"<system_notification>\nShell command \"Fixture\" (shellId: {shellId}) has completed successfully.\n</system_notification>", kind = new { type = "shell_completed", shellId, exitCode = 0, description = "Fixture" } }, s);
 }
 
 internal static class Claude

@@ -86,6 +86,18 @@ export function readQuestion(raw) {
   };
 }
 
+// Work still running after the session's own turn: { agents, shells }, or null when there
+// is none. A count that is not a whole number above zero reads as none, and both at none
+// is the same as the field being absent, so a client never shows "waiting for 0".
+export function readBackground(raw) {
+  const b = obj(raw);
+  if (!b) { return null; }
+  const count = (v) => (Number.isSafeInteger(v) && v > 0 ? v : 0);
+  const agents = count(b.agents);
+  const shells = count(b.shells);
+  return agents || shells ? { agents, shells } : null;
+}
+
 // A Session as the views use it, or null if it has no id to file it under.
 export function readSession(raw) {
   const s = obj(raw);
@@ -113,6 +125,7 @@ export function readSession(raw) {
       userMessage: str(a.userMessage),
       turnCount: num(a.turnCount),
       compactions: num(a.compactions),
+      background: readBackground(a.background),
     },
     question: readQuestion(s.question),
   };

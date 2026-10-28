@@ -30,6 +30,8 @@ internal sealed class SessionState
     public DateTimeOffset? StatusSince;
 
     public readonly ToolHistory Tools = new();
+    // Work started in the background that outlives the turn (Copilot's agents and shells).
+    public readonly BackgroundWork Background = new();
     // Questions the agent is waiting on, oldest first; the newest is the one shown.
     public readonly List<Question> Pending = [];
 
@@ -44,6 +46,7 @@ internal sealed class SessionState
         Prompts = 0; Compactions = 0; Seen = false;
         Status = SessionStatus.Idle; StatusSince = null; EffectiveSince = null;
         Tools.Clear();
+        Background.Clear();
         Pending.Clear();
     }
 

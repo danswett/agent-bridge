@@ -1,7 +1,9 @@
 // One session's card: the old dashboard's session card, rebuilt for the phone. A surface
 // whose edge and glow say what the session is doing (blue and breathing while it works,
-// amber while it waits on you, calm when idle), with a header that stays visible when the
-// card is folded, and the response, reasoning, history and question below it.
+// amber while it waits on you, calm when idle, and a still, dashed blue edge while it is
+// idle but delegating: its own turn is over and work it started in the background is not),
+// with a header that stays visible when the card is folded, and the response, reasoning,
+// history and question below it.
 import { h, icon } from './dom.js';
 import { ago, duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
@@ -10,6 +12,18 @@ import { renderQuestion } from './question-view.js';
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 const STATUS_TEXT = { working: 'Working', waiting: 'Waiting on you', idle: 'Idle' };
 const TOOL_MARK = { running: '⟳', done: '✓', failed: '✗' };
+
+// What the card shows: the status, except that an idle session still waiting on work it
+// started in the background is not finished, and reads as delegating, as on the old
+// dashboard. Agents are named first: a session waiting on both is delegating more than it
+// is running a command.
+export function cardState(s) {
+  const b = s.activity.background;
+  if (s.status !== 'idle' || !b) { return { view: s.status, text: STATUS_TEXT[s.status] }; }
+  return { view: 'delegating', text: b.agents > 0 ? 'Waiting for background agents' : 'Waiting for background commands' };
+}
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 let seq = 0;
 
@@ -84,8 +98,10 @@ export class SessionCard {
     root.dataset.id = s.id;
     root.dataset.status = s.status;
     root.dataset.agent = s.agent;
+    const state = cardState(s);
+    root.dataset.view = state.view;
     // Toggled, not assigned: the frame also carries 'collapsed', which only folding changes.
-    for (const st of ['working', 'waiting', 'idle']) { e.frame.classList.toggle(st, st === s.status); }
+    for (const st of ['working', 'waiting', 'idle', 'delegating']) { e.frame.classList.toggle(st, st === state.view); }
 
     if (this.#changed('agent', s.agent)) {
       e.badge.className = `agent-badge agent-${s.agent}`;
@@ -103,7 +119,7 @@ export class SessionCard {
       e.meta.replaceChildren(...bits);
     }
 
-    e.statusText.textContent = STATUS_TEXT[s.status];
+    e.statusText.textContent = state.text;
     e.updated.dateTime = s.updatedAt;
     e.updated.title = localTime(s.updatedAt);
     this.refreshTimes();
@@ -130,6 +146,9 @@ export class SessionCard {
     e.userText.textContent = s.activity.userMessage ?? '';
 
     const facts = [];
+    const b = s.activity.background;
+    if (b?.agents) { facts.push(plural(b.agents, 'background agent', 'background agents')); }
+    if (b?.shells) { facts.push(plural(b.shells, 'background command', 'background commands')); }
     if (s.activity.turnCount !== null) { facts.push(`${s.activity.turnCount} turns`); }
     if (s.activity.compactions) { facts.push(`${s.activity.compactions} compaction${s.activity.compactions === 1 ? '' : 's'}`); }
     if (s.processId !== null) { facts.push(`pid ${s.processId}`); }
@@ -148,7 +167,8 @@ export class SessionCard {
 
   refreshTimes(now = Date.now()) {
     const s = this.#s;
-    const since = s.status === 'idle' ? '' : duration(s.statusSince, now);
+    // Idle needs no clock; delegating does, since it is waiting on something.
+    const since = cardState(s).view === 'idle' ? '' : duration(s.statusSince, now);
     this.els.since.textContent = since ? `for ${since}` : '';
     const u = ago(s.updatedAt, now);
     this.els.updated.textContent = u ? `updated ${u}` : '';
