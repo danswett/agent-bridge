@@ -1,7 +1,11 @@
 // Network first, so a new version takes effect on the next load, with the cached shell as
 // the offline fallback. Nothing from the relay is ever cached.
 const PREFIX = 'agent-bridge-app-';
-const CACHE = `${PREFIX}v1`;
+// A hash of every file the site serves, written by tools/build-site.mjs. The browser only
+// installs a new worker when this file's bytes change, and the app only announces an
+// update when one takes over, so any change to the app or its relay must change it.
+const VERSION = 'dev';
+const CACHE = `${PREFIX}${VERSION}`;
 const SHELL = [
   './', './index.html', './app.css', './config.js', './manifest.webmanifest', './icon.svg',
   './js/main.js', './js/bytes.js', './js/noise-p256.js', './js/identity.js', './js/signin.js',

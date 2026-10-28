@@ -3,11 +3,12 @@
 // headers). The tests serve exactly this output, so they run under the same policy.
 //
 //   node tools/build-site.mjs --out <dir> [--relay https://relay.example]
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const appRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const FILES = ['index.html', 'app.css', 'sw.js', 'manifest.webmanifest', 'icon.svg', 'js', 'fixtures'];
 
 export function relayOrigin(relay) {
@@ -28,7 +29,7 @@ export function contentSecurityPolicy(relay) {
   return `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'${connect}; object-src 'none'; base-uri 'none'; form-action 'none'`;
 }
 
-export function buildSite({ out, relay = '' }) {
+export function buildSite({ out, relay = '', root = appRoot }) {
   const origin = relayOrigin(relay);
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
@@ -40,7 +41,31 @@ export function buildSite({ out, relay = '' }) {
   if (!html.includes(marker)) { throw new Error('index.html has no <meta charset="utf-8"> to put the policy after'); }
   const csp = contentSecurityPolicy(origin).replace(/"/g, '&quot;');
   writeFileSync(index, html.replace(marker, `${marker}\n  <meta http-equiv="Content-Security-Policy" content="${csp}">`));
+  stampWorker(out);
   return out;
+}
+
+// An installed PWA that stays open runs its old code until a new service worker takes
+// over, and a browser installs one only when sw.js itself changes. So sw.js carries a
+// hash of every other file served, and any change to the app or its relay is an update.
+function stampWorker(out) {
+  const files = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { walk(p); } else { files.push(p); }
+    }
+  };
+  walk(out);
+  const sw = path.join(out, 'sw.js');
+  const hash = createHash('sha256');
+  for (const f of files.filter((f) => f !== sw).sort()) {
+    hash.update(path.relative(out, f).split(path.sep).join('/')).update('\0').update(readFileSync(f)).update('\0');
+  }
+  const placeholder = "const VERSION = 'dev';";
+  const source = readFileSync(sw, 'utf8');
+  if (!source.includes(placeholder)) { throw new Error(`sw.js has no ${placeholder} to stamp`); }
+  writeFileSync(sw, source.replace(placeholder, `const VERSION = '${hash.digest('hex').slice(0, 16)}';`));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

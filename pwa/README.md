@@ -34,7 +34,7 @@ launching and notifications come next.
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
 | `js/ui/*` | Session cards, the read-only question, machines list, fold state, relative times |
 | `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client |
-| `tools/build-site.mjs` | Assembles the site for Pages: `config.js` with the relay, CSP in the page |
+| `tools/build-site.mjs` | Assembles the site for Pages: `config.js` with the relay, CSP in the page, and `sw.js` stamped with a hash of everything served, so any change reaches an open app as an update (the app then offers Reload) |
 
 ### Connecting a host
 
