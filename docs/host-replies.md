@@ -71,7 +71,9 @@ same from Home Assistant's image store, which only takes real images and falls b
 
 **Cleanup.** The staged copies of a typed reply stay 24 hours (agent-ha-bridge's
 `Remove-BridgeStaleAttachment` cutoff), because a working session reads a file only when it
-takes the prompt; a sweep at start-up and every 10 minutes deletes older ones. A reply that
+takes the prompt; a sweep at start-up and every 10 minutes deletes older ones. It deletes only
+files named as the store names them, and nothing at all when the folder has been replaced by
+a link. A reply that
 types nothing deletes its copies at once. Held files no reply uses go after 15 minutes. The
 log says how many files and how many KiB, never their names.
 

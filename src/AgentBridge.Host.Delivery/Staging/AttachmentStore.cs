@@ -253,17 +253,26 @@ public sealed class AttachmentStore : IDisposable
     }
 
     // Drops held attachments no reply used in time, and deletes staged copies past their time.
-    // Runs at start, then every SweepEvery.
+    // Runs at start, then every SweepEvery. Only files this store names (a 32-hex prefix and a
+    // dash) are touched, and only in the folder itself: if it has been replaced by a link, the
+    // files it points at were never staged here.
     public void Sweep()
     {
         lock (gate) { Expire(); }
         try
         {
-            if (!Directory.Exists(options.StagingRoot)) { return; }
+            var root = new DirectoryInfo(options.StagingRoot);
+            if (!root.Exists) { return; }
+            if (root.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                log($"left the attachment folder {options.StagingRoot} alone: it is a link");
+                return;
+            }
             var cutoff = Now - options.KeepStagedFor;
             var removed = 0;
-            foreach (var file in new DirectoryInfo(options.StagingRoot).EnumerateFiles())
+            foreach (var file in root.EnumerateFiles())
             {
+                if (!AttachmentFiles.IsStaged(file.Name) || file.Attributes.HasFlag(FileAttributes.ReparsePoint)) { continue; }
                 if (new DateTimeOffset(file.LastWriteTimeUtc, TimeSpan.Zero) >= cutoff) { continue; }
                 try { file.Delete(); removed++; }
                 catch (IOException) { }
@@ -365,6 +374,12 @@ public static partial class AttachmentFiles
         }
         return (stem + extension, null);
     }
+
+    // Whether a file name is one Stage gives: 32 hex digits, a dash, then the safe name.
+    public static bool IsStaged(string fileName) => StagedName().IsMatch(fileName);
+
+    [GeneratedRegex(@"^[0-9a-f]{32}-[0-9A-Za-z._-]+$")]
+    private static partial Regex StagedName();
 
     [GeneratedRegex(@".*[\\/]", RegexOptions.Singleline)]
     private static partial Regex LastSegment();

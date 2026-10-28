@@ -254,6 +254,47 @@ public sealed class AttachmentStoreTests : IDisposable
         Assert.False(File.Exists(path));
     }
 
+    [Fact]
+    public void The_sweep_deletes_only_old_files_it_staged_and_nothing_through_a_linked_folder()
+    {
+        var old = (time.GetUtcNow() - TimeSpan.FromHours(25)).UtcDateTime;
+        string Old(string folder, string name)
+        {
+            Directory.CreateDirectory(folder);
+            var p = Path.Combine(folder, name);
+            File.WriteAllText(p, "x");
+            File.SetLastWriteTimeUtc(p, old);
+            return p;
+        }
+        var ours = Old(Staging, "0123456789abcdef0123456789abcdef-shot.png");
+        var stranger = Old(Staging, "notes.txt");
+
+        store.Sweep();
+
+        Assert.False(File.Exists(ours));
+        Assert.True(File.Exists(stranger));
+
+        // The folder replaced by a link to somewhere else: nothing there was staged here.
+        var elsewhere = Path.Combine(f.Root, "elsewhere");
+        var theirs = Old(elsewhere, "0123456789abcdef0123456789abcdef-report.pdf");
+        Directory.Delete(Staging, recursive: true);
+        Link(Staging, elsewhere);
+
+        store.Sweep();
+
+        Assert.True(File.Exists(theirs));
+        Assert.Throws<IOException>(() => PrivateFolder.Ensure(Staging));
+    }
+
+    // A directory link any user can make: a junction on Windows, a symbolic link elsewhere.
+    static void Link(string link, string target)
+    {
+        if (!OperatingSystem.IsWindows()) { Directory.CreateSymbolicLink(link, target); return; }
+        using var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
+        mklink.WaitForExit();
+        Assert.True(new DirectoryInfo(link).Attributes.HasFlag(FileAttributes.ReparsePoint), "the junction was not made");
+    }
+
     [Theory]
     [InlineData("photo.HEIC", "jpeg", "photo.jpg")]
     [InlineData("scan", "pdf", "scan.pdf")]
