@@ -6,6 +6,8 @@
 //   channels.js      Noise_XX_P256 channels to hosts through the relay
 //   host-client.js   the sessions protocol over a channel: requests, events, seq gaps
 //   host-session.js  which host is shown; channel -> HostClient -> store, across reconnects
+//   answers.js       building and checking an answer before it is sent
+//   answer-service.js sending answers: one outcome each, resent with the same request
 //   sessions-store.js, ui/*  what is shown
 //   demo.js          ?demo=1: a simulated host, no relay
 import { RELAY } from '../config.js';
@@ -15,6 +17,7 @@ import { BridgeConnection } from './connection.js';
 import { HostSession } from './host-session.js';
 import { HostClient } from './host-client.js';
 import { SessionsStore } from './sessions-store.js';
+import { AnswerService } from './answer-service.js';
 import { SessionListView, renderMachines } from './ui/views.js';
 import { DemoHost, runScript } from './demo.js';
 
@@ -25,10 +28,13 @@ const BASE = RELAY || location.origin;
 const store = new SessionsStore();
 let currentClient = null;
 let machineName = '';
+// Who answers questions now: { service, hostId, capabilities }, or null.
+let answering = () => null;
 
 const view = new SessionListView($('session-list'), store, {
   fetchDetail: (id) => (currentClient ? currentClient.getSession(id) : Promise.reject(new Error('not connected'))),
   machineName: () => machineName,
+  answering: () => answering(),
 });
 view.onRender = (n) => {
   $('session-count').textContent = n ? `${n} live` : '';
@@ -75,10 +81,14 @@ async function startDemo() {
   $('demo-banner').hidden = false;
   setPill('Demo', 'warn');
   const fixture = await (await fetch('fixtures/sessions-list.json', { cache: 'no-store' })).json();
-  const host = new DemoHost(fixture);
-  const client = new HostClient(host.connect(), { store });
+  const host = new DemoHost(fixture, { answerDelayMs: Number(params.get('answerDelay') ?? 700), answering: params.get('answer') !== '0' });
+  // ?timeout= shortens how long a request waits for its response, for the tests of resends.
+  const timeoutMs = Number(params.get('timeout')) || 0;
+  const client = new HostClient(host.connect(), { store, ...(timeoutMs ? { timeoutMs, answerTimeoutMs: timeoutMs } : {}) });
   currentClient = client;
   const hello = await client.hello();
+  const answers = new AnswerService({ current: () => ({ client, hostId: hello.machine.id }), retryMs: Number(params.get('retry')) || 3000 });
+  answering = () => ({ service: answers, hostId: hello.machine.id, capabilities: hello.capabilities });
   $('machines').hidden = false;
   renderMachines($('machine-list'), {
     presence: [{ id: hello.machine.id, name: hello.machine.name, kind: 'host' }],
@@ -91,7 +101,11 @@ async function startDemo() {
   await client.subscribe();
   const script = params.get('static') === '1' ? null : runScript(host, { tickMs: Number(params.get('tick')) || 4000 });
   window.agentBridgeDemo = {
-    host, client, store, view,
+    host, client, store, view, answers,
+    // The next answers' outcomes, in order: 'delivered' (the default once these run out),
+    // 'unconfirmed', 'stale', 'busy', 'refused', an unknown one, or { outcome, reason,
+    // drop: true } to lose the response the first time, as a dropped channel would.
+    script: (...outcomes) => host.scriptAnswers(outcomes),
     upsert: (s) => host.upsert(s),
     remove: (id) => host.remove(id),
     frame: (f) => host.frame(f),
@@ -159,6 +173,11 @@ function begin(account) {
   const connection = new BridgeConnection({ base: BASE, key: identity.key, deviceId: identity.deviceId, name: deviceName(), account });
   const hosts = new HostSession({ connection, store });
   hosts.restoreTarget(takeLinkedHost());
+  // Answers go to the machine they were given for, on whichever channel to it is open now:
+  // after a reconnect, one still waiting for its outcome is resent with the same request.
+  const answers = new AnswerService({ current: () => (hosts.phase === 'open' && hosts.client ? { client: hosts.client, hostId: hosts.targetId } : null) });
+  answering = () => (hosts.targetId ? { service: answers, hostId: hosts.targetId, capabilities: hosts.capabilities } : null);
+  let shownCapabilities = '';
 
   const nameOf = (id) => connection.presence.find((d) => d.id === id)?.name;
   const drawMachines = () => {
@@ -186,6 +205,7 @@ function begin(account) {
     // The account's sessions and remembered machine go with it; a reconnect within the
     // same sign-in keeps them, but a new sign-in may be a different account.
     hosts.forget();
+    answers.clear();
     currentClient = null;
     accountStore.clear();
     connection.stop();
@@ -195,6 +215,9 @@ function begin(account) {
 
   hosts.onChange(() => {
     currentClient = hosts.client;
+    const caps = `${hosts.targetId}:${hosts.capabilities.join(' ')}`;
+    if (caps !== shownCapabilities) { shownCapabilities = caps; view.refreshQuestions(); }
+    if (hosts.phase === 'open') { answers.ready(); }
     drawMachines();
     if (!hosts.targetId) { $('sessions').hidden = true; return; }
     const name = hosts.machine?.name ?? nameOf(hosts.targetId) ?? 'your machine';
@@ -211,6 +234,7 @@ function begin(account) {
 
   $('signout').onclick = () => {
     hosts.forget();
+    answers.clear();
     accountStore.clear();
     connection.stop();
     location.replace(location.pathname);
@@ -218,7 +242,7 @@ function begin(account) {
 
   // For the E2E tests and debugging from the console. Holds no secrets beyond what the
   // page already has.
-  window.agentBridge = { connection, hosts, store };
+  window.agentBridge = { connection, hosts, store, answers };
   connection.start();
 }
 

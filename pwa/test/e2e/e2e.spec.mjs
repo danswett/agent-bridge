@@ -4,8 +4,9 @@
 // the relay is told to allow that origin. Covered: sign-in, the key proof, presence,
 // a Noise channel, hello, the subscription snapshot, live upserts and removes,
 // session.get, reconnecting after the socket drops (with a session that ended meanwhile
-// dropped by the new snapshot), returning to the last host, ?host= links, and a host
-// that predates the protocol.
+// dropped by the new snapshot), returning to the last host, ?host= links, a host that
+// predates the protocol, and answering a question: delivered, resent with the same request
+// after the socket drops mid-answer (typed once), and the host's own checks.
 //
 // Needs: dotnet build spikes/s4-relay/src/S4.DevStack -c Release
 import { test, expect } from '@playwright/test';
@@ -23,6 +24,7 @@ const fixture = JSON.parse(readFileSync(path.join(pwa, 'fixtures', 'sessions-lis
 const CLAUDE = '6f1c2b7e-claude-example';
 const CODEX = '019a1b2c-codex-example';
 const DELEGATING = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 test.skip(!existsSync(dll), 'the dev stack is not built: dotnet build spikes/s4-relay/src/S4.DevStack -c Release');
 test.describe.configure({ mode: 'serial' });
@@ -144,4 +146,55 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   await expect(opened.locator('[data-device-name="fixture-host"] button')).toBeVisible();
   await expect(opened.locator('#sessions')).toBeHidden();
   await expect(opened.locator('.session')).toHaveCount(0);
+});
+
+test('a phone answers a question through the relay, and an answer in flight when the socket drops is resent and typed once', async ({ page, context }) => {
+  const sockets = [];
+  await context.routeWebSocket(/\/v1\/ws$/, (ws) => { ws.connectToServer(); sockets.push(ws); });
+  const ask = (id, question) => {
+    const t = new Date().toISOString();
+    return host.upsert({
+      id, agent: 'copilot', title: `Asks ${question}`, status: 'waiting', statusSince: t, updatedAt: t, activity: {},
+      question: { id: question, kind: 'form', message: 'Which one?', askedAt: t, fields: [{ name: 'answer', title: 'Pick', type: 'choice', required: true, options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B (Recommended)' }] }] },
+    });
+  };
+  const sentFor = (id) => host.answers.filter((a) => a.id === id);
+  const typedFor = (id) => host.typed.filter((a) => a.id === id);
+
+  await ask('ask-1', 'q1');
+  await signIn(page);
+  await page.click('[data-device-name="fixture-host"] button');
+  const q1 = card(page, 'ask-1').locator('.question');
+  await expect(q1).toHaveAttribute('data-answerable', 'true', { timeout: 30000 });
+  await expect(q1.locator('.choice[data-value]').first()).toHaveText('B (Recommended)');
+  await q1.locator('.choice[data-value="a"]').click();
+  await expect(card(page, 'ask-1').locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.', { timeout: 15000 });
+  await expect(q1).toHaveCount(0);
+  expect(sentFor('ask-1')).toEqual([{ id: 'ask-1', question: 'q1', request: expect.stringMatching(UUID), fields: { answer: 'a' } }]);
+  expect(typedFor('ask-1')).toHaveLength(1);
+
+  // The socket drops while the host is still delivering. The phone resends on the new
+  // channel with the same request; the host returns the first outcome and types nothing more.
+  host.scriptAnswers({ outcome: 'delivered', holdMs: 4000 });
+  await ask('ask-2', 'q2');
+  const q2 = card(page, 'ask-2').locator('.question');
+  await expect(q2).toHaveAttribute('data-answerable', 'true', { timeout: 15000 });
+  await q2.locator('.choice[data-value="b"]').click();
+  await expect.poll(() => sentFor('ask-2').length, { timeout: 10000 }).toBe(1);
+  for (const ws of sockets.splice(0)) { await ws.close({ code: 4000, reason: 'test drop' }); }
+  await expect(card(page, 'ask-2').locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.', { timeout: 30000 });
+  const sent = sentFor('ask-2');
+  expect(sent).toHaveLength(2);
+  expect(sent[1].request).toBe(sent[0].request);
+  expect(typedFor('ask-2')).toHaveLength(1);
+
+  // The host checks for itself, whatever a client sends: a question no longer asked is
+  // stale, an answer that doesn't fit is refused with the reason, and neither is typed.
+  await ask('ask-3', 'q3');
+  await expect(card(page, 'ask-3').locator('.question')).toHaveAttribute('data-answerable', 'true', { timeout: 15000 });
+  const direct = (data) => page.evaluate((d) => window.agentBridge.hosts.client.answer({ ...d, request: crypto.randomUUID() }), data);
+  expect(await direct({ id: 'ask-3', question: 'q-old', fields: { answer: 'a' } })).toEqual({ outcome: 'stale', reason: 'the session is no longer asking that question' });
+  expect(await direct({ id: 'ask-3', question: 'q3', fields: { answer: 'zzz' } })).toEqual({ outcome: 'refused', reason: '"Pick": not one of the choices' });
+  expect(typedFor('ask-3')).toHaveLength(0);
+  await expect(card(page, 'ask-3').locator('.question')).toHaveCount(1);
 });

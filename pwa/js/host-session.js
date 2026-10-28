@@ -21,6 +21,9 @@ export class HostSession {
   // 'none' | 'waiting' (host not online) | 'opening' | 'open' | 'unsupported' | 'failed'
   phase = 'none';
   machine = null;
+  // What the machine said it supports in hello. Kept while reconnecting to the same
+  // machine, so an answer form being filled in doesn't turn read-only and back.
+  capabilities = [];
   error = '';
 
   constructor({ connection, store, storage = globalThis.localStorage, makeClient = (ch, store) => new HostClient(ch, { store }) }) {
@@ -60,6 +63,7 @@ export class HostSession {
     this.#detach();
     this.targetId = null;
     this.machine = null;
+    this.capabilities = [];
     this.store.clear();
     try { this.storage?.removeItem(LAST_HOST); } catch { /* a nicety */ }
     this.#set('none');
@@ -70,6 +74,7 @@ export class HostSession {
     this.#detach();
     this.store.clear();
     this.machine = null;
+    this.capabilities = [];
     this.targetId = deviceId;
     this.#write(LAST_HOST, deviceId);
     this.#set('waiting');
@@ -131,6 +136,7 @@ export class HostSession {
         throw Object.assign(e, { unsupported: e.fromHost === true });
       });
       this.machine = { ...hello.machine, name: hello.machine.name ?? channel.peerName };
+      this.capabilities = hello.capabilities;
       if (hello.protocol !== PROTOCOL_VERSION || !hello.capabilities.includes(Capabilities.sessionsRead)) {
         this.#set('unsupported', `${this.machine.name} speaks protocol ${hello.protocol ?? '?'} without session reading.`);
         return;

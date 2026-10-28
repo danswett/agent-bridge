@@ -33,7 +33,8 @@ async function upsert(page, id, change) {
 }
 
 test('demo mode shows every session from the worked example, with every field', async ({ page }) => {
-  await openDemo(page);
+  // A machine that takes no answers from the phone: the question is shown read-only.
+  await openDemo(page, '&answer=0');
   await expect(page.locator('.session')).toHaveCount(4);
   await expect(page.locator('#sessions-h')).toHaveText('Sessions on Demo machine');
 
@@ -68,7 +69,7 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(q.locator('.field[data-field="urgent"] .opt.chosen .label')).toHaveText('No');
   await expect(q.locator('.field[data-field="notes"] .answer-box')).toHaveText('Free text');
   await expect(q.locator('.field[data-field="count"] .answer-box')).toHaveText('A number');
-  await expect(q).toContainText('answering from your phone is coming next');
+  await expect(q.locator('.read-only-why')).toHaveText("This machine doesn't take answers from the phone yet. Answer at the machine on Demo machine.");
   // Read-only: nothing in the question can be operated.
   await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
 
@@ -329,8 +330,11 @@ test('a truncated question and response say so, and point to the machine', async
   });
   const c = card(page, COPILOT);
   await expect(c.locator('.note.truncated')).toBeVisible();
-  await expect(c.locator('.question .note.warn')).toContainText('Answer it at the machine on Demo machine');
+  // The machine takes answers, but not to a question it couldn't send whole.
+  await expect(c.locator('.question')).toHaveAttribute('data-answerable', 'false');
+  await expect(c.locator('.question .note.warn')).toHaveText("Part of this question didn't fit in the message from the machine, so it can't be answered from here. Answer at the machine on Demo machine.");
   await expect(c.locator('.question .field')).toHaveCount(0);
+  await expect(c.locator('.question').locator('button, input, select, textarea')).toHaveCount(0);
 });
 
 test('opening the tool history fetches the session with session.get', async ({ page }) => {

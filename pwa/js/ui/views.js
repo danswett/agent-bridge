@@ -9,8 +9,9 @@ export class SessionListView {
   #cards = new Map();
   #scheduled = false;
 
-  constructor(container, store, { fetchDetail, machineName = () => '', folds = new FoldStore() } = {}) {
-    Object.assign(this, { container, store, fetchDetail, machineName, folds });
+  // answering() -> { service, hostId, capabilities } | null, for answering questions.
+  constructor(container, store, { fetchDetail, machineName = () => '', folds = new FoldStore(), answering = () => null } = {}) {
+    Object.assign(this, { container, store, fetchDetail, machineName, folds, answering });
     store.onChange(() => this.schedule());
     // Relative times move on without any event from the host.
     this.ticker = setInterval(() => { for (const c of this.#cards.values()) { c.refreshTimes(); } }, 15000);
@@ -26,12 +27,16 @@ export class SessionListView {
   render() {
     const sessions = this.store.list();
     const live = new Set();
+    // Moving a card takes focus out of it, and a card being answered moves when its
+    // session updates: the text box being typed in keeps focus and the caret.
+    const focused = this.container.contains(document.activeElement) ? document.activeElement : null;
+    const caret = focused && typeof focused.selectionStart === 'number' ? [focused.selectionStart, focused.selectionEnd] : null;
     let prev = null;
     for (const s of sessions) {
       live.add(s.id);
       let card = this.#cards.get(s.id);
       if (!card) {
-        card = new SessionCard(s, { folds: this.folds, fetchDetail: this.fetchDetail, machineName: this.machineName() });
+        card = new SessionCard(s, { folds: this.folds, fetchDetail: this.fetchDetail, machineName: this.machineName(), answering: this.answering });
         this.#cards.set(s.id, card);
       } else if (card.session !== s) {
         card.update(s);
@@ -42,10 +47,18 @@ export class SessionListView {
       prev = card.element;
     }
     for (const [id, card] of this.#cards) {
-      if (!live.has(id)) { card.element.remove(); this.#cards.delete(id); }
+      if (!live.has(id)) { card.dispose(); card.element.remove(); this.#cards.delete(id); }
+    }
+    if (focused && focused.isConnected && document.activeElement !== focused) {
+      focused.focus({ preventScroll: true });
+      if (caret) { try { focused.setSelectionRange(...caret); } catch { /* not a text control */ } }
     }
     this.onRender?.(sessions.length);
   }
+
+  // Whether the machine takes answers may have changed: every question is drawn again,
+  // keeping what was typed.
+  refreshQuestions() { for (const c of this.#cards.values()) { c.refreshQuestion(); } }
 
   card(id) { return this.#cards.get(id) ?? null; }
 }

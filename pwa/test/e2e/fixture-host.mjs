@@ -1,6 +1,10 @@
 // A minimal Bridge Host for the end-to-end tests, in Node: it signs in through the relay
 // like any device, accepts Noise channels as the responder, and answers the sessions
-// protocol (hello, sessions.list, session.get, sessions.subscribe) with events. It reuses
+// protocol (hello, sessions.list, session.get, sessions.subscribe) with events, and
+// session.answer as a host must: it checks the answer (with the app's mirror of the C#
+// Answers.Check), says stale when the session is no longer asking, returns a repeated
+// request's first outcome without "typing" again, even while the first is still being
+// delivered, and takes an answered question away with an upsert. It reuses
 // the app's own relay and Noise code, so it proves the wire format against the real relay
 // and the real browser crypto, not against a copy of either.
 //
@@ -11,10 +15,12 @@ import { KIND, HEADER, prologue } from '../../js/channels.js';
 import { deviceIdOf } from '../../js/identity.js';
 import { startDeviceFlow } from '../../js/signin.js';
 import { concat, fromUtf8, utf8 } from '../../js/bytes.js';
+import { checkAnswer } from '../../js/answers.js';
+import { readQuestion } from '../../js/protocol.js';
 
 const EMPTY = new Uint8Array(0);
 
-export async function startFixtureHost({ base, name = 'fixture-host', sessions = [] }) {
+export async function startFixtureHost({ base, name = 'fixture-host', sessions = [], answering = true }) {
   const key = await P256KeyPair.generate();
   const deviceId = await deviceIdOf(key.public);
   const account = await (await startDeviceFlow(base)).wait();
@@ -25,6 +31,13 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
   const channels = new Map();
   const log = [];
   let revision = 1;
+  // session.answer: every request as received, the outcome of each request id (a promise,
+  // so a repeat during delivery waits for the same one), what was typed, and the outcomes
+  // a test has scripted for the next answers (delivered once they run out).
+  const answers = [];
+  const outcomes = new Map();
+  const typed = [];
+  const script = [];
 
   const send = (ch, kind, body) => relay.send(ch.peer, concat(new Uint8Array([kind]), ch.id, body));
   const sendJson = (ch, message) => {
@@ -40,7 +53,7 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
     const reply = (result) => sendJson(ch, { re: id, ok: true, result });
     switch (op) {
       case 'hello':
-        return reply({ protocol: 1, machine: { id: deviceId, name, os: 'linux', hostVersion: '0.0.0-fixture' }, capabilities: ['sessions.read'] });
+        return reply({ protocol: 1, machine: { id: deviceId, name, os: 'linux', hostVersion: '0.0.0-fixture' }, capabilities: answering ? ['sessions.read', 'sessions.answer'] : ['sessions.read'] });
       case 'sessions.list':
         return reply({ sessions: [...state.values()].map(listed), revision });
       case 'session.get': {
@@ -52,9 +65,31 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
         await reply({ revision, count: state.size });
         for (const s of state.values()) { await event(ch, 'session.upsert', listed(s)); }
         return event(ch, 'sessions.synced', { revision });
+      case 'session.answer':
+        if (!answering) { break; }
+        answers.push(structuredClone(data));
+        if (!outcomes.has(data?.request)) { outcomes.set(data?.request, answer(data)); }
+        return reply(await outcomes.get(data?.request));
       default:
-        return sendJson(ch, { re: id, ok: false, error: `unknown op ${op}` });
+        break;
     }
+    return sendJson(ch, { re: id, ok: false, error: `unknown op ${op}` });
+  }
+
+  async function answer(data) {
+    const step = script.shift() ?? 'delivered';
+    const { outcome, reason, holdMs = 0 } = typeof step === 'string' ? { outcome: step } : step;
+    // Delivering takes a while; holdMs lets a test drop the channel in the middle of it.
+    if (holdMs) { await new Promise((r) => setTimeout(r, holdMs)); }
+    const s = state.get(data?.id);
+    const q = s?.question ? readQuestion(s.question) : null;
+    if (!q || q.id !== data.question) { return { outcome: 'stale', reason: 'the session is no longer asking that question' }; }
+    const problem = checkAnswer(q, data);
+    if (problem) { return { outcome: 'refused', reason: problem }; }
+    if (['stale', 'busy', 'refused'].includes(outcome)) { return { outcome, reason: reason ?? outcome }; }
+    typed.push({ id: s.id, question: q.id, request: data.request, fields: data.fields, text: data.text });
+    await upsert({ ...s, status: 'working', statusSince: new Date().toISOString(), updatedAt: new Date().toISOString(), question: null });
+    return outcome === 'delivered' ? { outcome } : { outcome, reason: reason ?? 'not confirmed' };
   }
 
   relay.onData = async (from, payload) => {
@@ -92,16 +127,22 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
   };
 
   const subscribers = () => [...channels.values()].filter((c) => c.subscribed && c.hs.isComplete);
+  function upsert(s) {
+    state.set(s.id, s);
+    revision++;
+    return Promise.all(subscribers().map((ch) => event(ch, 'session.upsert', listed(s))));
+  }
   return {
     deviceId,
     name,
     log,
+    answers,
+    typed,
+    // The next answers' outcomes: 'delivered', 'unconfirmed', 'stale', 'busy', 'refused',
+    // or { outcome, reason, holdMs }.
+    scriptAnswers(...steps) { script.push(...steps); },
     get openChannels() { return subscribers().length; },
-    upsert(s) {
-      state.set(s.id, s);
-      revision++;
-      return Promise.all(subscribers().map((ch) => event(ch, 'session.upsert', listed(s))));
-    },
+    upsert,
     remove(id) {
       state.delete(id);
       revision++;
