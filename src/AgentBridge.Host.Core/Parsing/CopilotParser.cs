@@ -197,6 +197,18 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time) : Tra
                 S.SetStatus(_turnAskedForTools ? SessionStatus.Working : SessionStatus.Idle);
                 _turnAskedForTools = false;
                 break;
+            // What a subagent says and thinks reaches the card, as it does in
+            // agent-ha-bridge, so a delegated job (above all a background one, while the
+            // session itself reads idle) is not a silent one. Its turns, its prompt and its
+            // model stay its own: the status, the person's message and the model shown are
+            // the session's.
+            case "assistant.message" when sub:
+                {
+                    if (Text.NonBlank(Json.Str(data, "reasoningText")) is { } reasoning) { S.Reasoning = reasoning; }
+                    if (Text.NonBlank(Json.Str(data, "content")) is { } content) { S.Response = content; }
+                    S.Activity(at);
+                    break;
+                }
             // A subagent's abort or shutdown ends its own work, not the session's turn:
             // abandoning on it set the session idle and failed the parent's running tools.
             case "abort" when !sub:

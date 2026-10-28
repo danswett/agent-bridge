@@ -194,9 +194,9 @@ immediately before typing and confirmed by identity, never by clock, after.
 
 | Field | Type | Notes |
 |---|---|---|
-| `response` | string? (Markdown) | The latest assistant text, at most 16 KiB. When it's longer, the **end** is kept and `responseTruncated` is true |
+| `response` | string? (Markdown) | The latest assistant text, at most 16 KiB. When it's longer, the **end** is kept and `responseTruncated` is true. It may be a subagent's, including a background agent's while the session itself is idle, as on agent-ha-bridge's card; `status`, `userMessage` and `model` are always the session's own |
 | `responseTruncated` | bool? | |
-| `reasoning` | string? | The latest reasoning text, at most 4 KiB (the end is kept) |
+| `reasoning` | string? | The latest reasoning text, at most 4 KiB (the end is kept). Like `response`, it may be a subagent's |
 | `currentTool` | ToolCall? | The tool running now, while `working` |
 | `history` | ToolCall[]? | Only in `session.get`: the latest 50 tool calls, oldest first |
 | `userMessage` | string? | The latest user message, at most 2 KiB |
