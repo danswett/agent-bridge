@@ -37,6 +37,10 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
     static string Worker => Environment.GetEnvironmentVariable("AGENT_BRIDGE_INJECTOR") is { Length: > 0 } set
         ? set : Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName);
 
+    // Whether the tests run as administrator, as on GitHub's Windows runners; the echoes they
+    // start are then elevated too.
+    static bool Elevated => OperatingSystem.IsWindows() && TargetGuard.IntegrityLevel(Environment.ProcessId) >= 0x3000;
+
     public void Dispose()
     {
         foreach (var handle in started)
@@ -275,6 +279,18 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var result = await stops.StopAsync(new AgentBridge.Protocol.StopRequest { Id = Id, Request = Guid.NewGuid().ToString() });
 
         output.WriteLine($"{result.Outcome} {result.Reason} forced={result.Forced}");
+        // A test run elevated (GitHub's Windows runners are) starts an elevated echo, which
+        // the host must refuse before typing or terminating anything: the real check, for real.
+        if (Elevated)
+        {
+            Assert.Equal(AgentBridge.Protocol.StopOutcome.Refused, result.Outcome);
+            Assert.Contains("runs as administrator", result.Reason);
+            Thread.Sleep(500);
+            Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
+            using var p = Process.GetProcessById(echo.Pid);
+            Assert.False(p.HasExited);
+            return;
+        }
         Assert.Equal((AgentBridge.Protocol.StopOutcome.Ended, exits ? (bool?)null : true), (result.Outcome, result.Forced));
         var typed = WaitFor(echo.Log, lines => Keys(lines).Where(k => k.StartsWith("key 1 ", StringComparison.Ordinal)).ToList() is { Count: >= 6 } d ? d : null);
         Assert.Equal("/exit\r", new string([.. typed.Take(6).Select(k => (char)int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture))]));
@@ -291,10 +307,15 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         using (var p = Process.GetProcessById(echo.Pid)) { started = new DateTimeOffset(p.StartTime.ToUniversalTime(), TimeSpan.Zero); }
         var control = new WindowsProcessControl();
 
-        using (var held = control.Open(echo.Pid, started).Process)
+        var opened = control.Open(echo.Pid, started);
+        using (var held = opened.Process)
         {
-            Assert.NotNull(held);
-            Assert.Equal(echo.Pid, held.Id);
+            if (Elevated) { Assert.Contains("runs as administrator", opened.Refusal); }
+            else
+            {
+                Assert.NotNull(held);
+                Assert.Equal(echo.Pid, held.Id);
+            }
         }
         // Another start time is another process that has taken the id: as good as gone.
         Assert.Equal((null, true, null), Shape(control.Open(echo.Pid, started.AddSeconds(-5))));
