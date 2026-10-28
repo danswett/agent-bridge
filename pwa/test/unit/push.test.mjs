@@ -215,3 +215,32 @@ test('question notifications this app sees answered are closed; others stay', as
   assert.equal(noticeTag('m1', 's1'), 'm1:s1');
   assert.ok(tagged.every((n) => n.closed));
 });
+test('turning notifications off while a registration waits for the relay key leaves this device unsubscribed', async () => {
+  const win = browser({ permission: 'granted' });
+  const pm = pushManager();
+  let release;
+  const keyArrives = new Promise((res) => { release = res; });
+  const store = storage();
+  store.setItem('agent-bridge.app.notify', 'on');
+  const r = new PushRegistrar({
+    win,
+    storage: store,
+    registration: async () => ({ pushManager: pm }),
+    fetchKey: async () => { await keyArrives; return base64UrlToBytes(KEY); },
+    appUrl: 'https://danswett.github.io/agent-bridge/app/',
+    device: 'iPhone · Agent Bridge',
+  });
+  const host = client();
+
+  // A channel opened: registering, which waits for the relay's key. Then the tap on Off.
+  const registering = r.register(host, host.capabilities);
+  await new Promise((res) => { setImmediate(res); });
+  const turningOff = r.disable(host);
+  release();
+  await Promise.all([registering, turningOff]);
+
+  assert.equal(r.enabled, false);
+  assert.equal(pm.current, null, 'no browser subscription left');
+  assert.deepEqual(host.requests.map((q) => q.op), ['push.subscribe', 'push.unsubscribe'], 'the machine heard off last');
+  assert.equal(host.requests[1].data.endpoint, host.requests[0].data.endpoint);
+});

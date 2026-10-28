@@ -60,6 +60,7 @@ export const noticeTag = (hostId, sessionId) => `${hostId}:${sessionId}`;
 export class PushRegistrar {
   #listeners = new Set();
   #key = null;
+  #chain = Promise.resolve();
   // 'on' or 'off' while turning notifications on or off, '' otherwise; error is the last
   // failure's message, '' after a success.
   busy = '';
@@ -84,53 +85,69 @@ export class PushRegistrar {
 
   // Must run in a tap's handler: Safari shows the permission prompt only then, so the
   // prompt is asked for before anything is awaited. Then registers with `client` if given.
-  async enable(client = null, capabilities = []) {
-    const asked = this.win.Notification.requestPermission();
+  enable(client = null, capabilities = []) {
+    let asked;
+    try { asked = this.win.Notification.requestPermission(); } catch (e) { asked = Promise.reject(e); }
     this.busy = 'on';
     this.error = '';
     this.#emit();
-    try {
-      const permission = await asked;
-      if (permission !== 'granted') {
-        throw new Error(permission === 'denied'
-          ? 'Notifications are blocked for Agent Bridge. Allow them in Settings, then try again.'
-          : 'Notifications were not allowed.');
+    return this.#serial(async () => {
+      try {
+        const permission = await asked;
+        if (permission !== 'granted') {
+          throw new Error(permission === 'denied'
+            ? 'Notifications are blocked for Agent Bridge. Allow them in Settings, then try again.'
+            : 'Notifications were not allowed.');
+        }
+        await this.#subscription(true);
+        this.#write('on');
+        if (client) { await this.#register(client, capabilities); }
+      } catch (e) {
+        this.error = e.message;
+        throw e;
+      } finally {
+        this.busy = '';
+        this.#emit();
       }
-      await this.#subscription(true);
-      this.#write('on');
-      if (client) { await this.register(client, capabilities); }
-    } catch (e) {
-      this.error = e.message;
-      throw e;
-    } finally {
-      this.busy = '';
-      this.#emit();
-    }
+    });
   }
 
   // Turns notifications off for this device: tells the machine connected now, then drops
   // the browser's subscription, which every other machine learns of at its next push.
-  async disable(client = null) {
+  disable(client = null) {
     this.#write('off');
     this.busy = 'off';
     this.error = '';
     this.#emit();
-    try {
-      const sub = await this.#subscription(false).catch(() => null);
-      if (client) {
-        await client.request(Ops.pushUnsubscribe, sub ? { endpoint: sub.endpoint } : {}).catch(() => {});
+    return this.#serial(async () => {
+      try {
+        const sub = await this.#subscription(false).catch(() => null);
+        if (client) {
+          await client.request(Ops.pushUnsubscribe, sub ? { endpoint: sub.endpoint } : {}).catch(() => {});
+        }
+        await sub?.unsubscribe().catch(() => {});
+      } finally {
+        this.busy = '';
+        this.#emit();
       }
-      await sub?.unsubscribe().catch(() => {});
-    } finally {
-      this.busy = '';
-      this.#emit();
-    }
+    });
   }
 
   // Sent on every channel to a machine that offers push while notifications are on: a
   // machine that dropped the subscription, or a browser that renewed it, is caught up.
-  // Returns whether it registered.
-  async register(client, capabilities) {
+  // Resolves to whether it registered.
+  register(client, capabilities) { return this.#serial(() => this.#register(client, capabilities)); }
+
+  // One at a time, in the order asked: a registration still waiting for the relay's key
+  // when notifications are turned off must finish before the turning off does, or it would
+  // subscribe again afterwards and leave this device notified with the switch showing off.
+  #serial(fn) {
+    const run = this.#chain.then(fn, fn);
+    this.#chain = run.catch(() => {});
+    return run;
+  }
+
+  async #register(client, capabilities) {
     if (!this.enabled || !capabilities.includes(Capabilities.push)) { return false; }
     const sub = await this.#subscription(true);
     const json = sub.toJSON();
@@ -144,11 +161,13 @@ export class PushRegistrar {
   }
 
   // Signing out: this account's machines must not keep notifying this device.
-  async forget() {
+  forget() {
     this.#write(null);
-    const sub = await this.#subscription(false).catch(() => null);
-    await sub?.unsubscribe().catch(() => {});
-    this.#emit();
+    return this.#serial(async () => {
+      const sub = await this.#subscription(false).catch(() => null);
+      await sub?.unsubscribe().catch(() => {});
+      this.#emit();
+    });
   }
 
   // The browser's subscription, made (or remade, if the relay's key has changed since) when
