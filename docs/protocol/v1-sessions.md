@@ -350,7 +350,9 @@ the very one the first press saw, by id and start time. Anything short of that (
 lapsed or unknown one, one from another session, a process that has been replaced) is
 another first press: a new `confirm` and token, and nothing ended. Every device and client
 can send `session.stop`, so this is the host's rule, never only a client's. An `idle` session
-with nothing in the background ends on one press; a token sent for one is ignored. Several
+with nothing in the background ends on one press; a token sent for one is ignored. The host
+checks the session again immediately before it acts, and one that has started working or
+asking since the press arrived needs a second press after all (`confirm`). Several
 first presses can be waiting at once (two devices); any one confirms, and confirming spends
 them all.
 

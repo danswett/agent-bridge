@@ -133,6 +133,7 @@ public sealed class StopService : ISessionStopper
         Session session;
         int processId;
         DateTimeOffset startedAt;
+        var confirmed = false;
         try
         {
             if (!options.PlatformSupported) { return Refused("ending sessions is not supported on this platform yet; end it at the machine"); }
@@ -163,16 +164,10 @@ public sealed class StopService : ISessionStopper
             // Another press is ending it already.
             if (session.Status == SessionStatus.Ending) { return Busy(); }
 
-            if (Doing(session) is { } doing && !Confirms(session.Id, request.Confirm, processId, startedAt, out var why))
+            if (Doing(session) is { } doing)
             {
-                var token = ArmFor(session.Id, processId, startedAt);
-                var seconds = (int)Math.Round(options.ConfirmWindow.TotalSeconds);
-                log($"end requested for {Short(session.Id)} (pid {processId}) while {doing}; {why ?? "waiting for a second press"}");
-                return new StopResult(StopOutcome.Confirm, $"{(why is null ? "" : why + "; ")}{doing}; the confirmation lapses in {seconds} s")
-                {
-                    Confirm = token,
-                    ConfirmSeconds = seconds,
-                };
+                if (!Confirms(session.Id, request.Confirm, processId, startedAt, out var why)) { return AskAgain(session.Id, processId, startedAt, doing, why); }
+                confirmed = true;
             }
             Disarm(session.Id);
         }
@@ -185,8 +180,7 @@ public sealed class StopService : ISessionStopper
         StopResult result;
         try
         {
-            await SetEndingAsync(session.Id, true);
-            try { result = await EndProcessAsync(session, processId, startedAt); }
+            try { result = await EndProcessAsync(session, processId, startedAt, confirmed); }
             catch (Exception e) { result = Failed($"the host could not finish ending the session ({e.Message}); check at the machine"); }
         }
         finally { gate.Release(session.Id, key); }
@@ -201,7 +195,25 @@ public sealed class StopService : ISessionStopper
         return result;
     }
 
-    async Task<StopResult> EndProcessAsync(Session session, int pid, DateTimeOffset startedAt)
+    // A first press, or one that does not confirm: armed, and answered with the token a second
+    // press sends.
+    StopResult AskAgain(string sessionId, int pid, DateTimeOffset startedAt, string doing, string? why)
+    {
+        var token = ArmFor(sessionId, pid, startedAt);
+        var seconds = (int)Math.Round(options.ConfirmWindow.TotalSeconds);
+        log($"end requested for {Short(sessionId)} (pid {pid}) while {doing}; {why ?? "waiting for a second press"}");
+        return new StopResult(StopOutcome.Confirm, $"{(why is null ? "" : why + "; ")}{doing}; the confirmation lapses in {seconds} s")
+        {
+            Confirm = token,
+            ConfirmSeconds = seconds,
+        };
+    }
+
+    // confirmed: whether this press was the second press of a session that was not idle. One
+    // that was idle when it arrived is checked again once the typing turn is taken, which can
+    // be a while if another session is being typed into: a session that has started working
+    // or asking meanwhile needs a second press like any other.
+    async Task<StopResult> EndProcessAsync(Session session, int pid, DateTimeOffset startedAt, bool confirmed)
     {
         var opened = control.Open(pid, startedAt);
         if (opened.Refusal is { } refusal) { return Refused(refusal); }
@@ -214,9 +226,13 @@ public sealed class StopService : ISessionStopper
             try
             {
                 if (probe.Active() is { } active) { return Refused(active); }
+                // Read before the session is shown as ending, which would hide its own status.
+                if (source.Get(session.Id) is not { } now) { return Stale("the session has ended"); }
+                if (!confirmed && Doing(now) is { } doing) { return AskAgain(session.Id, pid, startedAt, doing, "the session is no longer idle"); }
+                await SetEndingAsync(session.Id, true);
                 // Typed words would answer a question, and Enter accept it: a session that is
                 // asking anything is terminated without them.
-                var asking = source.Get(session.Id)?.Question is not null || CopilotAsking(session);
+                var asking = now.Question is not null || CopilotAsking(session);
                 if (!asking)
                 {
                     InjectionResult typing;

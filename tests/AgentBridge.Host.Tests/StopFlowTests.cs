@@ -245,6 +245,36 @@ public sealed class StopFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_session_that_starts_working_while_its_one_press_waits_to_type_needs_a_second_press_after_all()
+    {
+        var other = f.CopilotSession(Other, Pid + 1, name: "Another");
+        Fixture.Append(other, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+        control.Run(AgentKind.Copilot, Pid + 1, Started);
+        await source.RefreshAsync();
+        Serve(Stopper(), Replier());
+        var release = new TaskCompletionSource();
+        injector.Gate = release.Task;
+        injector.OnInject = null;
+        var ch = await OpenAsync();
+
+        // A reply to another session holds the one typing turn.
+        _ = ch.RequestAsync(Ops.SessionReply, new { id = Other, request = Guid.NewGuid().ToString(), text = "hello" });
+        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the reply to start typing", Patience);
+        var stopping = StopAsync(ch);
+        await Wait.UntilAsync(() => Volatile.Read(ref control.Opens) == 2, "the stop to wait for the typing turn", Patience);
+        await WorkingAsync();
+        release.SetResult();
+
+        var result = await stopping;
+        Assert.Equal(("confirm", "the session is no longer idle; this session is still working; the confirmation lapses in 10 s"), Pair(result));
+        Assert.DoesNotContain(injector.Plans, p => p.Pid == Pid);
+        Assert.Empty(control.Terminated);
+        Assert.Equal(SessionStatus.Working, source.Get(Id)!.Status);
+        // And its token is good for the second press.
+        Assert.Equal("ended", (await StopAsync(ch, result.Confirm)).Outcome_);
+    }
+
+    [Fact]
     public async Task A_token_confirms_only_the_session_it_was_given_for()
     {
         var other = f.CopilotSession(Other, Pid + 1, name: "Another");
@@ -483,6 +513,7 @@ public sealed class StopFlowTests : IAsyncLifetime
         public readonly List<int> Terminated = [];
         public string? Refusal;
         public bool TerminateWorks = true;
+        public int Opens;
 
         public void Run(AgentKind agent, int pid, DateTimeOffset started)
         {
@@ -500,6 +531,7 @@ public sealed class StopFlowTests : IAsyncLifetime
 
         public HeldOpen Open(int processId, DateTimeOffset startedAt)
         {
+            Interlocked.Increment(ref Opens);
             if (Refusal is { } refusal) { return HeldOpen.Refused(refusal); }
             lock (gate)
             {

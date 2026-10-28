@@ -62,10 +62,13 @@ The same rules, with these differences, each deliberate:
    press of this session, within 10 s, against this pid and start time, it arms and answers
    `confirm` with a fresh token. Confirming spends every waiting arm.
 7. The session's `DeliveryGate` claim (`busy` if an answer or reply holds it), held until
-   the outcome. The session is shown as `ending`.
+   the outcome.
 8. The process is opened and held. The single typing turn is taken; agent-ha-bridge again
-   (`refused`); if nothing is asking, `/exit` and, 300 ms later, Enter. The host then waits
-   up to 12 s for the process to exit through its handle.
+   (`refused`); the session is read again, and one ended on a single press that has since
+   started working or asking needs a second press after all (`confirm`, "the session is no
+   longer idle"). Only then is it shown as `ending`, and, if nothing is asking, `/exit` and,
+   300 ms later, Enter typed. The host then waits up to 12 s for the process to exit
+   through its handle.
 9. Still running: agent-ha-bridge again (`failed` if it has started, nothing terminated),
    then `TerminateProcess` on the handle, and up to 5 s for it to go. Gone: `ended`
    (`forced` if terminated). Still there: `failed`.
