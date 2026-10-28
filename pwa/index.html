@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f6f8fa" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d1117" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Agent Bridge">
+  <meta name="referrer" content="no-referrer">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="app.css">
+  <title>Agent Bridge</title>
+</head>
+<body>
+  <a class="skip" href="#sessions">Skip to sessions</a>
+  <header class="topbar">
+    <h1>Agent Bridge</h1>
+    <p id="conn" class="pill" role="status" aria-live="polite">Starting…</p>
+  </header>
+
+  <main id="main">
+    <div id="update-banner" class="banner" role="status" hidden>
+      <span>A new version of the app is ready.</span>
+      <button type="button" id="reload" class="button">Reload</button>
+    </div>
+    <div id="demo-banner" class="banner demo" hidden>
+      <span>Demo: sample sessions, no machine connected.</span>
+      <a class="button secondary" href="./">Leave demo</a>
+    </div>
+    <div id="replaced-banner" class="banner" role="alert" hidden>
+      <span>This app is open in another window or tab.</span>
+      <button type="button" id="use-here" class="button">Use here</button>
+    </div>
+
+    <section id="signin" class="panel" aria-labelledby="signin-h" hidden>
+      <h2 id="signin-h">Sign in</h2>
+      <p>Agent Bridge shows the agent sessions on your machines. Sign in with the GitHub account your machines use.</p>
+      <p id="signin-error" class="note warn" role="alert" hidden></p>
+      <div class="row">
+        <button type="button" id="signin-button" class="button">Sign in with GitHub</button>
+        <a class="button secondary" href="?demo=1">Try the demo</a>
+      </div>
+      <div id="code-box" hidden>
+        <p>Open <a id="verify" target="_blank" rel="noopener noreferrer">github.com/login/device</a> and enter this code:</p>
+        <p class="code" id="code" aria-live="polite"></p>
+        <p class="note" role="status">Waiting for GitHub…</p>
+      </div>
+    </section>
+
+    <section id="machines" class="panel" aria-labelledby="machines-h" hidden>
+      <h2 id="machines-h">Machines</h2>
+      <ul id="machine-list" class="machines"></ul>
+      <p id="machines-empty" class="note" hidden>No machines online. Start Agent Bridge on a machine signed in to the same GitHub account.</p>
+    </section>
+
+    <section id="sessions" class="sessions" aria-labelledby="sessions-h" tabindex="-1" hidden>
+      <div class="sessions-head">
+        <h2 id="sessions-h">Sessions</h2>
+        <span id="session-count" class="count"></span>
+      </div>
+      <p id="host-state" class="note" role="status" aria-live="polite"></p>
+      <div id="session-list" class="session-list"></div>
+      <p id="sessions-empty" class="note empty" hidden>No live sessions on this machine.</p>
+    </section>
+
+    <footer id="account" class="account" hidden>
+      <p>Signed in as <b id="login"></b> · this device <code id="me"></code></p>
+      <button type="button" id="signout" class="button secondary">Sign out</button>
+    </footer>
+  </main>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
