@@ -2,18 +2,29 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 
-// agent-bridge-console-echo <log> [--exit-on <line>]
+// agent-bridge-console-echo <log> [--exit-on <line>] [--show <file>]
 //
 // Writes "ready <pid> <console window>" to <log>, then one line per key event read from
 // its own console input: "key <down> <vk> <char code>". Runs until its console closes or
 // it is stopped, or, with --exit-on, until that line is typed and Enter pressed, as an agent
-// CLI exits on /exit. Every line is flushed as it is written, so a test reads them live.
+// CLI exits on /exit. With --show, it first writes that file's text to its console, the way
+// an agent CLI draws a prompt. Every line is flushed as it is written, so a test reads them
+// live.
 internal static unsafe partial class Program
 {
     static int Main(string[] args)
     {
-        if (args.Length is not (1 or 3) || (args.Length == 3 && args[1] != "--exit-on")) { return 2; }
-        var exitOn = args.Length == 3 ? args[2] : null;
+        if (args.Length is not (1 or 3 or 5)) { return 2; }
+        string? exitOn = null, show = null;
+        for (var i = 1; i < args.Length; i += 2)
+        {
+            switch (args[i])
+            {
+                case "--exit-on": exitOn = args[i + 1]; break;
+                case "--show": show = args[i + 1]; break;
+                default: return 2;
+            }
+        }
         var line = new StringBuilder();
         using var log = new FileStream(args[0], FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
         void Say(string line)
@@ -21,6 +32,15 @@ internal static unsafe partial class Program
             var bytes = Encoding.UTF8.GetBytes(line + "\n");
             log.Write(bytes);
             log.Flush();
+        }
+
+        if (show is not null)
+        {
+            var text = File.ReadAllText(show).Replace("\r\n", "\n").Replace("\n", "\r\n");
+            fixed (char* first = text)
+            {
+                if (!WriteConsoleW(GetStdHandle(-11), first, (uint)text.Length, out _, 0)) { return 1; }
+            }
         }
 
         var input = GetStdHandle(-10);
@@ -63,6 +83,10 @@ internal static unsafe partial class Program
 
     [LibraryImport("kernel32.dll")]
     private static partial nint GetConsoleWindow();
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool WriteConsoleW(nint output, char* text, uint length, out uint written, nint reserved);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

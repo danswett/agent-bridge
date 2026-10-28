@@ -274,7 +274,8 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
 
         var codex = await Answerer().AnswerAsync(Request(CodexId, "call7", new { decision = "approve" }));
         var claudePermission = await Answerer().AnswerAsync(Request(ClaudeId, "tu_bash", new { decision = "approve" }));
-        var copilot = await Answerer().AnswerAsync(Request(CopilotId, "c9", new { decision = "approve" }));
+        // A permission request that does not say what it would allow.
+        var copilot = await Answerer().AnswerAsync(Request(CopilotId, source.Get(CopilotId)!.Question!.Id, new { decision = "approve" }));
 
         Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "Codex permission prompts can only be answered at the machine"), codex);
         Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "Claude permission prompts can only be answered at the machine"), claudePermission);

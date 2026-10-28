@@ -14,7 +14,8 @@ how the host does it and what it refuses.
 | Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape) |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
 | Copilot CLI | The older `question` / `choices` format | Refused: agent-ha-bridge never drove it, and no current build writes it |
-| Copilot CLI | Permission prompts | Refused, `answerAtMachine`: agent-ha-bridge only mirrors them as an alert, so there is no proven walk |
+| Copilot CLI | Permission prompts: a shell command, path access, a file edit or read, a URL, an MCP tool, a custom tool | Yes, beyond agent-ha-bridge (below): approve once or deny. Refused, `answerAtMachine`, when `permissions.remoteApproval` is off |
+| Copilot CLI | Other permission prompts (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read | Refused, `answerAtMachine` |
 | Claude Code | `AskUserQuestion`, one to four questions, each one option (`choice`) or several (`multi`, at least one, the first nine rows) | Yes |
 | Claude Code | Free text in `AskUserQuestion` ("Type something") | Refused: no field offers `allowOther` (below) |
 | Claude Code | More than four questions, a question without options, two questions with the same text | Refused, `answerAtMachine` |
@@ -22,7 +23,9 @@ how the host does it and what it refuses.
 | Codex | An approval agent-ha-bridge's hook recorded (`<id>.approval.json`) | Yes: approve or deny, always `unconfirmed` (below) |
 | Codex | An approval seen only in the rollout, or one agent-ha-bridge has already typed into | Refused, `answerAtMachine` |
 
-These are exactly what agent-ha-bridge answers, with two deliberate gaps. Claude's free
+These are what agent-ha-bridge answers, with two deliberate gaps and one deliberate
+addition. The addition, at the user's request: Copilot's permission prompts, which
+agent-ha-bridge only mirrors as an alert. The gaps: Claude's free
 text: agent-ha-bridge's only walk to "Type something" presses Down two rows past the
 options, Enter, the words and Enter, and its own code marks that path "not re-verified"
 (its README says `AskUserQuestion` never ran against a real question); a walk that misses
@@ -76,6 +79,64 @@ The keys are planned from the tool call's own arguments in the transcript, not f
 `Question` the client saw, because they depend on things a `Question` does not carry
 (which rows open ticked, `minItems`, the older format). If the two
 readings of the schema disagree on fields, order, types or option values, nothing is typed.
+
+## The keys (Copilot permission prompts)
+
+Not in agent-ha-bridge; added at the user's request. Copilot CLI (1.0.10x) draws a
+permission prompt as a numbered list ("1. Yes", "2. Yes, and don't ask again for …",
+"3. No, and tell Copilot what to do differently (Esc to stop)"; or for path access "1. Yes",
+"2. Yes, and remember these paths for this session", …, "4. No (Esc)"). The options vary
+with the kind and with what Copilot may offer, and the path prompt opens on its "remember"
+option, so Enter is never pressed and no option is found by position:
+
+* The host reads the session's screen (`agent-bridge-injector <pid> --screen`: the visible
+  window of its console, read-only) and takes the last block of numbered rows, numbered
+  from 1 without a gap.
+* **Approve once** is the one row whose label is exactly "Yes": Copilot's approve-once in
+  every permission prompt. Its digit commits it directly whatever is highlighted. Every
+  "Yes, and …" grants more than this request and is never chosen; a prompt without a
+  single plain "Yes" is refused.
+* **Deny** is a lone Escape, and only when the last row is a "No" labelled as Escape's
+  ("(Esc)" or "(Esc to stop)"): both of Copilot's lists then deny with no message. A deny
+  takes no text, so nothing can be typed into the "tell Copilot" box.
+* Refused, nothing typed: no prompt on screen, more than nine options, a last row that is
+  not a "No", or that "No" row highlighted (someone at the machine has its message box
+  open, where a digit would be typed as text).
+* The key is sent with the row it was chosen from: inside the same attach, just before
+  writing, the worker reads that row again and writes nothing unless it still reads the
+  same (`fail screen 0`, `refused`, and the prompt stays answerable).
+
+Bound to the request. The question's id is `<requestId>#<digest>`, the digest a hash of
+the message the client was shown. Immediately before typing, the transcript must show
+that `permission.requested` with no `permission.completed` (and no session abort or
+shutdown) after it, reading exactly as shown (`stale` otherwise), and no other permission
+request or `ask_user` waiting, since the screen shows one prompt at a time and could be
+showing the other (`refused`). A request to run outside the sandbox, a kind not listed
+above, or one whose details cannot be read is `answerAtMachine`.
+
+Delivered when that request's `permission.completed` records `approved` for an approve,
+or `denied-interactively-by-user` with no feedback for a deny. Anything else recorded
+(`approved-for-session`, a message, the other decision), the session ending, or nothing
+within 15 s is `unconfirmed`. The digit was chosen from the plain "Yes" row and checked at
+the moment it was typed, which is what makes an approval once; the record confirms the
+request was approved.
+
+**Turning it off.** The host's own settings, `config.json` in its profile folder
+(`agent-bridge-host whoami` prints the folder), beside the device key:
+
+```json
+{ "permissions": { "remoteApproval": false } }
+```
+
+It is on when the file or the setting is absent. A file that cannot be read, or a value
+that is not `true` or `false`, turns it off, and the host logs why. It is read when
+`serve` starts. Off, `hello` leaves out `sessions.approve`, every Copilot permission
+prompt is `answerAtMachine`, and an approval sent anyway is refused with "approving Copilot
+permission prompts from another device is turned off on this machine".
+
+**Untested live.** Whether the screen reads the same through Windows Terminal (a pseudo
+console) as through a classic console is to be checked on a real session before relying
+on it; if it cannot be read, approvals are refused and nothing is typed.
 
 ## The keys (Claude Code)
 
@@ -143,7 +204,8 @@ In order, for every answer:
 5. One answer is typed at a time across sessions, and its turn is taken before these last
    checks: agent-ha-bridge again, then the agent's own record: for Copilot, the tool call's
    start is there and no `human_response.recorded`, `tool.execution_complete` or session
-   abort/shutdown follows it; for Claude, the `AskUserQuestion` `tool_use` is there, in the
+   abort/shutdown follows it (for a permission prompt, the request as above, then the
+   screen); for Claude, the `AskUserQuestion` `tool_use` is there, in the
    session's own entries, with no `tool_result` or interrupt after it; for Codex, the
    approval marker as above (`stale` otherwise). Identity, never time.
 6. The prompt is claimed in the host's attempt ledger, `answer-attempts.json` in its
@@ -185,7 +247,9 @@ If neither the namespace listing nor the task scheduler can be read, it counts a
 
 `agent-bridge-injector.exe <pid>` reads the plan on stdin and types it, reporting
 `writing <n>` (flushed) before every console write, so the host always knows whether a key
-may have landed. It is a separate process because Windows ends every process attached to
+may have landed. A send may carry a screen row and its text, written only if that row
+still reads so. `agent-bridge-injector.exe <pid> --screen` types nothing and prints the
+visible window's rows. It is a separate process because Windows ends every process attached to
 a console when that console's window closes (spike S1). It ignores Ctrl+C, re-registering
 after each attach. One worker runs at a time. The host only reads everything else: it
 never writes, locks, renames or deletes anything the agents or agent-ha-bridge own.

@@ -48,10 +48,11 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    AnswerService Answerer(bool platform = true) => new(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
+    AnswerService Answerer(bool platform = true, bool remoteApproval = true) => new(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
     {
         CopilotHome = f.CopilotHome,
         PlatformSupported = platform,
+        CopilotRemoteApproval = remoteApproval,
         ConfirmTimeout = TimeSpan.FromSeconds(2),
         PollInterval = TimeSpan.FromMilliseconds(25),
     });
@@ -92,13 +93,22 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     public async Task Hello_offers_answering_only_while_agent_ha_bridge_is_not_running_asked_afresh_each_time()
     {
         var ch = await OpenAsync();
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsAnswer], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove], await CapabilitiesAsync(ch));
 
         probe.Reason = "agent-ha-bridge is running for this user";
         Assert.Equal([Capabilities.SessionsRead], await CapabilitiesAsync(ch));
 
         probe.Reason = null;
         Assert.Contains(Capabilities.SessionsAnswer, await CapabilitiesAsync(ch));
+    }
+
+    [Fact]
+    public async Task Hello_offers_approving_permission_prompts_only_on_a_host_with_remote_approval_on()
+    {
+        Serve(Answerer(remoteApproval: false));
+        var ch = await OpenAsync();
+
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsAnswer], await CapabilitiesAsync(ch));
     }
 
     [Fact]

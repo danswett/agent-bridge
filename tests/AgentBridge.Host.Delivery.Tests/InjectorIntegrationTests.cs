@@ -58,12 +58,18 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
 
     // Starts the echo program in a console of its own (CREATE_NEW_CONSOLE), hidden, and waits
     // for it to say it is reading. With exitOn, it exits once that line is typed and entered.
-    Echo StartEcho(string? exitOn = null)
+    Echo StartEcho(string? exitOn = null, IReadOnlyList<string>? show = null)
     {
         var log = Path.Combine(root, $"echo-{Guid.NewGuid():N}.log");
         var exe = Path.Combine(AppContext.BaseDirectory, "agent-bridge-console-echo.exe");
         var info = new StartupInfo { Size = Marshal.SizeOf<StartupInfo>(), Flags = 1 /* STARTF_USESHOWWINDOW */, ShowWindow = 0 /* SW_HIDE */ };
         var command = new StringBuilder($"\"{exe}\" \"{log}\"{(exitOn is null ? "" : $" --exit-on \"{exitOn}\"")}");
+        if (show is not null)
+        {
+            var screen = Path.Combine(root, $"screen-{Guid.NewGuid():N}.txt");
+            File.WriteAllText(screen, string.Join("\n", show), new UTF8Encoding(false));
+            command.Append($" --show \"{screen}\"");
+        }
         Assert.True(CreateProcessW(null, command, 0, 0, false, 0x10 /* CREATE_NEW_CONSOLE */, 0, null, ref info, out var process), $"CreateProcess {Marshal.GetLastWin32Error()}");
         CloseHandle(process.Thread);
         started.Add(process.Process);
@@ -147,6 +153,54 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         int[] expected = [49, 51, .. down, .. down, .. down, .. down, 13, 121, 13];
         var got = WaitFor(echo.Log, lines => Keys(lines) is { } k && k.Count >= expected.Length * 2 ? k : null);
         Assert.Equal(expected, got.Where(k => k.StartsWith("key 1", StringComparison.Ordinal)).Select(k => int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture)));
+    }
+
+    // A Copilot permission prompt drawn on a real console: the worker reads the screen, the
+    // host finds the plain Yes on it, and the digit goes only while that row still reads so.
+    static readonly string[] PermissionPrompt =
+    [
+        "Do you want to run this command?",
+        "",
+        "\u276F 1. Yes",
+        "  2. Yes, and don't ask again for `git push` in this directory",
+        "  3. No, and tell Copilot what to do differently (Esc to stop)",
+    ];
+
+    [WindowsFact]
+    public async Task A_permission_prompt_is_read_off_a_real_screen_and_approved_by_its_digit_only_while_the_row_still_reads_so()
+    {
+        var echo = StartEcho(show: PermissionPrompt);
+        var injector = new WorkerInjector(Worker);
+
+        var screen = await injector.ReadScreenAsync(echo.Pid);
+        Assert.Null(screen.Problem);
+        Assert.Equal(PermissionPrompt, screen.Rows!.Take(PermissionPrompt.Length));
+        var (choice, problem) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate(screen.Rows!, approve: true);
+        Assert.Null(problem);
+        Assert.Equal(("1", 2), (choice!.Key, choice.Row.Row));
+
+        // A row that no longer reads as it did: nothing is typed.
+        var moved = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend("1", false, 0, 0, new ScreenRow(2, "  1. Yes"))]));
+        Assert.Equal(InjectionStatus.NothingTyped, moved.Status);
+        Assert.Contains("changed", moved.Detail);
+
+        var typed = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend(choice.Key, false, 0, 0, choice.Row)]));
+        Assert.Equal(InjectionStatus.Typed, typed.Status);
+        var got = WaitFor(echo.Log, lines => Keys(lines) is { Count: >= 2 } k ? k : null);
+        Assert.Equal(["key 1 0 49", "key 0 0 49"], got);
+    }
+
+    [WindowsFact]
+    public async Task A_permission_prompt_is_denied_by_a_lone_Escape_key()
+    {
+        var echo = StartEcho(show: PermissionPrompt);
+        var injector = new WorkerInjector(Worker);
+        var (choice, _) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate((await injector.ReadScreenAsync(echo.Pid)).Rows!, approve: false);
+
+        var typed = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend(choice!.Key, false, 0, 0, choice.Row)]));
+
+        Assert.Equal(InjectionStatus.Typed, typed.Status);
+        Assert.Equal(["key 1 0 27", "key 0 0 27"], WaitFor(echo.Log, lines => Keys(lines) is { Count: >= 2 } k ? k : null));
     }
 
     [WindowsFact]

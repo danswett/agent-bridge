@@ -1,3 +1,4 @@
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 using Xunit;
 
@@ -11,11 +12,11 @@ public class CopilotTests
         public readonly string Events;
         public readonly AgentBridge.Host.Core.SessionSource Source;
 
-        public Session_()
+        public Session_(bool remoteApproval = true)
         {
             Events = F.CopilotSession(Id, 100);
             F.Processes.Run(AgentKind.Copilot, 100);
-            Source = F.Source();
+            Source = F.Source(remoteApproval: remoteApproval);
         }
 
         public async Task<Session> After(params string[] lines)
@@ -203,7 +204,7 @@ public class CopilotTests
     }
 
     [Fact]
-    public async Task A_permission_request_is_an_approval_question_answered_only_at_the_machine_until_it_is_completed()
+    public async Task A_permission_request_without_the_details_of_what_it_allows_is_answered_only_at_the_machine_until_it_is_completed()
     {
         await using var s = new Session_();
 
@@ -211,7 +212,7 @@ public class CopilotTests
             Copilot.Event("permission.requested", new { requestId = "r1", permissionRequest = new { kind = "shell", toolCallId = "c9", toolTitle = "Run a command", args = new { command = "rm -rf build" } } }, 3));
         Assert.Equal(SessionStatus.Waiting, asking.Status);
         var q = asking.Question!;
-        Assert.Equal("c9", q.Id);
+        Assert.StartsWith("r1#", q.Id);
         Assert.Equal(QuestionKind.Approval, q.Kind);
         Assert.Contains("rm -rf build", q.Message);
         Assert.Equal(["approve", "deny"], Assert.Single(q.Fields).Options!.Select(o => o.Value));
@@ -220,6 +221,94 @@ public class CopilotTests
         var granted = await s.After(Copilot.Event("permission.completed", new { requestId = "r1", toolCallId = "c9", result = new { kind = "approved" } }, 4));
         Assert.Null(granted.Question);
         Assert.Equal(SessionStatus.Working, granted.Status);
+    }
+
+    [Theory]
+    [InlineData("commands", "git push origin main --force-with-lease", "Push the branch")]
+    [InlineData("path", "C:\\elsewhere\\notes.txt\nC:\\elsewhere\\more", "**read** access")]
+    [InlineData("write", "src\\app.js", "+fresh()")]
+    [InlineData("read", "C:\\Users\\someone\\settings.json", "Read the settings")]
+    [InlineData("url", "https://example.com/docs/page", "Fetch the docs")]
+    [InlineData("mcp", "github/get_file_contents", "\"path\": \"README.md\"")]
+    [InlineData("custom-tool", "\"env\": \"prod\"", "Deploys the site")]
+    public async Task A_permission_request_of_every_kind_Copilot_draws_carries_in_full_what_it_would_allow_and_can_be_answered(string kind, string subject, string context)
+    {
+        await using var s = new Session_();
+
+        var asking = await s.After(Copilot.User("go", 1), Copilot.Permission("r7", "c7", Copilot.Prompts[kind], 2));
+
+        var q = asking.Question!;
+        Assert.Equal(QuestionKind.Approval, q.Kind);
+        Assert.Null(q.AnswerAtMachine);
+        Assert.Null(q.Truncated);
+        Assert.Contains(subject, q.Message);
+        Assert.Contains(context, q.Message);
+        var prompt = CopilotPermissionPrompt.ParseQuestionId(q.Id);
+        Assert.Equal("r7", prompt?.RequestId);
+    }
+
+    [Fact]
+    public async Task A_request_to_run_outside_the_sandbox_and_a_kind_the_host_does_not_drive_are_answered_only_at_the_machine()
+    {
+        await using var s = new Session_();
+        var bypass = Copilot.Prompts["commands"].DeepClone().AsObject();
+        bypass["requestSandboxBypass"] = true;
+        var hook = new System.Text.Json.Nodes.JsonObject { ["kind"] = "hook", ["toolName"] = "pre-commit", ["hookMessage"] = "Allow the hook?" };
+
+        Assert.True((await s.After(Copilot.Permission("r1", "c1", bypass, 1))).Question!.AnswerAtMachine);
+        Assert.True((await s.After(Copilot.PermissionDone("r1", "c1", "approved", 2), Copilot.Permission("r2", "c2", hook, 3))).Question!.AnswerAtMachine);
+    }
+
+    [Fact]
+    public async Task A_host_with_remote_approval_off_shows_every_permission_request_as_answered_only_at_the_machine()
+    {
+        await using var s = new Session_(remoteApproval: false);
+
+        var asking = await s.After(Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 1));
+
+        Assert.True(asking.Question!.AnswerAtMachine);
+        Assert.Contains("git push origin main", asking.Question.Message);
+    }
+
+    [Fact]
+    public void The_question_id_names_the_request_and_changes_with_anything_it_shows()
+    {
+        static CopilotPermissionPrompt Describe(System.Text.Json.Nodes.JsonObject prompt)
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", prompt, 1));
+            return CopilotPermission.Describe(doc.RootElement.GetProperty("data"))!;
+        }
+        var shown = Describe(Copilot.Prompts["commands"]);
+        var other = Copilot.Prompts["commands"].DeepClone().AsObject();
+        other["fullCommandText"] = "git push origin main --force";
+
+        Assert.Equal(shown.QuestionId, Describe(Copilot.Prompts["commands"]).QuestionId);
+        Assert.NotEqual(shown.QuestionId, Describe(other).QuestionId);
+        Assert.Equal(("r1", shown.Digest), CopilotPermissionPrompt.ParseQuestionId(shown.QuestionId));
+    }
+
+    [Fact]
+    public void A_command_holding_backticks_cannot_close_the_block_it_is_shown_in()
+    {
+        var prompt = Copilot.Prompts["commands"].DeepClone().AsObject();
+        prompt["fullCommandText"] = "echo ```\n**not bold**";
+        using var doc = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", prompt, 1));
+
+        var message = CopilotPermission.Describe(doc.RootElement.GetProperty("data"))!.Message;
+
+        Assert.Contains("````\necho ```\n**not bold**\n````", message);
+    }
+
+    [Fact]
+    public async Task A_permission_too_large_to_show_in_full_is_marked_truncated()
+    {
+        await using var s = new Session_();
+        var prompt = Copilot.Prompts["commands"].DeepClone().AsObject();
+        prompt["fullCommandText"] = "echo " + new string('x', Limits.QuestionMessage);
+
+        var asking = await s.After(Copilot.Permission("r1", "c1", prompt, 1));
+
+        Assert.True(asking.Question!.Truncated);
     }
 
     [Fact]

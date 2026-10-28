@@ -232,6 +232,37 @@ test.describe('on a phone', () => {
     expect((await log(page))[0].fields).toEqual({ decision: 'no' });
   });
 
+  // A Copilot permission prompt as a host with remote approval on sends it: what it would
+  // allow in full, and only Approve once or Deny.
+  const permission = {
+    id: 'r1#0123456789abcdef', kind: 'approval', message: 'Allow **shell**?\n\nPush the branch\n\n```\ngit push origin main --force-with-lease\n```',
+    fields: [{ name: 'decision', type: 'choice', required: true, options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }] }],
+  };
+
+  test('a Copilot permission prompt shows what it would allow and is approved once on a tap', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, permission, COPILOT);
+    await expect(q).toHaveAttribute('data-answerable', 'true');
+    await expect(q.locator('.question-head')).toHaveText('Permission requested');
+    await expect(q.locator('.question-message pre')).toHaveText('git push origin main --force-with-lease');
+    await expect(q.getByRole('button')).toHaveText(['Approve once', 'Deny']);
+    await expect(q.getByRole('button', { name: 'Approve once' })).toHaveClass(/\btone-allow\b/);
+    await expect(q.getByRole('button', { name: 'Deny' })).toHaveClass(/\btone-deny\b/);
+
+    await q.getByRole('button', { name: 'Approve once' }).tap();
+    await expect(q).toHaveCount(0);
+    expect((await log(page))[0]).toEqual({ id: COPILOT, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' } });
+  });
+
+  test('a Copilot permission prompt at a machine with approving turned off says so and offers nothing', async ({ page }) => {
+    await openDemo(page, '&approve=0');
+    const q = await ask(page, { ...permission, answerAtMachine: true }, COPILOT);
+    await expect(q).toHaveAttribute('data-answerable', 'false');
+    await expect(q.locator('.question-message')).toContainText('git push origin main --force-with-lease');
+    await expect(q.locator('.read-only-why')).toHaveText('Approving permission prompts from the phone is turned off on this machine. Answer at the machine on Demo machine.');
+    await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
+  });
+
   test('every control is at least 44 px tall', async ({ page }) => {
     await openDemo(page);
     await ask(page, choice({ allowOther: true }));

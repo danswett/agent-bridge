@@ -28,7 +28,7 @@ internal sealed class Fixture : IDisposable
     public string ClaudeRegistrations => Path.Combine(Runtime, "agent-bridge-claude");
     public string CodexRegistrations => Path.Combine(Runtime, "agent-bridge-codex");
 
-    public SessionSourceOptions Options(long tailBytes = 4 * 1024 * 1024, bool watch = false, long maxSkim = 512L * 1024 * 1024) => new()
+    public SessionSourceOptions Options(long tailBytes = 4 * 1024 * 1024, bool watch = false, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true) => new()
     {
         CopilotHome = CopilotHome,
         ClaudeHome = ClaudeHome,
@@ -39,10 +39,11 @@ internal sealed class Fixture : IDisposable
         InitialTailBytes = tailBytes,
         MaxSkimBytes = maxSkim,
         PollInterval = TimeSpan.FromMilliseconds(200),
+        CopilotRemoteApproval = remoteApproval,
     };
 
-    public SessionSource Source(long tailBytes = 4 * 1024 * 1024, long maxSkim = 512L * 1024 * 1024) =>
-        new(Options(tailBytes, maxSkim: maxSkim), Processes, Time);
+    public SessionSource Source(long tailBytes = 4 * 1024 * 1024, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true) =>
+        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval), Processes, Time);
 
     // session-state/<id>/ with workspace.yaml and, optionally, inuse.<pid>.lock. Returns
     // the events.jsonl path (not created).
@@ -202,6 +203,51 @@ internal static class Copilot
 
     public static string ToolStart(string id, string name, object arguments, int s, string? agentId = null) =>
         Event("tool.execution_start", new { toolCallId = id, toolName = name, arguments }, s, agentId);
+
+    // permission.requested as Copilot CLI 1.0.10x writes it: what is asked (permissionRequest)
+    // and what its prompt draws (promptRequest), each naming the tool call it gates. The
+    // prompts are synthesized with the field sets real transcripts carry, never copied.
+    public static string Permission(string requestId, string toolCallId, JsonObject prompt, int s, string? agentId = null)
+    {
+        var drawn = prompt.DeepClone().AsObject();
+        drawn["toolCallId"] = toolCallId;
+        var asked = drawn.DeepClone().AsObject();
+        // The shell command and path prompts both come from a shell permission request.
+        if (drawn["kind"]?.GetValue<string>() is "commands" or "path")
+        {
+            asked = new JsonObject
+            {
+                ["kind"] = "shell",
+                ["toolCallId"] = toolCallId,
+                ["fullCommandText"] = drawn["fullCommandText"]?.DeepClone() ?? "Get-Content C:\\elsewhere\\notes.txt",
+                ["intention"] = drawn["intention"]?.DeepClone() ?? "Read notes",
+                ["commands"] = new JsonArray(new JsonObject { ["identifier"] = "git push", ["readOnly"] = false }),
+                ["possiblePaths"] = new JsonArray(),
+                ["possibleUrls"] = new JsonArray(),
+                ["hasWriteFileRedirection"] = false,
+                ["canOfferSessionApproval"] = true,
+            };
+        }
+        var line = JsonNode.Parse(Event("permission.requested", new { requestId }, s, agentId))!.AsObject();
+        line["data"]!["permissionRequest"] = asked;
+        line["data"]!["promptRequest"] = drawn;
+        return line.ToJsonString();
+    }
+
+    public static string PermissionDone(string requestId, string toolCallId, string kind, int s, string? feedback = null) =>
+        Event("permission.completed", new { requestId, toolCallId, result = feedback is null ? (object)new { kind } : new { kind, feedback } }, s);
+
+    // One of each kind of prompt this host drives.
+    public static readonly IReadOnlyDictionary<string, JsonObject> Prompts = new Dictionary<string, JsonObject>
+    {
+        ["commands"] = new() { ["kind"] = "commands", ["fullCommandText"] = "git push origin main --force-with-lease", ["intention"] = "Push the branch", ["commandIdentifiers"] = new JsonArray("git push"), ["canOfferSessionApproval"] = true },
+        ["path"] = new() { ["kind"] = "path", ["accessKind"] = "read", ["paths"] = new JsonArray("C:\\elsewhere\\notes.txt", "C:\\elsewhere\\more") },
+        ["write"] = new() { ["kind"] = "write", ["intention"] = "Edit file", ["fileName"] = "src\\app.js", ["diff"] = "--- a/src/app.js\n+++ b/src/app.js\n@@ -1 +1 @@\n-old()\n+fresh()", ["newFileContents"] = "fresh()\n", ["canOfferSessionApproval"] = true },
+        ["read"] = new() { ["kind"] = "read", ["intention"] = "Read the settings", ["path"] = "C:\\Users\\someone\\settings.json" },
+        ["url"] = new() { ["kind"] = "url", ["url"] = "https://example.com/docs/page", ["intention"] = "Fetch the docs" },
+        ["mcp"] = new() { ["kind"] = "mcp", ["serverName"] = "github", ["toolName"] = "get_file_contents", ["toolTitle"] = "Get file contents", ["args"] = new JsonObject { ["owner"] = "octo", ["path"] = "README.md" } },
+        ["custom-tool"] = new() { ["kind"] = "custom-tool", ["toolName"] = "deploy_site", ["toolDescription"] = "Deploys the site", ["args"] = new JsonObject { ["env"] = "prod" } },
+    };
 
     public static string ToolDone(string id, int s, bool success = true, string? agentId = null) =>
         success ? Event("tool.execution_complete", new { toolCallId = id, success, result = new { content = "ok" } }, s, agentId)

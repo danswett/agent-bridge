@@ -147,9 +147,15 @@ function hostJson(v, top = false) {
 
 // Whether this phone may answer a question, and if not, why, for the read-only view. A
 // prompt the host marks as answered only at the machine says so whatever the machine
-// offers: no host can answer it from here.
-export function answerability(question, capabilities) {
-  if (question.answerAtMachine) { return { ok: false, why: 'atMachine' }; }
+// offers: no host can answer it from here. A Copilot permission prompt held at a machine
+// that answers but does not approve (sessions.approve) is held because approving from
+// another device is turned off there.
+export function answerability(question, capabilities, agent = null) {
+  if (question.answerAtMachine) {
+    const off = agent === 'copilot' && question.kind === 'approval'
+      && capabilities.includes('sessions.answer') && !capabilities.includes('sessions.approve');
+    return { ok: false, why: off ? 'approvalOff' : 'atMachine' };
+  }
   if (!capabilities.includes('sessions.answer')) { return { ok: false, why: 'machine' }; }
   if (question.truncated) { return { ok: false, why: 'truncated' }; }
   return { ok: true, why: null };

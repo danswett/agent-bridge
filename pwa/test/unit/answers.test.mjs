@@ -80,6 +80,10 @@ test('a prompt the host marks for the machine is never answered remotely, whatev
   assert.equal(checkAnswer(q, fields({ decision: 'approve' })), 'this prompt can only be answered at the machine');
   assert.deepEqual(answerability(q, ['sessions.read', 'sessions.answer']), { ok: false, why: 'atMachine' });
   assert.deepEqual(answerability(q, ['sessions.read']), { ok: false, why: 'atMachine' });
+  // A Copilot permission prompt held at a machine that answers but does not approve.
+  assert.deepEqual(answerability(q, ['sessions.read', 'sessions.answer'], 'copilot'), { ok: false, why: 'approvalOff' });
+  assert.deepEqual(answerability(q, ['sessions.read', 'sessions.answer', 'sessions.approve'], 'copilot'), { ok: false, why: 'atMachine' });
+  assert.deepEqual(answerability(q, ['sessions.read', 'sessions.answer'], 'claude'), { ok: false, why: 'atMachine' });
   // Anything but true, from a confused or older host, is an ordinary question.
   assert.equal(readQuestion({ id: 'p1', kind: 'approval', message: 'Allow?', answerAtMachine: 'yes' }).answerAtMachine, false);
 });

@@ -74,14 +74,15 @@ export class DemoHost {
 
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
   // replying: false, one that can't reply; attaching: false, one that takes no files;
-  // stopping: false, one that can't end sessions. stopWindowMs is how long a first press of
+  // stopping: false, one that can't end sessions; approving: false, one with approving
+  // Copilot's permission prompts turned off. stopWindowMs is how long a first press of
   // a busy session waits for its second. usage: false plays a host from before usage.get.
-  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, stopping = answering, stopWindowMs = 10000, usage = true } = {}) {
+  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true } = {}) {
     this.machine = { id: 'demo', name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : [])];
     this.sessions = new Map();
     for (const s of fixture.sessions ?? []) { this.sessions.set(s.id, s); }
     this.revision = fixture.revision ?? 1;

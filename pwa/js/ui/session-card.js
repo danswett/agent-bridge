@@ -243,9 +243,9 @@ export class SessionCard {
   #renderQuestion(s) {
     const q = s.question;
     const ctx = this.answering();
-    const able = q ? answerability(q, ctx?.capabilities ?? []) : null;
+    const able = q ? answerability(q, ctx?.capabilities ?? [], s.agent) : null;
     const answerable = !!(able?.ok && ctx?.service);
-    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null])) { return; }
+    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why])) { return; }
     const old = this.#panel;
     const sameQuestion = !!(old && q && old.questionId === q.id && answerable && old.answering.hostId === ctx.hostId);
     if (old && !sameQuestion) {

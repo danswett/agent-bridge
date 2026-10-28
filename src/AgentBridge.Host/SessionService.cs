@@ -164,6 +164,7 @@ public sealed class SessionService
     {
         List<string> offered = [Capabilities.SessionsRead];
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
+        if (answers?.ApprovesPermissions == true) { offered.Add(Capabilities.SessionsApprove); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }
         if (attachments is not null && replies?.TakesAttachments == true) { offered.Add(Capabilities.SessionsAttach); }
         if (stops?.Available == true) { offered.Add(Capabilities.SessionsStop); }

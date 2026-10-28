@@ -7,7 +7,8 @@ namespace AgentBridge.Host.Core.Parsing;
 // Maps each agent's way of asking onto the contract's Question and Field.
 internal static class QuestionMapper
 {
-    public static readonly IReadOnlyList<Option> ApprovalOptions = [new("approve", "Approve"), new("deny", "Deny")];
+    // Approve is once: this request, never a standing grant (Codex's y, Copilot's plain Yes).
+    public static readonly IReadOnlyList<Option> ApprovalOptions = [new("approve", "Approve once"), new("deny", "Deny")];
 
     // The contract's message limit. A question whose message had to be cut says so, so a
     // client shows it read-only and sends the person to the machine for the rest.

@@ -152,6 +152,7 @@ async function startDemo() {
     replying: params.get('reply') !== '0' && params.get('answer') !== '0',
     attaching: params.get('attach') !== '0',
     stopping: params.get('stop') !== '0' && params.get('answer') !== '0',
+  approving: params.get('approve') !== '0',
     stopWindowMs: Number(params.get('stopWindow')) || 10000,
     usage: params.get('usage') !== '0',
   });

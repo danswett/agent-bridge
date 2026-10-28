@@ -1,5 +1,6 @@
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Discovery;
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Delivery.Claude;
 using AgentBridge.Host.Delivery.Codex;
@@ -14,6 +15,10 @@ public interface ISessionAnswerer
     // Whether hello offers sessions.answer now. Asked per hello, so a client sees the
     // current state: agent-ha-bridge starting or stopping changes it.
     bool Available { get; }
+
+    // Whether hello offers sessions.approve: Copilot's permission prompts are approved or
+    // denied from other devices here (permissions.remoteApproval on).
+    bool ApprovesPermissions => false;
 
     Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default);
 }
@@ -43,6 +48,10 @@ public sealed class AnswerOptions
     // The host's own record of prompts already typed into (AttemptLedger), in its profile
     // folder; null keeps it in memory only.
     public string? AttemptLedgerPath { get; init; }
+
+    // The host's permissions.remoteApproval: whether Copilot's permission prompts may be
+    // approved or denied from another device. On unless the person turns it off.
+    public bool CopilotRemoteApproval { get; init; } = true;
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
 }
@@ -95,6 +104,8 @@ public sealed class AnswerService : ISessionAnswerer
 
     public bool Available => options.PlatformSupported && probe.Active() is null;
 
+    public bool ApprovesPermissions => Available && options.CopilotRemoteApproval;
+
     public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key))
@@ -114,6 +125,11 @@ public sealed class AnswerService : ISessionAnswerer
             var session = source.Get(request.Id);
             if (session is null) { return Stale("the session has ended"); }
             if (session.Question is not { } question || question.Id != request.Question) { return Stale("the session is no longer asking that question"); }
+            var permission = session.Agent == AgentKind.Copilot && question.Kind == QuestionKind.Approval;
+            if (permission && !options.CopilotRemoteApproval)
+            {
+                return Refused("approving Copilot permission prompts from another device is turned off on this machine (permissions.remoteApproval); answer at the machine");
+            }
             if (question.AnswerAtMachine == true) { return Refused(AtMachine(session.Agent, question)); }
             if (session.Agent is not (AgentKind.Copilot or AgentKind.Claude or AgentKind.Codex))
             {
@@ -128,6 +144,7 @@ public sealed class AnswerService : ISessionAnswerer
                 {
                     AgentKind.Claude => await ClaudeAsync(session, question, request),
                     AgentKind.Codex => await CodexAsync(session, question, request),
+                    _ when permission => await CopilotPermissionAsync(session, question, request),
                     _ => await CopilotAsync(session, question, request),
                 };
             }
@@ -223,6 +240,94 @@ public sealed class AnswerService : ISessionAnswerer
             await Task.Delay(options.PollInterval, options.Time);
         }
     }
+
+    // A Copilot permission prompt: approve once or deny, never anything that grants more. This
+    // goes beyond agent-ha-bridge, which only ever mirrored these prompts. The question id
+    // names the request and what the client was shown (CopilotPermissionPrompt), so:
+    //   * immediately before typing, the transcript must show that request still waiting,
+    //     reading exactly as shown, and nothing else waiting that the screen could be showing
+    //     instead (stale or refused otherwise);
+    //   * the option is found on the screen by its label, and the key goes only if that row
+    //     still reads so when it is typed (the worker checks it in the same attach);
+    //   * delivered only when the transcript records that request approved, or denied with no
+    //     message; anything else is unconfirmed. Never retried.
+    async Task<AnswerResult> CopilotPermissionAsync(Session session, Question question, AnswerRequest request)
+    {
+        if (!Guid.TryParseExact(session.Id, "D", out _)) { return Refused("the session's id is not a Copilot session id"); }
+        if (CopilotPermissionPrompt.ParseQuestionId(question.Id) is not { } parsed) { return Refused("this Copilot permission prompt can only be answered at the machine"); }
+        var (requestId, digest) = parsed;
+        if (Decision(request.Fields) is not { } approve) { return Refused("an approval is answered with decision approve or deny"); }
+        var transcript = Path.Combine(options.CopilotHome, "session-state", session.Id, "events.jsonl");
+        if (Target(session, AgentKind.Copilot) is { } unfit) { return unfit; }
+        var pid = session.ProcessId!.Value;
+        var decision = approve ? "approve" : "deny";
+
+        await gate.WaitToTypeAsync();
+        KeyPlan keys;
+        long from;
+        InjectionResult typed;
+        var attempt = AttemptLedger.Key("copilot", session.Id, question.Id);
+        try
+        {
+            if (probe.Active() is { } active) { return Refused(active); }
+            if (source.Get(session.Id)?.Question?.Id != question.Id) { return Stale("the session is no longer asking for that permission"); }
+            var state = CopilotPermissionTranscript.Before(transcript, requestId);
+            if (!state.Readable) { return Refused("the session's transcript could not be read, so nothing is typed; answer at the machine"); }
+            if (state.Request is not { } pending) { return Stale("Copilot is no longer asking for that permission"); }
+            if (!string.Equals(pending.Digest, digest, StringComparison.Ordinal)) { return Stale("Copilot's permission prompt reads differently from what was shown"); }
+            if (pending.AtMachine is { } why) { return Refused($"{why} can only be answered at the machine"); }
+            if (state.PendingPermissions + state.PendingAsks > 1)
+            {
+                return Refused("Copilot has more than one prompt waiting, and the screen shows only one of them; answer at the machine");
+            }
+
+            ConsoleScreen screen;
+            try { screen = await injector.ReadScreenAsync(pid); }
+            catch (Exception e) { return Refused($"the host could not read the session's screen ({e.Message}); answer at the machine"); }
+            if (screen.Rows is not { } rows) { return Refused(screen.Problem ?? "the host could not read the session's screen; answer at the machine"); }
+            var (choice, problem) = CopilotPermissionScreen.Locate(rows, approve);
+            if (choice is null) { return Refused($"{problem}; answer at the machine"); }
+            keys = new KeyPlan([new KeySend(choice.Key, false, 0, 0, choice.Row)]);
+            from = state.ScannedTo;
+
+            if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
+            typed = await TypeAsync(pid, keys);
+        }
+        finally { gate.DoneTyping(); }
+
+        log($"typed {decision} into {Short(session.Id)} (pid {pid}) for permission {Short(requestId)}: {keys.Describe()} -> {typed.Status} {typed.Detail}");
+        if (Settle(typed, attempt) is { } settled) { return settled; }
+        try { return await ConfirmPermissionAsync(transcript, requestId, from, approve); }
+        catch (Exception e) { return Unconfirmed($"the {decision} was typed but could not be checked ({e.Message}); check at the machine"); }
+    }
+
+    async Task<AnswerResult> ConfirmPermissionAsync(string transcript, string requestId, long from, bool approve)
+    {
+        var started = options.Time.GetTimestamp();
+        while (true)
+        {
+            var result = CopilotPermissionTranscript.Since(transcript, requestId, from);
+            if (result.Kind is { } kind)
+            {
+                if (approve ? kind == "approved" : kind == "denied-interactively-by-user" && !result.Feedback)
+                {
+                    return new AnswerResult(AnswerOutcome.Delivered);
+                }
+                return Unconfirmed($"Copilot recorded the request as {(kind.Length == 0 ? "answered" : kind)}{(result.Feedback ? " with a message" : "")}, not {(approve ? "approved" : "denied")}; check at the machine");
+            }
+            if (result.SessionEnded) { return Unconfirmed("the session ended before it recorded an answer; check at the machine"); }
+            if (options.Time.GetElapsedTime(started) >= options.ConfirmTimeout)
+            {
+                return Unconfirmed($"the session did not record an answer within {options.ConfirmTimeout.TotalSeconds:0} seconds; check at the machine");
+            }
+            await Task.Delay(options.PollInterval, options.Time);
+        }
+    }
+
+    static bool? Decision(IReadOnlyDictionary<string, System.Text.Json.JsonElement>? fields) =>
+        fields is not null && fields.TryGetValue("decision", out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String
+            ? value.GetString() switch { "approve" => true, "deny" => false, _ => null }
+            : null;
 
     // Claude Code's AskUserQuestion, keyed by its tool_use id in the session's transcript.
     async Task<AnswerResult> ClaudeAsync(Session session, Question question, AnswerRequest request)

@@ -48,6 +48,8 @@ string? Option(string name)
 bool Flag(string name) => arguments.Contains(name);
 
 var defaults = SessionSourceOptions.ForCurrentUser();
+// serve reads what it may do on this machine from the profile's config.json (HostSettings).
+var (settings, settingsProblem) = command == "serve" ? HostSettings.Load(LoadIdentity().Folder) : (HostSettings.Default, null);
 var options = new SessionSourceOptions
 {
     CopilotHome = Option("--copilot-home") ?? defaults.CopilotHome,
@@ -55,6 +57,7 @@ var options = new SessionSourceOptions
     CodexHome = Option("--codex-home") ?? defaults.CodexHome,
     ClaudeRegistrationRoots = defaults.ClaudeRegistrationRoots,
     CodexRegistrationRoots = defaults.CodexRegistrationRoots,
+    CopilotRemoteApproval = settings.RemoteApproval,
 };
 var pretty = new JsonSerializerOptions(ProtocolJson.Options) { WriteIndented = !Flag("--compact") };
 
@@ -243,9 +246,11 @@ static string OsName() =>
     var gate = new DeliveryGate();
     if (!File.Exists(Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName))) { Log($"{WorkerInjector.FileName} is missing beside the host; answers and replies will be refused"); }
     Log(probe.Active() is { } active ? $"answering, replying and ending sessions are off for now: {active}" : "answering, replying and ending sessions are on");
+    if (settingsProblem is not null) { Log(settingsProblem); }
+    Log($"approving Copilot permission prompts from other devices is {(settings.RemoteApproval ? "on" : "off")} (permissions.remoteApproval)");
     var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log);
     return (
-        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts }, Log, gate),
+        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval }, Log, gate),
         new ReplyService(source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome }, Log, gate, attachments),
         attachments,
         new StopService(source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log, gate));

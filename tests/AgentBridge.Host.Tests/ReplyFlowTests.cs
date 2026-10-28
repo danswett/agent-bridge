@@ -107,7 +107,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     public async Task Hello_offers_replying_only_while_agent_ha_bridge_is_not_running_and_only_where_a_replier_can_deliver()
     {
         var ch = await OpenAsync();
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsReply], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply], await CapabilitiesAsync(ch));
 
         probe.Reason = "agent-ha-bridge is running for this user";
         Assert.Equal([Capabilities.SessionsRead], await CapabilitiesAsync(ch));
@@ -405,7 +405,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     {
         ServeAttachments();
         var ch = await OpenAsync();
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsReply, Capabilities.SessionsAttach], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach], await CapabilitiesAsync(ch));
 
         probe.Reason = "agent-ha-bridge is running for this user";
         Assert.Equal([Capabilities.SessionsRead], await CapabilitiesAsync(ch));

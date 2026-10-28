@@ -23,7 +23,8 @@ namespace AgentBridge.Host.Core.Parsing;
 // agent woken again by a message never writes another, and its agent_idle notification
 // came up to 90 minutes late, or never, in real transcripts. Every one of 125 run ends
 // in them was an agent turn_end that asked for no tools, at or before those signals.
-internal sealed class CopilotParser(SessionState state, TimeProvider time) : TranscriptParser(state, time)
+// remoteApproval: SessionSourceOptions.CopilotRemoteApproval, the host's permissions.remoteApproval.
+internal sealed class CopilotParser(SessionState state, TimeProvider time, bool remoteApproval = true) : TranscriptParser(state, time)
 {
     static readonly IReadOnlyList<byte[]> Markers =
     [
@@ -263,21 +264,16 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time) : Tra
         return true;
     }
 
-    // A permission request is asked of the person like a question, so it is one, of
-    // kind approval, keyed by the tool call it gates when there is one. It is answered
-    // only at the machine: agent-ha-bridge mirrors these prompts as an alert and has never
-    // typed into one, so there is no proven walk to their options.
+    // A permission request is asked of the person like a question, so it is one, of kind
+    // approval, carrying in full what it would allow (CopilotPermission). A host with
+    // remote approval off, or a prompt of a kind it does not drive, shows it as answered
+    // only at the machine.
     void Permission(JsonElement data, DateTimeOffset at)
     {
-        var request = Json.Str(data, "requestId");
-        var ask = Json.Obj(data, "permissionRequest") ?? Json.Obj(data, "promptRequest");
-        if (request is null || ask is not { } p) { return; }
-        var id = Json.Str(p, "toolCallId") ?? request;
-        var what = Json.Str(p, "toolTitle") ?? Json.Str(p, "toolName") ?? Json.Str(p, "kind") ?? "a tool";
-        var detail = ToolSummary.From(Json.Get(p, "args")) ?? Text.OneLine(Json.Str(p, "fullCommandText") ?? Json.Str(p, "intention"));
-        var message = detail is null ? $"Allow **{what}**?" : $"Allow **{what}**?\n\n`{detail}`";
-        _permissionQuestion[request] = id;
-        S.Ask(QuestionMapper.Approval(id, message, at, atMachine: true));
+        if (CopilotPermission.Describe(data) is not { } prompt) { return; }
+        var id = prompt.QuestionId;
+        _permissionQuestion[prompt.RequestId] = id;
+        S.Ask(QuestionMapper.Approval(id, prompt.Message, at, atMachine: !remoteApproval || prompt.AtMachine is not null));
     }
 
     void Context(JsonElement? context)

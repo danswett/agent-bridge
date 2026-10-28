@@ -31,7 +31,7 @@ internal sealed class SessionTracker
         _firstSeen = time.GetUtcNow();
         _parser = discovered.Agent switch
         {
-            AgentKind.Copilot => new CopilotParser(_state, time),
+            AgentKind.Copilot => new CopilotParser(_state, time, options.CopilotRemoteApproval),
             AgentKind.Claude => new ClaudeParser(_state, time),
             _ => new CodexParser(_state, time),
         };

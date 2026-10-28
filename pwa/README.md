@@ -77,9 +77,12 @@ on screen. Unknown events still count for `seq`.
 A question can be answered from the phone when the machine's `hello` lists
 `sessions.answer` and the question is neither `truncated` nor `answerAtMachine`. Otherwise
 it is shown read-only with "Answer at the machine", and why. A prompt marked
-`answerAtMachine` (a Copilot or Claude permission prompt, say) shows only what it asks,
+`answerAtMachine` (a Claude permission prompt, say) shows only what it asks,
 the card reads "Waiting at the machine", and the reply box is held until it is answered
-there.
+there. A Copilot permission prompt held that way on a machine whose `hello` lists
+`sessions.answer` but not `sessions.approve` says approving from the phone is turned off
+there. Otherwise a Copilot permission prompt shows what it would allow in full, with
+Approve once and Deny.
 
 | Question | Controls | Sent when |
 |---|---|---|
