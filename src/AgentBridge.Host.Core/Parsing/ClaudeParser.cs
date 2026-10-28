@@ -27,10 +27,10 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
 {
     static readonly IReadOnlyList<byte[]> Markers =
     [
-        Marker("\"type\":\"user\""),
+        Marker("\"user\""),
         Marker("\"compact_boundary\""),
-        Marker("\"type\":\"ai-title\""),
-        Marker("\"type\":\"summary\""),
+        Marker("\"ai-title\""),
+        Marker("\"summary\""),
     ];
 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;

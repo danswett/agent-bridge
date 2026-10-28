@@ -176,6 +176,44 @@ public class TailTests
     }
 
     [Fact]
+    public async Task Records_written_with_spaces_after_the_colon_still_count_when_skimmed()
+    {
+        using var f = new Fixture();
+        const string id = "34343434-3434-4343-8343-343434343434";
+        var events = f.CopilotSession(id, 100, name: null);
+        static string Spaced(string line) => line.Replace("\"type\":\"", "\"type\": \"").Replace("\"success\":", "\"success\": ");
+        Fixture.Append(events, Spaced(Copilot.User("spaced first prompt", 1)), Spaced(Copilot.Event("session.compaction_complete", new { success = true }, 2)));
+        Fixture.Append(events, [.. Enumerable.Range(0, 100).Select(i => Copilot.Assistant("filler " + new string('f', 300), 3 + i))]);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(tailBytes: 4 * 1024);
+
+        await source.RefreshAsync();
+
+        var s = source.Get(id)!;
+        Assert.Equal("spaced first prompt", s.Title);
+        Assert.Equal(1, s.Activity.Compactions);
+    }
+
+    [Fact]
+    public async Task An_append_bigger_than_the_tail_window_still_applies_every_event_in_it()
+    {
+        using var f = new Fixture();
+        const string id = "35353535-3535-4353-8353-353535353535";
+        var events = f.CopilotSession(id, 100);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.ToolStart("c1", "powershell", new { command = "build" }, 3));
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(tailBytes: 4 * 1024);
+        await source.RefreshAsync();
+
+        Fixture.Append(events, [Copilot.ToolDone("c1", 4), .. Enumerable.Range(0, 100).Select(i => Copilot.Assistant("output " + new string('o', 300), 5 + i)), Copilot.TurnEnd(200)]);
+        await source.RefreshAsync();
+
+        var s = source.Get(id)!;
+        Assert.Equal(ToolStatus.Done, Assert.Single(s.Activity.History!).Status);
+        Assert.Equal(SessionStatus.Idle, s.Status);
+    }
+
+    [Fact]
     public async Task A_huge_Copilot_transcript_takes_its_title_turns_and_compactions_from_the_skim_and_its_state_from_the_tail()
     {
         using var f = new Fixture();

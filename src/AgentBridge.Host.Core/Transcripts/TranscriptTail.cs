@@ -21,7 +21,7 @@ internal enum TailOutcome { Missing, Unreadable, Unchanged, Appended, Restarted 
 // before the offset changed (replaced, or shrank and regrew to a longer size), is read
 // again from the start, because length alone cannot tell a same-size replacement apart.
 //
-// The first read, and any append bigger than the window, parses only the last
+// The first read (and the first after a restart) parses only the last
 // InitialTailBytes; everything before is skimmed, so a 500 MB transcript costs a cheap
 // byte scan once rather than a JSON parse of every line.
 internal sealed class TranscriptTail(string path, SessionSourceOptions options)
@@ -78,7 +78,10 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
         }
 
         var from = _offset;
-        var parseFrom = Math.Max(from, length - options.InitialTailBytes);
+        // Only the first read (or one after a restart) is bounded. An append, however
+        // big, is parsed whole: the parser still holds state from the last read, and a
+        // skimmed tool completion or answer would leave it running or pending for good.
+        var parseFrom = restart ? Math.Max(from, length - options.InitialTailBytes) : from;
         var position = from;
         var aligned = _aligned;
         if (parseFrom > from)

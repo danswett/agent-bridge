@@ -15,7 +15,10 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
 
     // Skimmed lines are outside the parsed window: only a few cheap facts are taken
     // from them (the first prompt, counts), and only lines a byte search says can carry
-    // them are parsed at all.
+    // them are parsed at all. Markers are bare quoted values, never `"type":"…"`: JSON
+    // may put whitespace after the colon, and a whole record kind then went uncounted.
+    // An unescaped quoted value can only be a JSON token, never text inside a string,
+    // and Count checks the parsed type anyway.
     public void Skim(ReadOnlyMemory<byte> line)
     {
         if (!SkimMarkers.Any(m => line.Span.IndexOf(m) >= 0)) { return; }

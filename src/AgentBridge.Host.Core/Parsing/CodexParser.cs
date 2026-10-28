@@ -24,8 +24,8 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         Marker("\"task_started\""),
         Marker("\"user_message\""),
         Marker("\"UserMessage\""),
-        Marker("\"type\":\"compacted\""),
-        Marker("\"type\":\"session_meta\""),
+        Marker("\"compacted\""),
+        Marker("\"session_meta\""),
     ];
 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;

@@ -22,9 +22,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time) : Tra
 {
     static readonly IReadOnlyList<byte[]> Markers =
     [
-        Marker("\"type\":\"user.message\""),
-        Marker("\"type\":\"session.compaction_complete\""),
-        Marker("\"type\":\"session.start\""),
+        Marker("\"user.message\""),
+        Marker("\"session.compaction_complete\""),
+        Marker("\"session.start\""),
     ];
 
     bool _turnAskedForTools;
