@@ -9,6 +9,8 @@ namespace S4;
 
 public sealed record PresenceEntry(string Id, string Name, string Kind, DateTimeOffset Since);
 
+public sealed record PushResult(int Status, string? Error);
+
 public sealed class RelayRefusedException(WebSocketCloseStatus? status, string? reason)
     : Exception($"relay closed the connection: {(int?)status} {reason}")
 {
@@ -52,6 +54,25 @@ public sealed class RelayClient : IAsyncDisposable
     }
     public event Action<IReadOnlyList<PresenceEntry>>? PresenceChanged;
     public event Action<string>? Undeliverable;
+
+    readonly System.Collections.Concurrent.ConcurrentDictionary<long, TaskCompletionSource<PushResult>> pushes = new();
+    long nextPush;
+
+    // Asks the relay to deliver an already-encrypted Web Push body (WebPushCrypto) to a
+    // subscription's endpoint. Status is the push service's HTTP status (201 accepted;
+    // 404/410 mean the subscription is gone), or 0 with the relay's reason for refusing.
+    public async Task<PushResult> PushAsync(string endpoint, byte[] body, int ttl = 3600, string urgency = "high", string? topic = null)
+    {
+        var id = Interlocked.Increment(ref nextPush);
+        var tcs = new TaskCompletionSource<PushResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pushes[id] = tcs;
+        try
+        {
+            await SendTextAsync(new { t = "push", id, endpoint, body = Convert.ToBase64String(body), ttl, urgency, topic }, default);
+            return await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        finally { pushes.TryRemove(id, out _); }
+    }
 
     public Task Completion => loop;
     public WebSocketCloseStatus? CloseStatus => ws.CloseStatus;
@@ -172,6 +193,12 @@ public sealed class RelayClient : IAsyncDisposable
                     {
                         case "presence": ApplyPresence(j); break;
                         case "undeliverable": Undeliverable?.Invoke(j.GetProperty("to").GetString()!); break;
+                        case "push-result":
+                            if (pushes.TryRemove(j.GetProperty("id").GetInt64(), out var p))
+                            {
+                                p.TrySetResult(new PushResult(j.GetProperty("status").GetInt32(), j.TryGetProperty("error", out var err) ? err.GetString() : null));
+                            }
+                            break;
                     }
                 }
                 else { Enqueue(data); }
@@ -189,6 +216,7 @@ public sealed class RelayClient : IAsyncDisposable
         inbound.Writer.TryComplete();
         // Lets the dispatcher finish even if nobody ever attached a handler.
         handler.TrySetResult((_, _) => Task.CompletedTask);
+        foreach (var p in pushes.Values) { p.TrySetException(new IOException("relay connection ended")); }
         if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {
             try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, default); } catch (WebSocketException) { }

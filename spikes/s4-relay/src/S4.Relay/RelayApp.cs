@@ -20,6 +20,13 @@ public static class RelayApp
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<Tokens>();
         builder.Services.AddSingleton<RelayHub>();
+        builder.Services.AddSingleton<PushGateway>();
+        builder.Services.AddHttpClient("push", c => c.Timeout = TimeSpan.FromSeconds(15))
+            // Never follow a redirect: it would take the request off the push-service allowlist.
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
+            // HttpClientFactory logs every request URL at Information, and a push endpoint is a
+            // bearer capability: anyone holding it can send that phone notifications.
+            .RemoveAllLoggers();
         builder.Services.AddHttpClient("github", c =>
         {
             c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("agent-bridge-relay-s4", "0.1"));
@@ -40,7 +47,7 @@ public static class RelayApp
                 ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
                 _ => new FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1) }));
         });
-        builder.Services.AddCors(o => o.AddPolicy("pwa", p => p.WithOrigins(options.AllowedOrigins).WithMethods("POST").WithHeaders("content-type")));
+        builder.Services.AddCors(o => o.AddPolicy("pwa", p => p.WithOrigins(options.AllowedOrigins).WithMethods("GET", "POST").WithHeaders("content-type")));
         builderHook?.Invoke(builder);
 
         var app = builder.Build();
@@ -79,6 +86,10 @@ public static class RelayApp
         else { app.MapGet("/", () => Results.Text("Agent Bridge relay (spike S4). It serves no app code; the PWA is published separately.")); }
 
         app.MapGet("/healthz", (RelayHub hub) => Results.Ok(new { ok = true, online = hub.Online }));
+
+        // The key a browser subscribes with (applicationServerKey). Public by design.
+        app.MapGet("/v1/push/key", (PushGateway push) =>
+            push.PublicKey is { } k ? Results.Ok(new { key = k }) : Results.NotFound()).RequireCors("pwa");
 
         app.MapPost("/v1/auth/device", async (IHttpClientFactory f) =>
         {

@@ -42,7 +42,11 @@ if (mode == "serve")
     using var key = P256KeyPair.Generate();
     var account = await SignIn.DeviceFlowAsync(http, url, (_, _) => { });
     await using var host = await RelayClient.ConnectAsync(url, account.Token, key, "demo-host", "host");
-    var hub = new ChannelHub(host, key, "demo-host", "host") { Handler = (ch, op, data) => DemoService.HandleAsync("demo-host", op, data) };
+    var questions = new QuestionService(host, "demo-host", Console.WriteLine);
+    var hub = new ChannelHub(host, key, "demo-host", "host")
+    {
+        Handler = async (ch, op, data) => await questions.HandleAsync(ch, op, data) ?? await DemoService.HandleAsync("demo-host", op, data),
+    };
     hub.Accepted += ch => Console.WriteLine($"demo-host: channel from {ch.PeerName} ({ch.PeerKind})");
     Console.WriteLine($"ready {url} demo-host {host.DeviceId}");
     await relay.WaitForShutdownAsync();
@@ -65,6 +69,9 @@ if (mode == "check")
 
     var fake = new FakeGitHub();
     await using var gh = await fake.StartAsync();
+    var pushService = new FakePushService();
+    await using var pushApp = await pushService.StartAsync();
+    using var vapidKey = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
     var taps = new ConcurrentQueue<byte[]>();
     var logs = new ConcurrentQueue<string>();
     Func<string, string, (string, string)?>? route = null;
@@ -75,6 +82,10 @@ if (mode == "check")
         o.GitHubClientSecret = "fake-secret";
         o.MaxFramesPerSecond = 200;
         o.AllowedOrigins = ["https://pwa.example"];
+        o.VapidPrivateKey = Convert.ToBase64String(vapidKey.ExportPkcs8PrivateKey());
+        o.PushHosts = ["127.0.0.1", "web.push.apple.com"];
+        o.AllowInsecurePush = true;
+        o.MaxPushesPerMinute = 20;
         o.Tap = (_, _, payload) => taps.Enqueue(payload);
         o.Route = (f, t) => route?.Invoke(f, t) ?? (f, t);
     }, b =>
@@ -359,6 +370,164 @@ if (mode == "check")
         try { await victim.Completion.WaitAsync(TimeSpan.FromSeconds(10)); } catch (Exception e) { fault = e; }
         await hostile.StopAsync();
         return (fault is null, fault is null ? "Completion ended normally" : $"Completion faulted: {fault.GetType().Name}");
+    });
+
+    // ---- S5: Web Push ----
+
+    await Check("RFC 8291 encryption reproduces the RFC's example byte for byte, and decrypts", () =>
+    {
+        var asPub = B64Url.Decode("BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8");
+        using var asKey = P256KeyPair.FromParameters(B64Url.Decode("yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw"), asPub[1..33], asPub[33..65]);
+        var uaPub = B64Url.Decode("BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4");
+        using var uaKey = P256KeyPair.FromParameters(B64Url.Decode("q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94"), uaPub[1..33], uaPub[33..65]);
+        var auth = B64Url.Decode("BTBZMqHH6r4Tts7J_aSIgg");
+        var plaintext = B64Url.Decode("V2hlbiBJIGdyb3cgdXAsIEkgd2FudCB0byBiZSBhIHdhdGVybWVsb24");
+        byte[] expected = [.. B64Url.Decode("DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8"),
+            .. B64Url.Decode("8pfeW0KbunFT06SuDKoJH9Ql87S1QUrdirN6GcG7sFz1y1sqLgVi1VhjVkHsUoEsbI_0LpXMuGvnzQ")];
+        var body = WebPushCrypto.Encrypt(plaintext, uaPub, auth, asKey, B64Url.Decode("DGv6ra1nlYgDCS1FRnbzlw"));
+        var back = WebPushCrypto.Decrypt(body, uaKey, auth);
+        return Task.FromResult((body.AsSpan().SequenceEqual(expected) && back.AsSpan().SequenceEqual(plaintext), $"{body.Length} bytes, \"{Encoding.UTF8.GetString(back)}\""));
+    });
+
+    await Check("the relay's VAPID header verifies against its published key, for the endpoint's origin, and expires within the hour", async () =>
+    {
+        var published = JsonDocument.Parse(await http.GetStringAsync(new Uri(url, "/v1/push/key"))).RootElement.GetProperty("key").GetString()!;
+        var header = Vapid.FromPkcs8(Convert.ToBase64String(vapidKey.ExportPkcs8PrivateKey()), "https://example.test").Header(new Uri("https://web.push.apple.com/QGuQ"), DateTimeOffset.UtcNow);
+        var jwt = header.Split("t=")[1].Split(',')[0];
+        var k = header.Split("k=")[1];
+        var parts = jwt.Split('.');
+        using var verify = System.Security.Cryptography.ECDsa.Create(new System.Security.Cryptography.ECParameters
+        {
+            Curve = System.Security.Cryptography.ECCurve.NamedCurves.nistP256,
+            Q = new System.Security.Cryptography.ECPoint { X = B64Url.Decode(k)[1..33], Y = B64Url.Decode(k)[33..65] },
+        });
+        var ok = verify.VerifyData(Encoding.ASCII.GetBytes($"{parts[0]}.{parts[1]}"), B64Url.Decode(parts[2]), System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+        var claims = JsonDocument.Parse(B64Url.Decode(parts[1])).RootElement;
+        var exp = DateTimeOffset.FromUnixTimeSeconds(claims.GetProperty("exp").GetInt64()) - DateTimeOffset.UtcNow;
+        return (ok && k == published && claims.GetProperty("aud").GetString() == "https://web.push.apple.com" && exp > TimeSpan.Zero && exp <= TimeSpan.FromHours(1),
+            $"aud {claims.GetProperty("aud").GetString()}, expires in {exp.TotalMinutes:F0} min");
+    });
+
+    await Check("a question reaches a phone as an encrypted push through the relay, and its answer comes back over the channel", async () =>
+    {
+        var hostKey = P256KeyPair.Generate();
+        var hostRelay = await RelayClient.ConnectAsync(url, octoAccount.Token, hostKey, "push-host", "host");
+        var questions = new QuestionService(hostRelay, "push-host");
+        var answered = new TaskCompletionSource<QuestionService.Question>();
+        questions.Answered += q => answered.TrySetResult(q);
+        _ = new ChannelHub(hostRelay, hostKey, "push-host", "host") { Handler = (c, op, d) => questions.HandleAsync(c, op, d) };
+
+        // The phone: a browser push key pair and auth secret, as PushManager.subscribe makes.
+        using var ua = P256KeyPair.Generate();
+        var auth = System.Security.Cryptography.RandomNumberGenerator.GetBytes(16);
+        var phone = await Connect(octoAccount, "phone", "pwa");
+        await phone.Relay.WaitForPeerAsync(p => p.Id == hostRelay.DeviceId, TimeSpan.FromSeconds(5));
+        var toHost = await phone.Hub.OpenAsync(hostRelay.DeviceId);
+        var endpoint = $"{pushService.Url}/push/phone-1";
+        var sub = await toHost.RequestAsync("push-subscribe", new { endpoint, p256dh = B64Url.Encode(ua.Public), auth = B64Url.Encode(auth), appUrl = "https://pwa.example/s4/" });
+        pushService.Received.Clear();
+        await toHost.RequestAsync("ask-me", new { delaySeconds = 0 });
+        var sw = Stopwatch.StartNew();
+        while (pushService.Received.IsEmpty && sw.Elapsed < TimeSpan.FromSeconds(10)) { await Task.Delay(50); }
+        var push = pushService.Received.Single();
+
+        var notice = JsonDocument.Parse(WebPushCrypto.Decrypt(push.Body, ua, auth)).RootElement.GetProperty("notification");
+        var navigate = new Uri(notice.GetProperty("navigate").GetString()!);
+        var qid = System.Web.HttpUtility.ParseQueryString(navigate.Query)["q"]!;
+        var hostInUrl = System.Web.HttpUtility.ParseQueryString(navigate.Query)["host"];
+        var question = await toHost.RequestAsync("question", new { q = qid });
+        var text = question.GetProperty("result").GetProperty("text").GetString()!;
+        var first = await toHost.RequestAsync("answer", new { q = qid, answer = "SQLite" });
+        var second = await toHost.RequestAsync("answer", new { q = qid, answer = "DuckDB" });
+        var got = await answered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var headersOk = push.Headers["Content-Encoding"] == "aes128gcm" && push.Headers["Urgency"] == "high" && push.Headers["TTL"] == "3600"
+            && push.Headers["Authorization"].StartsWith("vapid t=") && push.Headers["Topic"] == $"q{qid}";
+        var plaintextHidden = !Encoding.UTF8.GetString(push.Body).Contains("database") && !logs.Any(l => l.Contains(text) || l.Contains(endpoint));
+        await phone.Relay.DisposeAsync();
+        await hostRelay.DisposeAsync();
+        return (sub.GetProperty("ok").GetBoolean() && headersOk && plaintextHidden && hostInUrl == hostRelay.DeviceId
+            && first.GetProperty("result").GetProperty("accepted").GetBoolean() && !second.GetProperty("result").GetProperty("accepted").GetBoolean() && got.Answer == "SQLite",
+            $"{push.Body.Length}-byte push, title \"{notice.GetProperty("title").GetString()}\", answer {got.Answer}, second answer refused, question and endpoint absent from body and relay logs {plaintextHidden}");
+    });
+
+    await Check("the relay refuses push endpoints off its allowlist without making a request", async () =>
+    {
+        var c = await Connect(octoAccount, "pusher", "host");
+        pushService.Received.Clear();
+        var results = new List<string>();
+        foreach (var e in new[] { "http://169.254.169.254/latest/meta-data", "https://evil.example/push", "https://web.push.apple.com.evil.example/x", "ftp://web.push.apple.com/x", "not a url" })
+        {
+            var r = await c.Relay.PushAsync(e, new byte[100]);
+            results.Add($"{r.Status}:{r.Error}");
+        }
+        var big = await c.Relay.PushAsync($"{pushService.Url}/push/x", new byte[WebPushCrypto.RecordSize + 1]);
+        await c.Relay.DisposeAsync();
+        var refusedAll = results.All(r => r.StartsWith("0:endpoint") || r.StartsWith("0:bad-endpoint"));
+        return (refusedAll && big.Error == "bad-body-size" && pushService.Received.IsEmpty, string.Join(", ", results) + $", oversized {big.Error}");
+    });
+
+    await Check("pushes are rate-limited per account, and a gone subscription (410) is dropped", async () =>
+    {
+        var c = await Connect(octoAccount, "flood-pusher", "host");
+        var statuses = new List<string>();
+        for (int i = 0; i < 25; i++) { var r = await c.Relay.PushAsync($"{pushService.Url}/push/ok", new byte[64]); statuses.Add(r.Error ?? r.Status.ToString()); }
+        var limited = statuses.Count(s => s == "rate-limited");
+        var acceptedFirst = statuses.TakeWhile(s => s == "201").Count() == statuses.Count - limited;
+
+        // A host whose only subscriber has gone: one push, then it stops trying.
+        var hostKey = P256KeyPair.Generate();
+        var hostRelay = await RelayClient.ConnectAsync(url, malloryAccount.Token, hostKey, "gone-host", "host");
+        var questions = new QuestionService(hostRelay, "gone-host");
+        _ = new ChannelHub(hostRelay, hostKey, "gone-host", "host") { Handler = (ch2, op, d) => questions.HandleAsync(ch2, op, d) };
+        using var ua = P256KeyPair.Generate();
+        var phone = await Connect(malloryAccount, "old-phone", "pwa");
+        await phone.Relay.WaitForPeerAsync(p => p.Id == hostRelay.DeviceId, TimeSpan.FromSeconds(5));
+        var toHost = await phone.Hub.OpenAsync(hostRelay.DeviceId);
+        await toHost.RequestAsync("push-subscribe", new { endpoint = $"{pushService.Url}/gone/1", p256dh = B64Url.Encode(ua.Public), auth = B64Url.Encode(new byte[16]), appUrl = "https://pwa.example/" });
+        var before = questions.Subscribers;
+        await questions.AskAsync("still there?", ["yes"]);
+        var after = questions.Subscribers;
+        await phone.Relay.DisposeAsync();
+        await hostRelay.DisposeAsync();
+        await c.Relay.DisposeAsync();
+        return (limited > 0 && acceptedFirst && before == 1 && after == 0, $"{limited} of 25 rate-limited (account limit 20/min), subscribers {before} -> {after}");
+    });
+
+    await Check("a host's saved push subscriptions belong to one account: another account neither loads nor inherits them", async () =>
+    {
+        var store = Path.Combine(Path.GetTempPath(), $"s5-subs-{Guid.NewGuid():N}.json");
+        var hostKey = P256KeyPair.Generate();
+        var octoHost = await RelayClient.ConnectAsync(url, octoAccount.Token, hostKey, "store-host", "host");
+        var questions = new QuestionService(octoHost, "store-host", null, store);
+        _ = new ChannelHub(octoHost, hostKey, "store-host", "host") { Handler = (c, op, d) => questions.HandleAsync(c, op, d) };
+        using var ua = P256KeyPair.Generate();
+        var phone = await Connect(octoAccount, "store-phone", "pwa");
+        await phone.Relay.WaitForPeerAsync(p => p.Id == octoHost.DeviceId, TimeSpan.FromSeconds(5));
+        var toHost = await phone.Hub.OpenAsync(octoHost.DeviceId);
+        await toHost.RequestAsync("push-subscribe", new { endpoint = $"{pushService.Url}/push/store-1", p256dh = B64Url.Encode(ua.Public), auth = B64Url.Encode(new byte[16]), appUrl = "https://pwa.example/" });
+        await phone.Relay.DisposeAsync();
+        await octoHost.DisposeAsync();
+
+        // The same profile, restarted: once as the same account, once signed in as another.
+        var sameKey = P256KeyPair.Generate();
+        var same = await RelayClient.ConnectAsync(url, octoAccount.Token, sameKey, "store-host", "host");
+        var reloadedSame = new QuestionService(same, "store-host", null, store).Subscribers;
+        var otherKey = P256KeyPair.Generate();
+        var other = await RelayClient.ConnectAsync(url, malloryAccount.Token, otherKey, "store-host", "host");
+        var reloadedOther = new QuestionService(other, "store-host", null, store).Subscribers;
+
+        // A running host whose reconnect arrives under another account drops them too.
+        var running = new QuestionService(same, "store-host", null, store);
+        var beforeSwitch = running.Subscribers;
+        running.Relay = other;
+        var afterSwitch = running.Subscribers;
+        var afterSwitchReload = new QuestionService(same, "store-host", null, store).Subscribers;
+        await same.DisposeAsync();
+        await other.DisposeAsync();
+        File.Delete(store);
+        return (reloadedSame == 1 && reloadedOther == 0 && beforeSwitch == 1 && afterSwitch == 0 && afterSwitchReload == 0,
+            $"same account reloads {reloadedSame}, other account {reloadedOther}; switch while running {beforeSwitch} -> {afterSwitch}, then reloaded as the first account {afterSwitchReload}");
     });
 
     await Check("the relay's logs carry no tokens or payloads", () =>

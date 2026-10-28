@@ -26,6 +26,7 @@
     pre { white-space: pre-wrap; word-break: break-word; font-size: .8rem; background: #8881; padding: 8px; border-radius: 6px; max-height: 40vh; overflow: auto; }
     .ok { color: #1a7f37; } .bad { color: #cf222e; }
     .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+    .question { border-top: 1px solid #8882; padding-top: 8px; }
   </style>
 </head>
 <body>
@@ -52,6 +53,12 @@
     <ul id="devices"></ul>
   </section>
 
+  <section id="notify-box" hidden>
+    <b>Notifications</b>
+    <div id="notify-state" class="muted"></div>
+    <div class="row"><button id="enable-push">Enable notifications</button></div>
+  </section>
+
   <section id="channel" hidden>
     <div>Channel to <b id="peer"></b></div>
     <div id="peer-check"></div>
@@ -60,9 +67,15 @@
       <button id="snapshot">Snapshot</button>
       <button id="ping">Ping ×20</button>
       <button id="echo">Echo test</button>
+      <button id="ask-me">Ask me in 10 s</button>
     </div>
     <div id="pings"></div>
     <pre id="result"></pre>
+  </section>
+
+  <section id="questions-box" hidden>
+    <b>Waiting for your answer</b>
+    <div id="questions"></div>
   </section>
 
   <pre id="log"></pre>

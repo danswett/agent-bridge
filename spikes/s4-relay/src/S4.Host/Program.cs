@@ -37,12 +37,19 @@ switch (mode)
             var backoff = TimeSpan.FromSeconds(1);
             int reconnects = 0;
             var since = Stopwatch.StartNew();
+            QuestionService? questions = null;
             while (true)
             {
                 try
                 {
                     await using var relay = await RelayClient.ConnectAsync(Relay(), account.Token, id.Key, name, "host");
-                    var hub = new ChannelHub(relay, id.Key, name, "host") { Handler = (ch, op, data) => DemoService.HandleAsync(name, op, data) };
+                    questions ??= new QuestionService(relay, name, Log, Path.Combine(id.Folder, "push-subscriptions.json"));
+                    questions.Relay = relay;
+                    var q = questions;
+                    var hub = new ChannelHub(relay, id.Key, name, "host")
+                    {
+                        Handler = async (ch, op, data) => await q.HandleAsync(ch, op, data) ?? await DemoService.HandleAsync(name, op, data),
+                    };
                     hub.Accepted += ch => Log($"channel from {ch.PeerName} ({ch.PeerKind}, {ch.PeerId[..8]})");
                     hub.Rejected += (peer, e) => Log($"rejected a frame from {peer[..8]}: {e.Message}");
                     relay.PresenceChanged += p => Log($"online: {string.Join(", ", p.Select(d => $"{d.Name} ({d.Kind}, {d.Id[..8]})"))}");
