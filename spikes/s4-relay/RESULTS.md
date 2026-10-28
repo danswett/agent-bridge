@@ -58,7 +58,7 @@ Noise ciphertext.
 
 ## Results
 
-### Offline checks (`s4-devstack check`, in CI): 19 of 19 pass
+### Offline checks (`s4-devstack check`, in CI): 20 of 20 pass
 
 | Check | Result |
 |---|---|
@@ -79,6 +79,7 @@ Noise ciphertext.
 | A device that leaves drops out of presence | Pass |
 | A socket from a web origin that is not allowed is refused | Pass |
 | The sign-in API answers CORS preflight for allowed origins only | Pass |
+| A host bounds the channels it keeps: a full table refuses more, unfinished handshakes expire, and a departed peer's channels go | Pass |
 | The relay's logs carry no tokens or payloads | Pass |
 | A relay that is stopping tells connected devices to reconnect at once (1012) | Pass |
 
@@ -176,6 +177,22 @@ Enclave) cannot sign, yet the relay still needs to know a device holds the key i
 names. An HMAC over a relay nonce, keyed by ECDH with a fresh relay ephemeral, does
 it with the same primitive the channel already uses. That keeps S6's TPM question to
 "can it do ECDH", which it can.
+
+### 6. Nothing a peer or client does is trusted to be tidy
+
+Review and a flaky check found two more things the product must carry:
+
+* **A host bounds what peers can make it hold.** A caller that exits never says so, and
+  a hostile device can start handshakes it never finishes. The hub now expires
+  unfinished handshakes, drops a peer's channels when it leaves presence, and ignores
+  new handshakes past a cap.
+* **A relay that refuses a client must let it hear why.** Ending the request right
+  after a close frame reset the TCP connection while the client was still sending,
+  and the reset discarded the close frame unread (the flood check failed 2 runs in 4).
+  The relay now reads and discards until the client answers, for up to 2 s. That run
+  then passed 8 times in 8.
+* The per-account device cap is checked and taken under one lock, so concurrent
+  admissions cannot both see room.
 
 ## Limitations
 

@@ -71,18 +71,26 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, ILogger<RelayH
         if (conn is null) { return; }
 
         var devices = accounts.GetOrAdd(conn.Account.Id, _ => new());
-        if (!devices.ContainsKey(conn.DeviceId) && devices.Count >= options.MaxDevicesPerAccount)
+        // Check and register under one lock: two admissions racing near the cap must not
+        // both see room.
+        Connection? replaced;
+        bool full;
+        lock (devices)
+        {
+            full = !devices.TryGetValue(conn.DeviceId, out replaced) && devices.Count >= options.MaxDevicesPerAccount;
+            if (!full) { devices[conn.DeviceId] = conn; }
+        }
+        if (full)
         {
             await conn.CloseAsync(CloseCodes.TooManyDevices, "too-many-devices");
             return;
         }
-        Connection? replaced = null;
-        devices.AddOrUpdate(conn.DeviceId, conn, (_, old) => { replaced = old; return conn; });
         if (replaced != null) { await replaced.CloseAsync(CloseCodes.Replaced, "replaced"); }
 
         log.LogInformation("connect {Login} device {Device} {Kind} \"{Name}\"; {Count} online in account", conn.Account.Login, conn.DeviceId[..8], conn.Kind, conn.Name, devices.Count);
-        await conn.SendJsonAsync(new { t = "ready", device = conn.DeviceId, account = conn.Account.Id, login = conn.Account.Login });
+        // Announce before "ready", so peers learn of a device before it can send them anything.
         await BroadcastPresenceAsync(conn.Account.Id);
+        await conn.SendJsonAsync(new { t = "ready", device = conn.DeviceId, account = conn.Account.Id, login = conn.Account.Login });
 
         string end = "closed";
         try { end = await ForwardAsync(conn, devices, aborted); }
@@ -90,7 +98,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, ILogger<RelayH
         finally
         {
             // Only remove this connection: a replacement may already hold the slot.
-            ((ICollection<KeyValuePair<string, Connection>>)devices).Remove(new(conn.DeviceId, conn));
+            lock (devices) { ((ICollection<KeyValuePair<string, Connection>>)devices).Remove(new(conn.DeviceId, conn)); }
             await conn.CloseAsync((int)WebSocketCloseStatus.NormalClosure, "");
             log.LogInformation("disconnect {Login} device {Device} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}",
                 conn.Account.Login, conn.DeviceId[..8], end, (DateTimeOffset.UtcNow - conn.Since).TotalSeconds, conn.FramesIn, conn.FramesOut, conn.BytesIn, conn.BytesOut);
@@ -134,7 +142,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, ILogger<RelayH
             try { frame = await Wire.ReceiveAsync(ws, Wire.MaxFrame, aborted); }
             catch (FrameTooLargeException)
             {
-                await conn.CloseAsync(CloseCodes.TooLarge, "frame-too-large");
+                await CloseAndDrainAsync(conn, CloseCodes.TooLarge, "frame-too-large");
                 return "frame too large";
             }
             if (frame is null) { return "closed"; }
@@ -142,7 +150,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, ILogger<RelayH
             if (type != WebSocketMessageType.Binary) { continue; }
             if (!WithinRate(conn))
             {
-                await conn.CloseAsync(CloseCodes.RateLimited, "rate-limited");
+                await CloseAndDrainAsync(conn, CloseCodes.RateLimited, "rate-limited");
                 return "rate limited";
             }
             if (data.Length <= 1 + Wire.IdBytes || data[0] != Wire.DataFrame) { continue; }
@@ -175,6 +183,24 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, ILogger<RelayH
         var now = Environment.TickCount64;
         if (now - c.WindowStart >= 1000) { c.WindowStart = now; c.WindowFrames = 0; }
         return ++c.WindowFrames <= options.MaxFramesPerSecond;
+    }
+
+    // Ending the request straight after a close frame resets the TCP connection while the
+    // client is still sending, and the reset discards the close frame before the client
+    // reads it, so it never learns why. Read and discard until it answers, briefly.
+    static async Task CloseAndDrainAsync(Connection conn, int code, string reason)
+    {
+        await conn.CloseAsync(code, reason);
+        var buffer = new byte[16 * 1024];
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try
+        {
+            while (conn.Socket.State == WebSocketState.CloseSent)
+            {
+                if ((await conn.Socket.ReceiveAsync(buffer, cts.Token)).MessageType == WebSocketMessageType.Close) { break; }
+            }
+        }
+        catch (Exception e) when (e is WebSocketException or OperationCanceledException) { }
     }
 
     async Task BroadcastPresenceAsync(string accountId)

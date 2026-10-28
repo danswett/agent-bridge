@@ -18,6 +18,7 @@ public sealed class SecureChannel
 
     internal XXHandshake Handshake { get; }
     internal TaskCompletionSource Ready { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal long CreatedAt { get; } = Environment.TickCount64;
 
     public string PeerId { get; }
     public ulong Id { get; }
@@ -80,12 +81,39 @@ public sealed class ChannelHub
     public event Action<SecureChannel>? Accepted;
     public event Action<string, Exception>? Rejected;
 
+    // Peers are not trusted to clean up after themselves (a caller that exits never says
+    // so, and a hostile one can open handshakes it never finishes), so the hub bounds what
+    // it keeps: unfinished handshakes expire, channels go when their peer leaves presence,
+    // and past the cap new handshakes are ignored.
+    public int MaxChannels { get; set; } = 256;
+    public TimeSpan HandshakeTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    public int ChannelCount => channels.Count;
+
     public ChannelHub(RelayClient relay, P256KeyPair key, string name, string kind)
     {
         this.relay = relay;
         this.key = key;
         intro = JsonSerializer.SerializeToUtf8Bytes(new { name, kind });
         relay.OnData = OnDataAsync;
+        relay.PresenceChanged += present =>
+        {
+            var online = present.Select(p => p.Id).ToHashSet();
+            // A presence list can be a moment older than a peer's first frame; spare new channels.
+            var settled = Environment.TickCount64 - 5000;
+            foreach (var (k, ch) in channels)
+            {
+                if (!online.Contains(k.Peer) && ch.CreatedAt < settled && channels.TryRemove(k, out _)) { ch.Fail(new IOException("peer left")); }
+            }
+        };
+    }
+
+    void PruneHandshakes()
+    {
+        var cutoff = Environment.TickCount64 - (long)HandshakeTimeout.TotalMilliseconds;
+        foreach (var (k, ch) in channels)
+        {
+            if (!ch.Handshake.IsComplete && ch.CreatedAt < cutoff && channels.TryRemove(k, out _)) { ch.Fail(new TimeoutException("handshake not completed")); }
+        }
     }
 
     // Binds the handshake to both routing ids and the channel, so a relay cannot splice
@@ -138,6 +166,8 @@ public sealed class ChannelHub
             switch (kind)
             {
                 case ChannelKind.Msg1 when ch is null:
+                    PruneHandshakes();
+                    if (channels.Count >= MaxChannels) { return; }
                     ch = new SecureChannel(this, from, id, false, new XXHandshake(false, key, Prologue(id, from, relay.DeviceId)));
                     channels[(from, id)] = ch;
                     ch.Handshake.ReadMessage(body);

@@ -278,6 +278,40 @@ if (mode == "check")
         return (good == "https://pwa.example" && evil is null, $"allowed {good ?? "none"}, evil {evil ?? "none"}");
     });
 
+    await Check("a host bounds the channels it keeps: a full table refuses more, unfinished handshakes expire, and a departed peer's channels go", async () =>
+    {
+        var bounded = await Connect(octoAccount, "bounded-host", "host");
+        bounded.Hub.MaxChannels = 4;
+        bounded.Hub.HandshakeTimeout = TimeSpan.FromSeconds(1);
+        var attacker = await Connect(octoAccount, "half-open", "test");
+        await attacker.Relay.WaitForPeerAsync(p => p.Id == bounded.Relay.DeviceId, TimeSpan.FromSeconds(5));
+        async Task SendMsg1()
+        {
+            // A valid first handshake message on a fresh channel, never followed up.
+            var hs = new XXHandshake(true, attacker.Key, []);
+            byte[] payload = [(byte)ChannelKind.Msg1, .. System.Security.Cryptography.RandomNumberGenerator.GetBytes(8), .. hs.WriteMessage([])];
+            await attacker.Relay.SendAsync(bounded.Relay.DeviceId, payload);
+        }
+        for (int i = 0; i < 10; i++) { await SendMsg1(); }
+        await Task.Delay(500);
+        var whenFull = bounded.Hub.ChannelCount;
+        await Task.Delay(1200);
+        await SendMsg1();
+        await Task.Delay(300);
+        var afterExpiry = bounded.Hub.ChannelCount;
+        var peer = await Connect(octoAccount, "short-lived", "app");
+        await peer.Hub.OpenAsync(bounded.Relay.DeviceId);
+        var withPeer = bounded.Hub.ChannelCount;
+        await Task.Delay(5500);
+        await peer.Relay.DisposeAsync();
+        await attacker.Relay.DisposeAsync();
+        var sw = Stopwatch.StartNew();
+        while (bounded.Hub.ChannelCount > 0 && sw.Elapsed < TimeSpan.FromSeconds(5)) { await Task.Delay(50); }
+        var afterLeave = bounded.Hub.ChannelCount;
+        await bounded.Relay.DisposeAsync();
+        return (whenFull == 4 && afterExpiry == 1 && withPeer == 2 && afterLeave == 0, $"full {whenFull}, after expiry {afterExpiry}, with peer {withPeer}, after both left {afterLeave}");
+    });
+
     await Check("the relay's logs carry no tokens or payloads", () =>
     {
         var all = string.Join("\n", logs);
