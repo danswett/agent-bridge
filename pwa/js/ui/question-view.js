@@ -324,6 +324,7 @@ export class QuestionPanel {
         });
         input.addEventListener('change', () => {
           if (multi) {
+            st.touched = true;
             st.selected = input.checked ? [...new Set([...st.selected, o.value])] : st.selected.filter((v) => v !== o.value);
           } else if (input.checked) {
             st.selected = o.value;
@@ -340,6 +341,7 @@ export class QuestionPanel {
         text.value = st.other;
         other.addEventListener('change', () => {
           st.otherChosen = other.checked;
+          if (multi) { st.touched = true; }
           if (other.checked) { text.focus(); }
           this.#clearError();
         });

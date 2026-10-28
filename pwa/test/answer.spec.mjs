@@ -92,15 +92,16 @@ test.describe('on a phone', () => {
     expect((await log(page))[0].fields).toEqual({ answer: { other: 'DuckDB, embedded' } });
   });
 
-  test('a multi choice is checkboxes, sent in the agent\'s order, with Other; required means at least one', async ({ page }) => {
+  test('a multi choice is checkboxes, sent in the agent\'s order, with Other', async ({ page }) => {
     await openDemo(page);
     const q = await ask(page, {
       id: 'q-multi', message: 'Which platforms?',
       fields: [{ name: 'os', title: 'Platforms', type: 'multi', required: true, allowOther: true, options: [{ value: 'win', label: 'Windows' }, { value: 'mac', label: 'macOS' }, { value: 'linux', label: 'Linux' }] }],
     });
     await expect(q.getByRole('checkbox')).toHaveCount(4);
+    await q.getByRole('checkbox', { name: 'Other…' }).check();
     await q.getByRole('button', { name: 'Send answer' }).tap();
-    await expect(q.locator('.answer-error')).toHaveText('"Platforms" needs an answer.');
+    await expect(q.locator('.answer-error')).toHaveText('"Platforms": the other answer is empty.');
     await expect(q.locator('.field[data-field="os"]')).toHaveClass(/\binvalid\b/);
     await q.getByRole('checkbox', { name: 'Linux' }).check();
     await q.getByRole('checkbox', { name: 'Windows' }).check();
@@ -110,6 +111,19 @@ test.describe('on a phone', () => {
     await q.getByRole('button', { name: 'Send answer' }).tap();
     await expect(q).toHaveCount(0);
     expect((await log(page))[0].fields).toEqual({ os: ['win', 'linux', { other: 'FreeBSD' }] });
+  });
+
+  test('a required multi choice can be answered with nothing ticked, as an empty list', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, {
+      id: 'q-none', message: 'Which of these broke?',
+      fields: [{ name: 'broke', title: 'Broken', type: 'multi', required: true, options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }], default: ['a'] }],
+    });
+    await expect(q.getByRole('checkbox', { name: 'A' })).toBeChecked();
+    await q.getByRole('checkbox', { name: 'A' }).uncheck();
+    await q.getByRole('button', { name: 'Send answer' }).tap();
+    await expect(q).toHaveCount(0);
+    expect((await log(page))[0].fields).toEqual({ broke: [] });
   });
 
   test('a yes-or-no is two buttons, and required means one of them', async ({ page }) => {

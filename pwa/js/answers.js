@@ -179,7 +179,7 @@ export function optionTone(option) {
 //
 // What the person has chosen, one entry per field, as the controls hold it:
 //   choice  { selected: value|null, otherChosen, other }
-//   multi   { selected: [values], otherChosen, other }
+//   multi   { selected: [values], otherChosen, other, touched }
 //   boolean { value: true|false|null }
 //   text    { text }
 //   number  { text, bad }   (bad: the input holds something that isn't a number)
@@ -199,7 +199,7 @@ function initialField(field) {
       const list = Array.isArray(d) ? d : d === null || d === undefined ? [] : [d];
       const selected = list.filter((v) => known(field, v));
       const other = list.map((v) => otherDefault(field, v)).find((v) => v !== null) ?? null;
-      return { selected, otherChosen: other !== null, other: other ?? '' };
+      return { selected, otherChosen: other !== null, other: other ?? '', touched: false };
     }
     case 'boolean': return { value: typeof d === 'boolean' ? d : null };
     case 'number': return { text: typeof d === 'number' && Number.isFinite(d) ? String(d) : typeof d === 'string' && d.trim() !== '' && Number.isFinite(Number(d)) ? d.trim() : '', bad: false };
@@ -242,7 +242,11 @@ export function buildAnswer(question, state) {
         const order = field.options.map((o) => o.value);
         const list = order.filter((v) => st.selected.includes(v));
         if (st.otherChosen) { list.push({ other: wellFormed(st.other) }); }
-        if (list.length) { fields[field.name] = list; }
+        // Any number of options, none included, so nothing ticked can be an answer: [].
+        // It is one when the person cleared the ticks, cleared a default, or must answer;
+        // an optional list nobody touched is left unanswered.
+        const hadDefault = field.default !== null && field.default !== undefined;
+        if (list.length || st.touched || hadDefault || field.required) { fields[field.name] = list; }
         break;
       }
       case 'boolean':

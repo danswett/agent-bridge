@@ -10,8 +10,10 @@
 // The request is what makes a resend safe, so an answer keeps its request until it has an
 // outcome, across reconnects, and gets a new one only when the person answers again (after
 // busy or refused). A host remembers requests for at least 10 minutes; after
-// `giveUpMs` without an outcome the answer is reported as unconfirmed instead of being
-// sent again, since a host that has forgotten it could type it twice.
+// `giveUpMs` from its first send without an outcome the answer is reported as unconfirmed
+// instead of being sent again, since a host that has forgotten it could type it twice.
+// One never sent at all (given while disconnected) can't have been typed, so it waits for
+// a connection however long that takes.
 //
 // Entry states: 'sending' (a request is out), 'waiting' (no channel; resent when there is
 // one), 'failed' (the host answered the op with an error, not an outcome; resendable as
@@ -62,7 +64,7 @@ export class AnswerService {
     const entry = {
       key, hostId, sessionId, questionId, answer,
       request: this.uuid(), state: 'sending', outcome: null, reason: null,
-      firstSentAt: this.now(), attempts: 0, busyResends: 0, timer: null, token: 0,
+      firstSentAt: null, attempts: 0, busyResends: 0, timer: null, token: 0,
     };
     this.#entries.set(key, entry);
     this.#attempt(entry);
@@ -114,7 +116,7 @@ export class AnswerService {
     clearTimeout(entry.timer);
     entry.timer = null;
     const token = ++entry.token;
-    if (this.now() - entry.firstSentAt > this.giveUpMs) {
+    if (entry.firstSentAt !== null && this.now() - entry.firstSentAt > this.giveUpMs) {
       this.#set(entry, { state: 'done', outcome: 'unconfirmed', reason: NO_OUTCOME });
       return;
     }
@@ -125,6 +127,7 @@ export class AnswerService {
     }
     const client = cur.client;
     entry.attempts++;
+    entry.firstSentAt ??= this.now();
     this.#set(entry, { state: 'sending', reason: null });
     const data = { id: entry.sessionId, question: entry.questionId, request: entry.request, ...entry.answer };
     let result;

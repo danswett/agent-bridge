@@ -173,13 +173,32 @@ test('busy on resend after resend is bounded, and ends as unconfirmed', async ()
 test('after the host\'s memory of requests may have gone, an answer is reported unconfirmed, not resent', async () => {
   let t = 0;
   const { conn, service, submit } = setup({ now: () => t, giveUpMs: 1000 });
-  conn.client = null;
   submit();
+  const old = conn.client;
+  conn.client = null;
+  old.close();
+  await flush();
   t = 5000;
   conn.client = fakeClient();
   service.ready();
   assert.equal(conn.client.calls.length, 0);
   assert.equal(service.get('h1', 's1', 'q1').outcome, 'unconfirmed');
+});
+
+test('an answer given while disconnected is sent however long the connection takes to come back', async () => {
+  let t = 0;
+  const { conn, service, submit } = setup({ now: () => t, giveUpMs: 1000 });
+  conn.client = null;
+  submit();
+  // Never sent, so no host can have typed it: the clock for giving up hasn't started.
+  t = 60 * 60 * 1000;
+  conn.client = fakeClient();
+  service.ready();
+  assert.equal(conn.client.calls.length, 1);
+  assert.equal(service.get('h1', 's1', 'q1').state, 'sending');
+  conn.client.last().resolve({ outcome: 'delivered' });
+  await flush();
+  assert.equal(service.get('h1', 's1', 'q1').outcome, 'delivered');
 });
 
 test('clear forgets every answer', async () => {

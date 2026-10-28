@@ -155,9 +155,28 @@ test('a default that is not an option becomes Other text where Other is allowed'
   );
   const st = initialState(q);
   assert.deepEqual(st.c, { selected: null, otherChosen: true, other: 'something else' });
-  assert.deepEqual(st.m, { selected: ['a'], otherChosen: true, other: 'and b' });
+  assert.deepEqual(st.m, { selected: ['a'], otherChosen: true, other: 'and b', touched: false });
   assert.deepEqual(st.n, { selected: null, otherChosen: false, other: '' });
   assert.deepEqual(buildAnswer(q, st).answer.fields, { c: { other: 'something else' }, m: ['a', { other: 'and b' }] });
+});
+
+test('a multi choice with nothing ticked is answered with an empty list, which any number allows', () => {
+  const q = form({ name: 'm', title: 'Areas', type: 'multi', required: true, options: [{ value: 'a' }, { value: 'b' }], default: ['a'] });
+  const st = initialState(q);
+  st.m.selected = [];
+  const { answer } = buildAnswer(q, st);
+  assert.deepEqual(answer.fields, { m: [] });
+  assert.equal(checkAnswer(q, answer), null);
+  // Required with nothing ticked and no default: [], since any number is allowed.
+  const req = form({ name: 'm', type: 'multi', required: true, options: [{ value: 'a' }] });
+  assert.deepEqual(buildAnswer(req, initialState(req)).answer.fields, { m: [] });
+  // Optional: left alone it is unanswered; cleared after ticking it is [].
+  const opt = form({ name: 'm', type: 'multi', options: [{ value: 'a' }] }, { name: 't', type: 'text' });
+  const os = initialState(opt);
+  os.t.text = 'x';
+  assert.deepEqual(buildAnswer(opt, os).answer.fields, { t: 'x' });
+  os.m.touched = true;
+  assert.deepEqual(buildAnswer(opt, os).answer.fields, { m: [], t: 'x' });
 });
 
 test('blank text and empty numbers are no answer; a number box holding words is a problem', () => {
