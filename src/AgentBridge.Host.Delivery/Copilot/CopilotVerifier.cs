@@ -69,8 +69,9 @@ public static class CopilotVerifier
     }
 
     // tool.execution_complete alone: "User responded: <words>" or "User selected: <option>",
-    // and for a form "User responded: a=x, b=y". The rendering is lossy (delimiters inside
-    // values cannot be told from the separators), so anything ambiguous is not a match.
+    // which is trusted only where it can be read one way. A form of several fields renders
+    // as "a=x, b=y", which is equally a="x, b=y" with b left out, so only its structured
+    // record (human_response.recorded, which current builds write) can confirm it.
     static (bool, string) Rendered(CopilotPlan plan, string? text)
     {
         var rest = Strip(text?.Trim());
@@ -81,29 +82,13 @@ public static class CopilotVerifier
                 : "the session recorded the answer in a form the host could not compare");
         }
         if (plan.Text is { } words) { return Same(rest, words) ? (true, "") : (false, "the session recorded different words"); }
-
-        var spellings = plan.Fields.Select(f => (f.Name, Spelling: Spell(f.Value))).ToList();
-        if (spellings.Any(s => s.Spelling is null)) { return (false, "the session's record of this answer cannot be compared"); }
-        if (spellings.Count == 1 && !rest.StartsWith(spellings[0].Name + "=", StringComparison.Ordinal))
+        if (plan.Fields is not [var (name, value)])
         {
-            return Same(rest, spellings[0].Spelling!) ? (true, "") : (false, $"the session recorded a different answer for \"{spellings[0].Name}\"");
+            return (false, "the session recorded only a rendering of the form, without the structured answer that could confirm it");
         }
-        if (spellings.Any(s => s.Name.IndexOfAny([',', '=']) >= 0 || s.Spelling!.IndexOfAny([',', '=', '"']) >= 0))
-        {
-            return (false, "the session's record of this answer cannot be compared");
-        }
-        var pairs = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var part in rest.Split(','))
-        {
-            var eq = part.IndexOf('=');
-            if (eq < 0 || !pairs.TryAdd(part[..eq].Trim(), part[(eq + 1)..].Trim())) { return (false, "the session's record of this answer cannot be compared"); }
-        }
-        foreach (var (name, spelling) in spellings)
-        {
-            var ok = pairs.Remove(name, out var got) ? Same(got, spelling!) : spelling!.Length == 0;
-            if (!ok) { return (false, $"the session recorded a different answer for \"{name}\""); }
-        }
-        return pairs.Count == 0 ? (true, "") : (false, "the session recorded a field that was not typed");
+        if (Spell(value) is not { } spelling) { return (false, "the session's record of this answer cannot be compared"); }
+        if (rest.StartsWith(name + "=", StringComparison.Ordinal) && !Same(rest, spelling)) { rest = rest[(name.Length + 1)..]; }
+        return Same(rest, spelling) ? (true, "") : (false, $"the session recorded a different answer for \"{name}\"");
     }
 
     static string? Strip(string? text)

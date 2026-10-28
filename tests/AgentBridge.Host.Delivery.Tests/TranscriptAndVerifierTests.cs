@@ -162,15 +162,17 @@ public class CopilotVerifierTests
     }
 
     [Fact]
-    public void A_rendered_form_is_compared_pair_by_pair_and_an_ambiguous_one_is_never_a_match()
+    public void A_form_of_several_fields_is_never_confirmed_from_its_rendering_alone()
     {
-        const string Two = """{ "message": "m", "requestedSchema": { "properties": { "next": { "enum": ["s3", "s4"] }, "notes": { "type": "string" } } } }""";
+        const string Two = """{ "message": "m", "requestedSchema": { "properties": { "a": { "type": "string" }, "b": { "type": "string" } } } }""";
 
-        Assert.True(CopilotVerifier.Check(Plan(Two, new { next = "s4", notes = "ok" }), Rendered("User responded: next=s4, notes=ok")).Matched);
-        Assert.False(CopilotVerifier.Check(Plan(Two, new { next = "s4", notes = "ok" }), Rendered("User responded: next=s3, notes=ok")).Matched);
-        var commas = CopilotVerifier.Check(Plan(Two, new { next = "s4", notes = "a, b" }), Rendered("User responded: next=s4, notes=a, b"));
-        Assert.False(commas.Matched);
-        Assert.Contains("cannot be compared", commas.Reason);
+        // The same text is a="x", b="y", or a="x, b=y" with b left out: only the structured
+        // record can tell them apart.
+        var (matched, reason) = CopilotVerifier.Check(Plan(Two, new { a = "x", b = "y" }), Rendered("User responded: a=x, b=y"));
+
+        Assert.False(matched);
+        Assert.Contains("structured", reason);
+        Assert.True(CopilotVerifier.Check(Plan(Two, new { a = "x", b = "y" }), Human("""{ "a": "x", "b": "y" }""")).Matched);
     }
 
     [Fact]

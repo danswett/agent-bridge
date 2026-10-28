@@ -208,8 +208,10 @@ public sealed class AnswerService : ISessionAnswerer
             if (state.Answer is { } record)
             {
                 // Current builds write the structured answer beside the rendered result; it
-                // is the one compared exactly, so a moment is allowed for it to follow.
-                var wait = record.HumanContent is null && plan.Text is null && elapsed - (renderedAt ??= elapsed) < TimeSpan.FromSeconds(1) && elapsed < options.ConfirmTimeout;
+                // is the one compared exactly, so a moment is allowed for it to follow, and a
+                // form of several fields, whose rendering cannot confirm it, waits for it.
+                var wait = record.HumanContent is null && plan.Text is null && elapsed < options.ConfirmTimeout
+                    && (plan.Fields.Count > 1 || elapsed - (renderedAt ??= elapsed) < TimeSpan.FromSeconds(1));
                 if (!wait)
                 {
                     var (matched, reason) = CopilotVerifier.Check(plan, record);
