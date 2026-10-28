@@ -51,8 +51,10 @@ The same rules, with these differences, each deliberate:
 1. Request UUID (`refused` otherwise). Every outcome is remembered for 15 minutes and
    returned for a repeat, which does nothing more.
 2. Platform, agent-ha-bridge, `Stops.Check` (`refused`).
-3. The session is live (`stale`), has a known process (`refused`), which is a running agent
-   process (`stale`) with a readable start time (`refused`).
+3. The session is live (`stale`), and the process discovery bound it to is known
+   (`refused`) with a start time (`refused`), and is the agent process running under that
+   pid now, by start time (`stale`): a session whose CLI has exited stays listed until the
+   next discovery pass, and its pid can pass to another agent meanwhile.
 4. The process is opened for a moment: still the process that started then (`stale`
    otherwise), not elevated, this user's, not the host (`refused`).
 5. Already `ending` from another press: `busy`.

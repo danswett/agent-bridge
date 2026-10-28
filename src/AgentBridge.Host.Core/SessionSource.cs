@@ -96,6 +96,14 @@ public sealed class SessionSource : ISessionSource
         lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.GetForm : null; }
     }
 
+    public SessionProcess? ProcessOf(string id)
+    {
+        lock (_gate)
+        {
+            return _entries.TryGetValue(id, out var e) && e.Tracker.Discovered is { ProcessId: { } pid } d ? new SessionProcess(pid, d.ProcessStartedAt) : null;
+        }
+    }
+
     public SessionSubscription Subscribe()
     {
         lock (_gate)

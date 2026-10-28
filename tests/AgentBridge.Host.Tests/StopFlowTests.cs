@@ -216,14 +216,32 @@ public sealed class StopFlowTests : IAsyncLifetime
         var ch = await OpenAsync();
         var first = await StopAsync(ch);
 
-        // The same pid, now another process: the session was resumed and the id reused.
+        // The same pid, now another process: the session was resumed and the id reused, and
+        // discovery has seen it.
         control.Run(AgentKind.Copilot, Pid, Started.AddMinutes(5));
+        await source.RefreshAsync();
         var replaced = await StopAsync(ch, first.Confirm);
 
         Assert.Equal(("confirm", "the session's process has changed since the first press; this session is still working; the confirmation lapses in 10 s"), (replaced.Outcome_, replaced.Reason));
         Assert.Empty(injector.Plans);
         Assert.Empty(control.Terminated);
         Assert.Equal("ended", (await StopAsync(ch, replaced.Confirm)).Outcome_);
+    }
+
+    [Fact]
+    public async Task A_process_that_took_the_id_of_a_session_that_has_exited_is_never_ended_in_its_place()
+    {
+        var ch = await OpenAsync();
+
+        // The idle session's CLI exited and another agent process took its pid, before any
+        // discovery pass noticed: the card is still there, still idle.
+        control.Exit(Pid);
+        control.Run(AgentKind.Copilot, Pid, Started.AddMinutes(30));
+        Assert.Equal(SessionStatus.Idle, source.Get(Id)!.Status);
+
+        Assert.Equal(("stale", "the session's process has ended"), Pair(await StopAsync(ch)));
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
     }
 
     [Fact]

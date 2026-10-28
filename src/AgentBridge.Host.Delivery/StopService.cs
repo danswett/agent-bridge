@@ -77,9 +77,10 @@ public sealed class StopOptions
 //   * Graceful first: /exit typed into the agent's console, as a reply would be, so the CLI
 //     writes its transcript and releases its lock, and the session stays resumable. If it is
 //     still running after Grace, the process alone is terminated, never its tree.
-//   * Never the wrong process: the session's process is checked against the agent processes
-//     running now, by id and start time, both when arming and when confirming, and is held
-//     open by handle from then until it has gone, so its id cannot pass to another process.
+//   * Never the wrong process: the process discovery bound the session to, by id and start
+//     time, must be the one running under that id now, both when arming and when
+//     confirming, and is held open by handle from then until it has gone, so its id cannot
+//     pass to another process.
 //   * Never while agent-ha-bridge is active for this user (G5), checked when the request
 //     arrives, before typing and before terminating; never an elevated or another user's
 //     process. One delivery per session at a time: ending holds the session's DeliveryGate
@@ -130,7 +131,7 @@ public sealed class StopService : ISessionStopper
     async Task<StopResult> EndAsync(StopRequest request, Guid key)
     {
         Session session;
-        AgentProcess process;
+        int processId;
         DateTimeOffset startedAt;
         try
         {
@@ -139,27 +140,34 @@ public sealed class StopService : ISessionStopper
             if (Stops.Check(request) is { } invalid) { return Refused(invalid); }
             if (source.Get(request.Id) is not { } found) { return Stale("the session has ended"); }
             session = found;
-            if (session.ProcessId is not { } pid) { return Refused("the session's process is not known; end it at the machine"); }
-            if (processes.GetAgentProcesses(session.Agent).FirstOrDefault(p => p.Id == pid) is not { } running) { return Stale("the session's process has ended"); }
-            process = running;
+            // The process discovery bound the session to, by id and start time, and the one
+            // running under that id now must be it. A session whose process has exited stays
+            // listed until the next discovery pass, and its id can pass to another agent
+            // process meanwhile, which must never be ended in its place.
+            if (source.ProcessOf(session.Id) is not { } bound) { return Refused("the session's process is not known; end it at the machine"); }
+            processId = bound.Id;
             // The start time is the process's identity: without it, a process that later takes
             // the id could not be told from this one.
-            if (process.StartedAt is not { } started) { return Refused("the host cannot read when the session's process started, so it cannot tell it from another; end it at the machine"); }
+            if (bound.StartedAt is not { } started) { return Refused("the host cannot read when the session's process started, so it cannot tell it from another; end it at the machine"); }
             startedAt = started;
+            if (processes.GetAgentProcesses(session.Agent).FirstOrDefault(p => p.Id == processId) is not { StartedAt: { } now } || !Same(now, startedAt))
+            {
+                return Stale("the session's process has ended");
+            }
 
             // Refused on the first press, not after the person has confirmed.
-            var check = control.Open(process.Id, startedAt);
+            var check = control.Open(processId, startedAt);
             check.Process?.Dispose();
             if (check.Refusal is { } refusal) { return Refused(refusal); }
             if (check.Gone) { return Stale("the session's process has ended"); }
             // Another press is ending it already.
             if (session.Status == SessionStatus.Ending) { return Busy(); }
 
-            if (Doing(session) is { } doing && !Confirms(session.Id, request.Confirm, process.Id, startedAt, out var why))
+            if (Doing(session) is { } doing && !Confirms(session.Id, request.Confirm, processId, startedAt, out var why))
             {
-                var token = ArmFor(session.Id, process.Id, startedAt);
+                var token = ArmFor(session.Id, processId, startedAt);
                 var seconds = (int)Math.Round(options.ConfirmWindow.TotalSeconds);
-                log($"end requested for {Short(session.Id)} (pid {process.Id}) while {doing}; {why ?? "waiting for a second press"}");
+                log($"end requested for {Short(session.Id)} (pid {processId}) while {doing}; {why ?? "waiting for a second press"}");
                 return new StopResult(StopOutcome.Confirm, $"{(why is null ? "" : why + "; ")}{doing}; the confirmation lapses in {seconds} s")
                 {
                     Confirm = token,
@@ -178,7 +186,7 @@ public sealed class StopService : ISessionStopper
         try
         {
             await SetEndingAsync(session.Id, true);
-            try { result = await EndProcessAsync(session, process.Id, startedAt); }
+            try { result = await EndProcessAsync(session, processId, startedAt); }
             catch (Exception e) { result = Failed($"the host could not finish ending the session ({e.Message}); check at the machine"); }
         }
         finally { gate.Release(session.Id, key); }
@@ -283,7 +291,7 @@ public sealed class StopService : ISessionStopper
                 why = "the first press has lapsed";
                 return false;
             }
-            if (arm.ProcessId != pid || arm.StartedAt != startedAt)
+            if (arm.ProcessId != pid || !Same(arm.StartedAt, startedAt))
             {
                 why = "the session's process has changed since the first press";
                 return false;
@@ -314,6 +322,9 @@ public sealed class StopService : ISessionStopper
     {
         lock (armsGate) { arms.Remove(sessionId); }
     }
+
+    // Two readings of one creation time, which may differ by rounding but never by more.
+    static bool Same(DateTimeOffset a, DateTimeOffset b) => Math.Abs((a - b).Ticks) <= TimeSpan.TicksPerMillisecond;
 
     static string Short(string id) => id.Length > 8 ? id[..8] : id;
 
