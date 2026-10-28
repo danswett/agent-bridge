@@ -200,18 +200,22 @@ public sealed class AnswerService : ISessionAnswerer
     async Task<AnswerResult> ConfirmAsync(string transcript, string toolCallId, long from, CopilotPlan plan)
     {
         var started = options.Time.GetTimestamp();
-        TimeSpan? renderedAt = null;
+        TimeSpan? firstSeen = null;
         while (true)
         {
             var elapsed = options.Time.GetElapsedTime(started);
             var state = CopilotTranscript.Since(transcript, toolCallId, from);
             if (state.Answer is { } record)
             {
-                // Current builds write the structured answer beside the rendered result; it
-                // is the one compared exactly, so a moment is allowed for it to follow, and a
-                // form of several fields, whose rendering cannot confirm it, waits for it.
-                var wait = record.HumanContent is null && plan.Text is null && elapsed < options.ConfirmTimeout
-                    && (plan.Fields.Count > 1 || elapsed - (renderedAt ??= elapsed) < TimeSpan.FromSeconds(1));
+                // Current builds write the structured answer and the call's completion side by
+                // side. The structured answer is the one compared exactly, and the completion
+                // says whether the call failed, so a moment is allowed for whichever is still
+                // missing; a form of several fields, whose rendering cannot confirm it, waits
+                // for its structured answer as long as it takes.
+                var grace = elapsed - (firstSeen ??= elapsed) < TimeSpan.FromSeconds(1);
+                var wait = elapsed < options.ConfirmTimeout
+                    && ((record.HumanContent is null && plan.Text is null && (plan.Fields.Count > 1 || grace))
+                        || (!record.Completed && grace));
                 if (!wait)
                 {
                     var (matched, reason) = CopilotVerifier.Check(plan, record);

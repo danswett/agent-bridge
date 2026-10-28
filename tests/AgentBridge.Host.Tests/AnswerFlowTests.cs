@@ -131,6 +131,22 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_matching_answer_followed_at_once_by_the_call_failing_is_unconfirmed()
+    {
+        injector.OnInject = () =>
+        {
+            Fixture.Append(events, Recorded("q1", new { pick = "b" }));
+            _ = Task.Delay(300).ContinueWith(_ => Fixture.Append(events, Copilot.ToolDone("q1", second++, success: false)), TaskScheduler.Default);
+        };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("unconfirmed", outcome);
+        Assert.Contains("error", reason);
+    }
+
+    [Fact]
     public async Task A_different_recorded_answer_or_none_at_all_is_unconfirmed_never_delivered()
     {
         var ch = await OpenAsync();

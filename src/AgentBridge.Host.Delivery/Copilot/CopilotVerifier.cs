@@ -8,8 +8,9 @@ public static class CopilotVerifier
 {
     public static (bool Matched, string Reason) Check(CopilotPlan plan, CopilotAnswerRecord record)
     {
-        if (record.HumanContent is { } content) { return Human(plan, content); }
+        // A call that ended in an error did not take the answer, whatever else was recorded.
         if (!record.Succeeded) { return (false, "the question ended with an error instead of the answer"); }
+        if (record.HumanContent is { } content) { return Human(plan, content); }
         return Rendered(plan, record.ResultText);
     }
 

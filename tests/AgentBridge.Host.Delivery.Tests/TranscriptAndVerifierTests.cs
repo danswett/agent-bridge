@@ -140,6 +140,18 @@ public class CopilotVerifierTests
     }
 
     [Fact]
+    public void A_matching_structured_answer_beside_a_failed_tool_call_is_not_a_match()
+    {
+        var plan = Plan("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a", "b"] } } } }""", new { pick = "a" });
+        var failed = new CopilotAnswerRecord(JsonDocument.Parse("""{ "pick": "a" }""").RootElement.Clone(), true, false, null);
+
+        var (matched, reason) = CopilotVerifier.Check(plan, failed);
+
+        Assert.False(matched);
+        Assert.Contains("error", reason);
+    }
+
+    [Fact]
     public void Words_through_Other_match_only_when_the_words_were_recorded_and_not_an_option()
     {
         const string Pick = """{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a", "b"] } } } }""";
