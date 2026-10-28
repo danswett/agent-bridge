@@ -78,6 +78,7 @@ have been locked when the notice arrived, so it was repeated.
 | Pushes are rate-limited per account, and a gone subscription (410) is dropped | Pass |
 | A host's saved push subscriptions belong to one account: signing the same profile in as another account neither loads nor inherits them | Pass |
 | A push topic Apple would refuse (a length base64 cannot have) is dropped, and the push still goes | Pass |
+| A question asked while the host's relay connection is down still notifies the phone once the host reconnects, exactly once | Pass |
 
 `js/test-sw.mjs` (CI) runs the service worker's handlers against a stubbed worker scope;
 headless browsers refuse notification permission, so this is where they are pinned:
@@ -128,7 +129,10 @@ headless browsers refuse notification permission, so this is where they are pinn
 
    Notifications must never depend on the phone being connected. The host now also
    accepts a question from its own machine (`ask.txt` in the profile folder), as an
-   agent's `ask_user` would ask one. The app also remembers the last host and goes
+   agent's `ask_user` would ask one. The same holds for the host's own connection. A
+   notice that couldn't be sent because the host was reconnecting is sent on the next
+   connection (found in review). Before, it was lost, and a sleeping phone would never
+   have heard. The app also remembers the last host and goes
    straight back to it, so opening it from the Home Screen needs no Connect.
 6. **Apple is stricter than RFC 8030 about the `Topic` header.** Every real push was
    refused with 400 `BadWebPushTopic`, though the fake push service and the RFC accepted

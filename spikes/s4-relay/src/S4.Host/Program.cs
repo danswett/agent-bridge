@@ -48,7 +48,9 @@ switch (mode)
                 while (true)
                 {
                     await Task.Delay(1000);
-                    if (questions is null || !File.Exists(askFile)) { continue; }
+                    // Left in place while the relay connection is down; QuestionService also
+                    // resends a notice that a dropped connection lost.
+                    if (questions is null || questions.Relay.Completion.IsCompleted || !File.Exists(askFile)) { continue; }
                     try
                     {
                         var text = (await File.ReadAllTextAsync(askFile)).Trim();

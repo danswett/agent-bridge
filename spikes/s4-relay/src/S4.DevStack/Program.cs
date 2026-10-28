@@ -544,6 +544,43 @@ if (mode == "check")
             $"same account reloads {reloadedSame}, other account {reloadedOther}; switch while running {beforeSwitch} -> {afterSwitch}, then reloaded as the first account {afterSwitchReload}");
     });
 
+    await Check("a question asked while the host's relay connection is down still notifies the phone once the host reconnects", async () =>
+    {
+        var hostKey = P256KeyPair.Generate();
+        var first = await RelayClient.ConnectAsync(url, malloryAccount.Token, hostKey, "retry-host", "host");
+        var questions = new QuestionService(first, "retry-host");
+        _ = new ChannelHub(first, hostKey, "retry-host", "host") { Handler = (c, op, d) => questions.HandleAsync(c, op, d) };
+        using var ua = P256KeyPair.Generate();
+        var phone = await Connect(malloryAccount, "retry-phone", "pwa");
+        await phone.Relay.WaitForPeerAsync(p => p.Id == first.DeviceId, TimeSpan.FromSeconds(5));
+        var toHost = await phone.Hub.OpenAsync(first.DeviceId);
+        await toHost.RequestAsync("push-subscribe", new { endpoint = $"{pushService.Url}/push/retry-1", p256dh = B64Url.Encode(ua.Public), auth = B64Url.Encode(new byte[16]), appUrl = "https://pwa.example/" });
+        await phone.Relay.DisposeAsync();
+
+        // The connection drops; the agent asks anyway; the phone is asleep and offline.
+        await first.DisposeAsync();
+        pushService.Received.Clear();
+        var q = await questions.AskAsync("asked while reconnecting?", ["yes"]);
+        var whileDown = pushService.Received.Count;
+
+        var second = await RelayClient.ConnectAsync(url, malloryAccount.Token, hostKey, "retry-host", "host");
+        questions.Relay = second;
+        var sw = Stopwatch.StartNew();
+        while (pushService.Received.IsEmpty && sw.Elapsed < TimeSpan.FromSeconds(10)) { await Task.Delay(50); }
+        await Task.Delay(300);
+        var after = pushService.Received.ToArray();
+        // A later reconnect does not send it again.
+        var third = await RelayClient.ConnectAsync(url, malloryAccount.Token, hostKey, "retry-host", "host");
+        questions.Relay = third;
+        await Task.Delay(500);
+        var total = pushService.Received.Count;
+        await third.DisposeAsync();
+        await second.DisposeAsync();
+        var notice = after.Length == 1 ? JsonDocument.Parse(WebPushCrypto.Decrypt(after[0].Body, ua, new byte[16])).RootElement.GetProperty("notification").GetProperty("body").GetString() : null;
+        return (whileDown == 0 && after.Length == 1 && notice == q.Text && total == 1,
+            $"pushes while down {whileDown}, after reconnect {after.Length} (\"{notice}\"), after another reconnect {total}");
+    });
+
     await Check("the relay's logs carry no tokens or payloads", () =>
     {
         var all = string.Join("\n", logs);
