@@ -11,15 +11,22 @@ Home Assistant.
 
 ## Planned shape
 
-* **Bridge Host** (C#/.NET, Windows and macOS): one per machine. It does what the
-  agent-ha-bridge daemon does today: picks up hook events, tails transcripts, and
-  delivers answers, replies, launches and stops.
-* **Agent Bridge app** (WinUI 3): the desktop UI, notifications, and the installer and
-  manager for the host and agent hooks.
+Nothing depends on Windows: the host, hook, relay, protocol and all product logic are
+shared on Windows, macOS and Linux, and each desktop gets a native app of equal
+standing.
+
+* **Bridge Host** (C#/.NET, Windows, macOS and Linux): one per machine. It does what
+  the agent-ha-bridge daemon does today: picks up hook events, tails transcripts, and
+  delivers answers, replies, launches and stops. It holds all the product logic.
+* **Agent Bridge apps**: WinUI 3 on Windows and SwiftUI on macOS. Both are thin native
+  shells over the host, providing the desktop UI, notifications, and the installer and
+  manager for the host and agent hooks. Linux runs the host only, for now.
 * **Relay**: an untrusted, end-to-end-encrypted rendezvous so your machines and phone
   can reach each other from anywhere. It can be self-hosted, and there are LAN-only
   options.
 * **Phone**: a PWA first, native apps later.
+
+The protocol between them is specified in [docs/protocol](docs/protocol/v1-sessions.md).
 
 ## Ground rules while this is being built
 
