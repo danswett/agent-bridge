@@ -248,6 +248,19 @@ test('folding is remembered across a reload, and a new question unfolds the card
   await expect(card(page, CODEX).locator('button.fold')).toHaveAttribute('aria-expanded', 'false');
 });
 
+test('a folded card stays folded through ordinary updates, and one tap opens it', async ({ page }) => {
+  await openDemo(page);
+  const codex = card(page, CODEX);
+  await codex.locator('button.fold').click();
+  await upsert(page, CODEX, { updatedAt: later(), activity: { response: 'A plain update.' } });
+  await expect(codex.locator('.response')).toHaveText('A plain update.');
+  await expect(codex.locator('.frame')).toHaveClass(/\bcollapsed\b/);
+  await expect(codex.locator('.frame')).toHaveClass(/\bidle\b/);
+  await codex.locator('button.fold').click();
+  await expect(codex.locator('button.fold')).toHaveAttribute('aria-expanded', 'true');
+  await expect(codex.locator('.body')).toBeVisible();
+});
+
 test('the fold button is a labelled disclosure that works from the keyboard', async ({ page }) => {
   await openDemo(page);
   const fold = card(page, CLAUDE).locator('button.fold');

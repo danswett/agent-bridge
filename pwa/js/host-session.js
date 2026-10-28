@@ -85,17 +85,23 @@ export class HostSession {
   }
 
   #maybeOpen() {
-    if (!this.targetId || this.client || this.#opening || !this.connection.ready || !this.targetOnline) { return; }
-    const target = this.targetId;
+    // An attempt for another machine (the user switched while it was pending) does not
+    // block this one; it closes its own channel when it finds it is no longer wanted.
+    if (!this.targetId || this.client || this.#opening?.target === this.targetId || !this.connection.ready || !this.targetOnline) { return; }
+    const attempt = { target: this.targetId };
+    this.#opening = attempt;
     this.#set('opening');
-    this.#opening = this.#open(target).finally(() => { this.#opening = null; });
+    this.#open(attempt).finally(() => { if (this.#opening === attempt) { this.#opening = null; } });
   }
 
-  async #open(target) {
+  async #open(attempt) {
+    const target = attempt.target;
+    // Superseded by a later choice, or by a later attempt for the same machine.
+    const stale = () => this.targetId !== target || this.#opening !== attempt;
     let client;
     try {
       const channel = await this.connection.openChannel(target);
-      if (this.targetId !== target) { channel.close(); return; }
+      if (stale()) { channel.close(); return; }
       client = this.makeClient(channel, this.store);
       this.channel = channel;
       this.client = client;
@@ -119,7 +125,7 @@ export class HostSession {
       await client.subscribe();
       if (this.client === client) { this.#set('open'); }
     } catch (e) {
-      if (this.targetId !== target) { return; }
+      if (stale()) { client?.close(); return; }
       if (e.unsupported) {
         this.#set('unsupported', `This machine doesn't support Agent Bridge sessions yet (${e.reason ?? e.message}).`);
         return;

@@ -84,7 +84,8 @@ export class SessionCard {
     root.dataset.id = s.id;
     root.dataset.status = s.status;
     root.dataset.agent = s.agent;
-    e.frame.className = `frame ${s.status}`;
+    // Toggled, not assigned: the frame also carries 'collapsed', which only folding changes.
+    for (const st of ['working', 'waiting', 'idle']) { e.frame.classList.toggle(st, st === s.status); }
 
     if (this.#changed('agent', s.agent)) {
       e.badge.className = `agent-badge agent-${s.agent}`;
