@@ -73,6 +73,25 @@ public class ClaudeTests
     }
 
     [Fact]
+    public async Task Several_text_blocks_in_one_reply_make_one_response()
+    {
+        await using var s = new Session_();
+
+        var s1 = await s.After(Claude.User("explain", 1), Claude.Assistant(2, "end_turn", Claude.Text("First part."), Claude.Thinking("hmm"), Claude.Text("Second part.")));
+
+        Assert.Equal("First part.\n\nSecond part.", s1.Activity.Response);
+
+        var streamed = await s.After(Claude.User("again", 3), Claude.AssistantMessage("msg_2", 4, null, Claude.Text("Streamed one.")),
+            Claude.AssistantMessage("msg_2", 5, "end_turn", Claude.Text("Streamed two.")));
+
+        Assert.Equal("Streamed one.\n\nStreamed two.", streamed.Activity.Response);
+
+        var next = await s.After(Claude.User("third", 6), Claude.AssistantMessage("msg_3", 7, "end_turn", Claude.Text("A new reply.")));
+
+        Assert.Equal("A new reply.", next.Activity.Response);
+    }
+
+    [Fact]
     public async Task An_interrupt_from_the_user_ends_the_turn_and_fails_the_running_tool()
     {
         await using var s = new Session_();

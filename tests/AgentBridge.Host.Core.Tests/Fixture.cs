@@ -213,9 +213,13 @@ internal static class Claude
             ["content"] = new JsonArray(new JsonObject { ["type"] = "tool_result", ["tool_use_id"] = id, ["content"] = "result", ["is_error"] = error }),
         }, s).ToJsonString();
 
-    public static string Assistant(int s, string? stopReason, params JsonObject[] blocks) =>
+    public static string Assistant(int s, string? stopReason, params JsonObject[] blocks) => AssistantMessage(null, s, stopReason, blocks);
+
+    // One API message streamed as several entries shares its message id.
+    public static string AssistantMessage(string? id, int s, string? stopReason, params JsonObject[] blocks) =>
         Entry("assistant", new JsonObject
         {
+            ["id"] = id,
             ["model"] = "claude-fixture",
             ["role"] = "assistant",
             ["content"] = new JsonArray([.. blocks]),

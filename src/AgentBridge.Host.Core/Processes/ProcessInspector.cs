@@ -39,10 +39,7 @@ public sealed class SystemProcessInspector : IProcessInspector
         };
         if (name is null) { return []; }
 
-        // Windows names the executable exactly; elsewhere a CLI can run under node or bun,
-        // and Claude's Bun-compiled binary calls itself claude.exe even on macOS, so asking
-        // only for the bare name found nothing and every live session read as dead.
-        string[] names = OperatingSystem.IsWindows() ? [name] : [name, name + ".exe", "node", "bun"];
+        var names = CandidateNames(name);
         var found = new List<AgentProcess>();
         var seen = new HashSet<int>();
         var live = new HashSet<(int, long)>();
@@ -88,7 +85,14 @@ public sealed class SystemProcessInspector : IProcessInspector
         catch (Exception e) when (e is ArgumentException or InvalidOperationException or Win32Exception) { return false; }
     }
 
-    static bool IsAgentScript(AgentKind agent, string name, string? commandLine)
+    // The agent's own executable, and the runtimes a package install runs it under. Not
+    // only elsewhere: an npm install on Windows runs as node.exe too, and asking only for
+    // the bare name read every one of its sessions as dead. Claude's Bun-compiled binary
+    // calls itself claude.exe even on macOS.
+    internal static string[] CandidateNames(string name) =>
+        OperatingSystem.IsWindows() ? [name, "node", "bun"] : [name, name + ".exe", "node", "bun"];
+
+    internal static bool IsAgentScript(AgentKind agent, string name, string? commandLine)
     {
         if (string.IsNullOrEmpty(commandLine)) { return false; }
         var package = agent switch
@@ -97,7 +101,7 @@ public sealed class SystemProcessInspector : IProcessInspector
             AgentKind.Claude => "@anthropic-ai/claude-code",
             _ => "@openai/codex",
         };
-        if (commandLine.Contains(package, StringComparison.Ordinal)) { return true; }
+        if (commandLine.Replace('\\', '/').Contains(package, StringComparison.Ordinal)) { return true; }
         foreach (var token in CommandLine.Split(commandLine))
         {
             var file = token.Replace('\\', '/');

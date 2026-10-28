@@ -35,6 +35,15 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;
 
+    // The message whose text the response holds, so its later blocks extend it.
+    string? _responseMessage;
+
+    public override void Reset()
+    {
+        base.Reset();
+        _responseMessage = null;
+    }
+
     protected override void Count(JsonElement e)
     {
         if (Json.Bool(e, "isSidechain") == true) { return; }
@@ -132,6 +141,8 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         // nothing about which model the session runs.
         if (Text.NonBlank(Json.Str(message, "model")) is { } model && !model.StartsWith('<')) { S.Model = model; }
         var askedForTools = false;
+        // Without an id, the entry itself is the message.
+        var key = Json.Str(message, "id") ?? Guid.NewGuid().ToString("N");
         foreach (var block in Blocks(message))
         {
             switch (Json.Str(block, "type"))
@@ -140,7 +151,11 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                     S.Reasoning = thinking;
                     break;
                 case "text" when Text.NonBlank(Json.Str(block, "text")) is { } text:
-                    S.Response = text;
+                    // One reply can hold several text blocks, in one entry or (as Claude
+                    // streams them) in several entries sharing the message id: they are
+                    // one response, not each other's replacements.
+                    S.Response = key == _responseMessage && S.Response is { } sofar ? sofar + "\n\n" + text : text;
+                    _responseMessage = key;
                     break;
                 case "tool_use":
                     {

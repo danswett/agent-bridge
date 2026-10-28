@@ -225,6 +225,17 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public void Node_and_bun_hosted_agents_are_candidates_on_every_platform_and_recognised_by_their_script()
+    {
+        Assert.Contains("node", SystemProcessInspector.CandidateNames("copilot"));
+        Assert.Contains("bun", SystemProcessInspector.CandidateNames("claude"));
+        Assert.True(SystemProcessInspector.IsAgentScript(AgentKind.Copilot, "copilot",
+            "\"C:\\Program Files\\nodejs\\node.exe\" C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@github\\copilot\\index.js --session-id x"));
+        Assert.True(SystemProcessInspector.IsAgentScript(AgentKind.Codex, "codex", "node /usr/lib/node_modules/@openai/codex/bin/codex.js"));
+        Assert.False(SystemProcessInspector.IsAgentScript(AgentKind.Copilot, "copilot", "node C:\\work\\server.js --mention copilot"));
+    }
+
+    [Fact]
     public void This_platforms_command_line_reader_reads_a_live_process_and_answers_null_for_a_dead_one()
     {
         var own = SystemProcessInspector.ReadCommandLine(Environment.ProcessId);
