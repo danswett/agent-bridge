@@ -115,7 +115,12 @@ class Relay {
     if (b.length > 1 + ID && b[0] === DATA) { await this.onData?.(hex(b.subarray(1, 1 + ID)), b.subarray(1 + ID)); }
   }
 
-  send(peerId, payload) { this.ws.send(concat(new Uint8Array([DATA]), unhex(peerId), payload)); }
+  // WebSocket.send on a closed socket drops the data without an error. On a phone that has
+  // slept, every request then just timed out, so a dead connection must fail loudly.
+  send(peerId, payload) {
+    if (this.ws.readyState !== WebSocket.OPEN) { throw new Error('not connected to the relay'); }
+    this.ws.send(concat(new Uint8Array([DATA]), unhex(peerId), payload));
+  }
 }
 
 // ---- end-to-end channels ----
@@ -127,15 +132,25 @@ class Channel {
   frame(kind, body) { this.relay.send(this.peerId, concat(new Uint8Array([kind]), this.id, body)); }
   request(op, data, timeoutMs = 15000) {
     const id = ++this.next;
+    let reject;
     const p = new Promise((res, rej) => {
-      this.pending.set(id, res);
+      reject = rej;
+      this.pending.set(id, { res, rej });
       setTimeout(() => { if (this.pending.delete(id)) { rej(new Error(`${op} timed out`)); } }, timeoutMs);
     });
-    // Encrypt and send in one chain, so frames leave in nonce order.
+    // Encrypt and send in one chain, so frames leave in nonce order. A failed send fails
+    // this request only; the chain itself must not stay rejected.
     this.sendChain = this.sendChain.then(async () => {
       this.frame(KIND.transport, await this.hs.send.encryptWithAd(EMPTY, enc.encode(JSON.stringify({ id, op, data }))));
-    });
+    }).catch((e) => { if (this.pending.delete(id)) { reject(e); } });
     return p;
+  }
+
+  // The relay connection under this channel has gone; nothing more can cross it.
+  fail(e) {
+    this.rejectReady(e);
+    for (const { rej } of this.pending.values()) { rej(e); }
+    this.pending.clear();
   }
 }
 
@@ -143,6 +158,7 @@ const channels = new Map();
 let relay, key, me, account;
 
 async function openChannel(peerId) {
+  if (!relay) { throw new Error('not connected to the relay'); }
   const id = crypto.getRandomValues(new Uint8Array(8));
   const prologue = concat(enc.encode(`agent-bridge-s4|${me}|${peerId}|`), id);
   const ch = new Channel(relay, peerId, id, await XXHandshake.create(true, key, prologue));
@@ -167,8 +183,8 @@ async function onData(from, payload) {
       ch.resolveReady();
     } else if (kind === KIND.transport) {
       const m = JSON.parse(dec.decode(await ch.hs.receive.decryptWithAd(EMPTY, body)));
-      const res = ch.pending.get(m.re);
-      if (res) { ch.pending.delete(m.re); res(m); }
+      const p = ch.pending.get(m.re);
+      if (p) { ch.pending.delete(m.re); p.res(m); }
     }
   } catch (e) {
     channels.delete(`${from}:${hex(ch.id)}`);
@@ -205,11 +221,16 @@ function renderDevices(list) {
 }
 
 async function connectTo(d) {
+  pendingHost = null;
   const t0 = performance.now();
   const ch = await openChannel(d.id);
   await Promise.race([ch.ready, sleep(20000).then(() => { throw new Error('handshake timed out'); })]);
   const ms = performance.now() - t0;
   current = ch;
+  currentHost = d.id;
+  // Opening the app goes straight back to this host; pressing Connect every time is a step
+  // a phone user should not need.
+  localStorage.setItem('lastHost', d.id);
   $('channel').hidden = false;
   $('peer').textContent = `${ch.peerName} (${ch.peerKind})`;
   $('peer-check').className = 'ok';
@@ -279,10 +300,17 @@ $('enable-push').onclick = async () => {
 };
 
 $('ask-me').onclick = async () => {
-  const r = await current.request('ask-me', { delaySeconds: 10 });
-  $('result').textContent = `${current.peerName} will ask a question in ${r.result.scheduled} s. Lock the phone or switch apps to see the notification.`;
-  // If the app is still open by then, show the question here too.
-  setTimeout(() => refreshQuestions().catch(() => {}), (r.result.scheduled + 1.5) * 1000);
+  $('result').textContent = 'Asking…';
+  try {
+    const r = await current.request('ask-me', { delaySeconds: 10 });
+    // Only now is the request safely at the host; locking the phone before this can kill
+    // the connection with it still unsent.
+    $('result').textContent = `${current.peerName} will ask a question in ${r.result.scheduled} s. You can lock the phone now.`;
+    // If the app is still open by then, show the question here too.
+    setTimeout(() => refreshQuestions().catch(() => {}), (r.result.scheduled + 1.5) * 1000);
+  } catch (e) {
+    $('result').textContent = `Not sent: ${e.message}`;
+  }
 };
 
 // ---- questions ----
@@ -325,7 +353,7 @@ function renderQuestion(q) {
 // Opened from a notification: ?q=<question>&host=<device id>. Connect to that host as soon
 // as it shows up in presence, then show the question.
 const opened = new URLSearchParams(location.search);
-let pendingHost = opened.get('host');
+let pendingHost = opened.get('host') ?? localStorage.getItem('lastHost');
 let lastPresence = [];
 
 // Presence can arrive before the relay connection is ready to send, so this runs from both
@@ -365,6 +393,19 @@ async function start(acct) {
   $('account').hidden = false;
   $('login').textContent = account.login;
   $('me').textContent = me.slice(0, 8);
+  await connectRelay();
+  await updateNotifyBox();
+}
+
+// A phone kills the socket whenever it locks or the app is in the background (1006), and
+// the app must come back on its own when it is next in front: reconnect with backoff after
+// any drop, at once when the page becomes visible or the network returns, and reopen the
+// channel to the host that was open.
+let currentHost = null, attempt = null, retryTimer = null, backoff = 1000, stopped = false;
+
+function connectRelay() {
+  if (stopped || !account || attempt || relay?.ws.readyState === WebSocket.OPEN) { return attempt ?? Promise.resolve(); }
+  clearTimeout(retryTimer);
   const r = new Relay(key, me);
   r.onData = onData;
   r.onPresence = (list) => {
@@ -376,14 +417,35 @@ async function start(acct) {
     // textContent: the close reason comes from the relay, which is not trusted.
     $('relay-state').className = 'bad';
     $('relay-state').textContent = `Disconnected (${e.code} ${e.reason})`;
-    if (e.code === 4001) { localStorage.removeItem('account'); }
+    if (relay === r) {
+      relay = null;
+      const gone = new Error('the relay connection closed');
+      for (const ch of channels.values()) { ch.fail(gone); }
+      channels.clear();
+      current = null;
+    }
+    if (e.code === 4001 || e.code === 4003) { stopped = true; localStorage.removeItem('account'); return; }
+    // Another tab or window took this device over; two would only keep replacing each other.
+    if (e.code === 4009) { stopped = true; return; }
+    $('relay-state').textContent += ' · reconnecting';
+    retryTimer = setTimeout(connectRelay, backoff);
+    backoff = Math.min(backoff * 2, 30000);
   };
-  relay = await r.connect(account.token, deviceName());
-  $('relay-state').className = 'ok';
-  $('relay-state').textContent = 'Connected to the relay; key proven';
-  openPendingHost();
-  await updateNotifyBox();
+  attempt = r.connect(account.token, deviceName()).then(() => {
+    relay = r;
+    backoff = 1000;
+    $('relay-state').className = 'ok';
+    $('relay-state').textContent = 'Connected to the relay; key proven';
+    if (currentHost && !pendingHost) { pendingHost = currentHost; }
+    openPendingHost();
+  }, (e) => log(`relay: ${e.message}`)).finally(() => { attempt = null; });
+  return attempt;
 }
+
+const wake = () => { if (document.visibilityState === 'visible') { backoff = 1000; connectRelay(); } };
+document.addEventListener('visibilitychange', wake);
+addEventListener('pageshow', wake);
+addEventListener('online', wake);
 
 (async () => {
   if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js').catch((e) => log(`service worker: ${e.message}`)); }

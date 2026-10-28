@@ -1,6 +1,7 @@
 // Spike S4 host: a stand-in for the Bridge Host's relay side.
 //   sign-in --relay URL                    GitHub device flow through the relay
-//   run     --relay URL [--name N]         stay connected and answer peers (reconnects)
+//   run     --relay URL [--name N]         stay connected and answer peers (reconnects);
+//                                          a file ask.txt in the profile folder asks its text
 //   call    --relay URL --to NAME|ID [--count N]
 //                                          open an E2E channel to a peer, snapshot, N pings
 //   whoami
@@ -38,6 +39,25 @@ switch (mode)
             int reconnects = 0;
             var since = Stopwatch.StartNew();
             QuestionService? questions = null;
+            // A question asked from this machine, as an agent's ask_user would be: drop a
+            // file named ask.txt in the profile folder. The phone may be asleep, which is
+            // the point - nothing about it depends on the phone's connection.
+            var askFile = Path.Combine(id.Folder, "ask.txt");
+            _ = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    await Task.Delay(1000);
+                    if (questions is null || !File.Exists(askFile)) { continue; }
+                    try
+                    {
+                        var text = (await File.ReadAllTextAsync(askFile)).Trim();
+                        File.Delete(askFile);
+                        if (text.Length > 0) { await questions.AskAsync(text, ["Yes (Recommended)", "No"]); }
+                    }
+                    catch (Exception e) { Log($"ask.txt: {e.Message}"); }
+                }
+            });
             while (true)
             {
                 try

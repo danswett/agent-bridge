@@ -442,7 +442,7 @@ if (mode == "check")
         var got = await answered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var headersOk = push.Headers["Content-Encoding"] == "aes128gcm" && push.Headers["Urgency"] == "high" && push.Headers["TTL"] == "3600"
-            && push.Headers["Authorization"].StartsWith("vapid t=") && push.Headers["Topic"] == $"q{qid}";
+            && push.Headers["Authorization"].StartsWith("vapid t=") && push.Headers["Topic"] == PushTopic.From(Convert.FromHexString(qid)) && PushTopic.IsValid(push.Headers["Topic"]);
         var plaintextHidden = !Encoding.UTF8.GetString(push.Body).Contains("database") && !logs.Any(l => l.Contains(text) || l.Contains(endpoint));
         await phone.Relay.DisposeAsync();
         await hostRelay.DisposeAsync();
@@ -465,6 +465,20 @@ if (mode == "check")
         await c.Relay.DisposeAsync();
         var refusedAll = results.All(r => r.StartsWith("0:endpoint") || r.StartsWith("0:bad-endpoint"));
         return (refusedAll && big.Error == "bad-body-size" && pushService.Received.IsEmpty, string.Join(", ", results) + $", oversized {big.Error}");
+    });
+
+    await Check("a push topic Apple would refuse (a length base64 cannot have) is dropped, and the push still goes", async () =>
+    {
+        var c = await Connect(octoAccount, "topic-pusher", "host");
+        pushService.Received.Clear();
+        var bad = await c.Relay.PushAsync($"{pushService.Url}/push/topic", new byte[64], topic: "q7fe69a91e0b1");
+        var good = await c.Relay.PushAsync($"{pushService.Url}/push/topic", new byte[64], topic: "q7fe69a91e0b");
+        await c.Relay.DisposeAsync();
+        var sent = pushService.Received.ToArray();
+        var badHasTopic = sent.Length > 0 && sent[0].Headers.ContainsKey("Topic");
+        var goodTopic = sent.Length > 1 && sent[1].Headers.TryGetValue("Topic", out var gt) ? gt : null;
+        return (bad.Status == 201 && good.Status == 201 && sent.Length == 2 && !badHasTopic && goodTopic == "q7fe69a91e0b",
+            $"13-character topic sent {badHasTopic}, 12-character topic {goodTopic}");
     });
 
     await Check("pushes are rate-limited per account, and a gone subscription (410) is dropped", async () =>

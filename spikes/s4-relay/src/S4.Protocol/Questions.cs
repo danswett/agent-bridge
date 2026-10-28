@@ -141,7 +141,7 @@ public sealed class QuestionService
             });
             try
             {
-                var r = await Relay.PushAsync(s.Sub.Endpoint, WebPushCrypto.Encrypt(payload, s.Sub), ttl: 3600, urgency: "high", topic: $"q{q.Id}");
+                var r = await Relay.PushAsync(s.Sub.Endpoint, WebPushCrypto.Encrypt(payload, s.Sub), ttl: 3600, urgency: "high", topic: PushTopic.From(Convert.FromHexString(q.Id)));
                 log?.Invoke($"push to {new Uri(s.Sub.Endpoint).Host}: {r.Status}{(r.Error is null ? "" : $" {r.Error}")}");
                 // The browser has unsubscribed or the subscription expired.
                 if (r.Status is 404 or 410) { subscribers.TryRemove(peer, out _); Save(); }

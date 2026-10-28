@@ -24,7 +24,12 @@ let failed = 0;
 for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
   const browser = await type.launch();
   try {
-    const page = await (await browser.newContext()).newPage();
+    const context = await browser.newContext();
+    // Every relay socket goes through the test, so it can drop them the way a phone does
+    // when it locks.
+    const sockets = [];
+    await context.routeWebSocket(/\/v1\/ws$/, (ws) => { ws.connectToServer(); sockets.push(ws); });
+    const page = await context.newPage();
     page.on('pageerror', (e) => console.log(`[${name}] page error: ${e.message}`));
     await page.goto(`http://127.0.0.1:${port}/`);
     await page.click('#signin');
@@ -54,13 +59,31 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     await page.waitForFunction(() => document.querySelector('.question .ok')?.textContent.startsWith('Sent:'), null, { timeout: 15000 });
     const answered = await page.textContent('.question .ok');
 
+    // The connection drops, as it does whenever a phone locks. The app reconnects by
+    // itself and reopens the channel to the host it had open, without a reload.
+    const before = sockets.length;
+    const oldSession = await page.textContent('#hs-info');
+    for (const ws of sockets.splice(0)) { await ws.close({ code: 4000, reason: 'test drop' }); }
+    await page.waitForFunction(() => document.querySelector('#relay-state')?.textContent.includes('reconnecting'), null, { timeout: 10000 });
+    await page.waitForFunction(() => document.querySelector('#relay-state')?.textContent.includes('key proven'), null, { timeout: 20000 });
+    await page.waitForFunction((old) => { const t = document.querySelector('#hs-info')?.textContent ?? ''; return t.includes('handshake') && t !== old; }, oldSession, { timeout: 30000 });
+    await page.click('#echo');
+    await page.waitForFunction(() => document.querySelector('#result')?.textContent.startsWith('echoed intact'), null, { timeout: 15000 });
+    const reconnected = `dropped ${before} socket(s), reconnected and reopened the channel`;
+
+    // Opened again later (from the Home Screen, no link): it goes back to the last host by itself.
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('#peer')?.textContent.includes('demo-host'), null, { timeout: 30000 });
+
     // What a notification tap opens: ?q=…&host=…. The app connects to that host by itself.
     const opened = await page.context().newPage();
+    // Without the remembered host, so only the link can be what connects it.
+    await opened.addInitScript(() => localStorage.removeItem('lastHost'));
     await opened.goto(`http://127.0.0.1:${port}/?q=anything&host=${demoHost}`);
     await opened.waitForFunction(() => document.querySelector('#peer')?.textContent.includes('demo-host'), null, { timeout: 30000 });
     await opened.close();
 
-    console.log(`PASS  ${name}: signed in, proved its key, channel to demo-host; ${hs}; ${pings}; service worker ${sw}; question answered (${answered}); notification link opens the host`);
+    console.log(`PASS  ${name}: signed in, proved its key, channel to demo-host; ${hs}; ${pings}; service worker ${sw}; question answered (${answered}); ${reconnected}; reopened app returns to the last host; notification link opens the host`);
   } catch (e) {
     failed++;
     console.log(`FAIL  ${name}: ${e.message}`);
