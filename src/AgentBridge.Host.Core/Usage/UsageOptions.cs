@@ -71,15 +71,28 @@ public sealed class UsageOptions
         cacheRoots.Add(Path.Combine(home, "Library", "Application Support", "copilot"));
         cacheRoots.Add(Path.Combine(home, ".local", "share", "copilot"));
         cacheRoots.Add(sessions.CopilotHome);
-        // Claude Code keeps .claude.json in the profile, or in CLAUDE_CONFIG_DIR when that is set.
-        var claudeConfig = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
         return new UsageOptions
         {
             CopilotHome = sessions.CopilotHome,
             CopilotCacheRoots = cacheRoots,
             ClaudeHome = sessions.ClaudeHome,
-            ClaudeAccountPath = string.IsNullOrEmpty(claudeConfig) ? Path.Combine(home, ".claude.json") : Path.Combine(claudeConfig, ".claude.json"),
+            ClaudeAccountPath = ClaudeAccountFor(sessions.ClaudeHome),
             CodexHome = sessions.CodexHome,
         };
+    }
+
+    // Where the Claude profile at claudeHome names its account, worked out from that profile
+    // alone, so a --claude-home for another profile is never tagged with this user's account.
+    // Claude Code keeps .claude.json inside CLAUDE_CONFIG_DIR when that is set, and beside
+    // ~/.claude otherwise. When neither file is there the reading goes ungrouped rather than
+    // under a guessed account.
+    public static string ClaudeAccountFor(string claudeHome)
+    {
+        var inside = Path.Combine(claudeHome, ".claude.json");
+        if (File.Exists(inside)) { return inside; }
+        var trimmed = Path.TrimEndingDirectorySeparator(claudeHome);
+        return Path.GetFileName(trimmed) == ".claude" && Path.GetDirectoryName(trimmed) is { Length: > 0 } parent
+            ? Path.Combine(parent, ".claude.json")
+            : inside;
     }
 }

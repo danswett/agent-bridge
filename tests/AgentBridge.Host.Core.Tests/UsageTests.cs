@@ -288,6 +288,18 @@ public sealed class UsageTests : IDisposable
     }
 
     [Fact]
+    public void A_Claude_profile_names_its_own_account_whichever_layout_it_has()
+    {
+        // ~/.claude: the account is beside it, in that profile's own home.
+        Assert.Equal(Path.Combine(f.Root, "home", ".claude.json"), UsageOptions.ClaudeAccountFor(f.ClaudeHome));
+        // A CLAUDE_CONFIG_DIR keeps it inside.
+        var config = Path.Combine(f.Root, "elsewhere", "claude-config");
+        Directory.CreateDirectory(config);
+        File.WriteAllText(Path.Combine(config, ".claude.json"), "{}");
+        Assert.Equal(Path.Combine(config, ".claude.json"), UsageOptions.ClaudeAccountFor(config));
+    }
+
+    [Fact]
     public async Task Claude_never_spends_an_expired_token_and_leaves_the_last_reading_to_age()
     {
         ClaudeCredentials(expires: Now.AddMinutes(-1));
