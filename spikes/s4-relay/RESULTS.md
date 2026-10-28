@@ -206,8 +206,10 @@ Review and a flaky check found two more things the product must carry:
 
 ## Limitations
 
-* **Real phone not yet tested.** The Pages build has run in desktop Chromium and
-  WebKit at the real origin. The iPhone run follows once this merges and Pages deploys.
+* **Real phone: passed.** On 2026-10-27, after Pages deployed, iPhone Safari loaded the
+  published PWA, signed in with GitHub, proved its key, opened a channel to the host on
+  DSWETT-DEV-VM1 through the live relay, and passed Snapshot, Echo and Ping. Web Push and
+  the installed (Home Screen) mode are S5's subject.
 * **No device roster yet.** Any device that signs in to the account can see and reach
   every other device; pairing approval and the signed roster (§5.4) are P4. A host
   will need to refuse channels from keys not in the roster.
