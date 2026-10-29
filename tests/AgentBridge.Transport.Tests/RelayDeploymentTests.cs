@@ -3,6 +3,9 @@ using System.Net;
 using System.Security.Cryptography;
 using AgentBridge.Relay;
 using AgentBridge.RelaySmoke;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Console;
 using Xunit;
 
 namespace AgentBridge.Transport.Tests;
@@ -85,6 +88,17 @@ public class RelayDeploymentTests
         {
             Assert.DoesNotContain(identity, logs);
         }
+    }
+
+    [Fact]
+    public async Task A_relay_configured_for_JSON_logs_writes_JSON_lines()
+    {
+        await using var app = RelayApp.Build(["--Logging:Console:FormatterName=json"], builderHook: b => b.WebHost.UseUrls("http://127.0.0.1:0"));
+
+        var console = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<ConsoleLoggerOptions>>().CurrentValue;
+
+        Assert.Equal(ConsoleFormatterNames.Json, console.FormatterName);
+        Assert.Contains(app.Services.GetServices<ConsoleFormatter>(), f => f.Name == ConsoleFormatterNames.Json);
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Extensions.Logging.Console;
 
 namespace AgentBridge.Relay;
 
@@ -25,6 +26,12 @@ public static class RelayApp
         builder.Services.AddSingleton<RelayHub>();
         builder.Services.AddSingleton<PushGateway>();
         builder.Services.AddSingleton(sp => new RelayMetrics(sp.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(), () => sp.GetRequiredService<RelayHub>().Online));
+        // The slim builder's console logger stays on the simple formatter whatever the configuration
+        // says, so a deployment that asks for JSON lines (infra/ does) got plain text, silently.
+        if (string.Equals(builder.Configuration["Logging:Console:FormatterName"], ConsoleFormatterNames.Json, StringComparison.OrdinalIgnoreCase))
+        {
+            builder.Logging.AddJsonConsole();
+        }
         // Request logs say nothing an operator needs and cost ingestion; warnings still show.
         builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
         builder.WebHost.ConfigureKestrel(k =>

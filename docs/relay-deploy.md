@@ -100,7 +100,7 @@ client secret anywhere. Each environment has its own principal:
 | `agent-bridge-relay-deploy-staging` | AcrPush on the registry; Contributor on the staging app; Managed Identity Operator on its identity; Key Vault Secrets User on the **staging** vault; Reader on the resource group |
 | `agent-bridge-relay-deploy-production` | Contributor on the production app (granted at the cutover); Managed Identity Operator on its identity; Reader on the resource group |
 
-Each has one federated credential, `repo:danswett/agent-bridge:environment:<name>`. The
+Each has one federated credential for its environment. GitHub now presents subjects with the owner's and repository's numeric ids, `repo:danswett@3709749/agent-bridge@1436251473:environment:<name>`, so a renamed or recreated repository of the same name cannot sign in; the plain `repo:danswett/agent-bridge:…` form is refused (AADSTS700213). The
 `production` environment allows only `main` and requires `danswett`'s approval. Repository
 variables `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`, and each environment's
 `AZURE_CLIENT_ID`, are ids, not secrets. The repository variable `RELAY_DEPLOY=true` turns
@@ -121,7 +121,7 @@ foreach ($env in 'staging', 'production') {
   az ad sp create --id $app | Out-Null
   az ad app federated-credential create --id $app --parameters (@{
     name = "github-$env"; issuer = 'https://token.actions.githubusercontent.com'
-    subject = "repo:danswett/agent-bridge:environment:$env"; audiences = @('api://AzureADTokenExchange')
+    subject = "repo:danswett@3709749/agent-bridge@1436251473:environment:$env"; audiences = @('api://AzureADTokenExchange')
   } | ConvertTo-Json -Compress)
   gh variable set AZURE_CLIENT_ID --env $env --body $app -R danswett/agent-bridge
 }
