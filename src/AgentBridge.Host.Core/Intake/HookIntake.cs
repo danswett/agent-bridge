@@ -55,6 +55,9 @@ public sealed class HookIntake : IAsyncDisposable
     readonly Action<string> _log;
     readonly HookHandlers _handlers;
     readonly Dictionary<string, int> _attempts = new(StringComparer.Ordinal);
+    // Files handled whose delete failed (a reader that would not share it): deleted again, never
+    // handled again.
+    readonly HashSet<string> _undeleted = new(StringComparer.Ordinal);
     readonly List<Channel<HookNotice>> _subscribers = [];
     readonly Lock _gate = new();
     readonly SemaphoreSlim _wake = new(0, int.MaxValue);
@@ -229,6 +232,13 @@ public sealed class HookIntake : IAsyncDisposable
                 break;
             }
             var name = Path.GetFileName(path);
+            // Handled already; only its deletion failed. Its handler must not run twice: a Codex
+            // PermissionRequest replayed after the PreToolUse that answered it would re-arm it.
+            if (_undeleted.Contains(name))
+            {
+                if (Delete(path)) { _undeleted.Remove(name); }
+                continue;
+            }
             try
             {
                 var bytes = ReadCopy(path);
@@ -238,7 +248,7 @@ public sealed class HookIntake : IAsyncDisposable
                 handled++;
                 Handled++;
                 _attempts.Remove(name);
-                Delete(path);
+                if (!Delete(path)) { _undeleted.Add(name); }
                 Publish(notice);
             }
             // Whatever went wrong with one event, it costs that event, never the pass.
@@ -250,7 +260,7 @@ public sealed class HookIntake : IAsyncDisposable
                     _log($"dropped spooled hook {name} after {attempts} attempts: {e.Message}");
                     _attempts.Remove(name);
                     Dropped++;
-                    Delete(path);
+                    if (!Delete(path)) { _undeleted.Add(name); }
                 }
                 else
                 {
@@ -266,6 +276,7 @@ public sealed class HookIntake : IAsyncDisposable
         }
         // A file that went away by other means is not waiting for a retry.
         foreach (var gone in _attempts.Keys.Where(n => !files.Any(f => f.EndsWith(n, StringComparison.Ordinal))).ToList()) { _attempts.Remove(gone); }
+        _undeleted.RemoveWhere(n => !files.Any(f => f.EndsWith(n, StringComparison.Ordinal)));
         if (_attempts.Count > 0) { Wake(); }
         return handled;
     }
@@ -286,10 +297,14 @@ public sealed class HookIntake : IAsyncDisposable
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return null; }
     }
 
-    static void Delete(string path)
+    static bool Delete(string path)
     {
-        try { File.Delete(path); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        try
+        {
+            File.Delete(path);
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
     }
 
     void Publish(HookNotice notice)

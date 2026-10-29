@@ -336,6 +336,45 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_resumed_Codex_session_does_not_offer_the_approval_its_previous_run_died_waiting_on()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        Intake().Pass();
+        Assert.True(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+
+        // That Codex exited without SessionEnd; the same session is resumed in a new one.
+        _f.Processes.Run(AgentKind.Codex, 70, "codex.exe");
+        Spooled("0002", "codex", "hook", new { session_id = "x1", hook_event_name = "SessionStart" }, 70);
+        Intake().Pass();
+
+        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+        Assert.Equal(70, Registration("agent-bridge-codex", "x1").GetProperty("ProcessId").GetInt32());
+    }
+
+    [Fact]
+    public void An_event_handled_but_not_deleted_is_never_handled_again_while_its_file_lingers()
+    {
+        // Only Windows lets a reader refuse a delete.
+        if (!OperatingSystem.IsWindows()) { return; }
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var asked = Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        Spooled("0002", "codex", "hook", new { session_id = "x1", hook_event_name = "PreToolUse", tool_name = "shell" }, 60);
+        var intake = Intake();
+
+        using (new FileStream(asked, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Assert.Equal(2, intake.Pass());
+            Assert.True(File.Exists(asked));
+        }
+        Assert.Equal(0, intake.Pass());
+
+        Assert.False(File.Exists(asked));
+        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+        Assert.Equal(2, intake.Handled);
+    }
+
+    [Fact]
     public void Codex_hooks_under_its_shared_app_server_are_owned_by_the_window_above_it()
     {
         _f.Processes.Run(AgentKind.Codex, 50, @"C:\Users\u\.codex\packages\app-server-daemon\codex.exe app-server");

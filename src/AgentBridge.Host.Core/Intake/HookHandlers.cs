@@ -89,8 +89,10 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         var e = spooled.Event;
         if (notice.SessionId is not { } sessionId) { return notice; }
         var eventName = notice.EventName ?? "";
-        // A later lifecycle event retires the prompt, whichever input answered it.
-        if (eventName is "PreToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd")
+        // A later lifecycle event retires the prompt, whichever input answered it. SessionStart
+        // too: a Codex that died waiting for an approval never sent SessionEnd, and its resumed
+        // session must not offer the dead run's approval to be answered into the new process.
+        if (eventName is "SessionStart" or "PreToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd")
         {
             try { File.Delete(ApprovalPath(sessionId)); }
             catch (DirectoryNotFoundException) { }

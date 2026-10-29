@@ -140,6 +140,8 @@ shadow mode (#40) reads the same way and never deletes.
    Until it has been tried again, nothing after it is handled. The daemon carried on past a
    failure, but then a Codex `PermissionRequest` retried after the `PreToolUse` that answered
    it would arm an approval nobody is being asked. Keeping strict order costs one pass.
+   An event handled whose file could not be deleted (a reader that would not share the
+   delete) is only deleted again on later passes, never handled again, for the same reason.
 4. Prune now and then (below), unless agent-ha-bridge started during the pass.
 
 A `FileSystemWatcher` on the spool wakes a pass the moment a hook renames a file into place.
@@ -166,7 +168,7 @@ give their fixed reply at once, rather than spooling to nobody until it goes sta
 | `claude/stop` | `Invoke-ClaudeStopHook` | The registration, `HookStatus: idle` |
 | `claude/ask` | `Invoke-ClaudeAskHook` | The registration, for `AskUserQuestion` only. The daemon's pending-decision marker is not written: the host reads questions from transcripts |
 | `claude/notification` | `Invoke-ClaudeNotificationHook` | The registration. `HookStatus: waiting` only for a notification Claude is blocked on (`notification_type`, or anything but the idle reminder's wording) |
-| `codex/hook` | `Invoke-CodexHook` | The registration's status and activity per event (`SessionStart` idle, `UserPromptSubmit` and `PreToolUse` working, `PermissionRequest` waiting, `Stop` idle with the reply's first line, `SessionEnd` ended). `PreToolUse`, `UserPromptSubmit`, `Stop` and `SessionEnd` remove a pending approval marker. **`PermissionRequest` writes the approval marker** |
+| `codex/hook` | `Invoke-CodexHook` | The registration's status and activity per event (`SessionStart` idle, `UserPromptSubmit` and `PreToolUse` working, `PermissionRequest` waiting, `Stop` idle with the reply's first line, `SessionEnd` ended). `SessionStart`, `PreToolUse`, `UserPromptSubmit`, `Stop` and `SessionEnd` remove a pending approval marker (`SessionStart` too, unlike the daemon: a Codex that died waiting never sent `SessionEnd`, and its resumed session must not offer the dead run's approval). **`PermissionRequest` writes the approval marker** |
 | `copilot/*` | `Invoke-Copilot*Hook` | Nothing. Copilot's sessions are read from its own folder; the event is passed on to subscribers |
 
 The files and their shapes are agent-ha-bridge's:
