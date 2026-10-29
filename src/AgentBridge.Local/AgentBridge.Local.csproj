@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="AgentBridge.Local.Tests" />
+    <InternalsVisibleTo Include="AgentBridge.App.Tests" />
   </ItemGroup>
 
   <ItemGroup>

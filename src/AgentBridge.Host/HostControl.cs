@@ -55,6 +55,26 @@ public sealed class HostControl
             : new RelayStatus(RelayState.Connecting, options.Relay()?.ToString());
     }
 
+    // agent-ha-bridge's state is read for every status the app asks for; looking at most every
+    // few seconds keeps that from listing the session's named objects on every event. The first
+    // read always looks: a "never looked" sentinel of long.MinValue overflowed the subtraction
+    // and kept it from ever looking.
+    public static Func<string?> Cached(Func<string?> probe, Func<long> milliseconds, long everyMs = 5000)
+    {
+        var gate = new object();
+        long? at = null;
+        string? last = null;
+        return () =>
+        {
+            lock (gate)
+            {
+                var now = milliseconds();
+                if (at is not { } then || now - then > everyMs) { last = probe(); at = now; }
+                return last;
+            }
+        };
+    }
+
     public HostStatus Status()
     {
         lock (gate) { return StatusLocked(); }

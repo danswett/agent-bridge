@@ -30,11 +30,11 @@ public sealed class CardTests : IAsyncLifetime
         File.Delete(folds);
     }
 
-    CardContext Context(FoldStore? store = null) => new()
+    CardContext Context(FoldStore? store = null, Func<IReadOnlyList<string>>? caps = null) => new()
     {
         Deliveries = deliveries,
         Folds = store ?? new FoldStore(folds),
-        Capabilities = () => connection.Capabilities,
+        Capabilities = caps ?? (() => connection.Capabilities),
         MachineName = () => "Test PC",
         Host = connection,
         Time = clock,
@@ -322,5 +322,50 @@ public sealed class CardTests : IAsyncLifetime
 
         Assert.Null(card.Reply);
         Assert.Null(card.End);
+    }
+
+    [Fact]
+    public void The_host_going_away_for_a_moment_leaves_the_cards_drafts_and_controls_as_they_were()
+    {
+        IReadOnlyList<string> caps = connection.Capabilities;
+        var card = new SessionCardViewModel(Make.Session(question: Make.Choice(other: true)), Context(caps: () => caps));
+        var question = card.Question!;
+        question.Fields[0].OtherText = "DuckDB";
+        card.Reply!.Text = "after that, the docs";
+
+        caps = [];
+        card.CapabilitiesChanged();
+        caps = connection.Capabilities;
+        card.CapabilitiesChanged();
+
+        Assert.Same(question, card.Question);
+        Assert.Equal("DuckDB", card.Question!.Fields[0].OtherText);
+        Assert.Equal("after that, the docs", card.Reply!.Text);
+        Assert.NotNull(card.End);
+    }
+
+    [Fact]
+    public void When_the_host_stops_and_starts_taking_answers_the_same_questions_draft_and_the_reply_carry_over()
+    {
+        IReadOnlyList<string> caps = connection.Capabilities;
+        var card = new SessionCardViewModel(Make.Session(question: Make.Choice(other: true)), Context(caps: () => caps));
+        card.Question!.Fields[0].OtherText = "DuckDB";
+        card.Reply!.Text = "after that, the docs";
+
+        // agent-ha-bridge started: the host only watches.
+        caps = [Capabilities.SessionsRead];
+        card.CapabilitiesChanged();
+        Assert.False(card.Question!.Answerable);
+        Assert.Null(card.Reply);
+        Assert.False(card.HasOrphan);
+
+        caps = connection.Capabilities;
+        card.CapabilitiesChanged();
+
+        Assert.True(card.Question!.Answerable);
+        Assert.True(card.Question.Fields[0].OtherChosen);
+        Assert.Equal("DuckDB", card.Question.Fields[0].OtherText);
+        Assert.True(card.Question.OtherOpen);
+        Assert.Equal("after that, the docs", card.Reply!.Text);
     }
 }

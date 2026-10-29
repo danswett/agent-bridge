@@ -53,6 +53,22 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_gap_in_the_events_after_a_reconnect_still_subscribes_the_sessions_again()
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Get("s1") is not null, "the snapshot");
+        await host.StopAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the host to go");
+        host.Start();
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the reconnect");
+        var before = host.Sent(Ops.SessionsSubscribe).Count;
+
+        foreach (var ch in host.Channels.OfType<LocalChannel>().Where(c => c.IsOpen).Distinct()) { ch.SkipEventSeq(3); }
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s2"));
+
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionsSubscribe).Count == before + 1, "the sessions to be subscribed again");
+    }
+
+    [Fact]
     public async Task After_the_host_restarts_the_app_reconnects_and_drops_sessions_that_ended_meanwhile()
     {
         await Wait.UntilAsync(() => connection.Sessions.Get("s1") is not null, "the snapshot");

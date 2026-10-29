@@ -84,6 +84,9 @@ public sealed class LocalChannel : IProtocolChannel, IAsyncDisposable
 
     byte[] Serialize(object message) => JsonSerializer.SerializeToUtf8Bytes(message, json);
 
+    // Tests: as if events had been dropped on the way, so the next one arrives after a gap.
+    internal void SkipEventSeq(long count) => Interlocked.Add(ref lastEventSeq, count);
+
     async Task SendAsync(byte[] plain, CancellationToken ct)
     {
         await sendLock.WaitAsync(ct);

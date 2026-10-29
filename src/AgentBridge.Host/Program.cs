@@ -222,7 +222,7 @@ async Task<int> ServeAsync()
         Log = HostLog.FilePath,
         Account = () => identity.Account is { } a ? new HostAccount(a.Login, a.AccountId) : null,
         Relay = () => RelayUri(identity),
-        AgentHaBridge = CachedProbe(haProbe),
+        AgentHaBridge = haProbe is null ? () => null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64),
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -364,24 +364,6 @@ void RestartSelf()
     var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
     foreach (var a in args) { start.ArgumentList.Add(a); }
     using var _ = Process.Start(start);
-}
-
-// agent-ha-bridge's state is read for every status the app asks for; looking at most every few
-// seconds keeps that from listing the session's named objects on every event.
-static Func<string?> CachedProbe(AgentHaBridgeProbe? probe)
-{
-    if (probe is null) { return () => null; }
-    var gate = new object();
-    long? at = null;
-    string? last = null;
-    return () =>
-    {
-        lock (gate)
-        {
-            if (at is not { } then || Environment.TickCount64 - then > 5000) { last = OperatingSystem.IsWindows() ? probe.Active() : null; at = Environment.TickCount64; }
-            return last;
-        }
-    };
 }
 
 static string OsName() =>

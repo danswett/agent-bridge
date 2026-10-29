@@ -17,7 +17,6 @@ public sealed class HostConnection : IAsyncDisposable
     readonly IUiDispatcher ui;
     readonly Action<string> log;
     readonly CancellationTokenSource stop = new();
-    readonly SemaphoreSlim resubscribe = new(0);
     TaskCompletionSource connected = new(TaskCreationOptions.RunContinuationsAsynchronously);
     Task loop = Task.CompletedTask;
     LocalChannel? channel;
@@ -77,7 +76,12 @@ public sealed class HostConnection : IAsyncDisposable
             {
                 ch = await connect(ct);
                 var hello = await ch.HelloAsync(ct);
-                var pump = Task.Run(() => PumpAsync(ch, ct), ct);
+                // A gap in this connection's events: its own signal, so a wait abandoned when the
+                // connection ends cannot swallow the next connection's.
+                // Not disposed: the pump may still release it as the connection ends, and a
+                // SemaphoreSlim whose wait handle was never asked for holds nothing to free.
+                var gaps = new SemaphoreSlim(0);
+                var pump = Task.Run(() => PumpAsync(ch, gaps, ct), ct);
                 Volatile.Write(ref channel, ch);
                 ui.Post(() => Hello = hello);
                 // An event can overtake the subscribe's result on its way to the UI thread (they
@@ -101,7 +105,7 @@ public sealed class HostConnection : IAsyncDisposable
                 while (true)
                 {
                     var closed = ch.Closed;
-                    var again = resubscribe.WaitAsync(ct);
+                    var again = gaps.WaitAsync(ct);
                     if (await Task.WhenAny(closed, again, pump) != again) { break; }
                     await SubscribeSessionsAsync(ch, ct);
                 }
@@ -137,7 +141,7 @@ public sealed class HostConnection : IAsyncDisposable
         await ch.CallAsync<SubscribeResult>(Ops.SessionsSubscribe, ct: ct);
     }
 
-    async Task PumpAsync(LocalChannel ch, CancellationToken ct)
+    async Task PumpAsync(LocalChannel ch, SemaphoreSlim gaps, CancellationToken ct)
     {
         long last = 0;
         try
@@ -146,7 +150,7 @@ public sealed class HostConnection : IAsyncDisposable
             {
                 // A gap means the buffer dropped events while the UI was slow: the sessions
                 // are subscribed again, which resends them all.
-                if (last != 0 && ev.Seq != last + 1) { resubscribe.Release(); }
+                if (last != 0 && ev.Seq != last + 1) { gaps.Release(); }
                 last = ev.Seq;
                 Apply(ev);
             }

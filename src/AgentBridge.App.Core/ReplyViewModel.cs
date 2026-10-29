@@ -83,6 +83,16 @@ public sealed class ReplyViewModel : Observable
     public string Key => $"reply|{sessionId}";
     public ObservableCollection<ReplyAttachment> Attachments { get; } = [];
 
+    // The card's reply box rebuilt after the host stopped and started taking replies again:
+    // the words, files and any reply on its way carry over.
+    internal void TakeDraft(ReplyViewModel old)
+    {
+        Text = old.text;
+        sent = old.sent;
+        if (attach) { foreach (var f in old.Attachments) { Attachments.Add(f); } }
+        Refresh();
+    }
+
     public string Text
     {
         get => text;

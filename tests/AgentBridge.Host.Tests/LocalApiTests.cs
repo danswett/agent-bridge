@@ -281,4 +281,23 @@ public sealed class LocalApiTests : IAsyncLifetime
         }
         Assert.Equal(0, Volatile.Read(ref stops));
     }
+
+    [Theory]
+    [InlineData(1_000L)]
+    [InlineData(long.MaxValue / 2)]
+    public void Agent_ha_bridge_is_looked_for_on_the_first_status_and_then_at_most_every_five_seconds(long uptime)
+    {
+        var looks = 0;
+        var now = uptime;
+        var probe = HostControl.Cached(() => { looks++; return "agent-ha-bridge is running"; }, () => now);
+
+        Assert.Equal("agent-ha-bridge is running", probe());
+        Assert.Equal(1, looks);
+        now += 4_000;
+        probe();
+        Assert.Equal(1, looks);
+        now += 2_000;
+        probe();
+        Assert.Equal(2, looks);
+    }
 }

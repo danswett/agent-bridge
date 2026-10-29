@@ -43,6 +43,8 @@ public sealed class SessionCardViewModel : Observable
     bool historyLoading;
     string historyNote = "";
     string capabilitiesSeen = "";
+    IReadOnlyList<string> lastCaps = [];
+    ReplyViewModel? parkedReply;
     bool synced;
 
     public SessionCardViewModel(Session session, CardContext ctx)
@@ -167,18 +169,25 @@ public sealed class SessionCardViewModel : Observable
     void Sync()
     {
         var caps = ctx.Capabilities();
+        // A host away for a moment (restarting, updating) says nothing about what it takes: the
+        // card keeps what it had, drafts and all, until the host says otherwise.
+        if (caps.Count == 0 && lastCaps.Count > 0) { caps = lastCaps; }
+        lastCaps = caps;
         var capsKey = string.Join(",", caps);
         var capsChanged = capsKey != capabilitiesSeen;
         capabilitiesSeen = capsKey;
         var name = ctx.MachineName();
 
         var q = session.Question;
+        QuestionViewModel? rebuilt = null;
         if (question is not null && (q is null || q.Id != question.Id || capsChanged))
         {
             // The question changed or went: text typed and not sent stays on the card, and an
-            // answer that went keeps saying what became of it.
+            // answer that went keeps saying what became of it. The same question rebuilt for new
+            // capabilities takes its draft along instead.
             var draft = question.UnsentText();
-            if (draft.Length > 0 && (q is null || q.Id != question.Id))
+            if (q is not null && q.Id == question.Id) { rebuilt = question; }
+            else if (draft.Length > 0)
             {
                 OrphanText = draft;
                 OrphanNote = "The question changed before you sent your answer. It was answered at the machine, or the agent moved on. What you typed is kept here.";
@@ -187,14 +196,29 @@ public sealed class SessionCardViewModel : Observable
             question.Detach();
             Question = null;
         }
-        if (q is not null && question is null) { Question = new QuestionViewModel(q, session.Id, session.Agent, caps, ctx.Deliveries, name); }
+        if (q is not null && question is null)
+        {
+            var next = new QuestionViewModel(q, session.Id, session.Agent, caps, ctx.Deliveries, name);
+            if (rebuilt is not null) { next.TakeDraft(rebuilt); }
+            Question = next;
+        }
         if (q is not null && receiptKey is not null && ctx.Deliveries.Get(receiptKey) is { State: DeliveryState.Done }) { receiptKey = null; }
         UpdateReceipt();
 
         var replies = caps.Contains(Capabilities.SessionsReply);
         var files = caps.Contains(Capabilities.SessionsAttach);
-        if (replies && reply is null) { Reply = new ReplyViewModel(session, files, ctx.Deliveries, ctx.Host, ctx.Shrinker, name); }
-        else if (!replies && reply is not null) { reply.Detach(); Reply = null; }
+        if (replies && reply is null)
+        {
+            Reply = new ReplyViewModel(session, files, ctx.Deliveries, ctx.Host, ctx.Shrinker, name);
+            if (parkedReply is not null) { reply!.TakeDraft(parkedReply); parkedReply = null; }
+        }
+        else if (!replies && reply is not null)
+        {
+            // Kept aside, not dropped: replies may come back (agent-ha-bridge stopped, say).
+            reply.Detach();
+            parkedReply = reply;
+            Reply = null;
+        }
         reply?.Update(session, files);
 
         var stops = caps.Contains(Capabilities.SessionsStop);

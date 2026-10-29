@@ -118,6 +118,19 @@ public sealed partial class QuestionViewModel : Observable
         Error = null;
     }
 
+    // The same question, rebuilt because the host's capabilities changed: what was chosen and
+    // typed carries over rather than vanishing from under the person.
+    internal void TakeDraft(QuestionViewModel old)
+    {
+        if (old.Question.Id != Question.Id) { return; }
+        FreeText = old.FreeText;
+        foreach (var f in Fields)
+        {
+            if (old.Fields.FirstOrDefault(o => o.Name == f.Name) is { } was) { f.TakeDraft(was); }
+        }
+        OtherOpen = Tap && Fields[0].OtherChosen;
+    }
+
     // A click on one of a tap question's options is the whole answer.
     public void Choose(OptionViewModel option)
     {
@@ -352,6 +365,18 @@ public sealed partial class FieldViewModel : Observable
     internal void SelectOnly(string value)
     {
         foreach (var o in Options) { o.SetSelected(o.Value == value); }
+    }
+
+    // What the person had chosen and typed in the same field of the question's previous view
+    // model (the host's capabilities changed under the card).
+    internal void TakeDraft(FieldViewModel old)
+    {
+        foreach (var o in Options) { o.SetSelected(old.Options.Any(x => x.Value == o.Value && x.IsSelected)); }
+        Set(ref otherChosen, old.otherChosen, nameof(OtherChosen));
+        Set(ref otherText, old.otherText, nameof(OtherText));
+        Set(ref boolValue, old.boolValue, nameof(BoolValue));
+        Set(ref text, old.text, nameof(Text));
+        touched = old.touched;
     }
 
     // The field's value for session.answer, or null to leave it out, or why it cannot be read.
