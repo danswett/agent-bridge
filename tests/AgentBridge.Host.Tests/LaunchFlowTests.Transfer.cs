@@ -224,6 +224,27 @@ public sealed partial class LaunchFlowTests
     }
 
     [Fact]
+    public async Task A_machine_that_cannot_prepare_its_transfer_folder_says_so_and_gives_back_its_sending_slot()
+    {
+        await using var away = await AwayAsync();
+        ServeTransfers();
+        var toAway = await OpenToAsync(away.Device);
+        var ch = await OpenAsync();
+        if (Directory.Exists(away.Transfers.Staging)) { Directory.Delete(away.Transfers.Staging, recursive: true); }
+        Directory.CreateDirectory(Path.GetDirectoryName(away.Transfers.Staging)!);
+        File.WriteAllText(away.Transfers.Staging, "in the way");
+
+        // More than its two sending slots: each failure must give its slot back.
+        for (var i = 0; i < 3; i++)
+        {
+            var o = await LaunchAsync(ch, new { agent = "copilot", workspace = "App", transfer = Transfer(away, toAway) });
+            Assert.Equal("refused", o.Outcome_);
+            Assert.Contains("this machine's transfer folder could not be prepared", o.Reason);
+        }
+        File.Delete(away.Transfers.Staging);
+        Assert.Equal("started", (await LaunchAsync(ch, new { agent = "copilot", workspace = "App", transfer = Transfer(away, toAway) })).Outcome_);
+    }
+    [Fact]
     public async Task Nothing_moves_from_a_machine_that_does_not_hand_its_sessions_on_or_to_one_that_does_not_take_them()
     {
         await using var away = await AwayAsync(serve: false);

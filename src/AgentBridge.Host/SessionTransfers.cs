@@ -148,10 +148,11 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
         var bundleKey = BlobFormat.FromBase64Url(result.Blob.Key);
         if (bundleKey is not { Length: 32 }) { await ForgetAsync(l.Relay, result.Blob.Id); throw new TransferRefusedException("the bundle's key is malformed"); }
 
-        var zip = Path.Combine(Folder(), $"{Guid.NewGuid():N}.zip");
-        using var deadline = new CancellationTokenSource(SendFor, time);
+        string? zip = null;
         try
         {
+            // Inside: a staging folder that cannot be made still forgets the blob.
+            zip = Path.Combine(Folder(), $"{Guid.NewGuid():N}.zip");
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             limit.CancelAfter(FetchWait);
             byte[] sha;
@@ -176,6 +177,7 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
                 BlobIntegrityException i => $"the bundle in the blob store is not what was sent ({i.Message})",
                 BlobRefusedException r => $"the relay refused the bundle ({r.Reason})",
                 OperationCanceledException => $"fetching the bundle took over {FetchWait.TotalMinutes:0} minutes",
+                IOException or UnauthorizedAccessException when zip is null => $"this machine's transfer folder could not be prepared ({e.Message})",
                 _ => $"the bundle could not be fetched ({e.Message})",
             });
         }
@@ -241,11 +243,18 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
         }
         var config = launcher.TransferConfig;
         var most = Math.Min(config.MaxBytes, BlobFormat.MaxPlain(l.Relay.BlobMaxBytes));
-        if (!await sending.WaitAsync(TimeSpan.FromSeconds(30))) { throw new InvalidOperationException("this machine is sending other sessions; try again in a minute"); }
-        var zip = Path.Combine(Folder(), $"{Guid.NewGuid():N}.zip");
         using var deadline = new CancellationTokenSource(SendFor, time);
+        if (!await sending.WaitAsync(TimeSpan.FromSeconds(30))) { throw new InvalidOperationException("this machine is sending other sessions; try again in a minute"); }
+        string? zip = null;
+        // Everything after the slot is taken is inside, so whatever fails gives it back: two
+        // failures holding one each would stop every transfer from this machine.
         try
         {
+            try { zip = Path.Combine(Folder(), $"{Guid.NewGuid():N}.zip"); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                throw new InvalidOperationException($"this machine's transfer folder could not be prepared ({e.Message})");
+            }
             // Checked again: resumed at the machine since the list was made, it is being written.
             if (launcher.Running(entry.Id)) { throw new InvalidOperationException("that session is running on its machine; it can be brought over once it has ended there"); }
             SessionBundles.Packed packed;
@@ -282,8 +291,9 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
         }
     }
 
-    static void Delete(string path)
+    static void Delete(string? path)
     {
+        if (path is null) { return; }
         try { File.Delete(path); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
