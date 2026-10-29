@@ -26,8 +26,9 @@ later stages is below.
   on fifteen shapes and the port must agree on each.
 * **Run while agent-ha-bridge runs for this user** (G5). Two publishers of one machine's
   entities would fight over every retained topic. The same probe that gates typing
-  (`AgentHaBridgeProbe`: the daemon and supervisor mutexes and the scheduled task) is asked on
-  every pass, cached for five seconds as the app's view of it is, and the connector pauses —
+  (`AgentHaBridgeProbe`: the daemon and supervisor mutexes and the scheduled task) is asked
+  before **every write**, cached for five seconds as the app's view of it is, so the daemon
+  starting part-way through a long pass stops the rest of it, and the connector pauses —
   publishing nothing at all — for as long as the answer is "running" or "could not be checked".
   Where the probe does not exist yet (off Windows), the connector does not start.
 * **Write to a Home Assistant that is not disposable from a development build** (G6). A build
@@ -201,8 +202,10 @@ restart** loses nothing retained; the 300 s re-assert of the session list covers
 lost retained state. The daemon's repair of a liveness sensor Home Assistant has stopped
 listening to (#177, #202) is stage 7.
 
-**A pause** (agent-ha-bridge started for this user) stops every write within five seconds;
-the next pass after it stops re-runs the start.
+**A pause** (agent-ha-bridge started for this user) stops every write: the write that finds it
+is not made, nor anything after it in that pass. Within the probe's five-second cache, one
+request already on the wire is the most that can still land. The next pass after it stops
+re-runs the start.
 
 One connector per machine and user: `Local\AgentBridgeHaConnector_<slug>` is claimed at start,
 so a second profile cannot publish the same machine's entities.

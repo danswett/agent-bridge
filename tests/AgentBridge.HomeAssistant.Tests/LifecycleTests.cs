@@ -21,6 +21,7 @@ public sealed class LifecycleTests : IDisposable
     readonly FakeTimeProvider time = new(FakeSessions.T0);
     readonly List<string> log = [];
     string? agentHaBridge;
+    Func<string?>? agentHaBridgeProbe;
     UsageReport usage = UsageReport.Empty;
     long usageVersion;
 
@@ -35,7 +36,7 @@ public sealed class LifecycleTests : IDisposable
         Version = "0.1.0",
         Dev = true,
         StateFile = Path.Combine(folder, "ha-connector.json"),
-    }, ha, sessions, () => agentHaBridge, () => (usage, usageVersion), m => { lock (log) { log.Add(m); } }, time);
+    }, ha, sessions, () => agentHaBridgeProbe is { } probe ? probe() : agentHaBridge, () => (usage, usageVersion), m => { lock (log) { log.Add(m); } }, time);
 
     async Task Pass(HaConnector c, double seconds = 0)
     {
@@ -71,6 +72,23 @@ public sealed class LifecycleTests : IDisposable
         sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Working));
         await Run(c, 120);
         Assert.Equal(before, ha.Log.Count);
+    }
+
+    [Fact]
+    public async Task Agent_ha_bridge_starting_part_way_through_a_pass_stops_the_rest_of_it()
+    {
+        sessions.Set(FakeSessions.Copilot(A));
+        sessions.Set(FakeSessions.Copilot(B));
+        await using var c = Connector();
+        // The daemon appears once three messages have gone: the startup pass is far from done.
+        var probe = () => ha.Log.Count >= 3 ? "agent-ha-bridge is running for this user (AgentBridgeDaemon_0123)" : null;
+        agentHaBridgeProbe = probe;
+        await Pass(c);
+        Assert.Equal(3, ha.Log.Count);
+        Assert.False(c.Started);
+        Assert.Contains(log, l => l.Contains("paused", StringComparison.Ordinal));
+        await Run(c, 30);
+        Assert.Equal(3, ha.Log.Count);
     }
 
     [Fact]

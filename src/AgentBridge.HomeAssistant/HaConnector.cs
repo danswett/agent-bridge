@@ -44,7 +44,8 @@ public sealed record HaConnectorOptions
 //     only reads the served dashboard to know when a card has gone;
 //   * call a service that names more than one entity (ServiceTarget);
 //   * run while agent-ha-bridge runs for this user (design G5). Two publishers of one machine's
-//     entities would fight over every retained topic. Checked on every pass, not only at start;
+//     entities would fight over every retained topic. Checked before every write, so the
+//     daemon starting part-way through a pass stops the rest of it;
 //   * answer, reply, launch, stop or update: later stages. Until they land, entities only those
 //     would serve are withdrawn rather than left as controls nothing acts on.
 public sealed partial class HaConnector : IAsyncDisposable
@@ -98,7 +99,10 @@ public sealed partial class HaConnector : IAsyncDisposable
         Func<(UsageReport Report, long Version)>? usage = null, Action<string>? log = null, TimeProvider? time = null)
     {
         this.options = options;
-        this.ha = ha;
+        // Every write asks first (design G5): a pass can run long (each request may take its
+        // timeout), and agent-ha-bridge starting part-way through must stop the rest of it, not
+        // race the daemon's own publishes until the pass ends.
+        this.ha = new Guarded(ha, agentHaBridge);
         this.source = source;
         this.usage = usage;
         this.agentHaBridge = agentHaBridge;
@@ -148,9 +152,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             var now = time.GetUtcNow();
             if (agentHaBridge() is { } active)
             {
-                if (pausedFor != active) { log($"Home Assistant connector paused: {active}"); }
-                pausedFor = active;
-                started = false;
+                Pause(active);
                 return;
             }
             if (pausedFor is not null) { log("Home Assistant connector resuming: agent-ha-bridge is no longer running for this user"); }
@@ -163,7 +165,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                     await StartupAsync(now, cancellationToken);
                     Resolved("startup");
                 }
-                catch (Exception e) when (e is not OperationCanceledException)
+                catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
                 {
                     retryAt = now + options.RetryDelay;
                     Problem("startup", $"Home Assistant connector could not start: {Describe(e)}; trying again in {options.RetryDelay.TotalSeconds:F0}s");
@@ -182,7 +184,17 @@ public sealed partial class HaConnector : IAsyncDisposable
                 await Step("retire", () => RetireAsync(now, cancellationToken));
             }
         }
+        // agent-ha-bridge started during the pass: the write that found it was not made, and
+        // nothing after it is.
+        catch (AgentHaBridgeRunning e) { Pause(e.Message); }
         finally { passes.Release(); }
+    }
+
+    void Pause(string why)
+    {
+        if (pausedFor != why) { log($"Home Assistant connector paused: {why}"); }
+        pausedFor = why;
+        started = false;
     }
 
     async Task Step(string name, Func<Task> step)
@@ -192,7 +204,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             await step();
             Resolved(name);
         }
-        catch (Exception e) when (e is not OperationCanceledException)
+        catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
         {
             Problem(name, $"Home Assistant connector {name} failed: {Describe(e)}; trying again");
         }
@@ -665,5 +677,35 @@ public sealed partial class HaConnector : IAsyncDisposable
         // its own (expire_after), the cards stay, and whichever bridge starts next takes them over.
         SaveLedger();
         passes.Dispose();
+    }
+
+    // agent-ha-bridge is running for this user: the message says how it was found.
+    sealed class AgentHaBridgeRunning(string why) : Exception(why);
+
+    // Home Assistant with the G5 check in front of every write. Reads pass straight through:
+    // they change nothing the daemon owns.
+    sealed class Guarded(IHomeAssistant inner, Func<string?> agentHaBridge) : IHomeAssistant
+    {
+        void Check()
+        {
+            if (agentHaBridge() is { } active) { throw new AgentHaBridgeRunning(active); }
+        }
+
+        public Task PublishAsync(string topic, string payload, bool retain, CancellationToken cancellationToken = default)
+        {
+            Check();
+            return inner.PublishAsync(topic, payload, retain, cancellationToken);
+        }
+
+        public Task RenameEntityAsync(string entityId, string newEntityId, CancellationToken cancellationToken = default)
+        {
+            Check();
+            return inner.RenameEntityAsync(entityId, newEntityId, cancellationToken);
+        }
+
+        public Task<HaState?> GetStateAsync(string entityId, CancellationToken cancellationToken = default) => inner.GetStateAsync(entityId, cancellationToken);
+        public Task<IReadOnlyList<HaState>> GetStatesAsync(CancellationToken cancellationToken = default) => inner.GetStatesAsync(cancellationToken);
+        public Task<IReadOnlyList<HaRegistryEntry>> ListEntityRegistryAsync(CancellationToken cancellationToken = default) => inner.ListEntityRegistryAsync(cancellationToken);
+        public Task<HaDashboard> ReadDashboardAsync(string urlPath, CancellationToken cancellationToken = default) => inner.ReadDashboardAsync(urlPath, cancellationToken);
     }
 }
