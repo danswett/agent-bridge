@@ -166,7 +166,9 @@ internal static class Transcripts
                         if (!matches) { continue; }
                         var evidence = new { record = "user.message", offset, delivery, attachments = files, length = content.Length };
                         if (files < attachments) { return Match.No($"Copilot took the prompt with {files} of {attachments} attachment(s)", evidence); }
-                        if (steering && delivery is not ("steering" or "queued")) { return Match.No($"Copilot took the prompt as \"{delivery ?? "(none)"}\", not while working", evidence); }
+                        // Necessary, not sufficient: Copilot records interactive prompts as steering even with no
+                        // turn running, so the checklist pairs this with a working status just before.
+                        if (steering && delivery is not ("steering" or "queued")) { return Match.No($"Copilot took the prompt as \"{delivery ?? "(none)"}\", not as steering or queued", evidence); }
                         return Match.Yes($"Copilot took the prompt ({delivery ?? "no delivery recorded"})", evidence);
                     }
                 case Claude:

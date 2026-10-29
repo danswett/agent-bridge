@@ -27,6 +27,22 @@ internal static partial class Checklist
     public static IReadOnlyList<string> StepIds(string checklist) =>
         [.. StepRow().Matches(checklist).Select(m => m.Groups["id"].Value)];
 
+    // Every check the checklist expects evidence for: each step, and each further check a step
+    // records under its own id (E4-06b, E4-06c), so skipping one of those shows as not run.
+    public static IReadOnlyList<string> ExpectedSteps(string checklist)
+    {
+        var expected = new List<string>(StepIds(checklist));
+        foreach (var command in Commands(checklist))
+        {
+            var words = Split(command);
+            for (var i = 0; i + 1 < words.Count; i++)
+            {
+                if (words[i] == "--step" && Evidence.ValidStep(words[i + 1]) && !expected.Contains(words[i + 1], StringComparer.OrdinalIgnoreCase)) { expected.Add(words[i + 1]); }
+            }
+        }
+        return expected;
+    }
+
     public static IReadOnlyList<(int Section, string Prefix)> RowRefs(string checklist) =>
         [.. RowRef().Matches(checklist).Select(m => (int.Parse(m.Groups["section"].Value), m.Groups["prefix"].Value))];
 

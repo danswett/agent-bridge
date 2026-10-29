@@ -184,8 +184,9 @@ Volatile files found so far: none recorded yet (fill in after the first run).
 Sessions run in `$repo` on VM-M unless a step says otherwise. `expect` and `log` read only
 what came after the latest `mark`, so mark the session the step acts on (which also marks the
 host log) before doing anything. Unless a step says to act while the session works, start
-each step with `$cp` idle and no question or prompt open: wait with
-`agent-bridge-rehearsal sessions --id $cp --status idle --timeout 120`. E1-01 starts the Copilot
+each step with the session it acts on (`$cp`, `$cl` or `$cx`) idle and no question or prompt
+open: wait with `agent-bridge-rehearsal sessions --id $cp --status idle --timeout 120` (or
+`$cl`, `$cx`). E1-01 starts the Copilot
 session the phase uses. Right after
 it, type prompt **P0** in that session and set `$cp`:
 
@@ -233,14 +234,14 @@ Mark before each: `agent-bridge-rehearsal mark $cp`.
 | **E3-02** | §3 "Copilot permission prompts" | Machine, App | Mark; type **P9**; deny from the app | Recorded as denied (or cancelled and then the turn stopped) | `agent-bridge-rehearsal expect permission $cp --decision denied --step E3-02` | |
 | **E3-03** | §3 "A machine can turn remote approval off", §3 "A prompt only the machine" | App, PWA | In the app's Settings turn "approve from other devices" off and restart. Type **P9** | The PWA shows the prompt with no buttons, marked as waiting at the machine. The phone is notified the same way | `agent-bridge-rehearsal sessions --id $cp --expect-answer-at-machine --timeout 30 --step E3-03`; screenshot. Then approve it at the terminal, turn the setting back on and restart | |
 | **E3-04** | §3 "Codex approvals" | Machine, PWA | `agent-bridge-rehearsal mark $cx`. In Codex, type **P13**, then approve from the PWA | `y` then Enter is typed. The outcome is `unconfirmed`, since Codex records no answer. The command runs | `agent-bridge-rehearsal expect answer $cx --step E3-04` (exits 3, left to a person), then `agent-bridge-rehearsal note --step E3-04b --result pass --detail "…"` | #37, Cl/Cx live |
-| **E3-05** | §3 "Claude permission prompts" | Machine, PWA | In Claude, type **P9** | Shown as waiting at the machine; nothing to press | `agent-bridge-rehearsal sessions --id $cl --expect-answer-at-machine --timeout 30 --step E3-05` | #37, Cl/Cx live |
+| **E3-05** | §3 "Claude permission prompts" | Machine, PWA | In Claude, type **P9**. After the check, approve it at Claude's terminal | Shown as waiting at the machine, with nothing to press. Once approved there, Claude goes idle | `agent-bridge-rehearsal sessions --id $cl --expect-answer-at-machine --timeout 30 --step E3-05`, then `agent-bridge-rehearsal sessions --id $cl --status idle --timeout 120 --step E3-05b` | #37, Cl/Cx live |
 
 ### E4. Replies and attachments
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
 | **E4-01** | §4 "Reply to a session", §4 "Ctrl/Cmd+Enter" | PWA | Mark; type `rehearsal reply one` then a new line with Enter, then `two`, then send with Ctrl+Enter | One prompt, the line break as a space | `agent-bridge-rehearsal expect reply $cp --text "rehearsal reply one two" --step E4-01` | |
-| **E4-02** | §4 "Reply to a working session" | Machine, App | Type **P6**; while it works, mark and reply `rehearsal steer` from the app | Copilot takes it while working (steering or queued) | `agent-bridge-rehearsal expect steering $cp --text "rehearsal steer" --step E4-02` | |
+| **E4-02** | §4 "Reply to a working session" | Machine, App | Type **P6**. While it works: mark, confirm it is working, and reply `rehearsal steer` from the app | Copilot takes it during the turn, as a steering or queued prompt. The delivery alone does not prove the turn was running, since Copilot records interactive prompts as steering even when idle; the working check just before the reply does | `agent-bridge-rehearsal sessions --id $cp --status working --step E4-02`, then `agent-bridge-rehearsal expect steering $cp --text "rehearsal steer" --step E4-02b` | |
 | **E4-03** | §4 "A leading / or !" | PWA | Reply `/help`, then ` !dir` | Both refused; nothing typed | `agent-bridge-rehearsal note --step E4-03 --result pass --detail "…" --screenshot <file>` | |
 | **E4-04** | §4 "A reply waits" | Machine, PWA | Type **P1**; while the question is open, reply `rehearsal waits`. Then answer the question at the terminal | The reply is refused while the question is open. Once answered, the session goes idle | `agent-bridge-rehearsal note --step E4-04 --result pass --detail "…" --screenshot <file>`, then `agent-bridge-rehearsal sessions --id $cp --status idle --timeout 60 --step E4-04b` | |
 | **E4-05** | §4 "Paste an image", §4 "Attachments staged" | PWA | Mark. Reply **P14** with a 100 KiB PNG pasted and a text file attached | Each file mentioned as `@path` ahead of the words; Copilot attaches both | `agent-bridge-rehearsal expect reply $cp --text "Describe the attached files in one line each." --attachments 2 --step E4-05`, then `agent-bridge-rehearsal staging --expect-min-files 2 --step E4-05b` | |
@@ -267,7 +268,7 @@ That also marks the host log, which `log` then reads from.
 | **E6-02** | §6 "Workspaces are an explicit allowlist" | VM-M, PWA | `agent-bridge-host workspace add C:\Windows --label Bad` | Refused at the machine. The PWA offers only approved workspaces | `agent-bridge-rehearsal note --step E6-02 --result pass --detail "<refusal>"` | |
 | **E6-03** | §6 "Agent: Agency", §6 "Agency profiles", §6 "Model, effort and context", §6 "Permissions: ask", §6 "Extra arguments" | PWA | Launch with each agent offered; pick a model, effort and context; choose Allow all once; set `launch.agents.copilot.extraArgs` and relaunch | Started with each setting; an option the machine does not offer is not shown. Agency profiles appear only if Agency is installed | `agent-bridge-rehearsal note --step E6-03 --result pass --detail "…"` | |
 | **E6-04** | §6 "Resume: recent sessions", §6 "Live sessions are never offered" | PWA | Open Resume | Ended sessions in **Rehearsal** are offered; `$cp` (live) is not. Resume one: it reopens under its own id in its own folder | `agent-bridge-rehearsal log --contains "resumed pid" --timeout 60 --step E6-04` | #43 for the live-session guarantee |
-| **E6-05** | §6 "Folder trust", §16 "Elevated targets" | PWA, Machine | `agent-bridge-host workspace add C:\rehearsal\untrusted --label Untrusted`. Launch Claude there. While it waits on trust, launch again | The first is left for the machine; the second is `busy`. Then start an elevated `copilot` by hand and answer it from the PWA: refused, saying it is elevated | `agent-bridge-rehearsal log --contains "is asking whether to trust the folder" --timeout 60 --step E6-05` | Cl/Cx live |
+| **E6-05** | §6 "Folder trust", §16 "Elevated targets" | PWA, Machine | `agent-bridge-host workspace add C:\rehearsal\untrusted --label Untrusted`. Launch Claude there. While it waits on trust, launch again. Then decline the trust question at Claude's window and close it. Last, start an elevated `copilot` by hand, type **P1**, answer from the PWA, then close that window | The first launch is left for the machine; the second is `busy`. The elevated session's answer is refused, saying it is elevated | `agent-bridge-rehearsal log --contains "is asking whether to trust the folder" --timeout 60 --step E6-05` | Cl/Cx live |
 | **E6-06** | §6 "Codex launched with no prompt", §6 "A batch-file agent" | PWA | Launch Codex with no prompt, then Copilot with a prompt containing `" & echo pwned & "` | Codex is refused. Copilot receives the prompt as text and nothing is run | `agent-bridge-rehearsal note --step E6-06 --result pass --detail "…"` | |
 | **E6-07** | §7 "Fails closed", §7 "Reclaim finished worktrees", §7 "Neither product" | PWA, VM-M | (1) From the PWA, end every session launched in E6-01 to E6-06, so none of the host's worktrees is in use. (2) `agent-bridge-host config set launch.worktrees.limit 2` and `agent-bridge-host config set launch.worktrees.idleHours 0`, then restart the host. (3) Mark `$cp`, then launch into **Rehearsal** three times, ending nothing | The first launch removes the host's finished trees before counting, and never agent-ha-bridge's tree from B-05. The first two start; the third is refused at the cap, with no fallback to `$repo` | (3) `agent-bridge-rehearsal log --contains "removed finished worktree" --timeout 60 --step E6-07`, `agent-bridge-rehearsal worktrees $repo --expect-host-trees 2 --expect-old-trees 1 --step E6-07b`, and a screenshot of the refusal. Then end the two, `agent-bridge-host config unset` both settings, and restart | #43 |
 
@@ -284,7 +285,7 @@ That also marks the host log, which `log` then reads from.
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
 | **E9-01** | §9 "Machine row", §9 "Every machine" | PWA | Read the machine list | REHEARSAL-M with its session count, version and `(dev)` if a dev build | `agent-bridge-rehearsal host --step E9-01`; screenshot | |
-| **E9-02** | §9 "The machine updates itself", §14 "Uninstall removes" | App | Install the previous release first, then update from Settings. Later (after Phase F), uninstall | The update stops the host, then the app restarts on the new version. Uninstall removes the task, Run entry and toast registration, and keeps the profile | `agent-bridge-rehearsal host --step E9-02`; `agent-bridge-rehearsal note --step E9-02b --result pass --detail "…"` | |
+| **E9-02** | §9 "The machine updates itself", §14 "Uninstall removes" | App | If a newer release than the build under test exists, update from Settings; otherwise record this step as manual. After Phase F of the last run, uninstall from Windows Settings | The update stops the host, then the app restarts on the new version. Uninstall removes the task, Run entry and toast registration, and keeps the profile | `agent-bridge-rehearsal host --timeout 120 --step E9-02` after the update; `agent-bridge-rehearsal note --step E9-02b --result pass --detail "…"` after uninstalling | |
 
 ### E10. Notifications
 
@@ -311,7 +312,7 @@ That also marks the host log, which `log` then reads from.
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
-| **E13-01** | §13 "Huge transcripts" | Machine, App | Resume a session with a transcript over 50 MB (make one with **P6** repeated) | Listed with its title and state within seconds | `agent-bridge-rehearsal sessions --agent copilot --expect-min 1 --timeout 30 --step E13-01` | |
+| **E13-01** | §13 "Huge transcripts" | Machine, PWA | Make `C:\rehearsal\big.txt` (`1..200000 \| ForEach-Object { "line $_ of the rehearsal" } \| Set-Content C:\rehearsal\big.txt`). In a new Copilot session type **P16** three times, `/exit`, and resume it from the PWA | The resumed session is listed with its title and state within seconds, however long its transcript | `agent-bridge-rehearsal sessions --agent copilot --expect-min 2 --timeout 30 --step E13-01`; then end it from the PWA | |
 | **E13-02** | §13 "Incomplete discovery holds" | VM-M | With sessions running, stop and start the host three times quickly | No live session drops from the list, no resume offer includes a live session, no worktree is reclaimed | `agent-bridge-rehearsal sessions --id $cp --timeout 60 --step E13-02` after each restart | #43 |
 
 ### E14. Configuration
@@ -388,6 +389,7 @@ That also marks the host log, which `log` then reads from.
 | **P13** | (Codex, with approvals on request) `rehearsal-p13: run the shell command "git status" once.` |
 | **P14** | `Describe the attached files in one line each.` |
 | **P15** | `rehearsal-p15: run the shell command "agent-bridge-rehearsal host --try-restart --step E15-01" once and tell me its output.` |
+| **P16** | `rehearsal-p16: run "Get-Content C:\rehearsal\big.txt" and tell me how many lines it printed.` |
 
 ## Rows not exercised
 

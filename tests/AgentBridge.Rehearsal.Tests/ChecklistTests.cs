@@ -64,6 +64,17 @@ public class ChecklistTests
     }
 
     [Fact]
+    public void A_further_check_a_step_records_under_its_own_id_is_expected_evidence_too()
+    {
+        var expected = Checklist.ExpectedSteps(Doc);
+        Assert.Contains("E4-06", expected);
+        Assert.Contains("E4-06b", expected);
+        Assert.Contains("E4-06c", expected);
+        Assert.DoesNotContain("<id>", expected);
+        Assert.Equal(expected.Count, expected.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
+    [Fact]
     public void A_tool_name_inside_a_path_is_not_read_as_a_command_and_quoted_words_stay_whole()
     {
         Assert.Empty(Checklist.Commands("`tools/agent-bridge-rehearsal x`"));

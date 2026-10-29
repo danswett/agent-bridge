@@ -63,7 +63,7 @@ internal static class Cli
         new("expect reply", MinArgs: 1, MaxArgs: 1, Options: ["--text", "--attachments", "--timeout"], Required: ["--text"],
             Usage: "expect reply <session id> --text <words> [--attachments <n>] [--timeout <s>]"),
         new("expect steering", MinArgs: 1, MaxArgs: 1, Options: ["--text", "--timeout"], Required: ["--text"],
-            Usage: "expect steering <session id> --text <words> [--timeout <s>]: a reply Copilot took while working"),
+            Usage: "expect steering <session id> --text <words> [--timeout <s>]: a reply Copilot took as a steering or queued prompt; run sessions --status working just before replying, since Copilot marks interactive prompts steering even when idle"),
         new("expect permission", MinArgs: 1, MaxArgs: 1, Options: ["--decision", "--timeout"], Required: ["--decision"],
             Usage: "expect permission <session id> --decision approved|denied [--timeout <s>]"),
         new("expect shutdown", MinArgs: 1, MaxArgs: 1, Options: ["--timeout"],

@@ -181,7 +181,7 @@ internal static class Program
                 }
             case "report":
                 {
-                    var steps = p.Option("--checklist") is { } doc ? Checklist.StepIds(File.ReadAllText(doc)) : null;
+                    var steps = p.Option("--checklist") is { } doc ? Checklist.ExpectedSteps(File.ReadAllText(doc)) : null;
                     Console.WriteLine(evidence.Report(Evidence.Pacific(), steps));
                     return Outcome.Pass($"evidence in {evidence.Folder}");
                 }
