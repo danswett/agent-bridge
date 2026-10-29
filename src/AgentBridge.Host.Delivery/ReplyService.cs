@@ -43,6 +43,10 @@ public sealed class ReplyOptions
 
     public int ExtraEnters { get; init; } = 2;
 
+    // How long, at most, an input box still taking the reply in is waited for before Enter is
+    // given up on. Codex, streaming output, was seen live taking several seconds over it.
+    public TimeSpan SubmitPatience { get; init; } = TimeSpan.FromSeconds(15);
+
     public TimeSpan RememberFor { get; init; } = TimeSpan.FromMinutes(15);
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
@@ -292,7 +296,11 @@ public sealed class ReplyService : ISessionReplier
             {
                 return Done(Refused($"{name}'s input box is not on its screen, so it may be asking something at the machine; answer it there, or reply at the machine"));
             }
-            if (!box.Empty) { return Done(Refused($"something is already typed in {name}'s input box at the machine; send or clear it there first")); }
+            // Codex shows whether its box is empty in its footer. Claude shows a suggested next
+            // prompt in an empty box, which a screen read cannot tell from typed words, so its
+            // box is typed into whatever it shows: words someone left there would go with the
+            // reply, and Claude's record of them would leave the reply unconfirmed.
+            if (agent == AgentKind.Codex && !box.Empty) { return Done(Refused($"something is already typed in {name}'s input box at the machine; send or clear it there first")); }
             keys = plan.Keys(box.Rows);
             // The agent only appends, and a line still being written at this point is not a
             // prompt typed now: reading from here, it does not parse.
@@ -331,7 +339,8 @@ public sealed class ReplyService : ISessionReplier
     async Task SubmitAsync(string sessionId, AgentKind agent, int pid, string transcript, long from, AgentReply plan)
     {
         var pressed = 0;
-        for (var look = 0; look <= options.ExtraEnters + 1; look++)
+        var began = options.Time.GetTimestamp();
+        while (true)
         {
             var started = options.Time.GetTimestamp();
             while (options.Time.GetElapsedTime(started) < options.SubmitAfter)
@@ -339,7 +348,12 @@ public sealed class ReplyService : ISessionReplier
                 if (Prompts(agent, transcript, from).Prompts.Any(plan.Says)) { return; }
                 await Task.Delay(options.PollInterval, options.Time);
             }
-            if (pressed >= options.ExtraEnters || look > options.ExtraEnters) { return; }
+            if (pressed >= options.ExtraEnters) { return; }
+            if (options.Time.GetElapsedTime(began) >= options.SubmitPatience)
+            {
+                log($"not pressing Enter again in {Short(sessionId)}: its input box did not show the whole reply within {options.SubmitPatience.TotalSeconds:0} seconds");
+                return;
+            }
 
             await gate.WaitToTypeAsync();
             try

@@ -12,8 +12,8 @@ one session at once.
 | Agent | Replies | Why |
 |---|---|---|
 | Copilot CLI | Yes | agent-ha-bridge has long typed replies into it, and its transcript records every prompt (`user.message`) with the text as typed, which confirms one by identity |
-| Claude Code | Yes, typed only into its empty input box as seen on screen | Its transcript records a prompt typed while idle as a `user` entry whose content is the line as typed, and one typed while it works as a `queue-operation` `enqueue` with that content (2.1.312, seen live), which confirms one by identity. agent-ha-bridge confirmed only that *some* prompt was submitted |
-| Codex | Yes, typed only into its empty input box as seen on screen | Its rollout records every prompt, idle or mid-turn, as an `item_completed` `UserMessage` with the line as typed (0.165, seen live), which confirms one by identity. agent-ha-bridge typed with no confirmation at all |
+| Claude Code | Yes, typed only into its input box as seen on screen | Its transcript records a prompt typed while idle as a `user` entry whose content is the line as typed, and one typed while it works as a `queue-operation` `enqueue` with that content (2.1.312, seen live), which confirms one by identity. agent-ha-bridge confirmed only that *some* prompt was submitted |
+| Codex | Yes, typed only into its input box as seen on screen, and only while it is empty | Its rollout records every prompt, idle or mid-turn, as an `item_completed` `UserMessage` with the line as typed (0.165, seen live), which confirms one by identity. agent-ha-bridge typed with no confirmation at all |
 | Any, on macOS or Linux | Refused, and `sessions.reply` is not offered | Delivery through tmux comes later |
 
 ## The keys (Copilot)
@@ -106,20 +106,22 @@ own. What guards them is new. agent-ha-bridge's hooks tell it when a permission 
 ([app-windows.md](app-windows.md)), and a reply typed into one of those would answer it
 (words pick an option; Enter accepts the highlighted one). Each of them takes the input
 box's place on screen, so the host reads the screen first (`AgentReplies/Composer.cs`) and
-types only into an **empty input box that is positively on screen**, with the first send
+types only into an **input box that is positively on screen**, with the first send
 held to those rows (`KeySend.Expect`), so nothing is typed if they change in between:
 
-- Claude Code 2.1: a row starting `>` at the left edge between two full-width rules; empty,
-  or showing "Press up to edit queued messages". A permission prompt shows indented options
-  under one rule; an `AskUserQuestion` shows tabs between its rules and "Esc to cancel"
-  beneath. Neither is taken for the box.
+- Claude Code 2.1: a row starting `>` at the left edge between two full-width rules. A
+  permission prompt shows indented options under one rule; an `AskUserQuestion` shows tabs
+  between its rules and "Esc to cancel" beneath. Neither is taken for the box. After a turn
+  Claude suggests a next prompt in the empty box, as text a screen read cannot tell from
+  typed words, so the box is typed into whatever it shows: words someone left in it would go
+  with the reply, and Claude's record of them would leave the reply `unconfirmed`.
 - Codex 0.165: the last row starting `›` with "? for shortcuts" in the footer below it,
   which Codex shows only while nothing is typed (idle or working; the box's own text is one
   of several placeholders). An approval's first option also starts `›`, but has no such
   footer and ends "Press enter to confirm or esc to cancel".
 
-Otherwise the reply is `refused` ("input box is not on its screen", or "already typed in
-... input box"), and nothing is typed. Words already in the box would be sent with the reply.
+Otherwise the reply is `refused` ("input box is not on its screen", or, for Codex, "already
+typed in Codex's input box"), and nothing is typed.
 
 **Confirmed by identity.** Claude: a `user` entry (not meta, not a subagent's, no
 `tool_result`) whose content is the line, or, typed while it works, the `queue-operation`
