@@ -448,6 +448,11 @@ public sealed partial class AttachmentStore : IDisposable
         return b[..n];
     }
 
+    // Whether every file of a claim is an image Codex attaches when its path is pasted; a file
+    // too large for memory is told by its start on disk.
+    public static bool AllPastableImages(Claim claim) =>
+        claim.Items.All(h => AttachmentFiles.IsPastableImage(h.File is null ? h.Bytes : Head(h.File)));
+
     // The reply was typed: the attachments are the agent's now, and leave memory and incoming/.
     // Their staged copies stay until the sweep.
     public void Consume(Claim claim)

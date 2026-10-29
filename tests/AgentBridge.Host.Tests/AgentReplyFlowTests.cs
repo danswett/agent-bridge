@@ -311,6 +311,27 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_prompt_queued_before_the_reply_and_taken_first_does_not_take_the_replys_files()
+    {
+        Fixture.Append(claude, ClaudeQueued("an earlier thought"));
+        console.Rows = ClaudeIdle();
+        var shot = Upload(Png(300));
+        console.OnInject = plan =>
+        {
+            var line = Typed(plan);
+            Fixture.Append(claude, ClaudeQueued(line));
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(300);
+                Fixture.Append(claude, ClaudePrompt("an earlier thought", source: "queued"));
+                Fixture.Append(claude, ClaudePrompt(line, source: "queued"), ClaudeRead(line.Split(' ')[0][1..]));
+            });
+        };
+
+        Assert.Equal(AnswerOutcome.Delivered, (await ReplyAsync(ClaudeId, "and this", shot)).Outcome);
+    }
+
+    [Fact]
     public async Task A_Claude_reply_whose_file_is_never_read_is_unconfirmed()
     {
         console.Rows = ClaudeIdle();
@@ -423,6 +444,17 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_large_image_held_on_disk_rather_than_in_memory_goes_to_Codex_like_any_other()
+    {
+        console.Rows = CodexIdle();
+        CodexTakesImages();
+
+        var large = Upload(Png(AttachmentLimits.Bytes + 50_000), "large.png", direct: true);
+
+        Assert.Equal(AnswerOutcome.Delivered, (await ReplyAsync(CodexId, "see", large)).Outcome);
+    }
+
+    [Fact]
     public async Task A_Codex_image_path_its_box_shows_as_words_stops_the_reply_there_unconfirmed()
     {
         console.Rows = CodexIdle();
@@ -463,11 +495,15 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
 
     // ---- helpers ----
 
-    string Upload(byte[] bytes, string name = "shot.png")
+    string Upload(byte[] bytes, string name = "shot.png", bool direct = false)
     {
         var id = Guid.NewGuid().ToString();
-        store.Start(Peer, new AttachmentStart { Attachment = id, Name = name, Size = bytes.Length, Sha256 = Attachments.Base64Url(SHA256.HashData(bytes)) });
-        store.Chunk(Peer, new AttachmentChunk { Attachment = id, Offset = 0, Data = Convert.ToBase64String(bytes) });
+        store.Start(Peer, new AttachmentStart { Attachment = id, Name = name, Size = bytes.Length, Sha256 = Attachments.Base64Url(SHA256.HashData(bytes)) }, direct);
+        for (var at = 0; at < bytes.Length; at += AttachmentLimits.Chunk)
+        {
+            var n = Math.Min(AttachmentLimits.Chunk, bytes.Length - at);
+            store.Chunk(Peer, new AttachmentChunk { Attachment = id, Offset = at, Data = Convert.ToBase64String(bytes, at, n) });
+        }
         return id;
     }
 
