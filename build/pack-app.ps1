@@ -1,11 +1,12 @@
-# Builds the Windows app's Velopack release: the app, the host, its windowless launcher and
-# the injector, published into one folder with one version, then packed. docs/app-windows.md.
+# Builds the Windows app's Velopack release: the app, the host, its windowless launcher, the
+# injector and the agents' hook, published into one folder with one version, then packed.
+# docs/app-windows.md, docs/host-hooks.md.
 #
 #   pwsh build/pack-app.ps1 -Version 0.2.0            # out/app/publish and out/app/releases
 #   pwsh build/pack-app.ps1 -Version 0.2.0 -NoPack    # the folder only
 #
 # Needs the .NET 10 SDK, vpk 1.2.161 (dotnet tool install -g vpk --version 1.2.161) and, for
-# the NativeAOT injector, the MSVC linker (Visual Studio's C++ build tools). Nothing is signed:
+# the NativeAOT injector and hook, the MSVC linker (Visual Studio's C++ build tools). Nothing is signed:
 # signing is a release step that needs a certificate (docs/app-windows.md, Signing).
 [CmdletBinding()]
 param(
@@ -35,11 +36,12 @@ if ($Release) { $hostFlags += '-p:AgentBridgeRelease=true' }
 Publish 'src/AgentBridge.Host/AgentBridge.Host.csproj' $hostFlags
 Publish 'src/AgentBridge.HostLauncher/AgentBridge.HostLauncher.csproj' @('--self-contained')
 Publish 'src/AgentBridge.Injector/AgentBridge.Injector.csproj' @()
+Publish 'src/AgentBridge.Hook/AgentBridge.Hook.csproj' @()
 Publish 'src/AgentBridge.App/AgentBridge.App.csproj' @()
 
 # The .pri carries the compiled XAML: without it the installed app fails at startup with
 # nothing but 0xC000027B (spike S3), while the build output runs fine.
-$required = 'AgentBridge.exe', 'AgentBridge.pri', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'Assets\AgentBridge.ico', 'Assets\AgentBridge.png'
+$required = 'AgentBridge.exe', 'AgentBridge.pri', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe', 'Assets\AgentBridge.ico', 'Assets\AgentBridge.png'
 $missing = $required | Where-Object { -not (Test-Path (Join-Path $publish $_)) }
 if ($missing) { throw "missing from the publish folder: $($missing -join ', ')" }
 Write-Host "published $Version to $publish"

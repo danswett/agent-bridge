@@ -19,7 +19,8 @@ internal sealed record DiscoveredSession(
     DateTimeOffset? ProcessStartedAt = null);
 
 // One agent-ha-bridge hook registration (<id>.json), as written by its Claude and Codex
-// hooks. Only read; agent-ha-bridge prunes its own files.
+// hooks. Only read here: agent-ha-bridge prunes its own files, and on a machine migrated from
+// it the host's intake writes and prunes them in the same shapes (Intake/HookHandlers).
 internal sealed record Registration(
     string SessionId,
     int ProcessId,

@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
+using AgentBridge.Hooks;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
@@ -45,6 +47,10 @@ using AgentBridge.Transport;
 //   agent-bridge-host shadow run|once|summary   compare what this host shows with what
 //                                               agent-ha-bridge's daemon shows, read-only, and
 //                                               report the week (docs/host-shadow.md)
+//   agent-bridge-host hooks status              hook handling on this machine: whether this
+//                                               profile has taken over agent-ha-bridge's hook
+//                                               spool, its heartbeat, and the hooks' timings
+//                                               (docs/host-hooks.md)
 //
 // Roots default to the current user's; --copilot-home, --claude-home and --codex-home
 // point elsewhere. Nothing under them is ever written. sign-in, serve and whoami take
@@ -68,20 +74,26 @@ var defaults = SessionSourceOptions.ForCurrentUser();
 // serve reads what it may do on this machine from the profile's config.json (HostSettings), and
 // so do ha shadow, which must see the sessions as serve would (permissions.remoteApproval), and
 // usage, which reads what serve would (usage.*). usage only reads the file: it never makes the
-// profile a device key, as loading its identity would.
-var (settings, settingsProblem) = command == "serve" || (command == "ha" && arguments.ElementAtOrDefault(1) == "shadow")
-    ? HostSettings.Load(LoadIdentity().Folder)
+// profile a device key, as loading its identity would. serve and ha shadow also read whether this
+// profile has taken over agent-ha-bridge's hooks (IntakeState, docs/host-hooks.md).
+var serveFolder = command == "serve" || (command == "ha" && arguments.ElementAtOrDefault(1) == "shadow") ? LoadIdentity().Folder : null;
+var (settings, settingsProblem) = serveFolder is not null
+    ? HostSettings.Load(serveFolder)
     : command == "usage" && Identity.IsValidProfile(Option("--profile") ?? "default")
         ? HostSettings.Load(Path.Combine(Identity.DefaultRoot, Option("--profile") ?? "default"))
         // An invalid profile is refused by the usage command itself, before anything is read.
         : (HostSettings.Default, null);
+var (intakeState, intakeProblem) = serveFolder is not null ? IntakeState.Load(serveFolder) : (null, null);
+// A migrated installation's registrations are read where its runtime is, wherever that is.
+string[] WithIntake(IReadOnlyList<string> roots, string folder) =>
+    intakeState is null ? [.. roots] : [.. roots.Prepend(Path.Combine(intakeState.RuntimeRoot, folder)).Distinct(StringComparer.OrdinalIgnoreCase)];
 var options = new SessionSourceOptions
 {
     CopilotHome = Option("--copilot-home") ?? defaults.CopilotHome,
     ClaudeHome = Option("--claude-home") ?? defaults.ClaudeHome,
     CodexHome = Option("--codex-home") ?? defaults.CodexHome,
-    ClaudeRegistrationRoots = defaults.ClaudeRegistrationRoots,
-    CodexRegistrationRoots = defaults.CodexRegistrationRoots,
+    ClaudeRegistrationRoots = WithIntake(defaults.ClaudeRegistrationRoots, SpoolContract.ClaudeFolder),
+    CodexRegistrationRoots = WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder),
     CopilotRemoteApproval = settings.RemoteApproval,
     Log = command == "serve" ? Log : null,
 };
@@ -210,10 +222,13 @@ switch (command)
             if (ConfigCommands.Writes(rest) && Refused("change the host's config")) { return 4; }
             return ConfigCommands.Run(rest, LoadIdentity().Folder, Console.Out, Console.Error);
         }
+    case "hooks" when arguments.ElementAtOrDefault(1) == "status":
+        return HookCommands.Status(LoadIdentity().Folder, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge", "runtime"), Console.Out, DateTimeOffset.Now);
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
+        Console.Error.WriteLine("       agent-bridge-host hooks status");
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");
         return command == "help" ? 0 : 2;
 }
@@ -320,6 +335,9 @@ async Task<int> ServeAsync()
     // agent session, which may not manage it (§6.3 invariant 13).
     var inspector = new SystemProcessInspector();
     var callers = new CallerGuard(() => KnownAgents.Of(source, launcher, inspector), OperatingSystem.IsWindows() ? Path.Combine(AppContext.BaseDirectory, CallerGuard.AppExecutable) : null);
+    // On a machine migrated from agent-ha-bridge, the hooks hand their events to this host
+    // (docs/host-hooks.md). Its notices are there for the Home Assistant connector to subscribe to.
+    await using var intake = StartIntake(haProbe, stop.Token);
 
     // The desktop app's way in (docs/protocol/local-pipe.md): the same sessions ops, and the
     // host's management, which only the pipe reaches. It runs whether or not this profile has
@@ -536,6 +554,30 @@ void RestartSelf()
     var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
     foreach (var a in args) { start.ArgumentList.Add(a); }
     using var _ = Process.Start(start);
+}
+
+// Hook intake (docs/host-hooks.md): only for a profile that has migrated from agent-ha-bridge,
+// and only where agent-ha-bridge's daemon can be seen, since the intake must stand back
+// whenever it runs (G5). Null when off.
+HookIntake? StartIntake(AgentHaBridgeProbe? probe, CancellationToken cancellationToken)
+{
+    if (intakeProblem is not null) { Log(intakeProblem); }
+    if (intakeState is null) { return null; }
+    if (!OperatingSystem.IsWindows() || probe is null)
+    {
+        Log("hook intake is off: this platform cannot yet tell whether agent-ha-bridge is running, which it must know before touching the hook spool");
+        return null;
+    }
+    var active = HostControl.Cached(() => OperatingSystem.IsWindows() ? probe.Active() : "not Windows", () => Environment.TickCount64, everyMs: 2000);
+    var intake = new HookIntake(new HookIntakeOptions
+    {
+        RuntimeRoot = intakeState.RuntimeRoot,
+        ClaudeHome = options.ClaudeHome,
+        AgentHaBridgeActive = active,
+    }, new SystemProcessInspector(), log: Log);
+    intake.Start(cancellationToken);
+    Log($"hook intake is on: taking agent-ha-bridge installation {intakeState.InstallationId}'s hook spool in {intakeState.RuntimeRoot}{(active() is { } why ? $", once it stops ({why})" : "")}");
+    return intake;
 }
 
 static string OsName() =>

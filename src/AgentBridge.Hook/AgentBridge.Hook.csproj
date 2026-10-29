@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- agent-bridge-host-hook: the hook each agent runs on a migrated machine (docs/host-hooks.md).
+       The agents wait for every hook, so it is NativeAOT and starts in milliseconds, and a
+       console Exe, since the agent reads its reply from stdout. The host places it beside
+       itself; migration copies it to a folder of its own. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AgentBridge.Hook</RootNamespace>
+    <AssemblyName>agent-bridge-host-hook</AssemblyName>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AgentBridge.Hooks\AgentBridge.Hooks.csproj" />
+  </ItemGroup>
+
+</Project>

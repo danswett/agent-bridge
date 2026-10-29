@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AgentBridge.Protocol\AgentBridge.Protocol.csproj" />
+    <ProjectReference Include="..\AgentBridge.Hooks\AgentBridge.Hooks.csproj" />
   </ItemGroup>
 
 </Project>
