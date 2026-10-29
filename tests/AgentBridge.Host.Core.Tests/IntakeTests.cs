@@ -92,6 +92,8 @@ public sealed class IntakeTests : IDisposable
         intake.Pass();
         Assert.True(File.Exists(unknown));
         intake.Pass();
+        // The second bad file waited for the first to be dropped, and takes its own two tries.
+        intake.Pass();
         Assert.Empty(Directory.GetFiles(Spool));
         Assert.Contains(_log, l => l.StartsWith("dropped spooled hook 0031.json after 2 attempts: no handler for gemini/stop", StringComparison.Ordinal));
         Assert.Contains(_log, l => l.StartsWith("dropped spooled hook 0032.json after 2 attempts", StringComparison.Ordinal));
@@ -138,6 +140,48 @@ public sealed class IntakeTests : IDisposable
         Assert.Equal(1, gated.Pass());
         Assert.True(File.Exists(second));
         Assert.Equal("the daemon started", gated.Paused);
+    }
+
+    [Fact]
+    public void An_event_that_fails_holds_back_the_ones_after_it_so_a_retried_approval_is_never_rearmed_after_its_answer()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var asked = Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        var answered = Spooled("0002", "codex", "hook", new { session_id = "x1", hook_event_name = "PreToolUse", tool_name = "shell" }, 60);
+        var intake = Intake();
+
+        // A transient failure: something holds the first file for the whole of a pass.
+        using (new FileStream(asked, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Equal(0, intake.Pass());
+        }
+        Assert.True(File.Exists(answered));
+
+        Assert.Equal(2, intake.Pass());
+        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+        Assert.Equal("working", Registration("agent-bridge-codex", "x1").GetProperty("Status").GetString());
+    }
+
+    [Fact]
+    public void Registrations_are_not_pruned_once_agent_ha_bridge_has_started_during_the_pass()
+    {
+        _f.ClaudeRegistration("dead-old", 31, null);
+        Spooled("0001", "copilot", "agent_stop", new { });
+        // The pass, then the file, then the prune: agent-ha-bridge is running by the third.
+        var checks = 0;
+        var intake = new HookIntake(new HookIntakeOptions
+        {
+            RuntimeRoot = _f.Runtime,
+            ClaudeHome = _f.ClaudeHome,
+            AgentHaBridgeActive = () => ++checks > 2 ? "the daemon started" : null,
+            UseFileSystemWatcher = false,
+        }, _f.Processes, _f.Time, _log.Add);
+        _intakes.Add(intake);
+        _f.Time.Advance(TimeSpan.FromHours(6));
+
+        Assert.Equal(1, intake.Pass());
+        Assert.True(File.Exists(Path.Combine(_f.ClaudeRegistrations, "dead-old.json")));
+        Assert.Equal("the daemon started", intake.Paused);
     }
 
     [Fact]

@@ -137,6 +137,10 @@ shadow mode (#40) reads the same way and never deletes.
 3. For each file: read it, record what it means (below), delete it, and tell subscribers.
    An event that fails is kept for one more try on the next pass, then dropped, deleted and
    logged. This covers an unknown hook, a file that is not JSON and an unreadable file.
+   Until it has been tried again, nothing after it is handled. The daemon carried on past a
+   failure, but then a Codex `PermissionRequest` retried after the `PreToolUse` that answered
+   it would arm an approval nobody is being asked. Keeping strict order costs one pass.
+4. Prune now and then (below), unless agent-ha-bridge started during the pass.
 
 A `FileSystemWatcher` on the spool wakes a pass the moment a hook renames a file into place.
 A sweep every 2 s covers anything the watcher misses.

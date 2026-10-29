@@ -138,6 +138,13 @@ public sealed class HookIntake : IAsyncDisposable
         var now = _time.GetUtcNow();
         if (now - _prunedAt >= _options.PruneInterval)
         {
+            // The registrations are the daemon's again if it started during this pass.
+            if (Paused is not null) { return handled; }
+            if (_options.AgentHaBridgeActive() is { } started)
+            {
+                StandBack(started);
+                return handled;
+            }
             _prunedAt = now;
             Prune();
         }
@@ -234,7 +241,8 @@ public sealed class HookIntake : IAsyncDisposable
                 Delete(path);
                 Publish(notice);
             }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException or ArgumentException)
+            // Whatever went wrong with one event, it costs that event, never the pass.
+            catch (Exception e)
             {
                 var attempts = _attempts.GetValueOrDefault(name) + 1;
                 if (attempts >= 2)
@@ -248,6 +256,11 @@ public sealed class HookIntake : IAsyncDisposable
                 {
                     _attempts[name] = attempts;
                     _log($"spooled hook {name} failed, will retry: {e.Message}");
+                    // Nothing after it is handled until it has been: a Codex PermissionRequest
+                    // retried after the PreToolUse that answered it would re-arm an approval
+                    // nobody is being asked. (The daemon carried on past a failure; order is
+                    // worth the one pass this costs.)
+                    break;
                 }
             }
         }
