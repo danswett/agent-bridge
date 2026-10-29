@@ -113,8 +113,10 @@ which always runs it unelevated.
 The app never writes agent hook registrations (no Copilot, Claude or Codex hooks), and its
 names, folders, pipe, task and AUMID are its own. Without hooks the host still finds Copilot
 sessions (their session folders) and Claude sessions (Claude Code's own
-`~/.claude/sessions/<pid>.json`), but not Codex ones, which only agent-ha-bridge's Codex
-hook registers; and what only a hook reports is missing (a Claude question still waiting,
+`~/.claude/sessions/<pid>.json`), and Codex ones run with `--no-daemon`, as every launch
+from this host is (the terminal holds `~/.codex/thread-writer-locks/<id>.lock`). A Codex
+started the default way, through its shared app-server daemon, is found only through
+agent-ha-bridge's Codex hook; and what only a hook reports is missing (a Claude question still waiting,
 Claude permission prompts, Codex approvals: [host-answers.md](host-answers.md)). The host
 already refuses to type into any session while agent-ha-bridge is
 active for the user (G5), and offers read-only capabilities then; the app shows the

@@ -101,6 +101,16 @@ internal sealed class Fixture : IDisposable
         File.WriteAllText(Path.Combine(ClaudeRegistrations, fileName ?? id + ".json"), json.ToJsonString());
     }
 
+    // Codex's thread-writer-locks/<id>.lock, held open by whichever process writes the thread.
+    public string CodexLock(string id)
+    {
+        var dir = Path.Combine(CodexHome, "thread-writer-locks");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, id + ".lock");
+        File.WriteAllText(path, "");
+        return path;
+    }
+
     public string CodexTranscript(string id) => Path.Combine(CodexHome, "sessions", "2026", "10", "28", $"rollout-2026-10-28T04-00-00-{id}.jsonl");
 
     public void CodexRegistration(string id, int pid, string? transcript, string status = "working", bool ended = false, DateTimeOffset? updated = null)
@@ -190,6 +200,16 @@ internal sealed class FakeProcesses : IProcessInspector
     }
 
     public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent) => _live.TryGetValue(agent, out var list) ? [.. list] : [];
+
+    // Who has each file open, by full path, and how often the OS was asked.
+    public Dictionary<string, int[]> Holders { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public int HolderQueries { get; private set; }
+
+    public IReadOnlyList<int> FileHolders(string path)
+    {
+        HolderQueries++;
+        return Holders.TryGetValue(path, out var pids) ? pids : [];
+    }
 }
 
 // Line builders, one per agent, reproducing each transcript's shape.

@@ -17,6 +17,10 @@ public interface IProcessInspector
 {
     IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent);
 
+    // The processes that have a file open, where the OS can say (Windows' Restart Manager);
+    // empty elsewhere or when it cannot be read. Only ever asked, never acted on.
+    IReadOnlyList<int> FileHolders(string path) => [];
+
     // The same, and whether the list is known to be complete. Discovery can live with a
     // process it could not identify; deleting a worktree cannot, so the reclaimer asks this.
     AgentProcessObservation Observe(AgentKind agent) => new(GetAgentProcesses(agent), true);
@@ -203,6 +207,62 @@ public sealed class SystemProcessInspector : IProcessInspector
 
     [DllImport("ntdll.dll")]
     static extern int NtQueryInformationProcess(SafeProcessHandle process, int informationClass, IntPtr information, int length, out int returned);
+
+    public IReadOnlyList<int> FileHolders(string path) => OperatingSystem.IsWindows() ? RestartManagerHolders(path) : [];
+
+    // The Restart Manager's list of processes using a file: a session of its own, the one
+    // file registered, the list read. It only reports; nothing is shut down or restarted.
+    [SupportedOSPlatform("windows")]
+    static IReadOnlyList<int> RestartManagerHolders(string path)
+    {
+        if (RmStartSession(out var session, 0, Guid.NewGuid().ToString("N")) != 0) { return []; }
+        try
+        {
+            if (RmRegisterResources(session, 1, [path], 0, IntPtr.Zero, 0, null) != 0) { return []; }
+            uint count = 0, reasons = 0;
+            var result = RmGetList(session, out var needed, ref count, null, ref reasons);
+            if (result == 0) { return []; }
+            if (result != ErrorMoreData || needed == 0 || needed > 64) { return []; }
+            var info = new RmProcessInfo[needed];
+            count = needed;
+            if (RmGetList(session, out _, ref count, info, ref reasons) != 0) { return []; }
+            return [.. info.Take((int)count).Select(i => i.Process.ProcessId)];
+        }
+        finally { RmEndSession(session); }
+    }
+
+    const int ErrorMoreData = 234;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct RmUniqueProcess
+    {
+        public int ProcessId;
+        public System.Runtime.InteropServices.ComTypes.FILETIME StartTime;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct RmProcessInfo
+    {
+        public RmUniqueProcess Process;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string AppName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string ServiceShortName;
+        public int ApplicationType;
+        public uint AppStatus;
+        public uint TSSessionId;
+        [MarshalAs(UnmanagedType.Bool)] public bool Restartable;
+    }
+
+    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+    static extern int RmStartSession(out uint session, int flags, string key);
+
+    [DllImport("rstrtmgr.dll")]
+    static extern int RmEndSession(uint session);
+
+    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+    static extern int RmRegisterResources(uint session, uint files, string[] names, uint applications, IntPtr processes, uint services, string[]? serviceNames);
+
+    [DllImport("rstrtmgr.dll")]
+    static extern int RmGetList(uint session, out uint needed, ref uint count, [In, Out] RmProcessInfo[]? info, ref uint reasons);
 }
 
 // Splitting and joining command lines the way the agents' own option parsers see them.

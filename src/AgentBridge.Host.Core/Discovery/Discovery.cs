@@ -247,6 +247,54 @@ internal static class ClaudeSessionDiscovery
             : null;
 }
 
+internal static class CodexLockDiscovery
+{
+    // Live Codex sessions from Codex's own thread-writer-locks/<thread id>.lock, which the
+    // process writing a thread's rollout holds open while it runs (seen with 0.165). Run
+    // with --no-daemon, as every launch from this host is, that is the terminal codex.exe
+    // itself, so the lock binds the session to the process typed into. Run the default way,
+    // the shared app-server daemon holds it on behalf of any number of terminals, so it
+    // names no window, and such a session is left to agent-ha-bridge's hook. Without this, a
+    // Codex session launched from a device had no card on a machine without that hook.
+    public static IReadOnlyList<DiscoveredSession> Find(
+        string codexHome, IReadOnlyList<AgentProcess> processes, Func<string, IReadOnlyList<int>> holders,
+        Dictionary<string, (DateTime Created, int Pid)> known, Func<string, string?> findTranscript)
+    {
+        var root = Path.Combine(codexHome, "thread-writer-locks");
+        if (processes.Count == 0 || !Directory.Exists(root)) { return []; }
+        var running = processes.ToDictionary(p => p.Id);
+        var live = new List<DiscoveredSession>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in CopilotDiscovery.SafeEnumerateFiles(root, "*.lock"))
+        {
+            var id = Path.GetFileNameWithoutExtension(file);
+            if (!Guid.TryParse(id, out _) || RegistrationDiscovery.SafeKey(id) != id) { continue; }
+            seen.Add(file);
+            DateTime created;
+            try { created = File.GetCreationTimeUtc(file); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+
+            // The holder of one lock file never changes while it exists, so the OS is asked
+            // once per lock, and again only once the process it named has gone.
+            if (!(known.TryGetValue(file, out var cached) && cached.Created == created && running.ContainsKey(cached.Pid)))
+            {
+                var terminals = holders(file).Where(pid => running.TryGetValue(pid, out var p) && !IsAppServer(p.CommandLine)).Distinct().ToList();
+                if (terminals.Count != 1) { known.Remove(file); continue; }
+                cached = (created, terminals[0]);
+                known[file] = cached;
+            }
+            var process = running[cached.Pid];
+            live.Add(new DiscoveredSession(id, AgentKind.Codex, findTranscript(id), null, cached.Pid, ProcessStartedAt: process.StartedAt));
+        }
+        foreach (var gone in known.Keys.Where(k => !seen.Contains(k)).ToList()) { known.Remove(gone); }
+        return live;
+    }
+
+    // Codex's app-server: the daemon, its updater, or one an IDE runs. Never a terminal.
+    internal static bool IsAppServer(string? commandLine) =>
+        CommandLine.Split(commandLine).Skip(1).FirstOrDefault() == "app-server";
+}
+
 internal static class RegistrationDiscovery
 {
     // Live Claude or Codex sessions from agent-ha-bridge's hook registrations. A session
