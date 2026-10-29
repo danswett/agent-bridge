@@ -1,0 +1,189 @@
+name: Relay deploy
+
+# Builds the relay image once per commit, rolls it onto staging, smoke-tests it there, and
+# only then offers it to production, which waits for a person to approve (the production
+# environment's required reviewer). Rollback is a workflow_dispatch with an earlier commit.
+# No long-lived Azure secret is stored anywhere: every job signs in with GitHub OIDC, and
+# each environment has its own principal with rights over its own app only.
+# Infra itself (infra/) is applied by a person with infra/deploy.ps1; see docs/relay-deploy.md.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/AgentBridge.Relay/**'
+      - 'src/AgentBridge.Transport/**'
+      - 'tools/AgentBridge.RelaySmoke/**'
+      - 'infra/**'
+      - 'nuget.config'
+      - '.github/workflows/relay.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/AgentBridge.Relay/**'
+      - 'src/AgentBridge.Transport/**'
+      - 'tools/AgentBridge.RelaySmoke/**'
+      - 'infra/**'
+      - 'nuget.config'
+      - '.github/workflows/relay.yml'
+  workflow_dispatch:
+    inputs:
+      rollback_to:
+        description: 'Roll production back to this earlier commit SHA (its image must be in the registry). Empty: build and deploy this commit.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  RESOURCE_GROUP: rg-agent-bridge-relay
+  REGISTRY: agentbridgerelay59731
+  IMAGE: agent-bridge-relay
+  STAGING_APP: agent-bridge-relay-staging
+  STAGING_VAULT: kv-abrelay-wus2-stg
+  PRODUCTION_APP: agent-bridge-relay
+  PWA_ORIGIN: https://danswett.github.io
+
+jobs:
+  infra:
+    # The templates compile, on every change, before anything is deployed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          az bicep install
+          az bicep build -f infra/main.bicep --stdout > /dev/null
+          az bicep build-params -f infra/regions/westus2.bicepparam --stdout > /dev/null
+
+  build:
+    # RELAY_DEPLOY (a repository variable) is set once Azure and OIDC are configured; a fork
+    # or a fresh clone without them only compiles the templates.
+    if: >-
+      vars.RELAY_DEPLOY == 'true' && inputs.rollback_to == '' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: infra
+    runs-on: ubuntu-latest
+    # Fork pull requests get no OIDC token, so they skip Azure and only compile the templates.
+    environment: staging
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - id: push
+        run: |
+          az acr login -n "$REGISTRY"
+          ref="$REGISTRY.azurecr.io/$IMAGE:$GITHUB_SHA"
+          docker build -f src/AgentBridge.Relay/Dockerfile -t "$ref" .
+          docker push "$ref"
+          # Deploy by digest: a tag can be overwritten, a digest is the bytes staging tested.
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$ref")
+          echo "image=$digest" >> "$GITHUB_OUTPUT"
+          echo "Image: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+
+  staging:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: ${{ steps.roll.outputs.url }}
+    concurrency:
+      # One rollout at a time on the shared staging app; a newer one waits, never cancels.
+      group: relay-staging
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - id: roll
+        env:
+          IMAGE_REF: ${{ needs.build.outputs.image }}
+        run: |
+          az config set extension.use_dynamic_install=yes_without_prompt
+          az containerapp update -g "$RESOURCE_GROUP" -n "$STAGING_APP" --image "$IMAGE_REF" \
+            --set-env-vars "Relay__Version=$GITHUB_SHA" --query properties.latestRevisionName -o tsv
+          fqdn=$(az containerapp show -g "$RESOURCE_GROUP" -n "$STAGING_APP" --query properties.configuration.ingress.fqdn -o tsv)
+          echo "url=https://$fqdn" >> "$GITHUB_OUTPUT"
+      - name: Smoke test
+        env:
+          RELAY_URL: ${{ steps.roll.outputs.url }}
+        run: |
+          # Staging's own token key (never production's): the smoke test mints a token for a
+          # throwaway account and connects two devices with it.
+          key=$(az keyvault secret show --vault-name "$STAGING_VAULT" -n token-key --query value -o tsv)
+          echo "::add-mask::$key"
+          RELAY_SMOKE_TOKEN_KEY="$key" dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- \
+            --relay "$RELAY_URL" --origin "$PWA_ORIGIN" --expect-version "$GITHUB_SHA" --expect-push --wait 300
+
+  production:
+    needs: [build, staging]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Waits for approval: the environment's required reviewer, and main only.
+    environment:
+      name: production
+      url: ${{ steps.roll.outputs.url }}
+    concurrency:
+      group: relay-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - id: roll
+        env:
+          IMAGE_REF: ${{ needs.build.outputs.image }}
+        run: ./infra/roll-production.sh "$IMAGE_REF" "$GITHUB_SHA"
+      - name: Smoke test, without a token (nothing on production is signed by CI)
+        run: |
+          dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- \
+            --relay "${{ steps.roll.outputs.url }}" --origin "$PWA_ORIGIN" --expect-version "$GITHUB_SHA" --expect-push --wait 180
+
+  rollback:
+    if: vars.RELAY_DEPLOY == 'true' && inputs.rollback_to != ''
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.roll.outputs.url }}
+    concurrency:
+      group: relay-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - id: roll
+        env:
+          SHA: ${{ inputs.rollback_to }}
+        run: |
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then echo "rollback_to must be a full commit SHA"; exit 1; fi
+          ./infra/roll-production.sh "$REGISTRY.azurecr.io/$IMAGE:$SHA" "$SHA"
+      - name: Smoke test
+        env:
+          SHA: ${{ inputs.rollback_to }}
+        run: |
+          dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- \
+            --relay "${{ steps.roll.outputs.url }}" --origin "$PWA_ORIGIN" --expect-version "$SHA" --expect-push --wait 180

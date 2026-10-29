@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>relay-smoke</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The relay's own token code mints the smoke test's token, so the format is never copied. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\..\src\AgentBridge.Transport\AgentBridge.Transport.csproj" />
+    <ProjectReference Include="..\..\src\AgentBridge.Relay\AgentBridge.Relay.csproj" />
+  </ItemGroup>
+
+</Project>

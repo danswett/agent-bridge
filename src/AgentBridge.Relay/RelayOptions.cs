@@ -14,6 +14,14 @@ public sealed class RelayOptions
     public TimeSpan TokenLifetime { get; set; } = TimeSpan.FromDays(30);
     public int MaxFramesPerSecond { get; set; } = 200;
     public int MaxDevicesPerAccount { get; set; } = 32;
+    // Per replica. Sized for the lean stamp (0.5 GiB); raise it with the replica's memory.
+    public long MaxConnections { get; set; } = 10_000;
+    // New sockets per client address per minute. Devices reconnect with backoff, so this
+    // only bites a reconnect loop or abuse.
+    public int MaxConnectsPerMinutePerIp { get; set; } = 120;
+    // The build that is serving, reported by /healthz so a deploy can check it. Set by the
+    // deployment (infra/), never trusted for anything.
+    public string? Version { get; set; }
     // Web origins allowed to call the sign-in API and open sockets, such as the PWA on
     // GitHub Pages. Native clients send no Origin and are unaffected.
     public string[] AllowedOrigins { get; set; } = [];

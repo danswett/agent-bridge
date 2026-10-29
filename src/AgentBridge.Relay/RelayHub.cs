@@ -8,12 +8,22 @@ namespace AgentBridge.Relay;
 
 // Routes opaque frames between the devices of one account. It sees routing ids, sizes and
 // timing, and nothing a session says: payloads are Noise ciphertext end to end.
-public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, ILogger<RelayHub> log)
+public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, RelayMetrics metrics, ILogger<RelayHub> log)
 {
     static readonly HashSet<string> Kinds = ["host", "app", "pwa", "phone", "test"];
     readonly ConcurrentDictionary<string, ConcurrentDictionary<string, Connection>> accounts = new();
 
     public int Online => accounts.Values.Sum(a => a.Count);
+
+    // Set when the process is told to stop. Readiness then fails and new sockets are refused,
+    // so a device told to reconnect (1012) lands on a replica that is staying, not this one.
+    public bool Draining { get; private set; }
+
+    public Task DrainAsync()
+    {
+        Draining = true;
+        return CloseAllAsync();
+    }
 
     // On shutdown, tell every device to reconnect now. A rolling deploy otherwise leaves old
     // sockets on the draining replica for up to its drain timeout (about 90 s observed on
@@ -22,6 +32,9 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
 
     sealed class Connection(WebSocket ws, Account account, string deviceId, string name, string kind)
     {
+        // Correlates one socket's log lines. Random and meaningless outside this process, so
+        // logs carry no account, device or name (design §5.10).
+        public string Tag { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
         readonly SemaphoreSlim sendLock = new(1, 1);
         public WebSocket Socket => ws;
         public Account Account => account;
@@ -65,7 +78,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         try { conn = await AdmitAsync(ws, handshakeTimeout.Token); }
         catch (Exception e) when (e is OperationCanceledException or WebSocketException or JsonException or FormatException or KeyNotFoundException or InvalidOperationException or FrameTooLargeException)
         {
-            await CloseAsync(ws, CloseCodes.Protocol, "bad-hello");
+            await RefuseAsync(ws, CloseCodes.Protocol, "bad-hello");
             return;
         }
         if (conn is null) { return; }
@@ -82,12 +95,14 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         }
         if (full)
         {
+            metrics.Refused(CloseCodes.TooManyDevices);
             await conn.CloseAsync(CloseCodes.TooManyDevices, "too-many-devices");
             return;
         }
         if (replaced != null) { await replaced.CloseAsync(CloseCodes.Replaced, "replaced"); }
 
-        log.LogInformation("connect {Login} device {Device} {Kind} \"{Name}\"; {Count} online in account", conn.Account.Login, conn.DeviceId[..8], conn.Kind, conn.Name, devices.Count);
+        metrics.Connected(conn.Kind);
+        log.LogInformation("connect {Conn} {Kind}; {Count} online in account", conn.Tag, conn.Kind, devices.Count);
         // Announce before "ready", so peers learn of a device before it can send them anything.
         await BroadcastPresenceAsync(conn.Account.Id);
         await conn.SendJsonAsync(new { t = "ready", device = conn.DeviceId, account = conn.Account.Id, login = conn.Account.Login });
@@ -100,8 +115,9 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             // Only remove this connection: a replacement may already hold the slot.
             lock (devices) { ((ICollection<KeyValuePair<string, Connection>>)devices).Remove(new(conn.DeviceId, conn)); }
             await conn.CloseAsync((int)WebSocketCloseStatus.NormalClosure, "");
-            log.LogInformation("disconnect {Login} device {Device} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}",
-                conn.Account.Login, conn.DeviceId[..8], end, (DateTimeOffset.UtcNow - conn.Since).TotalSeconds, conn.FramesIn, conn.FramesOut, conn.BytesIn, conn.BytesOut);
+            metrics.Disconnected(end);
+            log.LogInformation("disconnect {Conn} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}",
+                conn.Tag, end, (DateTimeOffset.UtcNow - conn.Since).TotalSeconds, conn.FramesIn, conn.FramesOut, conn.BytesIn, conn.BytesOut);
             await BroadcastPresenceAsync(conn.Account.Id);
         }
     }
@@ -109,14 +125,14 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     async Task<Connection?> AdmitAsync(WebSocket ws, CancellationToken ct)
     {
         var hello = await ReceiveControlAsync(ws, ct);
-        if (hello.GetProperty("t").GetString() != "hello") { await CloseAsync(ws, CloseCodes.Protocol, "expected-hello"); return null; }
+        if (hello.GetProperty("t").GetString() != "hello") { await RefuseAsync(ws, CloseCodes.Protocol, "expected-hello"); return null; }
         var account = tokens.Validate(hello.GetProperty("token").GetString());
-        if (account is null) { await CloseAsync(ws, CloseCodes.AuthFailed, "bad-token"); return null; }
+        if (account is null) { await RefuseAsync(ws, CloseCodes.AuthFailed, "bad-token"); return null; }
         var pub = Wire.Unhex(hello.GetProperty("pub").GetString()!);
         try { P256KeyPair.AssertOnCurve(pub); }
-        catch (CryptographicException) { await CloseAsync(ws, CloseCodes.Protocol, "bad-key"); return null; }
+        catch (CryptographicException) { await RefuseAsync(ws, CloseCodes.Protocol, "bad-key"); return null; }
         var kind = hello.GetProperty("kind").GetString() ?? "";
-        if (!Kinds.Contains(kind)) { await CloseAsync(ws, CloseCodes.Protocol, "bad-kind"); return null; }
+        if (!Kinds.Contains(kind)) { await RefuseAsync(ws, CloseCodes.Protocol, "bad-kind"); return null; }
         var name = Clean(hello.GetProperty("name").GetString());
 
         using var eph = P256KeyPair.Generate();
@@ -127,7 +143,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         var expected = Wire.ProofMac(eph.Dh(pub), nonce, account.Id);
         if (!CryptographicOperations.FixedTimeEquals(mac, expected))
         {
-            await CloseAsync(ws, CloseCodes.ProofFailed, "proof-failed");
+            await RefuseAsync(ws, CloseCodes.ProofFailed, "proof-failed");
             return null;
         }
         return new Connection(ws, account, Wire.DeviceId(pub), name, kind);
@@ -163,6 +179,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                     _ = Task.Run(async () =>
                     {
                         var r = await push.SendAsync(c.Account.Id, m);
+                        metrics.Pushed(r);
                         await c.SendJsonAsync(new { t = "push-result", id, status = r.Status, error = r.Error });
                     });
                 }
@@ -185,6 +202,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             // Routing never leaves the sender's account.
             if (!devices.TryGetValue(to, out var target))
             {
+                metrics.Undeliverable();
                 await conn.SendJsonAsync(new { t = "undeliverable", to });
                 continue;
             }
@@ -195,6 +213,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             await target.SendAsync(outFrame, WebSocketMessageType.Binary);
             Interlocked.Increment(ref target.FramesOut);
             Interlocked.Add(ref target.BytesOut, outFrame.Length);
+            metrics.Forwarded(outFrame.Length);
         }
         return "closed";
     }
@@ -247,6 +266,12 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
 
     static Task SendJsonAsync(WebSocket ws, object message, CancellationToken ct) =>
         ws.SendAsync(JsonSerializer.SerializeToUtf8Bytes(message), WebSocketMessageType.Text, true, ct);
+
+    Task RefuseAsync(WebSocket ws, int code, string reason)
+    {
+        metrics.Refused(code);
+        return CloseAsync(ws, code, reason);
+    }
 
     static async Task CloseAsync(WebSocket ws, int code, string reason)
     {
