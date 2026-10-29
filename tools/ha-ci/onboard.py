@@ -102,10 +102,25 @@ def main():
             for f in fields:
                 if not f.get("name"):
                     continue
+                selector = f.get("selector") or {}
                 if f.get("type") == "expandable":
+                    print("  in", f["name"] + ":", [(g.get("name"), g.get("type"), list(g.get("selector") or {}), g.get("required"), g.get("default")) for g in f.get("schema") or []], flush=True)
                     out[f["name"]] = defaults(f.get("schema") or [])
                 elif "default" in f:
                     out[f["name"]] = f["default"]
+                elif not f.get("required"):
+                    continue
+                elif f.get("type") == "boolean" or "boolean" in selector:
+                    # A switch left as it is: off (no client certificate, and so on).
+                    out[f["name"]] = False
+                elif "select" in selector:
+                    options = selector["select"].get("options") or []
+                    if options:
+                        first = options[0]
+                        out[f["name"]] = first.get("value") if isinstance(first, dict) else first
+                elif f.get("type") == "select" and f.get("options"):
+                    first = f["options"][0]
+                    out[f["name"]] = first[0] if isinstance(first, (list, tuple)) else first
             return out
         body = defaults(schema)
         if flow.get("step_id") == "broker":
