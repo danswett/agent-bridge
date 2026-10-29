@@ -126,6 +126,7 @@ $base = 'C:\rehearsal\evidence\baseline-S1.json'
   and never reads their contents into the evidence.
 * Start the agents from a window where the variables above are set. A command an agent runs
   itself (E15-01) then records into the same evidence folder.
+* The agents ask before running a shell command. Outside the permission steps (E3), approve each at the terminal **once**: never "for the rest of the session". Otherwise a later step's prompt (P9) would not ask.
 * Words containing curly quotes (“ ”) go in single quotes, as E2-01 and E2-04 do. PowerShell
   treats curly double quotes as delimiters inside a double-quoted string.
 
@@ -297,7 +298,7 @@ That also marks the host log, which `log` then reads from.
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
 | **E10-01** | §10 "A finished turn", §10 "One notification per session" | Phone | Type **P2** in `$cp` and in a second session; lock the phone | One notification per session, each with the start of its response | Phone screenshot: `agent-bridge-rehearsal note --step E10-01 --result pass --detail "…" --screenshot <file>` | |
-| **E10-02** | §10 "Option buttons" | Phone | Type **P3** | The notification has no buttons; a tap opens the card (design §8) | `agent-bridge-rehearsal note --step E10-02 --result pass --detail "…"` | |
+| **E10-02** | §10 "Option buttons" | Phone | Type **P3**. Look at the notification, tap it, and answer **alpha** on the card it opens | The notification has no buttons; the tap opens the card (design §8). Once answered, the session goes idle | `agent-bridge-rehearsal note --step E10-02 --result pass --detail "…"`, then `agent-bridge-rehearsal sessions --id $cp --status idle --timeout 60 --step E10-02b` | |
 
 ### E11. Transfer
 
@@ -330,7 +331,7 @@ That also marks the host log, which `log` then reads from.
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
-| **E15-01** | §15 "A session cannot restart" | Machine | In `$cp`, type **P15** (it runs the tool with `--try-restart` from inside the session) | Refused; the host keeps running (invariant 13) | The step's own record: `agent-bridge-rehearsal host --try-restart --step E15-01` | #44 |
+| **E15-01** | §15 "A session cannot restart" | Machine | In `$cp`, type **P15**, and approve its shell command at the terminal. It runs the tool with `--try-restart` from inside the session | Refused; the host keeps running (invariant 13) | The step's own record: `agent-bridge-rehearsal host --try-restart --step E15-01` | #44 |
 | **E15-02** | §15 "MCP tools", §15 "Launched sessions drive" | VM-M | `agent-bridge-rehearsal mark $cp`. From another session, use agent-ha-bridge's MCP server (still installed) to list sessions and reply `rehearsal mcp reply` to `$cp` | Works through the connector; the reply is attributed to the agent | `agent-bridge-rehearsal expect reply $cp --text "rehearsal mcp reply" --step E15-02` | HA2, #45 |
 
 ### E17. Security
@@ -347,7 +348,7 @@ That also marks the host log, which `log` then reads from.
 | **E18-01** | §18 "Per-machine online", §18 "Per-machine and per-session MQTT" | PWA, HA, Tool | End every session except `$cp` from the PWA, so `$cp` is the only one, then open `/agent-decisions` | The machine row is online with its count. `$cp`'s card renders status, activity, trail, compactions and background counts. No `_2` | `agent-bridge-rehearsal ha --token-file $ha --slug $m --expect-online --expect-sessions 1 --expect-no-duplicates --step E18-01`; screenshot | HA1 |
 | **E18-02** | §18 "Per-machine and per-session MQTT" | Machine, HA | Start a second Copilot session with **P0**, and set `$gone = agent-bridge-rehearsal newest copilot`. Once its entities are there, `/exit` it at the machine (not `$cp`, which Phase F needs running) | It appears with its own entities. Then its card goes from the dashboard, then its entities: neither state nor registry entry is left | `agent-bridge-rehearsal ha --token-file $ha --slug $m --expect-sessions 2 --expect-session $gone --timeout 60 --step E18-02`, then `agent-bridge-rehearsal ha --token-file $ha --slug $m --expect-sessions 1 --expect-no-session $gone --timeout 180 --step E18-02b` | HA1 |
 | **E18-03** | §18 "Per-machine online" | VM-W | Restart Home Assistant (`docker compose restart homeassistant`) | Online again within a minute, from retained messages | `agent-bridge-rehearsal ha --token-file $ha --slug $m --expect-online --expect-no-duplicates --timeout 120 --step E18-03` | HA1 |
-| **E18-04** | §18 "Actionable phone notifications", §18 "Launch request payload", §18 "Agent attribution" | HA, Machine | Mark `$cp`, type **P1** at the machine, and answer **rehearsal-ha** from the old dashboard. Reply to `$cp` from its reply card, and answer a later question from the phone notification. Launch from the launch card and end **that** session from its card. Drive one action from an agent with the agent token. `$cp` stays running | Each works as before migration, attributed to the right principal | `agent-bridge-rehearsal expect answer $cp --text rehearsal-ha --step E18-04` and screenshots | HA2 |
+| **E18-04** | §18 "Actionable phone notifications", §18 "Launch request payload", §18 "Agent attribution" | HA, Machine | Mark `$cp`, type **P1** at the machine, and answer **rehearsal-ha** from the old dashboard. Reply to `$cp` from its reply card, then type **P3** and answer it by tapping the phone notification. Launch from the launch card and end **that** session from its card. Drive one action from an agent with the agent token. `$cp` stays running | Each works as before migration, attributed to the right principal | `agent-bridge-rehearsal expect answer $cp --text rehearsal-ha --step E18-04` and screenshots | HA2 |
 | **E18-05** | §18 "Per-machine online" | VM-M | G5. Mark `$cp`. Run the daemon briefly: `schtasks /change /tn AgentBridgeDaemon_<id> /enable`, then `schtasks /run /tn AgentBridgeDaemon_<id>`. Once the pause is logged, `schtasks /end /tn AgentBridgeDaemon_<id>` and `schtasks /change /tn AgentBridgeDaemon_<id> /disable`, leaving the task as migrate left it | The connector pauses and publishes nothing while the daemon runs, then resumes | `agent-bridge-rehearsal log --contains "Home Assistant connector paused" --timeout 60 --step E18-05`, then `agent-bridge-rehearsal log --contains "Home Assistant connector resuming" --timeout 120 --step E18-05b` | HA1 |
 
 ## Phase F: roll back
