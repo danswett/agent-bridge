@@ -42,6 +42,9 @@ using AgentBridge.Transport;
 //                                               the Home Assistant connector (docs/ha-connector.md):
 //                                               whether serve would run it, and its token, which is
 //                                               read from standard input and kept protected
+//   agent-bridge-host shadow run|once|summary   compare what this host shows with what
+//                                               agent-ha-bridge's daemon shows, read-only, and
+//                                               report the week (docs/host-shadow.md)
 //
 // Roots default to the current user's; --copilot-home, --claude-home and --codex-home
 // point elsewhere. Nothing under them is ever written. sign-in, serve and whoami take
@@ -151,6 +154,8 @@ switch (command)
             Func<string?>? active = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().Active : null;
             return HaCommands.Run(rest, LoadIdentity().Folder, () => HaCommands.ReadSecret(Console.Error), Console.Out, Console.Error, IsDevBuild(), active);
         }
+    case "shadow":
+        return await AgentBridge.Host.Shadow.ShadowCommand.RunAsync(arguments, options, HostVersion(), IsDevBuild(), Console.Out, Console.Error);
     case "workspace" or "config":
         {
             // At the machine only: this is how a person approves where sessions may be launched.
@@ -162,6 +167,7 @@ switch (command)
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear");
+        Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");
         return command == "help" ? 0 : 2;
 }

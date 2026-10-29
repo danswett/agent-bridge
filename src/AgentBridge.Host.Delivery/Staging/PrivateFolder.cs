@@ -4,16 +4,18 @@ using System.Security.Principal;
 
 namespace AgentBridge.Host.Delivery.Staging;
 
-// A folder only this user can open, for files on their way to an agent. agent-ha-bridge's
-// Protect-BridgeSecretFile, as it narrows its attachment root: on Windows a protected DACL
+// A folder only this user can open, for files on their way to an agent and for the shadow
+// comparison's reports. agent-ha-bridge's Protect-BridgeSecretFile, as it narrows its
+// attachment root: on Windows a protected DACL
 // (nothing inherited from %LOCALAPPDATA% or above) granting this user alone full control,
 // inherited by everything inside, and the user as owner; elsewhere mode 0700, with each file
 // created 0600. A folder that cannot be made so is never written to.
 public static class PrivateFolder
 {
     // Creates the folder if need be, narrows it if it is not private, and returns its full
-    // path. Throws if it is a link or stays readable by anyone else.
-    public static string Ensure(string path)
+    // path. Throws if it is a link or stays readable by anyone else, saying which folder and
+    // what is then not done.
+    public static string Ensure(string path, string what = "the attachment folder", string consequence = "nothing is staged in it")
     {
         var full = Path.GetFullPath(path);
         if (OperatingSystem.IsWindows()) { Directory.CreateDirectory(full); }
@@ -21,12 +23,12 @@ public static class PrivateFolder
         // A link would put the files wherever it points, under that place's permissions.
         if (new DirectoryInfo(full).Attributes.HasFlag(FileAttributes.ReparsePoint))
         {
-            throw new IOException("the attachment folder is a link, so nothing is staged in it");
+            throw new IOException($"{what} is a link, so {consequence}");
         }
         if (!IsPrivate(full))
         {
             Narrow(full);
-            if (!IsPrivate(full)) { throw new IOException("the attachment folder could not be made private to this user, so nothing is staged in it"); }
+            if (!IsPrivate(full)) { throw new IOException($"{what} could not be made private to this user, so {consequence}"); }
         }
         return full;
     }

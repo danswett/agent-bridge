@@ -26,9 +26,9 @@ public sealed class HostLock : IDisposable
 
     HostLock(FileStream file) { this.file = file; }
 
-    public static HostLock? TryAcquire(string folder, TimeSpan wait)
+    public static HostLock? TryAcquire(string folder, TimeSpan wait, string name = "host.lock")
     {
-        var path = Path.Combine(folder, "host.lock");
+        var path = Path.Combine(folder, name);
         var deadline = DateTime.UtcNow + wait;
         while (true)
         {

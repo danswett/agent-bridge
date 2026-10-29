@@ -348,22 +348,21 @@ agent-ha-bridge's manual checks, `tests/verify-mac-terminal.ps1`,
 
 | Part | Status | Notes |
 |---|---|---|
-| Trace recorder in agent-ha-bridge (opt-in, off by default, G10) | `Missing` | Nothing in agent-ha-bridge at `42fc551`. #40 |
+| Trace recorder in agent-ha-bridge (opt-in, off by default, G10) | `Intentionally different` | Not needed for the shadow diff, which reads the daemon's own state file, heartbeat and question markers, so agent-ha-bridge is unchanged ([host-shadow.md](host-shadow.md)). A recorder may still be wanted for replay traces. #40 |
 | Replay harness (recorded traces become xUnit cases named for the PS scenarios) | `Missing` | #40 |
-| Shadow mode (read-only beside the daemon, diffing state) | `Partial` | On DSWETT-DEV-VM1 the host already runs read-only, because G5 sees agent-ha-bridge (Progress), and serves the phone. There is no diff against the daemon. #40 |
+| Shadow mode (read-only beside the daemon, diffing state) | `Implemented, untested live` | `agent-bridge-host shadow run` and `summary` ([host-shadow.md](host-shadow.md)); `ShadowTests` (10). Compares sessions, status, background work, model, compactions, the response's end, questions and their fields, and machine status (daemon up, host up, G5). Usage and resumable sessions are not compared: the daemon keeps them only in Home Assistant. The week on DEV-VM1 has not run yet. #40 |
 
 **For a week of shadow comparison on DEV-VM1:**
 
-1. The recorder lands in agent-ha-bridge through its normal PR and release, off by
-   default, and is turned on on DEV-VM1 only.
-2. A shadow diff command reads the recorder's output and the host's sessions and writes a
-   daily report: sessions missing on either side, status disagreements longer than a few
-   seconds, question identity and field mismatches. It never injects, launches, writes
-   HA or consumes the spool.
-3. #43 (discovery holds) lands first, so a transient read does not read as a session
+1. `agent-bridge-host shadow run` beside the daemon and the serving host
+   ([host-shadow.md](host-shadow.md)). It writes a daily report: sessions missing on either
+   side, disagreements in status and the other compared fields that last longer than the
+   grace (60 s), question identity and field mismatches, and timing skew. It never
+   injects, launches, writes HA or consumes the spool.
+2. #43 (discovery holds) lands first, so a transient read does not read as a session
    ending.
-4. Seven consecutive days with an empty report, or with each disagreement explained and
-   fixed, before the cutover.
+3. Seven consecutive days whose `shadow summary` verdict is clean, or with each mismatch
+   explained and fixed, before the cutover.
 
 ## Migration readiness
 
@@ -431,7 +430,7 @@ agent-ha-bridge's manual checks, `tests/verify-mac-terminal.ps1`,
 
 1. #43 Discovery holds (invariants 6, 10)
 2. #44 Sessions cannot stop or restart their host (invariant 13)
-3. #40 Recorder and shadow diff, then a clean week
+3. #40 Shadow diff (built), then a clean week
 4. #41 Claude and Codex replies (if used there)
 5. In flight: reclaimer, blob store, HA connector commands
 
