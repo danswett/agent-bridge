@@ -156,7 +156,8 @@ $stagingDomain = Get-DomainState $stagingCfg
 Set-DomainStep $productionDomain $stagingDomain
 
 if ($WhatIf) {
-    $env:RELAY_DEPLOY_APPS = 'true'
+    # The preview of the deployment actually requested: -BaseOnly never reaches the apps.
+    $env:RELAY_DEPLOY_APPS = if ($BaseOnly) { 'false' } else { 'true' }
     az deployment group what-if --subscription $Subscription -g $ResourceGroup -f $template -p $paramFile
     return
 }
