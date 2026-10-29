@@ -129,14 +129,19 @@ gh variable set AZURE_TENANT_ID --body (az account show --query tenantId -o tsv)
 gh variable set AZURE_SUBSCRIPTION_ID --body (az account show --query id -o tsv) -R danswett/agent-bridge
 gh variable set RELAY_DEPLOY --body true -R danswett/agent-bridge
 
-# The stamp, staging included, production untouched. The first time, staging needs an image:
-az acr build -r agentbridgerelay59731 -t agent-bridge-relay:<sha> -f src/AgentBridge.Relay/Dockerfile .
+# The stamp, staging included, production untouched. The first time, staging needs an image.
+# ACR Tasks (az acr build) are refused on this free-trial subscription, so push one with the
+# SDK and a short-lived registry token (DOCKER_CONFIG pointing at a config.json with
+# auth = base64("00000000-0000-0000-0000-000000000000:<az acr login --expose-token>")):
+dotnet publish src/AgentBridge.Relay -c Release --os linux --arch x64 -t:PublishContainer -p:ContainerRegistry=agentbridgerelay59731.azurecr.io -p:ContainerRepository=agent-bridge-relay -p:ContainerImageTag=<sha>
 ./infra/deploy.ps1 -WhatIf -StagingImage agentbridgerelay59731.azurecr.io/agent-bridge-relay:<sha> -StagingVersion <sha>
 ./infra/deploy.ps1 -StagingImage agentbridgerelay59731.azurecr.io/agent-bridge-relay:<sha> -StagingVersion <sha>
 ```
 
 `deploy.ps1` seeds staging's vault with fresh keys, and production's with the keys the live
-app already uses.
+app already uses. It leaves the environment `cae-agent-bridge` exactly as it is until the
+cutover (it has the Consumption workload profile and, being hand-made, sends logs nowhere);
+`-Production` also attaches the stamp's Log Analytics workspace to it.
 
 ## Production cutover
 
@@ -146,8 +151,8 @@ Before:
 
 1. A `main` build has passed staging (its run's summary shows the image digest and SHA).
 2. `./infra/deploy.ps1 -WhatIf -Production -ProductionImage <digest> -ProductionVersion <sha>`
-   shows changes to `agent-bridge-relay` only, plus the role assignment for the production
-   principal, and nothing deleted elsewhere.
+   shows changes to `agent-bridge-relay`, the environment gaining its log destination, and
+   the role assignment for the production principal; nothing deleted elsewhere.
 3. Note the live revision, the rollback target:
    `az containerapp revision list -g rg-agent-bridge-relay -n agent-bridge-relay --query "[?properties.active].name" -o tsv`,
    and save the live definition as a record:
@@ -161,7 +166,7 @@ Cutover (about a minute; each device reconnects once):
 dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- --relay https://agent-bridge-relay.agreeablepebble-329880d4.westus2.azurecontainerapps.io --origin https://danswett.github.io --expect-version <sha> --expect-push
 ```
 
-This keeps the app's name, environment and therefore its URL, adds the identity, the
+This keeps the app's name, environment and therefore its URL, keeps its system identity, adds its own identity, the
 vault-backed `token-key` and `vapid-key` (the same values), probes, the drain settings and
 the `agent-bridge-managed=infra` tag that lets `relay.yml` roll it from then on.
 

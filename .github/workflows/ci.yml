@@ -33,9 +33,16 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $env:AGENT_BRIDGE_INJECTOR = "$env:RUNNER_TEMP/injector/agent-bridge-injector.exe"
           dotnet test tests/AgentBridge.Host.Delivery.Tests -c Release --no-build --nologo --filter "FullyQualifiedName~InjectorIntegrationTests"
-      - name: Relay container builds
+      - name: Relay container builds and serves
+        # Run as it ships: its own unprivileged user and a read-only file system. The first product
+        # image built but crashed at start, which only running it shows.
         if: runner.os == 'Linux'
-        run: docker build -f src/AgentBridge.Relay/Dockerfile -t agent-bridge-relay .
+        run: |
+          docker build -f src/AgentBridge.Relay/Dockerfile -t agent-bridge-relay .
+          docker run -d --name relay --read-only --tmpfs /tmp -p 8080:8080 -e Relay__Version=ci agent-bridge-relay
+          for i in $(seq 30); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8080/healthz | grep -q '"version":"ci"' || { docker logs relay; exit 1; }
+          curl -fsS http://127.0.0.1:8080/readyz
   spikes:
     runs-on: windows-latest
     steps:

@@ -9,11 +9,14 @@ public static class RelayApp
 {
     public static WebApplication Build(string[] args, Action<RelayOptions>? configure = null, Action<WebApplicationBuilder>? builderHook = null)
     {
+        // A dev stack's PWA (ServePwa) sits next to the binaries, so this works from bin/ and from a
+        // container. Only when it is there: ASP.NET creates a web root it is given, and the product
+        // image has none and runs as a user that cannot write /app, so naming it crashed at start.
+        var webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
         var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
         {
             Args = args,
-            // A dev stack's PWA (ServePwa) sits next to the binaries, so this works from bin/ and from a container.
-            WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot"),
+            WebRootPath = Directory.Exists(webRoot) ? webRoot : null,
         });
         var options = builder.Configuration.GetSection("Relay").Get<RelayOptions>() ?? new RelayOptions();
         configure?.Invoke(options);

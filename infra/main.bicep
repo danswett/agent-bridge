@@ -101,13 +101,18 @@ resource environment 'Microsoft.App/managedEnvironments@2025-01-01' = if (manage
   }
 }
 
-resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
+resource registry 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
   name: registryName
   location: location
   tags: tags
   sku: { name: 'Basic' }
+  // Stated as they are on the existing registry, so adopting it changes nothing but tags.
   properties: {
     adminUserEnabled: registryAdminUserEnabled
+    anonymousPullEnabled: false
+    dataEndpointEnabled: false
+    encryption: { status: 'disabled' }
+    policies: { azureADAuthenticationAsArmPolicy: { status: 'enabled' } }
   }
 }
 
