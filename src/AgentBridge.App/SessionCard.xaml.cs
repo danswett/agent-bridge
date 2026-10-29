@@ -190,7 +190,7 @@ public sealed partial class SessionCard : UserControl
             var size = (long)(await file.GetBasicPropertiesAsync()).Size;
             type = file.ContentType;
             var image = type.StartsWith("image/", StringComparison.Ordinal);
-            if (size > Protocol.AttachmentLimits.Bytes && (!image || size > MostRead))
+            if (size > reply.MaxBytes && (!image || size > MostRead))
             {
                 reply.Refuse(file.Name, type, size);
                 return;

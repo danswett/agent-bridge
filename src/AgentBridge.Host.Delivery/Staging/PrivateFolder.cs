@@ -41,10 +41,26 @@ public static class PrivateFolder
     // Never over an existing file: names are random, so one already there is not ours.
     public static void WriteNew(string path, byte[] bytes)
     {
+        using var stream = CreateNew(path);
+        stream.Write(bytes);
+    }
+
+    // A new file, 0600 off Windows (on Windows the folder's DACL is inherited), never an
+    // existing one.
+    public static FileStream CreateNew(string path)
+    {
         var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
         if (!OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
-        using var stream = new FileStream(path, options);
-        stream.Write(bytes);
+        return new FileStream(path, options);
+    }
+
+    // A copy made as WriteNew makes a file, rather than File.Copy, which carries the source's
+    // permissions over and can overwrite.
+    public static void CopyNew(string source, string path)
+    {
+        using var from = File.OpenRead(source);
+        using var to = CreateNew(path);
+        from.CopyTo(to);
     }
 
     static void Narrow(string path)

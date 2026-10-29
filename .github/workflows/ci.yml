@@ -188,11 +188,14 @@ jobs:
       - run: dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo
       - run: npm ci
       - run: node --test "test/unit/*.test.mjs"
-      - name: The Pages build accepts the live relay and refuses a bad one
+      - name: The Pages build accepts the live relay and its blob store, and refuses bad ones
         run: |
           node tools/build-site.mjs --out "$RUNNER_TEMP/site" --relay https://relay.example
           grep -q "connect-src 'self' https://relay.example wss://relay.example;" "$RUNNER_TEMP/site/index.html"
           ! node tools/build-site.mjs --out "$RUNNER_TEMP/bad" --relay "https://relay.example/'; script-src *"
+          node tools/build-site.mjs --out "$RUNNER_TEMP/site-blobs" --relay https://relay.example --blob-origin https://abblobs.blob.core.windows.net
+          grep -q "connect-src 'self' https://relay.example wss://relay.example https://abblobs.blob.core.windows.net;" "$RUNNER_TEMP/site-blobs/index.html"
+          ! node tools/build-site.mjs --out "$RUNNER_TEMP/bad-blobs" --relay https://relay.example --blob-origin https://evil.example
       - run: npx playwright install --with-deps chromium webkit
       - run: npx playwright test
       - uses: actions/upload-artifact@v4

@@ -36,7 +36,11 @@ public sealed class RelayClient : IAsyncDisposable
     readonly TaskCompletionSource<Func<string, byte[], Task>> handler = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public string DeviceId { get; }
+    // The relay this connection is to; a blob URL is only followed to it or to Azure Storage.
+    public Uri Relay { get; }
     public string AccountId { get; private set; } = "";
+    // The largest blob (stored bytes) the relay's blob store takes, or 0 when it has none.
+    public long BlobMaxBytes { get; private set; }
     public string Login { get; private set; } = "";
     public IReadOnlyList<PresenceEntry> Presence { get; private set; } = [];
 
@@ -56,6 +60,7 @@ public sealed class RelayClient : IAsyncDisposable
 
     readonly ConcurrentDictionary<long, TaskCompletionSource<PushResult>> pushes = new();
     long nextPush;
+    readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> blobRequests = new();
 
     // Frames held for a handler that is not attached yet.
     internal int QueuedFrames => inbound.Reader.Count;
@@ -76,12 +81,49 @@ public sealed class RelayClient : IAsyncDisposable
         finally { pushes.TryRemove(id, out _); }
     }
 
+    // The blob store (docs/protocol/blobs.md): a write-once URL for one blob for the device
+    // 	o, sized as BlobFormat.StoredSize says. The ticket names the blob from then on.
+    public async Task<BlobSlot> BlobPutAsync(string to, long storedSize, CancellationToken ct = default)
+    {
+        var r = await BlobRequestAsync(id => new { t = "blob-put", id, to, size = storedSize }, ct);
+        return new BlobSlot(r.GetProperty("blob").GetString()!, r.GetProperty("url").GetString()!, r.GetProperty("expires").GetDateTimeOffset());
+    }
+
+    // A short-lived read URL for a blob sent to this device, and its stored size.
+    public async Task<BlobLocation> BlobGetAsync(string blob, CancellationToken ct = default)
+    {
+        var r = await BlobRequestAsync(id => new { t = "blob-get", id, blob }, ct);
+        return new BlobLocation(r.GetProperty("url").GetString()!, r.GetProperty("size").GetInt64());
+    }
+
+    // Deletes a blob this device sent or received; true if it was there.
+    public async Task<bool> BlobDeleteAsync(string blob, CancellationToken ct = default)
+    {
+        var r = await BlobRequestAsync(id => new { t = "blob-delete", id, blob }, ct);
+        return r.TryGetProperty("deleted", out var d) && d.ValueKind == JsonValueKind.True;
+    }
+
+    async Task<JsonElement> BlobRequestAsync(Func<long, object> message, CancellationToken ct)
+    {
+        var id = Interlocked.Increment(ref nextPush);
+        var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        blobRequests[id] = tcs;
+        try
+        {
+            await SendTextAsync(message(id), ct);
+            var r = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            if (r.TryGetProperty("error", out var e) && e.GetString() is { } why) { throw new BlobRefusedException(why); }
+            return r;
+        }
+        finally { blobRequests.TryRemove(id, out _); }
+    }
+
     // Ends, never faults, when the connection does; the caller then reconnects.
     public Task Completion => loop;
     public WebSocketCloseStatus? CloseStatus => ws.CloseStatus;
     public string? CloseReason => ws.CloseStatusDescription;
 
-    RelayClient(ClientWebSocket ws, string deviceId) { this.ws = ws; DeviceId = deviceId; }
+    RelayClient(ClientWebSocket ws, string deviceId, Uri relay) { this.ws = ws; DeviceId = deviceId; Relay = relay; }
 
     public static Uri SocketUri(Uri relay) => new UriBuilder(relay)
     {
@@ -102,7 +144,7 @@ public sealed class RelayClient : IAsyncDisposable
         try
         {
             await ws.ConnectAsync(SocketUri(relay), ct);
-            c = new RelayClient(ws, Wire.DeviceId(key.Public));
+            c = new RelayClient(ws, Wire.DeviceId(key.Public), relay);
             await c.SendTextAsync(new { t = "hello", token, pub = Wire.Hex(key.Public), name, kind }, ct);
             var challenge = await c.ReceiveControlAsync("challenge", ct);
             var eph = Wire.Unhex(challenge.GetProperty("eph").GetString()!);
@@ -114,6 +156,8 @@ public sealed class RelayClient : IAsyncDisposable
             if (ready.GetProperty("device").GetString() != c.DeviceId) { throw new CryptographicException("relay assigned a different device id"); }
             c.AccountId = account;
             c.Login = ready.GetProperty("login").GetString() ?? "";
+            // Absent from a relay without a blob store, and from one that predates it.
+            if (ready.TryGetProperty("blobs", out var blobs) && blobs.ValueKind == JsonValueKind.Object && blobs.TryGetProperty("max", out var max) && max.TryGetInt64(out var m)) { c.BlobMaxBytes = Math.Max(0, m); }
         }
         catch
         {
@@ -241,6 +285,9 @@ public sealed class RelayClient : IAsyncDisposable
                                 p.TrySetResult(new PushResult(j.GetProperty("status").GetInt32(), j.TryGetProperty("error", out var err) ? err.GetString() : null));
                             }
                             break;
+                        case "blob-result":
+                            if (blobRequests.TryRemove(j.GetProperty("id").GetInt64(), out var b)) { b.TrySetResult(j.Clone()); }
+                            break;
                     }
                 }
                 else { Enqueue(data); }
@@ -259,6 +306,7 @@ public sealed class RelayClient : IAsyncDisposable
         // Lets the dispatcher finish even if nobody ever attached a handler.
         handler.TrySetResult((_, _) => Task.CompletedTask);
         foreach (var p in pushes.Values) { p.TrySetException(new IOException("relay connection ended")); }
+        foreach (var b in blobRequests.Values) { b.TrySetException(new IOException("relay connection ended")); }
         if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {
             try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, default); } catch (WebSocketException) { }

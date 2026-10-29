@@ -194,7 +194,9 @@ async Task<int> ServeAsync()
     // machine nor loses a change, and every new channel subscribes to the same state.
     await using var source = new SessionSource(options);
     await source.StartAsync(stop.Token);
-    var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"));
+    // Files over 256 KiB come from the relay's blob store, through whichever connection is up.
+    using var relayBlobs = new RelayBlobs();
+    var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs);
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
     // app closed. Subscriptions live in the profile's own folder, for this account only.
@@ -304,6 +306,7 @@ async Task<int> ServeAsync()
             hub.Accepted += ch => Log($"channel from {ch.PeerName} ({ch.PeerKind}, {ch.PeerId[..8]})");
             hub.Rejected += (peer, e) => Log($"rejected a frame from {peer[..Math.Min(8, peer.Length)]}: {e.Message}");
             push.Attach(new RelayPushSender(relay));
+            relayBlobs.Attach(relay);
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff = TimeSpan.FromSeconds(1);
@@ -338,7 +341,11 @@ async Task<int> ServeAsync()
             Log($"connection failed: {e.GetType().Name}: {e.Message}");
             control.SetRelay(RelayState.Connecting, $"connection failed: {e.Message}");
         }
-        finally { connection = null; }
+        finally
+        {
+            connection = null;
+            relayBlobs.Attach(null);
+        }
         reconnects++;
         // A sign-in during the wait goes straight to connecting.
         try { await wake.WaitAsync(backoff, stop.Token); }
@@ -411,7 +418,7 @@ static string OsName() =>
 // session at once. Files sent with replies are staged in the profile's own folder, private
 // to this user (docs/host-replies.md), and the prompts already
 // answered are recorded there too, so none is typed into twice.
-(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging, string attempts)
+(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging, string attempts, IBlobSource blobs)
 {
     if (!OperatingSystem.IsWindows())
     {
@@ -427,7 +434,7 @@ static string OsName() =>
     Log(probe.Active() is { } active ? $"answering, replying and ending sessions are off for now: {active}" : "answering, replying and ending sessions are on");
     if (settingsProblem is not null) { Log(settingsProblem); }
     Log($"approving Copilot permission prompts from other devices is {(settings.RemoteApproval ? "on" : "off")} (permissions.remoteApproval)");
-    var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log);
+    var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log, blobs: blobs);
     return (
         new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval }, Log, gate),
         new ReplyService(source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome }, Log, gate, attachments),

@@ -13,8 +13,9 @@ reply: a prompt typed into a session (`sessions.reply`), with files and images s
 of it (`sessions.attach`, see [Attachments](#attachments)), can end a session
 (`sessions.stop`), and notifies a client's devices when a session asks or finishes, even
 with the app closed (`push`, see [Notifications](#notifications)). It can also launch or
-resume a session (`sessions.launch`, in [v1-launch.md](v1-launch.md)). Larger files through
-the blob store come next; they will add ops without changing anything here.
+resume a session (`sessions.launch`, in [v1-launch.md](v1-launch.md)). Files too large for
+the channel go through the relay's blob store (`sessions.attach.blob`, in
+[blobs.md](blobs.md)).
 
 ## Rules for every message
 
@@ -81,6 +82,8 @@ Request `data`: `{}`. Result:
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
 | `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
 | `sessions.attach` | `attachment.start`, `attachment.chunk`, `attachment.discard`, and `attachments` on `session.reply` ([Attachments](#attachments)). Offered only with `sessions.reply`, by a host that can stage files for the agent. Without it a client offers no way to attach |
+| `sessions.attach.blob` | `attachment.start` takes a `blob`: files over 256 KiB, up to 100 MiB, through the relay's blob store ([Large files](#large-files-through-the-blob-store)). Offered with `sessions.attach` on a channel through a relay, while the host is connected to one that has a blob store. Without it a client keeps to 256 KiB |
+| `sessions.attach.direct` | `attachment.chunk` takes files up to 100 MiB, not only 256 KiB. Offered with `sessions.attach` on the local pipe only ([local-pipe.md](local-pipe.md)), where the bytes cost the relay nothing |
 | `sessions.stop` | `session.stop`. Left out on the same terms as `sessions.answer`. A client then offers no End session |
 | `sessions.approve` | Copilot permission prompts are approved or denied with `session.answer` ([Copilot permission prompts](#copilot-permission-prompts)). Offered only with `sessions.answer`, by a host whose `permissions.remoteApproval` is on (the default). Without it, every Copilot permission prompt is `answerAtMachine`, and a client says approving from the phone is turned off on that machine |
 | `push` | `push.subscribe`, `push.unsubscribe`, `push.list`: Web Push notifications of questions and finished turns ([Notifications](#notifications)) |
@@ -286,8 +289,10 @@ at once.
 
 Files and images go with a reply, as they can be pasted or attached at the machine. A
 client sends each file to the host first, in small chunks inside the channel, then names
-them in `session.reply`. Each file is at most **256 KiB** this way; larger ones will travel
-through the blob store (a later op), and a reply will name those the same way, by `id`.
+them in `session.reply`. Each file is at most **256 KiB** this way (100 MiB on the local
+pipe, `sessions.attach.direct`). A larger one, up to **100 MiB**, goes through the relay's
+blob store where the host offers `sessions.attach.blob`
+([Large files](#large-files-through-the-blob-store)); a reply names it the same way, by `id`.
 
 **What the agent is given (Copilot).** The host writes each file into a private folder
 (below) and types the reply as agent-ha-bridge does: `@<path>` for each file, in order,
@@ -324,8 +329,9 @@ Request `data`:
 | `attachment` | A fresh UUID for this file, the client's. Starting again with the same id and the same `name`, `size` and `sha256` resumes it (after a reconnect, say) |
 | `name` | 1 to 255 bytes of UTF-8. A pasted image with no name is sent as `image.png` or similar |
 | `type` | Optional MIME type, at most 127 bytes |
-| `size` | Bytes, 1 to 262,144 |
+| `size` | Bytes, 1 to 262,144; up to 104,857,600 with `blob`, or on the local pipe |
 | `sha256` | The SHA-256 of the whole file, base64url without padding (43 characters) |
+| `blob` | Optional, with `sessions.attach.blob`: `{ "id": "<ticket>", "key": "<32 bytes, base64url>" }`, a file already sealed and uploaded for this host ([Large files](#large-files-through-the-blob-store)). Absent: the file comes in chunks |
 
 Result: `{ "received": 0, "complete": false }`: how many bytes the host has, and whether
 that is the whole file. A file a typed reply has already used reads as complete, so a
@@ -359,15 +365,19 @@ offset, a hash mismatch, too many held) fail as requests (`ok: false`) with the 
 
 * **One device's.** An attachment belongs to the device that sent it (the channel's peer).
   Another device can neither add to it, use it, see it nor remove it.
-* **In memory until used.** A host keeps a file in memory while it arrives and until a
-  reply uses it. One no reply uses within **15 minutes** of its last chunk is dropped.
+* **Held until used.** A host keeps a file in memory while it arrives and until a reply
+  uses it; one over 256 KiB (from the blob store, or on the local pipe) is written instead,
+  as it arrives, to `incoming/` in the private folder below, never a shared temporary
+  folder. A host holds at most 1 GiB of those at once. One no reply uses within
+  **15 minutes** of its last chunk (or of the last `attachment.start` that asked about it)
+  is dropped, and its file deleted.
 * **Staged only to be typed.** Just before typing, the host writes the reply's files into a
   folder of its own profile that only the user can open: on Windows a DACL that inherits
   nothing and grants only the user, as owner; elsewhere mode `0700`, files `0600`. Names
   start with a random 128-bit prefix, so nothing is ever overwritten. A folder that can't be
   made private, or is a link, is never written to and the reply is `refused`.
 * **Gone after use.** Once the reply is typed (`delivered` or `unconfirmed`), its files leave
-  the host's memory and cannot be used again. The staged copies stay **24 hours**, since a
+  the host's memory and `incoming/` and cannot be used again. The staged copies stay **24 hours**, since a
   working session reads the file only when it takes the prompt, then are deleted by a sweep
   that also runs when the host starts. A reply that types nothing (`refused`, `busy`,
   `stale`) deletes its staged copies at once and leaves the files held, so the person can
@@ -378,6 +388,29 @@ offset, a hash mismatch, too many held) fail as requests (`ok: false`) with the 
 
 A client sends a reply's files before the reply, and again (from what the host has) on
 every resend of it, so a reply resent after the host restarted still finds them.
+
+#### Large files through the blob store
+
+With `sessions.attach.blob`, a file over 256 KiB goes through the relay's blob store
+([blobs.md](blobs.md)) instead of in chunks:
+
+1. The client asks its relay for a slot for the host's device (`blob-put`, the sealed and
+   padded size), seals the file with a fresh key bound to the ticket's id, and uploads it
+   straight to the URL it was given. It never passes through the relay.
+2. It sends `attachment.start` with `blob: { id, key }`, and the file's `name`, `size`,
+   `type` and `sha256` as for any attachment. The key travels only here.
+3. The host fetches the blob itself, on its own relay connection (only it, the device the
+   blob was put for, can), opens it as it arrives into `incoming/`, and checks the size and
+   SHA-256. It then deletes the blob from the store, whether it was right or not.
+4. The client sends `attachment.start` again, unchanged, until it reads `complete: true`
+   (or fails), then names the attachment in `session.reply` as usual. `received` counts the
+   bytes the host has opened, for progress.
+
+A blob that does not open, does not match its SHA-256 or cannot be fetched fails the next
+`attachment.start` for it once, with the reason, and is dropped; the client seals and
+uploads it again under a new id. A host that has no relay with a blob store just then
+fails `attachment.start` with a `blob` and stops offering `sessions.attach.blob`.
+`attachment.chunk` for an attachment started with a `blob` fails.
 
 ### `session.stop`
 

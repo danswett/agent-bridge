@@ -64,6 +64,13 @@ served by the same `SessionService` and `UsageService`, except `push.*`: Web Pus
 devices that reach the host through the relay (`push` is not in hello's capabilities
 here). Hello's capabilities on the pipe add `host.manage`.
 
+Attachments differ in size only. The pipe is a direct path (design §4.6): its bytes cost
+the relay nothing, so hello offers `sessions.attach.direct` with `sessions.attach`, and
+`attachment.chunk` takes files up to 100 MiB, not 256 KiB. The host writes one over
+256 KiB to its private `incoming/` folder as it arrives rather than holding it in memory.
+`sessions.attach.blob` is never offered here: the relay's blob store is for devices that
+reach the host through it.
+
 A refused client receives one event, then an error response to its first request, then
 the connection closes:
 

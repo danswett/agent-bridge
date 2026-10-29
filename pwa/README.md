@@ -157,11 +157,26 @@ picked with **Attach**, which on an iPhone offers the photo library, the camera 
 Each shows as a chip, with a thumbnail for an image, and can be removed until it is sent.
 A reply can be files alone, up to 10 of them.
 
-Each file is at most 256 KiB this way (the blob store will lift that). An image over the
-limit, as most phone photos and screenshots are, is redrawn as a JPEG at most 2048 px on a
-side, then smaller, until it fits, and its chip says it was made smaller. Anything else
-over it is refused with its size. An image the browser can't decode (HEIC outside Safari)
-can't be shrunk, so it goes only if it already fits.
+Files up to 256 KiB go in the channel. A larger one, up to 100 MiB (or less, if the relay says
+so), goes as it is through the relay's **blob store** where the machine lists
+`sessions.attach.blob` and the relay's `ready` has `blobs` ([blobs.md](../docs/protocol/blobs.md)):
+`js/blobs.js` seals it in the browser with a fresh key (AES-256-GCM records, WebCrypto),
+uploads it straight to Azure Storage on the URL the relay gives (an XHR, for upload
+progress), then names it to the machine with its key inside the channel and waits while the
+machine fetches and checks it. The status line says "Uploading the attachment… N%", then
+"The machine is receiving…", and **Cancel** stops the upload or the wait (the reply is then
+not sent, the files stay, and Send starts over); a blob already sealed for a reply that did
+not go is reused, so only what is missing is sent again. A relay refusal (over the daily
+allowance, too many at once, too large) says so in words and keeps the file in the box.
+Small files keep to the channel even then: nothing is stored, and nothing extra can fail.
+
+Without the blob store, each file is at most 256 KiB. An image over that, as most phone
+photos and screenshots are, is redrawn as a JPEG at most 2048 px on a side, then smaller,
+until it fits, and its chip says it was made smaller. Anything else over it is refused with
+its size. An image the browser can't decode (HEIC outside Safari) can't be shrunk, so it
+goes only if it already fits. Demo mode has a pretend blob store
+(`window.agentBridgeDemo.blobs`; `?blobs=0` turns it off, `?blobMax=<bytes>` and
+`?uploadDelay=<ms>` shape it).
 
 On **Send** the files go first, one 11 KiB chunk at a time, each from where the machine has
 got to, with the percentage shown; then the reply names them. A resend after a reconnect
@@ -285,9 +300,12 @@ running another checkout's tests at the same time.
   sending, 44 px targets, Ctrl/Cmd+Enter, and no box for a machine without `sessions.reply`.
 * `test/attach.spec.mjs`, in demo mode: a picked file and a pasted screenshot shown as
   chips and typed as `@` mentions ahead of the words, files alone, removing one, the size
-  limit and a large image made smaller, ten at most, progress, Try again withdrawn once the
-  files change after a failure, a refusal keeping them
-  without sending their bytes again, and no Attach for a machine without `sessions.attach`.
+  limit and a large image made smaller without a blob store, ten at most, progress, Try
+  again withdrawn once the files change after a failure, a refusal keeping them without
+  sending their bytes again, and no Attach for a machine without `sessions.attach`; with
+  the blob store, a phone photo over 256 KiB sent as it is with upload progress, Cancel
+  before the reply goes, the blob store's own limit, a relay refusal in words, and small
+  files still in the channel.
 * `test/stop.spec.mjs`, in demo mode: an idle session ended on one press (shown as ending,
   then gone), a working or delegating one only on a second press that carries the first's
   token, a lapsed window asking again, refusals and failures, an unknown outcome as failed,

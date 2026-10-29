@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using AgentBridge.Relay;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
@@ -36,7 +38,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         f.Processes.Run(AgentKind.Copilot, 100);
         source = new SessionSource(f.Options(), f.Processes, TimeProvider.System);
         await source.RefreshAsync();
-        relay = await TestRelay.StartAsync();
+        // With the in-process blob store, for files too large for the channel.
+        relay = await TestRelay.StartAsync(o => o.Blobs.Backend = "local");
         var token = relay.TokenFor(1, "octo");
         host = await relay.ConnectAsync(token, "Test host", "host");
         host.Hub.JsonOptions = ProtocolJson.Options;
@@ -70,8 +73,14 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         PollInterval = TimeSpan.FromMilliseconds(25),
     }, gate: gate);
 
-    void Serve(ISessionAnswerer? answers, ISessionReplier? replies, AttachmentStore? attachments = null) =>
-        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: answers, replies: replies, attachments: attachments).HandleAsync;
+    // The service the relay's channels reach, which the app's pipe reaches too where a test serves one.
+    SessionService served = null!;
+
+    void Serve(ISessionAnswerer? answers, ISessionReplier? replies, AttachmentStore? attachments = null)
+    {
+        served = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: answers, replies: replies, attachments: attachments);
+        host.Hub.Handler = served.HandleAsync;
+    }
 
     string Prompt(string text, string delivery = "idle") => Copilot.Event("user.message", new { content = text, delivery }, second++);
 
@@ -343,13 +352,13 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
     string Staging => Path.Combine(f.Root, "profile", "attachments");
 
-    AttachmentStore Store() => new(new AttachmentOptions { StagingRoot = Staging }, sweep: false);
+    AttachmentStore Store(IBlobSource? blobs = null) => new(new AttachmentOptions { StagingRoot = Staging }, sweep: false, blobs: blobs);
 
     // Serves replies with attachments, and plays the CLI as it records a prompt with files in
     // it: one attachment per @<path> it could read.
-    AttachmentStore ServeAttachments()
+    AttachmentStore ServeAttachments(IBlobSource? blobs = null)
     {
-        var store = Store();
+        var store = Store(blobs);
         Serve(Answerer(), new ReplyService(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
         {
             CopilotHome = f.CopilotHome,
@@ -378,16 +387,18 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         return bytes;
     }
 
+    static Task<string> UploadAsync(SecureChannel ch, byte[] bytes, string name = "shot.png") => UploadAsync((op, data) => ch.RequestAsync(op, data), bytes, name);
+
     // As a client sends one: start, then one chunk at a time from where the host is.
-    static async Task<string> UploadAsync(SecureChannel ch, byte[] bytes, string name = "shot.png")
+    static async Task<string> UploadAsync(Func<string, object, Task<System.Text.Json.JsonElement>> request, byte[] bytes, string name = "shot.png")
     {
         var id = Guid.NewGuid().ToString();
-        var state = Ok(await ch.RequestAsync(Ops.AttachmentStart, new { attachment = id, name, type = "image/png", size = bytes.Length, sha256 = Attachments.Base64Url(System.Security.Cryptography.SHA256.HashData(bytes)) }));
+        var state = Ok(await request(Ops.AttachmentStart, new { attachment = id, name, type = "image/png", size = bytes.Length, sha256 = Attachments.Base64Url(System.Security.Cryptography.SHA256.HashData(bytes)) }));
         while (!state.GetProperty("complete").GetBoolean())
         {
             var at = state.GetProperty("received").GetInt32();
             var n = Math.Min(AttachmentLimits.Chunk, bytes.Length - at);
-            state = Ok(await ch.RequestAsync(Ops.AttachmentChunk, new { attachment = id, offset = at, data = Convert.ToBase64String(bytes, at, n) }));
+            state = Ok(await request(Ops.AttachmentChunk, new { attachment = id, offset = at, data = Convert.ToBase64String(bytes, at, n) }));
         }
         return id;
     }
@@ -527,6 +538,129 @@ public sealed class ReplyFlowTests : IAsyncLifetime
             await Gate;
             if (Result.Status == InjectionStatus.Typed) { OnInject?.Invoke(plan); }
             return Result;
+        }
+    }
+
+    // ---- large files, through the relay's blob store ----
+
+    RelayBlobs HostBlobs()
+    {
+        var blobs = new RelayBlobs();
+        blobs.Attach(host.Relay);
+        return blobs;
+    }
+
+    // As the phone sends one: sealed and uploaded for the host, then named to it in the channel
+    // with its key, and watched with attachment.start until the host has it.
+    async Task<string> SendLargeAsync(SecureChannel ch, byte[] bytes, string name, byte[]? key = null)
+    {
+        using var http = BlobHttp.CreateClient();
+        var sent = await BlobTransfer.SendAsync(client.Relay, http, host.Id, bytes);
+        var id = Guid.NewGuid().ToString();
+        var start = new
+        {
+            attachment = id, name, type = "image/png", size = bytes.Length, sha256 = Attachments.Base64Url(sent.Sha256),
+            blob = new { id = sent.Blob, key = Attachments.Base64Url(key ?? sent.Key) },
+        };
+        var deadline = DateTime.UtcNow + Patience;
+        while (true)
+        {
+            var response = await ch.RequestAsync(Ops.AttachmentStart, start);
+            if (!response.GetProperty("ok").GetBoolean()) { throw new InvalidOperationException(response.GetProperty("error").GetString()); }
+            if (response.GetProperty("result").GetProperty("complete").GetBoolean()) { return id; }
+            if (DateTime.UtcNow > deadline) { throw new TimeoutException("the host never had the whole file"); }
+            await Task.Delay(20);
+        }
+    }
+
+    LocalBlobBackend RelayStore => (LocalBlobBackend)relay.App.Services.GetRequiredService<AgentBridge.Relay.BlobService>().Backend!;
+
+    [Fact]
+    public async Task Hello_offers_large_attachments_only_through_a_relay_with_a_blob_store()
+    {
+        using var blobs = HostBlobs();
+        using var store = ServeAttachments(blobs);
+        var ch = await OpenAsync();
+        Assert.Contains(Capabilities.SessionsAttachBlob, await CapabilitiesAsync(ch));
+
+        // Between relay connections the host can reach no blob store.
+        blobs.Attach(null);
+        var offered = await CapabilitiesAsync(ch);
+        Assert.Contains(Capabilities.SessionsAttach, offered);
+        Assert.DoesNotContain(Capabilities.SessionsAttachBlob, offered);
+    }
+
+    [Fact]
+    public async Task A_photo_too_large_for_the_channel_comes_through_the_blob_store_and_is_handed_to_copilot_like_any_attachment()
+    {
+        using var blobs = HostBlobs();
+        using var store = ServeAttachments(blobs);
+        var ch = await OpenAsync();
+        var photo = Png(4 * 1024 * 1024 + 123);
+
+        var a = await SendLargeAsync(ch, photo, "IMG_4021.png");
+        var (outcome, reason) = await ReplyAsync(ch, "What is in this photo?", attachments: Files(a));
+
+        Assert.Equal("delivered", outcome);
+        Assert.Null(reason);
+        var said = Assert.Single(injector.Plans).Plan.Sends[0].Text.Split(' ');
+        Assert.Matches(@"[\\/][0-9a-f]{32}-IMG_4021\.png$", said[0]);
+        Assert.Equal(photo, File.ReadAllBytes(said[0][1..]));
+        Assert.Equal("What is in this photo?", string.Join(' ', said[1..]));
+        // The host deleted the blob once it had checked it, and kept nothing in incoming/.
+        Assert.Empty(RelayStore.Stored);
+        Assert.Empty(Directory.GetFiles(store.IncomingRoot));
+    }
+
+    [Fact]
+    public async Task A_blob_the_host_cannot_open_is_refused_with_the_reason_and_nothing_is_typed()
+    {
+        using var blobs = HostBlobs();
+        using var store = ServeAttachments(blobs);
+        var ch = await OpenAsync();
+
+        var e = await Assert.ThrowsAsync<InvalidOperationException>(() => SendLargeAsync(ch, Png(300_000), "shot.png", key: new byte[32]));
+
+        Assert.StartsWith("the attachment in the blob store is not what was sent (a part of the blob was changed", e.Message);
+        Assert.Empty(injector.Plans);
+        await Wait.UntilAsync(() => RelayStore.Stored.Count == 0, "the unusable blob to be deleted");
+    }
+
+    [Fact]
+    public async Task The_app_on_this_machine_sends_a_file_over_256_KiB_in_chunks_over_its_pipe_and_a_device_through_the_relay_cannot()
+    {
+        using var store = ServeAttachments();
+        // Short: a Unix socket path must fit about 100 bytes.
+        var profile = Path.Combine(Path.GetTempPath(), "abr-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(profile);
+        try
+        {
+            await using var server = AgentBridge.Local.LocalServer.Start(AgentBridge.Local.LocalEndpoint.For(profile), served.HandleAsync);
+            await using var app = await AgentBridge.Local.LocalClient.ConnectAsync(AgentBridge.Local.LocalEndpoint.For(profile), Patience);
+            var hello = Ok(await app.RequestAsync(Ops.Hello, new { }));
+            var offered = hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()).ToArray();
+            Assert.Contains(Capabilities.SessionsAttachDirect, offered);
+            Assert.DoesNotContain(Capabilities.SessionsAttachBlob, offered);
+            var pdf = Png(3 * 1024 * 1024 + 77);
+
+            var a = await UploadAsync((op, data) => app.RequestAsync(op, data), pdf, "report.png");
+            var response = await app.RequestAsync(Ops.SessionReply, new { id = Id, request = Guid.NewGuid().ToString(), text = "Summarise this", attachments = Files(a) });
+
+            Assert.Equal("delivered", Ok(response).GetProperty("outcome").GetString());
+            var said = Assert.Single(injector.Plans).Plan.Sends[0].Text.Split(' ');
+            Assert.Equal(pdf, File.ReadAllBytes(said[0][1..]));
+            // Written to the private folder as it arrived, and gone from it once typed.
+            Assert.Empty(Directory.GetFiles(store.IncomingRoot));
+
+            // Through the relay the cap in chunks stays 256 KiB: larger files go by the blob store.
+            var ch = await OpenAsync();
+            Assert.DoesNotContain(Capabilities.SessionsAttachDirect, await CapabilitiesAsync(ch));
+            var big = await ch.RequestAsync(Ops.AttachmentStart, new { attachment = Guid.NewGuid().ToString(), name = "big.png", size = AttachmentLimits.Bytes + 1, sha256 = new string('A', 43) });
+            Assert.Equal("the attachment is larger than 256 KiB", big.GetProperty("error").GetString());
+        }
+        finally
+        {
+            try { Directory.Delete(profile, recursive: true); } catch (IOException) { }
         }
     }
 }

@@ -25,4 +25,6 @@ type appConfig = {
   customDomain: string?
   @description('Keep a system-assigned identity alongside the app\'s own (production, which was created with one).')
   keepSystemIdentity: bool?
+  @description('Storage account for this app\'s blob store (modules/blob-store.bicep): globally unique, 3-24 lowercase letters and digits. Unset: no blob store, and devices keep files under 256 KiB.')
+  blobStorageName: string?
 }

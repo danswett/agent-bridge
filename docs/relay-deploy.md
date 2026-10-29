@@ -13,6 +13,7 @@ builds an image per commit, rolls it onto **staging**, smoke-tests it there, and
 | Size | 0.25 vCPU, 0.5 GiB | 0.25 vCPU, 0.5 GiB |
 | Identity (ACR pull, Key Vault) | `id-agent-bridge-relay` | `id-agent-bridge-relay-staging` |
 | Key Vault (`token-key`, `vapid-key`) | `kv-abrelay-prod-wus2` | `kv-abrelay-stg-wus2` |
+| Blob store ([below](#blob-store)) | `abblobprodwus2` (made by the first `deploy.ps1 -Production` after it was added) | `abblobstgwus2` |
 | Deploys from | `main`, after approval | `main` and pull requests touching the relay |
 | GitHub environment / OIDC principal | `production` / `agent-bridge-relay-deploy-production` | `staging` / `agent-bridge-relay-deploy-staging` |
 
@@ -90,7 +91,9 @@ replicas no stable addresses to forward to, so that step is the `standard` size 
    readiness, no app code, the push key, CORS and origins, 4001, and two devices of a
    throwaway account that find each other in presence, open a Noise channel, echo a
    message, get "undeliverable" for an absent device, have an off-allowlist push refused,
-   and leave presence.
+   and leave presence; and (`--expect-blobs`) a 5 MiB file sealed, uploaded to the blob
+   store, refused to another device of the account and to another account, fetched,
+   opened and checked by its recipient, deleted, and then not found.
 4. **production** (`main` only, environment `production`): waits for approval by the
    required reviewer. `infra/roll-production.sh` refuses an app `infra/` has not adopted,
    writes the image it replaces to the job summary, rolls the digest, and the smoke test
@@ -142,7 +145,7 @@ gh variable set RELAY_DEPLOY --body true -R danswett/agent-bridge
 
 **A stamp from nothing** (how the current one was built, 2026-10-29). Register the resource
 providers (`Microsoft.App`, `Microsoft.ContainerRegistry`, `Microsoft.KeyVault`,
-`Microsoft.ManagedIdentity`, `Microsoft.OperationalInsights`) and create the resource group,
+`Microsoft.ManagedIdentity`, `Microsoft.OperationalInsights`, `Microsoft.Storage`) and create the resource group,
 then:
 
 ```powershell
@@ -285,6 +288,44 @@ resource group, and run `./infra/deploy.ps1 -Region <region> -ResourceGroup <rg>
 home/forward routing exists, an account's devices must all use one region, so a second
 region is a separate relay URL, not more capacity behind one name.
 
+## Blob store
+
+Large files (design §4.6, [protocol/blobs.md](protocol/blobs.md)): reply attachments over
+256 KiB now, session transfers later. Devices upload and download straight to and from
+Azure Storage on URLs the relay signs; no blob byte passes through a relay node.
+
+`infra/modules/blob-store.bicep`, one per app (`deployBlobStore`), next to it:
+
+* A StorageV2 account, **Standard_LRS, hot**, HTTPS and TLS 1.2 only, **shared keys off**
+  (`allowSharedKeyAccess: false`, so no account key or service SAS can be used, and none is
+  configured anywhere), no public blob access, no soft delete or versioning (a deleted blob
+  is gone), and CORS for the PWA's origins (`PUT`, `GET`, `OPTIONS`).
+* One private container, `blobs`, and a **lifecycle rule** that deletes every blob a day
+  after it was written, whatever else happens, matching the relay's 24-hour tickets. A
+  recipient deletes each blob as soon as it has it, so most live seconds.
+* For the app's user-assigned identity: **Storage Blob Data Contributor** on the container
+  and **Storage Blob Delegator** on the account. The relay gets a user delegation key from
+  Entra with them and signs one-blob, one-direction, 30-minute SAS URLs with it.
+* Environment for the app: `Relay__Blobs__Backend=azure`, `Relay__Blobs__AccountUrl`,
+  `Relay__Blobs__Container`, `Relay__Blobs__ManagedIdentityClientId`. Not a secret among
+  them. An app without them (`Backend` empty) says `blobs: null` in `ready`, and every
+  client keeps to 256 KiB in its channels.
+
+Staging has its account (`abblobstgwus2`, applied with `./infra/deploy.ps1` on 2026-10-29,
+which also registered `Microsoft.Storage` in the subscription). Production gets
+`abblobprodwus2` the first time infra is applied with `-Production` after this change, as
+any infra change is (a person, not CI):
+
+```powershell
+./infra/deploy.ps1 -WhatIf -Production -ProductionImage <running digest> -ProductionVersion <sha>
+./infra/deploy.ps1 -Production -ProductionImage <running digest> -ProductionVersion <sha>
+```
+
+Until then production's image runs without a blob store, and the PWA (whose Content
+Security Policy already allows `https://abblobprodwus2.blob.core.windows.net`, set in
+`pages.yml`) falls back to 256 KiB. The role assignments can take a few minutes to apply; a
+`blob-put` before then answers `unavailable`.
+
 ## Production behaviour in the code
 
 - **Probes:** startup and liveness on `/healthz`, readiness on `/readyz`.
@@ -293,12 +334,14 @@ region is a separate relay URL, not more capacity behind one name.
 - **Limits:** 64 KiB frames (`Wire.MaxFrame`), 4 KiB control messages, 200 frames/s per
   socket, 32 devices per account, 30 pushes/min per account, 60 sign-in calls/min and 120
   new sockets/min per client address, 16 KiB request bodies, 10,000 sockets per replica.
+  Blobs: 201 MiB stored per blob, 2 GiB per account per rolling 24 hours, 30 puts/min per
+  account (`Relay__Blobs__*`).
 - **Logs:** JSON to stdout, collected by Log Analytics (30 days, 0.1 GB/day cap). No
   account, device, name, address, token or push endpoint: a socket is a random tag that
   means nothing outside the process. ASP.NET request logs are off.
 - **Metrics hook:** meter `AgentBridge.Relay` (connections, connects by kind, disconnects
   by outcome, refusals by code, frames and bytes forwarded, undeliverable, pushes and
-  sign-ins by outcome), tags limited to `kind`, `outcome` and `code` and held to that by a
+  sign-ins by outcome, blob operations by kind and outcome and bytes ticketed), tags limited to `kind`, `outcome` and `code` and held to that by a
   test. Nothing exports it yet; the observability slice (design §5.10) will.
 
 ## Cost
@@ -315,7 +358,8 @@ West US 2 consumption prices; the subscription's monthly free grant is 180,000 v
 | Key Vault (2 vaults, secret reads on revision start and every 30 min) | < $0.05 | < $0.05 |
 | Requests (sign-in, health; probes are free) | $0 | $0 |
 | Egress (first 100 GB/month free) | $0 | ≈ $0 (about 25 GB/month at §5.9's 3-client rate) |
-| **Total** | **≈ $19/month** | **≈ $19–20/month** |
+| Blob store, 2 accounts: hot LRS, blobs kept 1–2 days, no fixed cost | < $0.05 | ≈ $0.10–2 (storage ≈ $0.06 for ≈ 3 GB held; writes ≈ $0.05; the rest is downloads to hosts, free inside the 100 GB with the relay's egress, ≈ $0.087/GB past it) |
+| **Total** | **≈ $19/month** | **≈ $19–22/month** |
 
 Levers when it matters: GHCR instead of ACR saves the $5 registry; a second region is
 another ≈ $14; the next step up is 0.5 vCPU / 1 GiB (≈ $34) for tens of thousands of sockets.

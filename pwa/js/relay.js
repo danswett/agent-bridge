@@ -16,6 +16,11 @@ const OPEN = 1;
 export class Relay {
   #ws = null;
   #chain = Promise.resolve();
+  // Blob store requests waiting for their blob-result, by id.
+  #blobRequests = new Map();
+  #nextBlob = 0;
+  // { max } from ready when the relay has a blob store (blobs.js); null otherwise.
+  blobs = null;
   onData = null;      // (fromDeviceId, payload: Uint8Array) => Promise|void
   onPresence = null;  // (devices: {id, name, kind, since}[]) => void
   onClose = null;     // ({code, reason}) => void, once, after ready
@@ -38,6 +43,8 @@ export class Relay {
       ws.onerror = () => {};
       ws.onclose = (e) => {
         const info = { code: e.code, reason: e.reason ?? '' };
+        for (const [, p] of this.#blobRequests) { p.reject(new Error('the relay connection ended')); }
+        this.#blobRequests.clear();
         if (!ready) { reject(Object.assign(new Error(`the relay closed the connection (${e.code}${e.reason ? ` ${e.reason}` : ''})`), info)); }
         else { this.onClose?.(info); }
       };
@@ -62,9 +69,16 @@ export class Relay {
       } else if (m.t === 'ready') {
         if (m.device !== this.deviceId) { this.close(4000, 'wrong device'); throw new Error('the relay assigned a different device id'); }
         this.login = m.login;
+        this.blobs = m.blobs && Number.isFinite(m.blobs.max) && m.blobs.max > 0 ? { max: m.blobs.max } : null;
         ready();
       } else if (m.t === 'presence') {
         this.onPresence?.(Array.isArray(m.devices) ? m.devices : []);
+      } else if (m.t === 'blob-result') {
+        const p = this.#blobRequests.get(m.id);
+        if (p) {
+          this.#blobRequests.delete(m.id);
+          if (typeof m.error === 'string') { p.reject(Object.assign(new Error(`the relay refused the blob request: ${m.error}`), { relayReason: m.error })); } else { p.resolve(m); }
+        }
       } else if (m.t === 'undeliverable') {
         this.onLog?.(`undeliverable to ${String(m.to).slice(0, 8)}`);
       }
@@ -81,6 +95,24 @@ export class Relay {
   send(peerId, payload) {
     if (!this.open) { throw new Error('not connected to the relay'); }
     this.#ws.send(concat(new Uint8Array([DATA]), unhex(peerId), payload));
+  }
+
+  // The blob store (blobs.js). Each resolves to the relay's result, or rejects with relayReason
+  // set to its refusal (too-large, quota, rate-limited, not-found, ...).
+  blobPut(to, size) { return this.#blobRequest({ t: 'blob-put', to, size }); }
+
+  blobGet(blob) { return this.#blobRequest({ t: 'blob-get', blob }); }
+
+  blobDelete(blob) { return this.#blobRequest({ t: 'blob-delete', blob }).then((r) => r.deleted === true); }
+
+  #blobRequest(message, timeoutMs = 30000) {
+    if (!this.open) { return Promise.reject(new Error('not connected to the relay')); }
+    const id = ++this.#nextBlob;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { if (this.#blobRequests.delete(id)) { reject(new Error('the relay did not answer the blob request')); } }, timeoutMs);
+      this.#blobRequests.set(id, { resolve: (r) => { clearTimeout(timer); resolve(r); }, reject: (e) => { clearTimeout(timer); reject(e); } });
+      this.#ws.send(JSON.stringify({ ...message, id }));
+    });
   }
 
   close(code = 1000, reason = '') {

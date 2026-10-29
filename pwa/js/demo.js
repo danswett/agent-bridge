@@ -7,7 +7,8 @@
 // window.agentBridgeDemo (demo mode only) lets tests and curious people drive it:
 //   upsert(session), remove(id), frame(rawFrame), calls (ops received), pause(),
 //   script(...outcomes) for the next answers, scriptReplies(...outcomes) for the next replies,
-//   host.attachments and host.attachmentLog for the files sent ahead of replies,
+//   host.attachments and host.attachmentLog for the files sent ahead of replies, blobs (the
+//   relay's blob store and storage, in the page) for the large ones,
 //   scriptStops(...outcomes) for the next presses of End session,
 //   scriptLaunches(...outcomes) for the next launches, host.launchOptions for what it offers
 //
@@ -26,6 +27,9 @@ import { checkReply, typedForm } from './replies.js';
 import { readQuestion } from './protocol.js';
 import { USAGE } from './usage.js';
 import { LAUNCH, checkLaunch, flattenPrompt } from './launch.js';
+import { blobIdOf, fromBase64url, openBlob, storedSize, toBase64url } from './blobs.js';
+
+const BLOB_FILE_MAX = 100 * 1024 * 1024;
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const now = () => new Date().toISOString();
@@ -81,17 +85,18 @@ export class DemoHost {
   launchOptions = demoLaunchOptions();
 
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
-  // replying: false, one that can't reply; attaching: false, one that takes no files;
+  // replying: false, one that can't reply; attaching: false, one that takes no files; large:
+  // false, one that takes no files through the blob store;
   // stopping: false, one that can't end sessions; approving: false, one with approving
   // Copilot's permission prompts turned off. stopWindowMs is how long a first press of
   // a busy session waits for its second. usage: false plays a host from before usage.get;
   // launching: false, one that can't launch sessions.
-  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering } = {}) {
+  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering } = {}) {
     this.machine = { id: 'demo', name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : [])];
     this.sessions = new Map();
     for (const s of fixture.sessions ?? []) { this.sessions.set(s.id, s); }
     this.revision = fixture.revision ?? 1;
@@ -157,7 +162,8 @@ export class DemoHost {
   // The host's AttachmentStore, simplified: one file per id, chunks in order, checked
   // against its sha256 once whole. attachmentDelayMs slows each chunk, for watching progress.
   async #attachment(op, data) {
-    this.attachmentLog.push({ op, attachment: data?.attachment, offset: data?.offset, size: data?.size });
+    this.attachmentLog.push({ op, attachment: data?.attachment, offset: data?.offset, size: data?.size, ...(data?.blob ? { blob: true } : {}) });
+    if (op === 'attachment.start' && data?.blob) { return this.#blobAttachment(data); }
     const f = this.attachments.get(data?.attachment);
     if (op === 'attachment.discard') { return { discarded: !!f && !f.used && this.attachments.delete(data.attachment) }; }
     if (op === 'attachment.start') {
@@ -188,6 +194,41 @@ export class DemoHost {
     f.complete = true;
     f.bytes = whole;
     return { received: f.received, complete: true };
+  }
+
+  // A file in the blob store, as the host's AttachmentStore takes one: fetched in the
+  // background from blobStore (a DemoBlobStore), opened, checked against its sha256, then deleted
+  // from the store; attachment.start again reports how far it has got, or why it failed.
+  #blobAttachment(data) {
+    if (!this.capabilities.includes('sessions.attach.blob')) { throw new Error('this host cannot fetch from the blob store now: it is not connected to a relay that has one'); }
+    if (!(data.size > 0 && data.size <= BLOB_FILE_MAX)) { throw new Error(data.size > 0 ? 'the attachment is larger than 100 MiB' : 'the attachment is empty'); }
+    const f = this.attachments.get(data.attachment);
+    if (f) {
+      if (f.failed) { this.attachments.delete(data.attachment); throw new Error(f.failed); }
+      return { received: f.used ? f.size : f.received, complete: f.used || f.complete };
+    }
+    const entry = { name: data.name, type: data.type, size: data.size, sha256: data.sha256, received: 0, complete: false, used: false, blob: true };
+    this.attachments.set(data.attachment, entry);
+    this.#fetchBlob(entry, data.blob);
+    return { received: 0, complete: false };
+  }
+
+  async #fetchBlob(entry, blob) {
+    if (this.attachmentDelayMs) { await new Promise((r) => setTimeout(r, this.attachmentDelayMs)); }
+    const stored = this.blobStore?.read(blob.id);
+    if (!stored) { entry.failed = 'the host could not fetch the attachment from the blob store (the relay refused the blob request: not-found); send it again'; return; }
+    let bytes;
+    try { bytes = await openBlob(stored, entry.size, fromBase64url(blob.key), blobIdOf(blob.id)); } catch (e) {
+      entry.failed = `the attachment in the blob store is not what was sent (${e.message}), so it was dropped; send it again`;
+      this.blobStore.delete(blob.id);
+      return;
+    }
+    const hash = toBase64url(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
+    this.blobStore.delete(blob.id);
+    if (hash !== entry.sha256) { entry.failed = "the attachment's bytes do not match its sha256, so it was dropped; send it again"; return; }
+    entry.bytes = bytes;
+    entry.received = entry.size;
+    entry.complete = true;
   }
 
   scriptAnswers(outcomes) { this.#script.push(...outcomes); }
@@ -462,6 +503,57 @@ function demoLaunchOptions() {
     ],
     defaults: { agent: 'copilot', workspace: 'agent-bridge', permissions: 'ask' },
   };
+}
+
+// The relay's blob store and Azure Storage, in the page: tickets as the relay issues them (the
+// blob's random id first), write-once uploads with progress, reads by the host, deletes. The
+// same interface as blobs.js RelayBlobs. Tests steer it: uploadDelayMs slows an upload so its
+// progress and Cancel can be seen; refuseNextPut gives the next put the relay's refusal;
+// failNextUpload, storage's HTTP status for the next upload.
+export class DemoBlobStore {
+  stored = new Map();
+  log = [];
+  uploadDelayMs = 0;
+  refuseNextPut = null;
+  failNextUpload = 0;
+
+  constructor({ max = storedSize(200 * 1024 * 1024) } = {}) { this.maxStored = max; }
+
+  get max() { return this.maxStored; }
+
+  async put(to, size) {
+    this.log.push({ op: 'put', to, size });
+    const refusal = this.refuseNextPut ?? (size > this.maxStored ? 'too-large' : null);
+    this.refuseNextPut = null;
+    if (refusal) { throw Object.assign(new Error(`the relay refused the blob request: ${refusal}`), { relayReason: refusal }); }
+    const name = toBase64url(crypto.getRandomValues(new Uint8Array(16)));
+    return { blob: `${name}.e30.demo`, url: `https://demo.blob.core.windows.net/blobs/${name}?sp=c`, expires: new Date(Date.now() + 30 * 60000).toISOString() };
+  }
+
+  async upload(url, body, { signal, onProgress } = {}) {
+    const name = new URL(url).pathname.split('/').pop();
+    this.log.push({ op: 'upload', name, size: body.length });
+    for (let step = 1; step <= 10; step++) {
+      signal?.throwIfAborted();
+      if (this.uploadDelayMs) { await new Promise((r) => setTimeout(r, this.uploadDelayMs / 10)); }
+      signal?.throwIfAborted();
+      onProgress?.((body.length * step) / 10);
+    }
+    if (this.failNextUpload) {
+      const status = this.failNextUpload;
+      this.failNextUpload = 0;
+      throw Object.assign(new Error(`storage answered ${status} to the upload`), { status });
+    }
+    if (this.stored.has(name)) { throw Object.assign(new Error('storage answered 409 to the upload'), { status: 409 }); }
+    this.stored.set(name, body.slice());
+  }
+
+  read(ticket) { return this.stored.get(String(ticket).split('.')[0]) ?? null; }
+
+  async delete(ticket) {
+    this.log.push({ op: 'delete' });
+    return this.stored.delete(String(ticket).split('.')[0]);
+  }
 }
 
 export function runScript(host, { tickMs = 4000 } = {}) {

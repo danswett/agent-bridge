@@ -121,7 +121,7 @@ explicit step.
 
 | Page | What it has | Parity source |
 |---|---|---|
-| Sessions | One card per live session of this machine: status and glow (working, waiting, delegating, ending), title, agent, repository, branch, model, current tool, response (Markdown), reasoning, last message, tool history, background agents and commands, turns, compactions; question forms (single and multi choice, Other, boolean, text, number, Copilot permission Approve once / Deny), reply box (Ctrl+Enter, paste an image, attach files), End session with the host's two-press rule; fold per session, persisted, reopened by a new question | PWA cards (`pwa/js/ui`), which mirror `agent-bridge-reply-card.js` |
+| Sessions | One card per live session of this machine: status and glow (working, waiting, delegating, ending), title, agent, repository, branch, model, current tool, response (Markdown), reasoning, last message, tool history, background agents and commands, turns, compactions; question forms (single and multi choice, Other, boolean, text, number, Copilot permission Approve once / Deny), reply box (Ctrl+Enter, paste an image, attach files: up to 100 MiB each in chunks over the pipe, `sessions.attach.direct`, or 256 KiB from an older host, which shrinks a larger image to fit), End session with the host's two-press rule; fold per session, persisted, reopened by a new question | PWA cards (`pwa/js/ui`), which mirror `agent-bridge-reply-card.js` |
 | Usage | Each agent's windows: percent, amber at 75 %, red at 90 %, pace against the window, "resets in" | PWA usage panel |
 | Settings | Host: running, version, profile, pid, start/stop/restart, start at sign-in, log tail; relay: sign in with GitHub (device code shown in the app), machine name, connection state; this machine: approving Copilot permission prompts from other devices (`permissions.remoteApproval`), agent-ha-bridge state; app: show reasoning and tools (the old Detail toggle, kept in the app since every client now gets the full activity), toasts, start the app at sign-in, version and updates | status card, `install.ps1`, `agent-ha-bridge configure` |
 
@@ -153,7 +153,11 @@ reaches the real host or its profile.
 ## Deferred, explicitly
 
 * **Remote machines through the relay** in the app (multi-machine Sessions and Usage,
-  pairing, the Devices page). Next slice: the app opens Noise channels like the PWA.
+  pairing, the Devices page). Next slice: the app opens Noise channels like the PWA. Large
+  attachments to those will go through the relay's blob store as the PWA's do
+  (`sessions.attach.blob`); the app's own machine needs none, since its pipe takes them.
+* **Cancelling a large attachment** part way. The PWA has a Cancel while a file uploads; the
+  app sends over the pipe at local speed and has none yet.
 * **Launch** page: waits for the host's launch and resume ops (another slice in flight).
 * Agent hook registration, migration from agent-ha-bridge and rollback (G4, G8).
 * Code signing, attestations and publishing releases.

@@ -207,9 +207,10 @@ public sealed class SessionCardViewModel : Observable
 
         var replies = caps.Contains(Capabilities.SessionsReply);
         var files = caps.Contains(Capabilities.SessionsAttach);
+        var large = files && caps.Contains(Capabilities.SessionsAttachDirect);
         if (replies && reply is null)
         {
-            Reply = new ReplyViewModel(session, files, ctx.Deliveries, ctx.Host, ctx.Shrinker, name);
+            Reply = new ReplyViewModel(session, files, ctx.Deliveries, ctx.Host, ctx.Shrinker, name, large);
             if (parkedReply is not null) { reply!.TakeDraft(parkedReply); parkedReply = null; }
         }
         else if (!replies && reply is not null)
@@ -219,7 +220,7 @@ public sealed class SessionCardViewModel : Observable
             parkedReply = reply;
             Reply = null;
         }
-        reply?.Update(session, files);
+        reply?.Update(session, files, large);
 
         var stops = caps.Contains(Capabilities.SessionsStop);
         if (stops && end is null) { End = new EndSessionViewModel(session, ctx.Deliveries, name); }

@@ -382,6 +382,14 @@ public static class Capabilities
     public const string SessionsStop = "sessions.stop";
     public const string Push = "push";
     public const string SessionsAttach = "sessions.attach";
+    // attachment.start takes a blob: files up to AttachmentLimits.BlobBytes through the relay's
+    // blob store (docs/protocol/blobs.md). Offered with sessions.attach, on a channel through a
+    // relay that has a blob store.
+    public const string SessionsAttachBlob = "sessions.attach.blob";
+    // attachment.start in chunks takes files up to AttachmentLimits.DirectBytes, not only
+    // AttachmentLimits.Bytes: offered with sessions.attach on a direct channel (the local pipe),
+    // where the bytes cost the relay nothing.
+    public const string SessionsAttachDirect = "sessions.attach.direct";
     // Copilot permission prompts are approved or denied through session.answer on this host.
     public const string SessionsApprove = "sessions.approve";
 }
