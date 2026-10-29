@@ -253,6 +253,25 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void An_event_that_waited_in_the_spool_is_dated_when_its_hook_ran_not_when_it_was_handled()
+    {
+        // Spooled at T0; the host comes back an hour later. Its working status must not read as
+        // newer than the transcript's finished turn since.
+        _f.Processes.Run(AgentKind.Claude, 30);
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        Spooled("0001", "claude", "register", new { session_id = "s1", hook_event_name = "UserPromptSubmit", transcript_path = _f.ClaudeTranscript("s1") }, 30);
+        Spooled("0002", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+
+        Intake().Pass();
+
+        DateTimeOffset At(JsonElement e, string field) => DateTimeOffset.Parse(e.GetProperty(field).GetString()!, System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal(Fixture.T0, At(Registration("agent-bridge-claude", "s1"), "HookStatusAt"));
+        Assert.Equal(Fixture.T0, At(Registration("agent-bridge-codex", "x1"), "Updated"));
+        using var marker = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+        Assert.Equal(Fixture.T0, At(marker.RootElement, "Created"));
+    }
+
+    [Fact]
     public void A_later_Claude_event_without_a_status_or_a_process_keeps_what_was_recorded()
     {
         _f.Processes.Run(AgentKind.Claude, 30);
@@ -361,7 +380,8 @@ public sealed class IntakeTests : IDisposable
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
         Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", _f.Time.GetLocalNow().AddSeconds(-5), 3);
+        // Before the approval was asked (as its hook recorded), though handled after.
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", Fixture.T0.AddSeconds(-5), 3);
         SpoolContract.Record(_f.Runtime, "claude", "stop", "reply", "no daemon heartbeat", _f.Time.GetLocalNow().AddSeconds(5), 3);
         Assert.NotNull(HookStats.LastUnspooled(_f.Runtime, "codex"));
 

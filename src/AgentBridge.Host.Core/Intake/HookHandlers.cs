@@ -80,7 +80,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
                 break;
         }
         var owner = ClaudeOwner(spooled.Ancestors);
-        WriteClaudeRegistration(sessionId, transcript, cwd, owner, status);
+        WriteClaudeRegistration(sessionId, transcript, cwd, owner, status, At(spooled));
         return notice with { OwnerPid = owner > 0 ? owner : null, Status = status };
     }
 
@@ -138,7 +138,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         }
 
         var owner = CodexOwner(sessionId, spooled.Ancestors);
-        WriteCodexRegistration(sessionId, Str(e, "transcript_path"), Str(e, "cwd"), Str(e, "model"), status, activity, owner, ended: eventName == "SessionEnd");
+        WriteCodexRegistration(sessionId, Str(e, "transcript_path"), Str(e, "cwd"), Str(e, "model"), status, activity, owner, ended: eventName == "SessionEnd", At(spooled));
 
         string? approvalId = null;
         if (approval)
@@ -146,7 +146,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             // agent-ha-bridge's generation: the session's node id and the time, so an answer
             // made for one approval is never typed into the next.
             approvalId = $"{NodeId(sessionId)}-{time.GetUtcNow().ToUnixTimeMilliseconds()}";
-            WriteApprovalMarker(sessionId, approvalId, activity);
+            WriteApprovalMarker(sessionId, approvalId, activity, At(spooled));
         }
         return notice with { OwnerPid = owner > 0 ? owner : null, Status = status, ApprovalId = approvalId };
     }
@@ -161,14 +161,14 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
 
     // As Write-ClaudeSessionRegistration: a later event without a pid keeps the one known, and
     // one that sets no status keeps the last recorded, with its time.
-    void WriteClaudeRegistration(string sessionId, string? transcript, string cwd, int pid, string? status)
+    void WriteClaudeRegistration(string sessionId, string? transcript, string cwd, int pid, string? status, string at)
     {
         var path = ClaudePath(sessionId);
         using var existing = ReadJson(path);
         var old = existing?.RootElement;
         if (pid <= 0 && old is { } o && Json.Int(o, "ProcessId") is { } kept) { pid = kept; }
         string hookStatus = "", hookStatusAt = "";
-        if (!string.IsNullOrEmpty(status)) { (hookStatus, hookStatusAt) = (status, Now()); }
+        if (!string.IsNullOrEmpty(status)) { (hookStatus, hookStatusAt) = (status, at); }
         else if (old is { } p && p.TryGetProperty("HookStatus", out _))
         {
             (hookStatus, hookStatusAt) = (Json.Str(p, "HookStatus") ?? "", Json.Str(p, "HookStatusAt") ?? "");
@@ -187,7 +187,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
 
     // As Write-CodexSessionRegistration: later events carry less than SessionStart did, so
     // anything already known is kept rather than blanked.
-    void WriteCodexRegistration(string sessionId, string? transcript, string? cwd, string? model, string status, string activity, int pid, bool ended)
+    void WriteCodexRegistration(string sessionId, string? transcript, string? cwd, string? model, string status, string activity, int pid, bool ended, string at)
     {
         var path = CodexPath(sessionId);
         using var existing = ReadJson(path);
@@ -205,22 +205,31 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             w.WriteString("Status", ended ? "ended" : Keep(status, "Status"));
             w.WriteString("Activity", Keep(activity, "Activity"));
             w.WriteBoolean("Ended", ended);
-            w.WriteString("Updated", Now());
+            w.WriteString("Updated", at);
         });
     }
 
     // As Write-CodexApprovalMarker: the gate an answer is typed through (AnswerService reads it
     // afresh before typing, and agent-ha-bridge's Set-CodexApprovalAttempt claims it).
-    void WriteApprovalMarker(string sessionId, string decisionId, string question) =>
+    void WriteApprovalMarker(string sessionId, string decisionId, string question, string at) =>
         WriteJson(ApprovalPath(sessionId), w =>
         {
             w.WriteString("SessionId", sessionId);
             w.WriteString("DecisionId", decisionId);
             w.WriteString("Question", question);
-            w.WriteString("Created", Now());
+            w.WriteString("Created", at);
         });
 
     string Now() => time.GetLocalNow().ToString("o");
+
+    // When the hook ran, not when the event was handled: an event that waited in the spool (the
+    // host was down) must not read as newer than what the transcript or a lost hook said since.
+    // A clock ahead of this one is not trusted past now.
+    string At(SpoolEvent spooled)
+    {
+        var now = time.GetLocalNow();
+        return (spooled.ReceivedAt is { } received && received < now ? received.ToOffset(now.Offset) : now).ToString("o");
+    }
 
     static JsonDocument? ReadJson(string path)
     {

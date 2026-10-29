@@ -185,6 +185,11 @@ Three rules carry over from agent-ha-bridge:
 * Each file is written whole and renamed into place.
 * The `DecisionId` is `agent_bridge_<node>-<unix ms>`, as agent-ha-bridge names its decisions.
 
+One differs: `HookStatusAt`, a Codex registration's `Updated` and a marker's `Created` are when
+the hook ran (the spooled `receivedAt`), not when the event was handled. The daemon used the
+time it handled it, which was almost always the same. Here an event can wait in the spool while
+the host is down, and must not then read as newer than what the transcript said since.
+
 Discovery (`RegistrationDiscovery`) and the answer path (`ApprovalMarkerRead`,
 `AnswerService`) read these unchanged. On a rollback, agent-ha-bridge's daemon reads them too.
 
