@@ -155,7 +155,7 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Equal("ask", (string?)settings["launch"]!["permissions"]);
         Assert.Equal("opus", (string?)settings["launch"]!["agents"]!["claude"]!["model"]);
         Assert.Equal("high", (string?)settings["launch"]!["agents"]!["codex"]!["effort"]);
-        Assert.Equal("C:\\tools\\claude.exe", (string?)settings["launch"]!["agents"]!["claude"]!["path"]);
+        Assert.Equal(FakeAgentHaBridge.Rooted("tools", "claude.exe"), (string?)settings["launch"]!["agents"]!["claude"]!["path"]);
         Assert.Equal("--verbose", (string?)settings["launch"]!["agents"]!["codex"]!["extraArgs"]![0]);
         Assert.Equal(12, (double)settings["launch"]!["worktrees"]!["idleHours"]!);
         Assert.Equal("http://ha.example:8123", (string?)settings["homeAssistant"]!["baseUrl"]);
@@ -306,7 +306,8 @@ public sealed class MigrationTests : IAsyncLifetime
     public async Task A_profile_with_its_own_settings_keeps_them_over_agent_ha_bridges()
     {
         var hostConfig = Path.Combine(_f.Profile, "config.json");
-        var mine = "{\r\n  \"version\": 1,\r\n  \"launch\": {\r\n    \"defaultAgent\": \"copilot\",\r\n    \"workspaces\": [ { \"path\": \"C:\\\\other\", \"label\": \"app\" } ]\r\n  }\r\n}\r\n";
+        var other = FakeAgentHaBridge.Rooted("other");
+        var mine = "{\r\n  \"version\": 1,\r\n  \"launch\": {\r\n    \"defaultAgent\": \"copilot\",\r\n    \"workspaces\": [ { \"path\": " + System.Text.Json.JsonSerializer.Serialize(other) + ", \"label\": \"app\" } ]\r\n  }\r\n}\r\n";
         File.WriteAllText(hostConfig, mine);
 
         var report = await _f.Migrator().MigrateAsync(dryRun: false);
@@ -316,7 +317,7 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Contains("the label app is already this profile's", report.ToString());
         var settings = JsonNode.Parse(Text(hostConfig))!;
         Assert.Equal("copilot", (string?)settings["launch"]!["defaultAgent"]);
-        Assert.Equal(["C:\\other", "C:\\repos\\docs"], settings["launch"]!["workspaces"]!.AsArray().Select(w => w is JsonObject o ? (string)o["path"]! : (string)w!));
+        Assert.Equal([other, FakeAgentHaBridge.Rooted("repos", "docs")], settings["launch"]!["workspaces"]!.AsArray().Select(w => w is JsonObject o ? (string)o["path"]! : (string)w!));
 
         Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
         Assert.Equal(mine, Text(hostConfig));

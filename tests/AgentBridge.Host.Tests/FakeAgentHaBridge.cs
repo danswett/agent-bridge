@@ -122,6 +122,9 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
         Hook = new InProcessHook();
     }
 
+    // An absolute path on this platform: the settings carried over must load here.
+    public static string Rooted(params string[] parts) => Path.Combine([OperatingSystem.IsWindows() ? "C:\\" : "/", .. parts]);
+
     public static JsonObject DefaultConfig() => new()
     {
         ["homeAssistant"] = new JsonObject
@@ -132,13 +135,13 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
         ["newSession"] = new JsonObject
         {
             ["enabled"] = true,
-            ["workspaces"] = new JsonArray(new JsonObject { ["label"] = "app", ["path"] = "C:\\repos\\app", ["isolate"] = true }, "C:\\repos\\docs"),
+            ["workspaces"] = new JsonArray(new JsonObject { ["label"] = "app", ["path"] = Rooted("repos", "app"), ["isolate"] = true }, Rooted("repos", "docs")),
             ["defaultWorkspace"] = "app", ["launcher"] = "claude", ["profiles"] = new JsonArray("work"), ["defaultProfile"] = "work",
             ["resumeCount"] = 80, ["allowAllTools"] = false,
             ["model"] = new JsonObject { ["copilot"] = "gpt-5", ["claude"] = "opus" },
             ["effort"] = new JsonObject { ["codex"] = "high" },
             ["extraArgs"] = new JsonArray("--verbose"),
-            ["claudePath"] = "C:\\tools\\claude.exe",
+            ["claudePath"] = Rooted("tools", "claude.exe"),
             ["worktreeRoot"] = "~/repos/wt", ["worktreeLimit"] = 10, ["worktreeIdleHours"] = 12,
             ["codexStartPrompt"] = "hi", ["discoverWorkspaces"] = true,
         },
