@@ -193,7 +193,7 @@ permission prompts goes beyond it, at the user's request:
 | Agent | Prompt | `kind` | Answered | `delivered` when |
 |---|---|---|---|---|
 | Copilot CLI | `ask_user`: free text, or a form of `choice`, `multi`, `boolean`, `text` and `number` fields | `form` | Yes | Its `human_response.recorded` (or, for free text, its completion) holds the answer typed |
-| Copilot CLI | Permission request for a shell command, path access, a file edit or read, a URL, an MCP tool or a custom tool | `approval` | Yes, with `sessions.approve`: approve once or deny, nothing that grants more | Its `permission.completed` for that request records `approved` (approve) or `denied-interactively-by-user` with no message (deny) |
+| Copilot CLI | Permission request for a shell command, path access, a file edit or read, a URL, an MCP tool or a custom tool | `approval` | Yes, with `sessions.approve`: approve once or deny, nothing that grants more | Its `permission.completed` for that request records `approved` (approve), or `denied-interactively-by-user` with no message or `cancelled` followed by the session's abort of the turn (deny) |
 | Copilot CLI | Any other permission request (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read, or any on a host with `permissions.remoteApproval` off | `approval` | No: `answerAtMachine` | |
 | Claude Code | `AskUserQuestion`: one to four questions, each a `choice` or a `multi` of its options | `form` | Yes, but not with free text (no field has `allowOther`), and a `multi` needs at least one option | The `tool_result` for its `tool_use` id records every question's answer as typed |
 | Claude Code | Permission prompt (from agent-ha-bridge's hook) | `approval` | No: `answerAtMachine` | |
@@ -213,8 +213,11 @@ no longer waiting or now reads differently from what the client was shown.
 The answer is `{ "decision": "approve" }` or `{ "decision": "deny" }`, nothing else.
 Approve is the prompt's plain "Yes", once: no option that grants more ("don't ask again",
 "remember this path", "approve for the session", read-only directory access) can ever be
-chosen remotely. Deny is the prompt's "No" with no message to Copilot; a deny takes no
-text, so nothing can be typed into the prompt's message box.
+chosen remotely. Deny is the prompt's "No" with no message to Copilot, taken by Escape as at
+the machine, which also **stops Copilot's turn**: the command does not run, and Copilot does
+not go on to try something else unattended. The session is then idle, and a reply can tell
+it what to do instead. A deny takes no text, so nothing can be typed into the prompt's
+message box.
 
 Immediately before typing, the host checks the transcript (that request still waiting and
 reading as shown, and no other prompt waiting that the screen could be showing instead),

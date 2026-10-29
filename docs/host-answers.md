@@ -122,9 +122,12 @@ again after, so what the screen showed was this request while it was still waiti
 request to run outside the sandbox, a kind not listed
 above, or one whose details cannot be read is `answerAtMachine`.
 
-Delivered when that request's `permission.completed` records `approved` for an approve,
-or `denied-interactively-by-user` with no feedback for a deny. Anything else recorded
-(`approved-for-session`, a message, the other decision), the session ending, or nothing
+Delivered when that request's `permission.completed` records `approved` for an approve.
+For a deny, it is `denied-interactively-by-user` with no feedback, or what Escape on
+"No (Esc to stop)" actually records (seen live with Copilot CLI 1.0.105): `cancelled`
+("Session aborted") followed by the session's own `abort` of the turn. A `cancelled` with
+no abort after it never counts. Anything else recorded (`approved-for-session`, a message,
+the other decision), the session ending, or nothing
 within 15 s is `unconfirmed`. The digit was chosen from the plain "Yes" row and checked at
 the moment it was typed, which is what makes an approval once; the record confirms the
 request was approved.

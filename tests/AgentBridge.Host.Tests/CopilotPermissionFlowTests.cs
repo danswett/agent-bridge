@@ -97,6 +97,43 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
         Assert.Equal((KeyPlan.Escape, false, Prompt.Length), (send.Text, send.Enter, send.Expect!.Count));
     }
 
+    [Fact]
+    public async Task Deny_is_delivered_when_Copilot_records_the_request_cancelled_and_then_stops_the_turn()
+    {
+        // What Escape on "No (Esc to stop)" recorded live with Copilot CLI 1.0.105.
+        injector.OnInject = _ => Fixture.Append(events,
+            Copilot.Event("permission.completed", new { requestId = "r1", toolCallId = "c1", result = new { kind = "cancelled", reason = "Session aborted" } }, second++),
+            Copilot.Event("abort", new { reason = "user_initiated" }, second++));
+
+        var result = await Answerer().AnswerAsync(Request("deny"));
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), result);
+    }
+
+    [Fact]
+    public async Task A_cancel_the_turn_does_not_stop_after_is_not_taken_for_a_deny()
+    {
+        injector.OnInject = _ => Fixture.Append(events,
+            Copilot.Event("permission.completed", new { requestId = "r1", toolCallId = "c1", result = new { kind = "cancelled" } }, second++));
+
+        var result = await Answerer().AnswerAsync(Request("deny"));
+
+        Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
+        Assert.Contains("cancelled", result.Reason);
+    }
+
+    [Fact]
+    public async Task A_cancel_and_stopped_turn_is_never_taken_for_an_approval()
+    {
+        injector.OnInject = _ => Fixture.Append(events,
+            Copilot.Event("permission.completed", new { requestId = "r1", toolCallId = "c1", result = new { kind = "cancelled" } }, second++),
+            Copilot.Event("abort", new { reason = "user_initiated" }, second++));
+
+        var result = await Answerer().AnswerAsync(Request("approve"));
+
+        Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
+    }
+
     [Theory]
     [InlineData("approve", "approved-for-session", null)]
     [InlineData("approve", "denied-interactively-by-user", null)]

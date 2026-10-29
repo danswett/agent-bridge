@@ -318,9 +318,16 @@ public sealed class AnswerService : ISessionAnswerer
             var result = CopilotPermissionTranscript.Since(transcript, requestId, from);
             if (result.Kind is { } kind)
             {
-                if (approve ? kind == "approved" : kind == "denied-interactively-by-user" && !result.Feedback)
+                if (approve ? kind == "approved" : (kind == "denied-interactively-by-user" && !result.Feedback) || (kind == "cancelled" && result.StoppedAfter))
                 {
                     return new AnswerResult(AnswerOutcome.Delivered);
+                }
+                // A cancel is a denial only once the person's abort of the turn follows it, which
+                // Copilot writes a few milliseconds later; until then, look again.
+                if (!approve && kind == "cancelled" && options.Time.GetElapsedTime(started) < options.ConfirmTimeout)
+                {
+                    await Task.Delay(options.PollInterval, options.Time);
+                    continue;
                 }
                 return Unconfirmed($"Copilot recorded the request as {(kind.Length == 0 ? "answered" : kind)}{(result.Feedback ? " with a message" : "")}, not {(approve ? "approved" : "denied")}; check at the machine");
             }
