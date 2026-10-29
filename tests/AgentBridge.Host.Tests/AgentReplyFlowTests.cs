@@ -332,6 +332,27 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_Claude_reply_whose_file_Claude_reads_with_its_Read_tool_is_delivered_but_a_failed_read_is_not()
+    {
+        console.Rows = ClaudeIdle();
+        var ok = true;
+        console.OnInject = plan =>
+        {
+            var line = Typed(plan);
+            var path = line.Split(' ')[0][1..];
+            var id = "toolu_" + Guid.NewGuid().ToString("N");
+            Fixture.Append(claude, ClaudePrompt(line),
+                Claude.Assistant(second++, "tool_use", Claude.ToolUse(id, "Read", new JsonObject { ["file_path"] = path })),
+                Claude.ToolResult(id, second++, error: !ok));
+        };
+
+        Assert.Equal(AnswerOutcome.Delivered, (await ReplyAsync(ClaudeId, "look", Upload(Png(300)))).Outcome);
+
+        ok = false;
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await ReplyAsync(ClaudeId, "look again", Upload(Png(300)))).Outcome);
+    }
+
+    [Fact]
     public async Task A_Claude_reply_whose_file_is_never_read_is_unconfirmed()
     {
         console.Rows = ClaudeIdle();
