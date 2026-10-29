@@ -126,8 +126,10 @@ completely:
 
 Those all belong to the daemon then, and two consumers would handle each event twice. It
 takes the spool again once the daemon is gone. Every read is of a copy in memory, through a
-handle that shares delete, so a reader never makes another consumer's delete fail. A future
-shadow mode (#40) reads the same way and never deletes.
+handle that shares delete, so a reader never makes another consumer's delete fail. The shadow
+comparison (#40, `docs/host-shadow.md`) never reads the spool at all. It does read the
+heartbeat as the daemon's, so it is for a machine before it migrates: once migrated the
+heartbeat is the host's.
 
 **Each pass**, as `Invoke-DaemonHookSpool`:
 
