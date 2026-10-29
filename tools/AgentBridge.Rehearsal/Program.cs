@@ -23,6 +23,12 @@ internal static class Program
             Console.Error.WriteLine(e.Message);
             return 2;
         }
+        // Checked before the step runs, so a mistyped id never leaves a check unrecorded.
+        if (p.Option("--step") is { } named && !Evidence.ValidStep(named))
+        {
+            Console.Error.WriteLine("--step is letters, digits and '-' only, up to 40 characters");
+            return 2;
+        }
         var evidence = new Evidence(p.Option("--evidence") ?? Environment.GetEnvironmentVariable("AGENT_BRIDGE_REHEARSAL_EVIDENCE") ?? "rehearsal-evidence");
         Outcome outcome;
         try { outcome = await RunAsync(p, evidence, CancellationToken.None); }

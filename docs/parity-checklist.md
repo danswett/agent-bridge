@@ -106,9 +106,9 @@ $base = 'C:\rehearsal\evidence\baseline-S1.json'
   * `marks.json`;
   * `screens\<step>.png`.
 
-  `agent-bridge-rehearsal report --checklist docs\parity-checklist.md` lists the latest
-  attempt of each step, in Pacific time, and the steps not yet run. Keep the folder with the
-  run.
+  `agent-bridge-rehearsal report --checklist docs\parity-checklist.md`, run from the checkout's
+  root, lists the latest attempt of each step, in Pacific time, and the steps not yet run.
+  Keep the folder with the run.
 * **Marks.** Run `agent-bridge-rehearsal mark <id>` *before* acting on a session.
   The `expect` checks read only what the session's transcript and the host log gained since
   the mark, so the evidence is the record the step produced, never an older one that
