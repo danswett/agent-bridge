@@ -29,6 +29,21 @@ public class AttachmentTests
     }
 
     [Fact]
+    public void A_start_from_the_blob_store_takes_files_of_up_to_100_MiB_with_the_relays_ticket_and_a_32_byte_key()
+    {
+        var blob = new BlobRef { Id = "AAAAAAAAAAAAAAAAAAAAAA.eyJmIjoiIn0.c2ln", Key = Attachments.Base64Url(new byte[32]) };
+        var start = Start(size: AttachmentLimits.BlobBytes) with { Blob = blob };
+
+        Assert.Null(Attachments.Check(start));
+        Assert.Equal("the attachment is larger than 100 MiB", Attachments.Check(start with { Size = AttachmentLimits.BlobBytes + 1 }));
+        Assert.Equal("blob.key must be 32 bytes, base64url without padding", Attachments.Check(start with { Blob = blob with { Key = Attachments.Base64Url(new byte[16]) } }));
+        Assert.Equal("blob.id must be the relay's ticket for the blob", Attachments.Check(start with { Blob = blob with { Id = "" } }));
+        Assert.Equal("blob.id must be the relay's ticket for the blob", Attachments.Check(start with { Blob = blob with { Id = "a b" } }));
+        Assert.Equal("blob.id must be the relay's ticket for the blob", Attachments.Check(start with { Blob = blob with { Id = new string('a', AttachmentLimits.BlobId + 1) } }));
+        Assert.Equal(start, JsonSerializer.Deserialize<AttachmentStart>(JsonSerializer.Serialize(start, ProtocolJson.Options), ProtocolJson.Options));
+    }
+
+    [Fact]
     public void A_chunk_carries_at_most_11_KiB_of_base64_so_its_request_stays_under_16_KiB_as_sent()
     {
         var full = new AttachmentChunk { Attachment = Id, Offset = AttachmentLimits.Bytes - AttachmentLimits.Chunk, Data = Convert.ToBase64String(new byte[AttachmentLimits.Chunk]) };

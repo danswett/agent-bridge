@@ -2,6 +2,8 @@
 // real one does (attachment.start and attachment.chunk, checked against their sha256) and
 // types them as @ mentions ahead of the words. Picking, pasting, removing, the size limit and
 // shrinking a large image, progress, a refusal that keeps them, and a host that takes none.
+// Files over 256 KiB through the relay's blob store, simulated in the page (DemoBlobStore):
+// sealed and uploaded with progress, fetched and checked by the host, cancelled, refused.
 import { test, expect } from '@playwright/test';
 
 const IDLE = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
@@ -104,8 +106,8 @@ test.describe('on a phone', () => {
     expect((await typed(page))[0].files.map((f) => f.name)).toEqual(['keep.md']);
   });
 
-  test('a file over 256 KiB is refused with the reason, and a large image is made smaller to fit', async ({ page }) => {
-    await openDemo(page);
+  test('on a machine without the blob store, a file over 256 KiB is refused with the reason, and a large image is made smaller to fit', async ({ page }) => {
+    await openDemo(page, '&blobs=0');
     const reply = box(page);
     await pick(page, { name: 'logs.zip', mimeType: 'application/zip', buffer: Buffer.alloc(300 * 1024) });
     await expect(reply.getByRole('alert')).toHaveText("Couldn't attach logs.zip: logs.zip is 300 KiB, over the 256 KiB limit for an attachment.");
@@ -188,4 +190,82 @@ test('a machine that takes replies but not files offers no Attach, and a pasted 
   const capabilities = await page.evaluate(() => window.agentBridgeDemo.host.capabilities);
   expect(capabilities).toEqual(expect.arrayContaining(['sessions.read', 'sessions.answer', 'sessions.reply', 'sessions.stop']));
   expect(capabilities).not.toContain('sessions.attach');
+});
+
+test.describe('large files, through the blob store', () => {
+  test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
+
+  const photo = (name = 'IMG_0042.jpg', size = 3 * 1024 * 1024) => ({ name, mimeType: 'image/jpeg', buffer: Buffer.from(Array.from({ length: size }, (_, i) => (i * 7 + 3) & 0xff)) });
+  const blobs = (page) => page.evaluate(() => ({ log: window.agentBridgeDemo.blobs.log.map((l) => l.op), stored: window.agentBridgeDemo.blobs.stored.size }));
+
+  test('a phone photo over 256 KiB goes as it is, with upload progress, and the session gets it like any attachment', async ({ page }) => {
+    await openDemo(page, '&uploadDelay=1500');
+    const reply = box(page);
+    await pick(page, photo());
+    const chip = reply.locator('.attachment');
+    await expect(chip.locator('.attachment-name')).toHaveText('IMG_0042.jpg');
+    await expect(chip.locator('.attachment-size')).toHaveText('3.0 MiB');
+
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('What is in this photo?');
+    await reply.getByRole('button', { name: 'Send' }).tap();
+    await expect(reply.locator('.reply-status')).toHaveText(/^Uploading the attachment… \d+%$/);
+    await expect(reply.getByRole('button', { name: 'Cancel' })).toBeVisible();
+    await expect(reply).toHaveAttribute('data-reply', 'delivered', { timeout: 15000 });
+    await expect(reply.getByRole('button', { name: 'Cancel' })).toBeHidden();
+
+    const [sent] = await typed(page);
+    expect(sent.said).toMatch(new RegExp(`${STAGED.source}IMG_0042\\.jpg What is in this photo\\?$`));
+    expect(sent.files).toEqual([{ name: 'IMG_0042.jpg', type: 'image/jpeg', size: 3 * 1024 * 1024 }]);
+    // Named to the host with its key, never chunked through the channel; the host deleted the
+    // blob once it had checked it.
+    expect(await page.evaluate(() => window.agentBridgeDemo.host.attachmentLog.every((l) => l.op === 'attachment.start' && l.blob))).toBe(true);
+    expect(await blobs(page)).toEqual({ log: ['put', 'upload', 'delete'], stored: 0 });
+  });
+
+  test('an upload can be cancelled before the reply goes; the photo stays, and Send sends it', async ({ page }) => {
+    await openDemo(page, '&uploadDelay=8000');
+    const reply = box(page);
+    await pick(page, photo());
+    await reply.getByRole('button', { name: 'Send' }).tap();
+    await reply.getByRole('button', { name: 'Cancel' }).tap();
+    await expect(reply.locator('.reply-status')).toHaveText('Cancelled. Nothing was sent to the session.');
+    await expect(reply.locator('.attachment-name')).toHaveText(['IMG_0042.jpg']);
+    await expect(reply.getByRole('button', { name: 'Try again' })).toBeHidden();
+    expect(await typed(page)).toHaveLength(0);
+
+    await page.evaluate(() => { window.agentBridgeDemo.blobs.uploadDelayMs = 0; });
+    await reply.getByRole('button', { name: 'Send' }).tap();
+    await expect(reply).toHaveAttribute('data-reply', 'delivered', { timeout: 15000 });
+    expect(await typed(page)).toHaveLength(1);
+  });
+
+  test('a file over what the machine takes through the blob store is refused with the limit', async ({ page }) => {
+    // A relay taking blobs of at most 3 MiB stored.
+    await openDemo(page, `&blobMax=${3 * 1024 * 1024}`);
+    const reply = box(page);
+    await pick(page, { name: 'logs.zip', mimeType: 'application/zip', buffer: Buffer.alloc(5 * 1024 * 1024) });
+    await expect(reply.getByRole('alert')).toHaveText("Couldn't attach logs.zip: logs.zip is 5.0 MiB, over the 3.0 MiB limit for an attachment.");
+    await expect(reply.locator('.attachment')).toHaveCount(0);
+  });
+
+  test('the relay refusing a large file says why, and keeps it in the box', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page);
+    await pick(page, photo('scan.pdf'));
+    await page.evaluate(() => { window.agentBridgeDemo.blobs.refuseNextPut = 'quota'; });
+    await reply.getByRole('button', { name: 'Send' }).tap();
+    await expect(reply.locator('.reply-status')).toHaveText("Couldn't send it: the relay's daily allowance for large attachments is used up; try again tomorrow, or send files of up to 256 KiB.");
+    await expect(reply.locator('.attachment-name')).toHaveText(['scan.pdf']);
+    expect(await typed(page)).toHaveLength(0);
+  });
+
+  test('a small file still goes through the channel, not the blob store', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page);
+    await pick(page, textFile('notes.md'));
+    await reply.getByRole('button', { name: 'Send' }).tap();
+    await expect(reply).toHaveAttribute('data-reply', 'delivered');
+    expect(await ops(page)).toEqual(['attachment.start', 'attachment.chunk']);
+    expect((await blobs(page)).log).toEqual([]);
+  });
 });

@@ -95,7 +95,7 @@ public sealed class DemoHost : IAsyncDisposable
         {
             case Ops.Hello:
                 return Done(new HelloResult(1, new MachineInfo("demo", "Demo machine", "windows", version, Dev: true, Sessions: Count),
-                    [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, UsageProtocol.Capability, HostOps.Capability]));
+                    [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, UsageProtocol.Capability, HostOps.Capability]));
             case HostOps.Status or HostOps.Subscribe:
                 return Done(Status());
             case UsageProtocol.Get or UsageProtocol.Subscribe:

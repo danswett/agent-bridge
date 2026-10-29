@@ -175,6 +175,10 @@ public sealed class SessionService
         if (answers?.ApprovesPermissions == true) { offered.Add(Capabilities.SessionsApprove); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }
         if (attachments is not null && replies?.TakesAttachments == true) { offered.Add(Capabilities.SessionsAttach); }
+        // Large files come through the blob store of the relay this channel came through; an app on
+        // this machine has no use for it, and sends them in chunks over its own pipe instead.
+        if (attachments is not null && replies?.TakesAttachments == true && channel is SecureChannel && attachments.BlobBytes > 0) { offered.Add(Capabilities.SessionsAttachBlob); }
+        if (attachments is not null && replies?.TakesAttachments == true && Direct(channel)) { offered.Add(Capabilities.SessionsAttachDirect); }
         if (stops?.Available == true) { offered.Add(Capabilities.SessionsStop); }
         // Web Push is for devices through the relay; an app on this machine has its own toasts.
         if (push is not null && channel is SecureChannel) { offered.Add(Capabilities.Push); }
@@ -193,6 +197,10 @@ public sealed class SessionService
         return await replies.ReplyAsync(request, channel.PeerId);
     }
 
+    // Only this machine's own pipe is direct: anything through the relay keeps the 256 KiB cap
+    // in chunks, which keeps the relay's bulk lane cheap (design §4.6).
+    static bool Direct(IProtocolChannel channel) => channel is AgentBridge.Local.LocalChannel;
+
     // attachment.*: the files a reply will carry, held for the device that sends them. A check
     // that fails fails the request, with the reason.
     object Attach(IProtocolChannel channel, string op, JsonElement data)
@@ -200,7 +208,7 @@ public sealed class SessionService
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException($"{op} needs an attachment"); }
         return op switch
         {
-            Ops.AttachmentStart => attachments!.Start(channel.PeerId, data.Deserialize<AttachmentStart>(ProtocolJson.Options)!),
+            Ops.AttachmentStart => attachments!.Start(channel.PeerId, data.Deserialize<AttachmentStart>(ProtocolJson.Options)!, Direct(channel)),
             Ops.AttachmentChunk => attachments!.Chunk(channel.PeerId, data.Deserialize<AttachmentChunk>(ProtocolJson.Options)!),
             _ => new AttachmentDiscarded(attachments!.Discard(channel.PeerId, data.Deserialize<AttachmentDiscard>(ProtocolJson.Options)!.Attachment)),
         };

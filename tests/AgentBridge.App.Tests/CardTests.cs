@@ -226,6 +226,31 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task On_a_host_that_takes_large_files_over_its_pipe_a_file_over_256_KiB_goes_as_it_is_in_chunks()
+    {
+        host.On(Ops.AttachmentStart, _ => new AttachmentState(0, false));
+        long received = 0;
+        host.On(Ops.AttachmentChunk, d => { received += Convert.FromBase64String(d.GetProperty("data").GetString()!).Length; return new AttachmentState(received, received == 300_000); });
+        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Delivered));
+        var r = new ReplyViewModel(Make.Session(), attach: true, deliveries, connection, new Shrinker(), large: true);
+
+        await r.AddAsync("report.pdf", "application/pdf", new byte[300_000]);
+        var file = Assert.Single(r.Attachments);
+        Assert.Equal((300_000L, false), (file.Size, file.Resized));
+        r.Refuse("video.mp4", "video/mp4", 150L * 1024 * 1024);
+        Assert.Equal("Couldn't attach video.mp4: it is 150.0 MiB, over the 100.0 MiB limit for an attachment.", r.Error);
+        r.Send();
+
+        await Wait.UntilAsync(() => r.StatusText == "Delivered. The session has your reply.", "delivered");
+        Assert.Equal(300_000, received);
+        Assert.Equal(300_000L, host.Sent(Ops.AttachmentStart)[0].GetProperty("size").GetInt64());
+
+        // A host that stops offering them takes 256 KiB again.
+        r.Update(Make.Session(), takesFiles: true);
+        Assert.Equal(AttachmentLimits.Bytes, r.MaxBytes);
+    }
+
+    [Fact]
     public async Task End_session_on_a_working_session_takes_a_second_press_with_the_hosts_token_inside_the_window()
     {
         var presses = 0;

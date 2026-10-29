@@ -25,6 +25,10 @@ public static class RelayApp
         builder.Services.AddSingleton<Tokens>();
         builder.Services.AddSingleton<RelayHub>();
         builder.Services.AddSingleton<PushGateway>();
+        // The backend is made once, here, so a misconfigured store fails at start, not at the
+        // first upload.
+        var blobBackend = BlobService.CreateBackend(options.Blobs);
+        builder.Services.AddSingleton(sp => new BlobService(options, sp.GetRequiredService<RelayMetrics>(), sp.GetRequiredService<ILogger<BlobService>>(), blobBackend));
         builder.Services.AddSingleton(sp => new RelayMetrics(sp.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(), () => sp.GetRequiredService<RelayHub>().Online));
         // The slim builder's console logger stays on the simple formatter whatever the configuration
         // says, so a deployment that asks for JSON lines (infra/ does) got plain text, silently.
@@ -36,7 +40,8 @@ public static class RelayApp
         builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
         builder.WebHost.ConfigureKestrel(k =>
         {
-            // The only request bodies are sign-in JSON of a few hundred bytes. WebSocket
+            // The only request bodies are sign-in JSON of a few hundred bytes (and, on a dev
+            // stack's local blob store only, uploads, which raise it per request). WebSocket
             // frames are bounded separately, by Wire.MaxFrame.
             k.Limits.MaxRequestBodySize = 16 * 1024;
             // Memory per replica is the binding limit (design §5.9). Past this a replica
@@ -77,7 +82,12 @@ public static class RelayApp
                 ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
                 _ => new FixedWindowRateLimiterOptions { PermitLimit = options.MaxConnectsPerMinutePerIp, Window = TimeSpan.FromMinutes(1) }));
         });
-        builder.Services.AddCors(o => o.AddPolicy("pwa", p => p.WithOrigins(options.AllowedOrigins).WithMethods("GET", "POST").WithHeaders("content-type")));
+        builder.Services.AddCors(o =>
+        {
+            o.AddPolicy("pwa", p => p.WithOrigins(options.AllowedOrigins).WithMethods("GET", "POST").WithHeaders("content-type"));
+            // Only a dev stack serves blobs itself; Azure Storage has its own CORS rules (infra/).
+            o.AddPolicy("dev-blobs", p => p.WithOrigins(options.AllowedOrigins).WithMethods("GET", "PUT").WithHeaders("content-type", "x-ms-blob-type"));
+        });
         builderHook?.Invoke(builder);
 
         var app = builder.Build();
@@ -199,6 +209,8 @@ public static class RelayApp
             await hub.RunAsync(ws, ctx.RequestAborted);
         }).RequireRateLimiting("connect");
 
+        if (blobBackend is LocalBlobBackend local) { MapLocalBlobs(app, local, options.Blobs); }
+
         return app;
 
         async Task RevokeAsync(HttpClient gh, string githubToken, ILogger log)
@@ -223,6 +235,29 @@ public static class RelayApp
     {
         metrics.SignedIn("refused");
         return Results.BadRequest(new { error });
+    }
+
+    // The local backend's half of the Blob REST API: Put Blob (create only) and Get Blob on
+    // URLs the relay signed, with Azure's status codes for what clients look at.
+    static void MapLocalBlobs(WebApplication app, LocalBlobBackend local, BlobOptions o)
+    {
+        app.MapPut(LocalBlobBackend.PathPrefix + "{name}", async (string name, HttpContext ctx) =>
+        {
+            var q = ctx.Request.Query;
+            if (!local.Allows(name, "c", q["sp"], q["se"], q["sig"], o.Time.GetUtcNow())) { return Results.StatusCode(StatusCodes.Status403Forbidden); }
+            if (ctx.Request.Headers["x-ms-blob-type"] != "BlockBlob") { return Results.BadRequest(); }
+            ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>()!.MaxRequestBodySize = o.MaxBytes;
+            using var ms = new MemoryStream();
+            try { await ctx.Request.Body.CopyToAsync(ms); }
+            catch (BadHttpRequestException) { return Results.StatusCode(StatusCodes.Status413PayloadTooLarge); }
+            return local.TryCreate(name, ms.ToArray()) ? Results.StatusCode(StatusCodes.Status201Created) : Results.Conflict();
+        }).RequireCors("dev-blobs");
+        app.MapGet(LocalBlobBackend.PathPrefix + "{name}", (string name, HttpContext ctx) =>
+        {
+            var q = ctx.Request.Query;
+            if (!local.Allows(name, "r", q["sp"], q["se"], q["sig"], o.Time.GetUtcNow())) { return Results.StatusCode(StatusCodes.Status403Forbidden); }
+            return local.Read(name) is { } bytes ? Results.Bytes(bytes, "application/octet-stream") : Results.NotFound();
+        }).RequireCors("dev-blobs");
     }
 
     public sealed record TokenRequest(string? DeviceCode);

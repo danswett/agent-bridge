@@ -348,4 +348,278 @@ public sealed class AttachmentStoreTests : IDisposable
 
         Assert.Equal([@"C:\s\a.png"], prompt.Attachments);
     }
+
+    // ---- large files, from the blob store ----
+
+    // Plays the relay's blob store: the file each blob opens to, or a failure, and the blobs
+    // deleted once fetched.
+    sealed class FakeBlobs : IBlobSource
+    {
+        public long MaxBytes { get; set; } = AttachmentLimits.BlobBytes;
+        public readonly Dictionary<string, byte[]> Files = [];
+        public Exception? Failure;
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool Hold;
+        public readonly List<string> Forgotten = [];
+
+        public async Task FetchAsync(BlobRef blob, long size, Stream output, Action<long> progress, CancellationToken cancellationToken)
+        {
+            if (Hold) { await Release.Task.WaitAsync(cancellationToken); }
+            if (Failure is { } e) { throw e; }
+            var bytes = Files[blob.Id];
+            await output.WriteAsync(bytes.AsMemory(0, bytes.Length / 2), cancellationToken);
+            progress(bytes.Length / 2);
+            await output.WriteAsync(bytes.AsMemory(bytes.Length / 2), cancellationToken);
+            progress(bytes.Length);
+        }
+
+        public Task ForgetAsync(BlobRef blob)
+        {
+            lock (Forgotten) { Forgotten.Add(blob.Id); }
+            return Task.CompletedTask;
+        }
+    }
+
+    AttachmentStore WithBlobs(FakeBlobs blobs) => new(new AttachmentOptions { StagingRoot = Staging, Time = time }, sweep: false, blobs: blobs);
+
+    static AttachmentStart FromBlob(byte[] bytes, FakeBlobs blobs, string name = "IMG_0001.png", byte[]? contents = null)
+    {
+        var id = Guid.NewGuid().ToString("N");
+        blobs.Files[id] = contents ?? bytes;
+        return Start(bytes, name) with { Blob = new BlobRef { Id = id, Key = Attachments.Base64Url(RandomNumberGenerator.GetBytes(32)) } };
+    }
+
+    // As a client watches a fetch: attachment.start again until the host has it all.
+    static async Task<AttachmentState> FetchedAsync(AttachmentStore s, AttachmentStart start, string peer = Phone)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (true)
+        {
+            var state = s.Start(peer, start);
+            if (state.Complete) { return state; }
+            if (DateTime.UtcNow > deadline) { throw new TimeoutException("the fetch never finished"); }
+            await Task.Delay(10);
+        }
+    }
+
+    string Incoming => Path.Combine(Staging, "incoming");
+
+    static async Task UntilAsync(Func<bool> condition, string what)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline) { throw new TimeoutException($"timed out waiting for {what}"); }
+            await Task.Delay(10);
+        }
+    }
+
+    [Fact]
+    public async Task A_file_from_the_blob_store_is_fetched_into_a_private_folder_staged_like_any_other_and_deleted_from_the_store()
+    {
+        var blobs = new FakeBlobs();
+        using var s = WithBlobs(blobs);
+        var photo = Png(3 * 1024 * 1024 + 7);
+        var start = FromBlob(photo, blobs, "IMG 0001.png");
+
+        Assert.Equal(new AttachmentState(0, false), s.Start(Phone, start));
+        Assert.Equal(new AttachmentState(photo.Length, true), await FetchedAsync(s, start));
+        var fetched = Assert.Single(Directory.GetFiles(Incoming));
+        Assert.True(PrivateFolder.IsPrivate(Incoming));
+        await UntilAsync(() => { lock (blobs.Forgotten) { return blobs.Forgotten.Count == 1; } }, "the blob to be deleted from the store");
+        Assert.Equal([start.Blob!.Id], blobs.Forgotten);
+
+        var (claim, problem) = s.Claim(Phone, Refs(start));
+        Assert.Null(problem);
+        var staged = Assert.Single(s.Stage(claim!));
+        Assert.Matches("^[0-9a-f]{32}-IMG-0001\\.png$", Path.GetFileName(staged));
+        Assert.Equal(photo, File.ReadAllBytes(staged));
+        if (!OperatingSystem.IsWindows()) { Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(staged)); }
+
+        s.Consume(claim!);
+        Assert.False(File.Exists(fetched));
+        Assert.True(File.Exists(staged));
+        Assert.Equal(new AttachmentState(photo.Length, true), s.Start(Phone, start));
+    }
+
+    [Fact]
+    public async Task A_fetched_file_that_does_not_match_its_sha256_is_refused_and_deleted_everywhere()
+    {
+        var blobs = new FakeBlobs();
+        using var s = WithBlobs(blobs);
+        var start = FromBlob(Png(500_000), blobs, contents: Png(500_000));
+
+        s.Start(Phone, start);
+        var e = await WaitForFailureAsync(s, start);
+
+        Assert.Equal("the attachment's bytes do not match its sha256, so it was dropped; send it again", e.Message);
+        Assert.Empty(Directory.GetFiles(Incoming));
+        await UntilAsync(() => { lock (blobs.Forgotten) { return blobs.Forgotten.Count == 1; } }, "the blob to be deleted from the store");
+        Assert.Equal([start.Blob!.Id], blobs.Forgotten);
+        Assert.Contains("is not on the host", s.Claim(Phone, Refs(start)).Problem);
+    }
+
+    [Fact]
+    public async Task A_blob_that_is_not_what_was_sealed_is_refused_with_the_reason_and_one_out_of_reach_is_kept_for_another_try()
+    {
+        var blobs = new FakeBlobs { Failure = new InvalidDataException("a part of the blob was changed, moved or is not from this blob") };
+        using var s = WithBlobs(blobs);
+        var tampered = FromBlob(Png(1000), blobs);
+        s.Start(Phone, tampered);
+        Assert.Equal("the attachment in the blob store is not what was sent (a part of the blob was changed, moved or is not from this blob), so it was dropped; send it again",
+            (await WaitForFailureAsync(s, tampered)).Message);
+        await UntilAsync(() => { lock (blobs.Forgotten) { return blobs.Forgotten.Count == 1; } }, "the blob to be deleted from the store");
+        Assert.Equal([tampered.Blob!.Id], blobs.Forgotten);
+
+        blobs.Failure = new HttpRequestException("storage answered 503 to the download");
+        var unreachable = FromBlob(Png(1000), blobs);
+        s.Start(Phone, unreachable);
+        Assert.Contains("could not fetch the attachment from the blob store (storage answered 503", (await WaitForFailureAsync(s, unreachable)).Message);
+        Assert.DoesNotContain(unreachable.Blob!.Id, blobs.Forgotten);
+    }
+
+    static async Task<Exception> WaitForFailureAsync(AttachmentStore s, AttachmentStart start)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            try { s.Start(Phone, start); }
+            catch (InvalidOperationException e) { return e; }
+            await Task.Delay(10);
+        }
+        throw new TimeoutException("the fetch never failed");
+    }
+
+    [Fact]
+    public void A_large_file_needs_a_blob_store_and_must_fit_what_it_and_the_protocol_allow()
+    {
+        var blobs = new FakeBlobs { MaxBytes = 0 };
+        using var s = WithBlobs(blobs);
+        var start = FromBlob(Png(1000), blobs);
+
+        Assert.Equal("this host cannot fetch from the blob store now: it is not connected to a relay that has one", Assert.Throws<InvalidOperationException>(() => s.Start(Phone, start)).Message);
+        Assert.Equal("this host cannot fetch from the blob store now: it is not connected to a relay that has one", Assert.Throws<InvalidOperationException>(() => store.Start(Phone, start)).Message);
+        blobs.MaxBytes = 1024 * 1024;
+        Assert.Equal("the attachment is larger than the 1 MiB this host can fetch", Assert.Throws<ArgumentException>(() => s.Start(Phone, start with { Size = 2 * 1024 * 1024 })).Message);
+        Assert.Equal("the attachment is larger than 100 MiB", Assert.Throws<ArgumentException>(() => s.Start(Phone, start with { Size = AttachmentLimits.BlobBytes + 1 })).Message);
+        Assert.Equal("blob.key must be 32 bytes, base64url without padding", Assert.Throws<ArgumentException>(() => s.Start(Phone, start with { Blob = start.Blob! with { Key = "short" } })).Message);
+        Assert.Equal(0, s.Count);
+    }
+
+    [Fact]
+    public async Task A_large_file_is_the_sending_devices_alone_and_removing_it_stops_its_fetch_and_deletes_what_arrived()
+    {
+        var blobs = new FakeBlobs { Hold = true };
+        using var s = WithBlobs(blobs);
+        var start = FromBlob(Png(2000), blobs);
+        s.Start(Phone, start);
+        await UntilAsync(() => Directory.Exists(Incoming) && Directory.GetFiles(Incoming).Length == 1, "the fetch to start");
+
+        Assert.Contains("is not on the host", s.Claim(Laptop, Refs(start)).Problem);
+        Assert.Contains("has not finished arriving", s.Claim(Phone, Refs(start)).Problem);
+        Assert.False(s.Discard(Laptop, start.Attachment));
+        Assert.True(s.Discard(Phone, start.Attachment));
+
+        await UntilAsync(() => Directory.GetFiles(Incoming).Length == 0, "the fetched file to be deleted");
+        Assert.Equal(0, s.Count);
+    }
+
+    [Fact]
+    public void The_sweep_deletes_fetched_files_no_attachment_is_waiting_for_and_nothing_else()
+    {
+        Directory.CreateDirectory(Incoming);
+        var orphan = Path.Combine(Incoming, "0123456789abcdef0123456789abcdef.part");
+        var stranger = Path.Combine(Incoming, "notes.txt");
+        File.WriteAllText(orphan, "x");
+        File.WriteAllText(stranger, "x");
+
+        store.Sweep();
+
+        Assert.False(File.Exists(orphan));
+        Assert.True(File.Exists(stranger));
+    }
+
+    [Fact]
+    public void The_sweep_never_deletes_the_file_of_a_large_attachment_that_started_while_it_ran()
+    {
+        var bytes = Png(AttachmentLimits.Bytes + 1);
+        var late = Start(bytes, "late.png");
+        AttachmentStore? s = null;
+        // The sweep logs between its staged and incoming passes: an upload starts and finishes
+        // right there, leaving its file closed (an open one could not be deleted on Windows).
+        s = new AttachmentStore(new AttachmentOptions { StagingRoot = Staging, Time = time }, log: line =>
+        {
+            if (!line.StartsWith("removed 1 staged", StringComparison.Ordinal)) { return; }
+            var state = s!.Start(Phone, late, direct: true);
+            while (!state.Complete) { state = s.Chunk(Phone, Chunk(late, bytes, state.Received, (int)Math.Min(AttachmentLimits.Chunk, bytes.Length - state.Received))); }
+        }, sweep: false);
+        using var _ = s;
+        Directory.CreateDirectory(Staging);
+        var old = Path.Combine(Staging, "0123456789abcdef0123456789abcdef-shot.png");
+        File.WriteAllText(old, "x");
+        File.SetLastWriteTimeUtc(old, (time.GetUtcNow() - TimeSpan.FromHours(25)).UtcDateTime);
+
+        s.Sweep();
+
+        Assert.False(File.Exists(old));
+        Assert.Single(Directory.GetFiles(Incoming));
+        Assert.Equal(bytes, File.ReadAllBytes(Assert.Single(s.Stage(s.Claim(Phone, Refs(late)).Claim!))));
+    }
+
+    // As the app on this machine sends one over its pipe: chunk by chunk, past 256 KiB.
+    AttachmentStart UploadDirect(AttachmentStore s, byte[] bytes, AttachmentStart? given = null)
+    {
+        var start = given ?? Start(bytes, "report.png");
+        var state = s.Start(Phone, start, direct: true);
+        while (!state.Complete)
+        {
+            var n = (int)Math.Min(AttachmentLimits.Chunk, bytes.Length - state.Received);
+            state = s.Chunk(Phone, Chunk(start, bytes, state.Received, n));
+        }
+        return start;
+    }
+
+    [Fact]
+    public void A_file_over_256_KiB_from_a_direct_channel_is_written_to_the_private_folder_as_it_arrives_and_staged_from_there()
+    {
+        var bytes = Png(AttachmentLimits.Bytes * 3 + 5);
+        var start = Start(bytes, "report.png");
+
+        Assert.Equal("the attachment is larger than 256 KiB", Assert.Throws<ArgumentException>(() => store.Start(Phone, start)).Message);
+        Assert.Equal("the attachment is larger than 100 MiB", Assert.Throws<ArgumentException>(() => store.Start(Phone, start with { Size = AttachmentLimits.DirectBytes + 1 }, direct: true)).Message);
+        store.Start(Phone, start, direct: true);
+        store.Chunk(Phone, Chunk(start, bytes, 0, AttachmentLimits.Chunk));
+        var part = Assert.Single(Directory.GetFiles(Incoming));
+        Assert.Equal(AttachmentLimits.Chunk, new FileInfo(part).Length);
+        if (OperatingSystem.IsWindows()) { AssertOnlyMe(Incoming); }
+        Assert.True(store.Discard(Phone, start.Attachment));
+        Assert.Empty(Directory.GetFiles(Incoming));
+
+        var again = UploadDirect(store, bytes);
+        var claim = store.Claim(Phone, Refs(again)).Claim!;
+        var staged = Assert.Single(store.Stage(claim));
+        Assert.Equal(bytes, File.ReadAllBytes(staged));
+        store.Consume(claim);
+        Assert.Empty(Directory.GetFiles(Incoming));
+    }
+
+    [Fact]
+    public void A_direct_file_that_does_not_match_its_sha256_is_dropped_with_what_was_written_and_large_files_share_one_budget_on_disk()
+    {
+        var bytes = Png(AttachmentLimits.Bytes + 1);
+        var wrong = Start(bytes, "report.png") with { Sha256 = Attachments.Base64Url(SHA256.HashData(Png(10))) };
+
+        var e = Assert.Throws<ArgumentException>(() => UploadDirect(store, bytes, wrong));
+
+        Assert.Equal("the attachment's bytes do not match its sha256, so it was dropped; send it again", e.Message);
+        Assert.Equal(0, store.Count);
+        Assert.Empty(Directory.GetFiles(Incoming));
+
+        using var small = new AttachmentStore(new AttachmentOptions { StagingRoot = Staging, Time = time, MaxHeldBlobBytes = 2L * bytes.Length - 1 }, sweep: false);
+        small.Start(Phone, Start(bytes, "a.png"), direct: true);
+        Assert.StartsWith("the host is already holding 0 MiB of large attachments", Assert.Throws<InvalidOperationException>(() => small.Start(Phone, Start(bytes, "b.png"), direct: true)).Message);
+        // Ones small enough for memory do not count against it.
+        small.Start(Phone, Start(Png(100), "c.png"), direct: true);
+        Assert.Equal(2, small.Count);
+    }
 }

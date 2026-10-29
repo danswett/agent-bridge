@@ -35,7 +35,9 @@ import { UsageBook, USAGE, machineStatus } from './usage.js';
 import { FleetStatus } from './fleet.js';
 import { UsageView } from './ui/usage-view.js';
 import { LaunchPanel } from './ui/launch-view.js';
-import { DemoHost, runScript } from './demo.js';
+import { DemoBlobStore, DemoHost, runScript } from './demo.js';
+import { RelayBlobs, maxPlain } from './blobs.js';
+import { AttachmentLimits } from './attachments.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -158,6 +160,13 @@ function registerServiceWorker() {
   $('reload').onclick = () => location.reload();
 }
 
+// The largest file a reply can carry through the blob store: what the machine and the relay
+// both take, and never over the protocol's 100 MiB; 0 when either has none.
+function largeLimit(capabilities, relayMax) {
+  if (!capabilities?.includes(Capabilities.sessionsAttachBlob) || !(relayMax > 0)) { return 0; }
+  return Math.min(AttachmentLimits.blobBytes, maxPlain(relayMax));
+}
+
 // ---- demo ----
 async function startDemo() {
   $('demo-banner').hidden = false;
@@ -168,6 +177,8 @@ async function startDemo() {
     answering: params.get('answer') !== '0',
     replying: params.get('reply') !== '0' && params.get('answer') !== '0',
     attaching: params.get('attach') !== '0',
+    // ?blobs=0: a host that takes no files through the blob store, as before it existed.
+    large: params.get('blobs') !== '0',
     stopping: params.get('stop') !== '0' && params.get('answer') !== '0',
   approving: params.get('approve') !== '0',
     stopWindowMs: Number(params.get('stopWindow')) || 10000,
@@ -176,6 +187,11 @@ async function startDemo() {
   });
   // ?attachDelay= slows each file chunk, so its progress can be watched.
   host.attachmentDelayMs = Number(params.get('attachDelay')) || 0;
+  // The relay's blob store, in the page. ?blobMax= sets the largest blob it takes (stored bytes),
+  // ?uploadDelay= slows each upload.
+  const blobStore = new DemoBlobStore(params.get('blobMax') ? { max: Number(params.get('blobMax')) } : {});
+  blobStore.uploadDelayMs = Number(params.get('uploadDelay')) || 0;
+  host.blobStore = blobStore;
   // ?timeout= shortens how long a request waits for its response, for the tests of resends.
   const timeoutMs = Number(params.get('timeout')) || 0;
   const client = new HostClient(host.connect(), { store, ...(timeoutMs ? { timeoutMs, answerTimeoutMs: timeoutMs, replyTimeoutMs: timeoutMs, stopTimeoutMs: timeoutMs, launchTimeoutMs: timeoutMs } : {}) });
@@ -184,10 +200,11 @@ async function startDemo() {
   const current = () => ({ client, hostId: hello.machine.id });
   const retryMs = Number(params.get('retry')) || 3000;
   const answers = new AnswerService({ current, retryMs });
-  const replies = new ReplyService({ current, retryMs });
+  const replies = new ReplyService({ current, retryMs, blobs: () => blobStore });
   const stops = new StopService({ current, retryMs });
   const launches = new LaunchService({ current, retryMs });
-  answering = () => ({ service: answers, replies, stops, hostId: hello.machine.id, capabilities: hello.capabilities });
+  const largeAttachments = () => largeLimit(hello.capabilities, blobStore.max);
+  answering = () => ({ service: answers, replies, stops, hostId: hello.machine.id, capabilities: hello.capabilities, largeAttachments });
   $('machines').hidden = false;
   const drawMachine = () => renderMachines($('machine-list'), {
     presence: [{ id: hello.machine.id, name: hello.machine.name, kind: 'host' }],
@@ -211,7 +228,7 @@ async function startDemo() {
   }
   const script = params.get('static') === '1' ? null : runScript(host, { tickMs: Number(params.get('tick')) || 4000 });
   window.agentBridgeDemo = {
-    host, client, store, view, answers, replies, stops, launches, launchPanel, book,
+    host, client, store, view, answers, replies, stops, launches, launchPanel, book, blobs: blobStore,
     // A new usage report from the host, sent as usage.update.
     usage: (report) => host.setUsage(report),
     // The next answers' outcomes, in order: 'delivered' (the default once these run out),
@@ -294,11 +311,15 @@ function begin(account) {
   // after a reconnect, one still waiting for its outcome is resent with the same request.
   const current = () => (hosts.phase === 'open' && hosts.client ? { client: hosts.client, hostId: hosts.targetId } : null);
   const answers = new AnswerService({ current });
-  const replies = new ReplyService({ current });
+  // Large files go through the blob store of the relay this page is connected to, when it has
+  // one and the machine fetches from it (sessions.attach.blob).
+  const relayBlobs = () => (connection.relay ? new RelayBlobs(connection.relay) : null);
+  const replies = new ReplyService({ current, blobs: relayBlobs });
   const stops = new StopService({ current });
   const launches = new LaunchService({ current });
   const launchPanel = new LaunchPanel($('launch'), { service: launches, jump: showSession });
-  answering = () => (hosts.targetId ? { service: answers, replies, stops, hostId: hosts.targetId, capabilities: hosts.capabilities } : null);
+  const largeAttachments = () => largeLimit(hosts.capabilities, connection.relay?.blobs?.max ?? 0);
+  answering = () => (hosts.targetId ? { service: answers, replies, stops, hostId: hosts.targetId, capabilities: hosts.capabilities, largeAttachments } : null);
   let shownCapabilities = '';
 
   // ---- notifications ----

@@ -2,7 +2,7 @@
 // talks to, and puts the Content-Security-Policy in the page (GitHub Pages cannot send
 // headers). The tests serve exactly this output, so they run under the same policy.
 //
-//   node tools/build-site.mjs --out <dir> [--relay https://relay.example]
+//   node tools/build-site.mjs --out <dir> [--relay https://relay.example] [--blob-origin https://<account>.blob.core.windows.net]
 import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -20,17 +20,29 @@ export function relayOrigin(relay) {
   return u.origin;
 }
 
-export function contentSecurityPolicy(relay) {
+// The relay's blob store, where large attachments are uploaded straight from the page: an Azure
+// Storage account's blob endpoint, and nothing else.
+export function blobOrigin(url) {
+  let u = null;
+  try { u = new URL(url); } catch { /* refused below */ }
+  if (!u || u.protocol !== 'https:' || !/^[a-z0-9]{3,24}\.blob\.core\.windows\.net$/.test(u.hostname) || u.origin !== url.replace(/\/$/, '')) {
+    throw new Error(`--blob-origin must be an origin like https://account.blob.core.windows.net, not ${url}`);
+  }
+  return u.origin;
+}
+
+export function contentSecurityPolicy(relay, blobOrigins = []) {
   const origin = relayOrigin(relay);
   // 'self' does not cover WebSockets in every Safari, so the socket origin is named too.
-  const connect = origin ? ` ${origin} ${origin.replace(/^http/, 'ws')}` : '';
-  // Scripts and styles only from this site, network only to the relay: a page that holds
-  // the device key must not be able to load or send anything else. blob: images are the
-  // thumbnails of files about to be attached, made in the page from their own bytes.
+  const connect = (origin ? ` ${origin} ${origin.replace(/^http/, 'ws')}` : '') + blobOrigins.map((b) => ` ${blobOrigin(b)}`).join('');
+  // Scripts and styles only from this site, network only to the relay and its blob store: a
+  // page that holds the device key must not be able to load or send anything else. blob:
+  // images are the thumbnails of files about to be attached, made in the page from their own
+  // bytes.
   return `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'${connect}; object-src 'none'; base-uri 'none'; form-action 'none'`;
 }
 
-export function buildSite({ out, relay = '', root = appRoot }) {
+export function buildSite({ out, relay = '', blobOrigins = [], root = appRoot }) {
   const origin = relayOrigin(relay);
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
@@ -40,7 +52,7 @@ export function buildSite({ out, relay = '', root = appRoot }) {
   const html = readFileSync(index, 'utf8');
   const marker = '<meta charset="utf-8">';
   if (!html.includes(marker)) { throw new Error('index.html has no <meta charset="utf-8"> to put the policy after'); }
-  const csp = contentSecurityPolicy(origin).replace(/"/g, '&quot;');
+  const csp = contentSecurityPolicy(origin, blobOrigins).replace(/"/g, '&quot;');
   writeFileSync(index, html.replace(marker, `${marker}\n  <meta http-equiv="Content-Security-Policy" content="${csp}">`));
   stampWorker(out);
   return out;
@@ -72,7 +84,7 @@ function stampWorker(out) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const arg = (name) => { const k = process.argv.indexOf(name); return k > 0 ? process.argv[k + 1] : undefined; };
   const out = arg('--out');
-  if (!out) { console.error('usage: build-site.mjs --out <dir> [--relay <origin>]'); process.exit(2); }
-  buildSite({ out: path.resolve(out), relay: arg('--relay') ?? '' });
+  if (!out) { console.error('usage: build-site.mjs --out <dir> [--relay <origin>] [--blob-origin <origin>]'); process.exit(2); }
+  buildSite({ out: path.resolve(out), relay: arg('--relay') ?? '', blobOrigins: arg('--blob-origin') ? [arg('--blob-origin')] : [] });
   console.log(`built ${out}${arg('--relay') ? ` for ${arg('--relay')}` : ''}`);
 }

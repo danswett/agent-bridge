@@ -15,16 +15,30 @@ namespace AgentBridge.Transport.Tests;
 public class RelayDeploymentTests
 {
     [Fact]
-    public async Task The_smoke_test_passes_against_a_working_relay_with_two_devices_talking()
+    public async Task The_smoke_test_passes_against_a_working_relay_with_two_devices_talking_and_a_file_through_its_blob_store()
     {
         var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-        await using var relay = await TestRelay.StartAsync(o => { o.TokenKey = key; o.Version = "abc123"; });
+        await using var relay = await TestRelay.StartAsync(o => { o.TokenKey = key; o.Version = "abc123"; o.Blobs.Backend = "local"; });
         var output = new StringWriter();
 
-        var ok = await new Smoke(relay.Url, output) { TokenKey = key, AllowedOrigin = "https://pwa.example", ExpectVersion = "abc123", ExpectPush = true }.RunAsync();
+        var ok = await new Smoke(relay.Url, output) { TokenKey = key, AllowedOrigin = "https://pwa.example", ExpectVersion = "abc123", ExpectPush = true, ExpectBlobs = true }.RunAsync();
 
         Assert.True(ok, output.ToString());
         Assert.Contains("PASS two devices over a Noise channel", output.ToString());
+        Assert.Contains("PASS a multi-MB file through the blob store", output.ToString());
+    }
+
+    [Fact]
+    public async Task The_smoke_test_fails_when_a_blob_store_is_expected_and_the_relay_has_none()
+    {
+        var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        await using var relay = await TestRelay.StartAsync(o => o.TokenKey = key);
+        var output = new StringWriter();
+
+        var ok = await new Smoke(relay.Url, output) { TokenKey = key, ExpectPush = true, ExpectBlobs = true }.RunAsync();
+
+        Assert.False(ok);
+        Assert.Contains("FAIL a multi-MB file through the blob store: the relay has no blob store", output.ToString());
     }
 
     [Fact]
@@ -110,7 +124,7 @@ public class RelayDeploymentTests
         listener.SetMeasurementEventCallback<long>((i, _, tags, _) => { lock (seen) { foreach (var t in tags) { seen.Add((i.Name, t.Key)); } } });
         listener.SetMeasurementEventCallback<int>((i, _, tags, _) => { lock (seen) { foreach (var t in tags) { seen.Add((i.Name, t.Key)); } } });
         listener.Start();
-        await using var relay = await TestRelay.StartAsync();
+        await using var relay = await TestRelay.StartAsync(o => o.Blobs.Backend = "local");
         await relay.SignInAsync(new GitHubUser(1, "octo"));
         var token = relay.TokenFor(1, "octo");
         var host = await relay.ConnectAsync(token, "host-a", "host");
@@ -119,6 +133,8 @@ public class RelayDeploymentTests
         var ch = await app.Hub.OpenAsync(host.Id);
         await ch.RequestAsync("ping");
         await app.Relay.PushAsync("https://push.example/x", [1]);
+        await app.Relay.BlobPutAsync(host.Id, 4096);
+        await Assert.ThrowsAsync<BlobRefusedException>(() => app.Relay.BlobGetAsync("not.a.ticket"));
         await Assert.ThrowsAsync<RelayRefusedException>(() => RelayClient.ConnectAsync(relay.Url, token + "x", P256KeyPair.Generate(), "x", "test"));
         await host.DisposeAsync();
         listener.RecordObservableInstruments();
@@ -127,6 +143,7 @@ public class RelayDeploymentTests
         {
             Assert.Contains(seen, s => s.Instrument == "relay.connects");
             Assert.Contains(seen, s => s.Instrument == "relay.refusals");
+            Assert.Contains(seen, s => s.Instrument == "relay.blobs");
             Assert.All(seen, s => Assert.Contains(s.Tag, RelayMetrics.AllowedTags));
         }
     }

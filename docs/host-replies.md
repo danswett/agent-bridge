@@ -50,6 +50,24 @@ The phone sends each file ahead of the reply (`attachment.start`, `attachment.ch
 `AttachmentStore` holds it in memory for that device, checks its SHA-256, and stages it
 only when a reply that names it is about to be typed.
 
+**Large files.** A file over 256 KiB, up to 100 MiB, comes one of two ways, and is held on
+disk, never in memory or a shared TEMP:
+
+* From a device through the relay, through the relay's **blob store**
+  ([protocol/blobs.md](protocol/blobs.md)): the phone seals it with a key of its own,
+  uploads it straight to Azure Storage, and names it in `attachment.start` with that key.
+  The host fetches it on its own relay connection (`RelayBlobs`, at most two at once),
+  opens it record by record into `<staging>\incoming\<32 hex>.part`, checks its size and
+  SHA-256, and deletes the blob from the store, whether it checked out or not. A failure is
+  said once, to the next `attachment.start` for it.
+* From the app on this machine, in chunks over the **local pipe**
+  (`sessions.attach.direct`), written to the same `incoming\` file as it arrives, hashed as
+  it goes.
+
+At most 1 GiB of these are held at once. Staging copies one into the staging folder like any
+other; once typed, or dropped, its `incoming\` file is deleted, and the sweep deletes any
+there no held attachment is using (all of them at start-up).
+
 **How Copilot gets the file.** Exactly as agent-ha-bridge does it: the staged path as an
 `@<path>` mention for each file, in order, then the words, trimmed, as one line, typed as
 any reply is (one burst, then Enter). Copilot CLI records such a prompt with the mentions
@@ -77,11 +95,12 @@ a link. A reply that
 types nothing deletes its copies at once. Held files no reply uses go after 15 minutes. The
 log says how many files and how many KiB, never their names.
 
-**Differences from agent-ha-bridge.** Images and other files take one path, up to 256 KiB
-each, through the end-to-end channel; Home Assistant's image store took images of any size.
-The phone shrinks a larger photo or screenshot to fit before sending it (see the PWA), and
-the blob store will lift the limit. Only Copilot sessions take replies here, so only they
-take attachments; agent-ha-bridge also typed them into Claude Code and Codex.
+**Differences from agent-ha-bridge.** Images and other files take one path each way: up to
+256 KiB through the end-to-end channel, and up to 100 MiB through the blob store, end to end
+encrypted; Home Assistant's image store took images of any size, and other files only up to
+256 KiB. Against a relay without a blob store the phone keeps to 256 KiB and shrinks a larger
+photo or screenshot to fit (see the PWA). Only Copilot sessions take replies here, so only
+they take attachments; agent-ha-bridge also typed them into Claude Code and Codex.
 
 ## Before and after typing
 

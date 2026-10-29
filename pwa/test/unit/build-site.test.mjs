@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { cpSync, readFileSync, readdirSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildSite } from '../../tools/build-site.mjs';
+import { buildSite, contentSecurityPolicy } from '../../tools/build-site.mjs';
 
 const pwa = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const scratch = path.join(pwa, '.site', 'unit-build');
@@ -45,4 +45,12 @@ test('the offline shell holds every script the app is made of, so it starts with
     .map((f) => `js/${f.split(path.sep).join('/')}`)
     .filter((f) => f.endsWith('.js'));
   assert.deepEqual(scripts.filter((f) => !shell.has(f)), []);
+});
+
+test('the page may reach the relay and the one storage account its blob store uses, and nothing else', () => {
+  const csp = contentSecurityPolicy('https://relay.example', ['https://abblobprodwus2.blob.core.windows.net']);
+  assert.match(csp, /connect-src 'self' https:\/\/relay\.example wss:\/\/relay\.example https:\/\/abblobprodwus2\.blob\.core\.windows\.net;/);
+  for (const bad of ['https://evil.example', 'http://acct.blob.core.windows.net', 'https://acct.blob.core.windows.net/path', "https://acct.blob.core.windows.net; script-src *"]) {
+    assert.throws(() => contentSecurityPolicy('https://relay.example', [bad]), /--blob-origin must be an origin/);
+  }
 });

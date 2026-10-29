@@ -20,6 +20,9 @@ public sealed class Smoke(Uri relay, TextWriter output)
     public string? AllowedOrigin { get; init; }
     public string? ExpectVersion { get; init; }
     public bool ExpectPush { get; init; }
+    // The relay must have a blob store, and a multi-MB file must round-trip through it.
+    public bool ExpectBlobs { get; init; }
+    public int BlobBytes { get; init; } = 5 * 1024 * 1024 + 123;
     // A staging replica scaled to zero takes a while to start; production should answer at once.
     public TimeSpan StartupWait { get; init; } = TimeSpan.FromMinutes(3);
     public TimeSpan StepTimeout { get; init; } = TimeSpan.FromSeconds(30);
@@ -36,7 +39,7 @@ public sealed class Smoke(Uri relay, TextWriter output)
         }
         if (Arg("--relay") is not { } url || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
         {
-            Console.Error.WriteLine("usage: relay-smoke --relay <https://...> [--origin <allowed web origin>] [--expect-version <v>] [--expect-push] [--wait <seconds>]");
+            Console.Error.WriteLine("usage: relay-smoke --relay <https://...> [--origin <allowed web origin>] [--expect-version <v>] [--expect-push] [--expect-blobs] [--wait <seconds>]");
             Console.Error.WriteLine("  RELAY_SMOKE_TOKEN_KEY: the relay's token key (base64). With it, two devices are connected and talk.");
             return 2;
         }
@@ -46,6 +49,7 @@ public sealed class Smoke(Uri relay, TextWriter output)
             AllowedOrigin = Arg("--origin"),
             ExpectVersion = Arg("--expect-version"),
             ExpectPush = args.Contains("--expect-push"),
+            ExpectBlobs = args.Contains("--expect-blobs"),
             StartupWait = Arg("--wait") is { } w ? TimeSpan.FromSeconds(int.Parse(w)) : TimeSpan.FromMinutes(3),
         };
         return await smoke.RunAsync() ? 0 : 1;
@@ -98,6 +102,7 @@ public sealed class Smoke(Uri relay, TextWriter output)
         else
         {
             await Step("two devices over a Noise channel", TwoDevicesAsync);
+            await Step("a multi-MB file through the blob store", BlobsAsync);
         }
         output.WriteLine(failures == 0 ? "smoke: all checks passed" : $"smoke: {failures} check(s) failed");
         return failures == 0;
@@ -169,6 +174,59 @@ public sealed class Smoke(Uri relay, TextWriter output)
         }
     }
 
+    // As a phone sends a photo to a host: sealed, uploaded straight to storage on a write-once
+    // URL, fetched by the receiver alone, opened, checked and deleted. Another device of the
+    // account and a device of another account are refused. Skipped, not failed, on a relay
+    // without a blob store unless --expect-blobs says it must have one.
+    async Task BlobsAsync()
+    {
+        var tokens = new Tokens(new RelayOptions { TokenKey = TokenKey, TokenLifetime = TimeSpan.FromMinutes(10) }, NullLogger<Tokens>.Instance);
+        string Token(string who) => tokens.Issue(new Account("smoke-" + RandomNumberGenerator.GetHexString(12, lowercase: true), who)).Token;
+        var token = Token("relay-smoke");
+        using var sendKey = P256KeyPair.Generate();
+        using var receiveKey = P256KeyPair.Generate();
+        using var otherKey = P256KeyPair.Generate();
+        using var strangerKey = P256KeyPair.Generate();
+        await using var sender = await RelayClient.ConnectAsync(relay, token, sendKey, "smoke phone", "test", Timeout());
+        if (sender.BlobMaxBytes == 0)
+        {
+            Expect(!ExpectBlobs, "the relay has no blob store");
+            output.WriteLine("     no blob store on this relay; skipped");
+            return;
+        }
+        await using var receiver = await RelayClient.ConnectAsync(relay, token, receiveKey, "smoke host", "test", Timeout());
+        await using var other = await RelayClient.ConnectAsync(relay, token, otherKey, "smoke laptop", "test", Timeout());
+        await using var stranger = await RelayClient.ConnectAsync(relay, Token("relay-smoke-other"), strangerKey, "smoke stranger", "test", Timeout());
+        using var http = BlobHttp.CreateClient();
+        var file = RandomNumberGenerator.GetBytes(BlobBytes);
+
+        var sw = Stopwatch.StartNew();
+        var sent = await BlobTransfer.SendAsync(sender, http, receiver.DeviceId, file, Timeout(TimeSpan.FromMinutes(2)));
+        var up = sw.Elapsed;
+        foreach (var (who, device) in new[] { ("another device of the account", other), ("a device of another account", stranger) })
+        {
+            try
+            {
+                await device.BlobGetAsync(sent.Blob, Timeout());
+                Expect(false, $"{who} could read the blob");
+            }
+            catch (BlobRefusedException e) { Expect(e.Reason == "not-found", $"{who} was refused with {e.Reason}, not not-found"); }
+        }
+        sw.Restart();
+        var received = new MemoryStream();
+        var hash = await BlobTransfer.ReceiveAsync(receiver, http, sent.Blob, sent.Key, file.Length, received, ct: Timeout(TimeSpan.FromMinutes(2)));
+        var down = sw.Elapsed;
+        Expect(received.ToArray().AsSpan().SequenceEqual(file) && hash.AsSpan().SequenceEqual(sent.Sha256), "the file came back different");
+        Expect(await receiver.BlobDeleteAsync(sent.Blob, Timeout()), "the receiver could not delete the blob");
+        try
+        {
+            await receiver.BlobGetAsync(sent.Blob, Timeout());
+            Expect(false, "a deleted blob could still be read");
+        }
+        catch (BlobRefusedException e) { Expect(e.Reason == "not-found", $"a deleted blob was refused with {e.Reason}, not not-found"); }
+        output.WriteLine($"     {file.Length / 1048576.0:F1} MiB: up {up.TotalMilliseconds:F0} ms, down {down.TotalMilliseconds:F0} ms");
+    }
+
     async Task<string?> PreflightAsync(string origin)
     {
         using var req = new HttpRequestMessage(HttpMethod.Options, new Uri(relay, "/v1/auth/token"));
@@ -192,7 +250,7 @@ public sealed class Smoke(Uri relay, TextWriter output)
         catch (WebSocketException) { return false; }
     }
 
-    CancellationToken Timeout() => new CancellationTokenSource(StepTimeout).Token;
+    CancellationToken Timeout(TimeSpan? limit = null) => new CancellationTokenSource(limit ?? StepTimeout).Token;
 
     sealed class CheckFailed(string message) : Exception(message);
 

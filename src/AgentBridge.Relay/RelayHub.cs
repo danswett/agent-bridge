@@ -8,7 +8,7 @@ namespace AgentBridge.Relay;
 
 // Routes opaque frames between the devices of one account. It sees routing ids, sizes and
 // timing, and nothing a session says: payloads are Noise ciphertext end to end.
-public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, RelayMetrics metrics, ILogger<RelayHub> log)
+public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, BlobService blobs, RelayMetrics metrics, ILogger<RelayHub> log)
 {
     static readonly HashSet<string> Kinds = ["host", "app", "pwa", "phone", "test"];
     readonly ConcurrentDictionary<string, ConcurrentDictionary<string, Connection>> accounts = new();
@@ -105,7 +105,8 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         log.LogInformation("connect {Conn} {Kind}; {Count} online in account", conn.Tag, conn.Kind, devices.Count);
         // Announce before "ready", so peers learn of a device before it can send them anything.
         await BroadcastPresenceAsync(conn.Account.Id);
-        await conn.SendJsonAsync(new { t = "ready", device = conn.DeviceId, account = conn.Account.Id, login = conn.Account.Login });
+        // blobs: present only with a blob store, so a device knows whether files over 256 KiB can go.
+        await conn.SendJsonAsync(new { t = "ready", device = conn.DeviceId, account = conn.Account.Id, login = conn.Account.Login, blobs = blobs.Advertised });
 
         string end = "closed";
         try { end = await ForwardAsync(conn, devices, aborted); }
@@ -165,7 +166,8 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             var (type, data) = frame.Value;
             if (type == WebSocketMessageType.Text)
             {
-                // The one control message a device sends after admission: forward a push.
+                // The control messages a device sends after admission: forward a push, or ask the
+                // blob store for a URL (Blobs.cs). Each counts against the frame rate.
                 if (!WithinRate(conn))
                 {
                     await CloseAndDrainAsync(conn, CloseCodes.RateLimited, "rate-limited");
@@ -182,6 +184,13 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                         metrics.Pushed(r);
                         await c.SendJsonAsync(new { t = "push-result", id, status = r.Status, error = r.Error });
                     });
+                }
+                else if (m.TryGetProperty("t", out var bt) && bt.GetString() is "blob-put" or "blob-get" or "blob-delete")
+                {
+                    var c = conn;
+                    var kind = bt.GetString()!;
+                    var message = m.Clone();
+                    _ = Task.Run(async () => await c.SendJsonAsync(await blobs.HandleAsync(c.Account, c.DeviceId, kind, message)));
                 }
                 continue;
             }

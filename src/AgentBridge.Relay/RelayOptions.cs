@@ -41,6 +41,9 @@ public sealed class RelayOptions
     public bool AllowInsecurePush { get; set; }
     public int MaxPushesPerMinute { get; set; } = 30;
 
+    // The blob store for files over 256 KiB (design §4.6; Blobs.cs). Off unless configured.
+    public BlobOptions Blobs { get; set; } = new();
+
     // Test hooks. Tap observes every forwarded payload; Route lets a test play a hostile
     // relay that redirects or forges routing.
     public Action<string, string, byte[]>? Tap { get; set; }

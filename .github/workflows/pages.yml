@@ -12,6 +12,9 @@ env:
   # The PWAs' relay. The pages are served from here, not by the relay, so a relay operator
   # cannot change the code that holds the keys.
   S4_RELAY: https://relay.bad-duck.com
+  # Production's blob store (infra/regions/westus2.bicepparam, production.blobStorageName): the
+  # app uploads large attachments straight to it, so its CSP names it.
+  BLOB_ORIGIN: https://abblobprodwus2.blob.core.windows.net
 
 permissions:
   contents: read
@@ -48,8 +51,9 @@ jobs:
           grep -q 'Content-Security-Policy' _site/s4/index.html
           # The product PWA, at /app/. Its build writes config.js and the same policy,
           # with no inline styles allowed; the tests run against this exact output.
-          node pwa/tools/build-site.mjs --out _site/app --relay "$S4_RELAY"
+          node pwa/tools/build-site.mjs --out _site/app --relay "$S4_RELAY" --blob-origin "$BLOB_ORIGIN"
           grep -q 'Content-Security-Policy' _site/app/index.html
+          grep -q "$BLOB_ORIGIN" _site/app/index.html
           grep -q "$S4_RELAY" _site/app/config.js
           cat > _site/index.html <<'EOF'
           <!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

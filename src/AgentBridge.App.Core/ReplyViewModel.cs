@@ -54,6 +54,7 @@ public sealed class ReplyViewModel : Observable
     readonly string at;
     Session session;
     bool attach;
+    bool large;
     string text = "";
     string? error;
     string statusText = "";
@@ -63,10 +64,13 @@ public sealed class ReplyViewModel : Observable
     string? handled;
     bool pausedAfterBusy;
 
-    public ReplyViewModel(Session session, bool attach, Deliveries deliveries, HostConnection? host = null, IImageShrinker? shrinker = null, string? machineName = null)
+    // large: the host takes files up to AttachmentLimits.DirectBytes in chunks over the pipe
+    // (sessions.attach.direct), not only AttachmentLimits.Bytes.
+    public ReplyViewModel(Session session, bool attach, Deliveries deliveries, HostConnection? host = null, IImageShrinker? shrinker = null, string? machineName = null, bool large = false)
     {
         this.session = session;
         this.attach = attach;
+        this.large = large;
         this.deliveries = deliveries;
         this.host = host;
         this.shrinker = shrinker;
@@ -130,17 +134,21 @@ public sealed class ReplyViewModel : Observable
     public string StatusText { get => statusText; private set => Set(ref statusText, value); }
     public Tone StatusTone { get => statusTone; private set => Set(ref statusTone, value); }
 
-    public void Update(Session next, bool takesFiles)
+    // The most one attachment can be: what the host takes in chunks over this pipe.
+    public long MaxBytes => large ? AttachmentLimits.DirectBytes : AttachmentLimits.Bytes;
+
+    public void Update(Session next, bool takesFiles, bool takesLarge = false)
     {
         session = next;
         attach = takesFiles;
+        large = takesFiles && takesLarge;
         Refresh();
     }
 
     // A file too big to read at all (the app does not load gigabytes to find out): refused as
     // AddAsync refuses one over the limit.
     public void Refuse(string? name, string? type, long size) =>
-        Error = $"Couldn't attach {Name(name, type ?? "")}: it is {Words.Size(size)}, over the {Words.Size(AttachmentLimits.Bytes)} limit for an attachment.";
+        Error = $"Couldn't attach {Name(name, type ?? "")}: it is {Words.Size(size)}, over the {Words.Size(MaxBytes)} limit for an attachment.";
 
     public void Unreadable(string name) => Error = $"Couldn't attach {name}: it could not be read.";
 
@@ -161,12 +169,13 @@ public sealed class ReplyViewModel : Observable
             type ??= "";
             var fileName = Name(name, type);
             var resized = false;
-            if (bytes.Length > AttachmentLimits.Bytes)
+            var max = MaxBytes;
+            if (bytes.Length > max)
             {
                 var smaller = type.StartsWith("image/", StringComparison.Ordinal) && shrinker is not null ? await shrinker.ShrinkAsync(bytes, AttachmentLimits.Bytes) : null;
                 if (smaller is null || smaller.Length > AttachmentLimits.Bytes)
                 {
-                    Error = $"Couldn't attach {fileName}: it is {Words.Size(bytes.Length)}, over the {Words.Size(AttachmentLimits.Bytes)} limit for an attachment.";
+                    Error = $"Couldn't attach {fileName}: it is {Words.Size(bytes.Length)}, over the {Words.Size(max)} limit for an attachment.";
                     return;
                 }
                 bytes = smaller;

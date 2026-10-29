@@ -39,6 +39,9 @@ param workloadProfileName string = ''
 @allowed(['none', 'added', 'bound'])
 param domainState string = 'none'
 
+@description('Create this app\'s blob store (app.blobStorageName) and point the relay at it. Production\'s waits for the cutover flag, like the app itself, so a staging deploy never touches it.')
+param deployBlobStore bool = false
+
 @description('Tags for every resource.')
 param tags object
 
@@ -53,6 +56,8 @@ var roles = {
 }
 
 var customDomain = app.?customDomain ?? ''
+var blobStorageName = app.?blobStorageName ?? ''
+var blobsOn = deployBlobStore && !empty(blobStorageName)
 var domainOn = !empty(customDomain) && domainState != 'none'
 var environmentName = last(split(environmentId, '/'))
 var certificateName = 'mc-${replace(customDomain, '.', '-')}'
@@ -165,6 +170,28 @@ var secretRefs = concat(
 
 var originEnv = [for (o, i) in allowedOrigins: { name: 'Relay__AllowedOrigins__${i}', value: o }]
 
+// Before the app, so its identity's storage roles exist when its first revision starts.
+module blobStore 'blob-store.bicep' = if (blobsOn) {
+  name: '${app.name}-blobs'
+  params: {
+    location: location
+    name: blobStorageName
+    relayPrincipalId: identity.properties.principalId
+    allowedOrigins: allowedOrigins
+    tags: tags
+  }
+}
+
+// Ids and a URL, no secret: the relay signs in as its identity (Blobs.cs).
+var blobEnv = blobsOn
+  ? [
+      { name: 'Relay__Blobs__Backend', value: 'azure' }
+      { name: 'Relay__Blobs__AccountUrl', value: blobStore!.outputs.accountUrl }
+      { name: 'Relay__Blobs__Container', value: blobStore!.outputs.container }
+      { name: 'Relay__Blobs__ManagedIdentityClientId', value: identity.properties.clientId }
+    ]
+  : []
+
 resource relay 'Microsoft.App/containerApps@2025-01-01' = if (deployApp) {
   name: app.name
   location: location
@@ -220,7 +247,8 @@ resource relay 'Microsoft.App/containerApps@2025-01-01' = if (deployApp) {
               { name: 'Logging__Console__FormatterName', value: 'json' }
             ],
             app.?githubClientSecret == true ? [{ name: 'Relay__GitHubClientSecret', secretRef: 'github-client-secret' }] : [],
-            originEnv
+            originEnv,
+            blobEnv
           )
           probes: [
             {
@@ -272,3 +300,4 @@ output fqdn string = deployApp ? relay!.properties.configuration.ingress.fqdn : 
 output customDomain string = customDomain
 output identityPrincipalId string = identity.properties.principalId
 output vaultName string = vault.name
+output blobAccountUrl string = blobsOn ? blobStore!.outputs.accountUrl : ''

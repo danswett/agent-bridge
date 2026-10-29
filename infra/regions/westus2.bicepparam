@@ -26,6 +26,7 @@ param production = {
   cpu: '0.25'
   memory: '0.5Gi'
   customDomain: 'relay.bad-duck.com'
+  blobStorageName: 'abblobprodwus2'
 }
 
 param staging = {
@@ -34,6 +35,7 @@ param staging = {
   version: readEnvironmentVariable('RELAY_STAGING_VERSION', '')
   identityName: 'id-agent-bridge-relay-staging'
   keyVaultName: 'kv-abrelay-stg-wus2'
+  blobStorageName: 'abblobstgwus2'
   minReplicas: 0
   maxReplicas: 1
   cpu: '0.25'
