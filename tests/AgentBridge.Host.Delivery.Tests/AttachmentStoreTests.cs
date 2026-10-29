@@ -539,6 +539,33 @@ public sealed class AttachmentStoreTests : IDisposable
         Assert.True(File.Exists(stranger));
     }
 
+    [Fact]
+    public void The_sweep_never_deletes_the_file_of_a_large_attachment_that_started_while_it_ran()
+    {
+        var bytes = Png(AttachmentLimits.Bytes + 1);
+        var late = Start(bytes, "late.png");
+        AttachmentStore? s = null;
+        // The sweep logs between its staged and incoming passes: an upload starts and finishes
+        // right there, leaving its file closed (an open one could not be deleted on Windows).
+        s = new AttachmentStore(new AttachmentOptions { StagingRoot = Staging, Time = time }, log: line =>
+        {
+            if (!line.StartsWith("removed 1 staged", StringComparison.Ordinal)) { return; }
+            var state = s!.Start(Phone, late, direct: true);
+            while (!state.Complete) { state = s.Chunk(Phone, Chunk(late, bytes, state.Received, (int)Math.Min(AttachmentLimits.Chunk, bytes.Length - state.Received))); }
+        }, sweep: false);
+        using var _ = s;
+        Directory.CreateDirectory(Staging);
+        var old = Path.Combine(Staging, "0123456789abcdef0123456789abcdef-shot.png");
+        File.WriteAllText(old, "x");
+        File.SetLastWriteTimeUtc(old, (time.GetUtcNow() - TimeSpan.FromHours(25)).UtcDateTime);
+
+        s.Sweep();
+
+        Assert.False(File.Exists(old));
+        Assert.Single(Directory.GetFiles(Incoming));
+        Assert.Equal(bytes, File.ReadAllBytes(Assert.Single(s.Stage(s.Claim(Phone, Refs(late)).Claim!))));
+    }
+
     // As the app on this machine sends one over its pipe: chunk by chunk, past 256 KiB.
     AttachmentStart UploadDirect(AttachmentStore s, byte[] bytes, AttachmentStart? given = null)
     {

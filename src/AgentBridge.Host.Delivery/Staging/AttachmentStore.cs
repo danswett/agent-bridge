@@ -485,12 +485,7 @@ public sealed partial class AttachmentStore : IDisposable
     // were never staged here.
     public void Sweep()
     {
-        HashSet<string> fetching;
-        lock (gate)
-        {
-            Expire();
-            fetching = [.. held.Values.Where(h => h.File is not null).Select(h => Path.GetFileName(h.File!))];
-        }
+        lock (gate) { Expire(); }
         try
         {
             var root = new DirectoryInfo(options.StagingRoot);
@@ -517,10 +512,17 @@ public sealed partial class AttachmentStore : IDisposable
             var orphans = 0;
             foreach (var file in incoming.EnumerateFiles())
             {
-                if (!IncomingName().IsMatch(file.Name) || file.Attributes.HasFlag(FileAttributes.ReparsePoint) || fetching.Contains(file.Name)) { continue; }
-                try { file.Delete(); orphans++; }
-                catch (IOException) { }
-                catch (UnauthorizedAccessException) { }
+                if (!IncomingName().IsMatch(file.Name) || file.Attributes.HasFlag(FileAttributes.ReparsePoint)) { continue; }
+                // Checked and deleted under the lock, against what is held now: a file an
+                // attachment started after the sweep began is one it is using. Start names an
+                // attachment's file under the lock before the file exists, so none is missed.
+                lock (gate)
+                {
+                    if (held.Values.Any(h => h.File is { } path && string.Equals(Path.GetFileName(path), file.Name, StringComparison.Ordinal))) { continue; }
+                    try { file.Delete(); orphans++; }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                }
             }
             if (orphans > 0) { log($"removed {orphans} fetched attachment(s) no reply is waiting for"); }
         }
