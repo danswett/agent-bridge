@@ -7,7 +7,9 @@ Home Assistant.
 
 > **Status: P0 spikes.** Nothing here is installable yet. agent-ha-bridge remains the
 > supported product, and nothing in this repository changes or replaces it until a
-> machine is explicitly migrated.
+> machine is explicitly migrated. How far each of agent-ha-bridge's features has come,
+> with the evidence, and what must be true before a machine migrates:
+> [docs/parity.md](docs/parity.md).
 
 ## Planned shape
 
