@@ -142,10 +142,14 @@ box's place, or other words in it, stop it.
 records an `attachment` entry with `filename` set to the path for each (seen live), so the
 line is Copilot's; a reply is `delivered` once every staged path has been read (for a queued
 reply, once Claude takes it). Codex does not read `@<path>` (left as words, seen live): it
-attaches an image when a paste is exactly a path to one, showing `[Image #n]`. So each image
-path goes as a paste of its own, 500 ms apart, then the words and Enter, and the record must
-list each as a `local_image`. Codex is sent PNG, JPEG, GIF and WebP only; a reply with any
-other file is `refused` before anything is typed, and its files are kept.
+attaches an image when a paste is exactly a path to one, showing `[Image #n]`. Keys that
+reach it together are one paste, though: a path and the words sent 500 ms after it were seen
+live taken as words. So each image path goes as a paste of its own only once the box shows
+the ones before it as `[Image #n]`, and the words and Enter once it shows them all (each
+waited for up to 10 s; if the box shows a path as words instead, typing stops there and the
+reply is `unconfirmed`). The record must list each as a `local_image`. Codex is sent PNG,
+JPEG, GIF and WebP only; a reply with any other file is `refused` before anything is typed,
+and its files are kept.
 
 ## Before and after typing
 

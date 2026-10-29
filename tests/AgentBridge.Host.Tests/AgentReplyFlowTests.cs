@@ -59,6 +59,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         ConfirmTimeout = TimeSpan.FromSeconds(2),
         PollInterval = TimeSpan.FromMilliseconds(25),
         SubmitAfter = TimeSpan.FromMilliseconds(200),
+        ImageWait = TimeSpan.FromMilliseconds(500),
     }, attachments: store);
 
     ReplyService? replier;
@@ -384,33 +385,61 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Empty(console.Plans);
     }
 
+    // Plays Codex taking pasted image paths: the box shows "[Image #n]" for each, and the reply
+    // is recorded with them, as `record` says, when Enter goes.
+    void CodexTakesImages(Func<string, IReadOnlyList<string>, string>? record = null, bool asImages = true)
+    {
+        var pasted = new List<string>();
+        console.OnInject = plan =>
+        {
+            var send = plan.Sends.Single();
+            if (!send.Enter)
+            {
+                pasted.Add(send.Text);
+                console.Rows = CodexIdle(asImages ? string.Concat(pasted.Select((_, i) => $"[Image #{i + 1}]")) : string.Join(' ', pasted));
+                return;
+            }
+            var text = string.Concat(pasted.Select((_, i) => $"[Image #{i + 1}]")) + send.Text;
+            Fixture.Append(rollout, record?.Invoke(text, pasted) ?? CodexPrompt(text, [.. pasted]));
+        };
+    }
+
     [Fact]
-    public async Task A_Codex_reply_with_images_pastes_each_path_on_its_own_and_is_delivered_once_Codex_records_them_attached()
+    public async Task A_Codex_reply_with_images_pastes_each_path_once_the_box_shows_the_ones_before_and_is_delivered_once_Codex_records_them_attached()
     {
         console.Rows = CodexIdle();
         var a = Upload(Png(200), "a.png");
         var b = Upload(Png(200), "b.png");
-        console.OnInject = plan =>
-        {
-            var paths = plan.Sends.Where(s => !s.Enter).Select(s => s.Text).ToArray();
-            Fixture.Append(rollout, CodexPrompt("[Image #1][Image #2]  What changed?", paths));
-        };
+        CodexTakesImages();
 
         Assert.Equal(new ReplyResult(AnswerOutcome.Delivered), await ReplyAsync(CodexId, "What changed?", a, b));
-        var sends = Assert.Single(console.Plans).Plan.Sends;
+        var sends = console.Plans.Select(p => p.Plan.Sends.Single()).ToList();
         Assert.Equal(3, sends.Count);
         Assert.All(sends.Take(2), s => Assert.Matches(@"^\S+-[ab]\.png$", s.Text));
         Assert.Equal((" What changed?", true), (sends[2].Text, sends[2].Enter));
-        // Only the first paste is held to the box; each later one finds the box as the last left it.
-        Assert.NotNull(sends[0].Expect);
-        Assert.Null(sends[1].Expect);
+        // Each held to the box as the sends before it left it.
+        Assert.Equal("› [Image #1]", sends[1].Expect![0].Text);
+        Assert.Equal("› [Image #1][Image #2]", sends[2].Expect![0].Text);
+    }
+
+    [Fact]
+    public async Task A_Codex_image_path_its_box_shows_as_words_stops_the_reply_there_unconfirmed()
+    {
+        console.Rows = CodexIdle();
+        CodexTakesImages(asImages: false);
+
+        var result = await ReplyAsync(CodexId, "see", Upload(Png(100)));
+
+        Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
+        Assert.Contains("did not take an attachment as an image", result.Reason);
+        Assert.Single(console.Plans);
     }
 
     [Fact]
     public async Task A_Codex_reply_whose_image_Codex_did_not_attach_is_unconfirmed()
     {
         console.Rows = CodexIdle();
-        console.OnInject = _ => Fixture.Append(rollout, CodexPrompt("[Image #1] see"));
+        CodexTakesImages(record: (text, _) => CodexPrompt(text));
 
         var result = await ReplyAsync(CodexId, "see", Upload(Png(100)));
 
