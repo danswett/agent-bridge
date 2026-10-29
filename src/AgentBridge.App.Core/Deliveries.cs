@@ -20,16 +20,23 @@ public sealed record Delivery
     // What the op has done so far: bytes of a reply's files sent, of all of them.
     public (long Sent, long Total)? Progress { get; init; }
     public object? Payload { get; init; }
+    // Whether a copy whose outcome was lost may go again to a host that has since restarted.
+    // The host remembers request ids only in memory, so only ops it guards across restarts
+    // otherwise (answers: its attempt ledger; End session: its two-press rule) may.
+    public bool ReplayAfterRestart { get; init; } = true;
 }
 
 // Sends answers, replies and stops (session.answer, session.reply, session.stop), each to
 // exactly one outcome, as the PWA's AnswerService does: a fresh request UUID per thing the
-// person does, and the same one again after the host restarted under it, which the host
-// answers with the first outcome instead of typing twice. One per key at a time; a busy that
-// answers a resend of our own request is waited out, not shown.
+// person does, and the same one again after the connection dropped under it, which the host
+// answers with the first outcome instead of acting twice. A host that restarted meanwhile has
+// forgotten the request: answers and stops go again (the host guards those across restarts),
+// a reply does not. One per key at a time; a busy that answers a resend of our own request is
+// waited out, not shown.
 public sealed class Deliveries
 {
     const string NoOutcome = "no outcome came back from the machine in time";
+    const string Restarted = "the Bridge Host restarted before saying whether it went";
     const int MaxBusyResends = 5;
 
     readonly HostConnection host;
@@ -61,7 +68,7 @@ public sealed class Deliveries
     // stands, so doing it again sends nothing. before: work on the connection ahead of the op
     // (a reply's files), given a progress callback.
     public Delivery Submit(string key, string op, Func<string, object> data, Func<string, bool> final, object? payload = null,
-        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null)
+        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true)
     {
         Delivery entry;
         lock (gate)
@@ -71,7 +78,7 @@ public sealed class Deliveries
             {
                 return existing;
             }
-            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload };
+            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart };
         }
         Publish(entry);
         _ = RunAsync(entry, op, data, before, resend: false);
@@ -92,6 +99,8 @@ public sealed class Deliveries
         var started = time.GetUtcNow();
         var busy = 0;
         var attempts = entry.Attempts;
+        // The host the op itself last went to, if it went: files sent ahead are not the op.
+        string? sentTo = null;
         while (true)
         {
             if (time.GetUtcNow() - started > GiveUp)
@@ -108,7 +117,10 @@ public sealed class Deliveries
                 {
                     await before((o, d, t) => host.CallAsync(o, d, t), (sent, total) => Update(entry.Key, e => e with { Progress = (sent, total) }));
                 }
-                result = await host.CallAsync(op, data(entry.Request), TimeSpan.FromSeconds(90));
+                var to = host.HostInstance;
+                var call = host.CallAsync(op, data(entry.Request), TimeSpan.FromSeconds(90));
+                sentTo = to;
+                result = await call;
             }
             catch (HostErrorException e)
             {
@@ -123,6 +135,13 @@ public sealed class Deliveries
                 try { await host.WhenConnectedAsync().WaitAsync(GiveUp, time); }
                 catch (TimeoutException) { }
                 await Task.Delay(RetryDelay);
+                // A replacement host has no memory of the request, so for a reply sending it
+                // again could type it twice: what became of it is the machine's to say.
+                if (!entry.ReplayAfterRestart && sentTo is not null && host.HostInstance is { } now && now != sentTo)
+                {
+                    Update(entry.Key, x => x with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = Restarted, Progress = null });
+                    return;
+                }
                 continue;
             }
             var outcome = result.TryGetProperty("outcome", out var o) && o.ValueKind == JsonValueKind.String ? o.GetString()! : "unconfirmed";

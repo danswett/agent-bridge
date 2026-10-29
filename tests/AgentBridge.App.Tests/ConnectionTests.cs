@@ -137,6 +137,43 @@ public sealed class ConnectionTests : IAsyncLifetime
         Assert.All(requests, r => Assert.Equal(entry.Request, r));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_reply_whose_outcome_was_lost_goes_again_only_to_the_same_host_process(bool hostRestarted)
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        var first = true;
+        var gate = new TaskCompletionSource();
+        host.On(Ops.SessionReply, data =>
+        {
+            if (first) { first = false; gate.SetResult(); Thread.Sleep(200); }
+            return new ReplyResult(AnswerOutcome.Delivered);
+        });
+        var deliveries = new Deliveries(connection, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+
+        var entry = deliveries.Submit("reply|s1", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, replayAfterRestart: false);
+        await gate.Task.WaitAsync(FakeHost.Patience);
+        await host.StopAsync();
+        // A replacement process has forgotten the request; the same one, its pipe back, has not.
+        if (hostRestarted) { host.Status = FakeHost.StatusOf() with { ProcessId = 4343 }; }
+        host.Start();
+
+        await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
+        var done = deliveries.Get(entry.Key)!;
+        if (hostRestarted)
+        {
+            Assert.Equal("unconfirmed", done.Outcome);
+            Assert.Contains("restarted", done.Reason);
+            Assert.Single(host.Sent(Ops.SessionReply));
+        }
+        else
+        {
+            Assert.Equal("delivered", done.Outcome);
+            Assert.True(host.Sent(Ops.SessionReply).Count >= 2);
+        }
+    }
+
     [Fact]
     public async Task A_busy_that_answers_our_own_resend_is_waited_out_and_never_shown()
     {

@@ -22,6 +22,8 @@ public sealed class HostConnection : IAsyncDisposable
     LocalChannel? channel;
     long statusEvents;
     long usageEvents;
+    long connections;
+    string? hostInstance;
 
     public HostConnection(Func<CancellationToken, Task<LocalChannel>> connect, IUiDispatcher ui, Action<string>? log = null)
     {
@@ -40,6 +42,10 @@ public sealed class HostConnection : IAsyncDisposable
 
     // Read on the UI thread.
     public LinkState State { get; private set; } = LinkState.Connecting;
+    // Which host process the current connection reaches (its pid and start), set before the
+    // connection counts as connected, on any thread: a delivery whose outcome was lost can
+    // tell whether the host that may have acted on it is still the one listening.
+    public string? HostInstance => Volatile.Read(ref hostInstance);
     public string? StateDetail { get; private set; }
     public HelloResult? Hello { get; private set; }
     public IReadOnlyList<string> Capabilities => Hello?.Capabilities ?? [];
@@ -88,17 +94,21 @@ public sealed class HostConnection : IAsyncDisposable
                 ui.Post(() => Hello = hello);
                 // An event can overtake the subscribe's result on its way to the UI thread (they
                 // arrive on different threads); the result is applied only if no event came.
-                var heard = Interlocked.Read(ref statusEvents);
+                var heardStatus = Interlocked.Read(ref statusEvents);
+                var connectionNumber = Interlocked.Increment(ref connections);
+                var instance = $"connection {connectionNumber}";
                 if (hello.Capabilities.Contains(HostOps.Capability))
                 {
                     var status = await ch.CallAsync<HostStatus>(HostOps.Subscribe, ct: ct);
-                    ui.Post(() => { if (Interlocked.Read(ref statusEvents) == heard) { Status = status; } });
+                    instance = $"{status.ProcessId}@{status.StartedAt:O}";
+                    ui.Post(() => { if (Interlocked.Read(ref statusEvents) == heardStatus) { Status = status; } });
                 }
-                heard = Interlocked.Read(ref usageEvents);
+                Volatile.Write(ref hostInstance, instance);
+                var heardUsage = Interlocked.Read(ref usageEvents);
                 if (hello.Capabilities.Contains(UsageProtocol.Capability))
                 {
                     var usage = await ch.CallAsync<UsageReport>(UsageProtocol.Subscribe, ct: ct);
-                    ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heard) { Usage = usage; } });
+                    ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; } });
                 }
                 await SubscribeSessionsAsync(ch, ct);
                 ui.Post(() => SetState(LinkState.Connected, null));
@@ -136,6 +146,7 @@ public sealed class HostConnection : IAsyncDisposable
             finally
             {
                 Volatile.Write(ref channel, null);
+                Volatile.Write(ref hostInstance, null);
                 if (ch is not null) { await ch.DisposeAsync(); }
                 if (Volatile.Read(ref connected).Task.IsCompleted) { Volatile.Write(ref connected, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)); }
             }

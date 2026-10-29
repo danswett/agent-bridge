@@ -239,7 +239,7 @@ public sealed class ReplyViewModel : Observable
         Error = null;
         foreach (var f in files) { f.Offered = true; }
         var sentText = text;
-        var entry = deliveries.Submit(Key, Ops.SessionReply, r => Request(r, sentText, files), _ => false, payload: files, before: (call, progress) => UploadAsync(call, files, progress));
+        var entry = deliveries.Submit(Key, Ops.SessionReply, r => Request(r, sentText, files), _ => false, payload: files, before: (call, progress) => UploadAsync(call, files, progress), replayAfterRestart: false);
         sent = (entry.Request, sentText, files);
         Refresh();
     }
