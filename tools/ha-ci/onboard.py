@@ -94,8 +94,20 @@ def main():
             continue
         schema = flow.get("data_schema") or []
         print("  fields:", [(f.get("name"), f.get("type"), f.get("required"), f.get("default")) for f in schema], flush=True)
-        # Every field the form defaults, as a browser would send it, then the broker's address.
-        body = {f["name"]: f["default"] for f in schema if "default" in f and f.get("name")}
+        # Every field the form defaults, as a browser would send it (an expandable section is an
+        # object of its own fields' defaults, and is required even when nothing in it is set),
+        # then the broker's address.
+        def defaults(fields):
+            out = {}
+            for f in fields:
+                if not f.get("name"):
+                    continue
+                if f.get("type") == "expandable":
+                    out[f["name"]] = defaults(f.get("schema") or [])
+                elif "default" in f:
+                    out[f["name"]] = f["default"]
+            return out
+        body = defaults(schema)
         if flow.get("step_id") == "broker":
             body.update({"broker": BROKER, "port": 1883})
         flow = call("POST", "/api/config/config_entries/flow/" + flow["flow_id"], body, token)
