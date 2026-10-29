@@ -59,7 +59,9 @@ public static class ClaudePrompts
                         var mine = new List<string>();
                         queued.Add((InjectableText.Flatten(content), mine));
                         prompts.Add(new AgentPrompt(start, content, mine));
-                        files = null;
+                        // Claude is still on the prompt before: its Reads and their results keep
+                        // arriving after an enqueue, so its files stay current until the queued
+                        // prompt is taken.
                         break;
                     case "assistant" when files is not null:
                         foreach (var b in Blocks(e))

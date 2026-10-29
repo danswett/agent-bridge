@@ -353,6 +353,23 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_prompt_queued_while_Claude_reads_a_replys_file_does_not_cost_the_reply_that_read()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan =>
+        {
+            var line = Typed(plan);
+            var id = "toolu_" + Guid.NewGuid().ToString("N");
+            Fixture.Append(claude, ClaudePrompt(line),
+                Claude.Assistant(second++, "tool_use", Claude.ToolUse(id, "Read", new JsonObject { ["file_path"] = line.Split(' ')[0][1..] })),
+                ClaudeQueued("a later thought"),
+                Claude.ToolResult(id, second++));
+        };
+
+        Assert.Equal(AnswerOutcome.Delivered, (await ReplyAsync(ClaudeId, "look", Upload(Png(300)))).Outcome);
+    }
+
+    [Fact]
     public async Task A_Claude_reply_whose_file_is_never_read_is_unconfirmed()
     {
         console.Rows = ClaudeIdle();
