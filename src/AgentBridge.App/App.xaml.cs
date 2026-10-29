@@ -155,7 +155,7 @@ public partial class App : Application
     {
         if (manager is null || !manager.HostInstalled) { return; }
         try { await manager.StartAsync(); }
-        catch (Exception e) when (e is IOException or TimeoutException or InvalidOperationException or System.Runtime.InteropServices.COMException or UnauthorizedAccessException)
+        catch (Exception e) when (e is not OutOfMemoryException)
         {
             AppLog.Write($"the host did not start: {e.Message}");
         }
@@ -172,7 +172,9 @@ public partial class App : Application
             atSignIn.Set(true);
             save(prefs() with { SetUp = true });
         }
-        catch (Exception e) when (e is UnauthorizedAccessException or IOException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+        // Any failure: COM maps HRESULTs onto many exception types, and this runs during launch,
+        // where an escape ends the app before its window opens.
+        catch (Exception e) when (e is not OutOfMemoryException)
         {
             AppLog.Write($"first run: start at sign-in not set up: {e.Message}");
         }

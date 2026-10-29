@@ -166,4 +166,28 @@ public sealed class HostManagerTests : IAsyncLifetime
 
         Assert.Equal("line 498\nline 499\nline 500", tail.Replace("\r", ""));
     }
+
+    [Fact]
+    public void A_task_scheduler_failure_reaches_callers_as_itself_not_wrapped_by_late_binding()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+
+        Assert.Throws<UnauthorizedAccessException>(() =>
+        {
+            if (OperatingSystem.IsWindows()) { WindowsLogonTasks.Call(new Refusing(), nameof(Refusing.RegisterTask)); }
+        });
+    }
+
+    [Fact]
+    public void Looking_for_a_task_that_does_not_exist_answers_no()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+
+        Assert.False(new WindowsLogonTasks().Exists("agent-bridge-test-" + Guid.NewGuid().ToString("N")));
+    }
+
+    public sealed class Refusing
+    {
+        public void RegisterTask() => throw new UnauthorizedAccessException("denied by policy");
+    }
 }

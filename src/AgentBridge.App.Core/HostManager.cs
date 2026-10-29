@@ -281,7 +281,7 @@ public sealed class WindowsLogonTasks : ILogonTasks
     public bool Exists(string name) => Use(folder =>
     {
         try { Release(Call(folder, "GetTask", name)); return true; }
-        catch (System.Reflection.TargetInvocationException e) when (e.InnerException is COMException or FileNotFoundException) { return false; }
+        catch (Exception e) when (e is COMException or FileNotFoundException) { return false; }
     });
 
     public void Register(string name, string xml) => Use(folder =>
@@ -318,8 +318,18 @@ public sealed class WindowsLogonTasks : ILogonTasks
         }
     }
 
-    static object? Call(object target, string name, params object?[] args) =>
-        target.GetType().InvokeMember(name, System.Reflection.BindingFlags.InvokeMethod, null, target, args);
+    // Late binding wraps every COM failure in TargetInvocationException, which slipped past
+    // callers' filters for COMException/UnauthorizedAccessException: a policy-denied
+    // registration on first run ended the app. Callers see the real exception instead.
+    internal static object? Call(object target, string name, params object?[] args)
+    {
+        try { return target.GetType().InvokeMember(name, System.Reflection.BindingFlags.InvokeMethod, null, target, args); }
+        catch (System.Reflection.TargetInvocationException e) when (e.InnerException is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(e.InnerException);
+            throw;
+        }
+    }
 
     static void Release(object? o)
     {
