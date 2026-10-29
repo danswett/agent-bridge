@@ -59,10 +59,12 @@ jobs:
   build:
     # RELAY_DEPLOY (a repository variable) is set once Azure and OIDC are configured; a fork
     # or a fresh clone without them only compiles the templates.
-    if: vars.RELAY_DEPLOY == 'true' && inputs.rollback_to == ''
+    if: >-
+      vars.RELAY_DEPLOY == 'true' && inputs.rollback_to == '' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     needs: infra
     runs-on: ubuntu-latest
-    # Fork pull requests get no OIDC token, so cannot reach Azure at all.
+    # Fork pull requests get no OIDC token, so they skip Azure and only compile the templates.
     environment: staging
     outputs:
       image: ${{ steps.push.outputs.image }}
