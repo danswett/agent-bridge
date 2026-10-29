@@ -108,4 +108,7 @@ the rest of the protocol.
 
 `serve` always opens the pipe. It goes to the relay only when the profile is signed in,
 and keeps running when it is not, or when the relay refuses it, so an app can sign it in
-over the pipe. `serve --local-only` never uses the relay.
+over the pipe. A sign-in made with `agent-bridge-host sign-in` while it runs is picked up
+within a few seconds. The relay of a sign-in made during the run is the one the host then
+uses, over `--relay` and `AGENT_BRIDGE_RELAY`, so a token only ever goes to the relay that
+issued it. `serve --local-only` never uses the relay.

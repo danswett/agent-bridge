@@ -163,6 +163,13 @@ Uri? RelayUri(Identity identity)
     return string.IsNullOrEmpty(url) ? null : new Uri(url);
 }
 
+// The relay the profile last signed in to.
+static Uri? SavedRelay(Identity identity)
+{
+    var saved = Path.Combine(identity.Folder, "relay.txt");
+    return File.Exists(saved) && Uri.TryCreate(File.ReadAllText(saved).Trim(), UriKind.Absolute, out var u) ? u : null;
+}
+
 async Task<int> ServeAsync()
 {
     var identity = LoadIdentity();
@@ -209,6 +216,11 @@ async Task<int> ServeAsync()
     // signed in to the relay.
     var wake = new SemaphoreSlim(0);
     CancellationTokenSource? connection = null;
+    // The relay that issued the account in use: a sign-in during this run (the app's, or the
+    // CLI's in another process) decides it, over --relay and AGENT_BRIDGE_RELAY, so a token
+    // is never sent to a relay other than the one that gave it.
+    Uri? signedInRelay = null;
+    Uri? ServeRelay() => signedInRelay ?? RelayUri(identity);
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -221,7 +233,7 @@ async Task<int> ServeAsync()
         LocalOnly = localOnly,
         Log = HostLog.FilePath,
         Account = () => identity.Account is { } a ? new HostAccount(a.Login, a.AccountId) : null,
-        Relay = () => RelayUri(identity),
+        Relay = ServeRelay,
         AgentHaBridge = haProbe is null ? () => null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64),
         SignIn = async (relay, show, ct) =>
         {
@@ -232,6 +244,7 @@ async Task<int> ServeAsync()
         {
             identity.Save(result);
             File.WriteAllText(Path.Combine(identity.Folder, "relay.txt"), relay.ToString());
+            signedInRelay = relay;
             // Whatever connection there is belongs to the account before; start over.
             connection?.Cancel();
             wake.Release();
@@ -259,7 +272,7 @@ async Task<int> ServeAsync()
     while (!stop.IsCancellationRequested)
     {
         var account = identity.Account;
-        var relayUri = RelayUri(identity);
+        var relayUri = ServeRelay();
         if (localOnly || account is null || relayUri is null)
         {
             if (localOnly) { control.SetRelay(RelayState.Off, "this host serves this machine's apps only (--local-only)"); }
@@ -268,8 +281,7 @@ async Task<int> ServeAsync()
                 control.SetRelay(RelayState.SignedOut);
                 Log("not signed in: serving this machine's apps only until someone signs in (the app, or agent-bridge-host sign-in)");
             }
-            try { await wake.WaitAsync(stop.Token); }
-            catch (OperationCanceledException) { break; }
+            if (!await WaitForSignInAsync()) { break; }
             continue;
         }
         using var current = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
@@ -298,8 +310,7 @@ async Task<int> ServeAsync()
                 // restart tries the relay again.
                 Log("another process took over this device on the relay; not reconnecting until signed in again or restarted");
                 control.SetRelay(RelayState.Refused, "another process took over this device on the relay");
-                try { await wake.WaitAsync(stop.Token); }
-                catch (OperationCanceledException) { break; }
+                if (!await WaitForSignInAsync()) { break; }
                 continue;
             }
         }
@@ -310,8 +321,7 @@ async Task<int> ServeAsync()
         {
             Log($"refused: {e.Message}; sign in again");
             control.SetRelay(RelayState.Refused, $"the relay refused this device's sign-in ({e.Message}); sign in again");
-            try { await wake.WaitAsync(stop.Token); }
-            catch (OperationCanceledException) { break; }
+            if (!await WaitForSignInAsync()) { break; }
             continue;
         }
         // Anything else the relay or network does to one connection is a reason to
@@ -331,6 +341,24 @@ async Task<int> ServeAsync()
     }
     Log("stopped");
     return 0;
+
+    // Until someone signs in: the app, through the pipe, wakes this at once; the CLI's sign-in
+    // in another process only writes the profile's files, so they are looked at every few
+    // seconds. False when the host is stopping.
+    async Task<bool> WaitForSignInAsync()
+    {
+        while (true)
+        {
+            try { if (await wake.WaitAsync(TimeSpan.FromSeconds(5), stop.Token)) { return true; } }
+            catch (OperationCanceledException) { return false; }
+            if (identity.ReloadAccount())
+            {
+                signedInRelay = SavedRelay(identity) ?? signedInRelay;
+                Log($"signed in as {identity.Account!.Login} by another process");
+                return true;
+            }
+        }
+    }
 }
 
 // Launching and resuming sessions from other devices (docs/host-launch.md): only in the folders
