@@ -65,6 +65,26 @@ internal sealed class Fixture : IDisposable
 
     public string ClaudeTranscript(string id) => Path.Combine(ClaudeHome, "projects", "-work-repo", id + ".jsonl");
 
+    // Claude Code's own sessions/<pid>.json, as 2.1.312 writes it for every interactive CLI.
+    public void ClaudeSessionFile(int pid, string id, DateTimeOffset? startedAt = null, string kind = "interactive", string? fileName = null)
+    {
+        var dir = Path.Combine(ClaudeHome, "sessions");
+        Directory.CreateDirectory(dir);
+        var at = (startedAt ?? T0).ToUnixTimeMilliseconds();
+        var json = new JsonObject
+        {
+            ["pid"] = pid,
+            ["sessionId"] = id,
+            ["cwd"] = "/work/repo",
+            ["startedAt"] = at,
+            ["kind"] = kind,
+            ["entrypoint"] = "cli",
+            ["status"] = "idle",
+            ["updatedAt"] = at,
+        };
+        File.WriteAllText(Path.Combine(dir, fileName ?? pid.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".json"), json.ToJsonString());
+    }
+
     public void ClaudeRegistration(string id, int pid, string? transcript, string? hookStatus = null, DateTimeOffset? hookAt = null, string? fileName = null)
     {
         Directory.CreateDirectory(ClaudeRegistrations);

@@ -110,9 +110,13 @@ which always runs it unelevated.
 
 ### agent-ha-bridge on the same machine (G4, G5)
 
-The app never writes agent hook registrations (no Copilot, Claude or Codex hooks: the
-host reads transcripts and needs none yet), and its names, folders, pipe, task and AUMID
-are its own. The host already refuses to type into any session while agent-ha-bridge is
+The app never writes agent hook registrations (no Copilot, Claude or Codex hooks), and its
+names, folders, pipe, task and AUMID are its own. Without hooks the host still finds Copilot
+sessions (their session folders) and Claude sessions (Claude Code's own
+`~/.claude/sessions/<pid>.json`), but not Codex ones, which only agent-ha-bridge's Codex
+hook registers; and what only a hook reports is missing (a Claude question still waiting,
+Claude permission prompts, Codex approvals: [host-answers.md](host-answers.md)). The host
+already refuses to type into any session while agent-ha-bridge is
 active for the user (G5), and offers read-only capabilities then; the app shows the
 reason in a banner over the cards and on the Settings page, and nothing more. Migration is a later,
 explicit step.

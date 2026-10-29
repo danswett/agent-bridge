@@ -234,11 +234,25 @@ public sealed class SessionSource : ISessionSource
     IEnumerable<DiscoveredSession> Discover()
     {
         foreach (var s in CopilotDiscovery.Find(_options.CopilotHome, _processes.GetAgentProcesses(AgentKind.Copilot))) { yield return s; }
-        // Listing processes is the expensive part; without a registration folder there is
-        // nothing it could match.
-        if (_options.ClaudeRegistrationRoots.Any(Directory.Exists))
+        // Listing processes is the expensive part; without a registration folder or Claude's
+        // own sessions folder there is nothing it could match.
+        var claudeSessions = Directory.Exists(Path.Combine(_options.ClaudeHome, "sessions"));
+        if (claudeSessions || _options.ClaudeRegistrationRoots.Any(Directory.Exists))
         {
-            foreach (var s in RegistrationDiscovery.Find(AgentKind.Claude, _options.ClaudeRegistrationRoots, _processes.GetAgentProcesses(AgentKind.Claude), FindClaudeTranscript)) { yield return s; }
+            var processes = _processes.GetAgentProcesses(AgentKind.Claude);
+            var registered = RegistrationDiscovery.Find(AgentKind.Claude, _options.ClaudeRegistrationRoots, processes, FindClaudeTranscript);
+            foreach (var s in registered) { yield return s; }
+            if (claudeSessions)
+            {
+                // agent-ha-bridge's registration, where there is one, carries what its hooks
+                // saw (status, permission prompts) and wins. One CLI owns one session.
+                var ids = registered.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+                var pids = registered.Select(s => s.ProcessId).ToHashSet();
+                foreach (var s in ClaudeSessionDiscovery.Find(_options.ClaudeHome, processes, FindClaudeTranscript))
+                {
+                    if (!ids.Contains(s.Id) && !pids.Contains(s.ProcessId)) { yield return s; }
+                }
+            }
         }
         if (_options.CodexRegistrationRoots.Any(Directory.Exists))
         {
@@ -386,6 +400,7 @@ public sealed class SessionSource : ISessionSource
     {
         Watch(Path.Combine(_options.CopilotHome, "session-state"), recursive: true);
         Watch(Path.Combine(_options.ClaudeHome, "projects"), recursive: true);
+        Watch(Path.Combine(_options.ClaudeHome, "sessions"), recursive: false);
         Watch(Path.Combine(_options.CodexHome, "sessions"), recursive: true);
         foreach (var root in _options.ClaudeRegistrationRoots.Concat(_options.CodexRegistrationRoots)) { Watch(root, recursive: false); }
     }
