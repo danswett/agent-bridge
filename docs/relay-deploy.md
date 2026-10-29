@@ -148,8 +148,11 @@ Before:
 2. `./infra/deploy.ps1 -WhatIf -Production -ProductionImage <digest> -ProductionVersion <sha>`
    shows changes to `agent-bridge-relay` only, plus the role assignment for the production
    principal, and nothing deleted elsewhere.
-3. Save the live definition for the rollback: `az containerapp show -g rg-agent-bridge-relay -n agent-bridge-relay -o yaml > relay-before-cutover.yaml`
-   (keep it out of the repository; it has no secret values, but it is not needed there).
+3. Note the live revision, the rollback target:
+   `az containerapp revision list -g rg-agent-bridge-relay -n agent-bridge-relay --query "[?properties.active].name" -o tsv`,
+   and save the live definition as a record:
+   `az containerapp show -g rg-agent-bridge-relay -n agent-bridge-relay -o yaml > relay-before-cutover.yaml`
+   (outside the repository; it holds no secret values).
 
 Cutover (about a minute; each device reconnects once):
 
@@ -178,15 +181,20 @@ Then check, in this order:
 
 - **A later bad build:** run `relay.yml` with `rollback_to=<previous SHA>` (the SHA is in
   the production job's summary), and approve it.
-- **The cutover itself:** the spike image reads the same settings, so putting it back is
-  one command, and existing tokens and subscriptions stay valid throughout:
+- **The cutover itself:** make a new revision from the spike's last revision:
 
   ```powershell
-  az containerapp update -g rg-agent-bridge-relay -n agent-bridge-relay --image agentbridgerelay59731.azurecr.io/agent-bridge-relay:s5b-10272017
+  az containerapp revision copy -g rg-agent-bridge-relay -n agent-bridge-relay --from-revision <the revision noted before the cutover>
   ```
 
-  For a full return to the hand-made definition, apply the saved YAML:
-  `az containerapp update -g rg-agent-bridge-relay -n agent-bridge-relay --yaml relay-before-cutover.yaml`.
+  That restores the spike's whole template: its image, settings, and no probes. An
+  image-only rollback would not do: it would keep the readiness probe on `/readyz`, which the
+  spike does not serve, so the revision would never become ready and traffic would stay on
+  the new one. The app-level parts the cutover changed stay, and the spike works with them:
+  `token-key` and `vapid-key` keep their names and values (now read from the vault), and the
+  new identity can pull from the same registry. Tokens and push subscriptions stay valid
+  throughout. `roll-production.sh` still treats the app as adopted afterwards, so the next
+  approved run rolls a product image onto it again.
 
 ## Hostnames, Pages and hosts
 

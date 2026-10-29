@@ -3,8 +3,10 @@
 using '../main.bicep'
 
 param location = 'westus2'
-param logAnalyticsName = 'LOG_ANALYTICS_NAME'
-param environmentName = 'ENVIRONMENT_NAME'
+// deploy.ps1 adopts whatever environment and workspace the live production app runs on;
+// these names are only used for a stamp built from nothing.
+param logAnalyticsName = readEnvironmentVariable('RELAY_LOG_ANALYTICS_NAME', 'log-agent-bridge-relay-wus2')
+param environmentName = readEnvironmentVariable('RELAY_ENVIRONMENT_NAME', 'cae-agent-bridge-relay-wus2')
 param registryName = 'agentbridgerelay59731'
 // The "Agent Bridge (dev)" GitHub App, device flow. A client id is public.
 param githubClientId = 'Iv23liXL0Mvqs2dckn5U'

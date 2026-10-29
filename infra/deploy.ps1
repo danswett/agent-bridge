@@ -51,9 +51,10 @@ function Get-AppVersion($app) {
     return ''
 }
 
+$script:builtParams = $null
 function Get-ParamValue([string]$name) {
-    $built = az bicep build-params -f $paramFile --stdout | ConvertFrom-Json
-    return ($built.parametersJson | ConvertFrom-Json).parameters.$name.value
+    if (-not $script:builtParams) { $script:builtParams = (az bicep build-params -f $paramFile --stdout | ConvertFrom-Json).parametersJson | ConvertFrom-Json }
+    return $script:builtParams.parameters.$name.value
 }
 
 # What each app runs now, so this deploy re-states it rather than rolling it.
@@ -64,6 +65,22 @@ if (-not $StagingImage) {
     if (-not $stagingApp) { throw "staging ($($stagingCfg.name)) does not exist yet: pass -StagingImage and -StagingVersion for its first revision" }
     $StagingImage = $stagingApp.properties.template.containers[0].image
     $StagingVersion = Get-AppVersion $stagingApp
+}
+# Adopting means the very resources production runs on: a different environment would give
+# the app a new URL, and a different workspace would split its logs. So when production
+# exists, its environment and workspace are the stamp's, whatever the parameter file's
+# defaults (which are for a new stamp) say.
+$liveProduction = Get-AppJson $productionCfg.name
+if ($liveProduction) {
+    $liveEnv = az containerapp env show --ids $liveProduction.properties.managedEnvironmentId -o json | ConvertFrom-Json
+    if ($liveEnv.resourceGroup -ne $ResourceGroup) { throw "$($productionCfg.name) runs in environment $($liveEnv.name) in resource group $($liveEnv.resourceGroup), not $ResourceGroup" }
+    $customerId = $liveEnv.properties.appLogsConfiguration.logAnalyticsConfiguration.customerId
+    $workspace = az monitor log-analytics workspace list -g $ResourceGroup --query "[?customerId=='$customerId'].name | [0]" -o tsv
+    if (-not $workspace) { throw "environment $($liveEnv.name) logs to a workspace outside $ResourceGroup ($customerId)" }
+    $env:RELAY_ENVIRONMENT_NAME = $liveEnv.name
+    $env:RELAY_LOG_ANALYTICS_NAME = $workspace
+    $script:builtParams = $null
+    Write-Host "adopting environment $($liveEnv.name) and workspace $workspace"
 }
 if ($Production) {
     if (-not $ProductionImage -or -not $ProductionVersion) { throw '-Production needs -ProductionImage and -ProductionVersion: the build staging has passed' }
@@ -97,10 +114,24 @@ $env:RELAY_DEPLOY_APPS = 'false'
 $out = az deployment group create -g $ResourceGroup -n "relay-stamp-base-$Region" -f $template -p $paramFile --query properties.outputs -o json | ConvertFrom-Json
 
 # Data-plane calls go straight to Key Vault's REST API, so no secret is ever on a command line.
-$vaultToken = az account get-access-token --resource https://vault.azure.net --query accessToken -o tsv
+$vaultHeaders = @{ Authorization = ('Bearer', (az account get-access-token --resource https://vault.azure.net --query accessToken -o tsv)) -join ' ' }
+
+# A role assignment made by pass 1 takes a minute or two to reach Key Vault, so a 403 is
+# retried for a while; anything else is an answer (404: no such secret) or an error.
+function Invoke-Vault([string]$method, [string]$uri, [string]$body) {
+    for ($i = 0; ; $i++) {
+        try {
+            if ($body) { return Invoke-RestMethod -Method $method -Uri $uri -Headers $vaultHeaders -ContentType 'application/json' -Body $body }
+            return Invoke-RestMethod -Method $method -Uri $uri -Headers $vaultHeaders
+        } catch {
+            if ($i -ge 12 -or $_.Exception.Response.StatusCode.value__ -ne 403) { throw }
+            Start-Sleep -Seconds 15
+        }
+    }
+}
 function Test-VaultSecret([string]$vault, [string]$name) {
     try {
-        Invoke-RestMethod -Uri "https://$vault.vault.azure.net/secrets/$name/?api-version=7.4" -Headers @{ Authorization = "Bearer $vaultToken" } | Out-Null
+        Invoke-Vault Get "https://$vault.vault.azure.net/secrets/$name/?api-version=7.4" | Out-Null
         return $true
     } catch {
         if ($_.Exception.Response.StatusCode.value__ -eq 404) { return $false }
@@ -109,16 +140,7 @@ function Test-VaultSecret([string]$vault, [string]$name) {
 }
 function Set-VaultSecret([string]$vault, [string]$name, [string]$value) {
     $body = @{ value = $value; contentType = 'base64' } | ConvertTo-Json
-    # A fresh role assignment takes a minute or two to reach Key Vault.
-    for ($i = 0; ; $i++) {
-        try {
-            Invoke-RestMethod -Method Put -Uri "https://$vault.vault.azure.net/secrets/$name/?api-version=7.4" -Headers @{ Authorization = "Bearer $vaultToken" } -ContentType 'application/json' -Body $body | Out-Null
-            return
-        } catch {
-            if ($i -ge 12 -or $_.Exception.Response.StatusCode.value__ -ne 403) { throw }
-            Start-Sleep -Seconds 15
-        }
-    }
+    Invoke-Vault Put "https://$vault.vault.azure.net/secrets/$name/?api-version=7.4" $body | Out-Null
 }
 function New-TokenKey { [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) }
 function New-VapidKey {
@@ -142,7 +164,6 @@ foreach ($name in 'token-key', 'vapid-key') {
 
 # Production's keys must be the ones it already signs with: a new token key signs every host
 # and phone out (hosts exit on 4001), and a new VAPID key orphans every push subscription.
-$liveProduction = Get-AppJson $productionCfg.name
 foreach ($pair in @(@('token-key', 'Relay__TokenKey'), @('vapid-key', 'Relay__VapidPrivateKey'))) {
     if (Test-VaultSecret $out.productionVault.value $pair[0]) { continue }
     $value = if ($liveProduction) { Get-LiveSecret $liveProduction $pair[1] } else { $null }
