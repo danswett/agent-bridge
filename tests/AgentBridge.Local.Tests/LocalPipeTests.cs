@@ -54,6 +54,33 @@ public sealed class LocalPipeTests : IAsyncDisposable
     });
 
     [Fact]
+    public async Task A_profile_too_deep_for_a_socket_address_listens_in_the_users_runtime_folder()
+    {
+        // Pipe names have no such limit.
+        if (OperatingSystem.IsWindows()) { return; }
+        var before = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
+        Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", folder);
+        try
+        {
+            var deep = Path.Combine(folder, new string('d', 90), new string('e', 90));
+            var endpoint = LocalEndpoint.For(deep);
+
+            Assert.StartsWith(folder, endpoint.Address);
+            Assert.True(LocalEndpoint.Fits(endpoint.Address));
+            Assert.Equal(endpoint.Address, LocalEndpoint.For(deep).Address);
+            Assert.NotEqual(endpoint.Address, LocalEndpoint.For(deep + "x").Address);
+            Assert.Equal(Path.Combine(folder, "host.sock"), Endpoint.Address);
+
+            var server = LocalServer.Start(endpoint, Echo);
+            owned.Add(server);
+            var ch = await LocalClient.ConnectAsync(endpoint, Patience);
+            owned.Add(ch);
+            Assert.Equal("Here", (await ch.HelloAsync()).Machine.Name);
+        }
+        finally { Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", before); }
+    }
+
+    [Fact]
     public async Task A_request_gets_its_response_and_the_host_sees_a_local_peer()
     {
         Serve(Echo);

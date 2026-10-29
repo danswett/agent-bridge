@@ -256,15 +256,21 @@ async Task<int> ServeAsync()
             stop.Cancel();
         },
     }, Log);
-    LocalServer local;
+    LocalServer? local = null;
     try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
         return 3;
     }
+    // Anything else that keeps it from listening (a socket path too long for the OS, say)
+    // costs this machine's apps their way in, not the host its relay.
+    catch (Exception e) when (e is System.Net.Sockets.SocketException or ArgumentException or IOException or UnauthorizedAccessException)
+    {
+        Log($"the local API is off, so apps on this machine cannot reach this host: {e.Message}");
+    }
     await using var localLifetime = local;
-    Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local pipe {local.Endpoint.Address}; {push.Subscribers} device(s) to notify");
+    Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {push.Subscribers} device(s) to notify");
 
     var backoff = TimeSpan.FromSeconds(1);
     var reconnects = 0;

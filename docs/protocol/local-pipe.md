@@ -14,7 +14,7 @@ One per host profile.
 | OS | Endpoint |
 |---|---|
 | Windows | Named pipe `\\.\pipe\AgentBridge.Host.<h>`, where `<h>` is the first 16 hex digits of SHA-256 of `<user SID>|<profile folder, lower case>` |
-| macOS, Linux | Unix socket `<profile folder>/host.sock` (the folder is `0700`) |
+| macOS, Linux | Unix socket `<profile folder>/host.sock` (the folder is `0700`). If that path is too long for a socket address (over 103 bytes), `agent-bridge-<h>.sock` in `$XDG_RUNTIME_DIR`, or `$TMPDIR` on macOS (both the user's alone), where `<h>` is 16 hex digits of SHA-256 of the profile folder. If neither fits, the host runs without its local API and says so in its log |
 
 The profile folder is `%LOCALAPPDATA%\AgentBridge\<profile>` on Windows and
 `~/.agent-bridge/<profile>` elsewhere. An app finds its host from the same profile name;
