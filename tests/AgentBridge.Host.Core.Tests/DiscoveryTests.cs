@@ -243,6 +243,24 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public async Task A_Codex_lock_holder_whose_command_line_cannot_be_read_names_no_session_until_it_can()
+    {
+        using var f = new Fixture();
+        var lockFile = f.CodexLock(A);
+        // Possibly the shared daemon: ending it would end every session it serves.
+        f.Processes.Run(AgentKind.Codex, 900, commandLine: null);
+        f.Processes.Holders[lockFile] = [900];
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Empty(source.Snapshot());
+
+        f.Processes.Run(AgentKind.Codex, 900, "codex.exe --no-daemon");
+        await source.RefreshAsync();
+
+        Assert.Equal(900, Assert.Single(source.Snapshot()).ProcessId);
+    }
+
+    [Fact]
     public async Task A_Codex_thread_lock_held_by_the_shared_daemon_or_by_two_terminals_names_no_session()
     {
         using var f = new Fixture();
