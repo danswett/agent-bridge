@@ -25,9 +25,11 @@ public static class ClaudePrompts
     public static AgentPromptsSince Since(string path, long from)
     {
         var prompts = new List<AgentPrompt>();
-        // The prompt the next attachments belong to, and the files each has collected.
+        // The prompt the next attachments belong to, and the files each has collected. Enqueued
+        // prompts wait here, by their words, for the queued "user" entry that takes them: one
+        // enqueued before the scan began has no entry, so its entry takes nothing.
         List<string>? files = null;
-        var queued = new Queue<List<string>>();
+        var queued = new List<(string Words, List<string> Files)>();
         if (Jsonl.Lines(path, from, skipFirst: false, Line) is not { } to) { return new AgentPromptsSince(false, [], from); }
         return new AgentPromptsSince(true, prompts, to);
 
@@ -49,7 +51,7 @@ public static class ClaudePrompts
                 {
                     case "queue-operation" when Str(e, "operation") == "enqueue" && Str(e, "content") is { } content:
                         var mine = new List<string>();
-                        queued.Enqueue(mine);
+                        queued.Add((InjectableText.Flatten(content), mine));
                         prompts.Add(new AgentPrompt(start, content, mine));
                         files = null;
                         break;
@@ -58,7 +60,10 @@ public static class ClaudePrompts
                         if (Text(e) is not { } text) { return; }
                         if (Str(e, "promptSource") == "queued")
                         {
-                            files = queued.Count > 0 ? queued.Dequeue() : null;
+                            var words = InjectableText.Flatten(text);
+                            var at = queued.FindIndex(q => q.Words == words);
+                            files = at < 0 ? null : queued[at].Files;
+                            if (at >= 0) { queued.RemoveAt(at); }
                             return;
                         }
                         files = [];

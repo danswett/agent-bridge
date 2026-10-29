@@ -270,7 +270,7 @@ public sealed class ReplyService : ISessionReplier
         IReadOnlyList<string> staged = [];
         if (claim is not null)
         {
-            if (agent == AgentKind.Codex && claim.Items.Any(i => !AttachmentFiles.IsPastableImage(i.Bytes)))
+            if (agent == AgentKind.Codex && !AttachmentStore.AllPastableImages(claim))
             {
                 return Done(Refused("Codex takes only images (PNG, JPEG, GIF or WebP) as attachments; send other files at the machine"));
             }
