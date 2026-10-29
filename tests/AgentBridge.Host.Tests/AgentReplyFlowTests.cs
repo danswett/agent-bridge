@@ -236,6 +236,21 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_input_box_that_has_not_drawn_the_reply_yet_is_looked_at_again_before_Enter_is_pressed()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan =>
+        {
+            if (plan.Sends is [{ Text: "", Enter: true }]) { Fixture.Append(claude, ClaudePrompt("drawn late")); return; }
+            // The box still reads empty at the first look, and shows the words only after it.
+            _ = Task.Run(async () => { await Task.Delay(300); console.Rows = ClaudeIdle("drawn late"); });
+        };
+
+        Assert.Equal(AnswerOutcome.Delivered, (await ReplyAsync(ClaudeId, "drawn late")).Outcome);
+        Assert.Equal(2, console.Plans.Count);
+    }
+
+    [Fact]
     public async Task A_Claude_reply_that_never_records_gets_two_more_Enters_at_most()
     {
         console.Rows = ClaudeIdle();

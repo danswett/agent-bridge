@@ -324,10 +324,13 @@ public sealed class ReplyService : ISessionReplier
 
     static Composer? Find(AgentKind agent, IReadOnlyList<string> rows) => agent == AgentKind.Claude ? ClaudeComposer.Find(rows) : CodexComposer.Find(rows);
 
-    // Presses Enter again while the reply is still sitting in the input box unrecorded.
+    // Presses Enter again while the reply is still sitting in the input box unrecorded. A box
+    // still empty may not have drawn the reply yet (Codex draws late while it streams), so it
+    // is looked at again rather than given up on.
     async Task SubmitAsync(string sessionId, AgentKind agent, int pid, string transcript, long from, AgentReply plan)
     {
-        for (var pressed = 0; ; pressed++)
+        var pressed = 0;
+        for (var look = 0; look <= options.ExtraEnters + 1; look++)
         {
             var started = options.Time.GetTimestamp();
             while (options.Time.GetElapsedTime(started) < options.SubmitAfter)
@@ -335,7 +338,7 @@ public sealed class ReplyService : ISessionReplier
                 if (Prompts(agent, transcript, from).Prompts.Any(plan.Says)) { return; }
                 await Task.Delay(options.PollInterval, options.Time);
             }
-            if (pressed >= options.ExtraEnters) { return; }
+            if (pressed >= options.ExtraEnters || look > options.ExtraEnters) { return; }
 
             await gate.WaitToTypeAsync();
             try
@@ -346,12 +349,21 @@ public sealed class ReplyService : ISessionReplier
                 if (Prompts(agent, transcript, from).Prompts.Any(plan.Says)) { return; }
                 if (!processes.GetAgentProcesses(agent).Any(p => p.Id == pid) || guard.Refuse(pid) is not null) { return; }
                 var screen = await injector.ReadScreenAsync(pid);
-                if (screen.Rows is not { } rows || Find(agent, rows) is not { } box || !box.Holds(plan.Composed))
+                // Why not, for the log; never the words on screen.
+                var why = screen.Rows is not { } rows ? "its screen could not be read"
+                    : Find(agent, rows) is not { } found ? "its input box is not on screen"
+                    : found.Empty ? null
+                    : !found.Holds(plan.Composed) ? $"its input box holds other words ({found.Content.Length} characters, not {plan.Composed.Length})"
+                    : "";
+                if (why is null) { continue; }
+                if (why.Length > 0)
                 {
-                    log($"not pressing Enter again in {Short(sessionId)}: its input box does not hold the reply");
+                    log($"not pressing Enter again in {Short(sessionId)}: {why}");
                     return;
                 }
+                var box = Find(agent, screen.Rows!)!;
                 var enter = await injector.InjectAsync(pid, new KeyPlan([new KeySend("", true, 0, 0, box.Rows)]));
+                pressed++;
                 log($"pressed Enter again in {Short(sessionId)} (pid {pid}): the reply was still in its input box -> {enter.Status} {enter.Detail}");
                 if (enter.Status != InjectionStatus.Typed) { return; }
             }
