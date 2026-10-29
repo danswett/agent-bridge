@@ -47,6 +47,9 @@ public sealed class ReplyOptions
     // given up on. Codex, streaming output, was seen live taking several seconds over it.
     public TimeSpan SubmitPatience { get; init; } = TimeSpan.FromSeconds(15);
 
+    // How long Codex is given to show a pasted image path as "[Image #n]" before the next keys.
+    public TimeSpan ImageWait { get; init; } = TimeSpan.FromSeconds(10);
+
     public TimeSpan RememberFor { get; init; } = TimeSpan.FromMinutes(15);
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
@@ -279,8 +282,10 @@ public sealed class ReplyService : ISessionReplier
 
         await gate.WaitToTypeAsync();
         long from;
-        KeyPlan keys;
+        var described = new List<string>();
         InjectionResult result;
+        // Whether a send before this one went: a refusal then is no longer "nothing typed".
+        var sent = false;
         try
         {
             if (probe.Active() is { } active) { return Done(Refused(active)); }
@@ -301,26 +306,42 @@ public sealed class ReplyService : ISessionReplier
             // box is typed into whatever it shows: words someone left there would go with the
             // reply, and Claude's record of them would leave the reply unconfirmed.
             if (agent == AgentKind.Codex && !box.Empty) { return Done(Refused($"something is already typed in {name}'s input box at the machine; send or clear it there first")); }
-            keys = plan.Keys(box.Rows);
             // The agent only appends, and a line still being written at this point is not a
             // prompt typed now: reading from here, it does not parse.
             from = Jsonl.Length(transcript);
-            try { result = await injector.InjectAsync(pid, keys); }
-            catch (Exception e)
+            result = new InjectionResult(InjectionStatus.Typed, "ok");
+            foreach (var send in plan.Sends)
             {
-                return new Attempt(Unconfirmed($"the injector failed while typing ({e.Message}); check at the machine"), null, KeysWent: true);
+                if (send.After is { } after)
+                {
+                    box = await AwaitBoxAsync(agent, pid, after);
+                    if (box is null)
+                    {
+                        log($"stopped typing a reply into {name} {Short(session.Id)}: its input box did not take an image path as an image");
+                        return new Attempt(Unconfirmed($"{name} did not take an attachment as an image, so its path may be left as words in its input box; check at the machine"), null, KeysWent: true);
+                    }
+                }
+                var keys = new KeyPlan([AgentReply.Key(send, box.Rows)]);
+                described.Add(keys.Describe());
+                try { result = await injector.InjectAsync(pid, keys); }
+                catch (Exception e)
+                {
+                    return new Attempt(Unconfirmed($"the injector failed while typing ({e.Message}); check at the machine"), null, KeysWent: true);
+                }
+                if (result.Status != InjectionStatus.Typed) { break; }
+                sent = true;
             }
         }
         finally { gate.DoneTyping(); }
 
-        log($"typed a reply into {name} {Short(session.Id)} (pid {pid}){(staged.Count > 0 ? $" with {staged.Count} attachment(s)" : "")}: {keys.Describe()} -> {result.Status} {result.Detail}");
+        log($"typed a reply into {name} {Short(session.Id)} (pid {pid}){(staged.Count > 0 ? $" with {staged.Count} attachment(s)" : "")}: {string.Join(" | ", described)} -> {result.Status} {result.Detail}");
         switch (result.Status)
         {
-            case InjectionStatus.NothingTyped:
+            case InjectionStatus.NothingTyped when !sent:
                 return Done(Refused(result.Detail == WorkerInjector.ScreenChanged
                     ? $"{name}'s screen changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"
                     : result.Detail));
-            case InjectionStatus.Interrupted:
+            case InjectionStatus.NothingTyped or InjectionStatus.Interrupted:
                 return new Attempt(Unconfirmed($"{result.Detail}; part of the reply may have reached the session, so check at the machine"), null, KeysWent: true);
         }
 
@@ -328,6 +349,20 @@ public sealed class ReplyService : ISessionReplier
         return new Attempt(null, new Typed(() => ConfirmAgentAsync(agent, transcript, from, plan)), KeysWent: true);
 
         static Attempt Done(ReplyResult r) => new(r, null);
+    }
+
+    // The input box once it shows exactly what the sends so far put in it, or null if it does
+    // not within ImageWait.
+    async Task<Composer?> AwaitBoxAsync(AgentKind agent, int pid, string shows)
+    {
+        var started = options.Time.GetTimestamp();
+        while (true)
+        {
+            var screen = await injector.ReadScreenAsync(pid);
+            if (screen.Rows is { } rows && Find(agent, rows) is { } box && box.Holds(shows)) { return box; }
+            if (options.Time.GetElapsedTime(started) >= options.ImageWait) { return null; }
+            await Task.Delay(options.PollInterval, options.Time);
+        }
     }
 
     static Composer? Find(AgentKind agent, IReadOnlyList<string> rows) => agent == AgentKind.Claude ? ClaudeComposer.Find(rows) : CodexComposer.Find(rows);
