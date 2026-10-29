@@ -14,6 +14,7 @@ public sealed class MainTests : IAsyncLifetime
     readonly LockedDispatcher ui = new();
     HostConnection connection = null!;
     MainViewModel main = null!;
+    int syncs;
 
     sealed class Sink(List<ToastNotice> shown) : IToastSink
     {
@@ -27,6 +28,7 @@ public sealed class MainTests : IAsyncLifetime
         host.Sessions.Add(Make.Session("asking", question: Make.Choice(), updated: Make.T0.AddMinutes(1)));
         host.Start();
         connection = host.Connect(ui);
+        connection.Sessions.Synced += () => Interlocked.Increment(ref syncs);
         var deliveries = new Deliveries(connection, ui);
         var planner = new ToastPlanner(new Sink(shown), clock) { Capabilities = () => connection.Capabilities };
         main = new MainViewModel(connection, new CardContext { Deliveries = deliveries, Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), toasts: planner);
@@ -41,10 +43,16 @@ public sealed class MainTests : IAsyncLifetime
 
     string[] Order() => [.. main.Sessions.Select(c => c.Id)];
 
+    // Read in full, sessions.synced included, and not just its cards: until then a session asked
+    // for that is not in the snapshot is taken to have ended and is forgotten, and upserts are
+    // the baseline rather than news. Waiting only for the two cards let a test act in the gap
+    // between the last card and sessions.synced, and the session it asked for never opened.
+    Task SnapshotAsync() => Wait.UntilAsync(() => main.Sessions.Count == 2 && Volatile.Read(ref syncs) > 0, "the snapshot");
+
     [Fact]
     public async Task Cards_are_most_recently_updated_first_and_move_up_when_their_session_changes()
     {
-        await Wait.UntilAsync(() => main.Sessions.Count == 2, "the snapshot");
+        await SnapshotAsync();
         Assert.Equal(["asking", "old"], Order());
 
         await host.SendAsync(Events.SessionUpsert, Make.Session("old", status: SessionStatus.Working, updated: Make.T0.AddMinutes(2)));
@@ -55,7 +63,7 @@ public sealed class MainTests : IAsyncLifetime
     [Fact]
     public async Task No_card_moves_while_someone_is_typing_in_any_card()
     {
-        await Wait.UntilAsync(() => main.Sessions.Count == 2, "the snapshot");
+        await SnapshotAsync();
         main.Sessions.Single(c => c.Id == "asking").Editing = true;
 
         await host.SendAsync(Events.SessionUpsert, Make.Session("old", status: SessionStatus.Working, updated: Make.T0.AddMinutes(2)));
@@ -67,7 +75,7 @@ public sealed class MainTests : IAsyncLifetime
     [Fact]
     public async Task A_question_pending_when_the_app_connects_is_toasted_but_a_turn_finished_before_is_not()
     {
-        await Wait.UntilAsync(() => main.Sessions.Count == 2, "the snapshot");
+        await SnapshotAsync();
         await Wait.UntilAsync(() =>
         {
             clock.Advance(TimeSpan.FromSeconds(1));
@@ -98,16 +106,17 @@ public sealed class MainTests : IAsyncLifetime
     {
         var opened = new List<string>();
         main.OpenRequested += c => opened.Add(c.Id);
-        await Wait.UntilAsync(() => main.Sessions.Count == 2, "the snapshot");
+        await SnapshotAsync();
         main.Sessions.Single(c => c.Id == "old").Folded = true;
 
-        main.Open("later");
+        // On the UI thread, as a toast click or the tray asks.
+        ui.Post(() => main.Open("later"));
         Assert.Empty(opened);
         await host.SendAsync(Events.SessionUpsert, Make.Session("later", updated: Make.T0.AddMinutes(5)));
         await Wait.UntilAsync(() => opened.Count == 1, "the session to open");
         Assert.Equal(["later"], opened);
 
-        main.Open("old");
+        ui.Post(() => main.Open("old"));
         Assert.Equal(["later", "old"], opened);
         Assert.False(main.Sessions.Single(c => c.Id == "old").Folded);
     }
