@@ -139,6 +139,8 @@ public class TranscriptTests
         Assert.True(Transcripts.Reply(Transcripts.Claude, path, 0, "rehearsal claude reply", 0, steering: false).Found);
         Append(path, new { type = "event_msg", payload = new { type = "user_message", message = "rehearsal codex reply" } });
         Assert.True(Transcripts.Reply(Transcripts.Codex, path, 0, "rehearsal codex reply", 0, steering: false).Found);
+        Append(path, new { type = "event_msg", payload = new { type = "item_completed", item = new { type = "UserMessage", id = "u1", content = new[] { new { type = "text", text = "rehearsal newer codex reply" } } } } });
+        Assert.True(Transcripts.Reply(Transcripts.Codex, path, 0, "rehearsal newer codex reply", 0, steering: false).Found);
     }
 
     [Fact]

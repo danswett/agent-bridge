@@ -183,8 +183,17 @@ internal static class Transcripts
                     }
                 default:
                     {
-                        if (Str(e, "type") != "event_msg" || Obj(e, "payload") is not { } p || Str(p, "type") != "user_message") { continue; }
-                        if (Str(p, "message") is { } words && Same(words, text)) { return Match.Yes("Codex took the prompt", new { record = "event_msg user_message", offset }); }
+                        // Older Codex records the prompt as user_message; newer as an
+                        // item_completed UserMessage whose content holds the text, as the host's
+                        // CodexParser reads both.
+                        if (Str(e, "type") != "event_msg" || Obj(e, "payload") is not { } p) { continue; }
+                        var words = Str(p, "type") switch
+                        {
+                            "user_message" => Str(p, "message"),
+                            "item_completed" when Obj(p, "item") is { } item && Str(item, "type") == "UserMessage" => ItemText(item),
+                            _ => null,
+                        };
+                        if (words is not null && Same(words, text)) { return Match.Yes("Codex took the prompt", new { record = $"event_msg {Str(p, "type")}", offset }); }
                         continue;
                     }
             }
@@ -271,6 +280,13 @@ internal static class Transcripts
             sb.Append(ch);
         }
         return sb.ToString();
+    }
+
+    static string? ItemText(JsonElement item)
+    {
+        if (!item.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array) { return Str(item, "text"); }
+        var parts = content.EnumerateArray().Select(c => c.ValueKind == JsonValueKind.String ? c.GetString() : Str(c, "text")).Where(t => !string.IsNullOrEmpty(t));
+        return string.Join("\n", parts);
     }
 
     static string? Show(JsonElement e) => e.ValueKind == JsonValueKind.Undefined ? null : e.GetRawText() is { Length: > 400 } raw ? raw[..400] + "…" : e.GetRawText();
