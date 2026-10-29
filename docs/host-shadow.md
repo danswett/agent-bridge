@@ -176,7 +176,8 @@ when `run` starts is kept beside it as `.unreadable-<time>`, never overwritten.
   the rest of the day. `intervalSeconds` and `graceSeconds` are the latest run's.
 * `open` is a mismatch still going when the file was last written: at the end of the day
   (the next day's file carries it on with the same `first`, and `summary` counts it once)
-  or when `run` stopped.
+  or when `run` stopped. One that began before midnight but lasted its grace only after it
+  is added to the day it began as well, so that day does not read clean.
 * At most 1,000 mismatches are listed per day; any beyond are counted in `overflow` by
   kind, never dropped.
 

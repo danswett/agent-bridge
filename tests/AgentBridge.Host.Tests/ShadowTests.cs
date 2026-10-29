@@ -263,7 +263,7 @@ public sealed class ShadowTests : IDisposable
     [Fact]
     public void The_summary_counts_mismatches_by_kind_over_the_days_once_each_and_says_which_days_were_clean()
     {
-        var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 26, 23, 58, 0, TimeSpan.Zero));
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 26, 23, 59, 30, TimeSpan.Zero));
         time.SetLocalTimeZone(TimeZoneInfo.Utc);
         var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(30), time);
         void Sample(params ShadowDifference[] diffs)
@@ -271,7 +271,7 @@ public sealed class ShadowTests : IDisposable
             ledger.Record(new ShadowComparison(true, 1, 1, diffs, ["s1"]), new ShadowView { Version = "1.33.32" }, new ShadowView { Version = "0.1.0" });
             time.Advance(TimeSpan.FromSeconds(30));
         }
-        // Over midnight: in both days' files, one mismatch.
+        // Begun before midnight and only a mismatch after it: in both days' files, one mismatch.
         for (var i = 0; i < 10; i++) { Sample(new ShadowDifference(ShadowKinds.Status, "s1", "daemon=working host=idle")); }
         Sample();
         // A short one the next morning: timing skew, not a mismatch.

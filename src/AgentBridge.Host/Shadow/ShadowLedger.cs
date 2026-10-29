@@ -172,6 +172,9 @@ public sealed class ShadowLedger
         if (e.Entry is null || e.EntryDate != date)
         {
             fresh = e.Entry is null;
+            // One that began before midnight and only lasted its grace after it belongs to the
+            // day it began as well, or that day would read clean.
+            if (fresh) { Backfill(e, date); }
             e.EntryDate = date;
             if (day!.Mismatches.Count >= MaxMismatches)
             {
@@ -188,6 +191,34 @@ public sealed class ShadowLedger
         e.Entry.Open = true;
         e.Entry.Details = [.. e.Details];
         return fresh ? e.Entry : null;
+    }
+
+    void Backfill(Episode e, string date)
+    {
+        var started = DateOnly.ParseExact(LocalDate(e.First, time.LocalTimeZone), "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        var today = DateOnly.ParseExact(date, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        for (var d = started; d < today; d = d.AddDays(1))
+        {
+            var name = d.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+            if (Read(folder, name) is not { } earlier) { continue; }
+            if (earlier.Mismatches.Count >= MaxMismatches) { earlier.Overflow[e.Kind] = earlier.Overflow.GetValueOrDefault(e.Kind) + 1; }
+            else
+            {
+                earlier.Mismatches.Add(new ShadowEpisode
+                {
+                    Kind = e.Kind,
+                    Session = e.Session,
+                    First = e.First,
+                    Last = e.Last,
+                    Seconds = (long)(e.Last - e.First).TotalSeconds,
+                    Samples = e.Samples,
+                    // It went on past the end of that day.
+                    Open = true,
+                    Details = [.. e.Details],
+                });
+            }
+            Save(earlier);
+        }
     }
 
     void Close(Episode e)
