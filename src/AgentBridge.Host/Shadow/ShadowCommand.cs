@@ -1,0 +1,152 @@
+using System.Text.Json;
+using AgentBridge.Host.Core;
+using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Delivery.Windows;
+using AgentBridge.Local;
+using AgentBridge.Transport;
+
+namespace AgentBridge.Host.Shadow;
+
+// One sample: both views, compared, and (for run) recorded.
+public sealed class ShadowRunner(DaemonReader daemon, IShadowHost host, ShadowLedger? ledger, Action<string> log)
+{
+    public async Task<ShadowComparison> SampleAsync(CancellationToken ct = default)
+    {
+        var h = await host.ObserveAsync(ct);
+        var d = daemon.Read();
+        var comparison = ShadowCompare.Compare(d, h);
+        if (ledger is not null)
+        {
+            foreach (var m in ledger.Record(comparison, d, h))
+            {
+                log($"mismatch: {m.Kind}{(m.Session is null ? "" : $" on {m.Session}")} for {m.Seconds} s ({string.Join("; ", m.Details)})");
+            }
+        }
+        return comparison;
+    }
+
+    public async Task RunAsync(TimeSpan interval, TimeProvider time, CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(interval, time);
+        var said = DateTimeOffset.MinValue;
+        try
+        {
+            do
+            {
+                try { await SampleAsync(ct); }
+                // A report that cannot be written this time is tried again next time; the
+                // comparison itself never stops for it.
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log($"sample not recorded: {e.GetType().Name}: {e.Message}"); }
+                if (ledger?.Today is { } day && time.GetUtcNow() - said >= TimeSpan.FromHours(1))
+                {
+                    said = time.GetUtcNow();
+                    log($"{day.Date}: {day.Compared} of {day.Samples} samples compared, {day.Mismatches.Count} mismatch(es), {day.Sessions.Count} session(s) seen");
+                }
+            }
+            while (await timer.WaitForNextTickAsync(ct));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+    }
+}
+
+// agent-bridge-host shadow run | once | summary (docs/host-shadow.md).
+public static class ShadowCommand
+{
+    public const string Usage = "agent-bridge-host shadow run [--interval <s>] [--grace <s>] [--in-process] | shadow once [--in-process] [--json] | shadow summary [--days <n>] [--json]   [--profile <name>] [--agent-ha-bridge-home <dir>]";
+
+    public static async Task<int> RunAsync(IReadOnlyList<string> args, SessionSourceOptions options, string version, bool dev, TextWriter output, TextWriter error)
+    {
+        string? Option(string name)
+        {
+            var i = args.ToList().IndexOf(name);
+            return i >= 0 && i + 1 < args.Count ? args[i + 1] : null;
+        }
+        bool Flag(string name) => args.Contains(name);
+        int Number(string name, int fallback, int min, int max)
+        {
+            var text = Option(name);
+            if (text is null) { return fallback; }
+            if (!int.TryParse(text, out var n) || n < min || n > max) { throw new ArgumentException($"{name} takes a whole number from {min} to {max}"); }
+            return n;
+        }
+
+        var sub = args.Count > 1 ? args[1] : "";
+        var profile = Option("--profile") ?? "default";
+        if (!Identity.IsValidProfile(profile)) { error.WriteLine($"\"{profile}\" is not a profile name"); return 2; }
+        var folder = Path.Combine(Identity.DefaultRoot, profile);
+        var reports = Path.Combine(folder, "shadow");
+        var paths = Option("--agent-ha-bridge-home") is { } home ? new AgentHaBridgePaths(Path.GetFullPath(home), options.CopilotHome) : AgentHaBridgePaths.ForCurrentUser(options.CopilotHome);
+        var time = TimeProvider.System;
+        try
+        {
+            switch (sub)
+            {
+                case "summary":
+                    {
+                        var days = Number("--days", 7, 1, 92);
+                        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(time.GetUtcNow(), time.LocalTimeZone).DateTime);
+                        var summary = ShadowSummary.Build(reports, today, days);
+                        output.Write(Flag("--json") ? JsonSerializer.Serialize(summary, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }) + Environment.NewLine : summary.Format());
+                        return 0;
+                    }
+                case "once":
+                    {
+                        if (!Directory.Exists(paths.Home)) { error.WriteLine($"agent-ha-bridge is not installed here ({paths.Home}); there is nothing to compare with"); return 2; }
+                        await using var host = await HostAsync(Flag("--in-process"), folder, options, version, dev, CancellationToken.None);
+                        var comparison = await new ShadowRunner(new DaemonReader(paths, time), host.View, null, _ => { }).SampleAsync();
+                        if (Flag("--json")) { output.WriteLine(JsonSerializer.Serialize(comparison, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true })); }
+                        else
+                        {
+                            output.WriteLine($"{(comparison.Compared ? "compared" : "not compared")}: daemon {comparison.DaemonSessions} session(s), host {comparison.HostSessions}; {comparison.Differences.Count} difference(s) now (a mismatch is one that lasts the grace; see shadow run)");
+                            foreach (var d in comparison.Differences) { output.WriteLine($"  {d.Kind,-26} {d.Session ?? "-",-14} {d.Detail}"); }
+                        }
+                        return comparison.Differences.Count == 0 ? 0 : 1;
+                    }
+                case "run":
+                    {
+                        if (!Directory.Exists(paths.Home)) { error.WriteLine($"agent-ha-bridge is not installed here ({paths.Home}); there is nothing to compare with"); return 2; }
+                        if (!Directory.Exists(folder)) { error.WriteLine($"there is no host profile \"{profile}\" here ({folder}); start agent-bridge-host serve once first"); return 2; }
+                        var interval = TimeSpan.FromSeconds(Number("--interval", 15, 5, 3600));
+                        var grace = TimeSpan.FromSeconds(Number("--grace", 60, 0, 86400));
+                        var ledger = new ShadowLedger(reports, grace, interval, time);
+                        using var lockFile = HostLock.TryAcquire(ledger.Folder, TimeSpan.Zero, "shadow.lock");
+                        if (lockFile is null) { error.WriteLine($"a shadow comparison is already running for profile \"{profile}\""); return 3; }
+                        HostLog.OpenFile(Path.Combine(ledger.Folder, "shadow.log"));
+                        using var stop = new CancellationTokenSource();
+                        Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
+                        await using var host = await HostAsync(Flag("--in-process"), folder, options, version, dev, stop.Token);
+                        HostLog.Write($"shadow comparison with agent-ha-bridge ({paths.Home}) against {host.Describe}, every {interval.TotalSeconds} s, grace {grace.TotalSeconds} s; reports in {ledger.Folder}");
+                        await new ShadowRunner(new DaemonReader(paths, time), host.View, ledger, HostLog.Write).RunAsync(interval, time, stop.Token);
+                        HostLog.Write("shadow comparison stopped");
+                        return 0;
+                    }
+                default:
+                    error.WriteLine("usage: " + Usage);
+                    return 2;
+            }
+        }
+        catch (ArgumentException e)
+        {
+            error.WriteLine(e.Message);
+            return 2;
+        }
+    }
+
+    sealed class HostHandle(IShadowHost view, string describe, IAsyncDisposable? owned) : IAsyncDisposable
+    {
+        public IShadowHost View { get; } = view;
+        public string Describe { get; } = describe;
+        public ValueTask DisposeAsync() => owned?.DisposeAsync() ?? ValueTask.CompletedTask;
+    }
+
+    // The running host through its pipe by default: what the user's devices actually see. In
+    // process, a scan of its own, for when no host serves this profile.
+    static async Task<HostHandle> HostAsync(bool inProcess, string folder, SessionSourceOptions options, string version, bool dev, CancellationToken ct)
+    {
+        if (!inProcess) { return new(new PipeShadowHost(LocalEndpoint.For(folder)), "the host serving this profile", null); }
+        var source = new SessionSource(options);
+        await source.StartAsync(ct);
+        IAgentHaBridgeProbe? probe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : null;
+        return new(new SourceShadowHost(source, probe, version, dev), "a scan in this process", source);
+    }
+}
