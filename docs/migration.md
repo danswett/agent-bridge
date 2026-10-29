@@ -28,6 +28,9 @@ with what the rollback did.
 1. **Preflight.** Refuses, before touching anything, when:
    * the profile is already migrated, or part-way through a migration;
    * the profile already has an `intake.json` with no migration record;
+   * another profile already takes this installation's spool, or is migrating it (two hosts
+     would handle every event twice; the intake also refuses to share a spool, see
+     `docs/host-hooks.md`);
    * `installation.json` is missing, is not schema 1 with a 32-hex id, belongs to another path,
      or is an isolated (test) installation;
    * agent-ha-bridge's `config.json` cannot be read, so its publication policy cannot be

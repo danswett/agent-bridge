@@ -80,6 +80,12 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         }
         var (install, problem) = AgentHaBridgeInstall.Read(options.BridgeHome);
         if (install is null) { Say("Refused: " + problem); return new(false, lines); }
+        // One profile per installation: two hosts taking one spool would handle every event twice.
+        if (OtherProfileTaking(install) is { } other)
+        {
+            Say($"Refused: profile {Path.GetFileName(other)} already takes installation {install.Id}'s hook spool ({Path.Combine(other, IntakeState.FileName)}); roll that profile back first.");
+            return new(false, lines);
+        }
         if (install.PublicationProblem() is { } publication) { Say("Refused: " + publication); return new(false, lines); }
         if (!File.Exists(options.HookSource)) { Say($"Refused: the hook program is missing beside the host ({options.HookSource}); reinstall the app."); return new(false, lines); }
         if (!dryRun && !await host.RunningAsync(cancellationToken))
@@ -446,6 +452,25 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
 
     static IEnumerable<string> Checked(AgentHaBridgeInstall install) =>
         new[] { install.ConfigPath, install.MetadataPath }.Concat(install.InstructionFiles);
+
+    // Another profile of this product (a sibling folder) whose intake.json, or migration record,
+    // names this installation.
+    string? OtherProfileTaking(AgentHaBridgeInstall install)
+    {
+        var root = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(options.ProfileFolder));
+        if (root is null || !Directory.Exists(root)) { return null; }
+        foreach (var folder in Directory.EnumerateDirectories(root))
+        {
+            if (AgentHaBridgeInstall.SamePath(folder, options.ProfileFolder)) { continue; }
+            if (IntakeState.Load(folder).State is { } state
+                && (state.InstallationId == install.Id || AgentHaBridgeInstall.SamePath(state.RuntimeRoot, install.RuntimeRoot)))
+            {
+                return folder;
+            }
+            if (MigrationRecord.Load(folder).Record is { } record && record.InstallationId == install.Id) { return folder; }
+        }
+        return null;
+    }
 
     async Task<bool> UntilAsync(Func<bool> condition, TimeSpan timeout, CancellationToken cancellationToken)
     {

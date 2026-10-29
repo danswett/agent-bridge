@@ -340,6 +340,20 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_second_profile_cannot_migrate_an_installation_another_profile_has_taken()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var other = Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(_f.Profile)!, "work")).FullName;
+        var listing = _f.Listing();
+
+        var report = await _f.Migrator(profile: other).MigrateAsync(dryRun: true);
+
+        Assert.False(report.Ok);
+        Assert.Contains("profile default already takes installation", report.ToString());
+        Assert.Equal(listing, _f.Listing());
+    }
+
+    [Fact]
     public async Task Rolling_back_with_nothing_migrated_says_so()
     {
         var report = await _f.Migrator().RollbackAsync(dryRun: false);

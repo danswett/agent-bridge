@@ -156,9 +156,9 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
         ["answerButtons"] = new JsonObject { ["max"] = 4 },
     };
 
-    public Migrator Migrator(TimeSpan? verify = null) => new(new MigrationOptions
+    public Migrator Migrator(TimeSpan? verify = null, string? profile = null) => new(new MigrationOptions
     {
-        ProfileFolder = Profile,
+        ProfileFolder = profile ?? Profile,
         BridgeHome = BridgeHome,
         HookFolder = HookFolder,
         HookSource = HookSource,
