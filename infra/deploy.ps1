@@ -67,20 +67,26 @@ if (-not $StagingImage) {
     $StagingVersion = Get-AppVersion $stagingApp
 }
 # Adopting means the very resources production runs on: a different environment would give
-# the app a new URL, and a different workspace would split its logs. So when production
-# exists, its environment and workspace are the stamp's, whatever the parameter file's
-# defaults (which are for a new stamp) say.
+# the app a new URL. So when production exists, its environment is the stamp's, whatever the
+# parameter file's defaults (for a new stamp) say, and that environment is left exactly as it
+# is until the cutover: updating it is updating what production runs on. Then it also starts
+# sending logs to the stamp's workspace (the hand-made one sends them nowhere).
 $liveProduction = Get-AppJson $productionCfg.name
+$env:RELAY_MANAGE_ENVIRONMENT = 'true'
 if ($liveProduction) {
     $liveEnv = az containerapp env show --ids $liveProduction.properties.managedEnvironmentId -o json | ConvertFrom-Json
     if ($liveEnv.resourceGroup -ne $ResourceGroup) { throw "$($productionCfg.name) runs in environment $($liveEnv.name) in resource group $($liveEnv.resourceGroup), not $ResourceGroup" }
-    $customerId = $liveEnv.properties.appLogsConfiguration.logAnalyticsConfiguration.customerId
-    $workspace = az monitor log-analytics workspace list -g $ResourceGroup --query "[?customerId=='$customerId'].name | [0]" -o tsv
-    if (-not $workspace) { throw "environment $($liveEnv.name) logs to a workspace outside $ResourceGroup ($customerId)" }
     $env:RELAY_ENVIRONMENT_NAME = $liveEnv.name
-    $env:RELAY_LOG_ANALYTICS_NAME = $workspace
+    $env:RELAY_MANAGE_ENVIRONMENT = if ($Production) { 'true' } else { 'false' }
+    $logs = $liveEnv.properties.appLogsConfiguration
+    $customerId = if ($logs -and $logs.logAnalyticsConfiguration) { $logs.logAnalyticsConfiguration.customerId } else { $null }
+    if ($customerId) {
+        $workspace = az monitor log-analytics workspace list -g $ResourceGroup --query "[?customerId=='$customerId'].name | [0]" -o tsv
+        if (-not $workspace) { throw "environment $($liveEnv.name) logs to a workspace outside $ResourceGroup ($customerId)" }
+        $env:RELAY_LOG_ANALYTICS_NAME = $workspace
+    }
     $script:builtParams = $null
-    Write-Host "adopting environment $($liveEnv.name) and workspace $workspace"
+    Write-Host "adopting environment $($liveEnv.name)$(if ($env:RELAY_MANAGE_ENVIRONMENT -eq 'false') { ' (left unchanged until the cutover)' })"
 }
 if ($Production) {
     if (-not $ProductionImage -or -not $ProductionVersion) { throw '-Production needs -ProductionImage and -ProductionVersion: the build staging has passed' }

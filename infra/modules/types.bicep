@@ -21,4 +21,6 @@ type appConfig = {
   @description('The vault holds github-client-secret: the relay then revokes each GitHub token as soon as sign-in has read the account id.')
   githubClientSecret: bool?
   purgeProtection: bool?
+  @description('Keep a system-assigned identity alongside the app\'s own (production, which was created with one).')
+  keepSystemIdentity: bool?
 }

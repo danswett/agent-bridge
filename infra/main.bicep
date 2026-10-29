@@ -31,6 +31,9 @@ param environmentName string
 @description('Set when adopting an environment created with workload profiles; a consumption-only environment has none.')
 param workloadProfiles array = []
 
+@description('Create or update the environment. False leaves an existing one exactly as it is (production runs in it); infra/deploy.ps1 sets it only for a new stamp or the cutover.')
+param manageEnvironment bool = true
+
 param registryName string
 
 @description('Must match the existing registry when adopting one.')
@@ -81,7 +84,7 @@ resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
-resource environment 'Microsoft.App/managedEnvironments@2025-01-01' = {
+resource environment 'Microsoft.App/managedEnvironments@2025-01-01' = if (manageEnvironment) {
   name: environmentName
   location: location
   tags: tags
@@ -131,11 +134,16 @@ resource deployersRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = [f
   }
 }]
 
+// By id, not by symbol: the environment may be one this deployment leaves alone.
+var environmentId = resourceId('Microsoft.App/managedEnvironments', environmentName)
+var workloadProfileName = empty(workloadProfiles) ? '' : workloadProfiles[0].name
+
 module stagingApp 'modules/relay-app.bicep' = {
   name: 'relay-staging'
   params: {
     location: location
-    environmentId: environment.id
+    environmentId: environmentId
+    workloadProfileName: workloadProfileName
     registryName: registry.name
     app: staging
     deployApp: deployApps
@@ -146,13 +154,15 @@ module stagingApp 'modules/relay-app.bicep' = {
     operatorPrincipalId: operatorPrincipalId
     tags: union(tags, { 'agent-bridge-env': 'staging' })
   }
+  dependsOn: [environment]
 }
 
 module productionApp 'modules/relay-app.bicep' = {
   name: 'relay-production'
   params: {
     location: location
-    environmentId: environment.id
+    environmentId: environmentId
+    workloadProfileName: workloadProfileName
     registryName: registry.name
     app: production
     deployApp: deployApps && deployProduction
@@ -163,6 +173,7 @@ module productionApp 'modules/relay-app.bicep' = {
     operatorPrincipalId: operatorPrincipalId
     tags: union(tags, { 'agent-bridge-env': 'production' })
   }
+  dependsOn: [environment]
 }
 
 output stagingFqdn string = stagingApp.outputs.fqdn

@@ -32,6 +32,9 @@ param deployerReadsSecrets bool = false
 @description('Object id of the person running infra/deploy.ps1, who seeds the vault\'s secrets (empty: none).')
 param operatorPrincipalId string = ''
 
+@description('Workload profile to run on, in an environment that has them (empty: none).')
+param workloadProfileName string = ''
+
 @description('Tags for every resource.')
 param tags object
 
@@ -143,11 +146,14 @@ resource relay 'Microsoft.App/containerApps@2025-01-01' = if (deployApp) {
   // onto an app infra/ has not adopted would skip its secrets and probes.
   tags: union(tags, { 'agent-bridge-managed': 'infra' })
   identity: {
-    type: 'UserAssigned'
+    // Production keeps the system identity it was created with, so the adoption removes nothing
+    // an earlier revision (the rollback target) might rely on.
+    type: app.?keepSystemIdentity == true ? 'SystemAssigned,UserAssigned' : 'UserAssigned'
     userAssignedIdentities: { '${identity.id}': {} }
   }
   properties: {
     environmentId: environmentId
+    workloadProfileName: empty(workloadProfileName) ? null : workloadProfileName
     configuration: {
       // One revision at a time: presence is in memory, so two live revisions would split an
       // account's devices between them (design §5.8; see docs/relay-deploy.md).
