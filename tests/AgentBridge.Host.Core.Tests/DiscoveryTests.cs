@@ -197,6 +197,66 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public async Task A_Codex_session_run_without_the_daemon_is_found_from_the_terminal_holding_its_thread_lock()
+    {
+        using var f = new Fixture();
+        Fixture.Append(f.CodexTranscript(A), Codex.Event(new { type = "user_message", message = "no hooks here" }, 1));
+        var lockFile = f.CodexLock(A);
+        f.Processes.Run(AgentKind.Codex, 800, "codex.exe --no-daemon -c model_reasoning_summary=detailed");
+        f.Processes.Holders[lockFile] = [800];
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+        await source.RefreshAsync();
+
+        var s = Assert.Single(source.Snapshot());
+        Assert.Equal(AgentKind.Codex, s.Agent);
+        Assert.Equal(800, s.ProcessId);
+        // Asked once for the lock, not on every pass, while the process it named runs.
+        Assert.Equal(1, f.Processes.HolderQueries);
+
+        f.Processes.Exit(AgentKind.Codex, 800);
+        File.Delete(lockFile);
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+    }
+
+    [Fact]
+    public async Task A_Codex_thread_lock_held_by_the_shared_daemon_or_by_two_terminals_names_no_session()
+    {
+        using var f = new Fixture();
+        var daemonHeld = f.CodexLock(A);
+        f.Processes.Run(AgentKind.Codex, 900, "\"C:\\Users\\me\\.codex\\packages\\app-server-daemon\\bin\\codex.exe\" app-server --listen unix:// --managed-daemon");
+        f.Processes.Run(AgentKind.Codex, 901, "codex.exe");
+        f.Processes.Holders[daemonHeld] = [900];
+        var shared = f.CodexLock(B);
+        f.Processes.Run(AgentKind.Codex, 902, "codex.exe --no-daemon");
+        f.Processes.Holders[shared] = [901, 902];
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+    }
+
+    [Fact]
+    public void Windows_names_the_process_that_has_a_file_open_and_nobody_once_it_is_closed()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        using var f = new Fixture();
+        var path = f.CodexLock(A);
+        var inspector = new SystemProcessInspector();
+
+        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+        {
+            Assert.Contains(Environment.ProcessId, inspector.FileHolders(path));
+        }
+
+        Assert.DoesNotContain(Environment.ProcessId, inspector.FileHolders(path));
+    }
+
+    [Fact]
     public async Task An_ended_Codex_registration_is_not_a_session_even_while_its_process_still_runs()
     {
         using var f = new Fixture();
