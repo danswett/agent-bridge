@@ -25,8 +25,15 @@ public sealed class IntakeTests : IDisposable
 
     string Spool => SpoolContract.SpoolDirectory(_f.Runtime);
 
-    HookIntake Intake(bool watch = false)
+    // A host's intake. Like a restarted host, a new one replaces the last (only one takes a spool
+    // at a time), unless it is meant to run alongside.
+    HookIntake Intake(bool watch = false, bool alongside = false)
     {
+        if (!alongside)
+        {
+            foreach (var i in _intakes) { i.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+            _intakes.Clear();
+        }
         var intake = new HookIntake(new HookIntakeOptions
         {
             RuntimeRoot = _f.Runtime,
@@ -119,6 +126,27 @@ public sealed class IntakeTests : IDisposable
         Assert.False(File.Exists(file));
         Assert.Null(intake.Paused);
         Assert.True(File.Exists(SpoolContract.HeartbeatPath(_f.Runtime)));
+    }
+
+    [Fact]
+    public async Task Only_one_host_takes_a_spool_and_a_second_waits_until_the_first_lets_go()
+    {
+        var file = Spooled("0001", "claude", "register", new { session_id = "a" });
+        var first = Intake();
+        Assert.Equal(1, first.Pass());
+
+        var second = Intake(alongside: true);
+        Spooled("0002", "claude", "register", new { session_id = "b" });
+        Assert.Equal(0, second.Pass());
+        Assert.Contains("another host is taking this spool", second.Paused);
+        Assert.True(File.Exists(Path.Combine(Spool, "0002.json")));
+
+        await first.DisposeAsync();
+        _intakes.Remove(first);
+        Assert.False(File.Exists(Path.Combine(_f.Runtime, HookIntake.ClaimFile)));
+        Assert.Equal(1, second.Pass());
+        Assert.Null(second.Paused);
+        Assert.False(File.Exists(file));
     }
 
     [Fact]

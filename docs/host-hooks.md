@@ -131,6 +131,12 @@ comparison (#40, `docs/host-shadow.md`) never reads the spool at all. It does re
 heartbeat as the daemon's, so it is for a machine before it migrates: once migrated the
 heartbeat is the host's.
 
+**One host per spool.** The intake takes the spool only while it holds
+`agent-bridge-host-intake.lock` in the runtime folder, opened for it alone and deleted when
+closed. A second host taking the same installation's spool (another profile with an
+`intake.json` for it) stands back in the same way until the first lets go. `migrate` also
+refuses a second profile for an installation that one already has.
+
 **Each pass**, as `Invoke-DaemonHookSpool`:
 
 1. Touch the heartbeat.

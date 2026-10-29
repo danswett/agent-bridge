@@ -72,6 +72,11 @@ public sealed class HookIntake : IAsyncDisposable
     // Whether approvals have been checked against the hooks that ran while nobody took events,
     // since this intake last (re)took the spool.
     bool _reconciled;
+    // Held while this intake takes the spool, so a second host (another profile migrated from
+    // the same installation) never handles the same events.
+    FileStream? _claim;
+
+    public const string ClaimFile = "agent-bridge-host-intake.lock";
 
     public HookIntake(HookIntakeOptions options, IProcessInspector processes, TimeProvider? time = null, Action<string>? log = null)
     {
@@ -133,9 +138,14 @@ public sealed class HookIntake : IAsyncDisposable
             StandBack(active);
             return 0;
         }
+        if (!Claim())
+        {
+            StandBack("another host is taking this spool (a second profile migrated from the same installation?)");
+            return 0;
+        }
         lock (_gate)
         {
-            if (_paused is not null) { _log("agent-ha-bridge has stopped; the host takes the hook spool again"); }
+            if (_paused is not null) { _log($"the host takes the hook spool again (was: {_paused})"); }
             _paused = null;
         }
         if (Beat() && !_reconciled)
@@ -165,14 +175,29 @@ public sealed class HookIntake : IAsyncDisposable
     {
         lock (_gate)
         {
-            if (_paused is null) { _log($"leaving the hook spool to agent-ha-bridge: {why}"); }
+            if (_paused is null) { _log($"standing back from the hook spool: {why}"); }
             _paused = why;
         }
         // The heartbeat is the daemon's now; the watcher would only wake passes that do nothing.
         _heartbeatOwned = false;
         _reconciled = false;
+        _claim?.Dispose();
+        _claim = null;
         _watcher?.Dispose();
         _watcher = null;
+    }
+
+    // Opened for this process alone and deleted when closed, so it never outlives the intake.
+    bool Claim()
+    {
+        if (_claim is not null) { return true; }
+        try
+        {
+            Directory.CreateDirectory(_options.RuntimeRoot);
+            _claim = new FileStream(Path.Combine(_options.RuntimeRoot, ClaimFile), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
     }
 
     // The daemon writes its pid; a hook reads only the time. This host's pid tells a reader
@@ -429,6 +454,8 @@ public sealed class HookIntake : IAsyncDisposable
             foreach (var s in _subscribers) { s.Writer.TryComplete(); }
             _subscribers.Clear();
         }
+        _claim?.Dispose();
+        _claim = null;
         _wake.Dispose();
     }
 }
