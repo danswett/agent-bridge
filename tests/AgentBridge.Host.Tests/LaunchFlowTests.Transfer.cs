@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Protocol;
 using AgentBridge.Relay;
 using AgentBridge.Transport;
@@ -243,6 +244,61 @@ public sealed partial class LaunchFlowTests
         }
         File.Delete(away.Transfers.Staging);
         Assert.Equal("started", (await LaunchAsync(ch, new { agent = "copilot", workspace = "App", transfer = Transfer(away, toAway) })).Outcome_);
+    }
+    [Fact]
+    public async Task A_transfer_refused_for_its_prompt_leaves_no_copy_here()
+    {
+        await using var away = await AwayAsync();
+        // An npm-installed agent runs through cmd.exe, whose command line is 8,191 characters.
+        locator.Installed["copilot"] = @"C:\fake\copilot.cmd";
+        var transfers = ServeTransfers();
+        var toAway = await OpenToAsync(away.Device);
+        var ch = await OpenAsync();
+        var sessions = Path.Combine(f.CopilotHome, "session-state");
+        var before = Left(sessions).ToList();
+
+        var o = await LaunchAsync(ch, new { agent = "copilot", workspace = "App", prompt = new string('x', 10_000), transfer = Transfer(away, toAway) });
+
+        Assert.Equal("refused", o.Outcome_);
+        Assert.StartsWith("the prompt is too long to start", o.Reason);
+        Assert.Equal(before, Left(sessions).ToList());
+        Assert.Empty(Left(transfers.Staging));
+        Assert.Empty(RelayStore.Stored);
+    }
+    // A relay that drops while the other machine is being asked.
+    sealed class DroppedRelay : ISessionFetcher
+    {
+        public string? Unavailable => null;
+
+        public Task<FetchedBundle> FetchAsync(LaunchTransfer transfer, string peer, long maxBytes, CancellationToken cancellationToken) =>
+            throw new System.Net.WebSockets.WebSocketException("the relay went away");
+    }
+
+    [Fact]
+    public async Task A_transfer_that_fails_in_a_way_nobody_expected_leaves_its_attachments_free_for_another_launch()
+    {
+        using var store = new AttachmentStore(new AttachmentOptions { StagingRoot = Path.Combine(f.Root, "attachments") }, sweep: false);
+        var launcher = Launcher(Config(), fetcher: new DroppedRelay(), attachments: store);
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+        var file = Guid.NewGuid().ToString();
+        store.Start("phone", new() { Attachment = file, Name = "shot.png", Size = png.Length, Sha256 = Attachments.Base64Url(System.Security.Cryptography.SHA256.HashData(png)) });
+        store.Chunk("phone", new() { Attachment = file, Offset = 0, Data = Convert.ToBase64String(png) });
+
+        var result = await launcher.LaunchAsync(new LaunchRequest
+        {
+            Request = Guid.NewGuid().ToString(),
+            Agent = "copilot",
+            Workspace = "App",
+            Transfer = new LaunchTransfer { From = new string('a', 32), Session = AwayId, Command = new SignedCommand { Body = "e30", By = "AA", Mac = "AA" } },
+            Attachments = [new() { Id = file }],
+        }, "phone");
+
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Contains("the relay went away", result.Reason);
+        var (claim, problem) = store.Claim("phone", [new() { Id = file }]);
+        Assert.Null(problem);
+        Assert.NotNull(claim);
+        Assert.Empty(starter.Specs);
     }
     [Fact]
     public async Task Nothing_moves_from_a_machine_that_does_not_hand_its_sessions_on_or_to_one_that_does_not_take_them()

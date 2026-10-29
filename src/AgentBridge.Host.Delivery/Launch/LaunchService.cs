@@ -421,28 +421,26 @@ public sealed partial class LaunchService : ISessionLauncher
                 (claim, var missing) = attachments.Claim(peer, refs);
                 if (claim is null) { return Refused(missing!); }
             }
-            // A session from another machine is fetched, and checked, before anything here is
-            // touched: a transfer that fails leaves no worktree and no session behind.
-            FetchedBundle? fetched = null;
-            if (plan.Transfer is { } transfer)
-            {
-                log($"launch {Short(key)}: bringing session {Short(transfer.Session)} from {Short(transfer.From)}");
-                try { fetched = await options.Transfers!.FetchAsync(transfer, peer, Config.Transfer.MaxBytes, CancellationToken.None); }
-                catch (TransferRefusedException e)
-                {
-                    if (claim is not null) { attachments!.Release(claim); }
-                    return Refused($"the session could not be brought from the other machine: {e.Message}");
-                }
-                if (fetched.About.Agent != plan.Launcher.Kind)
-                {
-                    fetched.Dispose();
-                    if (claim is not null) { attachments!.Release(claim); }
-                    var theirs = Launchers.Find(fetched.About.Launcher)?.Label ?? fetched.About.Agent.ToString();
-                    return Refused($"'{fetched.About.Title}' is a {theirs} session, so it resumes in {theirs}, not {plan.Launcher.Label}");
-                }
-            }
             var handed = new StrongBox<bool>();
-            try { return await StartAsync(plan, claim, key, handed, fetched); }
+            FetchedBundle? fetched = null;
+            try
+            {
+                // A session from another machine is fetched, and checked, before anything here is
+                // touched: a transfer that fails leaves no worktree and no session behind. Inside
+                // this try, so however it fails the attachments claimed above are released.
+                if (plan.Transfer is { } transfer)
+                {
+                    log($"launch {Short(key)}: bringing session {Short(transfer.Session)} from {Short(transfer.From)}");
+                    try { fetched = await options.Transfers!.FetchAsync(transfer, peer, Config.Transfer.MaxBytes, CancellationToken.None); }
+                    catch (TransferRefusedException e) { return Refused($"the session could not be brought from the other machine: {e.Message}"); }
+                    if (fetched.About.Agent != plan.Launcher.Kind)
+                    {
+                        var theirs = Launchers.Find(fetched.About.Launcher)?.Label ?? fetched.About.Agent.ToString();
+                        return Refused($"'{fetched.About.Title}' is a {theirs} session, so it resumes in {theirs}, not {plan.Launcher.Label}");
+                    }
+                }
+                return await StartAsync(plan, claim, key, handed, fetched);
+            }
             finally
             {
                 // Anything not handed to the agent stays held for another try.
@@ -627,11 +625,22 @@ public sealed partial class LaunchService : ISessionLauncher
                 prompt = line;
             }
 
-            // A session from another machine becomes one of this machine's, under an id of its own,
-            // working in the folder settled on here; then it resumes like any other.
-            if (fetched is not null)
+            // A session from another machine resumes under an id of its own. The command line is
+            // checked before it is installed, so a refusal leaves no copy behind.
+            var newId = fetched is not null ? Guid.NewGuid().ToString() : null;
+            var sessionId = newId ?? plan.Resume?.Id ?? (plan.Launcher.ChoosesOwnSessionId ? "" : Guid.NewGuid().ToString());
+            var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null || newId is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
+                Config.Agent(plan.Launcher.Id).ExtraArgs, plan.Profile, prompt);
+            var spec = new StartSpec(plan.Executable, args, directory, new Dictionary<string, string> { [Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched" });
+            if (starter.CommandLine(spec, out var tooLong) is null)
             {
-                var newId = Guid.NewGuid().ToString();
+                return Refused($"the prompt is too long to start {plan.Launcher.Label} with on this machine: {tooLong}; shorten it, or send the rest as a reply once it has started");
+            }
+
+            // It becomes one of this machine's sessions, working in the folder settled on here;
+            // then it resumes like any other.
+            if (fetched is not null && newId is not null)
+            {
                 try
                 {
                     var unpack = Path.Combine(PrivateFolder.Ensure(options.TransferStaging!), $"unpack-{Guid.NewGuid():N}");
@@ -643,15 +652,6 @@ public sealed partial class LaunchService : ISessionLauncher
                 }
                 log($"launch {Short(key)}: installed session {Short(plan.Transfer!.Session)} from {Short(fetched.From)} as {Short(newId)} ({TransferLimits.Mib(fetched.About.Size)}, {fetched.About.Files} file(s))");
                 plan = plan with { Resume = new ResumeEntry(newId, fetched.About.Agent, plan.Launcher.Id, fetched.About.Title, directory, options.Time.GetUtcNow()), Where = fetched.About.Title };
-            }
-
-            var sessionId = plan.Resume?.Id ?? (plan.Launcher.ChoosesOwnSessionId ? "" : Guid.NewGuid().ToString());
-            var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
-                Config.Agent(plan.Launcher.Id).ExtraArgs, plan.Profile, prompt);
-            var spec = new StartSpec(plan.Executable, args, directory, new Dictionary<string, string> { [Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched" });
-            if (starter.CommandLine(spec, out var tooLong) is null)
-            {
-                return Refused($"the prompt is too long to start {plan.Launcher.Label} with on this machine: {tooLong}; shorten it, or send the rest as a reply once it has started");
             }
 
             launched = new LaunchedWith

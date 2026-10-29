@@ -4,6 +4,7 @@ using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
@@ -77,7 +78,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null) => new(source, probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null) => new(source, probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
     {
         CopilotHome = f.CopilotHome,
         ClaudeHome = f.ClaudeHome,
@@ -93,9 +94,9 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         IsSystemDirectory = _ => false,
         WorktreeUsage = usage,
         LocalNow = now ?? (() => DateTime.Now),
-        Transfers = transfers,
-        TransferStaging = transfers?.Staging,
-    });
+        Transfers = fetcher ?? transfers,
+        TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
+    }, attachments: attachments);
 
     void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null) =>
         host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: Launcher(config, wait, usage, now)).HandleAsync;

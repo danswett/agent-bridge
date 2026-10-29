@@ -117,13 +117,13 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
         PresenceEntry source;
         try { source = await l.Relay.WaitForPeerAsync(p => p.Id == transfer.From, PeerWait); }
         catch (TimeoutException) { throw new TransferRefusedException("the machine it is on is not connected to the relay; it may be asleep or offline"); }
+        catch (Exception e) { throw new TransferRefusedException($"this machine lost the relay ({e.Message})"); }
 
         SecureChannel ch;
         try { ch = await l.Hub.OpenAsync(transfer.From, TimeSpan.FromSeconds(15)); }
-        catch (Exception e) when (e is TimeoutException or IOException or System.Security.Cryptography.CryptographicException)
-        {
-            throw new TransferRefusedException($"{source.Name} did not answer ({e.Message})");
-        }
+        // Whatever goes wrong with the relay or the handshake (a WebSocket that drops included) is
+        // the launch's refusal, never an exception out of it.
+        catch (Exception e) { throw new TransferRefusedException($"{source.Name} did not answer ({e.Message})"); }
         TransferResult result;
         try
         {
@@ -138,7 +138,12 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
         catch (TimeoutException) { throw new TransferRefusedException($"{source.Name} took over {SourceWait.TotalMinutes:0} minutes to send it"); }
         catch (IOException e) { throw new TransferRefusedException($"the channel to {source.Name} ended ({e.Message})"); }
         catch (JsonException) { throw new TransferRefusedException($"{source.Name}'s answer was not a bundle"); }
-        finally { await l.Hub.CloseAsync(ch); }
+        catch (Exception e) when (e is not TransferRefusedException) { throw new TransferRefusedException($"the channel to {source.Name} failed ({e.Message})"); }
+        finally
+        {
+            try { await l.Hub.CloseAsync(ch); }
+            catch (Exception) { }
+        }
 
         if (TransferLimits.CheckResult(result, maxBytes) is { } bad)
         {
