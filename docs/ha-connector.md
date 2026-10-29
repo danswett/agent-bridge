@@ -241,7 +241,9 @@ reads the broker's retained topics for this machine and for every session either
 with a note where the difference is by design (stop, launch and transfer controls; the answer
 controls when the host cannot answer). It needs `baseUrl` and the stored token but not
 `enabled`, and it ignores G5: it is the one thing that is meant to run while the daemon does,
-for the week of shadow running before a machine's cutover (§10 stage 4).
+for the week of shadow running before a machine's cutover (§10 stage 4). It complements
+`agent-bridge-host shadow`, which compares what the host *knows* with the daemon's local state
+files; `ha shadow` compares what each would *publish* to Home Assistant.
 
 ## Lifecycle
 
