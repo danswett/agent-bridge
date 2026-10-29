@@ -501,6 +501,29 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_Codex_reply_whose_own_words_hold_an_image_marker_is_still_confirmed()
+    {
+        console.Rows = CodexIdle();
+        console.OnInject = plan => Fixture.Append(rollout, CodexPrompt(Typed(plan)));
+
+        Assert.Equal(AnswerOutcome.Delivered, (await ReplyAsync(CodexId, "[Image #1] is the wrong one")).Outcome);
+    }
+
+    [Fact]
+    public async Task A_screen_that_cannot_be_read_part_way_through_a_Codex_image_reply_leaves_it_unconfirmed_and_its_files_staged()
+    {
+        console.Rows = CodexIdle();
+        console.OnInject = _ => console.FailReads = true;
+
+        var result = await ReplyAsync(CodexId, "see", Upload(Png(100)), Upload(Png(100)));
+
+        Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
+        Assert.Contains("could not read Codex's screen part way", result.Reason);
+        Assert.Equal(2, Directory.GetFiles(Path.Combine(f.Root, "profile", "attachments")).Length);
+        Assert.Equal(0, store.Count);
+    }
+
+    [Fact]
     public async Task Codex_is_sent_images_only_and_a_reply_with_another_file_is_refused_keeping_the_file_for_another_try()
     {
         console.Rows = CodexIdle();
@@ -571,6 +594,8 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         }
 
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new ConsoleScreen([.. Rows], null));
+            FailReads ? throw new IOException("the console went away") : Task.FromResult(new ConsoleScreen([.. Rows], null));
+
+        public volatile bool FailReads;
     }
 }

@@ -196,7 +196,4 @@ public static class CodexPrompts
             }
         }
     }
-
-    // The words of a recorded prompt, without the placeholders standing for its images.
-    public static string Words(string text) => System.Text.RegularExpressions.Regex.Replace(text, @"\[Image #\d+\]", " ");
 }
