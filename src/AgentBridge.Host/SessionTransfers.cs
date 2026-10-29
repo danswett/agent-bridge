@@ -26,7 +26,7 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
     readonly string staging;
     readonly Action<string> log;
     readonly TimeProvider time;
-    readonly HttpClient http = BlobHttp.CreateClient();
+    readonly HttpClient http;
     readonly CommandMemory memory;
     // Bundles packed and sent at once: each reads a session and writes it out again.
     readonly SemaphoreSlim sending = new(2, 2);
@@ -34,9 +34,11 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
 
     sealed record Link(RelayClient Relay, ChannelHub Hub);
 
-    public SessionTransfers(P256KeyPair key, string staging, Action<string>? log = null, TimeProvider? time = null)
+    // http: storage's client, for a test to stand in for storage. Its own by default.
+    public SessionTransfers(P256KeyPair key, string staging, Action<string>? log = null, TimeProvider? time = null, HttpClient? http = null)
     {
         this.key = key;
+        this.http = http ?? BlobHttp.CreateClient();
         this.staging = staging;
         this.log = log ?? (_ => { });
         this.time = time ?? TimeProvider.System;
@@ -67,6 +69,12 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
 
     // How long a source may take to pack and seal a bundle, and the target to fetch it.
     public TimeSpan SourceWait { get; init; } = TimeSpan.FromMinutes(10);
+
+    // How long the source may take to pack and upload a bundle once it starts: less than the
+    // target waits, so the target hears why. Storage that accepts an upload and then stalls
+    // would otherwise hold the bundle and one of the two sending slots until the host restarts,
+    // and two such would stop every transfer from this machine.
+    public TimeSpan SendFor { get; set; } = TimeSpan.FromMinutes(9);
     public TimeSpan FetchWait { get; init; } = TimeSpan.FromMinutes(20);
     public TimeSpan PeerWait { get; init; } = TimeSpan.FromSeconds(10);
 
@@ -141,6 +149,7 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
         if (bundleKey is not { Length: 32 }) { await ForgetAsync(l.Relay, result.Blob.Id); throw new TransferRefusedException("the bundle's key is malformed"); }
 
         var zip = Path.Combine(Folder(), $"{Guid.NewGuid():N}.zip");
+        using var deadline = new CancellationTokenSource(SendFor, time);
         try
         {
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -234,18 +243,19 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
         var most = Math.Min(config.MaxBytes, BlobFormat.MaxPlain(l.Relay.BlobMaxBytes));
         if (!await sending.WaitAsync(TimeSpan.FromSeconds(30))) { throw new InvalidOperationException("this machine is sending other sessions; try again in a minute"); }
         var zip = Path.Combine(Folder(), $"{Guid.NewGuid():N}.zip");
+        using var deadline = new CancellationTokenSource(SendFor, time);
         try
         {
             // Checked again: resumed at the machine since the list was made, it is being written.
             if (launcher.Running(entry.Id)) { throw new InvalidOperationException("that session is running on its machine; it can be brought over once it has ended there"); }
             SessionBundles.Packed packed;
-            try { packed = await Task.Run(() => SessionBundles.Pack(entry.Agent, launcher.Homes, entry.Id, zip, config.MaxSourceBytes)); }
+            try { packed = await Task.Run(() => SessionBundles.Pack(entry.Agent, launcher.Homes, entry.Id, zip, config.MaxSourceBytes), deadline.Token); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { throw new InvalidOperationException($"that session could not be read ({e.Message})"); }
             if (packed.Bytes > most)
             {
                 throw new InvalidOperationException($"that session is {TransferLimits.Mib(packed.Bytes)} compressed, over the {TransferLimits.Mib(most)} a transfer carries; /compact it first, or raise launch.transfer.maxBytes on both machines");
             }
-            var sent = await BlobTransfer.SendFileAsync(l.Relay, http, channel.PeerId, zip);
+            var sent = await BlobTransfer.SendFileAsync(l.Relay, http, channel.PeerId, zip, deadline.Token);
             log($"sent session {entry.Id[..8]} to {channel.PeerId[..8]} for {c.Principal.Device[..8]}: {TransferLimits.Mib(packed.Bytes)}, {packed.Files} file(s)");
             return new TransferResult
             {
@@ -257,6 +267,11 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
                 Title = title ?? entry.Summary,
                 Files = packed.Files,
             };
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            log($"transfer of {entry.Id[..8]} to {channel.PeerId[..8]} stopped: not sent within {SendFor}");
+            throw new InvalidOperationException("the bundle could not be uploaded in time; try again");
         }
         catch (BlobRefusedException e) { throw new InvalidOperationException($"the relay would not take the bundle ({e.Reason})"); }
         catch (HttpRequestException e) { throw new InvalidOperationException($"the bundle could not be uploaded ({e.Message})"); }

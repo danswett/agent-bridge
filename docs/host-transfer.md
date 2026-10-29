@@ -81,7 +81,9 @@ On the **source**, for `session.transfer` from another host's channel:
    A file that changes while it is read fails the transfer ("it is probably open somewhere").
 5. Refused if larger than the smaller of `maxBytes` and what the relay's blob store takes,
    with the size and what to do (`/compact`, or raise `maxBytes` on both machines).
-6. Sealed and streamed to the blob store for the target, then the zip is deleted.
+6. Sealed and streamed to the blob store for the target, then the zip is deleted. Packing and
+   uploading must finish within 9 minutes (the target waits 10): storage that stalls would
+   otherwise hold the zip and a sending slot until the host restarts.
 
 A host that stops part way leaves only its own names in its staging folder (`<hex>.zip`,
 `unpack-<hex>`), and deletes them when it next starts.
@@ -95,16 +97,17 @@ A host that stops part way leaves only its own names in its staging folder (`<he
 * requires the transcript;
 * replaces the old id with the new one in the transcript and its metadata (`.jsonl`,
   `.yaml`, `.json`, `.md`), line by line;
-* moves it where the agent looks: Copilot `~/.copilot/session-state/<new id>` with
-  `workspace.yaml`'s `cwd` set to where it now opens; Claude
+* records the folder it now opens in where the agent and this machine's resume list read it:
+  Copilot's `workspace.yaml` `cwd`, each Claude line's `cwd`, Codex's `session_meta` and
+  `turn_context` `cwd`. Left as the other machine's, a folder not approved here, the copy
+  would drop off the resume list once it ended;
+* moves it where the agent looks: Copilot `~/.copilot/session-state/<new id>`; Claude
   `~/.claude/projects/<folder slug>/<new id>.jsonl`; Codex
   `~/.codex/sessions/<yyyy>/<MM>/<dd>/rollout-<stamp>-<new id>.jsonl`;
 * checks it is where the agent looks for that id, and removes it otherwise, so a Copilot
   launch never starts an empty session under the new id.
 
-Known gaps: Claude transcripts keep their recorded `cwd` lines, so once the copy has ended,
-this machine may not list it for resume if that path is not approved here. Codex's version is
-not compared (agent-ha-bridge only warned). The Windows app does not offer transfers yet
+Known gaps: Codex's version is not compared (agent-ha-bridge only warned). The Windows app does not offer transfers yet
 (#49); the phone does.
 
 ## The log

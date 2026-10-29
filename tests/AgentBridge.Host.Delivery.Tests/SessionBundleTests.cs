@@ -101,24 +101,44 @@ public sealed class SessionBundleTests : IDisposable
     }
 
     [Fact]
-    public void Claude_and_Codex_sessions_keep_the_names_their_agents_find_them_by()
+    public void Claude_and_Codex_sessions_keep_the_names_their_agents_find_them_by_and_are_listed_in_the_folder_they_open_in()
     {
+        const string There = @"C:\\Users\\rezna\\repos\\app";
         var claude = Directory.CreateDirectory(Path.Combine(source.Claude, "projects", "C--Users-rezna-repos-app")).FullName;
-        File.WriteAllText(Path.Combine(claude, $"{Id}.jsonl"), $"{{\"type\":\"user\",\"sessionId\":\"{Id}\"}}\n");
+        File.WriteAllText(Path.Combine(claude, $"{Id}.jsonl"),
+            $"{{\"type\":\"user\",\"sessionId\":\"{Id}\",\"cwd\":\"{There}\",\"message\":{{\"role\":\"user\",\"content\":\"Fix the flaky test ✓\"}}}}\n"
+            + $"{{\"type\":\"assistant\",\"sessionId\":\"{Id}\",\"cwd\":\"{There}\",\"message\":{{\"content\":[]}},\"n\":1.50}}\n"
+            + "not json, \"cwd\" or not\n");
         SessionBundles.Pack(AgentKind.Claude, source, Id, Zip, long.MaxValue);
         var cwd = Path.Combine(root, "target", "repos", "app");
         var installed = SessionBundles.Install(Zip, AgentKind.Claude, Id, NewId, cwd, target, Unpack, long.MaxValue, Now);
         Assert.Equal($"{NewId}.jsonl", Path.GetFileName(installed));
         Assert.Equal(Path.Combine(target.Claude, "projects"), Path.GetDirectoryName(Path.GetDirectoryName(installed)));
-        Assert.Contains(NewId, File.ReadAllText(installed));
+        var lines = File.ReadAllLines(installed);
+        Assert.DoesNotContain(lines, l => l.Contains("rezna", StringComparison.Ordinal));
+        Assert.Contains("Fix the flaky test ✓", lines[0]);
+        Assert.Contains("\"n\":1.50", lines[1]);
+        Assert.Equal("not json, \"cwd\" or not", lines[2]);
         File.Delete(Zip);
 
         var codex = Directory.CreateDirectory(Path.Combine(source.Codex, "sessions", "2026", "10", "01")).FullName;
-        File.WriteAllText(Path.Combine(codex, $"rollout-2026-10-01T09-00-00-{Id}.jsonl"), $"{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{Id}\"}}}}\n");
+        File.WriteAllText(Path.Combine(codex, $"rollout-2026-10-01T09-00-00-{Id}.jsonl"),
+            $"{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{Id}\",\"cwd\":\"{There}\"}}}}\n"
+            + "{\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"Profile the relay\"}}\n"
+            + $"{{\"type\":\"turn_context\",\"payload\":{{\"cwd\":\"{There}\"}}}}\n"
+            + $"{{\"type\":\"response_item\",\"payload\":{{\"output\":\"ran in {There}\",\"cwd\":\"{There}\"}}}}\n");
         SessionBundles.Pack(AgentKind.Codex, source, Id, Zip, long.MaxValue);
         installed = SessionBundles.Install(Zip, AgentKind.Codex, Id, NewId, cwd, target, Unpack, long.MaxValue, Now);
         Assert.Equal(Path.Combine(target.Codex, "sessions", "2026", "10", "29", $"rollout-2026-10-29T21-00-00-{NewId}.jsonl"), installed);
-        Assert.Contains($"\"id\":\"{NewId}\"", File.ReadAllText(installed));
+        lines = File.ReadAllLines(installed);
+        Assert.Contains($"\"id\":\"{NewId}\"", lines[0]);
+        Assert.DoesNotContain("rezna", lines[0] + lines[2]);
+        // Only the fields Codex reads its folder from: what a tool printed stays as it was.
+        Assert.Contains("rezna", lines[3]);
+
+        // So this machine lists each where it now opens, and an approved folder offers it.
+        var listed = new ResumableStore(target.Copilot, target.Claude, target.Codex).Read(["claude", "codex"]);
+        Assert.Equal([(AgentKind.Claude, cwd), (AgentKind.Codex, cwd)], listed.Where(e => e.Id == NewId).Select(e => (e.Agent, e.Folder)).Order().ToArray());
     }
 
     [Fact]

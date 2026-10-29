@@ -35,7 +35,7 @@ public sealed partial class LaunchFlowTests
         }
     }
 
-    async Task<Away> AwayAsync(bool serve = true)
+    async Task<Away> AwayAsync(bool serve = true, HttpClient? storage = null)
     {
         var fa = new Fixture();
         var appAway = Directory.CreateDirectory(Path.Combine(fa.Root, "repos", "app")).FullName;
@@ -57,7 +57,7 @@ public sealed partial class LaunchFlowTests
         await awaySource.RefreshAsync();
         var device = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "Away host", "host");
         device.Hub.JsonOptions = ProtocolJson.Options;
-        var transfers = new SessionTransfers(device.Key, Path.Combine(fa.Root, "profile", "transfers"));
+        var transfers = new SessionTransfers(device.Key, Path.Combine(fa.Root, "profile", "transfers"), http: storage);
         var awayLocator = new FakeLocator();
         awayLocator.Installed["copilot"] = @"C:\fake\copilot.exe";
         var launcher = new LaunchService(awaySource, new FakeProbe(), new FakeScreens(), new FakeStarter(fa), awayLocator, new AgencyCatalog(new FakeRunner()), new LaunchServiceOptions
@@ -184,6 +184,43 @@ public sealed partial class LaunchFlowTests
 
         Assert.Single(starter.Specs);
         Assert.Empty(RelayStore.Stored);
+    }
+
+    // Storage that takes the connection and then never answers.
+    sealed class StallingStorage : HttpMessageHandler
+    {
+        public int Uploads;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref Uploads);
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new InvalidOperationException("unreachable");
+        }
+    }
+
+    [Fact]
+    public async Task A_machine_whose_upload_stalls_gives_up_in_time_keeping_neither_the_bundle_nor_its_sending_slot()
+    {
+        var storage = new StallingStorage();
+        await using var away = await AwayAsync(storage: new HttpClient(storage) { Timeout = Timeout.InfiniteTimeSpan });
+        away.Transfers.SendFor = TimeSpan.FromSeconds(1);
+        ServeTransfers();
+        var toAway = await OpenToAsync(away.Device);
+        var ch = await OpenAsync();
+
+        // More than the two it sends at once: a slot held by a stalled upload would make the
+        // third wait, and then say the machine is busy sending.
+        for (var i = 0; i < 3; i++)
+        {
+            var o = await LaunchAsync(ch, new { agent = "copilot", workspace = "App", transfer = Transfer(away, toAway) });
+            Assert.Equal("refused", o.Outcome_);
+            Assert.EndsWith("the bundle could not be uploaded in time; try again", o.Reason);
+        }
+        // Stalled in storage, not before it (a slow machine can spend the second packing).
+        Assert.InRange(storage.Uploads, 1, 3);
+        Assert.Empty(Left(away.Transfers.Staging));
+        Assert.Empty(starter.Specs);
     }
 
     [Fact]

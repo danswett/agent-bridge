@@ -183,8 +183,9 @@ A zip of the session's files as its agent keeps them, paths relative to the agen
 
 Links are never followed when packing. Installing accepts only those names, refuses `..`,
 rooted paths and duplicates, counts what it unpacks against a limit, and requires the
-transcript. The old id is replaced by the new one in the transcript and its metadata, and
-Copilot's `workspace.yaml` gets the folder it now opens in.
+transcript. The old id is replaced by the new one in the transcript and its metadata, and the
+folder it now opens in replaces the other machine's where each agent records it (Copilot's
+`workspace.yaml`, Claude's `cwd` on each line, Codex's `session_meta` and `turn_context`).
 
 ## Limits
 

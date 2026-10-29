@@ -1,6 +1,9 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery.Launch;
@@ -167,7 +170,9 @@ public static class SessionBundles
         try
         {
             var files = Extract(zip, kind, unpack, maxUnpacked, maxFiles);
-            foreach (var f in files.Where(f => Path.GetExtension(f) is ".jsonl" or ".yaml" or ".json" or ".md")) { Rename(f, oldId, newId); }
+            // Claude's and Codex's one file is the transcript, which also records the folder.
+            var relocate = kind == AgentKind.Copilot ? null : (Func<string, string>)(line => Relocate(kind, line, cwd));
+            foreach (var f in files.Where(f => Path.GetExtension(f) is ".jsonl" or ".yaml" or ".json" or ".md")) { Rename(f, oldId, newId, relocate); }
             switch (kind)
             {
                 case AgentKind.Copilot:
@@ -285,7 +290,7 @@ public static class SessionBundles
 
     // A transcript names its session inside as well as by its file: every mention becomes the
     // new id, line by line, so a transcript of any size is never held whole.
-    static void Rename(string file, string oldId, string newId)
+    static void Rename(string file, string oldId, string newId, Func<string, string>? relocate = null)
     {
         var temp = file + ".rename";
         var changed = false;
@@ -303,6 +308,12 @@ public static class SessionBundles
                     line = line.Replace(oldId, newId, StringComparison.OrdinalIgnoreCase);
                     changed = true;
                 }
+                if (relocate is not null)
+                {
+                    var moved = relocate(line);
+                    changed |= !ReferenceEquals(moved, line);
+                    line = moved;
+                }
                 writer.Write(line);
             }
             // A final line break is kept as it was.
@@ -318,6 +329,31 @@ public static class SessionBundles
         if (s.Length == 0) { return false; }
         s.Seek(-1, SeekOrigin.End);
         return s.ReadByte() == '\n';
+    }
+
+    static readonly JsonSerializerOptions Relaxed = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    // The folder a Claude or Codex transcript records, which is where this machine's resume list
+    // places the session (ResumableStore: a Claude prompt's cwd, Codex's session_meta). Left as
+    // the other machine's, a folder not approved here, the copy would drop off the list once it
+    // ended, or if its launch failed. Only those fields change; the line is returned as it was
+    // (the same string) when it has none, or is not JSON.
+    static string Relocate(AgentKind kind, string line, string cwd)
+    {
+        if (!line.Contains("\"cwd\"", StringComparison.Ordinal)) { return line; }
+        JsonObject? o;
+        try { o = JsonNode.Parse(line) as JsonObject; }
+        catch (JsonException) { return line; }
+        if (o is null) { return line; }
+        var holder = kind switch
+        {
+            AgentKind.Claude => o,
+            AgentKind.Codex when o["type"] is JsonValue type && type.TryGetValue<string>(out var name) && name is "session_meta" or "turn_context" => o["payload"] as JsonObject,
+            _ => null,
+        };
+        if (holder?["cwd"] is not JsonValue old || !old.TryGetValue<string>(out _)) { return line; }
+        holder["cwd"] = cwd;
+        return o.ToJsonString(Relaxed);
     }
 
     // workspace.yaml's cwd: the folder the copy works in here, not the other machine's.
