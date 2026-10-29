@@ -35,9 +35,9 @@ internal static class Program
         {
             outcome = Outcome.Error(e.Message);
         }
-        if (outcome.Verdict == Verdict.Pass && p.Name == "sessions" && p.Flag("--id-only"))
+        if (outcome.Verdict == Verdict.Pass && (p.Name == "newest" || (p.Name == "sessions" && p.Flag("--id-only"))))
         {
-            // Only the id, so `$cp = agent-bridge-rehearsal sessions … --id-only` sets a variable.
+            // Only the id, so `$cp = agent-bridge-rehearsal …` sets a variable.
             Console.WriteLine(outcome.Detail);
         }
         else
@@ -107,6 +107,13 @@ internal static class Program
                     var log = await HostChecks.LogPathAsync(profileFolder, ct);
                     if (log is not null && File.Exists(log)) { evidence.SaveMark("host-log", new Mark("log", log, new FileInfo(log).Length, at)); }
                     return Outcome.Pass($"marked {t.Kind} session {id} at byte {new FileInfo(t.Path).Length}{(log is null ? "; no host log found" : "")}");
+                }
+            case "newest":
+                {
+                    var agent = p.Args[0].ToLowerInvariant();
+                    return Transcripts.Newest(homes, agent) is { } n
+                        ? Outcome.Pass(n.Id)
+                        : Outcome.Error($"no {agent} transcript under {homes.Home}");
                 }
             case "expect answer" or "expect reply" or "expect steering" or "expect permission" or "expect shutdown":
                 {

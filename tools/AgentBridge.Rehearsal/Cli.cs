@@ -56,6 +56,8 @@ internal static class Cli
             Usage: "sessions [--id <id>] [--agent <a>] [--title <text>] [--status <s>] [--model <text>] [--expect-count <n>|--expect-min <n>] [--expect-question|--expect-answer-at-machine|--expect-gone] [--expect-background] [--expect-compactions <n>] [--id-only] [--timeout <s>]: the host's sessions, asked again each second until the expectation holds or the timeout passes; --id-only prints only the id of the one session that matches"),
         new("mark", MinArgs: 1, MaxArgs: 1,
             Usage: "mark <session id>: remember where the session's transcript and the host log end now; expect reads only what comes after"),
+        new("newest", MinArgs: 1, MaxArgs: 1,
+            Usage: "newest copilot|claude|codex: print only the id of the agent's most recently written session, read from its transcripts, so no host is needed"),
         new("expect answer", MinArgs: 1, MaxArgs: 1, Options: ["--text", "--timeout"], Repeatable: ["--field"],
             Usage: "expect answer <session id> [--text <words>] [--field <name>=<value>]... [--timeout <s>]"),
         new("expect reply", MinArgs: 1, MaxArgs: 1, Options: ["--text", "--attachments", "--timeout"], Required: ["--text"],

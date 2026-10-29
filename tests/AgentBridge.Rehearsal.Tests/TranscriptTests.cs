@@ -172,6 +172,24 @@ public class TranscriptTests
     }
 
     [Fact]
+    public void The_newest_session_of_each_agent_is_found_from_its_transcripts_without_a_host()
+    {
+        using var s = new Scratch();
+        var homes = Homes.For(s.Root);
+        var old = s.File(".copilot/session-state/11111111-old/events.jsonl", "");
+        File.SetLastWriteTimeUtc(old, DateTime.UtcNow.AddHours(-1));
+        s.File(".copilot/session-state/22222222-new/events.jsonl", "");
+        var sub = s.File(".claude/projects/C--repo/aaaaaaaa-main/subagents/agent-1.jsonl", "");
+        var main = s.File(".claude/projects/C--repo/aaaaaaaa-main.jsonl", "");
+        File.SetLastWriteTimeUtc(main, DateTime.UtcNow.AddMinutes(-5));
+        s.File(".codex/sessions/2026/10/28/rollout-2026-10-28T10-00-00-0199a3b2-1c2d-7e8f-9a0b-1c2d3e4f5a6b.jsonl", "");
+        Assert.Equal("22222222-new", Transcripts.Newest(homes, Transcripts.Copilot)?.Id);
+        Assert.Equal("aaaaaaaa-main", Transcripts.Newest(homes, Transcripts.Claude)?.Id);
+        Assert.True(File.Exists(sub));
+        Assert.Equal("0199a3b2-1c2d-7e8f-9a0b-1c2d3e4f5a6b", Transcripts.Newest(homes, Transcripts.Codex)?.Id);
+    }
+
+    [Fact]
     public void Each_agents_transcript_is_found_by_the_session_id_alone()
     {
         using var s = new Scratch();

@@ -41,6 +41,33 @@ internal static class Transcripts
         return null;
     }
 
+    // The session whose transcript was written last, for when no host is there to ask.
+    public static (string Kind, string Id)? Newest(Homes homes, string agent)
+    {
+        IEnumerable<(string Id, DateTime At)> candidates = agent switch
+        {
+            // Only the session's own file: subagents keep theirs further down.
+            Copilot => Dirs(Path.Combine(homes.CopilotHome, "session-state")).Select(d => Path.Combine(d, "events.jsonl")).Where(File.Exists)
+                .Select(f => (Path.GetFileName(Path.GetDirectoryName(f))!, File.GetLastWriteTimeUtc(f))),
+            Claude => Dirs(Path.Combine(homes.ClaudeHome, "projects")).SelectMany(d => Files(d, "*.jsonl", SearchOption.TopDirectoryOnly))
+                .Select(f => (Path.GetFileNameWithoutExtension(f), File.GetLastWriteTimeUtc(f))),
+            Codex => Files(Path.Combine(homes.CodexHome, "sessions"), "rollout-*.jsonl", SearchOption.AllDirectories)
+                .Select(f => (CodexId(Path.GetFileNameWithoutExtension(f)), File.GetLastWriteTimeUtc(f))),
+            _ => throw new UsageException("the agent is copilot, claude or codex"),
+        };
+        var newest = candidates.Where(c => c.Id.Length > 0).OrderByDescending(c => c.At).FirstOrDefault();
+        return newest.Id is null ? null : (agent, newest.Id);
+    }
+
+    static IEnumerable<string> Dirs(string root) =>
+        Directory.Exists(root) ? Directory.EnumerateDirectories(root, "*", new EnumerationOptions { AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = true }) : [];
+
+    static IEnumerable<string> Files(string root, string pattern, SearchOption depth) =>
+        Directory.Exists(root) ? Directory.EnumerateFiles(root, pattern, new EnumerationOptions { RecurseSubdirectories = depth == SearchOption.AllDirectories, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = true }) : [];
+
+    // rollout-<time>-<uuid>: the id is the uuid at the end.
+    static string CodexId(string name) => name.Length >= 36 && Guid.TryParse(name[^36..], out _) ? name[^36..] : "";
+
     // Complete lines from an offset, with where each starts; a line still being written waits.
     public static IEnumerable<(long Offset, JsonElement Entry)> Lines(string path, long from)
     {
