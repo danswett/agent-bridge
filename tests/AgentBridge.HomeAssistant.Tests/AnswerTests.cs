@@ -357,6 +357,25 @@ public sealed class AnswerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_card_taken_over_with_a_question_nobody_is_asking_any_more_is_cleared()
+    {
+        // agent-ha-bridge armed a question, which was then answered while no bridge ran.
+        foreach (var p in Contract.Publications("sessionPublish")) { ha.Seed(p.Topic, p.Payload); }
+        ha.Seed(HaContract.Topics(Node).DecisionAttributes, "{\"decision_id\":\"old\",\"field_count\":1}");
+        Ask(null);
+        await using var c = Connector();
+        await Pass(c);
+        Assert.Equal("{}", ha.Retained[HaContract.Topics(Node).DecisionAttributes]);
+        Assert.Equal(HaDecision.Idle, State(SessionEntities.Decision(Node)));
+
+        // A card with nothing armed is left as it is: no clear on every start.
+        var c2Log = ha.Log.Count;
+        await using var again = Connector();
+        await Pass(again);
+        Assert.DoesNotContain(ha.Log.Skip(c2Log), p => p.Topic == HaContract.Topics(Node).DecisionAttributes);
+    }
+
+    [Fact]
     public async Task The_watch_covers_every_sessions_controls_and_its_hits_reach_the_card()
     {
         Ask(Form("q1", Release));

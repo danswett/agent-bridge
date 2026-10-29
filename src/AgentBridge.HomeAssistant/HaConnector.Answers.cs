@@ -121,6 +121,13 @@ public sealed partial class HaConnector
         if (question is null)
         {
             if (p.Armed is null && p.Cleared) { return; }
+            if (p.Armed is null && !await StaleQuestionAsync(p.Node, ct))
+            {
+                // A card just published, or taken over with nothing armed: already idle.
+                p.Cleared = true;
+                p.ArmedSlots = Math.Max(p.ArmedSlots, 0);
+                return;
+            }
             var slots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
             await RunAsync(HaDecision.Clear(p.Node, name, options.MachineName, slots), p.Node, ct);
             p.Armed = null;
@@ -146,6 +153,20 @@ public sealed partial class HaConnector
         p.Cleared = false;
         p.Armed = new Armed { Question = question, Plan = plan, PayloadBaseline = payload, SubmitBaseline = submit, ReplyBaseline = reply };
         log($"Home Assistant connector armed {p.Node} for its question{(plan.TerminalOnly ? " (answered at the machine)" : "")}");
+    }
+
+    // Whether the card still shows a question nobody is asking: one armed before a restart, or by
+    // agent-ha-bridge before this host took the machine over, and answered meanwhile.
+    async Task<bool> StaleQuestionAsync(string node, CancellationToken ct)
+    {
+        try
+        {
+            var state = await ha.GetStateAsync(SessionEntities.Decision(node), ct);
+            if (state is null) { return false; }
+            var armedAttributes = state.Attributes.ValueKind == JsonValueKind.Object && state.Attributes.TryGetProperty("decision_id", out _);
+            return armedAttributes || state.State is not (HaDecision.Idle or "unknown" or "unavailable" or "");
+        }
+        catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { return true; }
     }
 
     // Get-CopilotMqttArmedFieldCount: the decision entity's field_count, or every slot when it
