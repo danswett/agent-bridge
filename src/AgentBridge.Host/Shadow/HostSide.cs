@@ -91,7 +91,9 @@ public sealed class PipeShadowHost(LocalEndpoint endpoint) : IShadowHost
         }
         catch (HostNotRunningException) { return new() { Problem = "the host is not running for this profile" }; }
         catch (LocalRefusedException) { return new() { Problem = "the host refused this process" }; }
-        catch (Exception e) when (e is IOException or TimeoutException or HostErrorException or System.Text.Json.JsonException or OperationCanceledException && !ct.IsCancellationRequested)
+        // Whatever else a connection does (a closed pipe, a timeout, a message that is not what
+        // was asked for) is this sample's host not answering; the comparison goes on.
+        catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             return new() { Problem = "the host did not answer" };
         }

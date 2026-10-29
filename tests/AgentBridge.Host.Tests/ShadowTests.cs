@@ -198,7 +198,13 @@ public sealed class ShadowTests : IDisposable
         Assert.Equal(mismatch.Kind, Assert.Single(made).Kind);
         Assert.Equal((75L, 6, false), (mismatch.Seconds, mismatch.Samples, mismatch.Open));
         Assert.Equal(["daemon=working host=idle"], mismatch.Details);
-        Assert.Equal(("mismatches", 10, 10), (day.Verdict, day.Samples, day.Compared));
+        Assert.Equal(("mismatches", 10, 10, 150L), (day.Verdict, day.Samples, day.Compared, day.ComparedSeconds));
+
+        // A run restarted the same day at another interval adds its own time, and does not
+        // rescale what was compared before it.
+        new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(5), f.Time)
+            .Record(new ShadowComparison(true, 1, 1, [], ["s1"]), new ShadowView(), new ShadowView());
+        Assert.Equal((11, 155L), (ShadowLedger.Read(reports, "2026-10-28")!.Compared, ShadowLedger.Read(reports, "2026-10-28")!.ComparedSeconds));
     }
 
     [Fact]
@@ -282,7 +288,7 @@ public sealed class ShadowTests : IDisposable
         Assert.Equal((ShadowKinds.Model, 1), (Assert.Single(summary.Transient).Kind, summary.Transient[0].Count));
         var text = summary.Format();
         Assert.Contains("1 mismatch by kind", text);
-        Assert.Contains("Clean days: 1 of 4.", text);
+        Assert.Contains("Clean days: 1 of 4, 0 of them compared for at least 20 h.", text);
         Assert.Contains("usage", text);
     }
 

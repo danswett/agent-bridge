@@ -16,6 +16,9 @@ public sealed class ShadowDay
     // Samples taken, and those in which both sides could be read and so were compared.
     public int Samples { get; set; }
     public int Compared { get; set; }
+    // How long both sides were compared, each compared sample counting the interval it was taken
+    // at, so a run restarted with another --interval does not rescale the rest of the day.
+    public long ComparedSeconds { get; set; }
     public DateTimeOffset? FirstSample { get; set; }
     public DateTimeOffset? LastSample { get; set; }
     public string? DaemonVersion { get; set; }
@@ -124,7 +127,11 @@ public sealed class ShadowLedger
             day = Load(date);
         }
         day.Samples++;
-        if (comparison.Compared) { day.Compared++; }
+        if (comparison.Compared)
+        {
+            day.Compared++;
+            day.ComparedSeconds += (long)interval.TotalSeconds;
+        }
         day.FirstSample ??= now;
         day.LastSample = now;
         day.DaemonVersion = daemon.Version ?? day.DaemonVersion;

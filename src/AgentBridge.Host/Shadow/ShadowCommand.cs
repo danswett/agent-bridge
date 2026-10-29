@@ -34,9 +34,10 @@ public sealed class ShadowRunner(DaemonReader daemon, IShadowHost host, ShadowLe
             do
             {
                 try { await SampleAsync(ct); }
-                // A report that cannot be written this time is tried again next time; the
-                // comparison itself never stops for it.
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log($"sample not recorded: {e.GetType().Name}: {e.Message}"); }
+                // A sample that fails, or a report that cannot be written this time, is tried
+                // again next time: an observer that one bad read can stop watches nothing for
+                // the rest of the week.
+                catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested) { log($"sample not recorded: {e.GetType().Name}: {e.Message}"); }
                 if (ledger?.Today is { } day && time.GetUtcNow() - said >= TimeSpan.FromHours(1))
                 {
                     said = time.GetUtcNow();

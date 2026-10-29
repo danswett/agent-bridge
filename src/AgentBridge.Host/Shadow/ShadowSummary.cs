@@ -17,6 +17,10 @@ public sealed record ShadowSummary(
     IReadOnlyList<string> NotCompared)
 {
     public int CleanDays => Days.Count(d => d.Verdict == "clean");
+    // Clean and compared for most of the day: a day with ten minutes of comparison is clean but
+    // says little.
+    public const double FullDayHours = 20;
+    public int FullCleanDays => Days.Count(d => d.Verdict == "clean" && d.ComparedHours >= FullDayHours);
     public int Mismatches => Kinds.Sum(k => k.Count);
 
     public static ShadowSummary Build(string folder, DateOnly today, int days)
@@ -45,7 +49,7 @@ public sealed record ShadowSummary(
                 var was = transient.GetValueOrDefault(kind);
                 transient[kind] = (was.Count + t.Count, Math.Max(was.Longest, t.LongestSeconds));
             }
-            var hours = Math.Round(day.Compared * (double)day.IntervalSeconds / 3600, 3);
+            var hours = Math.Round(day.ComparedSeconds / 3600.0, 3);
             list.Add(new(date, day.Samples, day.Compared, hours, day.Mismatches.Count + day.Overflow.Values.Sum(), day.Verdict));
         }
         var kinds = episodes.Values.GroupBy(e => e.Kind)
@@ -88,7 +92,7 @@ public sealed record ShadowSummary(
         b.AppendLine();
         b.AppendLine("Not compared: " + string.Join("; ", NotCompared) + ".");
         b.AppendLine();
-        b.AppendLine($"Clean days: {CleanDays} of {Days.Count}.");
+        b.AppendLine($"Clean days: {CleanDays} of {Days.Count}, {FullCleanDays} of them compared for at least {FullDayHours} h.");
         return b.ToString();
     }
 

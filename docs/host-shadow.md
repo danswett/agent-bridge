@@ -50,8 +50,9 @@ agent-bridge-host shadow summary [--days 7] [--json]
   one sample is not yet a mismatch.
 * `summary` reads the last `--days` daily reports (today included) and prints, per day,
   how long both sides were compared, how many mismatches there were and the verdict, then
-  the mismatches by kind across all of them, the timing skew by kind, and what is not
-  compared. `--json` gives the same as data.
+  the mismatches by kind across all of them, the timing skew by kind, what is not
+  compared, and how many days were clean, and of those how many were compared for at
+  least 20 hours. `--json` gives the same as data.
 
 To run it for the week on a machine, start it at logon, for example:
 
@@ -155,7 +156,7 @@ when `run` starts is kept beside it as `.unreadable-<time>`, never overwritten.
 {
   "schema": 1, "date": "2026-11-02", "timeZone": "Pacific Standard Time",
   "graceSeconds": 60, "intervalSeconds": 15,
-  "samples": 5760, "compared": 5752,
+  "samples": 5760, "compared": 5752, "comparedSeconds": 86280,
   "daemonVersion": "1.33.32", "hostVersion": "0.1.0", "hostDev": true,
   "daemonSessionsMax": 5, "hostSessionsMax": 5, "sessions": ["s8a666b6daa65", "…"],
   "mismatches": [
@@ -170,7 +171,9 @@ when `run` starts is kept beside it as `.unreadable-<time>`, never overwritten.
 ```
 
 * `verdict` is `clean` (compared, no mismatch), `mismatches`, or `no data` (never compared).
-  How much of the day was compared is `compared` × `intervalSeconds`; `summary` prints it.
+  How much of the day was compared is `comparedSeconds`: each compared sample adds the
+  interval it was taken at, so a run restarted with another `--interval` does not rescale
+  the rest of the day. `intervalSeconds` and `graceSeconds` are the latest run's.
 * `open` is a mismatch still going when the file was last written: at the end of the day
   (the next day's file carries it on with the same `first`, and `summary` counts it once)
   or when `run` stopped.
@@ -195,8 +198,9 @@ $sha = [Security.Cryptography.SHA256]::Create()
 
 ## Judging the week
 
-Seven consecutive days whose verdict is `clean`, each compared for most of the day, or
-with every mismatch explained (an intentional difference to add above) or filed and fixed.
+Seven consecutive days whose verdict is `clean`, each compared for at least 20 hours (the
+second count on `summary`'s last line), or with every mismatch explained (an intentional
+difference to add above) or filed and fixed.
 Timing skew is expected and is not a mismatch, but a kind whose longest skew keeps
 approaching the grace deserves a look.
 
