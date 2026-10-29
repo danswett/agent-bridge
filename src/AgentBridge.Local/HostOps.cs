@@ -1,0 +1,70 @@
+using AgentBridge.Protocol;
+
+namespace AgentBridge.Local;
+
+// The host's management ops, served on the local pipe only (never through the relay): what a
+// desktop app needs to run the host for the person at the machine. docs/protocol/local-pipe.md.
+public static class HostOps
+{
+    // In hello's capabilities on the pipe, beside the sessions ones.
+    public const string Capability = "host.manage";
+
+    public const string Status = "host.status";
+    // Answers with the status, then sends a host.status event whenever it changes.
+    public const string Subscribe = "host.subscribe";
+    public const string StatusEvent = "host.status";
+    public const string SignIn = "host.signIn";
+    public const string SignInCancel = "host.signIn.cancel";
+    public const string Settings = "host.settings";
+    public const string Restart = "host.restart";
+    public const string Stop = "host.stop";
+}
+
+[UnknownAs(Off)]
+public enum RelayState { Off, SignedOut, Connecting, Connected, Refused }
+
+[UnknownAs(Idle)]
+public enum SignInState { Idle, Pending, Failed }
+
+public sealed record HostAccount(string Login, string AccountId);
+
+// Off: this host never goes to the relay (--local-only). SignedOut: nobody has signed in on
+// this profile. Refused: the relay turned the account down; sign in again.
+public sealed record RelayStatus(RelayState State, string? Url = null, string? Detail = null, DateTimeOffset? Since = null);
+
+// A device-flow sign-in the host is running: the code to enter, and where.
+public sealed record SignInStatus(SignInState State, string? UserCode = null, string? VerificationUri = null, DateTimeOffset? ExpiresAt = null, string? Error = null);
+
+// What the host's config.json says now. A change takes effect when the host restarts, which
+// RestartRequired on the status says.
+public sealed record HostSettingsView(bool RemoteApproval, string? Name = null);
+
+public sealed record HostStatus
+{
+    public required string Version { get; init; }
+    public bool Dev { get; init; }
+    public required string Profile { get; init; }
+    public required string Folder { get; init; }
+    public required int ProcessId { get; init; }
+    public required DateTimeOffset StartedAt { get; init; }
+    public bool Elevated { get; init; }
+    public required MachineInfo Machine { get; init; }
+    public HostAccount? Account { get; init; }
+    public required RelayStatus Relay { get; init; }
+    public required SignInStatus SignIn { get; init; }
+    // Why delivery is off: agent-ha-bridge is running for this user (design G5). Null when it
+    // is not, so answers, replies and stops are this host's to deliver.
+    public string? AgentHaBridge { get; init; }
+    public required HostSettingsView Settings { get; init; }
+    public bool RestartRequired { get; init; }
+    // The host's log file, for an app to show the end of.
+    public string? Log { get; init; }
+}
+
+// host.signIn: start GitHub's device flow through this relay (or the one the profile used).
+public sealed record SignInRequest(string? Relay = null);
+
+// host.settings: any of these; absent ones are left as they are. Name "" clears it.
+public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name = null);
+
+public sealed record SettingsResult(HostSettingsView Settings, bool RestartRequired);

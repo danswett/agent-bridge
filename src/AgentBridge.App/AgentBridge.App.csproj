@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The Windows app (docs/app-windows.md): WinUI 3, unpackaged and self-contained, installed
+       and updated by Velopack with the host published beside it. Settings follow spike S3
+       (spikes/s3-winui-velopack/RESULTS.md). Not in AgentBridge.slnx: it builds only on
+       Windows, and CI builds it in a job of its own (build/pack-app.ps1). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <!-- Without it an unpackaged publish leaves out the app's .pri, which carries the compiled
+         XAML, and the installed app fails at startup with nothing but 0xC000027B (S3). -->
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Platforms>x64</Platforms>
+    <!-- Program.Main runs Velopack's hooks and registers the toast activator before XAML. -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>AgentBridge</AssemblyName>
+    <RootNamespace>AgentBridge.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\AgentBridge.ico</ApplicationIcon>
+    <Version>0.1.0</Version>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\AgentBridge.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\AgentBridge.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    <PackageReference Include="Velopack" Version="1.2.161" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AgentBridge.App.Core\AgentBridge.App.Core.csproj" />
+  </ItemGroup>
+
+</Project>

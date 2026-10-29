@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="AgentBridge.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AgentBridge.App"
+    xmlns:core="using:AgentBridge.App.Core"
+    Title="Agent Bridge">
+    <Grid x:Name="Root" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <NavigationView
+            x:Name="Nav"
+            PaneDisplayMode="Top"
+            IsBackButtonVisible="Collapsed"
+            IsSettingsVisible="False"
+            SelectionChanged="OnNavigate">
+            <NavigationView.MenuItems>
+                <NavigationViewItem x:Name="SessionsItem" Content="Sessions" Tag="sessions" AutomationProperties.AutomationId="NavSessions">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8BD;" />
+                    </NavigationViewItem.Icon>
+                    <NavigationViewItem.InfoBadge>
+                        <InfoBadge
+                            Value="{x:Bind ViewModel.Waiting, Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Count(ViewModel.Waiting), Mode=OneWay}"
+                            Background="{ThemeResource AbWarning}" />
+                    </NavigationViewItem.InfoBadge>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Usage" Tag="usage" AutomationProperties.AutomationId="NavUsage">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE9D2;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+            <NavigationView.FooterMenuItems>
+                <NavigationViewItem Content="Settings" Tag="settings" AutomationProperties.AutomationId="NavSettings">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE713;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.FooterMenuItems>
+
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <InfoBar
+                    Grid.Row="0"
+                    Margin="16,8,16,0"
+                    AutomationProperties.AutomationId="Banner"
+                    IsClosable="False"
+                    Severity="Warning"
+                    IsOpen="{x:Bind ViewModel.HasBanner, Mode=OneWay}"
+                    Message="{x:Bind ViewModel.Banner, Mode=OneWay}" />
+
+                <ScrollViewer x:Name="SessionsPane" Grid.Row="1" AutomationProperties.AutomationId="SessionsPane">
+                    <StackPanel MaxWidth="920" Padding="16,12,16,24" Spacing="12">
+                        <TextBlock
+                            Style="{StaticResource AbSecondaryText}"
+                            Text="No agent sessions on this machine right now. Start Copilot CLI, Claude Code or Codex and it appears here."
+                            Visibility="{x:Bind local:Ui.Show(ViewModel.Empty), Mode=OneWay}" />
+                        <ItemsControl x:Name="Cards" ItemsSource="{x:Bind ViewModel.Sessions}" IsTabStop="False" AutomationProperties.AutomationId="Cards">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Spacing="14" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="core:SessionCardViewModel">
+                                    <local:SessionCard Card="{x:Bind}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <local:UsageView x:Name="UsagePane" Grid.Row="1" Visibility="Collapsed" />
+                <local:SettingsView x:Name="SettingsPane" Grid.Row="1" Visibility="Collapsed" />
+            </Grid>
+        </NavigationView>
+    </Grid>
+</Window>

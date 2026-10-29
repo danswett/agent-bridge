@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The local API between a desktop app and the host on the same machine: Protocol v1's
+       messages over a named pipe (Windows) or a Unix socket (elsewhere), with the host's
+       local-only management ops. docs/protocol/local-pipe.md. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AgentBridge.Local</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AgentBridge.Local.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AgentBridge.Protocol\AgentBridge.Protocol.csproj" />
+    <ProjectReference Include="..\AgentBridge.Transport\AgentBridge.Transport.csproj" />
+  </ItemGroup>
+
+</Project>

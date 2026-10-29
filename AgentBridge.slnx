@@ -1,18 +1,23 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/AgentBridge.App.Core/AgentBridge.App.Core.csproj" />
     <Project Path="src/AgentBridge.Host.Core/AgentBridge.Host.Core.csproj" />
     <Project Path="src/AgentBridge.Host.Delivery/AgentBridge.Host.Delivery.csproj" />
     <Project Path="src/AgentBridge.Host/AgentBridge.Host.csproj" />
+    <Project Path="src/AgentBridge.HostLauncher/AgentBridge.HostLauncher.csproj" />
     <Project Path="src/AgentBridge.Injector/AgentBridge.Injector.csproj" />
+    <Project Path="src/AgentBridge.Local/AgentBridge.Local.csproj" />
     <Project Path="src/AgentBridge.Protocol/AgentBridge.Protocol.csproj" />
     <Project Path="src/AgentBridge.Relay/AgentBridge.Relay.csproj" />
     <Project Path="src/AgentBridge.Transport/AgentBridge.Transport.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/AgentBridge.App.Tests/AgentBridge.App.Tests.csproj" />
     <Project Path="tests/AgentBridge.ConsoleEcho/AgentBridge.ConsoleEcho.csproj" />
     <Project Path="tests/AgentBridge.Host.Core.Tests/AgentBridge.Host.Core.Tests.csproj" />
     <Project Path="tests/AgentBridge.Host.Delivery.Tests/AgentBridge.Host.Delivery.Tests.csproj" />
     <Project Path="tests/AgentBridge.Host.Tests/AgentBridge.Host.Tests.csproj" />
+    <Project Path="tests/AgentBridge.Local.Tests/AgentBridge.Local.Tests.csproj" />
     <Project Path="tests/AgentBridge.Protocol.Tests/AgentBridge.Protocol.Tests.csproj" />
     <Project Path="tests/AgentBridge.Transport.Tests/AgentBridge.Transport.Tests.csproj" />
   </Folder>

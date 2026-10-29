@@ -1,0 +1,262 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="AgentBridge.App.SessionCard"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AgentBridge.App"
+    xmlns:core="using:AgentBridge.App.Core">
+    <UserControl.Resources>
+        <!-- The PWA's glow (pwa/app.css .glow): a halo that breathes while the session works or
+             waits on you. Still, at 0.6, when Windows has animations turned off. -->
+        <Storyboard x:Name="Pulse" RepeatBehavior="Forever" AutoReverse="True">
+            <DoubleAnimation Storyboard.TargetName="Glow" Storyboard.TargetProperty="Opacity" From="0.1" To="0.9" Duration="0:0:0.8" />
+        </Storyboard>
+    </UserControl.Resources>
+
+    <Grid>
+        <Rectangle
+            x:Name="Glow"
+            Margin="-3"
+            RadiusX="16"
+            RadiusY="16"
+            StrokeThickness="4"
+            Opacity="0"
+            IsHitTestVisible="False"
+            Stroke="{x:Bind local:Ui.StateBrush(Card.View), Mode=OneWay}" />
+        <Border Background="{ThemeResource AbSurface}" CornerRadius="14" Padding="16,12,16,12">
+            <StackPanel Spacing="6">
+                <!-- Header: the title folds the card. -->
+                <Button
+                    x:Name="FoldButton"
+                    Padding="0"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Click="OnFold"
+                    AutomationProperties.AutomationId="Fold"
+                    AutomationProperties.Name="{x:Bind local:SessionCard.FoldName(Card.Title, Card.Folded), Mode=OneWay}">
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Border Background="{ThemeResource AbCodeBg}" CornerRadius="6" Padding="6,2" VerticalAlignment="Center">
+                            <TextBlock Text="{x:Bind Card.AgentName, Mode=OneWay}" FontSize="12" />
+                        </Border>
+                        <TextBlock
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            FontSize="17"
+                            FontWeight="SemiBold"
+                            TextWrapping="Wrap"
+                            Text="{x:Bind Card.Title, Mode=OneWay}" />
+                        <FontIcon
+                            Grid.Column="2"
+                            FontSize="12"
+                            VerticalAlignment="Center"
+                            Glyph="{x:Bind local:SessionCard.Chevron(Card.Folded), Mode=OneWay}" />
+                    </Grid>
+                </Button>
+                <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Card.Meta, Mode=OneWay}" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Ellipse Width="9" Height="9" VerticalAlignment="Center" Fill="{x:Bind local:Ui.StateBrush(Card.View), Mode=OneWay}" />
+                    <TextBlock FontWeight="SemiBold" Text="{x:Bind Card.StatusText, Mode=OneWay}" AutomationProperties.AutomationId="Status" />
+                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Card.SinceText, Mode=OneWay}" />
+                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Card.UpdatedText, Mode=OneWay}" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasTool), Mode=OneWay}">
+                    <ProgressRing Width="12" Height="12" IsActive="{x:Bind Card.HasTool, Mode=OneWay}" />
+                    <TextBlock FontWeight="SemiBold" Text="{x:Bind Card.ToolName, Mode=OneWay}" />
+                    <TextBlock Style="{StaticResource AbSecondaryText}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" MaxWidth="640" Text="{x:Bind Card.ToolSummary, Mode=OneWay}" />
+                </StackPanel>
+
+                <!-- Body, in the PWA's order: question, response, reasoning, your message, reply,
+                     tool history, facts, End session. -->
+                <StackPanel Spacing="10" Margin="0,6,0,0" Visibility="{x:Bind local:Ui.Hide(Card.Folded), Mode=OneWay}">
+                    <ContentControl x:Name="QuestionHost" HorizontalContentAlignment="Stretch" IsTabStop="False" />
+
+                    <InfoBar
+                        Title="Not sent"
+                        Severity="Warning"
+                        IsOpen="{x:Bind Card.HasOrphan, Mode=OneWay}"
+                        Message="{x:Bind Card.OrphanNote, Mode=OneWay}"
+                        Closed="OnOrphanClosed">
+                        <StackPanel Spacing="6" Margin="0,0,0,8">
+                            <TextBox IsReadOnly="True" TextWrapping="Wrap" Text="{x:Bind Card.OrphanText, Mode=OneWay}" />
+                            <Button Content="Copy" Click="OnCopyOrphan" />
+                        </StackPanel>
+                    </InfoBar>
+
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        IsTextSelectionEnabled="True"
+                        AutomationProperties.AutomationId="Receipt"
+                        Text="{x:Bind Card.ReceiptText, Mode=OneWay}"
+                        Foreground="{x:Bind local:Ui.ToneBrush(Card.ReceiptTone), Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}" />
+
+                    <TextBlock
+                        Style="{StaticResource AbSecondaryText}"
+                        Text="Earlier text not shown: the response was longer than the machine sends."
+                        Visibility="{x:Bind local:Ui.Show(Card.ResponseTruncated), Mode=OneWay}" />
+                    <local:MarkdownView
+                        x:Name="ResponseView"
+                        AutomationProperties.AutomationId="Response"
+                        Markdown="{x:Bind Card.Response, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Show(Card.HasResponse), Mode=OneWay}" />
+
+                    <Expander
+                        Header="Reasoning"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Stretch"
+                        Visibility="{x:Bind local:Ui.Show(Card.HasReasoning), Mode=OneWay}">
+                        <TextBlock TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.Reasoning, Mode=OneWay}" />
+                    </Expander>
+                    <Expander
+                        Header="Your last message"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Stretch"
+                        Visibility="{x:Bind local:Ui.Show(Card.HasUserMessage), Mode=OneWay}">
+                        <TextBlock TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.UserMessage, Mode=OneWay}" />
+                    </Expander>
+
+                    <!-- Reply (pwa/js/ui/reply-view.js). -->
+                    <StackPanel Spacing="6" Visibility="{x:Bind local:Ui.Some(Card.Reply), Mode=OneWay}">
+                        <TextBlock
+                            TextWrapping="Wrap"
+                            Foreground="{ThemeResource AbWarningText}"
+                            Text="{x:Bind Card.Reply.HeldText, Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Some(Card.Reply.HeldText), Mode=OneWay}" />
+                        <TextBox
+                            x:Name="ReplyBox"
+                            AcceptsReturn="True"
+                            TextWrapping="Wrap"
+                            MinHeight="40"
+                            MaxHeight="240"
+                            PlaceholderText="Reply to this session (Ctrl+Enter sends; paste or attach files)"
+                            AutomationProperties.AutomationId="ReplyText"
+                            AutomationProperties.Name="Reply"
+                            IsEnabled="{x:Bind local:Ui.Not(Card.Reply.Held), Mode=OneWay}"
+                            Text="{x:Bind Card.Reply.Text, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                            GotFocus="OnEditing"
+                            LostFocus="OnNotEditing"
+                            Paste="OnPaste"
+                            KeyDown="OnReplyKey" />
+                        <ItemsControl ItemsSource="{x:Bind Card.Reply.Attachments, Mode=OneWay}" IsTabStop="False">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="core:ReplyAttachment">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <TextBlock VerticalAlignment="Center" Text="{x:Bind Name}" />
+                                        <TextBlock VerticalAlignment="Center" Style="{StaticResource AbSecondaryText}" Text="{x:Bind SizeText}" />
+                                        <Button Content="Remove" Padding="8,2" Click="OnRemoveAttachment" Tag="{x:Bind}" AutomationProperties.Name="{x:Bind local:SessionCard.RemoveName(Name)}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button
+                                Content="Send"
+                                Style="{StaticResource AccentButtonStyle}"
+                                AutomationProperties.AutomationId="SendReply"
+                                IsEnabled="{x:Bind Card.Reply.CanSend, Mode=OneWay}"
+                                Click="OnSendReply" />
+                            <Button
+                                Content="Attach…"
+                                AutomationProperties.AutomationId="Attach"
+                                Visibility="{x:Bind local:Ui.Show(Card.Reply.ShowAttach), Mode=OneWay}"
+                                IsEnabled="{x:Bind Card.Reply.CanAttach, Mode=OneWay}"
+                                Click="OnAttach" />
+                            <Button
+                                Content="Send again"
+                                Visibility="{x:Bind local:Ui.Show(Card.Reply.ShowResend), Mode=OneWay}"
+                                Click="OnResendReply" />
+                            <TextBlock VerticalAlignment="Center" Style="{StaticResource AbSecondaryText}" Text="{x:Bind Card.Reply.BytesText, Mode=OneWay}" />
+                        </StackPanel>
+                        <TextBlock
+                            Style="{StaticResource AbSecondaryText}"
+                            Text="Line breaks go to the session as spaces: it takes a reply as one line."
+                            Visibility="{x:Bind local:Ui.Show(Card.Reply.LineBreakHint), Mode=OneWay}" />
+                        <TextBlock
+                            TextWrapping="Wrap"
+                            Foreground="{ThemeResource AbDanger}"
+                            Text="{x:Bind Card.Reply.Error, Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Show(Card.Reply.HasError), Mode=OneWay}" />
+                        <TextBlock
+                            TextWrapping="Wrap"
+                            IsTextSelectionEnabled="True"
+                            AutomationProperties.AutomationId="ReplyStatus"
+                            Text="{x:Bind Card.Reply.StatusText, Mode=OneWay}"
+                            Foreground="{x:Bind local:Ui.ToneBrush(Card.Reply.StatusTone), Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Some(Card.Reply.StatusText), Mode=OneWay}" />
+                    </StackPanel>
+
+                    <Expander
+                        x:Name="HistoryExpander"
+                        Header="Tool history"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Stretch"
+                        Expanding="OnHistoryOpen"
+                        Collapsed="OnHistoryClosed"
+                        Visibility="{x:Bind local:Ui.Show(Card.ShowHistory), Mode=OneWay}">
+                        <StackPanel Spacing="4">
+                            <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Card.HistoryNote, Mode=OneWay}" Visibility="{x:Bind local:Ui.Some(Card.HistoryNote), Mode=OneWay}" />
+                            <ItemsControl ItemsSource="{x:Bind Card.History}" IsTabStop="False">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="core:ToolRow">
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="20" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{x:Bind Mark}" AutomationProperties.Name="{x:Bind Status}" />
+                                            <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="{x:Bind Name}" />
+                                            <TextBlock Grid.Column="2" Style="{StaticResource AbSecondaryText}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Text="{x:Bind Summary}" />
+                                            <TextBlock Grid.Column="3" Style="{StaticResource AbSecondaryText}" Text="{x:Bind When}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Expander>
+
+                    <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Card.Facts, Mode=OneWay}" Visibility="{x:Bind local:Ui.Some(Card.Facts), Mode=OneWay}" />
+
+                    <!-- End session: last, and furthest from Send (pwa/js/ui/stop-view.js). -->
+                    <StackPanel Spacing="4" Visibility="{x:Bind local:Ui.Some(Card.End), Mode=OneWay}">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button
+                                Content="End session"
+                                AutomationProperties.AutomationId="EndSession"
+                                AutomationProperties.Name="{x:Bind Card.End.ButtonName, Mode=OneWay}"
+                                Foreground="{ThemeResource AbDanger}"
+                                IsEnabled="{x:Bind Card.End.CanPress, Mode=OneWay}"
+                                Click="OnEnd" />
+                            <Button
+                                Content="Send again"
+                                Visibility="{x:Bind local:Ui.Show(Card.End.ShowResend), Mode=OneWay}"
+                                Click="OnResendEnd" />
+                        </StackPanel>
+                        <TextBlock
+                            TextWrapping="Wrap"
+                            AutomationProperties.AutomationId="EndStatus"
+                            AutomationProperties.LiveSetting="Polite"
+                            Text="{x:Bind Card.End.StatusText, Mode=OneWay}"
+                            Foreground="{x:Bind local:Ui.ToneBrush(Card.End.StatusTone), Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Some(Card.End.StatusText), Mode=OneWay}" />
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+        <Rectangle
+            RadiusX="14"
+            RadiusY="14"
+            IsHitTestVisible="False"
+            Stroke="{x:Bind local:Ui.StateBrush(Card.View), Mode=OneWay}"
+            StrokeThickness="{x:Bind local:Ui.StateThickness(Card.View), Mode=OneWay}"
+            StrokeDashArray="{x:Bind local:Ui.StateDash(Card.View), Mode=OneWay}" />
+    </Grid>
+</UserControl>

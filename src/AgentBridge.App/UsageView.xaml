@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="AgentBridge.App.UsageView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AgentBridge.App"
+    xmlns:core="using:AgentBridge.App.Core">
+    <!-- The usage panel (pwa/js/ui/usage-view.js): each agent account's limits on this machine,
+         how far through each window it is, and whether that is ahead of an even pace. -->
+    <ScrollViewer AutomationProperties.AutomationId="UsagePane">
+        <StackPanel MaxWidth="920" Padding="16,12,16,24" Spacing="12">
+            <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind ViewModel.Summary, Mode=OneWay}" />
+            <TextBlock
+                Style="{StaticResource AbSecondaryText}"
+                Text="No usage reported yet. The host reads it from the agents' own accounts on this machine."
+                Visibility="{x:Bind local:Ui.Show(ViewModel.IsEmpty), Mode=OneWay}" />
+            <ItemsControl ItemsSource="{x:Bind ViewModel.Rows, Mode=OneWay}" IsTabStop="False">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Spacing="12" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="core:UsageRowViewModel">
+                        <Border Background="{ThemeResource AbSurface}" BorderBrush="{ThemeResource AbBorder}" BorderThickness="1" CornerRadius="14" Padding="16,12">
+                            <StackPanel Spacing="8">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock FontSize="16" FontWeight="SemiBold" Text="{x:Bind Label}" />
+                                    <TextBlock VerticalAlignment="Center" Style="{StaticResource AbSecondaryText}" Text="{x:Bind Detail}" />
+                                </StackPanel>
+                                <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Age}" Opacity="{x:Bind local:UsageView.AgeOpacity(Stale)}" />
+                                <TextBlock TextWrapping="Wrap" Foreground="{ThemeResource AbDanger}" Text="{x:Bind Error}" Visibility="{x:Bind local:Ui.Some(Error)}" />
+                                <ItemsControl ItemsSource="{x:Bind Windows}" IsTabStop="False">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Spacing="10" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="core:UsageWindowViewModel">
+                                            <StackPanel Spacing="3">
+                                                <Grid>
+                                                    <TextBlock FontWeight="SemiBold" Text="{x:Bind Label}" />
+                                                    <TextBlock HorizontalAlignment="Right" FontWeight="SemiBold" Text="{x:Bind PercentText}" Foreground="{x:Bind local:UsageView.SeverityBrush(Severity)}" />
+                                                </Grid>
+                                                <ProgressBar
+                                                    Maximum="100"
+                                                    Value="{x:Bind Percent}"
+                                                    Foreground="{x:Bind local:UsageView.SeverityBrush(Severity)}"
+                                                    AutomationProperties.Name="{x:Bind local:UsageView.BarName(Label, PercentText)}" />
+                                                <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind local:UsageView.Line(AmountText, ResetText)}" />
+                                                <TextBlock
+                                                    FontSize="12"
+                                                    TextWrapping="Wrap"
+                                                    Text="{x:Bind PaceText}"
+                                                    Foreground="{x:Bind local:UsageView.PaceBrush(AheadOfPace)}"
+                                                    Visibility="{x:Bind local:Ui.Some(PaceText)}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

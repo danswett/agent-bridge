@@ -39,6 +39,10 @@ The protocol between them is specified in [docs/protocol](docs/protocol/v1-sessi
 | `src/AgentBridge.Injector` | `agent-bridge-injector`: the NativeAOT worker the host starts to type into an agent's console, so a console closing mid-answer can never take the host down |
 | `src/AgentBridge.Transport` | The end-to-end channel (Noise XX over P-256), the relay client, channels with requests, responses and events, sign-in, device keys (TPM, DPAPI or an owner-only file) and Web Push encryption. Promoted from spikes S2, S4, S5 and S6 |
 | `src/AgentBridge.Relay` | The relay (ASP.NET Core), promoted from S4. `docker build -f src/AgentBridge.Relay/Dockerfile .` from the repository root |
+| `src/AgentBridge.Local` | The local API between a desktop app and its host: Protocol v1 over a named pipe (a Unix socket elsewhere) that only the same user at the same elevation can use, plus local-only host management ops. `serve` always opens it, and goes to the relay only once signed in. [docs/protocol/local-pipe.md](docs/protocol/local-pipe.md) |
+| `src/AgentBridge.App` | The Windows app (WinUI 3, unpackaged, Velopack): this machine's sessions as cards at parity with the PWA, usage, toasts that take answers, and installing, starting, signing in and updating the host it ships with. `--demo` runs it against a pretend host. [docs/app-windows.md](docs/app-windows.md); `build/pack-app.ps1` builds the package |
+| `src/AgentBridge.App.Core` | Everything in the app that is not drawing (connection, view models, toast plans, host lifecycle), platform-neutral and tested on Linux too |
+| `src/AgentBridge.HostLauncher` | `agent-bridge-hostw`: starts the host with no console window, for the logon task |
 | `tests/` | `dotnet test AgentBridge.slnx`, on Windows and Linux in CI |
 
 ## Ground rules while this is being built

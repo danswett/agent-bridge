@@ -14,7 +14,7 @@ public sealed class UsageService
 {
     readonly UsageMonitor monitor;
     readonly Action<string> log;
-    readonly ConcurrentDictionary<SecureChannel, Subscriber> subscribers = new();
+    readonly ConcurrentDictionary<IProtocolChannel, Subscriber> subscribers = new();
 
     public UsageService(UsageMonitor monitor, Action<string>? log = null)
     {
@@ -25,7 +25,7 @@ public sealed class UsageService
 
     public int Subscribers => subscribers.Count;
 
-    public Task<object?> HandleAsync(SecureChannel channel, string op, JsonElement data) => op switch
+    public Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data) => op switch
     {
         UsageProtocol.Get => Task.FromResult<object?>(monitor.Current.Report),
         UsageProtocol.Subscribe => SubscribeAsync(channel),
@@ -38,7 +38,7 @@ public sealed class UsageService
     // The subscriber is held from taking the report until the response has gone. Otherwise a
     // change announced in between could be sent as an update ahead of the response, and the
     // client, taking the response as current, would keep the older report over it.
-    async Task<object?> SubscribeAsync(SecureChannel channel)
+    async Task<object?> SubscribeAsync(IProtocolChannel channel)
     {
         var added = false;
         var current = subscribers.AddOrUpdate(channel, _ => { added = true; return new Subscriber(); }, (_, existing) => existing);
@@ -62,7 +62,7 @@ public sealed class UsageService
         });
     }
 
-    async Task PushAsync(SecureChannel channel, Subscriber subscriber)
+    async Task PushAsync(IProtocolChannel channel, Subscriber subscriber)
     {
         await subscriber.Gate.WaitAsync();
         try

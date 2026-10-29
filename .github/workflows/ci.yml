@@ -74,6 +74,43 @@ jobs:
         shell: pwsh
         run: dotnet spikes/s6-tpm-keys/src/S6.Check/bin/Release/net10.0-windows/s6-check.dll check
 
+  app:
+    # The Windows app (docs/app-windows.md): published with the host into one folder, packed
+    # with Velopack, then the published copy is started in demo mode to check that it draws
+    # the cards and answers one through them. Unsigned: the package is an artifact for testing.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet tool install -g vpk --version 1.2.161
+      - name: Publish and pack
+        shell: pwsh
+        run: ./build/pack-app.ps1 -Version "0.1.${{ github.run_number }}"
+      - name: The published app draws the demo's cards and answers one
+        shell: pwsh
+        run: |
+          $result = "$env:RUNNER_TEMP/selftest/result.json"
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/selftest" | Out-Null
+          $p = Start-Process out/app/publish/AgentBridge.exe -ArgumentList '--self-test', $result -PassThru
+          $finished = $p.WaitForExit(180000)
+          Copy-Item "$env:LOCALAPPDATA/AgentBridge/app/*.log" "$env:RUNNER_TEMP/selftest" -ErrorAction SilentlyContinue
+          if (-not $finished) { Stop-Process -Id $p.Id; Write-Error 'the self-test did not finish'; exit 1 }
+          if (Test-Path $result) { Get-Content $result } else { Write-Error 'the self-test wrote no result' }
+          exit $p.ExitCode
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-bridge-windows-0.1.${{ github.run_number }}
+          path: out/app/releases
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: app-self-test
+          path: ${{ runner.temp }}/selftest
+          retention-days: 7
+
   s2-noise-interop:
     # The .NET and WebCrypto implementations must keep agreeing byte for byte, in
     # Node, Chromium and WebKit (Safari's engine), and live over a WebSocket.

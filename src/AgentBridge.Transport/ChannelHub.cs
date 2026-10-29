@@ -215,7 +215,7 @@ public sealed class ChannelHub
     async Task ServeAsync(SecureChannel ch, long id, string op, JsonElement data)
     {
         byte[] reply;
-        Func<SecureChannel, Task>? then = null;
+        Func<IProtocolChannel, Task>? then = null;
         try
         {
             var result = Handler is null ? null : await Handler(ch, op, data);
@@ -246,4 +246,4 @@ public sealed class ChannelHub
 // A handler result with work that must follow its response on the wire. sessions.subscribe
 // needs it: the client must have {revision, count} before the snapshot's upserts, and
 // anything Then sends goes through the channel's send lock after the response has.
-public sealed record ChannelReply(object Result, Func<SecureChannel, Task> Then);
+public sealed record ChannelReply(object Result, Func<IProtocolChannel, Task> Then);
