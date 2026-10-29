@@ -129,8 +129,7 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.True(started.ProcessId > 0);
         Assert.True(Math.Abs((started.StartedAt - DateTimeOffset.UtcNow).TotalSeconds) < 60);
         var deadline = DateTime.UtcNow.AddSeconds(20);
-        while (!File.Exists(Out("start.json")) && DateTime.UtcNow < deadline) { Thread.Sleep(50); }
-        Assert.Equal(["-i", "a prompt"], Read("start.json"));
+        Assert.Equal(["-i", "a prompt"], ReadOnceWritten("start.json", deadline));
         while (starter.Running(started) && DateTime.UtcNow < deadline) { Thread.Sleep(50); }
         Assert.False(starter.Running(started));
         Assert.False(starter.Running(started with { StartedAt = started.StartedAt.AddMinutes(-5) }));
@@ -180,6 +179,20 @@ public sealed class LaunchPieceTests : IDisposable
     string Out(string name) => Path.Combine(root, name);
 
     string[] Read(string name) => JsonSerializer.Deserialize<string[]>(File.ReadAllText(Out(name)))!;
+
+    // For a file another process is writing. It exists from the moment the writer creates it,
+    // and is locked until the writer has finished, and sometimes for a few milliseconds more
+    // by something else (a virus scanner, not visible to the Restart Manager). Reading as soon
+    // as it appeared, as the starter's test once did, got "being used by another process":
+    // 61 times in 300 when polling for it under load.
+    string[] ReadOnceWritten(string name, DateTime deadline)
+    {
+        while (true)
+        {
+            try { return Read(name); }
+            catch (Exception e) when ((e is IOException or JsonException) && DateTime.UtcNow < deadline) { Thread.Sleep(50); }
+        }
+    }
 
     string[] RunAndRead((string Application, string CommandLine) line, string name)
     {

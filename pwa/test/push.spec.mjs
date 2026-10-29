@@ -37,11 +37,30 @@ test('a push shows a notification, and every later notice about the session repl
   const scope = await page.evaluate(async () => (await navigator.serviceWorker.ready).scope);
   await expect.poll(() => registrations.find((r) => r.scopeURL === scope && !r.isDeleted)?.registrationId, { timeout: 15000 }).toBeTruthy();
   const registrationId = registrations.find((r) => r.scopeURL === scope).registrationId;
-  const deliver = (data) => cdp.send('ServiceWorker.deliverPushMessage', { origin, registrationId, data });
+
+  // Chromium's getNotifications() drops any notification it finds in its database but not
+  // yet on the platform's list of displayed ones, and it writes the database before it
+  // displays. A read in that gap loses the notification for good, though it is on screen.
+  // Polling while pushes were still being shown failed this test on 3 of 4 pushes to main,
+  // missing whichever notice the read caught in the gap. So the worker counts each
+  // notification it has finished showing, and the page reads only once every push
+  // delivered so far is shown.
+  await expect.poll(() => context.serviceWorkers().some((w) => w.url().startsWith(scope)), { timeout: 15000 }).toBe(true);
+  const worker = context.serviceWorkers().find((w) => w.url().startsWith(scope));
+  await worker.evaluate(() => {
+    const reg = self.registration;
+    const show = reg.showNotification.bind(reg);
+    self.testShown = 0;
+    reg.showNotification = (...args) => show(...args).finally(() => { self.testShown += 1; });
+  });
+  let delivered = 0;
+  const deliver = (data) => { delivered += 1; return cdp.send('ServiceWorker.deliverPushMessage', { origin, registrationId, data }); };
+  const settled = () => expect.poll(() => worker.evaluate(() => self.testShown), { timeout: 15000 }).toBe(delivered);
   const shown = () => page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications())
     .map((n) => ({ title: n.title, body: n.body, tag: n.tag, silent: n.silent, renotify: n.renotify, data: n.data })));
 
   await deliver(notice(scope, 'question', 'DEV · waiting on you\nWhich database?'));
+  await settled();
   await expect.poll(shown, { timeout: 15000 }).toHaveLength(1);
   const [question] = await shown();
   expect(question).toMatchObject({ title: 'Pick the session store', body: 'DEV · waiting on you\nWhich database?', tag: `${MACHINE}:s1`, renotify: true, silent: false });
@@ -49,12 +68,14 @@ test('a push shows a notification, and every later notice about the session repl
 
   // Answered at the machine: the same notification, quietly changed.
   await deliver(notice(scope, 'resolved', 'DEV · no longer waiting'));
+  await settled();
   await expect.poll(async () => (await shown()).map((n) => n.body), { timeout: 15000 }).toEqual(['DEV · no longer waiting']);
   expect((await shown())[0]).toMatchObject({ silent: true, renotify: false });
 
   // Whatever arrives, something is shown, and a tap stays in the app.
   await deliver('not json');
   await deliver(notice(scope, 'question', 'x', { tag: 'other', navigate: 'https://evil.example/' }));
+  await settled();
   await expect.poll(shown, { timeout: 15000 }).toHaveLength(3);
   const all = await shown();
   expect(all.map((n) => n.title)).toContain('Agent Bridge');
