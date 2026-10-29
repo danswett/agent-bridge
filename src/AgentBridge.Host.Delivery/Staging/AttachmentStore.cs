@@ -609,6 +609,10 @@ public static partial class AttachmentFiles
     static readonly Format[] Known = [Png, Jpeg, Gif, Webp, Heic, Heif, Pdf];
     static readonly string[] HeicBrands = ["heic", "heix", "hevc", "hevx", "heim", "heis"];
 
+    // An image Codex takes in when its path is pasted into its input: it attaches only images,
+    // and a path to anything else stays as text in the prompt.
+    public static bool IsPastableImage(ReadOnlySpan<byte> b) => Detect(b) is { } f && (f == Png || f == Jpeg || f == Gif || f == Webp);
+
     public static Format? Detect(ReadOnlySpan<byte> b)
     {
         if (b.StartsWith((ReadOnlySpan<byte>)[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])) { return Png; }
