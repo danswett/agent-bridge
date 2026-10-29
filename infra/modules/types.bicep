@@ -21,6 +21,8 @@ type appConfig = {
   @description('The vault holds github-client-secret: the relay then revokes each GitHub token as soon as sign-in has read the account id.')
   githubClientSecret: bool?
   purgeProtection: bool?
+  @description('Public hostname served with an Azure-managed certificate, such as relay.bad-duck.com. Needs a CNAME to the app\'s FQDN and a TXT asuid.<host> with the environment\'s verification id; deploy.ps1 prints both.')
+  customDomain: string?
   @description('Keep a system-assigned identity alongside the app\'s own (production, which was created with one).')
   keepSystemIdentity: bool?
 }

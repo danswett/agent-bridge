@@ -38,10 +38,10 @@ permissions:
 
 env:
   RESOURCE_GROUP: rg-agent-bridge-relay
-  REGISTRY: agentbridgerelay59731
+  REGISTRY: abrelaywus2
   IMAGE: agent-bridge-relay
   STAGING_APP: agent-bridge-relay-staging
-  STAGING_VAULT: kv-abrelay-wus2-stg
+  STAGING_VAULT: kv-abrelay-stg-wus2
   PRODUCTION_APP: agent-bridge-relay
   PWA_ORIGIN: https://danswett.github.io
 

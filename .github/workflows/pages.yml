@@ -11,7 +11,7 @@ on:
 env:
   # The PWAs' relay. The pages are served from here, not by the relay, so a relay operator
   # cannot change the code that holds the keys.
-  S4_RELAY: https://agent-bridge-relay.agreeablepebble-329880d4.westus2.azurecontainerapps.io
+  S4_RELAY: https://relay.bad-duck.com
 
 permissions:
   contents: read

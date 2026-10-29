@@ -60,6 +60,12 @@ param stagingDeployerPrincipalId string = ''
 @description('Object id of the production deploy principal (GitHub OIDC, environment production).')
 param productionDeployerPrincipalId string = ''
 
+@description('Custom-domain step for each app; see modules/relay-app.bicep.')
+@allowed(['none', 'added', 'bound'])
+param productionDomainState string = 'none'
+@allowed(['none', 'added', 'bound'])
+param stagingDomainState string = 'none'
+
 @description('Object id of the person running deploy.ps1, who seeds the vaults\' secrets.')
 param operatorPrincipalId string = ''
 
@@ -156,6 +162,7 @@ module stagingApp 'modules/relay-app.bicep' = {
     allowedOrigins: allowedOrigins
     deployerPrincipalId: stagingDeployerPrincipalId
     deployerReadsSecrets: true
+    domainState: stagingDomainState
     operatorPrincipalId: operatorPrincipalId
     tags: union(tags, { 'agent-bridge-env': 'staging' })
   }
@@ -175,6 +182,7 @@ module productionApp 'modules/relay-app.bicep' = {
     allowedOrigins: allowedOrigins
     deployerPrincipalId: productionDeployerPrincipalId
     deployerReadsSecrets: false
+    domainState: productionDomainState
     operatorPrincipalId: operatorPrincipalId
     tags: union(tags, { 'agent-bridge-env': 'production' })
   }
@@ -183,5 +191,9 @@ module productionApp 'modules/relay-app.bicep' = {
 
 output stagingFqdn string = stagingApp.outputs.fqdn
 output productionFqdn string = productionApp.outputs.fqdn
+output environmentDomain string = manageEnvironment ? environment!.properties.defaultDomain : ''
+output verificationId string = manageEnvironment ? environment!.properties.customDomainConfiguration.customDomainVerificationId : ''
+output productionCustomDomain string = productionApp.outputs.customDomain
+output stagingCustomDomain string = stagingApp.outputs.customDomain
 output stagingVault string = stagingApp.outputs.vaultName
 output productionVault string = productionApp.outputs.vaultName
