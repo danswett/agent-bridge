@@ -192,6 +192,61 @@ internal static class CopilotDiscovery
     }
 }
 
+internal static class ClaudeSessionDiscovery
+{
+    // Live Claude sessions from Claude Code's own sessions/<pid>.json, written by every
+    // interactive CLI (seen with 2.1.312) whether or not any hook is installed. Without
+    // this, a Claude session had no card at all unless agent-ha-bridge's hooks had
+    // registered it, and the new host registers none.
+    public static IReadOnlyList<DiscoveredSession> Find(string claudeHome, IReadOnlyList<AgentProcess> processes, Func<string, string?> findTranscript)
+    {
+        var root = Path.Combine(claudeHome, "sessions");
+        if (processes.Count == 0 || !Directory.Exists(root)) { return []; }
+        var running = processes.ToDictionary(p => p.Id);
+        var live = new List<DiscoveredSession>();
+        foreach (var file in CopilotDiscovery.SafeEnumerateFiles(root, "*.json"))
+        {
+            if (Parse(file) is not { } entry || !running.TryGetValue(entry.Pid, out var process)) { continue; }
+            // A pid is reused, and a CLI that crashed leaves its file behind: one written by
+            // a session that began before the process now holding the pid started is not
+            // that process's session. A second of slack covers start times the OS rounds.
+            if (process.StartedAt is { } started && (entry.StartedAt ?? entry.UpdatedAt) is { } at && at < started - TimeSpan.FromSeconds(1)) { continue; }
+            live.Add(new DiscoveredSession(entry.SessionId, AgentKind.Claude, findTranscript(entry.SessionId), null, entry.Pid, ProcessStartedAt: process.StartedAt));
+        }
+        return live;
+    }
+
+    internal sealed record Entry(int Pid, string SessionId, DateTimeOffset? StartedAt, DateTimeOffset? UpdatedAt);
+
+    internal static Entry? Parse(string path)
+    {
+        var name = Path.GetFileNameWithoutExtension(path);
+        if (!int.TryParse(name, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var filePid) || filePid <= 0) { return null; }
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length > 64 * 1024) { return null; }
+            using var doc = JsonDocument.Parse(stream);
+            var e = doc.RootElement;
+            if (e.ValueKind != JsonValueKind.Object) { return null; }
+            // Named after its own process; one that is not is a stray or a copy.
+            if (Json.Int(e, "pid") != filePid) { return null; }
+            var id = Json.Str(e, "sessionId");
+            if (string.IsNullOrWhiteSpace(id) || RegistrationDiscovery.SafeKey(id) != id) { return null; }
+            // Only a CLI at a console can be typed into; an SDK or print-mode run is not
+            // a session a person drives.
+            if (Json.Str(e, "kind") is { } kind && kind != "interactive") { return null; }
+            return new Entry(filePid, id, Millis(e, "startedAt"), Millis(e, "updatedAt"));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }
+    }
+
+    static DateTimeOffset? Millis(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var ms) && ms > 0 && ms < 253402300800000
+            ? DateTimeOffset.FromUnixTimeMilliseconds(ms)
+            : null;
+}
+
 internal static class RegistrationDiscovery
 {
     // Live Claude or Codex sessions from agent-ha-bridge's hook registrations. A session

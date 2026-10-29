@@ -138,6 +138,65 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public async Task A_Claude_session_with_no_hook_installed_is_found_from_Claude_Code_s_own_session_file_while_its_process_runs()
+    {
+        using var f = new Fixture();
+        Fixture.Append(f.ClaudeTranscript(A), Claude.User("no hooks here", 1));
+        f.ClaudeSessionFile(700, A);
+        f.Processes.Run(AgentKind.Claude, 700);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        var s = Assert.Single(source.Snapshot());
+        Assert.Equal(AgentKind.Claude, s.Agent);
+        Assert.Equal(700, s.ProcessId);
+        Assert.Equal("no hooks here", s.Title);
+
+        f.Processes.Exit(AgentKind.Claude, 700);
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+    }
+
+    [Fact]
+    public async Task A_Claude_session_file_older_than_the_process_now_holding_its_pid_or_not_interactive_or_misnamed_is_not_a_session()
+    {
+        using var f = new Fixture();
+        // Left by a CLI that crashed at T0; pid 700 now belongs to one started an hour later.
+        f.ClaudeSessionFile(700, A, startedAt: Fixture.T0);
+        f.Processes.Run(AgentKind.Claude, 700, startedAt: Fixture.T0.AddHours(1));
+        f.ClaudeSessionFile(701, B, kind: "sdk");
+        f.Processes.Run(AgentKind.Claude, 701);
+        f.ClaudeSessionFile(702, "33333333-3333-4333-8333-333333333333", fileName: "703.json");
+        f.Processes.Run(AgentKind.Claude, 702);
+        f.Processes.Run(AgentKind.Claude, 703);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+    }
+
+    [Fact]
+    public async Task An_agent_ha_bridge_registration_wins_over_Claude_Code_s_own_file_for_the_same_session()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(A);
+        Fixture.Append(transcript, Claude.User("both", 1));
+        f.ClaudeRegistration(A, 700, transcript, hookStatus: "working", hookAt: Fixture.T0.AddMinutes(5));
+        f.ClaudeSessionFile(700, A);
+        f.Processes.Run(AgentKind.Claude, 700);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        var s = Assert.Single(source.Snapshot());
+        Assert.Equal(SessionStatus.Working, s.Status);
+        Assert.NotNull(source.Files(A)?.Registration);
+    }
+
+    [Fact]
     public async Task An_ended_Codex_registration_is_not_a_session_even_while_its_process_still_runs()
     {
         using var f = new Fixture();
