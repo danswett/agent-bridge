@@ -251,7 +251,7 @@ async Task<int> ServeAsync()
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
     var inspector = new SystemProcessInspector();
-    var callers = new CallerGuard(() => KnownAgents.Of(source, launcher, inspector), OperatingSystem.IsWindows() ? Path.Combine(AppContext.BaseDirectory, "AgentBridge.App.exe") : null);
+    var callers = new CallerGuard(() => KnownAgents.Of(source, launcher, inspector), OperatingSystem.IsWindows() ? Path.Combine(AppContext.BaseDirectory, CallerGuard.AppExecutable) : null);
 
     // The desktop app's way in (docs/protocol/local-pipe.md): the same sessions ops, and the
     // host's management, which only the pipe reaches. It runs whether or not this profile has

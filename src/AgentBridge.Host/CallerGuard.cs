@@ -31,7 +31,7 @@ public interface ICallerGuard
 // A connection is an agent's when its process, or any process it descends from, is one the host
 // knows to be an agent's (KnownProcess, matched by id and start time so a reused id does not
 // count) or is an agent CLI by name. It is the app when, failing that, its own executable is
-// AgentBridge.App.exe beside this host, which is how the app ships (docs/app-windows.md).
+// AppExecutable beside this host, which is how the app ships (docs/app-windows.md).
 // Anything else is Other: a person's script, say, which may still read and answer as before, but
 // not manage the host.
 //
@@ -45,6 +45,10 @@ public sealed class CallerGuard(Func<IReadOnlyList<KnownProcess>> known, string?
     // Executables that are an agent CLI or its launcher whatever runs them. Node and Bun are
     // recognised by the script they run, among the known processes.
     public static readonly IReadOnlyList<string> AgentNames = ["copilot", "claude", "codex", "agency"];
+
+    // The Windows app's executable as it ships: AgentBridge.App.csproj's AssemblyName, which
+    // build/pack-app.ps1 packs beside the host. Not the project's name.
+    public const string AppExecutable = "AgentBridge.exe";
 
     readonly IReadOnlyList<string> names = agentNames ?? AgentNames;
 
@@ -60,7 +64,7 @@ public sealed class CallerGuard(Func<IReadOnlyList<KnownProcess>> known, string?
         {
             return new Caller(CallerKind.App, "the Agent Bridge app");
         }
-        return new Caller(CallerKind.Other, $"{(Path.GetFileName(self.Image) is { Length: > 0 } file ? file : "a process")} (pid {self.Id}), which is not the Agent Bridge app beside this host");
+        return new Caller(CallerKind.Other, $"{(FileName(self.Image) is { Length: > 0 } file ? file : "a process")} (pid {self.Id}), which is not the Agent Bridge app beside this host");
     }
 
     // The nearest process in the chain that is an agent's, and what it is; null when none is.
@@ -70,13 +74,16 @@ public sealed class CallerGuard(Func<IReadOnlyList<KnownProcess>> known, string?
         foreach (var p in chain)
         {
             if (agents.FirstOrDefault(a => Same(a, p)) is { } agent) { return (p, agent.Which); }
-            if (Path.GetFileNameWithoutExtension(p.Image) is { } name && agentNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+            if (Path.GetFileNameWithoutExtension(FileName(p.Image)) is { Length: > 0 } name && agentNames.Contains(name, StringComparer.OrdinalIgnoreCase))
             {
                 return (p, $"a {name.ToLowerInvariant()} process");
             }
         }
         return null;
     }
+
+    // The last part of a path in either convention: a Windows image path read on any platform.
+    static string? FileName(string? path) => path?[(path.LastIndexOfAny(['\\', '/']) + 1)..];
 
     static Caller Inside(IReadOnlyList<PeerProcess> chain, PeerProcess at, string which) =>
         new(CallerKind.Agent, at == chain[0] ? $"{which} (pid {at.Id})" : $"pid {chain[0].Id}, inside {which} (pid {at.Id})");

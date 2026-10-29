@@ -7,7 +7,7 @@ using Xunit;
 public sealed class CallerGuardTests
 {
     static readonly DateTimeOffset T0 = new(2026, 10, 29, 20, 0, 0, TimeSpan.Zero);
-    const string App = @"C:\Users\me\AppData\Local\AgentBridge\current\AgentBridge.App.exe";
+    const string App = @"C:\Users\me\AppData\Local\AgentBridge\current\AgentBridge.exe";
 
     static PeerProcess P(int id, string image, int minutes = 0) => new(id, T0.AddMinutes(minutes), image);
 
@@ -52,7 +52,7 @@ public sealed class CallerGuardTests
         Assert.Equal(new Caller(CallerKind.Other, "pwsh.exe (pid 30), which is not the Agent Bridge app beside this host"),
             Guard().Classify([P(30, @"C:\Program Files\PowerShell\7\pwsh.exe"), P(4, @"C:\Windows\explorer.exe")]));
         // The app's name somewhere else is not the app beside this host.
-        Assert.Equal(CallerKind.Other, Guard().Classify([P(30, @"C:\Temp\AgentBridge.App.exe")]).Kind);
+        Assert.Equal(CallerKind.Other, Guard().Classify([P(30, @"C:\Temp\AgentBridge.exe")]).Kind);
         Assert.Equal(new Caller(CallerKind.Other, "a process the host could not trace"), Guard().Classify(Array.Empty<PeerProcess>()));
     }
 
@@ -66,6 +66,19 @@ public sealed class CallerGuardTests
         Assert.Null(KnownAgents.Inside(null, atDesk, () => []));
         // Started detached, its parent gone: the variable every launched agent inherits says it.
         Assert.Equal("inside a session the Bridge Host launched (AGENT_BRIDGE_SESSION is set)", KnownAgents.Inside("5b0e…", atDesk, () => []));
+    }
+
+    [Fact]
+    public void The_app_the_guard_lets_manage_the_host_is_the_executable_the_app_ships_as()
+    {
+        var root = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(root, "AgentBridge.slnx"))) { root = Path.GetDirectoryName(root)!; }
+        var project = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "AgentBridge.App", "AgentBridge.App.csproj"));
+        var assembly = project.Descendants("AssemblyName").Single().Value;
+        var pack = File.ReadAllText(Path.Combine(root, "build", "pack-app.ps1"));
+
+        Assert.Equal(CallerGuard.AppExecutable, assembly + ".exe");
+        Assert.Contains($"-e {CallerGuard.AppExecutable}", pack, StringComparison.Ordinal);
     }
 
     [Theory]

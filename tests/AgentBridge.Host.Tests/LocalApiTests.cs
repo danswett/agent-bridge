@@ -343,7 +343,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     public async Task Only_the_app_beside_the_host_manages_it_and_any_other_process_of_the_user_still_reads_and_answers()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        callers.Current = new CallerGuard(() => [], Path.Combine(AppContext.BaseDirectory, "AgentBridge.App.exe"), agentNames: []);
+        callers.Current = new CallerGuard(() => [], Path.Combine(AppContext.BaseDirectory, CallerGuard.AppExecutable), agentNames: []);
         var ch = await ConnectAsync();
 
         var hello = await ch.HelloAsync();

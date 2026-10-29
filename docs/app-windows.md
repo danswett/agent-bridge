@@ -49,7 +49,7 @@ phone.
 * **Only the app manages the host.** The host traces each connection's process and its
   ancestors. One that is, or runs inside, an agent session (a live session's process, one the
   host launched, or any agent CLI) may read sessions and nothing else; the app is
-  `AgentBridge.App.exe` beside the host, started from anywhere but an agent session. Anything
+  `AgentBridge.exe` (the app) beside the host, started from anywhere but an agent session. Anything
   else of the user's keeps the sessions ops but not management. A safety rail against an
   agent restarting its own host, not a security boundary
   ([local-pipe.md](protocol/local-pipe.md#who-may-manage-the-host)).
