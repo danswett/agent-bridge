@@ -115,14 +115,17 @@ $base = 'C:\rehearsal\evidence\baseline-S1.json'
   the mark, so the evidence is the record the step produced, never an older one that
   happens to match.
 * Session ids: `$cp`, `$cl` and `$cx` hold the Copilot, Claude and Codex sessions in use. Set
-  them with `sessions … --id-only`, which prints only the id of the one matching session. Before agent-bridge is installed, use `newest <agent>`, which reads the transcripts instead
-  and fails otherwise.
+  them with `sessions … --id-only`, which prints only the id of the one matching session and
+  fails otherwise. Before agent-bridge is installed, use `newest <agent>`, which reads the
+  transcripts instead.
 * **Screenshots.** Take them with Hyperloop and keep them with
   `agent-bridge-rehearsal note --step <id> --result pass --detail "…" --screenshot <file>`.
 * The prompts in [Prompts](#prompts) are typed at the machine (Machine) or sent as a reply
   (App or PWA) exactly as written, because the checks look for their words.
 * Times are Pacific. Nothing here prints a token. The tool hashes agent-ha-bridge's files
   and never reads their contents into the evidence.
+* Start the agents from a window where the variables above are set. A command an agent runs
+  itself (E15-01) then records into the same evidence folder.
 * Words containing curly quotes (“ ”) go in single quotes, as E2-01 and E2-04 do. PowerShell
   treats curly double quotes as delimiters inside a double-quoted string.
 
@@ -130,10 +133,10 @@ $base = 'C:\rehearsal\evidence\baseline-S1.json'
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
-| **A-01** | | VM-W | Docker; the compose file, onboarding, MQTT integration and long-lived token from ha-connector.md › Validation plan, with the live instance's HA version; token written to `C:\rehearsal\ha.token` | `/api/states` answers with that token | `agent-bridge-rehearsal ha --token-file $ha --step A-01` | |
-| **A-02** | | VM-M | Rename the computer `REHEARSAL-M`. Create user `rehearsal` (standard user). Install Git, Copilot CLI, Claude Code and Codex, each signed in. Create `$repo` as a clone of a small local bare repository, so `origin` can be fetched | `copilot --version`, `claude --version`, `codex --version` and `git -C $repo fetch` succeed | `agent-bridge-rehearsal note --step A-02 --result pass --detail "<versions>"` | |
-| **A-03** | | VM-M | Start the tunnel `ssh -N -L 8123:127.0.0.1:8123 rehearsal@VM-W` in its own window and copy the token file across | Home Assistant answers on VM-M's loopback | `agent-bridge-rehearsal ha --token-file $ha --step A-03` | |
-| **A-04** | | Both | `dotnet publish tools/AgentBridge.Rehearsal -c Release -r win-x64 --self-contained -o C:\rehearsal\tool`, and put `C:\rehearsal\tool` on `PATH` | The help lists every command | `agent-bridge-rehearsal report --step A-04` | |
+| **A-01** | | Both | Install Git and the .NET 10 SDK. Clone agent-bridge at the commit under test into `C:\rehearsal\agent-bridge`. From there, `dotnet publish tools/AgentBridge.Rehearsal -c Release -r win-x64 --self-contained -o C:\rehearsal\tool`, and put `C:\rehearsal\tool` on `PATH`. Every later step runs from that checkout | `agent-bridge-rehearsal --help` lists every command | `agent-bridge-rehearsal report --step A-01` | |
+| **A-02** | | VM-W | Rename the computer `REHEARSAL-W`. Set up Docker with the compose file, onboarding, MQTT integration and long-lived token from ha-connector.md › Validation plan, using the live instance's HA version. Write the token to `C:\rehearsal\ha.token` | `/api/states` answers with that token | `agent-bridge-rehearsal ha --token-file $ha --step A-02` | |
+| **A-03** | | VM-M | Rename the computer `REHEARSAL-M`. Create user `rehearsal` (standard user). Install Copilot CLI, Claude Code and Codex, each signed in. Create `$repo` as a clone of a small local bare repository, so `origin` can be fetched | `copilot --version`, `claude --version`, `codex --version` and `git -C $repo fetch` succeed | `agent-bridge-rehearsal note --step A-03 --result pass --detail "<versions>"` | |
+| **A-04** | | VM-M | Start the tunnel `ssh -N -L 8123:127.0.0.1:8123 rehearsal@VM-W` in its own window, and copy the token file across | Home Assistant answers on VM-M's loopback | `agent-bridge-rehearsal ha --token-file $ha --step A-04` | |
 | **A-05** | | Both | Snapshot both VMs: **S0** | Snapshots listed in Hyperloop | `agent-bridge-rehearsal note --step A-05 --result pass --detail "S0 taken"` | |
 
 ## Phase B: agent-ha-bridge, as the machines run it today
@@ -176,7 +179,7 @@ Volatile files found so far: none recorded yet (fill in after the first run).
 |---|---|---|---|---|---|---|
 | **D-01** | §14 "Migrate an existing" | VM-W | Install agent-bridge on VM-W too, and run `agent-bridge-host migrate --dry-run` there | Refused: VM-W is the publication writer (G7). Nothing changes | `agent-bridge-rehearsal note --step D-01 --result pass --detail "<refusal text>"` | #38 |
 | **D-02** | §14 "Migrate an existing" | VM-M | `agent-bridge-host migrate --dry-run` | Lists the task to disable, the hook fallback to move and each `newSession.*` key with its `launch.*` target. Keys with no equivalent (`usage.*`, `homeAssistant.*`, `answerButtons.*`, …) are reported as kept in the old file. Nothing changes | `agent-bridge-rehearsal baseline compare --baseline $base --step D-02` | #38 |
-| **D-03** | §14 "Migrate an existing" | VM-M | `agent-bridge-host migrate` | Exit 0. The daemon stopped; its task is **disabled, not deleted** | `agent-bridge-rehearsal g5 --expect inactive --step D-03` | #38 |
+| **D-03** | §14 "Migrate an existing" | VM-M | `agent-bridge-host migrate` | Exit 0. The daemon stopped; its task is **disabled, not deleted** | `agent-bridge-rehearsal g5 --expect inactive --timeout 30 --step D-03` | #38 |
 | **D-04** | §14 "Migrate an existing" | Tool | What changed | Only hook registrations, agent config and the tasks (disabled). `~/.agent-ha-bridge` is untouched | `agent-bridge-rehearsal baseline compare --baseline $base --allow hooks --allow agents --allow tasks --step D-04` | #38 |
 | **D-05** | §14 "configure:" | VM-M | `agent-bridge-host workspace list` and `agent-bridge-host config show` | **Rehearsal** imported with its path and isolation. The default agent, permissions and worktree settings match the old `newSession.*` | `agent-bridge-rehearsal note --step D-05 --result pass --detail "<imported keys>"` | #38 |
 | **D-06** | §12 "A native hook spools", §12 "PowerShell fallback" | Tool | The host now delivers | Every capability, and delivering | `agent-bridge-rehearsal host --expect-delivering --timeout 60 --expect-cap sessions.answer --expect-cap sessions.approve --expect-cap sessions.reply --expect-cap sessions.attach --expect-cap sessions.stop --expect-cap sessions.launch --step D-06` | #38, #37 |
@@ -189,9 +192,8 @@ what came after the latest `mark`, so mark the session the step acts on (which a
 host log) before doing anything. Unless a step says to act while the session works, start
 each step with the session it acts on (`$cp`, `$cl` or `$cx`) idle and no question or prompt
 open: wait with `agent-bridge-rehearsal sessions --id $cp --status idle --timeout 120` (or
-`$cl`, `$cx`). E1-01 starts the Copilot
-session the phase uses. Right after
-it, type prompt **P0** in that session and set `$cp`:
+`$cl`, `$cx`). E1-01 starts the Copilot session the phase uses. Right after it, type prompt
+**P0** in that session and set `$cp`:
 
 ```powershell
 $cp = agent-bridge-rehearsal sessions --agent copilot --id-only --timeout 30   # the only Copilot session running
@@ -346,7 +348,7 @@ That also marks the host log, which `log` then reads from.
 | **E18-02** | §18 "Per-machine and per-session MQTT" | Machine, HA | Start a second Copilot session with **P0**, and set `$gone = agent-bridge-rehearsal newest copilot`. Once its entities are there, `/exit` it at the machine (not `$cp`, which Phase F needs running) | It appears with its own entities. Then its card goes from the dashboard, then its entities: neither state nor registry entry is left | `agent-bridge-rehearsal ha --token-file $ha --slug $m --expect-sessions 2 --expect-session $gone --timeout 60 --step E18-02`, then `agent-bridge-rehearsal ha --token-file $ha --slug $m --expect-sessions 1 --expect-no-session $gone --timeout 180 --step E18-02b` | HA1 |
 | **E18-03** | §18 "Per-machine online" | VM-W | Restart Home Assistant (`docker compose restart homeassistant`) | Online again within a minute, from retained messages | `agent-bridge-rehearsal ha --token-file $ha --slug $m --expect-online --expect-no-duplicates --timeout 120 --step E18-03` | HA1 |
 | **E18-04** | §18 "Actionable phone notifications", §18 "Launch request payload", §18 "Agent attribution" | HA, Machine | Mark `$cp`, type **P1** at the machine, and answer **rehearsal-ha** from the old dashboard. Reply to `$cp` from its reply card, and answer a later question from the phone notification. Launch from the launch card and end **that** session from its card. Drive one action from an agent with the agent token. `$cp` stays running | Each works as before migration, attributed to the right principal | `agent-bridge-rehearsal expect answer $cp --text rehearsal-ha --step E18-04` and screenshots | HA2 |
-| **E18-05** | §18 "Per-machine online" | VM-M | G5: start the daemon by hand (`schtasks /run /tn AgentBridgeDaemon_<id>`), then stop it | The connector pauses, publishing nothing, and resumes after | `agent-bridge-rehearsal log --contains "Home Assistant connector paused" --timeout 60 --step E18-05` | HA1 |
+| **E18-05** | §18 "Per-machine online" | VM-M | G5. Mark `$cp`. Run the daemon briefly: `schtasks /change /tn AgentBridgeDaemon_<id> /enable`, then `schtasks /run /tn AgentBridgeDaemon_<id>`. Once the pause is logged, `schtasks /end /tn AgentBridgeDaemon_<id>` and `schtasks /change /tn AgentBridgeDaemon_<id> /disable`, leaving the task as migrate left it | The connector pauses and publishes nothing while the daemon runs, then resumes | `agent-bridge-rehearsal log --contains "Home Assistant connector paused" --timeout 60 --step E18-05`, then `agent-bridge-rehearsal log --contains "Home Assistant connector resuming" --timeout 120 --step E18-05b` | HA1 |
 
 ## Phase F: roll back
 
@@ -366,7 +368,7 @@ That also marks the host log, which `log` then reads from.
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
-| **G-01** | | VM-M | Restore **S1**. Set `$env:AGENT_BRIDGE_REHEARSAL_EVIDENCE` to `run-2`, and run Phases C to F again | Every step passes as in run 1 | `agent-bridge-rehearsal report --checklist docs\parity-checklist.md --step G-01` | |
+| **G-01** | | VM-M, VM-W | (1) On VM-M, write run 1's report, then copy `C:\rehearsal\evidence\run-1` to VM-W (`scp -r`): restoring S1 erases everything written since it was taken. (2) Restore **S1** on VM-M. (3) Set `$env:AGENT_BRIDGE_REHEARSAL_EVIDENCE` to `C:\rehearsal\evidence\run-2` and run Phases C to F again. (4) Write run 2's report and copy it across the same way | Every step passes as in run 1, and both runs' evidence is on VM-W | (1) `agent-bridge-rehearsal report --checklist docs\parity-checklist.md --step G-01`; (4) `agent-bridge-rehearsal report --checklist docs\parity-checklist.md --step G-01b` | |
 | **G-02** | | Person | Copy both runs' `report` output into the design doc's Progress section. Move the rows that passed to `Verified` in parity.md, citing "Live: rehearsal run 1/2" | parity.md updated through a PR | `agent-bridge-rehearsal note --step G-02 --result pass --detail "PR #…"` | |
 
 ## Prompts

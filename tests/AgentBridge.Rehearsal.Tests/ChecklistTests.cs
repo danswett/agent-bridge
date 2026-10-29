@@ -18,6 +18,7 @@ public class ChecklistTests
         foreach (var command in commands)
         {
             var words = Checklist.Split(command);
+            if (words.Count == 2 && words[1] is "--help" or "-h" or "help") { continue; }
             try { Cli.Parse([.. words.Skip(1)]); }
             catch (UsageException e) { refused.Add($"{command}: {e.Message}"); }
         }
