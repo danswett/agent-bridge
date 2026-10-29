@@ -39,9 +39,14 @@ def call(method, path, body=None, token=None, form=False):
     if token:
         headers["Authorization"] = "Bearer " + token
     request = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(request, timeout=30) as response:
-        text = response.read().decode()
-        return json.loads(text) if text else None
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            text = response.read().decode()
+            return json.loads(text) if text else None
+    except urllib.error.HTTPError as e:
+        # Home Assistant says what it refused in the body; without it a 400 is a guess.
+        print(f"{method} {path}: {e.code} {e.read().decode(errors='replace')[:2000]}", flush=True)
+        raise
 
 
 def wait_for_onboarding(deadline):
@@ -87,7 +92,12 @@ def main():
             choice = next((o for o in options if "broker" in o), options[0])
             flow = call("POST", "/api/config/config_entries/flow/" + flow["flow_id"], {"next_step_id": choice}, token)
             continue
-        body = {"broker": BROKER, "port": 1883} if flow.get("step_id") == "broker" else {}
+        schema = flow.get("data_schema") or []
+        print("  fields:", [(f.get("name"), f.get("type"), f.get("required"), f.get("default")) for f in schema], flush=True)
+        # Every field the form defaults, as a browser would send it, then the broker's address.
+        body = {f["name"]: f["default"] for f in schema if "default" in f and f.get("name")}
+        if flow.get("step_id") == "broker":
+            body.update({"broker": BROKER, "port": 1883})
         flow = call("POST", "/api/config/config_entries/flow/" + flow["flow_id"], body, token)
     else:
         sys.exit("the MQTT config flow did not finish")
