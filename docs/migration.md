@@ -55,10 +55,14 @@ with what the rollback did.
    to prove it starts. It goes in a folder of the product's own because an app update replaces
    the app's folder, and a registration must never point at nothing.
 5. **Registrations.** Re-points agent-ha-bridge's own hook entries and nothing else (below).
+   Each file's hash after is recorded before the file is written, so a migration cut short
+   between the two still rolls back what it wrote.
 6. **Settings.** Carries agent-ha-bridge's settings into the profile's `config.json` (below).
 7. **Hand-over.** Writes `intake.json`, restarts the host, waits for its heartbeat in the
-   runtime folder, runs the installed hook as Copilot would (`copilot agent_stop`), and
-   waits for the host to take that event from the spool. Only then is the state `migrated`.
+   runtime folder, and runs the installed hook as Copilot would (`copilot agent_stop`). The
+   hook gives the same fixed reply whether or not it could spool, so the proof is its own log
+   line saying the run was spooled. It then waits until no event that old is left in the spool.
+   Only then is the state `migrated`.
 
 ### The registrations
 
@@ -143,8 +147,7 @@ publishes the dashboard (G7).
 
 ## What rollback does
 
-1. Removes `intake.json` and restarts the host, which then stops taking the spool and removes
-   its heartbeat. The host stands back before the daemon starts.
+1. Removes `intake.json`.
 2. Restores each file migration rewrote. A file unchanged since the migration is restored
    **byte for byte** from the snapshot. A file edited since gets back only the entries
    migration re-pointed, with the later edits kept. A file that cannot be reverted is left, and
@@ -152,10 +155,14 @@ publishes the dashboard (G7).
    migration created it, unless a person has changed it since.
 3. Checks the files recorded by hash, and reports any that changed while migrated (by someone
    else; neither step writes them).
-4. Re-enables each task that was enabled before, starts it, and waits until the G5 probe sees
+4. Restarts the host, which reads both only when it starts: it lets go of the spool, removes
+   its heartbeat, and runs on its restored settings. The host stands back before the daemon
+   starts.
+5. Re-enables each task that was enabled before, starts it, and waits until the G5 probe sees
    agent-ha-bridge running again. A task that was disabled before stays disabled.
-5. Deletes `migration.json` and the snapshot. If anything above went wrong they are kept, and
-   the report says what to do.
+6. Deletes `migration.json` and the snapshot. If anything above went wrong they are kept, and
+   the report says what to do. A migration cut short (`migration status` says "part-way") is
+   rolled back the same way.
 
 Rollback keeps `%LOCALAPPDATA%\AgentBridge\bin\agent-bridge-host-hook.exe` and its
 `hook.json`. A session started while migrated still calls that hook until it exits, and it

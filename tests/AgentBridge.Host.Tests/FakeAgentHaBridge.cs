@@ -250,13 +250,20 @@ sealed class FakeHost(FakeAgentHaBridge fake) : IMigrationHost, IAsyncDisposable
     public string? RefuseRestart { get; set; }
     // Serves without taking the spool, as a host too old to know intake.json would.
     public bool IgnoreIntake { get; set; }
+    // The profile's config.json as each restart read it (null: none).
+    public List<string?> ConfigAtRestart { get; } = [];
+    // The migration is cut short here, as by the process being ended.
+    public bool Interrupt { get; set; }
 
     public Task<bool> RunningAsync(CancellationToken cancellationToken) => Task.FromResult(Running);
 
     public async Task<string?> RestartAsync(CancellationToken cancellationToken)
     {
+        if (Interrupt) { throw new OperationCanceledException("the migration was cut short"); }
         if (RefuseRestart is not null) { return RefuseRestart; }
         Restarts++;
+        var config = Path.Combine(fake.Profile, "config.json");
+        ConfigAtRestart.Add(File.Exists(config) ? File.ReadAllText(config) : null);
         if (_intake is not null) { await _intake.DisposeAsync(); _intake = null; }
         if (!IgnoreIntake && IntakeState.Load(fake.Profile).State is { } state)
         {

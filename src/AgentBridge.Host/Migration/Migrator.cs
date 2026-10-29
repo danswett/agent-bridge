@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentBridge.Hooks;
 using AgentBridge.Host.Core.Intake;
 
@@ -140,19 +142,22 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             record.Hook = InstallHook(install);
             record.Save(options.ProfileFolder);
 
-            // Recorded after each file, so a migration cut short still rolls back what it wrote.
+            // Each file's hash after is recorded before it is written: a migration cut short
+            // between the two still rolls back what it wrote (a file still as it was before is
+            // left alone).
             foreach (var plan in plans.Where(p => p.NewText is not null))
             {
-                WriteText(plan.Path, plan.NewText!);
-                record.Files.Single(f => f.Role == plan.Role).After = MigrationRecord.Hash(plan.Path);
+                var bytes = Utf8(plan.NewText!);
+                record.Files.Single(f => f.Role == plan.Role).After = MigrationRecord.Hash(bytes);
                 record.Save(options.ProfileFolder);
+                WriteBytes(plan.Path, bytes);
             }
             if (import.Text is not null)
             {
-                Directory.CreateDirectory(options.ProfileFolder);
-                WriteText(hostConfig, import.Text);
-                record.Files.Single(f => f.Role == "host-config").After = MigrationRecord.Hash(hostConfig);
+                var bytes = Utf8(import.Text);
+                record.Files.Single(f => f.Role == "host-config").After = MigrationRecord.Hash(bytes);
                 record.Save(options.ProfileFolder);
+                WriteBytes(hostConfig, bytes);
             }
             new IntakeState(install.RuntimeRoot, install.BridgeHome, install.Id, _time.GetUtcNow()).Save(options.ProfileFolder);
             record.Save(options.ProfileFolder);
@@ -238,11 +243,54 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
 
         // An agent_stop that names no session: Copilot's are only passed on to subscribers, so the
         // check records nothing anywhere.
+        var ran = _time.GetUtcNow().AddMilliseconds(-50);
         var (exit, reply) = hook.Run(options.HookPath, ["copilot", "agent_stop"], "{\"agentBridgeMigrationCheck\":true}");
         if (exit != 0 || reply != "{}\n") { return $"the installed hook replied {reply.Trim()} (exit {exit}) instead of Copilot's fixed reply"; }
+        // The fixed reply is also what a hook gives when it could not spool, so the reply proves
+        // nothing: the hook's own log line says where this run went.
+        if (!SpooledSince(install.RuntimeRoot, ran))
+        {
+            return $"the installed hook did not spool its event (its log in {install.RuntimeRoot} records no spooled run since the check began; can it write to {SpoolContract.SpoolFolder}?)";
+        }
+        // Taken: no event as old as this one is still waiting (later ones are other sessions').
+        var cutoff = SpoolContract.UnixNanoseconds(_time.GetUtcNow());
         var spool = SpoolContract.SpoolDirectory(install.RuntimeRoot);
-        var taken = await UntilAsync(() => !Directory.Exists(spool) || !Directory.EnumerateFiles(spool, "*.json").Any(f => f.EndsWith(".json", StringComparison.Ordinal)), options.VerifyTimeout, cancellationToken);
+        var taken = await UntilAsync(() => !Waiting(spool, cutoff), options.VerifyTimeout, cancellationToken);
         return taken ? null : $"the host did not take the hook's event from {spool} within {options.VerifyTimeout.TotalSeconds:0} s";
+    }
+
+    static bool SpooledSince(string runtimeRoot, DateTimeOffset since)
+    {
+        var log = SpoolContract.LogPath(runtimeRoot);
+        foreach (var path in new[] { log, log + ".1" })
+        {
+            string[] lines;
+            try { lines = File.Exists(path) ? File.ReadAllLines(path) : []; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            foreach (var line in lines)
+            {
+                try
+                {
+                    var o = JsonNode.Parse(line) as JsonObject;
+                    if (o is null || (string?)o["agent"] != "copilot" || (string?)o["hook"] != "agent_stop" || (string?)o["path"] != "spool") { continue; }
+                    if (DateTimeOffset.TryParse((string?)o["at"], System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var at) && at >= since) { return true; }
+                }
+                catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException) { }
+            }
+        }
+        return false;
+    }
+
+    // Whether an event spooled at or before the cutoff (Unix ns, the start of its name) is waiting.
+    static bool Waiting(string spool, long cutoff)
+    {
+        try
+        {
+            if (!Directory.Exists(spool)) { return false; }
+            return Directory.EnumerateFiles(spool, "*.json").Select(Path.GetFileName)
+                .Any(n => n!.EndsWith(".json", StringComparison.Ordinal) && (n.Length < 20 || !long.TryParse(n.AsSpan(0, 20), out var at) || at <= cutoff));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return true; }
     }
 
     async Task<MigrationReport> Undo(MigrationRecord record, string why, List<string> lines, CancellationToken cancellationToken)
@@ -273,16 +321,10 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         var ok = true;
         Say($"{(dryRun ? "Would roll back" : "Rolling back")} the migration of agent-ha-bridge installation {record.InstallationId} ({record.BridgeHome}).");
 
-        // Hand the spool back first: the host stands back before the daemon starts.
-        if (dryRun) { Say($"* Hook spool: remove {IntakeState.FileName} and restart the host, which then stops taking it."); }
-        else
-        {
-            IntakeState.Delete(options.ProfileFolder);
-            if (await host.RunningAsync(cancellationToken))
-            {
-                Say(await host.RestartAsync(cancellationToken) is { } why ? $"The host could not be restarted ({why}); it stands back on its own once the daemon runs (G5)." : "The host restarted without the hook spool.");
-            }
-        }
+        // The spool is handed back before the daemon starts; the host lets go of it when it
+        // restarts below, once its config.json is restored too, since it reads both only then.
+        if (dryRun) { Say($"* Hook spool: remove {IntakeState.FileName} and restart the host, which then stops taking it and reads its restored settings."); }
+        else { IntakeState.Delete(options.ProfileFolder); }
 
         foreach (var file in record.Files)
         {
@@ -329,6 +371,13 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         foreach (var check in record.Checked)
         {
             if (MigrationRecord.Hash(check.Path) != check.Hash) { Say($"* {check.Path}: changed while migrated (not by the migration); left as it is."); }
+        }
+
+        if (!dryRun && await host.RunningAsync(cancellationToken))
+        {
+            Say(await host.RestartAsync(cancellationToken) is { } why
+                ? $"* The host could not be restarted ({why}); it stands back on its own once the daemon runs (G5), and reads its restored settings when it next starts."
+                : "* The host restarted without the hook spool, on its restored settings.");
         }
 
         var tasks = record.Tasks.Where(t => t.Enabled).ToList();
@@ -410,7 +459,9 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
     }
 
     // Replaced in one step, so an agent starting never reads half a settings file.
-    static void WriteText(string path, string text) => WriteBytes(path, new UTF8Encoding(false).GetBytes(text));
+    static void WriteText(string path, string text) => WriteBytes(path, Utf8(text));
+
+    static byte[] Utf8(string text) => new UTF8Encoding(false).GetBytes(text);
 
     static void WriteBytes(string path, byte[] bytes)
     {

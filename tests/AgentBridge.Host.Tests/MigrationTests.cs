@@ -248,6 +248,53 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_hook_that_cannot_spool_fails_the_hand_over_although_it_gives_the_fixed_reply()
+    {
+        var before = _f.Listing();
+        // Something where the spool folder should be: the hook gives its reply and spools nothing.
+        Directory.Delete(SpoolContract.SpoolDirectory(_f.Runtime), true);
+        File.WriteAllText(SpoolContract.SpoolDirectory(_f.Runtime), "not a folder");
+
+        var report = await _f.Migrator(verify: TimeSpan.FromSeconds(2)).MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("the installed hook did not spool its event", report.ToString());
+        Assert.Equal(before, _f.Listing());
+        Assert.True(_f.Runtime_.DaemonRunning);
+    }
+
+    [Fact]
+    public async Task A_migration_cut_short_is_rolled_back_from_its_record()
+    {
+        var before = _f.Listing();
+        _f.Host.Interrupt = true;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => _f.Migrator().MigrateAsync(dryRun: false));
+        Assert.Equal("migrating", MigrationRecord.Load(_f.Profile).Record!.State);
+        Assert.Contains("migration", _f.Migrator().Status(), StringComparison.OrdinalIgnoreCase);
+        _f.Host.Interrupt = false;
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.Equal(before, _f.Listing());
+        Assert.True(_f.Runtime_.DaemonRunning);
+    }
+
+    [Fact]
+    public async Task The_host_is_restarted_on_its_restored_settings_when_rolling_back()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        Assert.NotNull(_f.Host.ConfigAtRestart[^1]);
+
+        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+
+        // The migration created the profile's config.json, so the host restarted without one.
+        Assert.Null(_f.Host.ConfigAtRestart[^1]);
+        Assert.False(_f.Host.TakingSpool);
+    }
+
+    [Fact]
     public async Task A_daemon_that_will_not_stop_leaves_everything_as_it_was()
     {
         var before = _f.Listing();
