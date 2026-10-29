@@ -169,6 +169,9 @@ public sealed class WorkerInjector : IConsoleInjector
         }
     }
 
+    // What a send held to the screen (KeySend.Expect) comes to when the screen no longer reads so.
+    public const string ScreenChanged = "the prompt on the session's screen changed before anything was typed; look again and answer, or answer at the machine";
+
     // What a person can do about a failure that happened before any key was written.
     internal static string Explain(string stage, int code) => (stage, code) switch
     {
@@ -177,7 +180,7 @@ public sealed class WorkerInjector : IConsoleInjector
         ("attach", _) => $"the host could not reach the session's console (error {code}); answer at the machine",
         ("input", _) => $"the host could not open the session's console input (error {code}); answer at the machine",
         ("output", _) => $"the host could not read the session's screen (error {code}); answer at the machine",
-        ("screen", 0) => "the prompt on the session's screen changed before anything was typed; look again and answer, or answer at the machine",
+        ("screen", 0) => ScreenChanged,
         ("screen", _) => $"the host could not read the session's screen (error {code}); answer at the machine",
         _ => $"the injector could not type ({stage} error {code}); answer at the machine",
     };
