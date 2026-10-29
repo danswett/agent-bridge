@@ -62,6 +62,21 @@ public class HaCheckTests
     }
 
     [Fact]
+    public async Task Home_Assistant_that_cannot_be_reached_yet_is_asked_again_until_the_deadline()
+    {
+        var calls = 0;
+        var recovered = await Poll.UntilAsync("Home Assistant", _ => ++calls < 3 ? throw new HttpRequestException("connection refused") : Task.FromResult(Outcome.Pass("ok")),
+            DateTimeOffset.UtcNow.AddSeconds(10), TimeSpan.FromMilliseconds(10), CancellationToken.None);
+        Assert.Equal(Verdict.Pass, recovered.Verdict);
+        Assert.Equal(3, calls);
+
+        var never = await Poll.UntilAsync("Home Assistant", _ => throw new HttpRequestException("connection refused"),
+            DateTimeOffset.UtcNow.AddMilliseconds(100), TimeSpan.FromMilliseconds(10), CancellationToken.None);
+        Assert.Equal(Verdict.Error, never.Verdict);
+        Assert.Contains("connection refused", never.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Checking_a_machine_without_its_slug_is_a_usage_error()
     {
         Assert.Throws<UsageException>(() => HaCheck.Evaluate(Json(Array.Empty<object>()), default, Expect(slug: null, online: true)));

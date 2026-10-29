@@ -8,7 +8,12 @@ namespace AgentBridge.Rehearsal;
 // hello, what host.status says, and the sessions it lists.
 internal static class HostChecks
 {
-    public static async Task<Outcome> HostAsync(string profileFolder, Parsed p, CancellationToken ct)
+    public static Task<Outcome> HostAsync(string profileFolder, Parsed p, CancellationToken ct) =>
+        // --try-restart is asked once: a second try after a refusal proves nothing more.
+        p.Flag("--try-restart") ? HostOnceAsync(profileFolder, p, ct)
+            : Poll.UntilAsync("the host", c => HostOnceAsync(profileFolder, p, c), Poll.Deadline(p), TimeSpan.FromSeconds(2), ct);
+
+    static async Task<Outcome> HostOnceAsync(string profileFolder, Parsed p, CancellationToken ct)
     {
         await using var channel = await ConnectAsync(profileFolder, ct);
         var hello = await channel.HelloAsync(ct);
@@ -47,29 +52,25 @@ internal static class HostChecks
             : Outcome.Fail(string.Join("; ", problems), data);
     }
 
-    public static async Task<Outcome> SessionsAsync(string profileFolder, Parsed p, CancellationToken ct)
-    {
-        await using var channel = await ConnectAsync(profileFolder, ct);
-        await channel.HelloAsync(ct);
-        // With --timeout, asked again each second until the expectation holds: a status
-        // a step causes takes a moment to reach the transcript and the host.
-        var until = p.Option("--timeout") is null ? DateTimeOffset.MinValue : DateTimeOffset.UtcNow + p.Timeout(0);
-        while (true)
+    // With --timeout, asked again each second until the expectation holds: a status a step
+    // causes takes a moment to reach the transcript and the host, and a host being restarted
+    // is connected to again.
+    public static Task<Outcome> SessionsAsync(string profileFolder, Parsed p, CancellationToken ct) =>
+        Poll.UntilAsync("the host", async c =>
         {
+            await using var channel = await ConnectAsync(profileFolder, c);
+            await channel.HelloAsync(c);
             var all = new List<Session>();
             string? cursor = null;
             do
             {
-                var page = await channel.CallAsync<SessionList>(Ops.SessionsList, new ListRequest(cursor), ct: ct);
+                var page = await channel.CallAsync<SessionList>(Ops.SessionsList, new ListRequest(cursor), ct: c);
                 all.AddRange(page.Sessions);
                 cursor = page.Next;
             }
             while (cursor is not null);
-            var outcome = Sessions(all, p);
-            if (outcome.Verdict == Verdict.Pass || DateTimeOffset.UtcNow >= until) { return outcome; }
-            await Task.Delay(TimeSpan.FromSeconds(1), ct);
-        }
-    }
+            return Sessions(all, p);
+        }, Poll.Deadline(p), TimeSpan.FromSeconds(1), ct);
 
     internal static Outcome Sessions(IReadOnlyList<Session> all, Parsed p)
     {

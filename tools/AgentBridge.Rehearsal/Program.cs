@@ -145,14 +145,12 @@ internal static class Program
                     if (token.Length == 0) { return Outcome.Error("the token file is empty"); }
                     var expect = new HaExpectations(p.Option("--slug"), p.Flag("--expect-online"), p.Flag("--expect-offline"), p.Int("--expect-sessions"), p.Flag("--expect-no-duplicates"),
                         p.All("--expect-entity"), p.All("--expect-no-entity"), Pairs(p.All("--expect-state"), "--expect-state"));
-                    var until = p.Option("--timeout") is null ? DateTimeOffset.MinValue : DateTimeOffset.UtcNow + p.Timeout(0);
-                    while (true)
+                    var registry = expect.NoDuplicates || expect.NoEntities.Count > 0;
+                    return await Poll.UntilAsync("Home Assistant", async c =>
                     {
-                        var (states, registry) = await HaCheck.ReadAsync(url, token, expect.NoDuplicates || expect.NoEntities.Count > 0, ct);
-                        var outcome = HaCheck.Evaluate(states, registry, expect);
-                        if (outcome.Verdict == Verdict.Pass || DateTimeOffset.UtcNow >= until) { return outcome; }
-                        await Task.Delay(TimeSpan.FromSeconds(5), ct);
-                    }
+                        var (states, entities) = await HaCheck.ReadAsync(url, token, registry, c);
+                        return HaCheck.Evaluate(states, entities, expect);
+                    }, Poll.Deadline(p), TimeSpan.FromSeconds(5), ct);
                 }
             case "staging": return Disk.Staging(profileFolder, p.Int("--expect-min-files"));
             case "worktrees": return Disk.Worktrees(Path.GetFullPath(p.Args[0]), p.Int("--expect-host-trees"), p.Int("--expect-max-host-trees"), p.Int("--expect-old-trees"));
