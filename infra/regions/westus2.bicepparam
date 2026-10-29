@@ -1,16 +1,16 @@
-// West US 2: the first stamp. It adopts the resources the S4/S5 dev relay was created with
-// (resource group rg-agent-bridge-relay), so production keeps its URL.
+// West US 2, in the "Visual Studio Enterprise Subscription" (0e38f344-908e-4ff3-88ac-4d499a1f51f8),
+// resource group rg-agent-bridge-relay. infra/deploy.ps1 deploys here by default. Production
+// is served at relay.bad-duck.com (DNS at Cloudflare; see docs/relay-deploy.md).
 using '../main.bicep'
 
 param location = 'westus2'
-// deploy.ps1 adopts whatever environment and workspace the live production app runs on;
-// these names are only used for a stamp built from nothing.
+// deploy.ps1 adopts whatever environment and workspace a live production app runs on; these
+// names are what a stamp built from nothing gets.
 param logAnalyticsName = readEnvironmentVariable('RELAY_LOG_ANALYTICS_NAME', 'log-agent-bridge-relay-wus2')
 param environmentName = readEnvironmentVariable('RELAY_ENVIRONMENT_NAME', 'cae-agent-bridge-relay-wus2')
-// cae-agent-bridge was created with the Consumption workload profile.
 param workloadProfiles = [{ name: 'Consumption', workloadProfileType: 'Consumption' }]
 param manageEnvironment = bool(readEnvironmentVariable('RELAY_MANAGE_ENVIRONMENT', 'true'))
-param registryName = 'agentbridgerelay59731'
+param registryName = 'abrelaywus2'
 // The "Agent Bridge (dev)" GitHub App, device flow. A client id is public.
 param githubClientId = 'Iv23liXL0Mvqs2dckn5U'
 param allowedOrigins = ['https://danswett.github.io']
@@ -20,12 +20,12 @@ param production = {
   image: readEnvironmentVariable('RELAY_PRODUCTION_IMAGE', '')
   version: readEnvironmentVariable('RELAY_PRODUCTION_VERSION', '')
   identityName: 'id-agent-bridge-relay'
-  keyVaultName: 'kv-abrelay-wus2'
+  keyVaultName: 'kv-abrelay-prod-wus2'
   minReplicas: 1
   maxReplicas: 1
   cpu: '0.25'
   memory: '0.5Gi'
-  keepSystemIdentity: true
+  customDomain: 'relay.bad-duck.com'
 }
 
 param staging = {
@@ -33,14 +33,15 @@ param staging = {
   image: readEnvironmentVariable('RELAY_STAGING_IMAGE', '')
   version: readEnvironmentVariable('RELAY_STAGING_VERSION', '')
   identityName: 'id-agent-bridge-relay-staging'
-  keyVaultName: 'kv-abrelay-wus2-stg'
+  keyVaultName: 'kv-abrelay-stg-wus2'
   minReplicas: 0
   maxReplicas: 1
   cpu: '0.25'
   memory: '0.5Gi'
-  keepSystemIdentity: true
 }
 
+param productionDomainState = readEnvironmentVariable('RELAY_PRODUCTION_DOMAIN_STATE', 'none')
+param stagingDomainState = readEnvironmentVariable('RELAY_STAGING_DOMAIN_STATE', 'none')
 param stagingDeployerPrincipalId = readEnvironmentVariable('RELAY_STAGING_DEPLOYER', '')
 param productionDeployerPrincipalId = readEnvironmentVariable('RELAY_PRODUCTION_DEPLOYER', '')
 param deployApps = bool(readEnvironmentVariable('RELAY_DEPLOY_APPS', 'true'))

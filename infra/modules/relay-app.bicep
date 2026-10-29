@@ -35,6 +35,10 @@ param operatorPrincipalId string = ''
 @description('Workload profile to run on, in an environment that has them (empty: none).')
 param workloadProfileName string = ''
 
+@description('Where the app\'s custom domain (app.customDomain) stands: none (no DNS yet), added (hostname on the app, no certificate; DNS proves ownership) or bound (managed certificate, SNI). infra/deploy.ps1 works it out and steps it forward.')
+@allowed(['none', 'added', 'bound'])
+param domainState string = 'none'
+
 @description('Tags for every resource.')
 param tags object
 
@@ -46,6 +50,28 @@ var roles = {
   keyVaultSecretsOfficer: 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
   contributor: 'b24988ac-6180-42a0-ab88-20f7382dd24c'
   managedIdentityOperator: 'f1a07417-d97a-45cb-824c-7a7467783830'
+}
+
+var customDomain = app.?customDomain ?? ''
+var domainOn = !empty(customDomain) && domainState != 'none'
+var environmentName = last(split(environmentId, '/'))
+var certificateName = 'mc-${replace(customDomain, '.', '-')}'
+
+resource environment 'Microsoft.App/managedEnvironments@2025-01-01' existing = {
+  name: environmentName
+}
+
+// Azure-managed (free, renewed by the platform while the CNAME stays in place). It can only be
+// issued once the hostname is on the app, hence the added step before this one.
+resource certificate 'Microsoft.App/managedEnvironments/managedCertificates@2025-01-01' = if (deployApp && domainOn && domainState == 'bound') {
+  parent: environment
+  name: certificateName
+  location: location
+  tags: tags
+  properties: {
+    subjectName: customDomain
+    domainControlValidation: 'CNAME'
+  }
 }
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
@@ -164,6 +190,15 @@ resource relay 'Microsoft.App/containerApps@2025-01-01' = if (deployApp) {
         transport: 'auto'
         allowInsecure: false
         traffic: [{ latestRevision: true, weight: 100 }]
+        customDomains: domainOn
+          ? [
+              {
+                name: customDomain
+                bindingType: domainState == 'bound' ? 'SniEnabled' : 'Disabled'
+                certificateId: domainState == 'bound' ? certificate.id : null
+              }
+            ]
+          : []
       }
       registries: [{ server: registry.properties.loginServer, identity: identity.id }]
       secrets: secretRefs
@@ -234,5 +269,6 @@ resource deployerApp 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (
 }
 
 output fqdn string = deployApp ? relay!.properties.configuration.ingress.fqdn : ''
+output customDomain string = customDomain
 output identityPrincipalId string = identity.properties.principalId
 output vaultName string = vault.name

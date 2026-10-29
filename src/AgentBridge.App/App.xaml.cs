@@ -218,7 +218,7 @@ public partial class App : Application
 // The relay the app offers to sign in to, until the person names another.
 static class HostDefaults
 {
-    public const string Relay = "https://agent-bridge-relay.agreeablepebble-329880d4.westus2.azurecontainerapps.io";
+    public const string Relay = "https://relay.bad-duck.com";
 }
 
 // Stand-ins where the real thing would touch the machine: a development copy and the demo

@@ -8,20 +8,24 @@ builds an image per commit, rolls it onto **staging**, smoke-tests it there, and
 | | Production | Staging |
 |---|---|---|
 | Container App | `agent-bridge-relay` | `agent-bridge-relay-staging` |
-| URL | `https://agent-bridge-relay.agreeablepebble-329880d4.westus2.azurecontainerapps.io` (unchanged) | `https://agent-bridge-relay-staging.agreeablepebble-329880d4.westus2.azurecontainerapps.io` |
+| URL | **`https://relay.bad-duck.com`** (also `https://agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io`) | `https://agent-bridge-relay-staging.icyflower-4f71155d.westus2.azurecontainerapps.io` |
 | Replicas | 1–1 (always on: hosts hold a socket open) | 0–1 (scales to zero between deploys) |
 | Size | 0.25 vCPU, 0.5 GiB | 0.25 vCPU, 0.5 GiB |
 | Identity (ACR pull, Key Vault) | `id-agent-bridge-relay` | `id-agent-bridge-relay-staging` |
-| Key Vault (`token-key`, `vapid-key`) | `kv-abrelay-wus2` | `kv-abrelay-wus2-stg` |
+| Key Vault (`token-key`, `vapid-key`) | `kv-abrelay-prod-wus2` | `kv-abrelay-stg-wus2` |
 | Deploys from | `main`, after approval | `main` and pull requests touching the relay |
 | GitHub environment / OIDC principal | `production` / `agent-bridge-relay-deploy-production` | `staging` / `agent-bridge-relay-deploy-staging` |
 
-Shared in the stamp (resource group `rg-agent-bridge-relay`, West US 2): the Container
-Apps environment, the Log Analytics workspace and the registry `agentbridgerelay59731`.
+Shared in the stamp: the Container Apps environment `cae-agent-bridge-relay-wus2`, the Log
+Analytics workspace `log-agent-bridge-relay-wus2` and the registry `abrelaywus2`. All of it is
+in resource group `rg-agent-bridge-relay`, West US 2, subscription **Visual Studio Enterprise
+Subscription** (`0e38f344-908e-4ff3-88ac-4d499a1f51f8`, tenant `danswettoutlook`), and all of
+it was built from `infra/` alone. The first stamp, in the free-trial subscription, is
+retired; see [History](#history).
 
-## Compatibility with the dev relay it replaces
+## Compatibility with the dev relay it replaced
 
-Production today runs the S4/S5 spike (`spikes/s4-relay`, image `s5b-10272017`), not
+Production first ran the S4/S5 spike (`spikes/s4-relay`, image `s5b-10272017`), not
 `src/AgentBridge.Relay`. The product relay was promoted from that code with only namespace
 and naming changes, and this branch adds operational behaviour. Compared side by side:
 
@@ -80,7 +84,7 @@ replicas no stable addresses to forward to, so that step is the `standard` size 
 ## The pipeline (`.github/workflows/relay.yml`)
 
 1. **infra**: `az bicep build` of the stamp and every region's parameters.
-2. **build** (environment `staging`): `docker build`, push `agentbridgerelay59731.azurecr.io/agent-bridge-relay:<sha>`; later jobs deploy its digest.
+2. **build** (environment `staging`): `docker build`, push `abrelaywus2.azurecr.io/agent-bridge-relay:<sha>`; later jobs deploy its digest.
 3. **staging**: `az containerapp update` to that digest with `Relay__Version=<sha>`, then
    `relay-smoke` against staging with staging's token key: health at the new version,
    readiness, no app code, the push key, CORS and origins, 4001, and two devices of a
@@ -100,24 +104,28 @@ client secret anywhere. Each environment has its own principal:
 | Principal | Roles |
 |---|---|
 | `agent-bridge-relay-deploy-staging` | AcrPush on the registry; Contributor on the staging app; Managed Identity Operator on its identity; Key Vault Secrets User on the **staging** vault; Reader on the resource group |
-| `agent-bridge-relay-deploy-production` | Contributor on the production app (granted at the cutover); Managed Identity Operator on its identity; Reader on the resource group |
+| `agent-bridge-relay-deploy-production` | Contributor on the production app; Managed Identity Operator on its identity; Reader on the resource group |
 
 Each has one federated credential for its environment. GitHub now presents subjects with the owner's and repository's numeric ids, `repo:danswett@3709749/agent-bridge@1436251473:environment:<name>`, so a renamed or recreated repository of the same name cannot sign in; the plain `repo:danswett/agent-bridge:…` form is refused (AADSTS700213). The
 `production` environment allows only `main` and requires `danswett`'s approval. Repository
-variables `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`, and each environment's
+variables `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` (the stamp's subscription), and each environment's
 `AZURE_CLIENT_ID`, are ids, not secrets. The repository variable `RELAY_DEPLOY=true` turns
 the Azure jobs on; without it (a fork, a fresh clone) the workflow only compiles `infra/`.
 
 Infra changes (probes, sizes, secrets, a new region) are not applied by CI. A person runs
 `infra/deploy.ps1`, which never rolls an image: it re-states what each app runs now.
 
-## First-time setup
+## Building a stamp
 
-Done once per subscription, as the subscription's owner, with
-`$env:AZURE_CONFIG_DIR = "$HOME\.azure-agentbridge"`:
+Everything below runs as the subscription's owner, with
+`$env:AZURE_CONFIG_DIR = "$HOME\.azure-agentbridge"`. `deploy.ps1` names the subscription on
+every call (`-Subscription`, default the Visual Studio Enterprise one), so the CLI's default
+never decides where anything goes.
+
+**Once per tenant**, the OIDC principals (one per GitHub environment). Their roles come from
+the stamp, in whatever subscription it is deployed to:
 
 ```powershell
-# OIDC principals (one per GitHub environment)
 foreach ($env in 'staging', 'production') {
   $app = az ad app create --display-name "agent-bridge-relay-deploy-$env" --query appId -o tsv
   az ad sp create --id $app | Out-Null
@@ -128,63 +136,76 @@ foreach ($env in 'staging', 'production') {
   gh variable set AZURE_CLIENT_ID --env $env --body $app -R danswett/agent-bridge
 }
 gh variable set AZURE_TENANT_ID --body (az account show --query tenantId -o tsv) -R danswett/agent-bridge
-gh variable set AZURE_SUBSCRIPTION_ID --body (az account show --query id -o tsv) -R danswett/agent-bridge
+gh variable set AZURE_SUBSCRIPTION_ID --body <stamp subscription id> -R danswett/agent-bridge
 gh variable set RELAY_DEPLOY --body true -R danswett/agent-bridge
-
-# The stamp, staging included, production untouched. The first time, staging needs an image.
-# ACR Tasks (az acr build) are refused on this free-trial subscription, so push one with the
-# SDK and a short-lived registry token (DOCKER_CONFIG pointing at a config.json with
-# auth = base64("00000000-0000-0000-0000-000000000000:<az acr login --expose-token>")):
-dotnet publish src/AgentBridge.Relay -c Release --os linux --arch x64 -t:PublishContainer -p:ContainerRegistry=agentbridgerelay59731.azurecr.io -p:ContainerRepository=agent-bridge-relay -p:ContainerImageTag=<sha>
-./infra/deploy.ps1 -WhatIf -StagingImage agentbridgerelay59731.azurecr.io/agent-bridge-relay:<sha> -StagingVersion <sha>
-./infra/deploy.ps1 -StagingImage agentbridgerelay59731.azurecr.io/agent-bridge-relay:<sha> -StagingVersion <sha>
 ```
 
-`deploy.ps1` seeds staging's vault with fresh keys, and production's with the keys the live
-app already uses. It leaves the environment `cae-agent-bridge` exactly as it is until the
-cutover (it has the Consumption workload profile and, being hand-made, sends logs nowhere);
-`-Production` also attaches the stamp's Log Analytics workspace to it.
-
-## Production cutover
-
-Done 2026-10-29: `agent-bridge-relay--s5b-10272017` (the spike) was replaced by
-`agent-bridge-relay--0000006`, build `4ab4e0e`. The steps are kept for a new stamp or region.
-Everything below is reversible.
-
-Before:
-
-1. A `main` build has passed staging (its run's summary shows the image digest and SHA).
-2. `./infra/deploy.ps1 -WhatIf -Production -ProductionImage <digest> -ProductionVersion <sha>`
-   shows changes to `agent-bridge-relay`, the environment gaining its log destination, and
-   the role assignment for the production principal; nothing deleted elsewhere.
-3. Note the live revision, the rollback target:
-   `az containerapp revision list -g rg-agent-bridge-relay -n agent-bridge-relay --query "[?properties.active].name" -o tsv`,
-   and save the live definition as a record:
-   `az containerapp show -g rg-agent-bridge-relay -n agent-bridge-relay -o yaml > relay-before-cutover.yaml`
-   (outside the repository; it holds no secret values).
-
-Cutover (about a minute; each device reconnects once):
+**A stamp from nothing** (how the current one was built, 2026-10-29). Register the resource
+providers (`Microsoft.App`, `Microsoft.ContainerRegistry`, `Microsoft.KeyVault`,
+`Microsoft.ManagedIdentity`, `Microsoft.OperationalInsights`) and create the resource group,
+then:
 
 ```powershell
-./infra/deploy.ps1 -Production -ProductionImage <digest> -ProductionVersion <sha>
-dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- --relay https://agent-bridge-relay.agreeablepebble-329880d4.westus2.azurecontainerapps.io --origin https://danswett.github.io --expect-version <sha> --expect-push
+./infra/deploy.ps1 -WhatIf -Production -BaseOnly
+# Pass 1 only: environment, workspace, registry, identities, vaults, role assignments and keys.
+# -SeedProductionFrom copies production's keys vault to vault from another stamp (any
+# subscription), printing only 8-character SHA-256 prefixes; without it new keys are made.
+./infra/deploy.ps1 -Production -BaseOnly -SeedProductionFrom <old production vault>
+# An image for the apps' first revisions: import one the old registry already has (same digest),
+az acr import --subscription <sub> -n abrelaywus2 --registry <old registry resource id> --source agent-bridge-relay@sha256:<digest> --image agent-bridge-relay:<sha>
+# or, with no registry to import from, push one with the SDK (dotnet publish src/AgentBridge.Relay
+# -t:PublishContainer -p:ContainerRegistry=abrelaywus2.azurecr.io ...); ACR Tasks may be refused.
+./infra/deploy.ps1 -Production -ProductionImage abrelaywus2.azurecr.io/agent-bridge-relay@sha256:<digest> -ProductionVersion <sha> -StagingImage <same> -StagingVersion <sha>
 ```
 
-This keeps the app's name, environment and therefore its URL, keeps its system identity, adds its own identity, the
-vault-backed `token-key` and `vapid-key` (the same values), probes, the drain settings and
-the `agent-bridge-managed=infra` tag that lets `relay.yml` roll it from then on.
+That run prints the DNS records the custom domain needs (next section). Once they exist,
+running it again adds the domain and its certificate. From then on CI rolls images, and a
+plain `./infra/deploy.ps1 -Production -ProductionImage <running digest> -ProductionVersion <sha>`
+re-applies infra without rolling anything.
 
-Then check, in this order:
+**Adopting a hand-made app** instead (what the first stamp did with the spike's app):
+`deploy.ps1` finds the live production app, uses its environment, leaves that environment
+untouched until `-Production`, and copies the keys the app signs with into the vault.
 
-- [ ] `/healthz` shows the new `version`; the smoke test passes.
-- [ ] Each host's log shows `connection ended … 1012 restarting` and then `connected as …`
-      within seconds, with no `refused`.
-- [ ] The PWA on the iPhone, already signed in, lists the machines and opens a session
-      without signing in again.
-- [ ] A question raises a notification on the locked phone (the VAPID key carried over).
-- [ ] Answer and reply from the phone still deliver.
-- [ ] Log Analytics shows JSON lines with no login, account id or device name:
-      `ContainerAppConsoleLogs_CL | where ContainerAppName_s == 'agent-bridge-relay' | take 50`.
+## Custom domain
+
+Production is `relay.bad-duck.com`, with an Azure-managed certificate (DigiCert, free,
+six months, renewed by the platform). The `bad-duck.com` zone is on Cloudflare; the two
+records are DNS only (grey cloud), because the certificate is validated against the CNAME
+and Cloudflare's proxy would also cut WebSockets and terminate TLS:
+
+| Type | Name | Value |
+|---|---|---|
+| CNAME | `relay` | `agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io` |
+| TXT | `asuid.relay` | the environment's verification id, `9E5A7D37AE5B378B92399BA82D0EEEF5F4674EE876FF3BF49EB6BB4B53A20E60` |
+
+The domain is `customDomain` in the region's parameter file. `deploy.ps1` steps it forward
+as DNS allows: it prints both records while they are missing; once they resolve it puts the
+hostname on the app (pass 2), then issues the managed certificate and binds it with SNI
+(pass 3); after that it re-states the binding. Staging has no custom domain; adding
+`customDomain: 'relay-staging.bad-duck.com'` to `staging` and two more records would give it one.
+
+**Renewal** is automatic as long as the CNAME keeps pointing at the app and stays DNS only.
+Moving the record, proxying it, or deleting the TXT makes renewal fail silently until the
+certificate expires (the current one: 2027-04-29). Check with
+`az containerapp env certificate list --subscription 0e38f344-908e-4ff3-88ac-4d499a1f51f8 -g rg-agent-bridge-relay -n cae-agent-bridge-relay-wus2 --managed-certificates-only -o table`.
+
+## History
+
+1. **2026-10-27**, dev relay (spike S4/S5) hand-made in the free-trial subscription
+   (`ef8fa0cf-…`, resource group `rg-agent-bridge-relay`): app `agent-bridge-relay` in
+   environment `cae-agent-bridge`, registry `agentbridgerelay59731`, at
+   `https://agent-bridge-relay.agreeablepebble-329880d4.westus2.azurecontainerapps.io`.
+2. **2026-10-29 morning**, cutover in place: `infra/` adopted that app, the product relay
+   replaced the spike (revision `agent-bridge-relay--0000006`, build `4ab4e0e`), and the token
+   key was rotated (the copied one had been exposed in a session's output). The VAPID key was
+   carried over.
+3. **2026-10-29**, moved to the Visual Studio Enterprise subscription by redeploying the
+   stamp from `infra/` (not `az resource move`), served at `relay.bad-duck.com`. Production's
+   token and VAPID keys were copied vault to vault (fingerprints `f747df20`, `3e12c65b`), so a
+   token from either relay works on both and push subscriptions carried over. The old stamp
+   was left running for anything still pointed at it; see
+   [Decommissioning the old stamp](#decommissioning-the-old-stamp).
 
 ## Key rotation
 
@@ -199,7 +220,7 @@ and each PWA needs Sign in again. Push subscriptions are unaffected.
 ```powershell
 $h = @{ Authorization = 'Bearer ' + (az account get-access-token --resource https://vault.azure.net --query accessToken -o tsv) }
 $body = @{ value = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)); contentType = 'base64' } | ConvertTo-Json
-Invoke-RestMethod -Method Put -Uri 'https://kv-abrelay-wus2.vault.azure.net/secrets/token-key?api-version=7.4' -Headers $h -ContentType 'application/json' -Body $body | Out-Null
+Invoke-RestMethod -Method Put -Uri 'https://kv-abrelay-prod-wus2.vault.azure.net/secrets/token-key?api-version=7.4' -Headers $h -ContentType 'application/json' -Body $body | Out-Null
 $body = $null
 # A running replica keeps the value it started with; a new revision reads the new one.
 az containerapp update -g rg-agent-bridge-relay -n agent-bridge-relay --revision-suffix "key$(Get-Date -Format MMddHHmm)" --query properties.latestRevisionName -o tsv
@@ -215,40 +236,47 @@ Every browser subscription is bound to the old public key, so each PWA has to tu
 notifications off and on again; hosts drop the old subscriptions when the push service
 answers 410. Accounts and tokens are unaffected.
 
-Staging has its own keys in `kv-abrelay-wus2-stg`; rotating them affects only the smoke test.
+Staging has its own keys in `kv-abrelay-stg-wus2`; rotating them affects only the smoke test.
 
 ## Rollback
 
-- **A later bad build:** run `relay.yml` with `rollback_to=<previous SHA>` (the SHA is in
-  the production job's summary), and approve it.
-- **The cutover itself:** make a new revision from the spike's last revision:
-
-  ```powershell
-  az containerapp revision copy -g rg-agent-bridge-relay -n agent-bridge-relay --from-revision <the revision noted before the cutover>
-  ```
-
-  That restores the spike's whole template: its image, settings, and no probes. An
-  image-only rollback would not do: it would keep the readiness probe on `/readyz`, which the
-  spike does not serve, so the revision would never become ready and traffic would stay on
-  the new one. The app-level parts the cutover changed stay, and the spike works with them:
-  `token-key` and `vapid-key` keep their names and current values (now read from the vault), and the
-  new identity can pull from the same registry. Tokens and push subscriptions stay valid
-  throughout. `roll-production.sh` still treats the app as adopted afterwards, so the next
-  approved run rolls a product image onto it again.
+- **A bad build:** run `relay.yml` with `rollback_to=<previous SHA>` (the SHA is in the
+  production job's summary), and approve it.
+- **The move to relay.bad-duck.com**, while the old stamp still exists: it runs the same
+  build with the same keys, so pointing clients back is enough. Revert `S4_RELAY` in
+  `.github/workflows/pages.yml` and the app's default in `src/AgentBridge.App/App.xaml.cs` to
+  `https://agent-bridge-relay.agreeablepebble-329880d4.westus2.azurecontainerapps.io`, and
+  `agent-bridge-host sign-in --relay <that url>` on each host. Tokens stay valid; every device
+  has to be on the same relay to see the others.
 
 ## Hostnames, Pages and hosts
 
-Production keeps its current URL, so nothing else changes: `pages.yml` bakes it into the PWA's
-`config.js` and Content-Security-Policy, and each host stores it in its profile's
-`relay.txt`. If production ever moves (a new app name, region or a custom domain such as
-`relay.<domain>`, which is the design's long-term name):
+The relay's public name is `relay.bad-duck.com`. `pages.yml` bakes it into the PWA's
+`config.js` and Content-Security-Policy (`S4_RELAY`), the Windows app has it as its default,
+and each host stores the relay it signed in to in its profile's `relay.txt`. Presence is per
+relay, so **every device of an account must use the same one**: a host on the old URL and a
+phone on the new one never see each other.
 
-1. Add the new name and keep the old one serving the same app (a custom domain on the same
-   Container App does that), so existing hosts and installed PWAs keep working.
-2. Change `S4_RELAY` in `.github/workflows/pages.yml`; the next Pages deploy updates the
-   PWA's relay and CSP. Installed PWAs pick it up on their next open.
-3. Hosts: `agent-bridge-host sign-in --relay <new url>` rewrites `relay.txt`.
-4. Retire the old name only when no host connects to it.
+To move the name to another stamp or region later, point the CNAME at the new app (and add
+the new environment's `asuid` TXT) after adding the domain there; clients need no change.
+
+## Decommissioning the old stamp
+
+Not done; needs approval. The free-trial subscription `ef8fa0cf-48ab-4dc9-80b3-95923fd029da`
+still has, in `rg-agent-bridge-relay`: apps `agent-bridge-relay` (production, always on) and
+`agent-bridge-relay-staging`, environment `cae-agent-bridge`, registry `agentbridgerelay59731`,
+vaults `kv-abrelay-wus2` and `kv-abrelay-wus2-stg`, identities `id-agent-bridge-relay` and
+`id-agent-bridge-relay-staging`, and workspace `log-agent-bridge-relay-wus2`. It costs about
+**$19/month** (production replica ≈ $14.30, registry ≈ $5, the rest under $0.10), paid from
+the trial's credit.
+
+1. Make sure nothing still uses it: every host signed in to `https://relay.bad-duck.com`
+   (`relay.txt`), and `/healthz` on the old URL reporting `"online":0` over a day.
+2. Delete the resource group; its role assignments (including the deploy principals') go with it:
+   `az group delete --subscription ef8fa0cf-48ab-4dc9-80b3-95923fd029da -n rg-agent-bridge-relay --yes`
+3. The two vaults stay soft-deleted for 90 days (their secrets recoverable). To end that
+   early: `az keyvault purge --subscription ef8fa0cf-48ab-4dc9-80b3-95923fd029da -n kv-abrelay-wus2` and the same for `kv-abrelay-wus2-stg`.
+4. Nothing else in GitHub or Entra refers to the old subscription after this PR.
 
 ## Adding a region
 
