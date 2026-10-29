@@ -17,6 +17,9 @@ public sealed record AgentPromptsSince(bool Readable, IReadOnlyList<AgentPrompt>
 //   * typed while it works: a "queue-operation" "enqueue" whose content is the line, and, once
 //     the turn ends and it is taken, a "user" entry with promptSource "queued" and then its
 //     attachments.
+// An image too large to go inline gets no "attachment" entry: the agent reads it with its
+// Read tool instead (seen live with a 290 KiB PNG), and a Read of the path that succeeds
+// counts the same.
 // The queued "user" entry repeats a prompt already recorded by its enqueue, so it is never a
 // prompt of its own; its attachments are the enqueued prompt's. Tool results, meta entries
 // and subagents' entries are not the person's.
@@ -30,6 +33,8 @@ public static class ClaudePrompts
         // enqueued before the scan began has no entry, so its entry takes nothing.
         List<string>? files = null;
         var queued = new List<(string Words, List<string> Files)>();
+        // Read calls under way, by tool_use id, with the path each reads.
+        var reads = new Dictionary<string, string>(StringComparer.Ordinal);
         if (Jsonl.Lines(path, from, skipFirst: false, Line) is not { } to) { return new AgentPromptsSince(false, [], from); }
         return new AgentPromptsSince(true, prompts, to);
 
@@ -38,7 +43,8 @@ public static class ClaudePrompts
             var user = bytes.IndexOf("\"type\":\"user\""u8) >= 0;
             var queue = bytes.IndexOf("\"type\":\"queue-operation\""u8) >= 0;
             var attachment = bytes.IndexOf("\"type\":\"attachment\""u8) >= 0;
-            if (!user && !queue && !attachment) { return; }
+            var read = bytes.IndexOf("\"name\":\"Read\""u8) >= 0;
+            if (!user && !queue && !attachment && !read) { return; }
             JsonDocument doc;
             try { doc = JsonDocument.Parse(bytes.ToArray()); }
             catch (JsonException) { return; }
@@ -55,8 +61,29 @@ public static class ClaudePrompts
                         prompts.Add(new AgentPrompt(start, content, mine));
                         files = null;
                         break;
+                    case "assistant" when files is not null:
+                        foreach (var b in Blocks(e))
+                        {
+                            if (Str(b, "type") == "tool_use" && Str(b, "name") == "Read" && Str(b, "id") is { } id
+                                && b.TryGetProperty("input", out var input) && input.ValueKind == JsonValueKind.Object && Str(input, "file_path") is { } readPath)
+                            {
+                                reads[id] = readPath;
+                            }
+                        }
+                        break;
                     case "user":
                         if (e.TryGetProperty("isMeta", out var meta) && meta.ValueKind == JsonValueKind.True) { return; }
+                        if (files is not null && reads.Count > 0)
+                        {
+                            foreach (var b in Blocks(e))
+                            {
+                                if (Str(b, "type") == "tool_result" && Str(b, "tool_use_id") is { } id && reads.Remove(id, out var readPath)
+                                    && !(b.TryGetProperty("is_error", out var err) && err.ValueKind == JsonValueKind.True))
+                                {
+                                    files.Add(readPath);
+                                }
+                            }
+                        }
                         if (Text(e) is not { } text) { return; }
                         if (Str(e, "promptSource") == "queued")
                         {
@@ -76,6 +103,16 @@ public static class ClaudePrompts
                         break;
                 }
             }
+        }
+    }
+
+    static IEnumerable<JsonElement> Blocks(JsonElement entry)
+    {
+        if (!entry.TryGetProperty("message", out var m) || m.ValueKind != JsonValueKind.Object) { yield break; }
+        if (!m.TryGetProperty("content", out var c) || c.ValueKind != JsonValueKind.Array) { yield break; }
+        foreach (var b in c.EnumerateArray())
+        {
+            if (b.ValueKind == JsonValueKind.Object) { yield return b; }
         }
     }
 

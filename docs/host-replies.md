@@ -140,7 +140,9 @@ box's place, or other words in it, stop it.
 
 **Attachments.** Claude reads a file its prompt mentions as `@<path>`, image or text, and
 records an `attachment` entry with `filename` set to the path for each (seen live), so the
-line is Copilot's; a reply is `delivered` once every staged path has been read (for a queued
+line is Copilot's. An image too large to go inline gets no such entry; Claude reads it with
+its `Read` tool instead (seen live with 290 KiB), and a successful `Read` of the path counts
+the same. A reply is `delivered` once every staged path has been read (for a queued
 reply, once Claude takes it). Codex does not read `@<path>` (left as words, seen live): it
 attaches an image when a paste is exactly a path to one, showing `[Image #n]`. Keys that
 reach it together are one paste, though: a path and the words sent 500 ms after it were seen
