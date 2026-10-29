@@ -69,6 +69,9 @@ public sealed class HookIntake : IAsyncDisposable
     DateTimeOffset _prunedAt;
     string? _paused;
     bool _heartbeatOwned;
+    // Whether approvals have been checked against the hooks that ran while nobody took events,
+    // since this intake last (re)took the spool.
+    bool _reconciled;
 
     public HookIntake(HookIntakeOptions options, IProcessInspector processes, TimeProvider? time = null, Action<string>? log = null)
     {
@@ -135,7 +138,11 @@ public sealed class HookIntake : IAsyncDisposable
             if (_paused is not null) { _log("agent-ha-bridge has stopped; the host takes the hook spool again"); }
             _paused = null;
         }
-        Beat();
+        if (Beat() && !_reconciled)
+        {
+            ReconcileApprovals();
+            _reconciled = true;
+        }
         EnsureWatcher();
         var handled = Consume();
         var now = _time.GetUtcNow();
@@ -163,23 +170,59 @@ public sealed class HookIntake : IAsyncDisposable
         }
         // The heartbeat is the daemon's now; the watcher would only wake passes that do nothing.
         _heartbeatOwned = false;
+        _reconciled = false;
         _watcher?.Dispose();
         _watcher = null;
     }
 
     // The daemon writes its pid; a hook reads only the time. This host's pid tells a reader
     // whose it is, and lets this host take back only its own when it stops.
-    void Beat()
+    bool Beat()
     {
         try
         {
             Directory.CreateDirectory(_options.RuntimeRoot);
             File.WriteAllText(_heartbeat, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             _heartbeatOwned = true;
+            return true;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             _log($"could not keep the hook heartbeat ({e.Message}); hooks give their fixed reply until it is fresh again");
+            _reconciled = false;
+            return false;
+        }
+    }
+
+    // A Codex hook that ran while nobody took events gave its fixed reply and went nowhere, so
+    // the PreToolUse or Stop that ended an approval may never have arrived: the person answered
+    // at the terminal while the host was down. Its marker would then offer an answered approval
+    // to be answered again, typed into whatever the terminal shows now. So each approval asked
+    // before the last such run is withdrawn when the intake takes the spool again; one asked
+    // after it is still pending. The hook log is the record of those runs (both hooks write it).
+    void ReconcileApprovals()
+    {
+        string[] markers;
+        try { markers = Directory.Exists(_handlers.CodexRoot) ? Directory.GetFiles(_handlers.CodexRoot, "*.approval.json") : []; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; }
+        if (markers.Length == 0) { return; }
+        if (HookStats.LastUnspooled(_options.RuntimeRoot, "codex") is not { } unheard) { return; }
+        foreach (var marker in markers)
+        {
+            DateTimeOffset? created = null;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(marker));
+                if (Json.Str(doc.RootElement, "Created") is { } text && DateTimeOffset.TryParse(text, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var at)) { created = at; }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { }
+            if (created is { } c && c > unheard) { continue; }
+            try
+            {
+                File.Delete(marker);
+                _log($"withdrew Codex approval {Path.GetFileName(marker)}: a Codex hook ran at {unheard:o} with nobody taking events, so it may have been answered at the terminal");
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
     }
 

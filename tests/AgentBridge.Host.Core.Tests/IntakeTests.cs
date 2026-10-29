@@ -336,6 +336,42 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public async Task An_approval_asked_before_a_Codex_hook_ran_with_nobody_taking_events_is_withdrawn_when_the_host_returns()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        var first = Intake();
+        first.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        Assert.True(File.Exists(marker));
+
+        // The host stops; the person answers at the terminal, and Codex's PreToolUse gets only
+        // the fixed reply. The same Codex is still running when the host comes back.
+        await first.DisposeAsync();
+        _intakes.Remove(first);
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", _f.Time.GetLocalNow().AddSeconds(5), 3);
+        Intake().Pass();
+
+        Assert.False(File.Exists(marker));
+        Assert.Contains(_log, l => l.StartsWith("withdrew Codex approval x1.approval.json", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void An_approval_asked_after_the_last_unheard_Codex_hook_is_still_pending_when_the_host_returns()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", _f.Time.GetLocalNow().AddSeconds(-5), 3);
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "reply", "no daemon heartbeat", _f.Time.GetLocalNow().AddSeconds(5), 3);
+        Assert.NotNull(HookStats.LastUnspooled(_f.Runtime, "codex"));
+
+        Intake().Pass();
+        Intake().Pass();
+
+        Assert.True(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+    }
+
+    [Fact]
     public void A_resumed_Codex_session_does_not_offer_the_approval_its_previous_run_died_waiting_on()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");

@@ -55,6 +55,33 @@ public sealed record HookStats(
             Percentile(runs.Where(r => r.Path == "spool").Select(r => r.Ms), 0.5));
     }
 
+    // When a hook for this agent last ran without spooling (path fallback or reply), from the log
+    // and its rotated file; null when none is recorded.
+    public static DateTimeOffset? LastUnspooled(string runtimeRoot, string agent)
+    {
+        DateTimeOffset? last = null;
+        var log = SpoolContract.LogPath(runtimeRoot);
+        foreach (var path in new[] { log + ".1", log })
+        {
+            IEnumerable<string> lines;
+            try { lines = File.Exists(path) ? File.ReadAllLines(path) : []; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            foreach (var line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line)) { continue; }
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    var e = doc.RootElement;
+                    if (Json.Str(e, "agent") != agent || Json.Str(e, "path") is null or "spool") { continue; }
+                    if (Json.Str(e, "at") is { } text && DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at) && (last is null || at > last)) { last = at; }
+                }
+                catch (JsonException) { }
+            }
+        }
+        return last;
+    }
+
     static string FoldReason(string? reason)
     {
         if (string.IsNullOrWhiteSpace(reason)) { return "(none)"; }

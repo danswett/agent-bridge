@@ -193,6 +193,14 @@ Assistant, because only its card could answer an approval. Here a client of this
 answers it, so the marker is written for every approval Codex asks for. A Codex approval
 on a migrated machine can then be answered from the phone and the app (`AnswerService`).
 
+**Approvals across an outage.** While nobody takes events, a Codex hook gives its fixed reply
+and its event goes nowhere, so the `PreToolUse` or `Stop` that ended an approval answered at the
+terminal may never arrive. When the intake takes the spool again (it starts, agent-ha-bridge
+stops, or the heartbeat can be written again), it withdraws every approval marker asked before
+the last Codex hook run the hook log records as not spooled. One asked after it is still
+pending. Answering an approval twice could type into whatever the terminal shows now; losing a
+remote answer only means answering at the terminal.
+
 **The owning process** is found from the recorded ancestry, so the shells in between can have
 exited:
 
