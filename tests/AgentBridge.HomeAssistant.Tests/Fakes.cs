@@ -266,13 +266,13 @@ internal sealed class FakeSessions : ISessionSource
 
     public void Set(Session s)
     {
-        sessions[s.Id] = s;
+        lock (sessions) { sessions[s.Id] = s; }
         Changed?.Invoke(this, new SessionChange(SessionChangeKind.Upserted, s.Id, s.WithoutHistory(), ++revision));
     }
 
     public void End(string id)
     {
-        sessions.Remove(id);
+        lock (sessions) { sessions.Remove(id); }
         Changed?.Invoke(this, new SessionChange(SessionChangeKind.Removed, id, null, ++revision));
     }
 
@@ -281,13 +281,14 @@ internal sealed class FakeSessions : ISessionSource
 
     public IReadOnlyList<Session> Snapshot()
     {
-        IReadOnlyList<Session> snapshot = [.. sessions.Values.OrderByDescending(s => s.UpdatedAt).Select(s => s.WithoutHistory())];
+        IReadOnlyList<Session> snapshot;
+        lock (sessions) { snapshot = [.. sessions.Values.OrderByDescending(s => s.UpdatedAt).Select(s => s.WithoutHistory())]; }
         var after = AfterSnapshot;
         AfterSnapshot = null;
         after?.Invoke();
         return snapshot;
     }
-    public Session? Get(string id) => sessions.TryGetValue(id, out var s) ? s : null;
+    public Session? Get(string id) { lock (sessions) { return sessions.TryGetValue(id, out var s) ? s : null; } }
     public SessionList List(string? cursor = null) => new(Snapshot(), revision);
     public SessionSubscription Subscribe() => throw new NotSupportedException();
     public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;

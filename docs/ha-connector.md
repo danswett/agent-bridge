@@ -10,8 +10,9 @@ command topics and pinned entity ids. DSWETT-HOME, the publication writer, still
 agent-ha-bridge, goes on generating the dashboard from every machine's retained session list,
 and a migrated machine's cards render unchanged.
 
-It is built in stages. **This is stage 1: read-only status.** The command-handling plan for the
-later stages is below.
+It is built in stages. **Stage 1 is read-only status; stage 2 adds answering questions from the
+card**, and a read-only shadow that compares the connector with a daemon still running. The
+plan for the later stages is below.
 
 ## What it never does
 
@@ -147,23 +148,100 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
 * The trail is rebuilt from the host's tool history in the daemon's words: `Reading your
   message`, `Running: <tool>` per call, `Thinking: <first line>` with Detailed activity on
   (`Get-BridgeThoughtLine`, ported and fixture-checked), the reply's first line.
-* `driver` is `human` until replies and launches come through this host (stage 3).
+* `driver` is `human` until an answer from the card sets it (stage 2, below); replies and
+  launches set it from stages 3 and 5.
 
-### What stage 1 withdraws
+### What is withdrawn
 
-Everything agent-ha-bridge publishes that stage 1 would not act on is withdrawn (an empty
+Everything agent-ha-bridge publishes that the connector would not act on is withdrawn (an empty
 retained payload), so the dashboard never offers a control that silently does nothing:
 
 * per machine, at start: the install button, the launch card's prompt, prompt payload,
   workspace, profile, agent, model, effort, context, resume and permissions selectors, Launch,
   the launch result and transfer request, and their state topics (17 of the 25 machine topics);
-* per session, when the connector first publishes it: the decision and field selectors (12),
-  the submit and stop buttons, the reply box and reply payload sensor, and their state topics.
+* per session, when the connector first publishes it: the stop button and the two legacy state
+  topics `decision/state` and `reply/state`; and, only when the host has no way to answer (no
+  `ISessionAnswerer` on this platform), also the decision and field selectors (12), the submit
+  button, the reply box and the reply payload sensor, as stage 1 did.
 
-The generated dashboard draws a card with "Entity not found" for those controls until the
-stage that serves them lands. **Stage 1 is therefore for the disposable rehearsal only; no real
-machine enables the connector until the stages that serve what it withdraws (2–6) have
-landed** (see the plan).
+The generated dashboard draws "Entity not found" for those controls until the stage that serves
+them lands. **The connector is therefore for the disposable rehearsal only; no real machine
+enables it until the stages that serve what it withdraws (3–6) have landed** (see the plan).
+
+### Stage 2: answering from the card
+
+With an answerer, a session's first publication is agent-ha-bridge's full set in its order
+(`Publish-CopilotMqttSession`): availability, the decision selector (`Idle`), the reply box,
+the reply payload sensor, status, activity, the twelve field slots (`Idle`, `Field <i>`) and
+Send; everything but stop. 900 ms later (`FieldPinDelay`, the daemon's wait for discovery) the
+controls are pinned to their ids. `HaDecision` is the port of `Set-CopilotMqttDecision`,
+`Publish-CopilotMqttDecisionFields` and `Clear-CopilotMqttDecision`, and
+`Fixtures/ha-decisions.json` records the originals on ten questions (free text, approval, a
+long question, single choice, yes/no, text, a form, a twelve-slot multi-select, unsafe and
+empty multi-select options), three clears and the multi-select code table.
+
+**Arming** a question, as the daemon does:
+
+1. the decision selector's config with its options: `Awaiting answer...` and `Cancel request`
+   around the choices when there are any and no field slots, otherwise just the two;
+2. `select_option` `Awaiting answer...`, retried while Home Assistant has not yet applied the
+   new options (12 attempts, 150 ms apart);
+3. the field slots: every slot the previous question used, or all twelve when that is unknown,
+   each with `Choose...` (a choice), `Idle` (text, or unused), or the multi-select's default;
+4. the decision attributes the card reads: `decision_id`, `question` (to 6000 characters, then
+   a truncation note), `choices`, `mode`, `multi_field`, `field_count`, `session`, `machine`,
+   `asked_at`, and per field `field_<i>_label`, `_multi`, `_options`, `_separator`, `_codes`,
+   `_empty`, plus `answer_on_tap` and `takes_typed_answer` when they apply.
+
+**Reading** an answer. Presses come from one held WebSocket `subscribe_trigger` on every armed
+session's Send button and reply payload sensor (the daemon's `Wait-CopilotHaStateChange`), and
+each pass also reads them over REST, so a missed event costs at most a second. A press counts
+only when it changed from the baseline taken at arming, was not already spent, and its
+`context.user_id` is recorded for `driver`. The fields are read from the slots, choice labels
+mapped back to their values (`#n,m` codes for a multi-select), numbers parsed, `Other` taken
+from the reply box; a free-text question is answered from the reply box or a reply-card payload
+whose `decision_id` matches. The answer goes through the host's `ISessionAnswerer`, the same
+path as the app's, so G5, the delivery gate and the attempt ledger apply unchanged.
+
+**Telling the card**, on the activity line, as `Set-DaemonTransientActivity` does:
+`Sending answer...`, then `Answer sent` (with `answer`, `at` and `answer_consumed_at`, which the
+reply card uses to clear its draft, and the reply box reset to `' '`), `Answer unconfirmed -
+check the terminal`, or `Answer NOT sent` with a hint, after which Send can be pressed again.
+`Not sent - answer every field` (with `waiting_on`), `Not sent - this question takes options`
+and `Not sent - no Send button on this session` say what was wrong with the press itself; such
+a press is spent. A question that ends is cleared (selector `Idle`, attributes `{}`, the slots
+it used reset); a question the card still shows when the connector takes over, but which the
+session no longer asks, is cleared too.
+
+**Driver.** A press whose `context.user_id` is in `homeAssistant.agentUserIds`, or a reply
+payload saying `driver: agent`, makes the next turn agent-driven (the purple edge), if that
+turn starts within 600 s (`DriverArmSeconds`); otherwise it reads `human`.
+
+Where stage 2 knowingly differs from the daemon:
+
+| Difference | Why |
+|---|---|
+| A question the host cannot answer from a card (`AnswerAtMachine`, or a question the host had to truncate) is armed with `**This one has to be answered in the terminal** - <why>` appended and is never read | The host already knows these cannot be delivered; the daemon learns it later |
+| An empty multi-select answer is allowed only for Copilot | The host's `Field` carries no `minItems`; Copilot's own forms allow it |
+| `takes_typed_answer` only for a lone choice that allows another answer | The daemon also offers it for yes/no, which the host's question model cannot take |
+| Claude forms use field slots, never the selector's choices | Claude's questions always arrive as forms here |
+| An approval offers `Approve` / `Deny` on the selector with `answer_on_tap` | The host's approval is a question kind of its own |
+| `Cancel request` says `Answer NOT sent` and resets the selector | The host has no way to cancel an agent's question |
+| A reply with no question says `Reply NOT sent` | Replies are stage 3 |
+| A free-text answer from the reply box must differ from the box at arming | The box keeps the previous reply; the daemon reads it the same way through its baseline |
+| Baselines, `answer_consumed_at` and a pending driver are kept in memory | A host restart re-arms every open question with a fresh baseline, so a press before it is not replayed |
+
+### The shadow: comparing with a running daemon
+
+`agent-bridge-host ha shadow [--json] [--window <seconds>]` runs one connector pass against a
+Home Assistant that **forwards reads and records writes without sending any** (`HaShadow`), then
+reads the broker's retained topics for this machine and for every session either side names
+(the daemon's from its `global/attr`), and compares them as JSON, ignoring `updated` and
+`asked_at`. Each topic is reported `same`, `differs`, `agent-ha-bridge only` or `host only`,
+with a note where the difference is by design (stop, launch and transfer controls; the answer
+controls when the host cannot answer). It needs `baseUrl` and the stored token but not
+`enabled`, and it ignores G5: it is the one thing that is meant to run while the daemon does,
+for the week of shadow running before a machine's cutover (§10 stage 4).
 
 ## Lifecycle
 
@@ -265,9 +343,9 @@ publishes with, and the agent's (`homeAssistant.agentTokenEnvVar`, default
 `AGENT_HA_AGENT_TOKEN`), which agents use when *they* press, reply or launch. The daemon marks a
 card agent-driven (the purple edge) when the `context.user_id` on the state change that carried
 the input is in `homeAssistant.agentUserIds`. The connector keeps that split: it publishes with
-the user's token only, and from stage 2 reads `context.user_id` off each command's state change
-and matches it against its own `homeAssistant.agentUserIds` to set `driver`. Agents driving a
-migrated machine go on using their own token, unchanged. Stage 1 publishes `driver: human`.
+the user's token only, reads `context.user_id` off each command's state change and matches it
+against its own `homeAssistant.agentUserIds` to set `driver` (stage 2). Agents driving a
+migrated machine go on using their own token, unchanged.
 
 **Notifications.** The phone flow (`notify.mobile_app_*` with answer buttons, and
 `mobile_app_notification_action` events back) is stage 5. Until then a migrated machine's
@@ -285,20 +363,51 @@ does), never by subscribing to the broker.
 
 | Stage | Commands | agent-ha-bridge spec |
 |---|---|---|
-| 2 Answers | Publish the full per-session set (`Publish-CopilotMqttSession`: decision, 12 field slots, submit, reply, reply payload, stop) and prime the reply box with `' '`. Arm a question onto the decision selector and field slots with its `question`, options, `decision_id` and the `#n,m` position encoding; read a Submit press or a tapped choice; answer through `AnswerService`; stamp `answer_consumed_at`; Cancel request; clear on resolve. `driver` from `context.user_id` | `Set-CopilotMqttDecision`, `Publish-CopilotMqttDecisionFields`, `Clear-CopilotMqttDecision`, `daemon-decisions.ps1`, card `answer_consumed_at` |
+| 2 Answers (done) | The full per-session set but stop; arm, read, answer, tell the card, clear; `driver` from `context.user_id`; the read-only shadow; the container CI job (above and below) | `Set-CopilotMqttDecision`, `Publish-CopilotMqttDecisionFields`, `Clear-CopilotMqttDecision`, `daemon-decisions.ps1`, card `answer_consumed_at` |
 | 3 Replies and attachments | The reply card's JSON on `copilot/cli/<node>/replypayload/set` (text, uploaded image ids, `at`), read through the reply payload sensor's attributes; images fetched from Home Assistant's image store (`/api/image/serve/<id>/original`), staged in `AttachmentStore`, deleted after (`image/delete`); `ReplyService`; driver pending until the turn starts | `daemon-replies.ps1`, card reply path |
 | 4 Stop | `button.<node>_stop`, two presses when the session is not idle, the confirm and lapsed notes pinned on the activity line; `StopService`; `ending` | `Invoke-PendingStops`, `Get-DaemonCardSummary`, `CopilotEndSessionConfirmNote` |
 | 5 Launch and notifications | The launch card's controls (`Publish-CopilotMqttNewSession`) from the host's approved workspaces and agents; the 255-character limit lifted through the retained `newsession/promptpayload` (`{at, text, request, settings}`); `new_session_result` with `recent` per request; `capabilities.newSession`/`launchRequest`; transfer requests. Phone notifications with answer buttons and their actions | `daemon-launch.ps1`, `daemon-decision-notify.ps1` |
 | 6 Update buttons | `button.agent_bridge_<slug>_install_update` starts the product's own update (the app's Velopack update on Windows), with `stage`/`stage_detail` and `update_percentage` from it, and `latest_version` from this product's release feed — never agent-ha-bridge's (G2) | `Publish-CopilotMqttUpdate`, `daemon-maintenance.ps1` |
 | 7 Upkeep | The Detailed activity helper created when absent (`input_boolean/create`, never recreated); the liveness repair for a sensor Home Assistant has stopped applying, with its attempt limit (#177, #202); forget-machine (the card's X clears this machine's topics from the browser; the connector must not resurrect a machine that was forgotten while it was off) | `Initialize-CopilotVerboseToggle`, `Confirm-DaemonOnlineHeartbeat`, `Get-BridgeMachineForgetTopic` |
 
-A shadow mode belongs beside these (stage 2): while agent-ha-bridge still runs, the connector
-computes what it would publish and compares it, read-only, with the daemon's retained topics,
-for the week of shadow running on DEV-VM1 before its cutover (§10 stage 4).
+## Validation: a disposable Home Assistant and Mosquitto
 
-## Validation plan: a disposable Home Assistant and Mosquitto
+Never the live Home Assistant or broker.
 
-Never the live Home Assistant or broker. Everything below runs on the Hyperloop VM (or a
+### In CI, on every change
+
+The `ha-integration` job in `.github/workflows/ci.yml` is the disposable Home Assistant every
+connector change is checked against. On an Ubuntu runner it starts Mosquitto
+(`eclipse-mosquitto:2.0`, no authentication, reachable only on a private Docker network) and
+Home Assistant (a pinned release, published only on `127.0.0.1:8123`), both empty;
+`tools/ha-ci/onboard.py` onboards Home Assistant (owner, core config, analytics, integrations),
+adds the MQTT integration through its config flow, waits for it to load and hands the test a
+token through the job's environment, masked. The script refuses any address that is not
+loopback. Both containers go with the runner.
+
+The tests (`LiveHomeAssistantTests`, trait `Category=HomeAssistantIntegration`) are skipped
+everywhere else: they run only when `AGENT_BRIDGE_HA_TEST_URL` is loopback and
+`AGENT_BRIDGE_HA_TEST_DISPOSABLE=1`. Each poses as a machine of its own and checks, through Home
+Assistant itself rather than a fake:
+
+* the card's entities exist at the ids the dashboard uses, a question is armed onto them, the
+  stop button is not offered, and the machine reads online with its session count;
+* a choice and a Send press made through Home Assistant's services reach the host's answerer
+  with the chosen value, the card says `Answer sent`, and the next turn is `agent`-driven
+  because the pressing account is in `agentUserIds`;
+* a reply card payload published through `mqtt.publish` answers a free-text question and
+  `answer_consumed_at` comes back;
+* with no dashboard at all, an ended session is retired, and nothing it published is left
+  retained;
+* the shadow, against the daemon's own recorded publications seeded into the broker, reports
+  what it should and leaves the broker exactly as it found it.
+
+To bump the Home Assistant release, change `HA_IMAGE` in the job.
+
+### By hand, with a copy of the dashboard
+
+What CI cannot show is the generated dashboard and card drawing a migrated machine, because they
+are agent-ha-bridge's output. That needs the rehearsal below, on the Hyperloop VM (or a
 developer machine with Docker), with its own instance, broker and dashboard.
 
 ### 1. The instance
@@ -349,8 +458,9 @@ for retained state, and `config/entity_registry/list` for ids:
 
 1. Daemon → host: the machine row stays (online, session count, version, `(dev)`); each card
    keeps rendering status, activity, the reply text, the trail, compactions and background
-   counts; Detailed activity toggles reasoning; usage rows stay; no `_2` ids; the launch card
-   and install button for the machine go (stage 1) and nothing else does.
+   counts; Detailed activity toggles reasoning; usage rows stay; no `_2` ids; the launch card,
+   install and stop buttons for the machine go and nothing else does; a question is answered
+   from the card, on a phone-sized browser too.
 2. A session ending: it leaves the list, the writer drops its card, and only then do its
    entities go; all 29 topics are empty.
 3. Host restart (kill the process, start it): no new entities; a session that ended while the
@@ -363,11 +473,9 @@ for retained state, and `config/entity_registry/list` for ids:
    card, sweeps what ended; no duplicates, nothing unavailable left.
 7. Then snapshot-restore the VM and run it again (§10 stage 3).
 
-The parent session arranges the VM; the connector's own tests stay in-process
-(`tests/AgentBridge.HomeAssistant.Tests`: contract tests against the fixture, lifecycle tests
-against an in-process Home Assistant and broker). A CI job with the same two containers, driving
-the connector on a Linux runner with an injected probe, is planned with stage 2 (G6's "container
-in CI").
+The rest of the connector's tests stay in-process (`tests/AgentBridge.HomeAssistant.Tests`:
+contract tests against the fixtures, lifecycle and answer tests against an in-process Home
+Assistant and broker).
 
 ## Configuration and commands
 
@@ -380,7 +488,8 @@ in CI").
   "dashboardUrlPath": "agent-decisions",  // read, never written
   "detailedActivity": true,               // when the machine has no Detailed activity switch
   "machineName": null,                    // the computer's name; set only for a rehearsal
-  "disposable": false                     // a development build needs true
+  "disposable": false,                    // a development build needs true
+  "agentUserIds": []                      // Home Assistant users whose presses are agents'
 }
 ```
 
@@ -390,6 +499,7 @@ agent-bridge-host config set homeAssistant.disposable true
 agent-bridge-host config set homeAssistant.enabled true
 agent-bridge-host ha token set            # paste the token; it is not shown
 agent-bridge-host ha status               # on, or why not; never the token
+agent-bridge-host ha shadow               # compare with agent-ha-bridge's retained topics; writes nothing
 ```
 
 `serve` logs `the Home Assistant connector is on: <url> as agent_bridge_<slug>` or why it is

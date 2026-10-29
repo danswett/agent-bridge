@@ -43,6 +43,35 @@ jobs:
           for i in $(seq 30); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 1; done
           curl -fsS http://127.0.0.1:8080/healthz | grep -q '"version":"ci"' || { docker logs relay; exit 1; }
           curl -fsS http://127.0.0.1:8080/readyz
+  ha-integration:
+    # The Home Assistant connector against a real Home Assistant and Mosquitto: containers on this
+    # runner, started empty, onboarded for this run (tools/ha-ci/onboard.py) and thrown away with
+    # it. The disposable Home Assistant every HA connector change is checked against
+    # (docs/ha-connector.md, "Validation"); nothing here can reach any other.
+    runs-on: ubuntu-latest
+    env:
+      # The Home Assistant release the connector is checked against. Keep it at, or close to,
+      # the release the real dashboard runs.
+      HA_IMAGE: ghcr.io/home-assistant/home-assistant:2026.10.4
+      MOSQUITTO_IMAGE: eclipse-mosquitto:2.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Start a disposable Home Assistant and Mosquitto
+        run: |
+          docker network create ha
+          docker run -d --name mosquitto --network ha "$MOSQUITTO_IMAGE" mosquitto -c /mosquitto-no-auth.conf
+          docker run -d --name homeassistant --network ha -p 127.0.0.1:8123:8123 -e TZ=UTC "$HA_IMAGE"
+      - run: dotnet build tests/AgentBridge.HomeAssistant.Tests -c Release --nologo
+      - name: Onboard it, with MQTT
+        run: python3 tools/ha-ci/onboard.py
+      - name: The connector against it
+        run: dotnet test tests/AgentBridge.HomeAssistant.Tests -c Release --no-build --nologo --filter "Category=HomeAssistantIntegration" --logger "console;verbosity=normal"
+      - name: Home Assistant's log
+        if: failure()
+        run: docker logs homeassistant 2>&1 | tail -n 300
   spikes:
     runs-on: windows-latest
     steps:
