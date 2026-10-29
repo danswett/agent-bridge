@@ -71,12 +71,14 @@ public sealed class LocalServer : IAsyncDisposable
     [SupportedOSPlatform("windows")]
     NamedPipeServerStream CreatePipe(bool first)
     {
-        var user = WindowsIdentity.GetCurrent().User!;
+        var identity = WindowsIdentity.GetCurrent();
+        var user = identity.User!;
         var security = new PipeSecurity();
-        // Owned by the user, so the app's CurrentUserOnly check (the pipe's owner is me) holds
-        // even when the host runs elevated, whose objects would otherwise be owned by
-        // Administrators. Only this user, never over the network.
-        security.SetOwner(user);
+        // Owned by the token's default owner, which is what a CurrentUserOnly client compares
+        // with its own: the user, or Administrators in an elevated administrator's token. So an
+        // app and a host at the same elevation agree, and a mismatch fails at the client before
+        // the host's own elevation check. Only this user, never over the network.
+        security.SetOwner(identity.Owner ?? user);
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.FullControl, AccessControlType.Allow));
         security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid, null), PipeAccessRights.FullControl, AccessControlType.Deny));

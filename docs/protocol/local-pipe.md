@@ -22,12 +22,14 @@ nothing is advertised.
 
 The name is not a secret. What keeps others out:
 
-* The pipe's DACL allows the current user only and denies `NETWORK` (S-1-5-2); its owner
-  is that user.
+* The pipe's DACL allows the current user only and denies `NETWORK` (S-1-5-2). Its owner
+  is the host's token owner: the user, or Administrators when an administrator runs it
+  elevated.
 * The host creates the first instance with `FILE_FLAG_FIRST_PIPE_INSTANCE`. If something
   already holds the name, the host exits rather than share it.
 * The client connects with `PipeOptions.CurrentUserOnly`, which checks that the pipe's
-  owner is the client's user.
+  owner is the client's own token owner: another user's pipe fails, and so does a host at
+  a different elevation.
 * For each connection the host reads the client's process (`GetNamedPipeClientProcessId`)
   and refuses it unless the process runs as the same user, at the same elevation as the
   host. A process it cannot identify is refused.

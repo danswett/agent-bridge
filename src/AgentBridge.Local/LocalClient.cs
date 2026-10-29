@@ -22,8 +22,10 @@ public static class LocalClient
         Stream stream;
         if (OperatingSystem.IsWindows())
         {
-            // CurrentUserOnly: the connection fails unless the pipe is owned by this user, so a
-            // pipe another user created under the name is never talked to.
+            // CurrentUserOnly: the connection fails unless the pipe's owner is this process's
+            // token owner, so a pipe another user created under the name is never talked to. An
+            // elevated administrator's token owner is Administrators, so a host and an app at
+            // different elevations fail here too.
             var pipe = new NamedPipeClientStream(".", endpoint.Address, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             try
             {
@@ -39,7 +41,7 @@ public static class LocalClient
             catch (UnauthorizedAccessException e)
             {
                 await pipe.DisposeAsync();
-                throw new LocalRefusedException($"the host's pipe is not this user's ({e.Message})");
+                throw new LocalRefusedException($"the host's pipe belongs to another user, or one of the host and this app runs as administrator and the other does not ({e.Message})");
             }
             stream = pipe;
         }
