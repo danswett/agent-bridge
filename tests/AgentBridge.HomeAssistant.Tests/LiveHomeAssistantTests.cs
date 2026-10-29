@@ -119,9 +119,9 @@ public sealed class LiveHomeAssistantTests : IDisposable
         await using var c = Connector("CI-CARD");
         c.Start();
 
-        await Until(SessionEntities.Decision(node), s => s.State == HaDecision.Awaiting);
-        var decision = await ha.GetStateAsync(SessionEntities.Decision(node));
-        Assert.Equal("q1", decision!.Attributes.GetProperty("decision_id").GetString());
+        // The attributes come last, after the selector is Awaiting, as the daemon publishes them.
+        await Until(SessionEntities.Decision(node), s => s.State == HaDecision.Awaiting
+            && s.Attributes.TryGetProperty("decision_id", out var d) && d.GetString() == "q1");
         var field = await Until(SessionEntities.Field(node, 1), s => s.State == HaDecision.Choose);
         Assert.Contains("Cut the release now", field.Attributes.GetProperty("options").EnumerateArray().Select(o => o.GetString()));
         foreach (var entity in new[] { SessionEntities.Status(node), SessionEntities.Activity(node), SessionEntities.Submit(node), SessionEntities.Reply(node), SessionEntities.ReplyPayload(node) })
