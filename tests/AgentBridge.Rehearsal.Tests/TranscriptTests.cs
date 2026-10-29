@@ -192,6 +192,20 @@ public class TranscriptTests
     }
 
     [Fact]
+    public void One_answer_recorded_twice_counts_once_and_a_second_typing_of_its_words_is_seen()
+    {
+        var (s, path) = Transcript(
+            Recorded("rehearsal-once"),
+            new { type = "tool.execution_complete", data = new { toolCallId = "t1", result = new { content = "User responded: rehearsal-once" } } });
+        using var _ = s;
+        Assert.Equal((1, 0), Transcripts.AnswerCount(Transcripts.Copilot, path, 0, "rehearsal-once"));
+        Append(path, new { type = "user.message", data = new { content = "rehearsal-once", delivery = "steering" } });
+        Assert.Equal((1, 1), Transcripts.AnswerCount(Transcripts.Copilot, path, 0, "rehearsal-once"));
+        Append(path, new { type = "human_response.recorded", data = new { toolCallId = "t2", response = new { content = "rehearsal-once" } } });
+        Assert.Equal(2, Transcripts.AnswerCount(Transcripts.Copilot, path, 0, "rehearsal-once").Answers);
+    }
+
+    [Fact]
     public void Each_agents_transcript_is_found_by_the_session_id_alone()
     {
         using var s = new Scratch();

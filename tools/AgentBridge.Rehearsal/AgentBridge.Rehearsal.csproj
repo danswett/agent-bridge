@@ -17,6 +17,7 @@
     <ProjectReference Include="..\..\src\AgentBridge.Protocol\AgentBridge.Protocol.csproj" />
     <ProjectReference Include="..\..\src\AgentBridge.Transport\AgentBridge.Transport.csproj" />
     <ProjectReference Include="..\..\src\AgentBridge.Host.Delivery\AgentBridge.Host.Delivery.csproj" />
+    <ProjectReference Include="..\..\src\AgentBridge.HomeAssistant\AgentBridge.HomeAssistant.csproj" />
   </ItemGroup>
 
   <ItemGroup>

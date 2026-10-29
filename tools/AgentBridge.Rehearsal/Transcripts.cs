@@ -68,6 +68,39 @@ internal static class Transcripts
     // rollout-<time>-<uuid>: the id is the uuid at the end.
     static string CodexId(string name) => name.Length >= 36 && Guid.TryParse(name[^36..], out _) ? name[^36..] : "";
 
+    // How many questions the session recorded as answered after a mark, counted by tool call
+    // (Copilot records one answer twice: the structured response and the tool's result), and
+    // how many prompts of the same words followed, which is where a second typing of a text
+    // answer would land once the question had gone.
+    public static (int Answers, int Strays) AnswerCount(string kind, string path, long from, string? text)
+    {
+        var calls = new HashSet<string>(StringComparer.Ordinal);
+        var unnamed = 0;
+        var strays = 0;
+        foreach (var (_, e) in Lines(path, from))
+        {
+            if (kind == Copilot)
+            {
+                if (Str(e, "agentId") is { Length: > 0 } || Obj(e, "data") is not { } d) { continue; }
+                switch (Str(e, "type"))
+                {
+                    case "human_response.recorded":
+                    case "tool.execution_complete" when Obj(d, "result") is { } r && (Str(r, "content") ?? "").TrimStart().StartsWith("User responded: ", StringComparison.Ordinal):
+                        if (Str(d, "toolCallId") is { Length: > 0 } id) { calls.Add(id); } else { unnamed++; }
+                        break;
+                    case "user.message" when text is not null && Str(d, "source") is not { Length: > 0 } && Str(d, "content") is { } words && Same(words, text):
+                        strays++;
+                        break;
+                }
+            }
+            else if (kind == Claude && Str(e, "type") == "user" && !Bool(e, "isSidechain") && Obj(e, "toolUseResult") is { } result && Obj(result, "answers") is not null)
+            {
+                unnamed++;
+            }
+        }
+        return (calls.Count + unnamed, strays);
+    }
+
     // Complete lines from an offset, with where each starts; a line still being written waits.
     public static IEnumerable<(long Offset, JsonElement Entry)> Lines(string path, long from)
     {

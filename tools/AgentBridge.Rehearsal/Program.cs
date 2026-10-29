@@ -135,7 +135,15 @@ internal static class Program
                         _ => () => Transcripts.Shutdown(mark.Kind, mark.Path, mark.Offset),
                     };
                     if (p.Name == "expect permission" && mark.Kind != Transcripts.Copilot) { return Outcome.Manual($"{mark.Kind} permission prompts are answered at the machine"); }
-                    return await PollAsync(check, p.Timeout(p.Name == "expect reply" || p.Name == "expect steering" ? 90 : 30), ct);
+                    var found = await PollAsync(check, p.Timeout(p.Name == "expect reply" || p.Name == "expect steering" ? 90 : 30), ct);
+                    if (found.Verdict != Verdict.Pass || !p.Flag("--expect-once")) { return found; }
+                    // Typed once: wait for a late second typing to land, then count.
+                    await Task.Delay(TimeSpan.FromSeconds(p.Int("--settle") ?? 15), ct);
+                    var (answers, strays) = Transcripts.AnswerCount(mark.Kind, mark.Path, mark.Offset, p.Option("--text"));
+                    var counted = new { answers, strays };
+                    if (answers != 1) { return Outcome.Fail($"{answers} answers recorded since the mark, expected exactly one", counted); }
+                    if (strays > 0) { return Outcome.Fail($"the answer's words were also taken as {strays} prompt(s), as a second typing would be", counted); }
+                    return Outcome.Pass($"{found.Detail}, exactly once", counted);
                 }
             case "log":
                 {
@@ -149,8 +157,14 @@ internal static class Program
                     if (HaCheck.Refusal(url) is { } refused) { return Outcome.Error(refused); }
                     var token = File.ReadAllText(p.Option("--token-file")!).Trim();
                     if (token.Length == 0) { return Outcome.Error("the token file is empty"); }
+                    // A session's entities, named by the connector's own contract, so a check
+                    // never has to work out the node id by hand.
+                    static IEnumerable<string> SessionEntities(IEnumerable<string> ids) =>
+                        ids.SelectMany(id => AgentBridge.HomeAssistant.HaContract.SessionSensorIds(AgentBridge.HomeAssistant.HaContract.NodeId(id)).Values);
                     var expect = new HaExpectations(p.Option("--slug"), p.Flag("--expect-online"), p.Flag("--expect-offline"), p.Int("--expect-sessions"), p.Flag("--expect-no-duplicates"),
-                        p.All("--expect-entity"), p.All("--expect-no-entity"), Pairs(p.All("--expect-state"), "--expect-state"));
+                        [.. p.All("--expect-entity"), .. SessionEntities(p.All("--expect-session"))],
+                        [.. p.All("--expect-no-entity"), .. SessionEntities(p.All("--expect-no-session"))],
+                        Pairs(p.All("--expect-state"), "--expect-state"));
                     var registry = expect.NoDuplicates || expect.NoEntities.Count > 0;
                     return await Poll.UntilAsync("Home Assistant", async c =>
                     {
