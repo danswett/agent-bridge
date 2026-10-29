@@ -10,8 +10,9 @@ namespace AgentBridge.Host.Delivery.Copilot;
 public sealed record CopilotPermissionState(bool Readable, CopilotPermissionPrompt? Request, int PendingPermissions, int PendingAsks, long ScannedTo);
 
 // What the transcript recorded for one permission request after a point: the result kind of
-// its permission.completed, whether that carried feedback, and whether the session ended.
-public sealed record CopilotPermissionResult(string? Kind, bool Feedback, bool SessionEnded, long ScannedTo);
+// its permission.completed, whether that carried feedback, whether the session's own turn was
+// aborted by the person after it, and whether the session ended.
+public sealed record CopilotPermissionResult(string? Kind, bool Feedback, bool SessionEnded, long ScannedTo, bool StoppedAfter = false);
 
 // Reads Copilot's own record of its permission prompts, by request id and never by time.
 public static class CopilotPermissionTranscript
@@ -74,12 +75,26 @@ public static class CopilotPermissionTranscript
         string? kind = null;
         var feedback = false;
         var ended = false;
+        var stopped = false;
         var scannedTo = Jsonl.Lines(path, from, skipFirst: false, Line) ?? from;
-        return new CopilotPermissionResult(kind, feedback, ended, scannedTo);
+        return new CopilotPermissionResult(kind, feedback, ended, scannedTo, stopped);
 
         void Line(ReadOnlySpan<byte> bytes, long start)
         {
-            if (kind is not null) { return; }
+            // Escape on the "No (Esc to stop)" row does not record a denial: Copilot 1.0.105
+            // records the request as cancelled ("Session aborted") and then aborts the turn, by
+            // the user. Seen live on 2026-10-28, so the abort that follows is looked for too.
+            if (kind is not null)
+            {
+                if (!stopped && kind == "cancelled" && bytes.IndexOf("\"type\":\"abort\""u8) >= 0 && CopilotPrompts.Parse(bytes) is { } a)
+                {
+                    using (a.Doc)
+                    {
+                        stopped = a.Type == "abort" && a.AgentId is null;
+                    }
+                }
+                return;
+            }
             var completed = bytes.IndexOf("\"type\":\"permission.completed\""u8) >= 0;
             if (!completed && bytes.IndexOf("\"type\":\"session.shutdown\""u8) < 0) { return; }
             if (CopilotPrompts.Parse(bytes) is not { } e) { return; }
