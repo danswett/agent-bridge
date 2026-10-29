@@ -409,6 +409,36 @@ public sealed class LifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task A_new_turns_thinking_replaces_the_previous_turns_reply_until_its_own_reply_arrives()
+    {
+        sessions.Set(FakeSessions.Copilot(A, response: "First answer"));
+        await using var c = Connector();
+        await Run(c, 3);
+        var attr = HaContract.Topics(NodeA).ActivityAttributes;
+        JsonElement Detail() => JsonDocument.Parse(ha.Retained[attr]).RootElement;
+        Assert.Equal("text", Detail().GetProperty("response_kind").GetString());
+
+        // A new turn: the host clears the reasoning and keeps the last reply, then thinks.
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Working, response: "First answer"));
+        await Pass(c, 1);
+        Assert.Equal("First answer", Detail().GetProperty("response").GetString());
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Working) with { Activity = new Activity { Response = "First answer", Reasoning = "Weighing the second" } });
+        await Pass(c, 1);
+        Assert.Equal("reasoning", Detail().GetProperty("response_kind").GetString());
+        Assert.Equal("Weighing the second", Detail().GetProperty("response").GetString());
+
+        // Another step that changes neither text keeps the thought.
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Working) with { Activity = new Activity { Response = "First answer", Reasoning = "Weighing the second", TurnCount = 2 } });
+        await Pass(c, 1);
+        Assert.Equal("reasoning", Detail().GetProperty("response_kind").GetString());
+
+        sessions.Set(FakeSessions.Copilot(A) with { Activity = new Activity { Response = "Second answer", Reasoning = "Weighing the second" } });
+        await Pass(c, 1);
+        Assert.Equal("text", Detail().GetProperty("response_kind").GetString());
+        Assert.Equal("Second answer", Detail().GetProperty("response").GetString());
+    }
+
+    [Fact]
     public async Task Usage_is_published_when_a_reading_changes_and_not_again_when_it_does_not()
     {
         var reading = new AgentUsage

@@ -112,8 +112,10 @@ public static class HaPayloads
     // The activity sensor's attributes for a session: the daemon's activity detail (session,
     // machine, verbose, updated, driver, history) with the card's text added as
     // Add-DaemonCardText does. driver is "human" until replies and launches arrive through
-    // this host (docs/ha-connector.md, later PRs).
-    public static JsonObject ActivityAttributes(Session full, string sessionName, string machineName, bool verbose, DateTimeOffset now, string driver = "human")
+    // this host (docs/ha-connector.md, later PRs). thinking says the newest line is the
+    // reasoning rather than the reply; the connector knows which changed last, and without it
+    // the reasoning is newest only while there is no reply at all.
+    public static JsonObject ActivityAttributes(Session full, string sessionName, string machineName, bool verbose, DateTimeOffset now, string driver = "human", bool? thinking = null)
     {
         var detail = new JsonObject
         {
@@ -124,12 +126,10 @@ public static class HaPayloads
             ["driver"] = driver,
             ["history"] = History(full, verbose),
         };
-        // The host keeps the newest reply and the newest reasoning, not which came last; a
-        // thought is the newest line only while the turn has produced no reply yet.
         var response = full.Activity.Response;
         var reasoning = full.Activity.Reasoning;
-        var thinking = string.IsNullOrWhiteSpace(response) && !string.IsNullOrWhiteSpace(reasoning);
-        AddCardText(detail, InlineReasoning(full.Agent), verbose, response, thinking ? reasoning : response, thinking, reasoning);
+        var isThinking = !string.IsNullOrWhiteSpace(reasoning) && (thinking ?? string.IsNullOrWhiteSpace(response));
+        AddCardText(detail, InlineReasoning(full.Agent), verbose, response, isThinking ? reasoning : response, isThinking, reasoning);
         return detail;
     }
 

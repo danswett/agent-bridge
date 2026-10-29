@@ -89,6 +89,27 @@ public sealed partial class HaConnector : IAsyncDisposable
         public required string Kind;
         public string? Status;
         public string? Activity;
+        // Which of the reply and the reasoning changed last. The host keeps the previous turn's
+        // reply when a new turn starts, so "no reply yet" cannot say the newest line is a thought.
+        public bool Seen;
+        public string? SeenResponse;
+        public string? SeenReasoning;
+        public bool Thinking;
+
+        public bool Observe(string? response, string? reasoning)
+        {
+            var hasReply = !string.IsNullOrWhiteSpace(response);
+            var hasReasoning = !string.IsNullOrWhiteSpace(reasoning);
+            if (!Seen) { Thinking = !hasReply && hasReasoning; }
+            // A reply follows the thinking that led to it, so a pass seeing both change takes the reply.
+            else if (hasReply && response != SeenResponse) { Thinking = false; }
+            else if (hasReasoning && reasoning != SeenReasoning) { Thinking = true; }
+            else if (!hasReasoning) { Thinking = false; }
+            Seen = true;
+            SeenResponse = response;
+            SeenReasoning = reasoning;
+            return Thinking;
+        }
     }
 
     sealed class Retiring
@@ -457,7 +478,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         }
 
         var summary = HaPayloads.ActivitySummary(full);
-        var detail = HaPayloads.ActivityAttributes(full, name, options.MachineName, verbose, now);
+        var detail = HaPayloads.ActivityAttributes(full, name, options.MachineName, verbose, now, thinking: p.Observe(full.Activity.Response, full.Activity.Reasoning));
         var activitySignature = summary + "\n" + Signature(detail);
         if (activitySignature != p.Activity)
         {

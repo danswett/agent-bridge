@@ -139,8 +139,11 @@ published when they change, compared without their `updated` stamp.
 How the host's `Session` maps to what the daemon kept, where the two differ:
 
 * The daemon remembers the newest message and whether it was a thought; the host keeps the
-  newest reply and the newest reasoning. A thought is shown as the newest line (Detailed
-  activity on, `response_kind: reasoning`) while the turn has produced no reply yet.
+  newest reply and the newest reasoning, and keeps the previous turn's reply while a new turn
+  thinks. The connector therefore remembers, per session, which of the two changed last, and
+  shows a thought as the newest line (Detailed activity on, `response_kind: reasoning`) until
+  a new reply arrives. A session first seen (a start or restart) is thinking only while it has
+  no reply at all, the one case the snapshot alone settles.
 * The trail is rebuilt from the host's tool history in the daemon's words: `Reading your
   message`, `Running: <tool>` per call, `Thinking: <first line>` with Detailed activity on
   (`Get-BridgeThoughtLine`, ported and fixture-checked), the reply's first line.
