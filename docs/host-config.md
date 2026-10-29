@@ -42,6 +42,14 @@ follow.
       "claude": { "model": "opus" },
       "codex": { }
     }
+  },
+  "homeAssistant": {
+    "enabled": false,
+    "baseUrl": "http://homeassistant.local:8123",
+    "dashboardUrlPath": "agent-decisions",
+    "detailedActivity": true,
+    "machineName": null,
+    "disposable": false
   }
 }
 ```
@@ -67,12 +75,19 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `launch.agents.<id>.model`, `effort`, `context` | none | What a launch that does not say is started with. None means the agent's own default. `agency` uses `copilot`'s |
 | `launch.agents.<id>.models`, `efforts`, `contexts` | built in | The values to offer, replacing the built-in lists (and, for models, those the machine's sessions are using). At most 64 each |
 | `launch.agents.<id>.extraArgs` | `[]` | Arguments added to every launch of that agent, as written |
+| `homeAssistant.enabled` | `false` | The Home Assistant connector ([ha-connector.md](ha-connector.md)): this machine's sessions on the existing agent-ha-bridge dashboard. Runs only while agent-ha-bridge does not, and only with a token (`agent-bridge-host ha token set`, kept protected beside the device key, never in this file) |
+| `homeAssistant.baseUrl` | none | The Home Assistant, `http` or `https`, with no credentials in it. Required when enabled |
+| `homeAssistant.dashboardUrlPath` | `agent-decisions` | The dashboard agent-ha-bridge's writer generates. Only read, to know when an ended session's card has gone |
+| `homeAssistant.detailedActivity` | `true` | What cards carry when this machine has no Detailed activity switch in Home Assistant |
+| `homeAssistant.machineName` | the computer's | The name the entities are keyed on (`agent_bridge_<slug>`). Only for a rehearsal posing as another machine on a disposable Home Assistant |
+| `homeAssistant.disposable` | `false` | Says `baseUrl` is a disposable Home Assistant. A development build writes to no other |
 
 How a file that is wrong is read: one that cannot be read or parsed turns both remote
 approval and launching off; a `permissions.remoteApproval` that is not `true` or `false`
 does too. In `launch`, a workspace entry that is wrong (no path, a relative path, an `isolate`
 that is not `true` or `false`) is left out and said in the log, and any other value that is
-wrong turns launching off. A setting someone may have meant as off is never read as on.
+wrong turns launching off. In `homeAssistant`, any value that is wrong turns the connector off
+and is said in the log. A setting someone may have meant as off is never read as on.
 
 ## Approving a workspace at the machine
 

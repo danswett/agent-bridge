@@ -45,6 +45,7 @@ The protocol between them is specified in [docs/protocol](docs/protocol/v1-sessi
 | `src/AgentBridge.App` | The Windows app (WinUI 3, unpackaged, Velopack): this machine's sessions as cards at parity with the PWA, usage, toasts that take answers, and installing, starting, signing in and updating the host it ships with. `--demo` runs it against a pretend host. [docs/app-windows.md](docs/app-windows.md); `build/pack-app.ps1` builds the package |
 | `src/AgentBridge.App.Core` | Everything in the app that is not drawing (connection, view models, toast plans, host lifecycle), platform-neutral and tested on Linux too |
 | `src/AgentBridge.HostLauncher` | `agent-bridge-hostw`: starts the host with no console window, for the logon task |
+| `src/AgentBridge.HomeAssistant` | The Home Assistant connector: a migrated machine's sessions, liveness, version and usage on the existing agent-ha-bridge dashboard, in agent-ha-bridge's own per-machine MQTT contract (status only so far; off by default). [docs/ha-connector.md](docs/ha-connector.md); `tools/ha-contract` records the contract fixtures from agent-ha-bridge's source |
 | `tools/AgentBridge.RelaySmoke` | `relay-smoke --relay <url>`: checks a deployed relay from outside, and with its token key connects two devices over a Noise channel |
 | `tests/` | `dotnet test AgentBridge.slnx`, on Windows and Linux in CI |
 

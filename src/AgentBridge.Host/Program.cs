@@ -38,6 +38,10 @@ using AgentBridge.Transport;
 //                                               other devices, approved here at the machine
 //   agent-bridge-host config show|set|unset     the rest of the profile's config.json
 //                                               (docs/host-config.md, docs/host-launch.md)
+//   agent-bridge-host ha status|token set|token clear
+//                                               the Home Assistant connector (docs/ha-connector.md):
+//                                               whether serve would run it, and its token, which is
+//                                               read from standard input and kept protected
 //
 // Roots default to the current user's; --copilot-home, --claude-home and --codex-home
 // point elsewhere. Nothing under them is ever written. sign-in, serve and whoami take
@@ -139,6 +143,14 @@ switch (command)
         }
     case "serve":
         return await ServeAsync();
+    case "ha":
+        {
+            var rest = new List<string>(arguments);
+            var p = rest.IndexOf("--profile");
+            if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
+            Func<string?>? active = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().Active : null;
+            return HaCommands.Run(rest, LoadIdentity().Folder, () => HaCommands.ReadSecret(Console.Error), Console.Out, Console.Error, IsDevBuild(), active);
+        }
     case "workspace" or "config":
         {
             // At the machine only: this is how a person approves where sessions may be launched.
@@ -149,7 +161,7 @@ switch (command)
         }
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
-        Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key>");
+        Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear");
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");
         return command == "help" ? 0 : 2;
 }
@@ -211,6 +223,11 @@ async Task<int> ServeAsync()
     await using var usageMonitor = new UsageMonitor(UsageMonitor.Collectors(usageOptions, usageHttp, new CommandRunner(), log: Log), source, usageOptions,
         agentHaBridge: () => OperatingSystem.IsWindows() ? haProbe!.Active() : null, log: Log);
     usageMonitor.Start();
+    // The Home Assistant connector (docs/ha-connector.md): this machine's sessions on the dashboard
+    // agent-ha-bridge's writer generates. Off unless config.json turns it on, and paused while
+    // agent-ha-bridge runs for this user (looked at every few seconds, as the app's view of it is).
+    Func<string?>? haActive = haProbe is null ? null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64);
+    await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, new UsageService(usageMonitor, Log), Launcher(source, attachments));
 
     // The desktop app's way in (docs/protocol/local-pipe.md): the same sessions ops, and the
