@@ -22,9 +22,8 @@ public sealed record LaunchConfig
     public string WorktreeRoot { get; init; } = "~/repos/wt";
     // Managed worktrees per repository; 0 is no cap.
     public int WorktreeLimit { get; init; } = 10;
-    // How old a finished worktree must be before a reclaimer may remove it. This host has no
-    // reclaimer yet (docs/host-launch.md), so nothing reads it; kept so the file need not
-    // change when one arrives.
+    // How long since this host made a worktree before the reclaimer may remove it once it is
+    // finished (clean, detached, nothing ahead of its base, no live session in it).
     public double WorktreeIdleHours { get; init; } = 12;
     // Agency profiles to offer; empty offers every profile Agency lists.
     public IReadOnlyList<string> Profiles { get; init; } = [];

@@ -76,7 +76,7 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null) => new(source, probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null) => new(source, probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
     {
         CopilotHome = f.CopilotHome,
         ClaudeHome = f.ClaudeHome,
@@ -90,10 +90,11 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         ExitGrace = TimeSpan.FromMilliseconds(100),
         // The fixture's folders are under temp, which is a system folder to a real launch.
         IsSystemDirectory = _ => false,
+        WorktreeUsage = usage,
     });
 
-    void Serve(LaunchConfig config, TimeSpan? wait = null) =>
-        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: Launcher(config, wait)).HandleAsync;
+    void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null) =>
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: Launcher(config, wait, usage)).HandleAsync;
 
     async Task<SecureChannel> OpenAsync()
     {
@@ -337,6 +338,32 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         var refused = await LaunchAsync(ch, new { prompt = "go" });
         Assert.StartsWith("Launch refused: requested isolation failed. Cannot establish the repository for isolation", refused.Reason);
         Assert.Single(starter.Specs);
+    }
+
+    [Fact]
+    public async Task A_finished_worktree_is_removed_before_the_cap_is_counted_so_the_next_isolated_launch_goes_ahead()
+    {
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "hi\n");
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "one");
+        Serve(Config(c => c with { Workspaces = [new("App", app, true)], WorktreeLimit = 1 }), usage: new NoSessions());
+        var ch = await OpenAsync();
+
+        Assert.Equal("started", (await LaunchAsync(ch, new { prompt = "go" })).Outcome_);
+        var first = starter.Specs[0].WorkingDirectory;
+        await WaitAsync(() => Task.FromResult(!File.Exists(Path.Combine(Worktrees.AdminFolder(first)!, "locked"))));
+        // Its session has ended and it has sat idle past launch.worktrees.idleHours.
+        File.WriteAllText(Path.Combine(Worktrees.AdminFolder(first)!, Worktrees.Marker), DateTimeOffset.Now.AddHours(-13).ToString("o"));
+
+        Assert.Equal("started", (await LaunchAsync(ch, new { prompt = "again" })).Outcome_);
+        Assert.False(Directory.Exists(first));
+        Assert.True(Worktrees.IsManaged(starter.Specs[1].WorkingDirectory));
+    }
+
+    sealed class NoSessions : IWorktreeUsage
+    {
+        public WorktreeUsage Read() => new(true, [], "");
     }
 
     [Fact]

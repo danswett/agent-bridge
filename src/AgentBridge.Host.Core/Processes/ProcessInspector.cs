@@ -16,7 +16,15 @@ public sealed record AgentProcess(int Id, DateTimeOffset? StartedAt, string? Com
 public interface IProcessInspector
 {
     IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent);
+
+    // The same, and whether the list is known to be complete. Discovery can live with a
+    // process it could not identify; deleting a worktree cannot, so the reclaimer asks this.
+    AgentProcessObservation Observe(AgentKind agent) => new(GetAgentProcesses(agent), true);
 }
+
+// Known is false when a process that might be this agent could not be identified, or the
+// processes could not be listed at all.
+public sealed record AgentProcessObservation(IReadOnlyList<AgentProcess> Processes, bool Known);
 
 // The real machine, on Windows, macOS and Linux. Only reads: it opens a process for
 // query-limited information and nothing more.
@@ -28,7 +36,11 @@ public sealed class SystemProcessInspector : IProcessInspector
     readonly Dictionary<(int, long), string?> _commandLines = [];
     readonly Lock _gate = new();
 
-    public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent)
+    public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent) => Scan(agent).Processes;
+
+    public AgentProcessObservation Observe(AgentKind agent) => Scan(agent);
+
+    AgentProcessObservation Scan(AgentKind agent)
     {
         var name = agent switch
         {
@@ -37,17 +49,18 @@ public sealed class SystemProcessInspector : IProcessInspector
             AgentKind.Codex => "codex",
             _ => null,
         };
-        if (name is null) { return []; }
+        if (name is null) { return new([], true); }
 
         var names = CandidateNames(name);
         var found = new List<AgentProcess>();
         var seen = new HashSet<int>();
         var live = new HashSet<(int, long)>();
+        var known = true;
         foreach (var candidate in names)
         {
             Process[] processes;
             try { processes = Process.GetProcessesByName(candidate); }
-            catch (Exception e) when (e is InvalidOperationException or Win32Exception or PlatformNotSupportedException) { continue; }
+            catch (Exception e) when (e is InvalidOperationException or Win32Exception or PlatformNotSupportedException) { known = false; continue; }
             foreach (var process in processes)
             {
                 using (process)
@@ -60,6 +73,11 @@ public sealed class SystemProcessInspector : IProcessInspector
                     var key = (id, started?.UtcTicks ?? 0);
                     live.Add(key);
                     var commandLine = CommandLineOf(key);
+                    // agent-ha-bridge's usage snapshot (Get-BridgeWorktreeUsage) gives up on a
+                    // runtime it cannot identify outside Windows. On Windows it never looks at
+                    // node at all; every other user's and service's node is listed there too,
+                    // and an unreadable one would keep every worktree for ever.
+                    if (candidate is "node" or "bun" && string.IsNullOrWhiteSpace(commandLine) && !OperatingSystem.IsWindows()) { known = false; }
                     if (candidate is "node" or "bun" && !IsAgentScript(agent, name, commandLine)) { continue; }
                     found.Add(new AgentProcess(id, started, commandLine));
                 }
@@ -76,7 +94,7 @@ public sealed class SystemProcessInspector : IProcessInspector
                 _commandLines.Remove(key);
             }
         }
-        return found;
+        return new(found, known);
     }
 
     static bool IsRunning(int pid)

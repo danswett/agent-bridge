@@ -64,7 +64,7 @@ differences, each deliberate:
 | The agent token variable | Set in the child's environment, so a launched agent drives the bridge as itself | Not set: agent-bridge has no agent principal yet. The agent gets the host's environment |
 | Where the host runs | A logon task, always on the desktop | Wherever it was started. Launching is offered only when the host is unelevated, interactive, in a logon session with a desktop (`WinSta0`); elevated, as a service or over SSH it is not, since the agent would be an administrator's, or on no screen |
 | Worktree marker | `agent-bridge-created` | `agent-bridge-host-created`, so neither product counts or claims the other's trees. Mutex `Local\AgentBridgeHostWorktree_<sha256>`, lock reason `agent-bridge-host-launch:<hex>` |
-| Reclaiming worktrees | Before each isolated launch, by its rules | **None.** This host never deletes a worktree. Those it made stay until a person removes them, and once `launch.worktrees.limit` of them exist for a repository, isolated launches there are refused saying so. `launch.worktrees.idleHours` is kept for the reclaimer that may come, which must follow agent-ha-bridge's rules exactly (marker, unlocked, clean including ignored files but its named build output, detached, no commit ahead of the base, no live session at or below it, older than the idle hours, never the shared root, never `--force`) |
+| Reclaiming worktrees | Before each isolated launch, by its rules | The same rules, at the same point ([below](#reclaiming-finished-worktrees)), for this host's own marker only, and the same two exempt build outputs. Each tree kept is logged with its reason |
 | macOS and Linux | tmux | Not offered yet |
 
 ## In order, for every launch
@@ -103,25 +103,98 @@ For a workspace with `isolate: true`, each new session (never a resume):
    launches in `<worktree>\src\svc`.
 2. A per-repository mutex across processes, by the repository's common git folder; a second
    operation at once is refused, not queued.
-3. `git fetch origin --quiet` (a failure is logged and the local base used); the base is
+3. Finished worktrees are reclaimed ([below](#reclaiming-finished-worktrees)).
+4. `git fetch origin --quiet` (a failure is logged and the local base used); the base is
    origin's default branch, else `origin/main`, `origin/master`, else `HEAD`.
-4. The cap: worktrees registered with the repository that carry this host's marker, against
-   `launch.worktrees.limit` (0 is no cap). At the cap: `refused`.
-5. `<root>\<repo>-<yyyyMMdd-HHmmss>` (local time), `-1`, `-2`… for a name in use, then `git
+5. The cap, counted after reclaiming: worktrees registered with the repository that carry
+   this host's marker, against `launch.worktrees.limit` (0 is no cap). At the cap: `refused`.
+6. `<root>\<repo>-<yyyyMMdd-HHmmss>` (local time), `-1`, `-2`… for a name in use, then `git
    worktree add --detach <target> <base>`, and the marker written into the worktree's git
    administration folder with the time.
-6. `git worktree lock --reason agent-bridge-host-launch:<random>`, lifted only if the lock
+7. `git worktree lock --reason agent-bridge-host-launch:<random>`, lifted only if the lock
    still has that reason once the session registers.
 
 Worktrees are under `launch.worktrees.root`, by default `~/repos/wt`, the same root
 agent-ha-bridge uses: shared with other sessions and other repositories. This host never
-sweeps it, removes anything from it, or touches a worktree it did not create.
+sweeps it, and never touches a worktree it did not create.
+
+## Reclaiming finished worktrees
+
+agent-ha-bridge's `Remove-BridgeFinishedWorktree`, protection for protection. It runs where
+agent-ha-bridge runs it, before each isolated launch (not a resume) and before the cap is
+counted, with the repository's worktree mutex held. agent-ha-bridge does not run it on a
+timer, so neither does this host. It is best effort: anything it cannot clear stays, and the
+launch goes on to the cap.
+
+**Which worktrees.** Only those the repository's own `git worktree list --porcelain` registers,
+never anything found by looking in the shared root, so a worktree of another repository is
+never even considered. Of those, only the ones carrying this host's marker
+(`agent-bridge-host-created` in the worktree's git administration folder): not
+agent-ha-bridge's, not one a person made, and not one made before the marker existed. Never
+the primary checkout.
+
+**What keeps one.** Unknown means kept. A worktree stays if any of these holds:
+
+| | Logged as |
+|---|---|
+| Whether a session is using it cannot be established (below), which keeps every one | `N worktree(s) were retained: whether a session is using them cannot be established (…)` |
+| A live session, of any agent, works in it or below it (physically, links resolved) | `a live session is working in it` |
+| Its git common folder is not the repository's | `which repository it belongs to is uncertain` |
+| It is locked (`git worktree lock`): a launch still starting, or anyone's lock | `it is locked (…)` |
+| A tracked entry is a link, a submodule or a conflict; a path in it is a junction or symlink; a tracked file is missing | `it holds a link, a submodule, a conflict, or a tracked file that is missing or unreadable` |
+| Any uncommitted or untracked file | `it has uncommitted or untracked files` |
+| Any ignored file except the build outputs named below | `it has ignored files, which may be someone's local data` |
+| A branch is checked out | `a branch is checked out in it` |
+| `HEAD` has a commit that is not in the base (resolved to a commit in the repository, so with no `origin` it is the checkout's `HEAD`; agent-ha-bridge reads `HEAD` inside the worktree there, which finds nothing ahead) | `it has commits that are not in the base` |
+| Its marker's time is missing or unreadable | `its ownership marker has no readable time` |
+| Made less than `launch.worktrees.idleHours` ago | `it is younger than launch.worktrees.idleHours` |
+| Git cannot answer any of these | `its git state cannot be read` |
+| Git is working in it (its `HEAD.lock` or `index.lock` exists) | `git is working in it` |
+| Removal stopped partway, because something arrived in it meanwhile | `its removal stopped without deleting anything recursively (…); the tracked files it had removed were restored` |
+
+Each is logged once per launch as `retained worktree <folder name>: <reason>`, and a removal
+as `removed finished worktree <folder name>`: the folder's name, never a path or a file in it.
+
+**Live sessions.** A strict snapshot, agent-ha-bridge's `Get-BridgeWorktreeUsage`, not session
+discovery: every Copilot, Claude and Codex process (through every way this host recognises
+one) must be accounted for by a session with a readable working directory (Copilot's
+`workspace.yaml` for the session its `--session-id` or `inuse.<pid>.lock` names; Claude's and
+Codex's agent-ha-bridge registrations, whose time must fall within the process's life). It is
+unknown if any Agency launcher is running (it cannot be told from a session still starting),
+if a process's start time cannot be read, if a registration cannot be read or names a different
+live process, if a lock is older than its process, or if a session folder, registration or
+working directory is a link or cannot be resolved. Since Agency stays running for as long as
+its session does, **no worktree is reclaimed while any Agency session runs on the machine**,
+exactly as with agent-ha-bridge.
+
+**How it is removed.** Never `--force`, and never `git worktree remove`, which deletes ignored
+files recursively even without force. With the worktree's own `HEAD.lock` and `index.lock`
+taken (so nothing else works in it meanwhile), every check above is made again, liveness
+included; then the clean tracked files are deleted through a private index (`git read-tree
+HEAD`, `git rm -r`, which refuses a modified file), the named build outputs by exact path,
+each folder with a non-recursive delete, the `.git` pointer moved aside and the worktree
+folder deleted only if empty. Anything that arrived since makes a delete fail: the pointer is
+put back and `git checkout-index --all` restores only the tracked files that are missing,
+never overwriting one. The worktree's administration folder is left for git's own maintenance
+(`git worktree prune` across the repository would also retire other owners' missing trees).
+
+**Build outputs.** agent-ha-bridge exempts exactly `hook/agent-bridge-hook` and
+`hook/agent-bridge-hook.exe`, the native hook its `AGENTS.md` tells every session to build,
+without which every worktree of that repository was kept for ever and the cap refused all
+launches there (#143). This host exempts the same two files, so a worktree of that repository
+is reclaimed the same way under either product. They are exact paths, not patterns or folders,
+and are reproducible only because a worktree reaches removal with no tracked file modified.
+agent-bridge names none of its own: its build output is `bin/` and `obj/` folders, and an
+ignored folder keeps a worktree like any other ignored data, since removing it would mean a
+recursive delete. A worktree where agent-bridge was built stays until a person removes it.
 
 ## The log
 
 ```
 launch 2b6e1f0a received (agent=agency, workspace=Bridge, profile=work; prompt of 812 chars)
-launch 2b6e1f0a: worktree: created C:\Users\me\repos\wt\bridge-20261028-131443 at origin/main
+launch 2b6e1f0a: worktree: removed finished worktree bridge-20261026-090112
+launch 2b6e1f0a: worktree: retained worktree bridge-20261027-164500: a branch is checked out in it
+launch 2b6e1f0a: worktree: removed 1 finished; created C:\Users\me\repos\wt\bridge-20261028-131443 at origin/main
 launch 2b6e1f0a: new Agency session in 'Bridge' (C:\Users\me\repos\wt\bridge-20261028-131443) profile 'work'
 launch 2b6e1f0a: started pid 41208 in C:\Users\me\repos\wt\bridge-20261028-131443 via Agency (session 0f3c1a2b-…)
 launch 2b6e1f0a: Agency in Bridge registered as session 0f3c1a2b after 3.4 s
