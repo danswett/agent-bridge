@@ -60,6 +60,9 @@ public sealed partial class HaConnector : IAsyncDisposable
     readonly object gate = new();
     readonly HashSet<string> dirty = new(StringComparer.Ordinal);
     readonly Dictionary<string, Published> published = new(StringComparer.Ordinal);
+    // Sessions whose first publication has begun but not finished: they already have retained
+    // entities in Home Assistant, so one ending before a retry succeeds must still be retired.
+    readonly Dictionary<string, string> starting = new(StringComparer.Ordinal);
     readonly Dictionary<string, Retiring> retiring = new(StringComparer.Ordinal);
     readonly Dictionary<string, Pin> pins = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> usageSignatures = new(StringComparer.Ordinal);
@@ -375,7 +378,8 @@ public sealed partial class HaConnector : IAsyncDisposable
         List<(string Id, string Node)> gone;
         lock (gate)
         {
-            gone = [.. published.Where(p => !live.ContainsKey(p.Key)).Select(p => (p.Key, p.Value.Node))];
+            gone = [.. published.Where(p => !live.ContainsKey(p.Key)).Select(p => (p.Key, p.Value.Node))
+                .Concat(starting.Where(p => !live.ContainsKey(p.Key)).Select(p => (p.Key, p.Value)))];
             work = everything ? [.. live.Keys] : [.. notified.Where(live.ContainsKey).Concat(live.Keys.Where(id => !published.ContainsKey(id))).Distinct()];
         }
         foreach (var (id, node) in gone)
@@ -383,6 +387,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             lock (gate)
             {
                 published.Remove(id);
+                starting.Remove(id);
                 retiring.TryAdd(node, new Retiring());
             }
             log($"Home Assistant connector: session {id[..Math.Min(8, id.Length)]} ended; its entities go once its card has left the dashboard");
@@ -410,6 +415,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         lock (gate) { published.TryGetValue(s.Id, out p); }
         if (p is null)
         {
+            lock (gate) { starting[s.Id] = node; }
             // Availability first and retained, so a session never appears already stale.
             await ha.PublishAsync(t.Availability, "online", true, ct);
             await PublishSensorConfigsAsync(t, name, ct);
@@ -419,6 +425,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent) };
             lock (gate)
             {
+                starting.Remove(s.Id);
                 published[s.Id] = p;
                 if (retiring.Remove(node)) { SaveLedger(); }
             }

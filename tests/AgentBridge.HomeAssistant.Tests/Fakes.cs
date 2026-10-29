@@ -25,11 +25,13 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     public string? Dashboard { get; set; }
     public Exception? DashboardFails { get; set; }
     public Exception? PublishFails { get; set; }
+    public Func<string, string, bool>? PublishFailsFor { get; set; }
     public int RegistryLists { get; private set; }
 
     public Task PublishAsync(string topic, string payload, bool retain, CancellationToken cancellationToken = default)
     {
         if (PublishFails is { } e) { throw e; }
+        if (PublishFailsFor?.Invoke(topic, payload) == true) { throw new HttpRequestException("Connection reset"); }
         lock (gate)
         {
             Log.Add(new Published(topic, payload, retain));

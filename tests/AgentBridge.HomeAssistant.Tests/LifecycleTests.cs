@@ -213,6 +213,28 @@ public sealed class LifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task A_session_that_ends_before_its_first_publication_finished_is_still_retired()
+    {
+        sessions.Set(FakeSessions.Copilot(A));
+        ha.Draw(NodeA);
+        await using var c = Connector();
+        await Run(c, 3);
+
+        // B's sensors and availability go, then a withdrawal fails; B ends before the retry.
+        ha.PublishFailsFor = (topic, payload) => payload.Length == 0 && topic.Contains(NodeB, StringComparison.Ordinal);
+        sessions.Set(FakeSessions.Copilot(B));
+        await Pass(c, 1);
+        Assert.Contains(ha.Retained.Keys, k => k.Contains(NodeB, StringComparison.Ordinal));
+        sessions.End(B);
+        ha.PublishFailsFor = null;
+        await Run(c, 60);
+
+        Assert.False(ha.Exists($"sensor.{NodeB}_status"));
+        Assert.DoesNotContain(ha.Retained.Keys, k => k.Contains(NodeB, StringComparison.Ordinal));
+        Assert.Empty(c.PendingRetirement);
+    }
+
+    [Fact]
     public async Task A_dashboard_that_cannot_be_read_holds_every_retirement()
     {
         sessions.Set(FakeSessions.Copilot(B));
