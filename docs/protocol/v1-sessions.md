@@ -12,8 +12,9 @@ Scope so far: a host reports sessions, their activity and their pending question
 reply: a prompt typed into a session (`sessions.reply`), with files and images sent ahead
 of it (`sessions.attach`, see [Attachments](#attachments)), can end a session
 (`sessions.stop`), and notifies a client's devices when a session asks or finishes, even
-with the app closed (`push`, see [Notifications](#notifications)). Larger files through the
-blob store and launching come next; they will add ops without changing anything here.
+with the app closed (`push`, see [Notifications](#notifications)). It can also launch or
+resume a session (`sessions.launch`, in [v1-launch.md](v1-launch.md)). Larger files through
+the blob store come next; they will add ops without changing anything here.
 
 ## Rules for every message
 
@@ -84,6 +85,7 @@ Request `data`: `{}`. Result:
 | `sessions.approve` | Copilot permission prompts are approved or denied with `session.answer` ([Copilot permission prompts](#copilot-permission-prompts)). Offered only with `sessions.answer`, by a host whose `permissions.remoteApproval` is on (the default). Without it, every Copilot permission prompt is `answerAtMachine`, and a client says approving from the phone is turned off on that machine |
 | `push` | `push.subscribe`, `push.unsubscribe`, `push.list`: Web Push notifications of questions and finished turns ([Notifications](#notifications)) |
 | `usage` | `usage.get`, `usage.subscribe`: how much of each agent's allowance is gone ([v1-usage.md](v1-usage.md)) |
+| `sessions.launch` | `launch.options`, `session.launch`: starting or resuming a session in a workspace approved at the machine ([v1-launch.md](v1-launch.md)) |
 
 ### `sessions.list`
 

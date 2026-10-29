@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -14,7 +15,8 @@ namespace AgentBridge.Host;
 // replier types a prompt into a session's input, with any files sent first by attachment.*,
 // which go to the AttachmentStore) and session.stop (the stopper ends a session). The
 // push.* ops, which register a device for notifications, go to the
-// PushNotifier, and usage.* to the UsageService.
+// PushNotifier, usage.* to the UsageService, and launch.options and session.launch to the
+// launcher (docs/protocol/v1-launch.md).
 public sealed class SessionService
 {
     readonly ISessionSource source;
@@ -26,11 +28,12 @@ public sealed class SessionService
     readonly AttachmentStore? attachments;
     readonly ISessionStopper? stops;
     readonly UsageService? usage;
+    readonly ISessionLauncher? launcher;
     readonly ConcurrentDictionary<SecureChannel, Subscriber> subscribers = new();
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
-        UsageService? usage = null)
+        UsageService? usage = null, ISessionLauncher? launcher = null)
     {
         this.source = source;
         this.machine = machine;
@@ -41,6 +44,7 @@ public sealed class SessionService
         this.attachments = attachments;
         this.stops = stops;
         this.usage = usage;
+        this.launcher = launcher;
     }
 
     // Channels with a subscription running; tests and the host's log read it.
@@ -68,6 +72,10 @@ public sealed class SessionService
                 return await StopAsync(data);
             case Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList when push is not null:
                 return await push.HandleAsync(channel, op, data);
+            case LaunchProtocol.Options when launcher is not null:
+                return await launcher.OptionsAsync();
+            case LaunchProtocol.Launch when launcher is not null:
+                return await LaunchAsync(channel, data);
             case UsageProtocol.Get or UsageProtocol.Subscribe when usage is not null:
                 return await usage.HandleAsync(channel, op, data);
             case Ops.SessionsList:
@@ -170,6 +178,7 @@ public sealed class SessionService
         if (stops?.Available == true) { offered.Add(Capabilities.SessionsStop); }
         if (push is not null) { offered.Add(Capabilities.Push); }
         if (usage is not null) { offered.Add(UsageProtocol.Capability); }
+        if (launcher?.Available == true) { offered.Add(LaunchProtocol.Capability); }
         return offered;
     }
 
@@ -204,6 +213,16 @@ public sealed class SessionService
         var request = data.Deserialize<StopRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.stop needs an id and a request");
         if (stops is null) { return new StopResult(StopOutcome.Refused, "this host does not end sessions; end it at the machine"); }
         return await stops.StopAsync(request);
+    }
+
+async Task<LaunchResult> LaunchAsync(SecureChannel channel, JsonElement data)
+    {
+        // As for answers: a request without a request UUID fails as a request, and anything
+        // that can be read gets an outcome. The whole request is bounded, prompt and all.
+        if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.launch needs a request"); }
+        if (System.Text.Encoding.UTF8.GetByteCount(data.GetRawText()) > LaunchProtocol.MaxRequest) { throw new ArgumentException($"session.launch is larger than {LaunchProtocol.MaxRequest / 1024} KiB"); }
+        var request = data.Deserialize<LaunchRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.launch needs a request");
+        return await launcher!.LaunchAsync(request, channel.PeerId);
     }
 
     static string? String(JsonElement data, string name) =>

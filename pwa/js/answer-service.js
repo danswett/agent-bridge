@@ -46,8 +46,11 @@ export class AnswerService {
     send = (client, data) => client.answer(data),
     payload = (e) => ({ id: e.sessionId, question: e.questionId, request: e.request, ...e.answer }),
     final = (e) => !['busy', 'refused'].includes(e.outcome),
+    // Whether busy on a resend means the first copy is still being delivered. A launch's host
+    // returns the first copy's outcome to a resend, whatever it is, so busy there is the answer.
+    resendOnBusy = true,
   }) {
-    Object.assign(this, { current, uuid, now, retryMs, giveUpMs, send, payload, final });
+    Object.assign(this, { current, uuid, now, retryMs, giveUpMs, send, payload, final, resendOnBusy });
   }
 
   static key(hostId, sessionId, questionId) { return JSON.stringify([hostId, sessionId, questionId]); }
@@ -166,7 +169,7 @@ export class AnswerService {
     // The contract doesn't say how a host answers a repeat of a request it is still working
     // on, so this is bounded: after a few, the copy that may have been typed is reported as
     // unconfirmed, which is the truth.
-    if (result.outcome === 'busy' && entry.attempts > 1) {
+    if (result.outcome === 'busy' && entry.attempts > 1 && this.resendOnBusy) {
       if (++entry.busyResends > MAX_BUSY_RESENDS) {
         this.#set(entry, { state: 'done', outcome: 'unconfirmed', reason: result.reason ?? NO_OUTCOME });
         return;

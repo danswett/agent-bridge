@@ -11,6 +11,7 @@
 //   replies.js, reply-service.js  checking and sending replies (session.reply), likewise
 //   attachments.js   preparing files and images for a reply, and sending them first
 //   stop-service.js  ending sessions (session.stop), likewise, two presses when not idle
+//   launch.js, launch-service.js  starting and resuming sessions (session.launch), likewise
 //   push.js          notifications: turning them on and off, registering with each machine
 //   usage.js, fleet.js  agent usage merged across machines, and each machine's status line
 //   sessions-store.js, ui/*  what is shown
@@ -25,12 +26,15 @@ import { SessionsStore } from './sessions-store.js';
 import { AnswerService } from './answer-service.js';
 import { ReplyService } from './reply-service.js';
 import { StopService } from './stop-service.js';
+import { LaunchService } from './launch-service.js';
+import { LAUNCH } from './launch.js';
 import { PushRegistrar, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities } from './protocol.js';
 import { SessionListView, renderMachines } from './ui/views.js';
 import { UsageBook, USAGE, machineStatus } from './usage.js';
 import { FleetStatus } from './fleet.js';
 import { UsageView } from './ui/usage-view.js';
+import { LaunchPanel } from './ui/launch-view.js';
 import { DemoHost, runScript } from './demo.js';
 
 const $ = (id) => document.getElementById(id);
@@ -95,6 +99,19 @@ function focusLinked() {
 
 let currentHost = () => null;
 
+// A launched session's card, once it has arrived: unfolded and scrolled to. False until then.
+function showSession(id) {
+  const card = view.card(id);
+  if (!card) { return false; }
+  if (card.folded) { card.setFolded(false); }
+  const el = card.element;
+  el.classList.add('linked');
+  setTimeout(() => el.classList.remove('linked'), 4000);
+  el.scrollIntoView({ block: 'start' });
+  el.querySelector('.fold')?.focus({ preventScroll: true });
+  return true;
+}
+
 // A tap on a notification while the app is open: the worker says where to go.
 navigator.serviceWorker?.addEventListener('message', (e) => {
   if (e.data?.type !== 'agent-bridge.open' || typeof e.data.url !== 'string') { return; }
@@ -155,12 +172,13 @@ async function startDemo() {
   approving: params.get('approve') !== '0',
     stopWindowMs: Number(params.get('stopWindow')) || 10000,
     usage: params.get('usage') !== '0',
+    launching: params.get('launch') !== '0' && params.get('answer') !== '0',
   });
   // ?attachDelay= slows each file chunk, so its progress can be watched.
   host.attachmentDelayMs = Number(params.get('attachDelay')) || 0;
   // ?timeout= shortens how long a request waits for its response, for the tests of resends.
   const timeoutMs = Number(params.get('timeout')) || 0;
-  const client = new HostClient(host.connect(), { store, ...(timeoutMs ? { timeoutMs, answerTimeoutMs: timeoutMs, replyTimeoutMs: timeoutMs, stopTimeoutMs: timeoutMs } : {}) });
+  const client = new HostClient(host.connect(), { store, ...(timeoutMs ? { timeoutMs, answerTimeoutMs: timeoutMs, replyTimeoutMs: timeoutMs, stopTimeoutMs: timeoutMs, launchTimeoutMs: timeoutMs } : {}) });
   currentClient = client;
   const hello = await client.hello();
   const current = () => ({ client, hostId: hello.machine.id });
@@ -168,6 +186,7 @@ async function startDemo() {
   const answers = new AnswerService({ current, retryMs });
   const replies = new ReplyService({ current, retryMs });
   const stops = new StopService({ current, retryMs });
+  const launches = new LaunchService({ current, retryMs });
   answering = () => ({ service: answers, replies, stops, hostId: hello.machine.id, capabilities: hello.capabilities });
   $('machines').hidden = false;
   const drawMachine = () => renderMachines($('machine-list'), {
@@ -186,9 +205,13 @@ async function startDemo() {
     client.on('usage', (r) => book.set(hello.machine.id, r));
     book.set(hello.machine.id, await client.subscribeUsage());
   }
+  const launchPanel = new LaunchPanel($('launch'), { service: launches, jump: showSession });
+  if (hello.capabilities.includes(LAUNCH.capability)) {
+    launchPanel.setTarget({ hostId: hello.machine.id, machineName: hello.machine.name, load: () => client.launchOptions() });
+  }
   const script = params.get('static') === '1' ? null : runScript(host, { tickMs: Number(params.get('tick')) || 4000 });
   window.agentBridgeDemo = {
-    host, client, store, view, answers, replies, stops, book,
+    host, client, store, view, answers, replies, stops, launches, launchPanel, book,
     // A new usage report from the host, sent as usage.update.
     usage: (report) => host.setUsage(report),
     // The next answers' outcomes, in order: 'delivered' (the default once these run out),
@@ -199,6 +222,9 @@ async function startDemo() {
     scriptReplies: (...outcomes) => host.scriptReplies(outcomes),
     // The same, for the next stops; none scripted, the host decides as a real one would.
     scriptStops: (...outcomes) => host.scriptStops(outcomes),
+    // The same, for the next launches: 'started' (the default), 'unconfirmed', 'busy', 'refused',
+    // 'failed', an unknown one, or { outcome, reason, drop: true }.
+    scriptLaunches: (...outcomes) => host.scriptLaunches(outcomes),
     upsert: (s) => host.upsert(s),
     remove: (id) => host.remove(id),
     frame: (f) => host.frame(f),
@@ -270,6 +296,8 @@ function begin(account) {
   const answers = new AnswerService({ current });
   const replies = new ReplyService({ current });
   const stops = new StopService({ current });
+  const launches = new LaunchService({ current });
+  const launchPanel = new LaunchPanel($('launch'), { service: launches, jump: showSession });
   answering = () => (hosts.targetId ? { service: answers, replies, stops, hostId: hosts.targetId, capabilities: hosts.capabilities } : null);
   let shownCapabilities = '';
 
@@ -377,6 +405,8 @@ function begin(account) {
     answers.clear();
     replies.clear();
     stops.clear();
+    launches.clear();
+    launchPanel.setTarget(null);
     currentClient = null;
     accountStore.clear();
     connection.stop();
@@ -390,13 +420,17 @@ function begin(account) {
     currentClient = hosts.client;
     const caps = `${hosts.targetId}:${hosts.capabilities.join(' ')}`;
     if (caps !== shownCapabilities) { shownCapabilities = caps; view.refreshQuestions(); }
-    if (hosts.phase === 'open') { answers.ready(); replies.ready(); stops.ready(); }
+    if (hosts.phase === 'open') { answers.ready(); replies.ready(); stops.ready(); launches.ready(); }
     registerHere();
     drawNotify();
     drawMachines();
-    if (!hosts.targetId) { $('sessions').hidden = true; return; }
+    if (!hosts.targetId) { $('sessions').hidden = true; launchPanel.setTarget(null); return; }
     const name = hosts.machine?.name ?? nameOf(hosts.targetId) ?? 'your machine';
     showSessionsFor(name);
+    // While reconnecting the panel stays, with any launch still waiting to be resent; a machine
+    // that comes back without sessions.launch hides it.
+    const launchable = hosts.phase === 'open' ? hosts.capabilities.includes(LAUNCH.capability) : launchPanel.hostId === hosts.targetId;
+    launchPanel.setTarget(launchable ? { hostId: hosts.targetId, machineName: name, load: () => (hosts.client ? hosts.client.launchOptions() : Promise.reject(new Error('not connected'))) } : null);
     switch (hosts.phase) {
       case 'waiting': return setHostState(hosts.error || (hosts.targetOnline ? `Connecting to ${name}…` : `${name} is offline. Its sessions will show when it is back.`));
       case 'opening': return setHostState(`Opening an end-to-end encrypted channel to ${name}…`);
@@ -413,6 +447,7 @@ function begin(account) {
     answers.clear();
     replies.clear();
     stops.clear();
+    launches.clear();
     accountStore.clear();
     connection.stop();
     // Not for long: signing out must not wait on a service worker that isn't running.
@@ -422,7 +457,7 @@ function begin(account) {
 
   // For the E2E tests and debugging from the console. Holds no secrets beyond what the
   // page already has.
-  window.agentBridge = { connection, hosts, store, answers, replies, stops, notices, fleet, book };
+  window.agentBridge = { connection, hosts, store, answers, replies, stops, launches, notices, fleet, book };
   drawNotify();
   connection.start();
 }

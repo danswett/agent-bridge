@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 
 // agent-bridge-console-echo <log> [--exit-on <line>] [--show <file>]
+// agent-bridge-console-echo --args <file> [<argument>...]
 //
 // Writes "ready <pid> <console window>" to <log>, then one line per key event read from
 // its own console input: "key <down> <vk> <char code>". Runs until its console closes or
@@ -10,10 +11,18 @@ using System.Text;
 // CLI exits on /exit. With --show, it first writes that file's text to its console, the way
 // an agent CLI draws a prompt. Every line is flushed as it is written, so a test reads them
 // live.
+//
+// With --args, it writes the arguments it was given after the file, as a JSON array, and
+// exits: a stand-in for an agent CLI being launched, so a test sees exactly what it received.
 internal static unsafe partial class Program
 {
     static int Main(string[] args)
     {
+        if (args.Length >= 2 && args[0] == "--args")
+        {
+            File.WriteAllText(args[1], System.Text.Json.JsonSerializer.Serialize(args[2..]), new UTF8Encoding(false));
+            return 0;
+        }
         if (args.Length is not (1 or 3 or 5)) { return 2; }
         string? exitOn = null, show = null;
         for (var i = 1; i < args.Length; i += 2)

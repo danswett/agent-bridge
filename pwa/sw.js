@@ -15,6 +15,7 @@ const SHELL = [
   './js/ui/dom.js', './js/ui/time.js', './js/ui/fold-store.js', './js/ui/question-view.js',
   './js/ui/reply-view.js', './js/ui/stop-view.js', './js/ui/session-card.js', './js/ui/views.js', './fixtures/sessions-list.json',
   './js/usage.js', './js/fleet.js', './js/ui/usage-view.js',
+  './js/launch.js', './js/launch-service.js', './js/ui/launch-view.js',
 ];
 
 // GitHub Pages lets a browser keep every file for 10 minutes (max-age=600), and a worker's

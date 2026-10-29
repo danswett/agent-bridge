@@ -6,6 +6,7 @@ using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Host.Delivery.Windows;
 using AgentBridge.Protocol;
@@ -28,6 +29,10 @@ using AgentBridge.Transport;
 //   agent-bridge-host whoami                    this device and the account it signed in to
 //   agent-bridge-host usage                     ask each agent for its allowance once, as JSON
 //                                               (serve does it on a timer; docs/protocol/v1-usage.md)
+//   agent-bridge-host workspace list|add|remove the folders sessions may be launched in from
+//                                               other devices, approved here at the machine
+//   agent-bridge-host config show|set|unset     the rest of the profile's config.json
+//                                               (docs/host-config.md, docs/host-launch.md)
 //
 // Roots default to the current user's; --copilot-home, --claude-home and --codex-home
 // point elsewhere. Nothing under them is ever written. sign-in, serve and whoami take
@@ -129,8 +134,17 @@ switch (command)
         }
     case "serve":
         return await ServeAsync();
+    case "workspace" or "config":
+        {
+            // At the machine only: this is how a person approves where sessions may be launched.
+            var rest = new List<string>(arguments);
+            var p = rest.IndexOf("--profile");
+            if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
+            return ConfigCommands.Run(rest, LoadIdentity().Folder, Console.Out, Console.Error);
+        }
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] | whoami");
+        Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key>");
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");
         return command == "help" ? 0 : 2;
 }
@@ -174,7 +188,7 @@ async Task<int> ServeAsync()
     await using var usageMonitor = new UsageMonitor(UsageMonitor.Collectors(usageOptions, usageHttp, new CommandRunner(), log: Log), source, usageOptions,
         agentHaBridge: () => OperatingSystem.IsWindows() ? haProbe!.Active() : null, log: Log);
     usageMonitor.Start();
-    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, new UsageService(usageMonitor, Log));
+    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, new UsageService(usageMonitor, Log), Launcher(source, attachments));
     Log($"watching {source.Snapshot().Count} live session(s); serving as \"{name}\" ({machine.Id[..8]}) on {relayUri.Host}; {push.Subscribers} device(s) to notify");
 
     var backoff = TimeSpan.FromSeconds(1);
@@ -220,6 +234,30 @@ async Task<int> ServeAsync()
     }
     Log("stopped");
     return 0;
+}
+
+// Launching and resuming sessions from other devices (docs/host-launch.md): only in the folders
+// the profile's config.json approves, and on Windows only for now. The agent starts in a console
+// of its own on this desktop, so the host must run here, as the user, unelevated.
+ISessionLauncher Launcher(ISessionSource source, AttachmentStore? attachments)
+{
+    foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
+    IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
+    IAgentHaBridgeProbe probe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : new NoAgentHaBridge();
+    IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector() : new NoScreens();
+    var launcher = new LaunchService(source, probe, injector, starter, new AgentLocator(), new AgencyCatalog(new CommandRunner()), new LaunchServiceOptions
+    {
+        CopilotHome = options.CopilotHome,
+        ClaudeHome = options.ClaudeHome,
+        CodexHome = options.CodexHome,
+        Config = settings.Launch,
+    }, Log, attachments);
+    var why = !settings.Launch.Enabled ? "turned off (launch.enabled)" : starter.Unavailable() ?? probe.Active();
+    var count = settings.Launch.Workspaces.Count;
+    Log(why is null
+        ? $"launching sessions is on: {count} workspace(s) approved{(count == 0 ? "; approve one here with agent-bridge-host workspace add <folder>" : $" ({string.Join(", ", settings.Launch.Workspaces.Select(w => w.Label + (w.Isolate ? " [worktrees]" : "")))})")}"
+        : $"launching sessions is off for now: {why}");
+    return launcher;
 }
 
 static string OsName() =>
@@ -279,3 +317,15 @@ static string Describe(SessionEvent ev) => ev.Data switch
     SessionsSynced y => $"{DateTimeOffset.UtcNow:HH:mm:ss.fff} synced revision {y.Revision}",
     _ => ev.Name,
 };
+
+// Off Windows a launch is refused before anything would read a screen or ask after agent-ha-bridge.
+sealed class NoAgentHaBridge : IAgentHaBridgeProbe
+{
+    public string? Active() => null;
+}
+
+sealed class NoScreens : IConsoleInjector
+{
+    public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, "not supported on this platform"));
+}

@@ -7,6 +7,7 @@
 // it is an in-process fake. Nothing here knows which.
 import { Events, Ops, readAnswerResult, readAttachmentState, readHello, readSession, readStopResult } from './protocol.js';
 import { USAGE, readUsage } from './usage.js';
+import { LAUNCH, readLaunchOptions, readLaunchResult } from './launch.js';
 
 export class HostError extends Error {
   // fromHost: the host answered with ok:false. Otherwise the request never got an answer
@@ -27,6 +28,7 @@ export class HostClient {
   #answerTimeoutMs;
   #replyTimeoutMs;
   #stopTimeoutMs;
+  #launchTimeoutMs;
   #listeners = new Map();
   #lastSeq = null;
   // While a subscription's snapshot is arriving: the ids received since subscribing.
@@ -40,13 +42,14 @@ export class HostClient {
   // than other requests before it counts as lost (and is resent with the same request). A
   // reply to a working session is confirmed only once the agent takes it, which a host
   // waits up to a minute for, so session.reply gets longer still.
-  constructor(transport, { store, timeoutMs = 15000, answerTimeoutMs = Math.max(timeoutMs, 30000), replyTimeoutMs = Math.max(answerTimeoutMs, 90000), stopTimeoutMs = Math.max(answerTimeoutMs, 45000) } = {}) {
+  constructor(transport, { store, timeoutMs = 15000, answerTimeoutMs = Math.max(timeoutMs, 30000), replyTimeoutMs = Math.max(answerTimeoutMs, 90000), stopTimeoutMs = Math.max(answerTimeoutMs, 45000), launchTimeoutMs = Math.max(answerTimeoutMs, 120000) } = {}) {
     this.#transport = transport;
     this.store = store;
     this.#timeoutMs = timeoutMs;
     this.#answerTimeoutMs = answerTimeoutMs;
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#stopTimeoutMs = stopTimeoutMs;
+    this.#launchTimeoutMs = launchTimeoutMs;
     transport.onmessage = (m) => this.#receive(m);
     transport.onclose = (e) => this.#closed(e);
   }
@@ -133,6 +136,16 @@ export class HostClient {
   // than an answer.
   async stop(data, { timeoutMs = this.#stopTimeoutMs } = {}) {
     return readStopResult(await this.request(Ops.sessionStop, data, { timeoutMs }));
+  }
+
+// launch.options: what session.launch can name on this machine now.
+  async launchOptions() { return readLaunchOptions(await this.request(LAUNCH.options)); }
+
+  // Launches or resumes a session: data is session.launch's settings with a request. A host
+  // answers once the session has registered, which it waits up to a minute for, after making a
+  // worktree if the workspace is isolated, so this waits longer than anything else.
+  async launch(data, { timeoutMs = this.#launchTimeoutMs } = {}) {
+    return readLaunchResult(await this.request(LAUNCH.launch, data, { timeoutMs }));
   }
 
   // Starts (or restarts) the subscription. The host answers {revision, count}, then sends
