@@ -223,6 +223,26 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public async Task A_later_process_given_the_pid_of_a_Codex_lock_holder_is_asked_about_and_not_handed_the_session()
+    {
+        using var f = new Fixture();
+        var lockFile = f.CodexLock(A);
+        f.Processes.Run(AgentKind.Codex, 800, "codex.exe --no-daemon", Fixture.T0.AddHours(-2));
+        f.Processes.Holders[lockFile] = [800];
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Single(source.Snapshot());
+
+        // The holder exits leaving its lock behind, and a new Codex takes its pid.
+        f.Processes.Run(AgentKind.Codex, 800, "codex.exe --no-daemon", Fixture.T0.AddMinutes(-1));
+        f.Processes.Holders.Remove(lockFile);
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+        Assert.Equal(2, f.Processes.HolderQueries);
+    }
+
+    [Fact]
     public async Task A_Codex_thread_lock_held_by_the_shared_daemon_or_by_two_terminals_names_no_session()
     {
         using var f = new Fixture();

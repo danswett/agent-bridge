@@ -25,7 +25,7 @@ public sealed class SessionSource : ISessionSource
     readonly Channel<bool> _wake = Channel.CreateBounded<bool>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
     readonly Dictionary<string, (string? Path, DateTimeOffset At)> _transcriptSearch = new(StringComparer.Ordinal);
     // Who holds each Codex thread lock, as the OS last said. Only touched under _pass.
-    readonly Dictionary<string, (DateTime Created, int Pid)> _codexLockHolders = new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, (DateTime Created, int Pid, DateTimeOffset Started)> _codexLockHolders = new(StringComparer.OrdinalIgnoreCase);
     // Sessions the host is ending, and since when. Under _gate.
     readonly Dictionary<string, DateTimeOffset> _ending = new(StringComparer.Ordinal);
     readonly List<FileSystemWatcher> _watchers = [];

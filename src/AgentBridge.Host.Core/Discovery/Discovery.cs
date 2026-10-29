@@ -258,10 +258,10 @@ internal static class CodexLockDiscovery
     // Codex session launched from a device had no card on a machine without that hook.
     public static IReadOnlyList<DiscoveredSession> Find(
         string codexHome, IReadOnlyList<AgentProcess> processes, Func<string, IReadOnlyList<int>> holders,
-        Dictionary<string, (DateTime Created, int Pid)> known, Func<string, string?> findTranscript)
+        Dictionary<string, (DateTime Created, int Pid, DateTimeOffset Started)> known, Func<string, string?> findTranscript)
     {
         var root = Path.Combine(codexHome, "thread-writer-locks");
-        if (processes.Count == 0 || !Directory.Exists(root)) { return []; }
+        if (processes.Count == 0 || !Directory.Exists(root)) { known.Clear(); return []; }
         var running = processes.ToDictionary(p => p.Id);
         var live = new List<DiscoveredSession>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -275,13 +275,19 @@ internal static class CodexLockDiscovery
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
 
             // The holder of one lock file never changes while it exists, so the OS is asked
-            // once per lock, and again only once the process it named has gone.
-            if (!(known.TryGetValue(file, out var cached) && cached.Created == created && running.ContainsKey(cached.Pid)))
+            // once per lock, and again only once the process it named has gone. That process
+            // is its pid *and* start time: a pid reused by a later process would otherwise
+            // inherit the session, and a stop checked against its start time would end it.
+            if (!(known.TryGetValue(file, out var cached) && cached.Created == created
+                && running.TryGetValue(cached.Pid, out var holder) && holder.StartedAt == cached.Started))
             {
+                known.Remove(file);
                 var terminals = holders(file).Where(pid => running.TryGetValue(pid, out var p) && !IsAppServer(p.CommandLine)).Distinct().ToList();
-                if (terminals.Count != 1) { known.Remove(file); continue; }
-                cached = (created, terminals[0]);
-                known[file] = cached;
+                if (terminals.Count != 1) { continue; }
+                // A holder whose start is unknown cannot be told from a successor, so it is
+                // asked about afresh on every pass rather than remembered.
+                if (running[terminals[0]].StartedAt is { } started) { known[file] = (created, terminals[0], started); }
+                cached = (created, terminals[0], default);
             }
             var process = running[cached.Pid];
             live.Add(new DiscoveredSession(id, AgentKind.Codex, findTranscript(id), null, cached.Pid, ProcessStartedAt: process.StartedAt));
