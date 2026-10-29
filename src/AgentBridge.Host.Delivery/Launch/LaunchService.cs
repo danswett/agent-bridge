@@ -58,6 +58,10 @@ public sealed class LaunchServiceOptions
 
     // The clock a worktree's name is stamped from: local time, as agent-ha-bridge names them.
     public Func<DateTime> LocalNow { get; init; } = () => DateTime.Now;
+
+    // Which folders live sessions work in, asked before a finished worktree is removed. Null
+    // is "cannot tell", which removes none.
+    public IWorktreeUsage? WorktreeUsage { get; init; }
 }
 
 // Launches and resumes agent sessions as agent-ha-bridge's Launch button does
@@ -487,7 +491,7 @@ public sealed partial class LaunchService : ISessionLauncher
             string? worktree = null;
             if (plan.Isolated is { } isolated)
             {
-                var made = await Task.Run(() => Worktrees.Create(directory, Config, options.LocalNow));
+                var made = await Task.Run(() => Worktrees.Create(directory, Config, options.LocalNow, options.WorktreeUsage, m => log($"launch {Short(key)}: worktree: {m}")));
                 if (made.Detail.Length > 0) { log($"launch {Short(key)}: worktree: {made.Detail}"); }
                 if (made.Path is null) { return Refused($"Launch refused: requested isolation failed. {made.Problem}"); }
                 directory = made.Path;

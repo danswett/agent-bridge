@@ -382,6 +382,7 @@ ISessionLauncher Launcher(ISessionSource source, AttachmentStore? attachments)
         ClaudeHome = options.ClaudeHome,
         CodexHome = options.CodexHome,
         Config = settings.Launch,
+        WorktreeUsage = new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots),
     }, Log, attachments);
     var why = !settings.Launch.Enabled ? "turned off (launch.enabled)" : starter.Unavailable() ?? probe.Active();
     var count = settings.Launch.Workspaces.Count;

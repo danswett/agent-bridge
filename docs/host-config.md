@@ -58,8 +58,8 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `launch.defaultAgent` | `auto` | `auto` (the first installed of Agency, Copilot, Claude, Codex) or one of `agency`, `copilot`, `claude`, `codex` |
 | `launch.permissions` | `ask` | What a launch that does not say gets: `ask` keeps permission prompts; `allowAll` launches without them. A client may choose either per launch |
 | `launch.worktrees.root` | `~/repos/wt` | Where isolated sessions' worktrees go. Shared with agent-ha-bridge and every other session: this host only ever adds its own there |
-| `launch.worktrees.limit` | `10` | Worktrees this host made, per repository, before isolated launches there are refused. `0` is no cap |
-| `launch.worktrees.idleHours` | `12` | Reserved for a reclaimer; this host has none yet and never removes a worktree |
+| `launch.worktrees.limit` | `10` | Worktrees this host made, per repository, before isolated launches there are refused, counted after finished ones are removed. `0` is no cap |
+| `launch.worktrees.idleHours` | `12` | How long after this host made a worktree it may be removed once finished: clean (no uncommitted, untracked or ignored files but two named build outputs), detached, nothing ahead of its base, unlocked, and no live session in it ([host-launch.md](host-launch.md#reclaiming-finished-worktrees)). `0` removes a finished one at the next isolated launch |
 | `launch.profiles` | `[]` | Agency profiles to offer: empty offers every one Agency lists; otherwise those of them named here (all, if none of them is listed) |
 | `launch.defaultProfile` | first | The profile a launch gets when it names none |
 | `launch.resumeCount` | `12` | How many resumable sessions to offer, up to 50; `0` offers none |
