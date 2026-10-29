@@ -212,8 +212,9 @@ public sealed class HostConnection : IAsyncDisposable
             await foreach (var ev in ch.Events.ReadAllAsync(ct))
             {
                 // A gap means the buffer dropped events while the UI was slow: the sessions
-                // are subscribed again, which resends them all.
-                if (last != 0 && ev.Seq != last + 1) { gaps.Release(); }
+                // are subscribed again, which resends them all. Each connection numbers its
+                // events from 1, so a first event above 1 is a gap too.
+                if (ev.Seq != last + 1) { gaps.Release(); }
                 last = ev.Seq;
                 Apply(ev);
             }

@@ -73,6 +73,27 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Events_lost_before_the_first_one_arrives_are_noticed_too()
+    {
+        await using var fresh = new FakeHost();
+        fresh.Sessions.Add(Make.Session("s1"));
+        var skipped = 0;
+        // As if the buffer overflowed before the app read anything: the first event it sees is 4.
+        fresh.On(Ops.Hello, _ =>
+        {
+            if (Interlocked.Exchange(ref skipped, 1) == 0)
+            {
+                foreach (var ch in fresh.Channels.OfType<LocalChannel>().Where(c => c.IsOpen).Distinct()) { ch.SkipEventSeq(3); }
+            }
+            return new HelloResult(1, new MachineInfo("host-id", "Test PC", "windows", "0.1.0"), [.. fresh.Capabilities]);
+        });
+        fresh.Start();
+        await using var watching = fresh.Connect();
+
+        await Wait.UntilAsync(() => fresh.Sent(Ops.SessionsSubscribe).Count >= 2, "the sessions to be subscribed again");
+    }
+
+    [Fact]
     public async Task An_open_connection_notices_when_the_host_starts_or_stops_taking_answers()
     {
         await using var watching = new HostConnection(ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher())
