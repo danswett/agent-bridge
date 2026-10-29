@@ -68,16 +68,17 @@ tool refuses any Home Assistant URL that is not loopback before making a request
 * **Phone**: a person with the iPhone.
 * **Machine**: the agent's own terminal on VM-M, through Hyperloop.
 
-**Needs** marks a step that depends on work not yet on `main`, or not yet deployed. Run it
-when that work has merged; until then, record it with
-`note --result manual --detail "needs #NN"`. The interfaces assumed are the ones stated in
-each issue or PR:
+**Needs** names the work a step depends on. If that work is not on `main` yet, or not
+deployed, when you reach the step, record it with
+`note --result manual --detail "needs #NN"` and run it once the work lands. The table says
+which have merged. For the rest, the interfaces assumed are the ones stated in each issue or
+PR:
 
 | Mark | Work | Interface assumed |
 |---|---|---|
 | **#37** | Hook intake | The host consumes `agent-bridge-hook`'s spool and keeps its heartbeat. It writes the Claude and Codex registrations and the Codex approval marker. `agent-bridge-host hook --fallback` prints the fixed safe reply |
 | **#38** | Migrate and roll back | `agent-bridge-host migrate [--dry-run]` and `agent-bridge-host rollback`. Migrate disables (not deletes) `AgentBridgeDaemon_<id>`, moves the hook fallback to the host, imports `newSession.*` into `launch.*`, refuses on the publication writer, and never writes `~/.agent-ha-bridge`. Rollback restores registrations, instruction blocks and config byte for byte |
-| **#40** | Shadow diff | A read-only diff of the host's sessions against agent-ha-bridge's recorder (`serve --shadow` or a separate command), reporting "clean" or each disagreement |
+| **#40** | Shadow comparison (#63, merged) | `agent-bridge-host shadow run\|once\|summary` ([host-shadow.md](host-shadow.md)): read-only, from the daemon's own files, with a daily verdict `clean`, `mismatches` or `no data` |
 | **#41** | Claude and Codex replies | `sessions.reply` delivers to Claude and Codex |
 | **#43** | Discovery holds | An incomplete pass holds removal, resume offers and reclaim |
 | **#44** | Sessions cannot manage their host | `host.restart` and `host.stop` from a process inside a session the host can see are refused |
@@ -122,6 +123,8 @@ $base = 'C:\rehearsal\evidence\baseline-S1.json'
   (App or PWA) exactly as written, because the checks look for their words.
 * Times are Pacific. Nothing here prints a token. The tool hashes agent-ha-bridge's files
   and never reads their contents into the evidence.
+* Words containing curly quotes (“ ”) go in single quotes, as E2-01 and E2-04 do. PowerShell
+  treats curly double quotes as delimiters inside a double-quoted string.
 
 ## Phase A: the machines (once)
 
@@ -165,7 +168,7 @@ Volatile files found so far: none recorded yet (fill in after the first run).
 | **C-02** | §13 "Never writes" | Tool | G5 keeps the host read-only while the daemon runs | Reading only; no answer, reply, end or launch is offered | `agent-bridge-rehearsal host --expect-read-only --expect-cap sessions.read --expect-no-cap sessions.answer --expect-no-cap sessions.reply --expect-no-cap sessions.stop --expect-no-cap sessions.launch --step C-02` | |
 | **C-03** | §13 "Never writes" | Tool | Leave it running for five minutes with a Copilot session open, then end the session | Not a byte of agent-ha-bridge's install, hooks or agent config changed | `agent-bridge-rehearsal baseline compare --baseline $base --step C-03` | |
 | **C-04** | §17 "Only the user" | PWA, Phone | Sign the PWA in on VM-W and on the iPhone, with the same account | Both list REHEARSAL-M | Screenshot of the PWA's machine list: `agent-bridge-rehearsal note --step C-04 --result pass --detail "listed on both" --screenshot <file>` | |
-| **S-01** | §13 "Copilot sessions from live locks" | Tool (VM-M) | **Optional, before migrating:** run the shadow diff for at least an hour of normal use | The report says "clean", or lists each disagreement | `agent-bridge-rehearsal note --step S-01 --result pass --detail "<report summary>"` | #40 |
+| **S-01** | §13 "Copilot sessions from live locks" | Tool (VM-M) | **Optional, before migrating**, with agent-ha-bridge running: `agent-bridge-host shadow once`, then `agent-bridge-host shadow run` through at least an hour of use with a session of each agent, then `agent-bridge-host shadow summary --days 1` | `once` exits 0. Today's verdict is `clean`, or each mismatch is listed and explained | `agent-bridge-rehearsal note --step S-01 --result pass --detail "<verdict, minutes compared, mismatches by kind>"` | #40 |
 
 ## Phase D: migrate
 
@@ -216,10 +219,10 @@ Mark before each: `agent-bridge-rehearsal mark $cp`.
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
-| **E2-01** | §2 "Free-text ask_user", §2 "Non-Latin-1", §2 "An answer counts only", §10 "A question reaches the phone" | Machine, Phone | Type **P1**. On the phone, tap the notification and answer `Grüße — “quoted” 你好 🚀` | Notified with the question; the tap opens the card. Copilot records exactly those words | `agent-bridge-rehearsal expect answer $cp --text "Grüße — “quoted” 你好 🚀" --step E2-01` | |
+| **E2-01** | §2 "Free-text ask_user", §2 "Non-Latin-1", §2 "An answer counts only", §10 "A question reaches the phone" | Machine, Phone | Type **P1**. On the phone, tap the notification and answer `Grüße — “quoted” 你好 🚀` | Notified with the question; the tap opens the card. Copilot records exactly those words | `agent-bridge-rehearsal expect answer $cp --text 'Grüße — “quoted” 你好 🚀' --step E2-01` | |
 | **E2-02** | §2 "Single choice", §10 "Desktop notifications" | Machine, App | Type **P3**. Answer **beta** from the toast's button | Recorded as `beta`; the toast is withdrawn | `agent-bridge-rehearsal expect answer $cp --text beta --step E2-02` | |
 | **E2-03** | §2 "Forms of any number", §2 "Multi-select checkboxes", §2 "Question forms on the phone" | Machine, PWA | Type **P4**. Answer colour **green**, confirm **yes**, name `Zoë 🚀`, count **3**, extras **x** and **z** | Each field recorded as given | `agent-bridge-rehearsal expect answer $cp --field colour=green --field confirm=true --field "name=Zoë 🚀" --field count=3 --field extras=x,z --step E2-03` | |
-| **E2-04** | §2 "Other (type your answer)" | Machine, PWA | Type **P5**. Answer through "Other" with `“smart” words` | The words recorded, not an option | `agent-bridge-rehearsal expect answer $cp --text "“smart” words" --step E2-04` | |
+| **E2-04** | §2 "Other (type your answer)" | Machine, PWA | Type **P5**. Answer through "Other" with `“smart” words` | The words recorded, not an option | `agent-bridge-rehearsal expect answer $cp --text '“smart” words' --step E2-04` | |
 | **E2-05** | §2 "Other inside", §2 "The older question / choices format" | Machine, PWA | Type **P4o** (a form whose choice allows Other) | Other inside the form is not offered for typing; the reason is shown. The card says to answer at the machine. Answer at the machine | `agent-bridge-rehearsal note --step E2-05 --result pass --detail "…" --screenshot <file>` | |
 | **E2-06** | §2 "The terminal and the remote", §10 "Answered anywhere" | Machine, PWA, Phone | Type **P3**. Answer **alpha** at the terminal, then press **gamma** on the PWA | The PWA's press is stale, and nothing is typed. The phone's notice is withdrawn | `agent-bridge-rehearsal expect answer $cp --text alpha --step E2-06`; screenshot of the stale result | |
 | **E2-07** | §2 "One typing attempt", §2 "A resent request", §14 "Restarted after a crash" | Machine, PWA, Tool | Type **P1**. On the PWA send `rehearsal-once`, and while it is being typed restart the host from the app. After the restart, send it again | Typed once: exactly one answer recorded, and the words never arrive a second time as a prompt. The second send returns the first outcome. The host is back within a minute | `agent-bridge-rehearsal expect answer $cp --text rehearsal-once --expect-once --step E2-07`, then `agent-bridge-rehearsal host --expect-delivering --timeout 60 --step E2-07b` | |

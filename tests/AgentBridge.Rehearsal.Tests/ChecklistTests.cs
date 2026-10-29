@@ -75,6 +75,13 @@ public class ChecklistTests
     }
 
     [Fact]
+    public void No_command_puts_curly_quotes_inside_double_quotes_where_PowerShell_would_split_on_them()
+    {
+        var bad = Checklist.Commands(Doc).Where(c => System.Text.RegularExpressions.Regex.IsMatch(c, "\"[^\"]*[\u201C\u201D][^\"]*\"")).ToList();
+        Assert.True(bad.Count == 0, string.Join("\n", bad));
+    }
+
+    [Fact]
     public void A_tool_name_inside_a_path_is_not_read_as_a_command_and_quoted_words_stay_whole()
     {
         Assert.Empty(Checklist.Commands("`tools/agent-bridge-rehearsal x`"));
