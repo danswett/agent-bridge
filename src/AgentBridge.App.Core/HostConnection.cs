@@ -35,6 +35,8 @@ public sealed class HostConnection : IAsyncDisposable
 
     // How long to wait between attempts while the host is not there. Tests shorten it.
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromSeconds(2);
+    // How often an open connection asks the host again what it offers. Tests shorten it.
+    public TimeSpan CapabilityRefresh { get; init; } = TimeSpan.FromSeconds(10);
 
     // Read on the UI thread.
     public LinkState State { get; private set; } = LinkState.Connecting;
@@ -102,12 +104,24 @@ public sealed class HostConnection : IAsyncDisposable
                 ui.Post(() => SetState(LinkState.Connected, null));
                 Volatile.Read(ref connected).TrySetResult();
                 log($"connected to the host ({hello.Machine.Name}, {hello.Machine.HostVersion})");
+                // The host's capabilities change without a new connection (agent-ha-bridge
+                // starting or stopping takes answering away or gives it back), and hello is
+                // computed afresh each time, so it is asked again now and then. The gap wait is
+                // kept across turns: a fresh one each time would leave the old one to swallow
+                // the next gap.
+                Task? again = null;
                 while (true)
                 {
-                    var closed = ch.Closed;
-                    var again = gaps.WaitAsync(ct);
-                    if (await Task.WhenAny(closed, again, pump) != again) { break; }
-                    await SubscribeSessionsAsync(ch, ct);
+                    again ??= gaps.WaitAsync(ct);
+                    var tick = Task.Delay(CapabilityRefresh, ct);
+                    var done = await Task.WhenAny(ch.Closed, again, pump, tick);
+                    if (done == again)
+                    {
+                        again = null;
+                        await SubscribeSessionsAsync(ch, ct);
+                    }
+                    else if (done == tick) { await RefreshAsync(ch, ct); }
+                    else { break; }
                 }
                 log($"connection to the host ended: {ch.CloseReason?.Message}");
             }
@@ -139,6 +153,25 @@ public sealed class HostConnection : IAsyncDisposable
         // The snapshot is marked before the request goes, so no upsert of it is missed.
         ui.Post(Sessions.BeginSnapshot);
         await ch.CallAsync<SubscribeResult>(Ops.SessionsSubscribe, ct: ct);
+    }
+
+    // What the host offers now, and its status (whose agent-ha-bridge note the host works out
+    // when asked rather than announcing). Applied only when something changed.
+    async Task RefreshAsync(LocalChannel ch, CancellationToken ct)
+    {
+        var hello = await ch.HelloAsync(ct);
+        HostStatus? status = hello.Capabilities.Contains(HostOps.Capability) ? await ch.CallAsync<HostStatus>(HostOps.Status, ct: ct) : null;
+        ui.Post(() =>
+        {
+            var changed = false;
+            if (Hello is not null && !Hello.Capabilities.SequenceEqual(hello.Capabilities)) { Hello = hello; changed = true; }
+            if (status is not null && Status is { } now && (now.AgentHaBridge != status.AgentHaBridge || now.RestartRequired != status.RestartRequired))
+            {
+                Status = status;
+                changed = true;
+            }
+            if (changed) { Changed?.Invoke(); }
+        });
     }
 
     async Task PumpAsync(LocalChannel ch, SemaphoreSlim gaps, CancellationToken ct)

@@ -59,14 +59,32 @@ public sealed class ToastPlanner
     public Func<string?> MachineName { get; init; } = () => null;
 
     // The sessions as the app first hears of them: a turn that finished before is not news, but
-    // a question already pending is notified, as the host does after a restart.
+    // a question already pending is notified, as the host does after a restart. Sessions it
+    // knew before a reconnect are brought up to date: a toast whose question was answered
+    // meanwhile is withdrawn, and a question that arrived meanwhile is notified.
     public void Baseline(IEnumerable<Session> live)
     {
+        var now = time.GetUtcNow();
         foreach (var s in live)
         {
-            if (sessions.ContainsKey(s.Id)) { continue; }
-            var t = sessions[s.Id] = new Tracked { Last = s };
-            if (s.Question is { } q) { t.Due = (ToastKind.Question, time.GetUtcNow() + QuestionDelay, q.Id); }
+            if (!sessions.TryGetValue(s.Id, out var t))
+            {
+                t = sessions[s.Id] = new Tracked { Last = s };
+                if (s.Question is { } first) { t.Due = (ToastKind.Question, now + QuestionDelay, first.Id); }
+                continue;
+            }
+            t.Last = s;
+            if (t.Shown is { } shown && s.Question?.Id != shown)
+            {
+                sink.Withdraw(Tag(s.Id));
+                t.Shown = null;
+            }
+            if (s.Question is { } q && !t.Notified.Contains(q.Id))
+            {
+                if (t.Due is not { Kind: ToastKind.Question } d || d.Question != q.Id) { t.Due = (ToastKind.Question, now + QuestionDelay, q.Id); }
+            }
+            else if (t.Due is { Kind: ToastKind.Question } pending && s.Question?.Id != pending.Question) { t.Due = null; }
+            else if (t.Due is { Kind: ToastKind.Finished } && s.Status != SessionStatus.Idle) { t.Due = null; }
         }
     }
 

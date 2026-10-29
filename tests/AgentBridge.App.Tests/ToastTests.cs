@@ -54,6 +54,26 @@ public sealed class ToastTests
     }
 
     [Fact]
+    public void After_a_reconnect_a_question_answered_meanwhile_loses_its_toast_and_one_asked_meanwhile_gets_one()
+    {
+        var p = Planner();
+        p.Baseline([Make.Session(question: Make.Choice("q1")), Make.Session("s2", response: "Done.")]);
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        // The host was away; its snapshot on reconnecting is a baseline again.
+        p.Baseline([Make.Session(), Make.Session("s2", question: Make.Choice("q9"), response: "Done.")]);
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+
+        Assert.Equal(["s1"], sink.Withdrawn);
+        Assert.Equal(2, sink.Shown.Count);
+        Assert.Equal("s2", sink.Shown[1].Tag);
+        Assert.Contains("q9", sink.Shown[1].Xml);
+    }
+
+    [Fact]
     public void A_question_answered_within_two_seconds_raises_nothing_and_one_answered_later_withdraws_its_toast()
     {
         var p = Planner();

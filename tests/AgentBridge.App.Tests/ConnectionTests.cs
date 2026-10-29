@@ -69,6 +69,27 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_open_connection_notices_when_the_host_starts_or_stops_taking_answers()
+    {
+        await using var watching = new HostConnection(ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher())
+        {
+            RetryDelay = TimeSpan.FromMilliseconds(100),
+            CapabilityRefresh = TimeSpan.FromMilliseconds(100),
+        };
+        watching.Start();
+        await Wait.UntilAsync(() => watching.Can(Capabilities.SessionsAnswer), "the first hello");
+
+        // agent-ha-bridge started for this user: the host only watches.
+        host.Status = FakeHost.StatusOf(agentHaBridge: "agent-ha-bridge is running");
+        host.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("host-id", "Test PC", "windows", "0.1.0"), [Capabilities.SessionsRead, HostOps.Capability]));
+        await Wait.UntilAsync(() => !watching.Can(Capabilities.SessionsAnswer) && watching.Status?.AgentHaBridge is not null, "answering to be taken away");
+
+        host.Status = FakeHost.StatusOf();
+        host.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("host-id", "Test PC", "windows", "0.1.0"), [.. host.Capabilities]));
+        await Wait.UntilAsync(() => watching.Can(Capabilities.SessionsAnswer) && watching.Status?.AgentHaBridge is null, "answering to come back");
+    }
+
+    [Fact]
     public async Task After_the_host_restarts_the_app_reconnects_and_drops_sessions_that_ended_meanwhile()
     {
         await Wait.UntilAsync(() => connection.Sessions.Get("s1") is not null, "the snapshot");
