@@ -192,9 +192,13 @@ public sealed class PushNotifier : IAsyncDisposable
         }
     }
 
-    // push.subscribe, push.unsubscribe and push.list; null for any other op.
-    public Task<object?> HandleAsync(SecureChannel channel, string op, JsonElement data) =>
-        Task.FromResult(op.StartsWith("push.", StringComparison.Ordinal) ? Handle(PushPeer.Of(channel), op, data) : null);
+    // push.subscribe, push.unsubscribe and push.list; null for any other op. Only a channel
+    // through the relay can carry them: the account boundary they rely on is the relay's, and
+    // an app on this machine needs no Web Push to hear from its own host.
+    public Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data) =>
+        Task.FromResult(!op.StartsWith("push.", StringComparison.Ordinal) ? null
+            : channel is SecureChannel secure ? Handle(PushPeer.Of(secure), op, data)
+            : throw new InvalidOperationException("notifications are for devices that reach this host through the relay"));
 
     internal object? Handle(PushPeer peer, string op, JsonElement data)
     {

@@ -64,6 +64,19 @@ public sealed class IdentityTests : IDisposable
         Assert.Null(other.Account);
     }
 
+    [Fact]
+    public void A_running_host_picks_up_a_sign_in_made_by_another_process()
+    {
+        var host = Identity.Load("p1", KeyStorage.File, root);
+        Assert.False(host.ReloadAccount());
+
+        Identity.Load("p1", null, root).Save(new SignInResult("token", "1", "octo"));
+
+        Assert.True(host.ReloadAccount());
+        Assert.Equal("octo", host.Account!.Login);
+        Assert.False(host.ReloadAccount());
+    }
+
     [NotWindowsFact("Windows keeps the key in the TPM or DPAPI, under the user's own %LOCALAPPDATA%")]
     public void A_new_profile_off_Windows_keeps_its_key_and_token_where_only_the_owner_can_read_them()
     {

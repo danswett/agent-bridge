@@ -29,7 +29,7 @@ public sealed class SessionService
     readonly ISessionStopper? stops;
     readonly UsageService? usage;
     readonly ISessionLauncher? launcher;
-    readonly ConcurrentDictionary<SecureChannel, Subscriber> subscribers = new();
+    readonly ConcurrentDictionary<IProtocolChannel, Subscriber> subscribers = new();
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
@@ -53,7 +53,7 @@ public sealed class SessionService
     // Each feed as it is made, so tests can check a replaced one is let go.
     internal event Action<object>? FeedCreated;
 
-    public async Task<object?> HandleAsync(SecureChannel channel, string op, JsonElement data)
+    public async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data)
     {
         switch (op)
         {
@@ -61,7 +61,7 @@ public sealed class SessionService
                 // Computed for each hello, so it says what is true now: agent-ha-bridge
                 // starting for this user takes sessions.answer and sessions.reply away until
                 // it stops.
-                return new HelloResult(1, machine with { Sessions = source.Snapshot().Count }, Offered());
+                return new HelloResult(1, machine with { Sessions = source.Snapshot().Count }, Offered(channel));
             case Ops.SessionAnswer:
                 return await AnswerAsync(channel, data);
             case Ops.SessionReply:
@@ -95,7 +95,7 @@ public sealed class SessionService
     // A channel has one subscription. A second subscribe (a client recovering from a gap)
     // stops the first before answering, so nothing from the old one can follow the new
     // response, and the new snapshot covers whatever the old one never sent.
-    async Task<object> SubscribeAsync(SecureChannel channel)
+    async Task<object> SubscribeAsync(IProtocolChannel channel)
     {
         var state = subscribers.GetOrAdd(channel, _ => new Subscriber());
         // Cleanup is registered once per channel and finds whatever feed is current then.
@@ -129,9 +129,9 @@ public sealed class SessionService
         finally { state.Gate.Release(); }
     }
 
-    async Task EndAsync(SecureChannel channel, Subscriber state)
+    async Task EndAsync(IProtocolChannel channel, Subscriber state)
     {
-        subscribers.TryRemove(new KeyValuePair<SecureChannel, Subscriber>(channel, state));
+        subscribers.TryRemove(new KeyValuePair<IProtocolChannel, Subscriber>(channel, state));
         // Under the lock, so a subscribe already running finishes first and its feed is the
         // one stopped here. The lock itself is left for the GC rather than disposed: a
         // subscribe still waiting on it would otherwise throw instead of finding the channel
@@ -155,7 +155,7 @@ public sealed class SessionService
         public int Registered;
     }
 
-    async Task<AnswerResult> AnswerAsync(SecureChannel channel, JsonElement data)
+    async Task<AnswerResult> AnswerAsync(IProtocolChannel channel, JsonElement data)
     {
         // A request without an id, question or request UUID fails as a request; anything
         // that can be read gets an outcome.
@@ -168,7 +168,7 @@ public sealed class SessionService
         return result;
     }
 
-    List<string> Offered()
+    List<string> Offered(IProtocolChannel channel)
     {
         List<string> offered = [Capabilities.SessionsRead];
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
@@ -176,13 +176,14 @@ public sealed class SessionService
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }
         if (attachments is not null && replies?.TakesAttachments == true) { offered.Add(Capabilities.SessionsAttach); }
         if (stops?.Available == true) { offered.Add(Capabilities.SessionsStop); }
-        if (push is not null) { offered.Add(Capabilities.Push); }
+        // Web Push is for devices through the relay; an app on this machine has its own toasts.
+        if (push is not null && channel is SecureChannel) { offered.Add(Capabilities.Push); }
         if (usage is not null) { offered.Add(UsageProtocol.Capability); }
         if (launcher?.Available == true) { offered.Add(LaunchProtocol.Capability); }
         return offered;
     }
 
-    async Task<ReplyResult> ReplyAsync(SecureChannel channel, JsonElement data)
+    async Task<ReplyResult> ReplyAsync(IProtocolChannel channel, JsonElement data)
     {
         // As for answers: a request without an id or request UUID fails as a request, and
         // anything that can be read gets an outcome.
@@ -194,7 +195,7 @@ public sealed class SessionService
 
     // attachment.*: the files a reply will carry, held for the device that sends them. A check
     // that fails fails the request, with the reason.
-    object Attach(SecureChannel channel, string op, JsonElement data)
+    object Attach(IProtocolChannel channel, string op, JsonElement data)
     {
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException($"{op} needs an attachment"); }
         return op switch
@@ -215,7 +216,7 @@ public sealed class SessionService
         return await stops.StopAsync(request);
     }
 
-async Task<LaunchResult> LaunchAsync(SecureChannel channel, JsonElement data)
+async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
     {
         // As for answers: a request without a request UUID fails as a request, and anything
         // that can be read gets an outcome. The whole request is bounded, prompt and all.
@@ -238,7 +239,7 @@ async Task<LaunchResult> LaunchAsync(SecureChannel channel, JsonElement data)
 
         // Sends the subscription's events, in order, until the channel ends or it is
         // replaced. The channel numbers them: seq continues across subscriptions.
-        public async Task RunAsync(SecureChannel channel, Action<string> log)
+        public async Task RunAsync(IProtocolChannel channel, Action<string> log)
         {
             if (Interlocked.Exchange(ref started, 1) == 1) { return; }
             try

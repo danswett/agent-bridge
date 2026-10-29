@@ -69,6 +69,22 @@ public sealed class Identity
         WritePrivate(Path.Combine(Folder, "account.json"), JsonSerializer.Serialize(account));
     }
 
+    // Reads account.json again, for a long-running host: another process (the CLI's sign-in)
+    // may have signed this profile in since. True when the account changed.
+    public bool ReloadAccount()
+    {
+        SignInResult? now;
+        try
+        {
+            var file = Path.Combine(Folder, "account.json");
+            now = File.Exists(file) ? JsonSerializer.Deserialize<SignInResult>(File.ReadAllText(file)) : null;
+        }
+        catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { return false; }
+        if (now is null || now == Account) { return false; }
+        Account = now;
+        return true;
+    }
+
     static void CreatePrivateDirectory(string path)
     {
         if (OperatingSystem.IsWindows()) { Directory.CreateDirectory(path); }

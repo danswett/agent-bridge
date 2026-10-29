@@ -20,7 +20,7 @@ public sealed class PeerMismatchException() : CryptographicException("the peer's
 // An end-to-end encrypted conversation with one peer device, carried as opaque frames
 // through the relay. Requests, responses and events are JSON inside Noise transport
 // messages; the relay sees none of it.
-public sealed class SecureChannel
+public sealed class SecureChannel : IProtocolChannel
 {
     // One message is one Noise transport message: its ciphertext, plaintext plus the tag,
     // must fit NoiseConst.MaxMessage. A larger one would be refused by the relay (4013),

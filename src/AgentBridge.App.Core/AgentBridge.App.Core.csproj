@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Everything the Windows app does that is not drawing: its connection to the host, the
+       view models behind each card and page, toasts as plans, the host's lifecycle and the
+       Markdown model. Platform-neutral (Windows-only pieces are behind interfaces or OS
+       checks), so its tests run anywhere and the SwiftUI app has a reference to follow. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AgentBridge.App.Core</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AgentBridge.App.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Markdig" Version="0.43.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The protocol's example sessions, which the demo host serves. -->
+    <EmbeddedResource Include="..\..\docs\protocol\examples\sessions-list.json" LogicalName="AgentBridge.App.Core.sessions-list.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AgentBridge.Protocol\AgentBridge.Protocol.csproj" />
+    <ProjectReference Include="..\AgentBridge.Local\AgentBridge.Local.csproj" />
+  </ItemGroup>
+
+</Project>
