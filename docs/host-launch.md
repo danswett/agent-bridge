@@ -145,7 +145,7 @@ the primary checkout.
 | Any uncommitted or untracked file | `it has uncommitted or untracked files` |
 | Any ignored file except the build outputs named below | `it has ignored files, which may be someone's local data` |
 | A branch is checked out | `a branch is checked out in it` |
-| `HEAD` has a commit that is not in the base | `it has commits that are not in the base` |
+| `HEAD` has a commit that is not in the base (resolved to a commit in the repository, so with no `origin` it is the checkout's `HEAD`; agent-ha-bridge reads `HEAD` inside the worktree there, which finds nothing ahead) | `it has commits that are not in the base` |
 | Its marker's time is missing or unreadable | `its ownership marker has no readable time` |
 | Made less than `launch.worktrees.idleHours` ago | `it is younger than launch.worktrees.idleHours` |
 | Git cannot answer any of these | `its git state cannot be read` |

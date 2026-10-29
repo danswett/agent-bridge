@@ -232,7 +232,17 @@ public static class Worktrees
     static int ReclaimHeld(string repository, double idleHours, IWorktreeUsage? usage, Action<string> log, Func<DateTimeOffset> now)
     {
         if (CommonDir(repository) is not { } common) { log("worktrees were retained: the repository's git folder cannot be read"); return 0; }
-        if (BaseRef(repository) is not { } baseRef) { log("worktrees were retained: the repository has no readable base to compare them with"); return 0; }
+        // As a commit id, resolved here in the repository: the fallback base is HEAD, and read
+        // inside a worktree that would be the worktree's own, so HEAD..HEAD found nothing ahead
+        // and a worktree holding the only copy of a commit was removed. (agent-ha-bridge passes
+        // the name through, and has that gap without an origin.)
+        if (BaseRef(repository) is not { } baseName
+            || Git.Run(repository, ["rev-parse", "--verify", "--quiet", baseName + "^{commit}"]) is not { Ok: true } resolved
+            || resolved.Output.Trim() is not { Length: > 0 } baseRef)
+        {
+            log("worktrees were retained: the repository has no readable base to compare them with");
+            return 0;
+        }
         if (Registered(repository) is not { } registered) { log("worktrees were retained: the repository's worktrees cannot be listed"); return 0; }
         var mine = registered.Where(IsManaged).ToList();
         if (mine.Count == 0) { return 0; }

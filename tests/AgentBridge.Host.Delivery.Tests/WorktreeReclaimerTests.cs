@@ -184,6 +184,26 @@ public sealed class WorktreeReclaimerTests : IDisposable
     }
 
     [Fact]
+    public void Without_an_origin_the_base_is_the_checkouts_own_commit_so_a_commit_in_the_worktree_still_counts()
+    {
+        // The base falls back to HEAD; read in the worktree, that would be the worktree's own.
+        var local = Path.Combine(root, "local");
+        Git(root, "init", "-q", "-b", "main", local);
+        File.WriteAllText(Path.Combine(local, "README.md"), "hello\n");
+        Git(local, "add", ".");
+        Commit(local, "one");
+        work = local;
+        var committed = Tree();
+        File.WriteAllText(Path.Combine(committed, "new.txt"), "work");
+        Git(committed, "add", "new.txt");
+        Commit(committed, "work");
+
+        Assert.Equal(0, Reclaim());
+        Assert.True(File.Exists(Path.Combine(committed, "new.txt")));
+        Assert.EndsWith("it has commits that are not in the base", Retained(committed));
+    }
+
+    [Fact]
     public void A_locked_worktree_is_retained_and_its_lock_is_left_alone()
     {
         var locked = Tree();
