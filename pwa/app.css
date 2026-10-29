@@ -355,6 +355,17 @@ summary {
 .text-input[readonly] { background: var(--surface-2); }
 .text-input:disabled { background: var(--surface-2); color: var(--muted); }
 
+/* ---- starting a session: agent-ha-bridge's launch card ---- */
+.launch h2 { margin: 0; }
+.launch-body { margin-top: 6px; }
+.launch-form { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
+.launch-form > .row, .launch-field:has(textarea), .launch-field:has(select[name="resume"]), .launch-field:has(select[name="workspace"]) { grid-column: 1 / -1; }
+.launch-field { display: grid; gap: 4px; min-width: 0; }
+.launch-field[hidden] { display: none; }
+.launch-label { font-weight: 600; font-size: .92rem; }
+.launch-count { margin: 0; }
+.launch-count.warn { color: var(--danger); }
+@media (max-width: 360px) { .launch-form { grid-template-columns: 1fr; } }
 /* ---- replying ---- */
 .reply-slot:empty { display: none; }
 .reply { margin: 12px 0 4px; padding-top: 10px; border-top: 1px solid var(--border); }

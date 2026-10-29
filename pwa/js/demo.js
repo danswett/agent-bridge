@@ -8,7 +8,8 @@
 //   upsert(session), remove(id), frame(rawFrame), calls (ops received), pause(),
 //   script(...outcomes) for the next answers, scriptReplies(...outcomes) for the next replies,
 //   host.attachments and host.attachmentLog for the files sent ahead of replies,
-//   scriptStops(...outcomes) for the next presses of End session
+//   scriptStops(...outcomes) for the next presses of End session,
+//   scriptLaunches(...outcomes) for the next launches, host.launchOptions for what it offers
 //
 // It answers questions as a host would: the same validation (answers.js mirrors the C#
 // Answers.Check), stale when the session is no longer asking, a request seen before gets
@@ -17,12 +18,14 @@
 // asks a question and for agents a host can't reply to yet (only Copilot), and a typed one
 // shows as the session's latest message, with the session at work on it. End session as a
 // host ends one: a session that is not idle takes a second press carrying the token the first
-// was given, then shows as ending and goes. Outcomes are delivered unless a test or curious
-// person scripts others.
+// was given, then shows as ending and goes. A launch as a host launches one (launch.js mirrors
+// LaunchProtocol.Check): refused for what this machine does not offer, then started, with the new
+// session upserted. Outcomes are delivered unless a test or curious person scripts others.
 import { checkAnswer } from './answers.js';
 import { checkReply, typedForm } from './replies.js';
 import { readQuestion } from './protocol.js';
 import { USAGE } from './usage.js';
+import { LAUNCH, checkLaunch, flattenPrompt } from './launch.js';
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const now = () => new Date().toISOString();
@@ -71,18 +74,24 @@ export class DemoHost {
   stopLog = [];
   #stopScript = [];
   #arms = new Map();
+  // session.launch: outcomes by request, and every request as received.
+  launches = new Map();
+  launchLog = [];
+  #launchScript = [];
+  launchOptions = demoLaunchOptions();
 
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
   // replying: false, one that can't reply; attaching: false, one that takes no files;
   // stopping: false, one that can't end sessions; approving: false, one with approving
   // Copilot's permission prompts turned off. stopWindowMs is how long a first press of
-  // a busy session waits for its second. usage: false plays a host from before usage.get.
-  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true } = {}) {
+  // a busy session waits for its second. usage: false plays a host from before usage.get;
+  // launching: false, one that can't launch sessions.
+  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering } = {}) {
     this.machine = { id: 'demo', name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : [])];
     this.sessions = new Map();
     for (const s of fixture.sessions ?? []) { this.sessions.set(s.id, s); }
     this.revision = fixture.revision ?? 1;
@@ -133,6 +142,12 @@ export class DemoHost {
       case 'session.stop':
         if (!this.capabilities.includes('sessions.stop')) { break; }
         return this.#stop(data, reply);
+      case LAUNCH.options:
+        if (!this.capabilities.includes(LAUNCH.capability)) { break; }
+        return reply(clone(this.launchOptions));
+      case LAUNCH.launch:
+        if (!this.capabilities.includes(LAUNCH.capability)) { break; }
+        return this.#launch(data, reply);
       default:
         return t.deliver({ re: id, ok: false, error: `unknown op ${op}` });
     }
@@ -180,6 +195,61 @@ export class DemoHost {
   scriptReplies(outcomes) { this.#replyScript.push(...outcomes); }
 
   scriptStops(outcomes) { this.#stopScript.push(...outcomes); }
+
+  scriptLaunches(outcomes) { this.#launchScript.push(...outcomes); }
+
+  #launch(data, reply) {
+    this.launchLog.push(clone(data ?? null));
+    const request = typeof data?.request === 'string' ? data.request : '';
+    const known = this.launches.get(request);
+    if (known) { known.result.then(reply); return; }
+    const step = this.#launchScript.shift() ?? null;
+    const scripted = typeof step === 'string' ? { outcome: step } : step;
+    const result = new Promise((resolve) => setTimeout(() => resolve(this.#decideLaunch(data ?? {}, scripted)), this.answerDelayMs));
+    this.launches.set(request, { result });
+    result.then((r) => { if (!scripted?.drop) { reply(r); } });
+  }
+
+  // As a host decides: what it does not offer is refused, in its words; otherwise the session
+  // starts in the workspace (or the resumed session's folder) and is upserted.
+  #decideLaunch(data, scripted) {
+    const o = this.launchOptions;
+    if (scripted && scripted.outcome !== 'started') {
+      const reasons = {
+        busy: "a session this machine launched is waiting at its folder trust prompt; answer it at the machine",
+        refused: 'agent-ha-bridge is running for this user, so this host leaves launching to it',
+        unconfirmed: "the session started, but it is asking whether to trust its folder; answer that at the machine",
+        failed: 'the agent could not be started (The system cannot find the file specified.)',
+      };
+      return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host' };
+    }
+    const problem = checkLaunch(data);
+    if (problem) { return { outcome: 'refused', reason: problem }; }
+    const resume = data.resume ? o.resumable.find((r) => r.id === data.resume) : null;
+    if (data.resume && !resume) { return { outcome: 'refused', reason: `No resumable session '${data.resume}' on this machine; it is not on its resume list` }; }
+    const agent = o.agents.find((a) => a.id === (data.agent ?? resume?.launcher ?? o.defaults.agent));
+    if (!agent) { return { outcome: 'refused', reason: `Unknown agent '${data.agent}'; this machine has ${o.agents.map((a) => a.id).join(', ')}` }; }
+    const workspace = resume ? null : o.workspaces.find((w) => w.label === (data.workspace ?? o.defaults.workspace));
+    if (!resume && !workspace) { return { outcome: 'refused', reason: o.workspaces.length ? `Unknown workspace '${data.workspace}'; this machine has ${o.workspaces.map((w) => w.label).join(', ')}` : 'no workspace is approved on this machine yet; approve one at the machine (agent-bridge-host workspace add <folder>)' }; }
+    if (!resume && agent.needsPrompt && !flattenPrompt(data.prompt)) { return { outcome: 'refused', reason: `${agent.label} starts its session only on a first message; give it a prompt` }; }
+    for (const axis of ['model', 'effort', 'context']) {
+      const v = data[axis];
+      if (v && !agent[`${axis}s`].includes(v)) { return { outcome: 'refused', reason: `Unknown ${axis} '${v}' for ${agent.label}; it offers ${agent[`${axis}s`].join(', ') || 'only its own default'}` }; }
+    }
+    const cwd = resume?.cwd ?? workspace.path;
+    const id = resume?.id ?? crypto.randomUUID();
+    const said = flattenPrompt(data.prompt);
+    const at = now();
+    this.upsert({
+      id, agent: agent.kind, title: resume?.title ?? (said ? (said.length > 60 ? `${said.slice(0, 59)}…` : said) : 'New session'), cwd,
+      model: data.model || agent.defaults.model || undefined, status: said ? 'working' : 'idle', statusSince: at, startedAt: at, updatedAt: at,
+      processId: 4000 + this.launches.size,
+      activity: { ...(said ? { userMessage: said } : {}), turnCount: said ? 1 : 0 },
+    });
+    if (resume) { this.launchOptions = { ...o, resumable: o.resumable.filter((r) => r.id !== resume.id) }; }
+    const permissions = data.permissions ?? o.defaults.permissions;
+    return { outcome: 'started', session: id, launched: { agent: agent.id, ...(resume ? { resume: resume.id } : { workspace: workspace.label }), cwd, worktree: !!workspace?.isolate, permissions } };
+  }
 
   #stop(data, reply) {
     this.stopLog.push(clone(data ?? null));
@@ -375,6 +445,25 @@ function withHistory(s) {
 // A few changes on a loop, so the demo looks alive: the working session's tool moves on,
 // a new session appears and goes, the delegating one's background agents come and go, and
 // the idle one gets a follow-up.
+// What the demo machine offers: two agents, two workspaces (one isolated), one session to resume.
+function demoLaunchOptions() {
+  const tuning = { efforts: ['low', 'medium', 'high'], contexts: [] };
+  return {
+    agents: [
+      { id: 'copilot', label: 'Copilot', kind: 'copilot', models: ['claude-opus-5.5', 'claude-sonnet-5', 'gpt-6-sol'], ...tuning, contexts: ['default', '1m'], profiles: null, defaults: { model: 'claude-opus-5.5' }, attachments: true, needsPrompt: false },
+      { id: 'codex', label: 'Codex', kind: 'codex', models: ['gpt-6-sol'], ...tuning, profiles: null, defaults: {}, attachments: false, needsPrompt: true },
+    ],
+    workspaces: [
+      { label: 'agent-bridge', path: 'C:\\Users\\demo\\repos\\agent-bridge', isolate: true },
+      { label: 'notes', path: 'C:\\Users\\demo\\notes', isolate: false },
+    ],
+    resumable: [
+      { id: '7d3c1a2e-5b6f-4c8d-9e0a-1b2c3d4e5f60', agent: 'copilot', launcher: 'copilot', title: 'Fix the flaky relay test', cwd: 'C:\\Users\\demo\\repos\\agent-bridge', workspace: 'agent-bridge', updatedAt: '2026-10-27T18:02:11.000Z' },
+    ],
+    defaults: { agent: 'copilot', workspace: 'agent-bridge', permissions: 'ask' },
+  };
+}
+
 export function runScript(host, { tickMs = 4000 } = {}) {
   const steps = [
     () => {

@@ -43,7 +43,7 @@ The same rules, with these differences, each deliberate:
 | A session asking a question | `/exit` typed into it | Terminated without `/exit`: typed words land in the question's input, and Enter could submit `/exit` as the answer. Asking is read from the session and, for Copilot, from the transcript (a subagent's question is only there) |
 | `/exit` that could not be typed | Waits out the 12 s anyway | Terminates at once |
 | Who it refuses | Whatever `Stop-Process` refuses | Refused before anything is armed: an elevated process (integrity High or above), another user's (token user SID differs), one whose start time cannot be read, and the host's own process |
-| The window or tab | Closes the console the bridge launched | Left open: this host does not launch sessions yet, so every terminal is the person's own |
+| The window or tab | Closes the console the bridge launched | Left open for a terminal the person opened. A session this host launched has a console of its own, which normally closes when the agent exits, since nothing else runs in it |
 | macOS and Linux | tmux | Not offered yet (`sessions.stop` left out), as for answers and replies |
 
 ## In order, for every press
