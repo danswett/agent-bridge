@@ -236,13 +236,14 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task An_input_box_that_has_not_drawn_the_reply_yet_is_looked_at_again_before_Enter_is_pressed()
+    public async Task An_input_box_that_has_not_taken_in_all_of_the_reply_yet_is_looked_at_again_before_Enter_is_pressed()
     {
         console.Rows = ClaudeIdle();
         console.OnInject = plan =>
         {
             if (plan.Sends is [{ Text: "", Enter: true }]) { Fixture.Append(claude, ClaudePrompt("drawn late")); return; }
-            // The box still reads empty at the first look, and shows the words only after it.
+            // At the first look the box shows only the start of the words; the rest comes after.
+            console.Rows = ClaudeIdle("dra");
             _ = Task.Run(async () => { await Task.Delay(300); console.Rows = ClaudeIdle("drawn late"); });
         };
 
