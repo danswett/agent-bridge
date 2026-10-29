@@ -51,9 +51,11 @@ allowed origin carried over, existing account tokens (valid to about 26 November
 host profiles, the PWA's sign-in and every push subscription keep working. Nobody has to
 sign in again. Each device reconnects once, within seconds, when the revision changes.
 
-If the keys were ever lost: a new token key makes every host exit with "refused … run
-sign-in again" (`agent-bridge-host sign-in --relay <url>` on each machine, and Sign in again in
-the PWA); a new VAPID key needs notifications turned off and on again in the PWA.
+If the keys were ever lost or exposed, see [Key rotation](#key-rotation).
+
+At the cutover itself the token key **was rotated** (the copied one had been exposed in a
+session's output), so every host and the PWA signed in again once; the VAPID key was carried
+over unchanged, so push subscriptions survived.
 
 ## Why one replica
 
@@ -145,7 +147,9 @@ cutover (it has the Consumption workload profile and, being hand-made, sends log
 
 ## Production cutover
 
-Not done yet. It needs the coordinator's go-ahead. Everything below is reversible.
+Done 2026-10-29: `agent-bridge-relay--s5b-10272017` (the spike) was replaced by
+`agent-bridge-relay--0000006`, build `4ab4e0e`. The steps are kept for a new stamp or region.
+Everything below is reversible.
 
 Before:
 
@@ -182,6 +186,37 @@ Then check, in this order:
 - [ ] Log Analytics shows JSON lines with no login, account id or device name:
       `ContainerAppConsoleLogs_CL | where ContainerAppName_s == 'agent-bridge-relay' | take 50`.
 
+## Key rotation
+
+Rotate a key when it may have been exposed. Never put key material on a command line, in a
+file or in output: generate it in the PowerShell process, send it straight to Key Vault's
+REST API, and compare only hash prefixes.
+
+**Token key** (`token-key`: signs account tokens). Every account token becomes invalid: each
+host exits with "refused … run sign-in again" and needs `agent-bridge-host sign-in --relay <url>`,
+and each PWA needs Sign in again. Push subscriptions are unaffected.
+
+```powershell
+$h = @{ Authorization = 'Bearer ' + (az account get-access-token --resource https://vault.azure.net --query accessToken -o tsv) }
+$body = @{ value = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)); contentType = 'base64' } | ConvertTo-Json
+Invoke-RestMethod -Method Put -Uri 'https://kv-abrelay-wus2.vault.azure.net/secrets/token-key?api-version=7.4' -Headers $h -ContentType 'application/json' -Body $body | Out-Null
+$body = $null
+# A running replica keeps the value it started with; a new revision reads the new one.
+az containerapp update -g rg-agent-bridge-relay -n agent-bridge-relay --revision-suffix "key$(Get-Date -Format MMddHHmm)" --query properties.latestRevisionName -o tsv
+```
+
+Then check: `relay-smoke` with `RELAY_SMOKE_TOKEN_KEY` set from the vault (in the process,
+never echoed) passes the two-device check, which proves the relay signs with the new key; and
+a hello with an old account token closes with 4001.
+
+**VAPID key** (`vapid-key`: signs Web Push). Same procedure with a new P-256 key in PKCS#8,
+base64 (`[Security.Cryptography.ECDsa]::Create([Security.Cryptography.ECCurve+NamedCurves]::nistP256).ExportPkcs8PrivateKey()`).
+Every browser subscription is bound to the old public key, so each PWA has to turn
+notifications off and on again; hosts drop the old subscriptions when the push service
+answers 410. Accounts and tokens are unaffected.
+
+Staging has its own keys in `kv-abrelay-wus2-stg`; rotating them affects only the smoke test.
+
 ## Rollback
 
 - **A later bad build:** run `relay.yml` with `rollback_to=<previous SHA>` (the SHA is in
@@ -196,7 +231,7 @@ Then check, in this order:
   image-only rollback would not do: it would keep the readiness probe on `/readyz`, which the
   spike does not serve, so the revision would never become ready and traffic would stay on
   the new one. The app-level parts the cutover changed stay, and the spike works with them:
-  `token-key` and `vapid-key` keep their names and values (now read from the vault), and the
+  `token-key` and `vapid-key` keep their names and current values (now read from the vault), and the
   new identity can pull from the same registry. Tokens and push subscriptions stay valid
   throughout. `roll-production.sh` still treats the app as adopted afterwards, so the next
   approved run rolls a product image onto it again.
