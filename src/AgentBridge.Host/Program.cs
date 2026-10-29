@@ -263,8 +263,13 @@ async Task<int> ServeAsync()
     // agent-ha-bridge runs for this user (looked at every few seconds, as the app's view of it is).
     Func<string?>? haActive = haProbe is null ? null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64);
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers);
-    var launcher = Launcher(source, attachments);
-    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, new UsageService(usageMonitor, Log), launcher);
+    // Ended sessions moved between the account's machines, on commands a person's device signs,
+    // through the relay's blob store (docs/host-transfer.md). Bundles wait in the profile's own
+    // private folder, never a shared temporary one.
+    using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log);
+    var launcher = Launcher(source, attachments, transfers);
+    transfers.Launcher = launcher;
+    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, new UsageService(usageMonitor, Log), launcher, transfers);
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
     var inspector = new SystemProcessInspector();
@@ -364,6 +369,7 @@ async Task<int> ServeAsync()
             hub.Rejected += (peer, e) => Log($"rejected a frame from {peer[..Math.Min(8, peer.Length)]}: {e.Message}");
             push.Attach(new RelayPushSender(relay));
             relayBlobs.Attach(relay);
+            transfers.Attach(relay, hub);
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff = TimeSpan.FromSeconds(1);
@@ -402,6 +408,7 @@ async Task<int> ServeAsync()
         {
             connection = null;
             relayBlobs.Attach(null);
+            transfers.Attach(null, null);
         }
         reconnects++;
         // A sign-in during the wait goes straight to connecting.
@@ -434,7 +441,7 @@ async Task<int> ServeAsync()
 // Launching and resuming sessions from other devices (docs/host-launch.md): only in the folders
 // the profile's config.json approves, and on Windows only for now. The agent starts in a console
 // of its own on this desktop, so the host must run here, as the user, unelevated.
-ISessionLauncher Launcher(ISessionSource source, AttachmentStore? attachments)
+LaunchService Launcher(ISessionSource source, AttachmentStore? attachments, SessionTransfers transfers)
 {
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
@@ -447,6 +454,8 @@ ISessionLauncher Launcher(ISessionSource source, AttachmentStore? attachments)
         CodexHome = options.CodexHome,
         Config = settings.Launch,
         WorktreeUsage = new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots),
+        Transfers = transfers,
+        TransferStaging = transfers.Staging,
     }, Log, attachments);
     var why = !settings.Launch.Enabled ? "turned off (launch.enabled)" : starter.Unavailable() ?? probe.Active();
     var count = settings.Launch.Workspaces.Count;

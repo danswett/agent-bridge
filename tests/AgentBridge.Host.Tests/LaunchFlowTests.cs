@@ -14,7 +14,7 @@ using Xunit;
 // and real git for isolated workspaces. Starting an agent is the one thing faked: the fake
 // starter plays the agent by writing the session folder and process an agent would have, so
 // no test ever starts Copilot, Claude or Codex. Nothing here is ever typed into a console.
-public sealed class LaunchFlowTests : IAsyncLifetime
+public sealed partial class LaunchFlowTests : IAsyncLifetime
 {
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
@@ -50,7 +50,8 @@ public sealed class LaunchFlowTests : IAsyncLifetime
             CoalesceInterval = TimeSpan.Zero,
         }, f.Processes, TimeProvider.System);
         await source.RefreshAsync();
-        relay = await TestRelay.StartAsync();
+        // With the in-process blob store, which a session transfer goes through.
+        relay = await TestRelay.StartAsync(o => o.Blobs.Backend = "local");
         var token = relay.TokenFor(1, "octo");
         host = await relay.ConnectAsync(token, "Test host", "host");
         host.Hub.JsonOptions = ProtocolJson.Options;
@@ -76,7 +77,7 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null) => new(source, probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null) => new(source, probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
     {
         CopilotHome = f.CopilotHome,
         ClaudeHome = f.ClaudeHome,
@@ -92,6 +93,8 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         IsSystemDirectory = _ => false,
         WorktreeUsage = usage,
         LocalNow = now ?? (() => DateTime.Now),
+        Transfers = transfers,
+        TransferStaging = transfers?.Staging,
     });
 
     void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null) =>

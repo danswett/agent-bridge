@@ -8,10 +8,10 @@ and short-lived URLs; it never sees the bytes, and storage sees only ciphertext.
 `RelayClient.Blob*Async`), `AgentBridge.Relay` (`BlobService`), the host's
 `AttachmentStore` and the PWA's `js/blobs.js`.
 
-Used now for **reply attachments over 256 KiB** (`sessions.attach.blob` in
-[v1-sessions.md](v1-sessions.md#attachments)). Session transfer and cross-machine resume
-will use the same format and relay messages, in both directions; nothing here is specific
-to attachments.
+Used for **reply attachments over 256 KiB** (`sessions.attach.blob` in
+[v1-sessions.md](v1-sessions.md#attachments)), from a device to a host, and for **session
+transfer** ([v1-transfer.md](v1-transfer.md)), from one host to another: the same format and
+relay messages, with nothing specific to either.
 
 ## Paths
 
@@ -114,7 +114,8 @@ A recipient deletes a blob as soon as it has checked it, and one it cannot use.
 The blob's ticket and **key** travel only inside the end-to-end channel, with the file's
 name, size, type and SHA-256, in the op that uses it. For reply attachments that is
 `attachment.start` with `blob: { "id": "<ticket>", "key": "<base64url, 32 bytes>" }`
-([v1-sessions.md](v1-sessions.md#attachmentstart)). The relay sees the ticket go up and
+([v1-sessions.md](v1-sessions.md#attachmentstart)); for a session transfer, `session.transfer`'s
+result, between the two hosts ([v1-transfer.md](v1-transfer.md#sessiontransfer)). The relay sees the ticket go up and
 come back, never the key.
 
 ## Limits and lifetime
@@ -130,8 +131,9 @@ These are relay settings (`Relay:Blobs:*`), not protocol constants:
 | `UrlLifetime`, how long one URL works | 30 minutes |
 
 A reply attachment is at most **100 MiB** (`AttachmentLimits.BlobBytes`) whatever the relay
-allows. Session transfers will default to 25 MB, configurable up to 200 MB (design §9),
-within `MaxBytes`.
+allows. A session transfer is at most `launch.transfer.maxBytes` on each host, **25 MiB** by
+default and up to **200 MiB** (design §9), within `MaxBytes`. The receiving host deletes a
+transfer's blob as soon as it has fetched it, whatever the outcome.
 
 Storage deletes every blob a day after it was written, whatever happens (a lifecycle
 rule), so one nobody fetched or deleted lives one to two days at most. Rate and quota

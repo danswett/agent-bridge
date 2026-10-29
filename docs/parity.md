@@ -27,7 +27,7 @@ reason.
 | `Missing` | Not built; an issue is linked |
 | `Intentionally different` | Changed on purpose; the decision is cited |
 | `N/A` | Home Assistant plumbing the design replaces (§2, §6.1 "Deleted, not ported") |
-| `In flight (<slice>)` | Owned by a slice already under way, with no separate issue: **reclaimer**, **blob store** (large attachments, then session transfer), **Claude/Codex live** (Claude and Codex live tests on the VM), **HA connector** (agent-ha-bridge's per-machine entity contract, so a migrated machine still shows on the old dashboard) |
+| `In flight (<slice>)` | Owned by a slice already under way, with no separate issue: **reclaimer**, **Claude/Codex live** (Claude and Codex live tests on the VM), **HA connector** (agent-ha-bridge's per-machine entity contract, so a migrated machine still shows on the old dashboard) |
 
 Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 
@@ -36,12 +36,12 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 | Status | Rows |
 |---|---|
 | `Verified` | 47 |
-| `Implemented, untested live` | 28 |
+| `Implemented, untested live` | 31 |
 | `Partial` | 3 |
 | `Missing` | 22 |
 | `Intentionally different` | 17 |
 | `N/A` | 12 |
-| `In flight (…)` | 17: Claude/Codex live 8, HA connector 5, blob store 3, reclaimer 1 |
+| `In flight (…)` | 14: Claude/Codex live 8, HA connector 5, reclaimer 1 |
 | **Total** | **146** feature rows in §1–§18 |
 
 Of the 15 §6.3 invariants: 7 `Verified`, 2 `Implemented, untested live`, 2 `Partial`, 3
@@ -114,7 +114,7 @@ Of the 15 §6.3 invariants: 7 `Verified`, 2 `Implemented, untested live`, 2 `Par
 | A reply waits while a question or permission prompt is open | All | `Test-DaemonReplyBoxFree` | `Verified` | `ReplyFlowTests.While_the_session_asks_a_question_a_reply_is_refused_untyped_even_before_the_host_has_read_it`, `CopilotPermissionFlowTests.A_reply_waits_while_a_permission_prompt_that_can_be_answered_is_pending`. Live: Progress › Replies | |
 | Ctrl/Cmd+Enter sends; Enter is a new line; text is kept until it is consumed | All | Reply card | `Implemented, untested live` | `pwa/test/reply.spec.mjs: "Ctrl+Enter or Cmd+Enter sends…"`, `"words typed while a reply is on its way stay in the box…"`, `CardTests.A_reply_goes_with_its_files_sent_first_in_chunks_and_leaves_what_was_typed_meanwhile` | #39 |
 | Paste an image or attach a file (up to 256 KiB), mentioned as `@path` | Cp | `New-BridgeAttachmentPrompt`, `Save-BridgeReplyFile` | `Verified` | `ReplyFlowTests.A_reply_with_files_sent_first_mentions_each_ahead_of_the_words_and_is_delivered_once_copilot_attaches_them`, `pwa/test/attach.spec.mjs`. Live: Progress › Attachments (#27) | |
-| Images of any size (HA image store) and files over 256 KiB | All | `/api/image/upload` | `In flight (blob store)` | The phone shrinks photos to fit (`pwa/test/unit/attachments.test.mjs: "an image over 256 KiB is redrawn smaller…"`) | |
+| Images of any size (HA image store) and files over 256 KiB | All | `/api/image/upload` | `Implemented, untested live` | Through the relay's blob store, end-to-end encrypted (#61; [blobs.md](protocol/blobs.md)): `BlobTests`, `pwa/test/attach.spec.mjs` | #39 |
 | Attachments to Claude and Codex | Cl, Cx | `New-BridgeAttachmentPrompt` | `Verified` | Claude: `@<path>`, read back from its `attachment` entries; Codex: images pasted as paths, read back as `local_image` (`AgentReplyFlowTests`; live on the VM, #41) | Codex takes images only; other files are refused |
 | Attachments staged in a protected per-installation folder, never shared TEMP; swept after 24 h | All | `Get-BridgeAttachmentRootForInstallation`, `Remove-BridgeStaleAttachment`; `tests/test-p5-attachment-privacy.ps1` | `Verified` | `AttachmentStoreTests.Staged_files_go_in_a_folder_only_this_user_can_open_named_safely_with_the_extension_their_bytes_call_for`, `The_sweep_deletes_only_old_files_it_staged_and_nothing_through_a_linked_folder`. Live: Progress › Attachments | |
 
@@ -197,9 +197,9 @@ Of the 15 §6.3 invariants: 7 `Verified`, 2 `Implemented, untested live`, 2 `Par
 
 | Feature / behaviour | Agents | agent-ha-bridge | Status | Evidence in agent-bridge | Gap / validation |
 |---|---|---|---|---|---|
-| Copy a session to another machine and resume it there (fork under a new id; up to 25 MB) | All | `Send-BridgeSessionBundle`; `docs/cross-machine-resume.md`; `tests/test-session-fork.ps1`, `test-session-transfer.ps1` | `In flight (blob store)` | — | Session transfer follows the blob store |
-| Resume choices shared across machines | All | `tests/test-resume-sharing.ps1` | `In flight (blob store)` | — | Part of the transfer slice |
-| Transfers signed with the fleet secret | All | `Get-BridgeTransferSignature` | `Intentionally different` | Signed commands and an end-to-end channel replace the fleet secret | Design §9 ("Fleet secret retired") |
+| Copy a session to another machine and resume it there (fork under a new id; up to 25 MB) | All | `Send-BridgeSessionBundle`; `docs/cross-machine-resume.md`; `tests/test-session-fork.ps1`, `test-session-transfer.ps1` | `Implemented, untested live` | Through the blob store, end-to-end encrypted ([host-transfer.md](host-transfer.md), [v1-transfer.md](protocol/v1-transfer.md)); 25 MiB by default, up to 200 MiB: `LaunchFlowTests.A_session_that_ended_on_another_machine_is_brought_here_under_an_id_of_its_own_and_resumed_in_the_workspace_chosen`, `SessionBundleTests` (Copilot, Claude, Codex), `pwa/test/launch.spec.mjs: "bringing a session from another machine"` | #39. The session opens in a workspace picked on the receiving machine, not the path it had (invariant 7). Codex's version is not compared. Not from the Windows app (#49) |
+| Resume choices shared across machines | All | `tests/test-resume-sharing.ps1` | `Implemented, untested live` | The phone lists, under Resume, the sessions each of the account's other machines offers: `pwa/test/unit/transfer.test.mjs: "the other machines' sessions come from those that hand them on…"`, `pwa/test/launch.spec.mjs` | #39. Read live from each machine, not published |
+| Transfers signed with the fleet secret | All | `Get-BridgeTransferSignature` | `Intentionally different` | A command the person's device signs for the machine the session is on, once, for minutes, naming the machine that receives it; host to host over an end-to-end channel: `SignedCommandTests`, `LaunchFlowTests.A_command_is_carried_out_once_for_the_machines_it_names_and_by_a_machine_that_hands_its_sessions_on` | Design §9 ("Fleet secret retired") |
 
 ## 12. Hooks and intake
 
@@ -282,7 +282,7 @@ product itself replaces them.
 | Publication authority, fences, rollback pins, render fingerprints | All | `tests/test-publication-policy.ps1`, `test-write-boundary-*.ps1` | `N/A` | No shared renderer | Design §2 |
 | Entity-registry pinning, legacy and unscoped entity sweeps | All | `tests/test-registration-isolation.ps1`, `test-multi-machine.ps1` | `N/A` | | |
 | 255-character text, optimistic selects, position-encoded multi-select, 10-option cap | All | `tests/test-choices-form.ps1`, `test-decision-select-race.ps1` | `N/A` | | Design §1 parity contract |
-| HA image store for pasted images | All | `/api/image/upload`, `image/delete` | `N/A` | In-channel attachments now; the blob store is in flight | |
+| HA image store for pasted images | All | `/api/image/upload`, `image/delete` | `N/A` | In-channel attachments, and the relay's blob store for larger ones | |
 | HA REST and WebSocket client (state snapshot, filtered reads, retry, auth backoff, HTTP session reuse) | All | `tests/test-state-read.ps1`, `test-state-snapshot.ps1`, `test-reliability.ps1`, `test-auth-backoff.ps1`, `test-http-session.ps1` | `N/A` | Relay reconnect and backoff: `ChannelTests`, `RelayTests.A_relay_that_is_stopping_tells_connected_devices_to_reconnect_at_once_with_1012` | |
 | Pairing through HA helper state (`input_text.agent_bridge_pairing`) | All | `bridge-pairing-io.ps1` | `N/A` | Replaced by device approval (#55) | |
 | Detached-entity repair, global reassert, peer stand-in sessions | All | `agent-bridge-daemon.ps1` (`DetachedEntity*`, `GlobalReassertSeconds`, `PeerSessionsStandInSeconds`) | `N/A` | Snapshot plus ordered events with gap detection: `ConnectionTests.A_gap_in_the_events_after_a_reconnect_reads_the_sessions_status_and_usage_again` | |
@@ -304,7 +304,7 @@ All 87 agent-ha-bridge suites, grouped by feature, with where the behaviour stan
 | Replies and attachments | `test-daemon-replies`, `test-reply-card` [HA], `test-p5-attachment-privacy` | `ReplyFlowTests`, `CopilotReplyTests`, `AttachmentStoreTests`, `AgentReplyFlowTests`: Verified for Copilot, Claude and Codex |
 | End session | `test-stop-session`, `test-write-boundary-stop` [HA] | `StopFlowTests`, `StopTests`: Verified (§5) |
 | Launch, resume, worktrees | `test-new-session`, `test-launchers`, `test-launch-permissions`, `test-agent-launched`, `test-worktree-isolation`, `test-p4-worktree-safety`, `test-resume-sharing` | `LaunchFlowTests`, `LaunchPieceTests`: Verified or untested live (§6, §7). Reclaimer and sharing in flight. Agent principal: #44, #45 |
-| Transfer and fork | `test-session-transfer`, `test-session-fork` | In flight (blob store) |
+| Transfer and fork | `test-session-transfer`, `test-session-fork` | `SessionBundleTests`, `SignedCommandTests`, `LaunchFlowTests` (transfer): Implemented, untested live (§11) |
 | Usage | `test-usage` | `UsageTests`, `UsageFlowTests`: §8. Settings: #52 |
 | Machines and fleet | `test-multi-machine` [HA], `test-status-card` [HA], `test-driver-card` | §9. Offline and Forget #50; purple edge #46 |
 | Dashboard and cards | `test-dashboard` [HA], `test-install-cards` [HA], `test-bridge-adapter` [HA], `frontend/test-cards.js` | N/A (§18); the card behaviours are rows in §1–§9 |
@@ -412,8 +412,7 @@ agent-ha-bridge's manual checks, `tests/verify-mac-terminal.ps1`,
 - [ ] #41: replies to Claude and Codex, if either is used on DEV-VM1.
 - [ ] Reclaimer (in flight) merged, after #43, or the cap raised and watched, so isolated
   launches are not refused after ten.
-- [ ] Blob store (in flight) merged, so a phone photo over 256 KiB still reaches a
-  session (today it is shrunk).
+- [x] Blob store merged (#61), so a phone photo over 256 KiB reaches a session whole.
 - [ ] HA connector (in flight) at commands as well as status, so the old dashboard and
   MCP server can still drive DEV-VM1's sessions.
 - [ ] Every row that DEV-VM1's daily use touches is `Verified` in this document after the
@@ -436,7 +435,7 @@ agent-ha-bridge's manual checks, `tests/verify-mac-terminal.ps1`,
 2. #44 Sessions cannot stop or restart their host (invariant 13)
 3. #40 Shadow diff (built), then a clean week
 4. #41 Claude and Codex replies (if used there)
-5. In flight: reclaimer, blob store, HA connector commands
+5. In flight: reclaimer, HA connector commands
 
 **Can follow**
 

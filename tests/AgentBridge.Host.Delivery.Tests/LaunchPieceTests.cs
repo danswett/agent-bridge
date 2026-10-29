@@ -509,4 +509,18 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Contains(why, p => p.EndsWith("launching is off", StringComparison.Ordinal));
         Assert.False(Config("""{ "worktrees": { "limit": 2.5 } }""").Item1.Enabled);
     }
+
+    [Fact]
+    public void Transfers_default_to_25_MiB_each_way_and_take_at_most_200_MiB()
+    {
+        Assert.Equal(new TransferConfig { Serve = true, Receive = true, MaxBytes = 25L << 20, MaxSourceBytes = 250L << 20 }, LaunchConfig.Read(null).Config.Transfer);
+
+        var (config, problems) = Config("""{ "transfer": { "serve": false, "maxBytes": 209715200 } }""");
+        Assert.Empty(problems);
+        Assert.Equal((false, true, 200L << 20, 2000L << 20), (config.Transfer.Serve, config.Transfer.Receive, config.Transfer.MaxBytes, config.Transfer.MaxSourceBytes));
+
+        // Over the ceiling, or a flag that is not a boolean: launching is off rather than guessed.
+        Assert.False(Config("""{ "transfer": { "maxBytes": 209715201 } }""").Item1.Enabled);
+        Assert.False(Config("""{ "transfer": { "serve": "no" } }""").Item1.Enabled);
+    }
 }

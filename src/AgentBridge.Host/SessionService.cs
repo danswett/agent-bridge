@@ -29,11 +29,12 @@ public sealed class SessionService
     readonly ISessionStopper? stops;
     readonly UsageService? usage;
     readonly ISessionLauncher? launcher;
+    readonly SessionTransfers? transfers;
     readonly ConcurrentDictionary<IProtocolChannel, Subscriber> subscribers = new();
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
-        UsageService? usage = null, ISessionLauncher? launcher = null)
+        UsageService? usage = null, ISessionLauncher? launcher = null, SessionTransfers? transfers = null)
     {
         this.source = source;
         this.machine = machine;
@@ -45,6 +46,7 @@ public sealed class SessionService
         this.stops = stops;
         this.usage = usage;
         this.launcher = launcher;
+        this.transfers = transfers;
     }
 
     // Channels with a subscription running; tests and the host's log read it.
@@ -76,6 +78,10 @@ public sealed class SessionService
                 return await launcher.OptionsAsync();
             case LaunchProtocol.Launch when launcher is not null:
                 return await LaunchAsync(channel, data);
+            // Host to host, through the relay only: another machine of the account asking for a
+            // session with a command a person's device signed.
+            case TransferProtocol.Op when transfers is not null && channel is SecureChannel secure:
+                return await transfers.ServeAsync(secure, data);
             case UsageProtocol.Get or UsageProtocol.Subscribe when usage is not null:
                 return await usage.HandleAsync(channel, op, data);
             case Ops.SessionsList:
@@ -184,6 +190,12 @@ public sealed class SessionService
         if (push is not null && channel is SecureChannel) { offered.Add(Capabilities.Push); }
         if (usage is not null) { offered.Add(UsageProtocol.Capability); }
         if (launcher?.Available == true) { offered.Add(LaunchProtocol.Capability); }
+        // Transfers are signed by a device through the relay, and go through its blob store.
+        if (transfers is not null && channel is SecureChannel)
+        {
+            if (launcher?.Available == true && transfers.Receives) { offered.Add(TransferProtocol.Capability); }
+            if (transfers.Serves) { offered.Add(TransferProtocol.ServeCapability); }
+        }
         return offered;
     }
 
@@ -231,6 +243,12 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.launch needs a request"); }
         if (System.Text.Encoding.UTF8.GetByteCount(data.GetRawText()) > LaunchProtocol.MaxRequest) { throw new ArgumentException($"session.launch is larger than {LaunchProtocol.MaxRequest / 1024} KiB"); }
         var request = data.Deserialize<LaunchRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.launch needs a request");
+        // A transfer is asked for by a device through the relay, which signs it; this machine's
+        // own app has no key the other machine knows.
+        if (request.Transfer is not null && (channel is not SecureChannel || transfers is null))
+        {
+            return new LaunchResult(LaunchOutcome.Refused, "a session from another machine is brought in through the relay, from the phone or browser app");
+        }
         return await launcher!.LaunchAsync(request, channel.PeerId);
     }
 

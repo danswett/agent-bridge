@@ -12,6 +12,7 @@
 //   attachments.js   preparing files and images for a reply, and sending them first
 //   stop-service.js  ending sessions (session.stop), likewise, two presses when not idle
 //   launch.js, launch-service.js  starting and resuming sessions (session.launch), likewise
+//   transfer.js      bringing a session from another machine: its sessions, a signed command
 //   push.js          notifications: turning them on and off, registering with each machine
 //   usage.js, fleet.js  agent usage merged across machines, and each machine's status line
 //   sessions-store.js, ui/*  what is shown
@@ -28,6 +29,7 @@ import { ReplyService } from './reply-service.js';
 import { StopService } from './stop-service.js';
 import { LaunchService } from './launch-service.js';
 import { LAUNCH } from './launch.js';
+import { TRANSFER, collectRemote, signTransfer } from './transfer.js';
 import { PushRegistrar, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities } from './protocol.js';
 import { SessionListView, renderMachines } from './ui/views.js';
@@ -35,7 +37,7 @@ import { UsageBook, USAGE, machineStatus } from './usage.js';
 import { FleetStatus } from './fleet.js';
 import { UsageView } from './ui/usage-view.js';
 import { LaunchPanel } from './ui/launch-view.js';
-import { DemoBlobStore, DemoHost, runScript } from './demo.js';
+import { DemoBlobStore, DemoHost, demoTransfers, runScript } from './demo.js';
 import { RelayBlobs, maxPlain } from './blobs.js';
 import { AttachmentLimits } from './attachments.js';
 
@@ -184,6 +186,8 @@ async function startDemo() {
     stopWindowMs: Number(params.get('stopWindow')) || 10000,
     usage: params.get('usage') !== '0',
     launching: params.get('launch') !== '0' && params.get('answer') !== '0',
+    // ?transfer=0: a host from before sessions came from other machines.
+    transferring: params.get('transfer') !== '0',
   });
   // ?attachDelay= slows each file chunk, so its progress can be watched.
   host.attachmentDelayMs = Number(params.get('attachDelay')) || 0;
@@ -194,7 +198,7 @@ async function startDemo() {
   host.blobStore = blobStore;
   // ?timeout= shortens how long a request waits for its response, for the tests of resends.
   const timeoutMs = Number(params.get('timeout')) || 0;
-  const client = new HostClient(host.connect(), { store, ...(timeoutMs ? { timeoutMs, answerTimeoutMs: timeoutMs, replyTimeoutMs: timeoutMs, stopTimeoutMs: timeoutMs, launchTimeoutMs: timeoutMs } : {}) });
+  const client = new HostClient(host.connect(), { store, ...(timeoutMs ? { timeoutMs, answerTimeoutMs: timeoutMs, replyTimeoutMs: timeoutMs, stopTimeoutMs: timeoutMs, launchTimeoutMs: timeoutMs, transferTimeoutMs: timeoutMs } : {}) });
   currentClient = client;
   const hello = await client.hello();
   const current = () => ({ client, hostId: hello.machine.id });
@@ -224,7 +228,8 @@ async function startDemo() {
   }
   const launchPanel = new LaunchPanel($('launch'), { service: launches, jump: showSession });
   if (hello.capabilities.includes(LAUNCH.capability)) {
-    launchPanel.setTarget({ hostId: hello.machine.id, machineName: hello.machine.name, load: () => client.launchOptions() });
+    const transfers = hello.capabilities.includes(TRANSFER.capability) ? await demoTransfers(host, hello.machine.id) : null;
+    launchPanel.setTarget({ hostId: hello.machine.id, machineName: hello.machine.name, load: () => client.launchOptions(), transfers });
   }
   const script = params.get('static') === '1' ? null : runScript(host, { tickMs: Number(params.get('tick')) || 4000 });
   window.agentBridgeDemo = {
@@ -452,7 +457,14 @@ function begin(account) {
     // While reconnecting the panel stays, with any launch still waiting to be resent; a machine
     // that comes back without sessions.launch hides it.
     const launchable = hosts.phase === 'open' ? hosts.capabilities.includes(LAUNCH.capability) : launchPanel.hostId === hosts.targetId;
-    launchPanel.setTarget(launchable ? { hostId: hosts.targetId, machineName: name, load: () => (hosts.client ? hosts.client.launchOptions() : Promise.reject(new Error('not connected'))) } : null);
+    const targetId = hosts.targetId;
+    // The account's other machines' sessions, each signed for when picked: only where this one
+    // takes them, and only what they hand on.
+    const transfers = hosts.capabilities.includes(TRANSFER.capability) ? {
+      remotes: () => collectRemote({ connection, targetId, me: identity.deviceId, makeClient: (ch) => new HostClient(ch) }),
+      sign: (remote, session) => signTransfer({ key: identity.key, deviceId: identity.deviceId, machinePublic: remote.key, session, to: targetId }),
+    } : null;
+    launchPanel.setTarget(launchable ? { hostId: targetId, machineName: name, load: () => (hosts.client ? hosts.client.launchOptions() : Promise.reject(new Error('not connected'))), transfers } : null);
     switch (hosts.phase) {
       case 'waiting': return setHostState(hosts.error || (hosts.targetOnline ? `Connecting to ${name}…` : `${name} is offline. Its sessions will show when it is back.`));
       case 'opening': return setHostState(`Opening an end-to-end encrypted channel to ${name}…`);

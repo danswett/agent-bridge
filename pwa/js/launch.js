@@ -42,6 +42,10 @@ export function checkLaunch(l) {
   }
   if (l.resume != null && l.workspace != null) { return 'a resumed session reopens in its own folder; name a workspace or a session to resume, not both'; }
   if (l.resume === '') { return 'the session to resume is empty'; }
+  if (l.transfer != null) {
+    if (l.resume != null) { return 'a transferred session is brought from another machine; name a session to resume or one to transfer, not both'; }
+    if (l.workspace == null) { return 'a session from another machine has no folder here; name the workspace it opens in'; }
+  }
   if (l.workspace === '') { return 'the workspace is empty'; }
   if (l.permissions != null && l.permissions !== ASK && l.permissions !== ALLOW_ALL) { return `unknown permissions '${cut(l.permissions)}'; use '${ASK}' or '${ALLOW_ALL}'`; }
   const attachments = l.attachments ?? [];
@@ -117,6 +121,9 @@ export function readLaunchResult(raw) {
     outcome: readLaunchOutcome(r.outcome),
     reason: str(r.reason),
     session: str(r.session),
-    launched: l ? { agent: str(l.agent), workspace: str(l.workspace), resume: str(l.resume), cwd: str(l.cwd), worktree: l.worktree === true, permissions: str(l.permissions) } : null,
+    launched: l ? {
+      agent: str(l.agent), workspace: str(l.workspace), resume: str(l.resume), cwd: str(l.cwd), worktree: l.worktree === true, permissions: str(l.permissions),
+      transfer: obj(l.transfer) && str(l.transfer.from) ? { from: l.transfer.from, session: str(l.transfer.session), bytes: typeof l.transfer.bytes === 'number' ? l.transfer.bytes : null } : null,
+    } : null,
   };
 }

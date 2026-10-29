@@ -82,7 +82,7 @@ test.describe('on a phone', () => {
     expect(sent.resume).toBe(RESUMABLE);
     expect(sent.workspace).toBeUndefined();
     await expect(page.locator(`.session[data-id="${RESUMABLE}"]`)).toBeInViewport();
-    await expect(field(page, 'resume')).toBeHidden();
+    await expect(field(page, 'resume').locator(`option[value="${RESUMABLE}"]`)).toHaveCount(0);
   });
 
   test('an agent that starts only on a first message is not launched without one, and nothing is sent', async ({ page }) => {
@@ -139,5 +139,74 @@ test.describe('on a phone', () => {
     await openDemo(page, '&launch=0');
     await expect(panel(page)).toBeHidden();
     expect(await page.evaluate(() => window.agentBridgeDemo.calls)).not.toContain('launch.options');
+  });
+});
+
+// Bringing a session that ended on another machine (docs/protocol/v1-transfer.md): Studio PC, the
+// demo's second machine, offers two; the launch carries a command this page signed for it.
+test.describe('bringing a session from another machine', () => {
+  test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
+
+  const AWAY = '2b4e6f80-1a3c-4d5e-8f70-9a0b1c2d3e4f';
+  const CODEX_AWAY = '5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f';
+  const body = (b64) => JSON.parse(Buffer.from(b64, 'base64url').toString('utf8'));
+
+  test('its sessions are listed by machine, and one opens here as a copy in the workspace picked', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await expect(field(page, 'resume').locator('option')).toHaveText(['New session', 'Fix the flaky relay test · agent-bridge', 'Draft the transfer docs · on Studio PC', 'Profile the relay under load · on Studio PC']);
+    await field(page, 'resume').selectOption(`@demo-studio/${AWAY}`);
+    // Its folder is on Studio PC: it opens in a workspace here, picked like a new session's.
+    await expect(field(page, 'workspace')).toBeVisible();
+    await expect(field(page, 'agent').locator('option')).toHaveText(['Copilot']);
+    await expect(panel(page).locator('.launch-note')).toContainText('from Studio PC to Demo machine');
+    await expect(panel(page).locator('.launch-note')).toContainText('It stays on Studio PC as it was.');
+    await field(page, 'workspace').selectOption('notes');
+    await launchButton(page).tap();
+
+    await expect(status(page)).toHaveText('Session brought over and started. The original is still on its machine.');
+    const [sent] = await log(page);
+    expect(sent).toMatchObject({ agent: 'copilot', workspace: 'notes', transfer: { from: 'demo-studio', session: AWAY } });
+    expect(sent.resume).toBeUndefined();
+    const command = body(sent.transfer.command.body);
+    expect(command).toMatchObject({ v: 1, action: 'session.transfer', request: expect.stringMatching(UUID), principal: { kind: 'user' }, target: { session: AWAY }, to: 'demo' });
+    expect(command.expiresAt - command.issuedAt).toBe(300);
+    expect(sent.transfer.command.mac).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    // A new session, under a new id, with the original's title.
+    const id = await page.evaluate(() => window.agentBridgeDemo.launches.get('demo').detail.session);
+    expect(id).not.toBe(AWAY);
+    const card = page.locator(`.session[data-id="${id}"]`);
+    await expect(card).toBeInViewport();
+    await expect(card).toContainText('Draft the transfer docs');
+  });
+
+  test('a resend after a lost response carries the same signed command', async ({ page }) => {
+    await openDemo(page, '&timeout=1000&retry=200');
+    await openPanel(page);
+    await script(page, { outcome: 'started', drop: true });
+    await field(page, 'resume').selectOption(`@demo-studio/${CODEX_AWAY}`);
+    await field(page, 'prompt').fill('Carry on from the last profile.');
+    await launchButton(page).tap();
+    await expect(status(page)).toHaveText(/^Session brought over and started in a new worktree\./, { timeout: 10000 });
+    const sent = await log(page);
+    expect(sent.length).toBeGreaterThan(1);
+    expect(new Set(sent.map((s) => JSON.stringify(s.transfer))).size).toBe(1);
+    expect(sent[0].agent).toBe('codex');
+  });
+
+  test("the other machine's refusal is shown in its words", async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await field(page, 'resume').selectOption(`@demo-studio/${AWAY}`);
+    // It ended up running again on Studio PC while the panel was open.
+    await page.evaluate((id) => { const h = window.agentBridgeDemo.host; h.remote.resumable = h.remote.resumable.filter((r) => r.id !== id); }, AWAY);
+    await launchButton(page).tap();
+    await expect(status(page)).toHaveText('Not launched: the session could not be brought from the other machine: Studio PC refused: that session is not one its machine offers (it is not on its resume list).');
+  });
+
+  test('a machine that takes no sessions from others lists only its own', async ({ page }) => {
+    await openDemo(page, '&transfer=0');
+    await openPanel(page);
+    await expect(field(page, 'resume').locator('option')).toHaveText(['New session', 'Fix the flaky relay test · agent-bridge']);
   });
 });

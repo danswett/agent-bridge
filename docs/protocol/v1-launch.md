@@ -7,6 +7,8 @@ effort, context, permissions, an opening prompt, or a session to resume. It adds
 values, request UUIDs). C# records are in `src/AgentBridge.Protocol/Launch.cs`; the PWA
 mirrors them in `pwa/js/launch.js`. How a Windows host carries a launch out is
 [host-launch.md](../host-launch.md); its settings are [host-config.md](../host-config.md).
+Resuming here a session that ended on another of the account's machines is a launch with a
+`transfer` ([v1-transfer.md](v1-transfer.md)).
 
 Nothing a client sends can widen what a machine allows. A session starts only in a folder a
 person approved **at that machine**, and every value is checked against what the machine
@@ -88,6 +90,7 @@ Request `data`:
 | `agent` | A launcher `id` from `launch.options`. Absent: the machine's default; for a resume, the launcher the session lists |
 | `workspace` | A workspace `label`. Absent: the machine's default. Not with `resume` |
 | `resume` | A `resumable` session's `id`, to reopen it in its own folder, instead of starting a new one |
+| `transfer` | With `sessions.transfer`: `{ from, session, command }`, a session from another machine of the account, brought here and resumed under a new id in `workspace`, which it then requires ([v1-transfer.md](v1-transfer.md)). Not with `resume` |
 | `profile` | Agency only: one of its `profiles`. Absent: its default |
 | `model`, `effort`, `context` | One of the agent's values, or `""` for the agent's own default over the machine's. Absent: the machine's default (`agents[].defaults`) |
 | `permissions` | `ask` (permission prompts as usual) or `allowAll` (launched without them: Copilot `--allow-all`, Claude `--dangerously-skip-permissions`, Codex `--ask-for-approval never`). Absent: `defaults.permissions` |
@@ -116,12 +119,13 @@ Result: `{ "outcome", "reason", "session", "launched" }`:
 | `unconfirmed` | The agent's process was started, but the host cannot say its session runs: it had not registered within the host's wait (60 s; a first launch that has to sign in can take longer), or the agent is asking a question in its window that only a person at the machine answers (whether to trust the folder; Codex's hook review). `reason` says which; `session` is set when the id is known in advance (Copilot, Agency, Claude, a resume). Never retried | Yes |
 | `failed` | The host tried, and the agent did not run: it could not be started, or its process exited before its session registered | No session |
 | `busy` | A session launched earlier on this machine is waiting for a person to answer whether to trust its folder, or the host's discovery is held ([below](#while-discovery-is-held)). `reason` says which. Nothing was started | No |
-| `refused` | Nothing was started: an invalid request, a value the machine does not offer (`reason` lists what it does), no approved workspace, a session to resume that is not on the list or is running, its folder no longer approved, worktree isolation that failed or is at its cap, a prompt too long for the command line, attachments the agent cannot take, launching off, agent-ha-bridge active for the user, an elevated host or one not on the desktop, or a platform without launching | No |
+| `refused` | Nothing was started: an invalid request, a value the machine does not offer (`reason` lists what it does), no approved workspace, a session to resume that is not on the list or is running, its folder no longer approved, worktree isolation that failed or is at its cap, a session from another machine that could not be brought (the reason says why, the other machine's words included), a prompt too long for the command line, attachments the agent cannot take, launching off, agent-ha-bridge active for the user, an elevated host or one not on the desktop, or a platform without launching | No |
 
 `reason` is present for anything but `started`. `launched` says what was settled on, after the
 machine's defaults: `{ agent, workspace, resume, cwd, worktree, profile, model, effort,
-context, permissions }`, where `cwd` is where the agent starts (a new worktree for an isolated
-workspace, with `worktree: true`). A client treats an outcome it does not know as
+context, permissions, transfer }`, where `cwd` is where the agent starts (a new worktree for an
+isolated workspace, with `worktree: true`), and `transfer`, for a session brought from another
+machine, is `{ from, session, bytes }` with `resume` its new id here. A client treats an outcome it does not know as
 `unconfirmed`: something may have started.
 
 **Trust is answered only at the machine.** An agent may ask, before its session registers,

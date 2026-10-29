@@ -21,12 +21,19 @@
 // host ends one: a session that is not idle takes a second press carrying the token the first
 // was given, then shows as ending and goes. A launch as a host launches one (launch.js mirrors
 // LaunchProtocol.Check): refused for what this machine does not offer, then started, with the new
-// session upserted. Outcomes are delivered unless a test or curious person scripts others.
+// session upserted. Outcomes are delivered unless a test or curious person scripts others. A
+// second machine, Studio PC, offers two ended sessions to bring over (transfer.js): the launch
+// carries a command this page signs with a key of its own for Studio PC's, which the demo host
+// reads as the target would and Studio PC would check.
 import { checkAnswer } from './answers.js';
 import { checkReply, typedForm } from './replies.js';
 import { readQuestion } from './protocol.js';
 import { USAGE } from './usage.js';
 import { LAUNCH, checkLaunch, flattenPrompt } from './launch.js';
+import { TRANSFER, signTransfer } from './transfer.js';
+import { P256KeyPair } from './noise-p256.js';
+import { deviceIdOf } from './identity.js';
+import { fromUtf8 } from './bytes.js';
 import { blobIdOf, fromBase64url, openBlob, storedSize, toBase64url } from './blobs.js';
 
 const BLOB_FILE_MAX = 100 * 1024 * 1024;
@@ -83,6 +90,8 @@ export class DemoHost {
   launchLog = [];
   #launchScript = [];
   launchOptions = demoLaunchOptions();
+  // The other machine's sessions, as it offers them for a transfer.
+  remote = { hostId: 'demo-studio', machineName: 'Studio PC', resumable: demoRemoteResumable() };
 
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
   // replying: false, one that can't reply; attaching: false, one that takes no files; large:
@@ -90,13 +99,14 @@ export class DemoHost {
   // stopping: false, one that can't end sessions; approving: false, one with approving
   // Copilot's permission prompts turned off. stopWindowMs is how long a first press of
   // a busy session waits for its second. usage: false plays a host from before usage.get;
-  // launching: false, one that can't launch sessions.
-  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering } = {}) {
+  // launching: false, one that can't launch sessions; transferring: false, one that takes no
+  // sessions from other machines.
+  constructor(fixture, { machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching } = {}) {
     this.machine = { id: 'demo', name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : [])];
     this.sessions = new Map();
     for (const s of fixture.sessions ?? []) { this.sessions.set(s.id, s); }
     this.revision = fixture.revision ?? 1;
@@ -266,6 +276,7 @@ export class DemoHost {
     }
     const problem = checkLaunch(data);
     if (problem) { return { outcome: 'refused', reason: problem }; }
+    if (data.transfer) { return this.#decideTransfer(data); }
     const resume = data.resume ? o.resumable.find((r) => r.id === data.resume) : null;
     if (data.resume && !resume) { return { outcome: 'refused', reason: `No resumable session '${data.resume}' on this machine; it is not on its resume list` }; }
     const agent = o.agents.find((a) => a.id === (data.agent ?? resume?.launcher ?? o.defaults.agent));
@@ -290,6 +301,38 @@ export class DemoHost {
     if (resume) { this.launchOptions = { ...o, resumable: o.resumable.filter((r) => r.id !== resume.id) }; }
     const permissions = data.permissions ?? o.defaults.permissions;
     return { outcome: 'started', session: id, launched: { agent: agent.id, ...(resume ? { resume: resume.id } : { workspace: workspace.label }), cwd, worktree: !!workspace?.isolate, permissions } };
+  }
+
+  // As the target and the machine the session is on decide between them: the command must be for
+  // the session asked for, from Studio PC, to this machine; the session must still be offered and
+  // run by an agent here; then it opens, under a new id, in the workspace picked.
+  #decideTransfer(data) {
+    const o = this.launchOptions;
+    const { from, session, command } = data.transfer;
+    if (from !== this.remote.hostId) { return { outcome: 'refused', reason: 'that machine is not online' }; }
+    let body = null;
+    try { body = JSON.parse(fromUtf8.decode(fromBase64url(command?.body ?? ''))); } catch { body = null; }
+    if (!body || body.action !== TRANSFER.action || body.target?.session !== session || body.to !== this.machine.id || !command.mac || !command.by) {
+      return { outcome: 'refused', reason: 'the session could not be brought from the other machine: the signed command is not for this launch: it must be signed by the device asking, for this machine to receive that session' };
+    }
+    const r = this.remote.resumable.find((x) => x.id === session);
+    if (!r) { return { outcome: 'refused', reason: 'the session could not be brought from the other machine: Studio PC refused: that session is not one its machine offers (it is not on its resume list)' }; }
+    const agent = o.agents.find((a) => a.id === (data.agent ?? r.launcher));
+    if (!agent || agent.kind !== r.agent) { return { outcome: 'refused', reason: `the session is a ${r.agent} session; launch it with an agent that runs those` }; }
+    const workspace = o.workspaces.find((w) => w.label === data.workspace);
+    if (!workspace) { return { outcome: 'refused', reason: `Unknown workspace '${data.workspace}'; this machine has ${o.workspaces.map((w) => w.label).join(', ')}` }; }
+    const id = crypto.randomUUID();
+    const said = flattenPrompt(data.prompt);
+    const at = now();
+    this.upsert({
+      id, agent: agent.kind, title: r.title, cwd: workspace.path, status: said ? 'working' : 'idle', statusSince: at, startedAt: at, updatedAt: at,
+      processId: 4000 + this.launches.size, activity: { ...(said ? { userMessage: said } : {}), turnCount: said ? 1 : 0 },
+    });
+    const permissions = data.permissions ?? o.defaults.permissions;
+    return {
+      outcome: 'started', session: id,
+      launched: { agent: agent.id, workspace: workspace.label, cwd: workspace.path, worktree: workspace.isolate, permissions, resume: id, transfer: { from, session, bytes: r.bytes } },
+    };
   }
 
   #stop(data, reply) {
@@ -508,6 +551,26 @@ function demoLaunchOptions() {
       { id: '7d3c1a2e-5b6f-4c8d-9e0a-1b2c3d4e5f60', agent: 'copilot', launcher: 'copilot', title: 'Fix the flaky relay test', cwd: 'C:\\Users\\demo\\repos\\agent-bridge', workspace: 'agent-bridge', updatedAt: '2026-10-27T18:02:11.000Z' },
     ],
     defaults: { agent: 'copilot', workspace: 'agent-bridge', permissions: 'ask' },
+  };
+}
+
+// What Studio PC offers to hand on: two ended sessions, one each for the agents the demo runs.
+function demoRemoteResumable() {
+  return [
+    { id: '2b4e6f80-1a3c-4d5e-8f70-9a0b1c2d3e4f', agent: 'copilot', launcher: 'copilot', title: 'Draft the transfer docs', cwd: 'D:\\src\\agent-bridge', workspace: 'agent-bridge', updatedAt: '2026-10-27T16:40:00.000Z', bytes: 3 * 1024 * 1024 + 123456 },
+    { id: '5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f', agent: 'codex', launcher: 'codex', title: 'Profile the relay under load', cwd: 'D:\\src\\relay', workspace: 'relay', updatedAt: '2026-10-26T22:15:00.000Z', bytes: 812345 },
+  ];
+}
+
+// The other machine, as the launch panel sees it: its sessions and a key, and commands signed
+// for it by a key this page makes for itself.
+export async function demoTransfers(host, targetId) {
+  const me = await P256KeyPair.generate();
+  const studio = await P256KeyPair.generate();
+  const deviceId = await deviceIdOf(me.public);
+  return {
+    remotes: async () => [{ hostId: host.remote.hostId, machineName: host.remote.machineName, key: studio.public, resumable: host.remote.resumable.map(({ bytes, ...r }) => r) }],
+    sign: (remote, session) => signTransfer({ key: me, deviceId, machinePublic: remote.key, session, to: targetId }),
   };
 }
 

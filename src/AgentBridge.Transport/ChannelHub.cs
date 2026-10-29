@@ -144,6 +144,14 @@ public sealed class ChannelHub
 
     internal Task SendAsync(SecureChannel ch, ChannelKind kind, byte[] body) => SendAsync(ch, kind, () => body, default);
 
+    // Ends a channel this device has finished with, telling the peer so it can let go at once.
+    public async Task CloseAsync(SecureChannel ch)
+    {
+        try { await SendAsync(ch, ChannelKind.Close, []); }
+        catch (Exception) { }
+        Forget(ch, new IOException("closed"));
+    }
+
     internal Task SendAsync(SecureChannel ch, ChannelKind kind, Func<byte[]> body, CancellationToken ct) => relay.SendAsync(ch.PeerId, () =>
     {
         var b = body();

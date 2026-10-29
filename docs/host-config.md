@@ -41,7 +41,8 @@ follow.
       "agency": { "path": null, "extraArgs": [] },
       "claude": { "model": "opus" },
       "codex": { }
-    }
+    },
+    "transfer": { "serve": true, "receive": true, "maxBytes": 26214400, "maxSourceBytes": null }
   },
   "homeAssistant": {
     "enabled": false,
@@ -76,6 +77,10 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `launch.agents.<id>.model`, `effort`, `context` | none | What a launch that does not say is started with. None means the agent's own default. `agency` uses `copilot`'s |
 | `launch.agents.<id>.models`, `efforts`, `contexts` | built in | The values to offer, replacing the built-in lists (and, for models, those the machine's sessions are using). At most 64 each |
 | `launch.agents.<id>.extraArgs` | `[]` | Arguments added to every launch of that agent, as written |
+| `launch.transfer.serve` | `true` | Hand this machine's ended sessions to the account's other machines, each on a command a person's device signed for it ([host-transfer.md](host-transfer.md)). `false` leaves `sessions.transfer.serve` out |
+| `launch.transfer.receive` | `true` | Bring sessions here from the account's other machines (`sessions.transfer`) |
+| `launch.transfer.maxBytes` | `26214400` (25 MiB) | The largest session bundle, compressed, this machine sends or takes: 1 MiB to 200 MiB. A transfer needs it on both machines |
+| `launch.transfer.maxSourceBytes` | 10 × `maxBytes` | The most read from disk to pack one, and unpacked to install one: from `maxBytes` to 20 GiB |
 | `homeAssistant.enabled` | `false` | The Home Assistant connector ([ha-connector.md](ha-connector.md)): this machine's sessions on the existing agent-ha-bridge dashboard. Runs only while agent-ha-bridge does not, and only with a token (`agent-bridge-host ha token set`, kept protected beside the device key, never in this file) |
 | `homeAssistant.baseUrl` | none | The Home Assistant, `http` or `https`, with no credentials in it. Required when enabled |
 | `homeAssistant.dashboardUrlPath` | `agent-decisions` | The dashboard agent-ha-bridge's writer generates. Only read, to know when an ended session's card has gone |

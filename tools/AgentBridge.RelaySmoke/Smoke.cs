@@ -225,6 +225,27 @@ public sealed class Smoke(Uri relay, TextWriter output)
         }
         catch (BlobRefusedException e) { Expect(e.Reason == "not-found", $"a deleted blob was refused with {e.Reason}, not not-found"); }
         output.WriteLine($"     {file.Length / 1048576.0:F1} MiB: up {up.TotalMilliseconds:F0} ms, down {down.TotalMilliseconds:F0} ms");
+
+        // As one host sends another a session (docs/host-transfer.md): from a file, sealed as it
+        // streams into storage, never whole in memory.
+        var bundle = Path.Combine(Environment.CurrentDirectory, $"relay-smoke-{RandomNumberGenerator.GetHexString(16, lowercase: true)}.bin");
+        try
+        {
+            var bytes = RandomNumberGenerator.GetBytes(BlobBytes * 2);
+            await File.WriteAllBytesAsync(bundle, bytes);
+            sw.Restart();
+            var streamed = await BlobTransfer.SendFileAsync(sender, http, receiver.DeviceId, bundle, Timeout(TimeSpan.FromMinutes(2)));
+            up = sw.Elapsed;
+            Expect(streamed.Size == bytes.Length, $"the streamed file was sent as {streamed.Size} bytes, not {bytes.Length}");
+            var back = new MemoryStream();
+            sw.Restart();
+            var streamedHash = await BlobTransfer.ReceiveAsync(receiver, http, streamed.Blob, streamed.Key, bytes.Length, back, ct: Timeout(TimeSpan.FromMinutes(2)));
+            down = sw.Elapsed;
+            Expect(back.ToArray().AsSpan().SequenceEqual(bytes) && streamedHash.AsSpan().SequenceEqual(streamed.Sha256), "the streamed file came back different");
+            Expect(await receiver.BlobDeleteAsync(streamed.Blob, Timeout()), "the receiver could not delete the streamed blob");
+            output.WriteLine($"     {bytes.Length / 1048576.0:F1} MiB streamed from a file: up {up.TotalMilliseconds:F0} ms, down {down.TotalMilliseconds:F0} ms");
+        }
+        finally { File.Delete(bundle); }
     }
 
     async Task<string?> PreflightAsync(string origin)

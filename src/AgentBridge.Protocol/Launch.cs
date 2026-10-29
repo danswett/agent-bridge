@@ -57,6 +57,14 @@ public static partial class LaunchProtocol
             return "a resumed session reopens in its own folder; name a workspace or a session to resume, not both";
         }
         if (launch.Resume is { Length: 0 }) { return "the session to resume is empty"; }
+        if (launch.Transfer is { } transfer)
+        {
+            if (launch.Resume is not null) { return "a transferred session is brought from another machine; name a session to resume or one to transfer, not both"; }
+            // No silent fallback to the default workspace: the session's own folder is on the
+            // other machine, and where it opens here is the person's choice.
+            if (launch.Workspace is null) { return "a session from another machine has no folder here; name the workspace it opens in"; }
+            if (TransferProtocol.Check(transfer) is { } bad) { return bad; }
+        }
         if (launch.Workspace is { Length: 0 }) { return "the workspace is empty"; }
         if (launch.Permissions is { } p && p is not (Ask or AllowAll)) { return $"unknown permissions '{Cut(p)}'; use '{Ask}' or '{AllowAll}'"; }
 
@@ -111,6 +119,9 @@ public sealed record LaunchRequest
     public string? Permissions { get; init; }
     public string? Prompt { get; init; }
     public IReadOnlyList<AttachmentRef>? Attachments { get; init; }
+    // With sessions.transfer: a session from another machine, resumed here as one of its own
+    // (docs/protocol/v1-transfer.md). Not with resume; needs workspace.
+    public LaunchTransfer? Transfer { get; init; }
 }
 
 // Session: the session's id, once known (always with started). Launched: what it was started
@@ -137,6 +148,15 @@ public sealed record LaunchedWith
     public string? Effort { get; init; }
     public string? Context { get; init; }
     public required string Permissions { get; init; }
+    // For a transferred session: where it came from. Resume is its new id here.
+    public LaunchedTransfer? Transfer { get; init; }
+}
+
+public sealed record LaunchedTransfer
+{
+    public required string From { get; init; }
+    public required string Session { get; init; }
+    public required long Bytes { get; init; }
 }
 
 // launch.options' result: what session.launch can name on this machine now.
