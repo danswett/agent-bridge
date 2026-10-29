@@ -50,7 +50,7 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
     IEnumerable<ResumeEntry> Copilot()
     {
         var root = Path.Combine(copilotHome, "session-state");
-        foreach (var dir in Newest(SafeDirectories(root), d => Directory.GetLastWriteTimeUtc(d)))
+        foreach (var dir in Newest(SafeDirectories(root), CopilotActivity))
         {
             var id = Path.GetFileName(dir);
             if (!Guid.TryParseExact(id, "D", out _)) { continue; }
@@ -81,6 +81,16 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
             if (string.IsNullOrWhiteSpace(summary)) { continue; }
             yield return new ResumeEntry(id.ToLowerInvariant(), AgentKind.Copilot, "copilot", summary, folder, updated);
         }
+    }
+
+    // When a Copilot session was last used: its transcript is appended to in place, which does
+    // not touch the folder's own time, so a session reopened yesterday after a year would rank
+    // by the year and fall outside the scan.
+    static DateTime CopilotActivity(string dir)
+    {
+        var events = File.GetLastWriteTimeUtc(Path.Combine(dir, "events.jsonl"));
+        var folder = Directory.GetLastWriteTimeUtc(dir);
+        return events > folder ? events : folder;
     }
 
     IEnumerable<ResumeEntry> Claude()

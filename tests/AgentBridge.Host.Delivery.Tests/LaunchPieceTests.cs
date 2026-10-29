@@ -388,6 +388,27 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    public void A_copilot_session_used_recently_is_offered_however_old_its_folder_and_however_many_others_there_are()
+    {
+        var copilot = Path.Combine(root, ".copilot");
+        var state = Path.Combine(copilot, "session-state");
+        string Id(int n) => $"{n:D8}-0000-4000-8000-000000000000";
+        for (var i = 1; i <= ResumableStore.ScanLimit; i++)
+        {
+            var d = Directory.CreateDirectory(Path.Combine(state, Id(i))).FullName;
+            File.WriteAllText(Path.Combine(d, "workspace.yaml"), $"cwd: C:\\repos\\app\nsummary: Session {i}\n");
+        }
+        // Started long ago and reopened just now: only its transcript says so.
+        var old = Directory.CreateDirectory(Path.Combine(state, Id(9999))).FullName;
+        File.WriteAllText(Path.Combine(old, "workspace.yaml"), "cwd: C:\\repos\\app\nsummary: The old one\n");
+        File.WriteAllText(Path.Combine(old, "events.jsonl"), """{"type":"user.message","data":{"content":"again"}}""" + "\n");
+        File.SetLastWriteTimeUtc(Path.Combine(old, "workspace.yaml"), new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        Directory.SetLastWriteTimeUtc(old, new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        Assert.Contains(new ResumableStore(copilot, root, root).Read(["copilot"]), e => e.Id == Id(9999));
+    }
+
+    [Fact]
     public void Agencys_listings_are_read_as_it_prints_them()
     {
         Assert.Equal(["home", "work"], AgencyCatalog.ParseProfiles("Agency 1.2\nProfiles:\n  home\n    MCPs: none\n    Plugins: none\n  work\n    MCPs: github\nDone.\n"));
