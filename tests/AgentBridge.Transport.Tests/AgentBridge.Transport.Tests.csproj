@@ -19,6 +19,7 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\..\src\AgentBridge.Transport\AgentBridge.Transport.csproj" />
     <ProjectReference Include="..\..\src\AgentBridge.Relay\AgentBridge.Relay.csproj" />
+    <ProjectReference Include="..\..\tools\AgentBridge.RelaySmoke\AgentBridge.RelaySmoke.csproj" />
     <None Include="testdata\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
