@@ -301,9 +301,12 @@ internal static class CodexLockDiscovery
     // A Codex process known to be a terminal: its command line read, and not an app-server.
     internal static bool IsTerminal(string? commandLine) => commandLine is { Length: > 0 } && !IsAppServer(commandLine);
 
-    // Codex's app-server: the daemon, its updater, or one an IDE runs. Never a terminal.
+    // Codex's app-server or MCP server: the daemon, its updater, or one an IDE runs. Never a
+    // terminal. Global options may come before the subcommand (`codex -c k=v app-server`), so
+    // any argument naming one counts: a terminal mistaken for a server is only not found, while
+    // a server mistaken for a terminal could be stopped, ending every session it serves.
     internal static bool IsAppServer(string? commandLine) =>
-        CommandLine.Split(commandLine).Skip(1).FirstOrDefault() == "app-server";
+        CommandLine.Split(commandLine).Skip(1).Any(a => a is "app-server" or "mcp-server");
 }
 
 internal static class RegistrationDiscovery

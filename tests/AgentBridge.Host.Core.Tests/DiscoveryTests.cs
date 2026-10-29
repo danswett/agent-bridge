@@ -271,6 +271,10 @@ public class DiscoveryTests
         var shared = f.CodexLock(B);
         f.Processes.Run(AgentKind.Codex, 902, "codex.exe --no-daemon");
         f.Processes.Holders[shared] = [901, 902];
+        // Global options ahead of the subcommand still make it a server.
+        var optioned = f.CodexLock("33333333-3333-4333-8333-333333333333");
+        f.Processes.Run(AgentKind.Codex, 903, "codex.exe -c model=example app-server --listen stdio://");
+        f.Processes.Holders[optioned] = [903];
         await using var source = f.Source();
 
         await source.RefreshAsync();
