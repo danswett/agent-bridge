@@ -44,6 +44,9 @@ public sealed record HaConnectorOptions
     // An arm left by a press stops counting for the next turn after this long
     // (DriverArmSeconds): the turn it was for is not coming.
     public TimeSpan DriverArm { get; init; } = TimeSpan.FromSeconds(600);
+    // How often a card with an open question is read even though the watch reported nothing, so
+    // a press made while the watch was reconnecting is not lost; the watch makes it immediate.
+    public TimeSpan AnswerSweep { get; init; } = TimeSpan.FromSeconds(5);
 }
 
 // The Home Assistant connector (docs/ha-connector.md): this machine's sessions, liveness,

@@ -82,10 +82,11 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
 
     // States Home Assistant keeps for optimistic MQTT entities (selects, buttons, text with no
     // state topic), by unique_id so a rename keeps them.
-    readonly Dictionary<string, (string State, string? UserId)> optimistic = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (string State, string? UserId, string Changed)> optimistic = new(StringComparer.Ordinal);
     public List<(string Service, string EntityId, string Value, string? UserId)> Services { get; } = [];
     // The account the connector's token belongs to, as Home Assistant records it.
     public string TokenUser { get; set; } = "token-user";
+    int changes;
     readonly System.Threading.Channels.Channel<HaTrigger> triggers = System.Threading.Channels.Channel.CreateUnbounded<HaTrigger>();
     public List<IReadOnlyCollection<string>> Watches { get; } = [];
 
@@ -116,7 +117,9 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
                     Now = Now.AddSeconds(1);
                     break;
             }
-            optimistic[uniqueId] = (value, userId);
+            // last_changed moves only when the state does, as Home Assistant's does.
+            var changed = optimistic.TryGetValue(uniqueId, out var before) && before.State == value ? before.Changed : $"changed-{++changes}";
+            optimistic[uniqueId] = (value, userId, changed);
             return new HaTrigger(entityId, Derived(entityId)!);
         }
     }
@@ -201,10 +204,11 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
             state = JsonNode.Parse(state)?["at"]?.GetValue<string>() ?? "unknown";
         }
         string? user = null;
-        if (optimistic.TryGetValue(uniqueId, out var o)) { (state, user) = o; }
+        string? changedAt = null;
+        if (optimistic.TryGetValue(uniqueId, out var o)) { (state, user, changedAt) = o; }
         var attributes = config["json_attributes_topic"]?.GetValue<string>() is { } at && Retained.TryGetValue(at, out var a) ? JsonNode.Parse(a)!.AsObject() : [];
         if (config["options"] is JsonArray options) { attributes["options"] = options.DeepClone(); }
-        return new HaState(entityId, state, JsonDocument.Parse(attributes.ToJsonString()).RootElement.Clone(), user);
+        return new HaState(entityId, state, JsonDocument.Parse(attributes.ToJsonString()).RootElement.Clone(), user, changedAt);
     }
 
     public Task<IReadOnlyList<HaRegistryEntry>> ListEntityRegistryAsync(CancellationToken cancellationToken = default)

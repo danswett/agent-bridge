@@ -195,7 +195,8 @@ empty multi-select options), three clears and the multi-select code table.
 
 **Reading** an answer. Presses come from one held WebSocket `subscribe_trigger` on every armed
 session's Send button and reply payload sensor (the daemon's `Wait-CopilotHaStateChange`), and
-each pass also reads them over REST, so a missed event costs at most a second. A press counts
+every card with an open question is also read every 5 s (`AnswerSweep`), so a press made while
+the watch was reconnecting is late, never lost. A press counts
 only when it changed from the baseline taken at arming, was not already spent, and its
 `context.user_id` is recorded for `driver`. The fields are read from the slots, choice labels
 mapped back to their values (`#n,m` codes for a multi-select), numbers parsed, `Other` taken
@@ -206,7 +207,11 @@ path as the app's, so G5, the delivery gate and the attempt ledger apply unchang
 **Telling the card**, on the activity line, as `Set-DaemonTransientActivity` does:
 `Sending answer...`, then `Answer sent` (with `answer`, `at` and `answer_consumed_at`, which the
 reply card uses to clear its draft, and the reply box reset to `' '`), `Answer unconfirmed -
-check the terminal`, or `Answer NOT sent` with a hint, after which Send can be pressed again.
+check the terminal`, or `Answer NOT sent` with a hint. After `NOT sent` the attempt that failed
+is never retried on its own: a new Send press, a new reply-card publish, a new tap (the
+selector goes back to `Awaiting answer...` so the same option can be chosen again; a tap is
+known by the selector's `last_changed`), or for words in the reply box a press of Send, answers
+again, each as a request of its own so the host does not answer it from the earlier refusal.
 `Not sent - answer every field` (with `waiting_on`), `Not sent - this question takes options`
 and `Not sent - no Send button on this session` say what was wrong with the press itself; such
 a press is spent. A question that ends is cleared (selector `Idle`, attributes `{}`, the slots

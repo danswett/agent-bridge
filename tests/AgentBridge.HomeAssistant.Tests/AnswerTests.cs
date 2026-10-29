@@ -294,11 +294,81 @@ public sealed class AnswerTests : IDisposable
         await Do(c, ha.Press(SessionEntities.Submit(Node)));
         Assert.Equal("Answer NOT sent", Activity);
         Assert.Equal("nothing reached the terminal", Detail.GetProperty("hint").GetString());
+        // The press that failed is not tried again by itself, however often the card is read.
+        await Pass(c, 6);
+        await Pass(c, 6);
+        Assert.Single(answered);
 
         outcome = _ => new AnswerResult(AnswerOutcome.Delivered);
         await Do(c, ha.Press(SessionEntities.Submit(Node)));
         Assert.Equal(2, answered.Count);
         // Two presses are two requests; a resend of one would carry its id again.
+        Assert.NotEqual(answered[0].Request, answered[1].Request);
+        Assert.Equal("Answer sent", Activity);
+    }
+
+    [Fact]
+    public async Task A_press_the_watch_never_reported_is_still_answered_when_the_card_is_next_read()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        // Made while the watch was reconnecting: Home Assistant has it, the connector heard nothing.
+        ha.Choose(SessionEntities.Field(Node, 1), "Wait for the fix");
+        ha.Press(SessionEntities.Submit(Node));
+        await Pass(c, 6);
+        Assert.Equal("wait", Assert.Single(answered).Fields!["release"].GetString());
+        Assert.Equal("Answer sent", Activity);
+        await Pass(c, 6);
+        Assert.Single(answered);
+    }
+
+    [Fact]
+    public async Task An_approval_tap_that_was_refused_can_be_tapped_again_and_is_tried_afresh()
+    {
+        outcome = _ => new AnswerResult(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with
+        {
+            Agent = AgentKind.Codex,
+            Question = new Question
+            {
+                Id = "a1", Kind = QuestionKind.Approval, Message = "Codex wants to run git push", AskedAt = FakeSessions.T0,
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
+            },
+        });
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        Assert.Equal("Answer NOT sent", Activity);
+        // Back to waiting, so the same option can be chosen again; and not retried by itself.
+        Assert.Equal(HaDecision.Awaiting, State(SessionEntities.Decision(Node)));
+        await Pass(c, 6);
+        Assert.Single(answered);
+
+        outcome = _ => new AnswerResult(AnswerOutcome.Delivered);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        Assert.Equal(2, answered.Count);
+        // A new tap is a new request, not the refusal the host remembers for the first.
+        Assert.NotEqual(answered[0].Request, answered[1].Request);
+        Assert.Equal("Answer sent", Activity);
+    }
+
+    [Fact]
+    public async Task Refused_words_from_the_reply_box_go_again_on_a_press_of_send_and_not_by_themselves()
+    {
+        outcome = _ => new AnswerResult(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");
+        Ask(Form("q1"));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Type(SessionEntities.Reply(Node), "Call it Aurora"));
+        Assert.Equal("Answer NOT sent", Activity);
+        await Pass(c, 6);
+        Assert.Single(answered);
+
+        outcome = _ => new AnswerResult(AnswerOutcome.Delivered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Equal(2, answered.Count);
+        Assert.Equal("Call it Aurora", answered[1].Text);
         Assert.NotEqual(answered[0].Request, answered[1].Request);
         Assert.Equal("Answer sent", Activity);
     }
