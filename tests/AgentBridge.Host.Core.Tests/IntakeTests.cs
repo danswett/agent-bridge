@@ -185,21 +185,21 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
-    public void The_heartbeat_is_kept_while_taking_events_and_only_the_hosts_own_is_removed_when_it_stops()
+    public async Task The_heartbeat_is_kept_while_taking_events_and_only_the_hosts_own_is_removed_when_it_stops()
     {
         var intake = Intake();
         intake.Pass();
         var heartbeat = SpoolContract.HeartbeatPath(_f.Runtime);
         Assert.Equal(Environment.ProcessId.ToString(), File.ReadAllText(heartbeat));
         Assert.True(SpoolContract.ConsumerState(_f.Runtime, DateTimeOffset.Now).Alive);
-        intake.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        await intake.DisposeAsync();
         Assert.False(File.Exists(heartbeat));
 
         // A daemon that has taken over keeps its heartbeat.
         var second = Intake();
         second.Pass();
         File.WriteAllText(heartbeat, "999999");
-        second.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        await second.DisposeAsync();
         Assert.Equal("999999", File.ReadAllText(heartbeat));
     }
 
