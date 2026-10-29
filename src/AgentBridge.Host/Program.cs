@@ -245,7 +245,7 @@ ISessionLauncher Launcher(ISessionSource source, AttachmentStore? attachments)
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
     IAgentHaBridgeProbe probe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : new NoAgentHaBridge();
     IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector() : new NoScreens();
-    var launcher = new LaunchService(source, probe, injector, starter, new AgentLocator(), new AgencyCatalog(new CommandRunner()), new LaunchServiceOptions
+    var launcher = new LaunchService(source, probe, injector, starter, new AgentLocator(), new AgencyCatalog(new BatchFileRunner(new CommandRunner())), new LaunchServiceOptions
     {
         CopilotHome = options.CopilotHome,
         ClaudeHome = options.ClaudeHome,

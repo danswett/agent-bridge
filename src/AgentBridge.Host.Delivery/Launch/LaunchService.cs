@@ -95,6 +95,11 @@ public sealed partial class LaunchService : ISessionLauncher
     readonly SemaphoreSlim starting = new(1, 1);
     readonly Lock pendingGate = new();
     readonly List<Pending> pending = [];
+    // Every session id a launch has started an agent on (given, resumed, or the Codex session
+    // bound to it), with its process: while that process runs, the session is not resumed
+    // again, even after its launch has stopped being followed, and a Codex session bound to
+    // one launch is never bound to another.
+    readonly Dictionary<string, Started> launchedOn = new(StringComparer.OrdinalIgnoreCase);
 
     public LaunchService(ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
         AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null)
@@ -277,6 +282,8 @@ public sealed partial class LaunchService : ISessionLauncher
         var candidates = stored.Where(e => e.Agent != AgentKind.Copilot).Concat(fromAgency)
             .Concat(stored.Where(e => e.Agent == AgentKind.Copilot).Select(e => e with { Launcher = copilotLauncher! }));
         var excluded = new HashSet<string>(live.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
+        // And any a launch has started an agent on that has not registered yet.
+        lock (pendingGate) { excluded.UnionWith(launchedOn.Where(x => starter.Running(x.Value)).Select(x => x.Key)); }
         var offered = new List<Offered>();
         var labels = new HashSet<string>(StringComparer.Ordinal);
         var prefixed = candidates.Select(e => e.Agent).Distinct().Count() > 1;
@@ -378,7 +385,7 @@ public sealed partial class LaunchService : ISessionLauncher
             resume = resolved.Resumable.FirstOrDefault(e => string.Equals(e.Id, resumeId, StringComparison.OrdinalIgnoreCase));
             if (resume is null)
             {
-                return (null, source.Get(resumeId) is not null
+                return (null, source.Get(resumeId) is not null || Starting(resumeId)
                     ? "that session is already running; two agents on one session would corrupt it"
                     : $"No resumable session '{Limits.KeepStart(resumeId, 64)}' on this machine; it is not on its resume list");
             }
@@ -469,6 +476,12 @@ public sealed partial class LaunchService : ISessionLauncher
             // Checked again: agent-ha-bridge may have started while this one waited its turn.
             if (probe.Active() is { } active) { return Refused(active); }
             if (BusyReason() is { } busy) { return new LaunchResult(LaunchOutcome.Busy, busy); }
+            // And the session to resume, which another press may have resumed while this one
+            // waited: two agents on one transcript would corrupt it.
+            if (plan.Resume is { } again && (source.Get(again.Id) is not null || Starting(again.Id)))
+            {
+                return Refused("that session is already running; two agents on one session would corrupt it");
+            }
 
             var directory = plan.Directory;
             string? worktree = null;
@@ -539,6 +552,7 @@ public sealed partial class LaunchService : ISessionLauncher
                 return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} could not be started: {e.Message}") { Launched = launched };
             }
             if (claim is not null) { attachments!.Consume(claim); handed.Value = true; }
+            if (sessionId.Length > 0) { Launched(sessionId, started); }
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");
             // The reservation is the follow's now, released when the session registers.
             follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched);
@@ -658,18 +672,55 @@ public sealed partial class LaunchService : ISessionLauncher
         }
     }
 
-    // The session a launch produced, once it is live: by the id it was given, or for Codex, the
-    // first Codex session that was not there before and started after the launch.
+    // The session a launch produced, once it is live: by the id it was given, or for Codex, which
+    // chooses its own, a new Codex session that started after the launch and runs in the process
+    // the launch started or one under it. Only when that cannot be told (its process is not
+    // known, or the launcher has gone) is timing enough, and then only while no other Codex
+    // launch is waiting for its session, which could be this one. A session bound to one launch
+    // is never bound to another.
     string? Registered(Pending p)
     {
         if (p.SessionId.Length > 0) { return source.Get(p.SessionId) is not null ? p.SessionId : null; }
+        if (p.Bound is { } bound) { return bound; }
+        List<Pending> others;
+        lock (pendingGate) { others = [.. pending.Where(x => x != p && x.SessionId.Length == 0 && x.Bound is null)]; }
         foreach (var s in source.Snapshot())
         {
-            if (s.Agent != AgentKind.Codex || p.CodexBefore.Contains(s.Id)) { continue; }
-            var started = source.ProcessOf(s.Id)?.StartedAt ?? s.StartedAt;
-            if (started is { } at && at >= p.Started.StartedAt - TimeSpan.FromSeconds(2)) { return s.Id; }
+            if (s.Agent != AgentKind.Codex || !Candidate(p, s.Id, out var process)) { continue; }
+            var own = process is null ? null : starter.Owns(p.Started, process.Id);
+            if (own == false || (own is null && others.Any(x => Candidate(x, s.Id, out _)))) { continue; }
+            lock (pendingGate)
+            {
+                if (launchedOn.ContainsKey(s.Id)) { continue; }
+                launchedOn[s.Id] = p.Started;
+                p.Bound = s.Id;
+            }
+            return s.Id;
         }
         return null;
+    }
+
+    // Whether a Codex session is new to a launch: not there when it started, and started after.
+    bool Candidate(Pending p, string id, out SessionProcess? process)
+    {
+        process = source.ProcessOf(id);
+        return !p.CodexBefore.Contains(id)
+            && (process?.StartedAt ?? source.Get(id)?.StartedAt) is { } at && at >= p.Started.StartedAt - TimeSpan.FromSeconds(2);
+    }
+
+    // Whether a launch has started an agent on this session that is still running.
+    bool Starting(string sessionId)
+    {
+        lock (pendingGate) { return launchedOn.TryGetValue(sessionId, out var started) && starter.Running(started); }
+    }
+
+    void Launched(string sessionId, Started started)
+    {
+        lock (pendingGate)
+        {
+            foreach (var gone in launchedOn.Where(x => !starter.Running(x.Value)).Select(x => x.Key).ToList()) { launchedOn.Remove(gone); }
+            launchedOn[sessionId] = started;
+        }
     }
 
     void Decide(Pending p, LaunchResult result)
@@ -708,6 +759,7 @@ public sealed partial class LaunchService : ISessionLauncher
         public StartupQuestion Question { get; set; }
         public DateTimeOffset? TrustAt { get; set; }
         public bool RegisteredLate { get; set; }
+        public string? Bound { get; set; }
     }
 
     static string Short(Guid key) => key.ToString()[..8];

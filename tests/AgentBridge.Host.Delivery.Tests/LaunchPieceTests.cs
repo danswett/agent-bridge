@@ -95,6 +95,20 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.False(File.Exists(canary));
     }
 
+    [WindowsFact]
+    public async Task Agency_installed_as_a_batch_shim_still_lists_its_profiles_from_a_folder_cmd_exe_would_misread_unquoted()
+    {
+        // Program Files (x86): an unquoted ( or & is where cmd.exe goes wrong.
+        var folder = Directory.CreateDirectory(Path.Combine(root, "Program Files (x86) & co")).FullName;
+        var shim = Path.Combine(folder, "agency.cmd");
+        File.WriteAllText(shim, $"@echo Profiles:\r\n@echo   home\r\n@echo   work\r\n@\"{Echo}\" --args \"{Out("agency.json")}\" %*\r\n");
+
+        var ran = await new BatchFileRunner(new AgentBridge.Host.Core.Usage.CommandRunner()).RunAsync(shim, ["config", "profiles"], TimeSpan.FromSeconds(30));
+        Assert.Equal((true, 0), (ran.Ran, ran.ExitCode));
+        Assert.Equal(["config", "profiles"], Read("agency.json"));
+        Assert.Equal(["home", "work"], await new AgencyCatalog(new BatchFileRunner(new AgentBridge.Host.Core.Usage.CommandRunner())).ProfilesAsync(shim));
+    }
+
     [Fact]
     public void A_line_too_long_for_cmd_exe_is_refused_rather_than_cut()
     {
@@ -120,6 +134,45 @@ public sealed class LaunchPieceTests : IDisposable
         while (starter.Running(started) && DateTime.UtcNow < deadline) { Thread.Sleep(50); }
         Assert.False(starter.Running(started));
         Assert.False(starter.Running(started with { StartedAt = started.StartedAt.AddMinutes(-5) }));
+    }
+
+    [WindowsFact]
+    public void A_process_is_the_launchs_own_only_if_it_runs_under_the_process_started_for_it()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var starter = new WindowsAgentStarter(hidden: true);
+        // As npm installs an agent: cmd.exe runs the shim, and the agent runs under it.
+        var shim = Path.Combine(root, "agent.cmd");
+        File.WriteAllText(shim, $"@\"{Echo}\" \"{Out("agent.log")}\"\r\n");
+        var started = starter.Start(new StartSpec(shim, [], root));
+        int agent = 0;
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            while (agent == 0 && DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    // Shared, since the agent holds its log open for writing.
+                    using var log = new StreamReader(new FileStream(Out("agent.log"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+                    if (log.ReadToEnd().Split(' ') is ["ready", var pid, ..]) { agent = int.Parse(pid); }
+                }
+                catch (IOException) { }
+                Thread.Sleep(50);
+            }
+            Assert.NotEqual(0, agent);
+            Assert.True(starter.Owns(started, agent));
+            Assert.True(starter.Owns(started, started.ProcessId));
+            Assert.False(starter.Owns(started, Environment.ProcessId));
+        }
+        finally
+        {
+            if (agent != 0) { try { Process.GetProcessById(agent).Kill(); } catch (ArgumentException) { } }
+        }
+        var gone = DateTime.UtcNow.AddSeconds(20);
+        while (starter.Running(started) && DateTime.UtcNow < gone) { Thread.Sleep(50); }
+        // Once the launcher has gone, nothing can be traced to it.
+        Assert.Null(starter.Owns(started, agent));
     }
 
     static string Echo => Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "agent-bridge-console-echo.exe" : "agent-bridge-console-echo");

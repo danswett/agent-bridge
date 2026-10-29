@@ -132,7 +132,11 @@ shows, other launches on that machine are `busy`, so no later press is ever take
 answer and nothing new starts over it, as agent-ha-bridge does. Once a person answers at the
 machine the session registers and appears like any other.
 
-**One start at a time.** A host starts one launch at a time (worktree, start, binding); a
-second press waits its turn. Each is bound to its session by the id it was given (Copilot,
-Agency and Claude take one; a resume keeps its own), and Codex, which picks its own, by the
-first new Codex session that starts after it.
+**One start at a time.** A host starts one launch at a time (worktree, then the agent's
+process); a second press waits its turn. Each launch is bound to its session by the id it was
+given (Copilot, Agency and Claude take one; a resume keeps its own). Codex picks its own id,
+so its launch is bound to a new Codex session that runs in the process the launch started, or
+one under it. Only when that cannot be told is a session started after the launch enough, and
+then only if no other Codex launch could claim it; no session is ever bound to two launches.
+While a launch's agent runs, the session it was started on is not resumable: it is left out of
+`resumable`, and a resume of it is `refused`, even after its launch has answered.

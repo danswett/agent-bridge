@@ -361,6 +361,54 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         Assert.Equal(["--no-daemon", "-c", "model_reasoning_summary=detailed", "--", "add pagination"], starter.Specs[0].Arguments);
     }
 
+    [Fact]
+    public async Task Two_codex_launches_at_once_each_get_the_session_their_own_agent_chose()
+    {
+        const string First = "71111111-1111-4111-8111-111111111111", Second = "72222222-2222-4222-8222-222222222222";
+        locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        starter.Registers = false;
+        var ch = await OpenAsync();
+        var first = LaunchAsync(ch, new { agent = "codex", prompt = "one" });
+        await WaitAsync(() => Task.FromResult(starter.Pids.Count == 1));
+        var second = LaunchAsync(ch, new { agent = "codex", prompt = "two" });
+        await WaitAsync(() => Task.FromResult(starter.Pids.Count == 2));
+
+        // The second's agent registers first: it is the second's, and the first goes on waiting.
+        starter.RegisterCodex(starter.Specs[1], starter.Pids[1], 7002, Second);
+        Assert.Equal(("started", Second), ((await second).Outcome_, (await second).Session));
+        Assert.False(first.IsCompleted);
+
+        starter.RegisterCodex(starter.Specs[0], starter.Pids[0], 7001, First);
+        Assert.Equal(("started", First), ((await first).Outcome_, (await first).Session));
+    }
+
+    [Fact]
+    public async Task A_session_being_resumed_is_not_resumed_again_by_another_press_until_its_agent_has_gone()
+    {
+        const string Id = "77777777-7777-4777-8777-777777777777";
+        Resumable(Id, app, "Ship it");
+        starter.Registers = false;
+        Serve(Config(), wait: TimeSpan.FromMilliseconds(400));
+        var ch = await OpenAsync();
+
+        // Two presses at once, from two devices, say: one agent starts, the other is turned away.
+        var a = LaunchAsync(ch, new { resume = Id });
+        var b = LaunchAsync(ch, new { resume = Id });
+        Assert.Equal(["refused", "unconfirmed"], new[] { (await a).Outcome_, (await b).Outcome_ }.Order());
+        Assert.Single(starter.Specs);
+
+        // Still starting after its launch has answered: not offered, and not started again.
+        var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
+        Assert.DoesNotContain(options.GetProperty("resumable").EnumerateArray(), r => r.GetProperty("id").GetString() == Id);
+        Assert.Equal(("refused", "that session is already running; two agents on one session would corrupt it"), Pair(await LaunchAsync(ch, new { resume = Id })));
+        Assert.Single(starter.Specs);
+
+        // Once its agent has gone, it can be resumed again.
+        starter.Exit(starter.Pids[0]);
+        Assert.Equal("unconfirmed", (await LaunchAsync(ch, new { resume = Id })).Outcome_);
+        Assert.Equal(2, starter.Specs.Count);
+    }
+
     static (string, string?) Pair(Outcome o) => (o.Outcome_, o.Reason);
 
     void Resumable(string id, string cwd, string summary)
@@ -445,7 +493,9 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         public volatile bool Registers = true;
         public bool ExitsAtOnce;
         public readonly string CodexId = "66666666-6666-4666-8666-666666666666";
+        public readonly List<int> Pids = [];
         readonly HashSet<int> running = [];
+        readonly Dictionary<int, int> parents = [];
         int next = 4000;
 
         public string? Unavailable() => Unavailable_;
@@ -455,7 +505,7 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         public Started Start(StartSpec spec)
         {
             int pid;
-            lock (Specs) { Specs.Add(spec); pid = ++next; if (!ExitsAtOnce) { running.Add(pid); } }
+            lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } }
             if (Registers) { Register(spec, pid); }
             return new Started(pid, DateTimeOffset.UtcNow);
         }
@@ -465,16 +515,43 @@ public sealed class LaunchFlowTests : IAsyncLifetime
             lock (Specs) { return running.Contains(started.ProcessId); }
         }
 
+        // As the process tree does: the process started, or one under it.
+        public bool? Owns(Started started, int processId)
+        {
+            lock (Specs)
+            {
+                if (!running.Contains(started.ProcessId)) { return null; }
+                return processId == started.ProcessId || parents.GetValueOrDefault(processId) == started.ProcessId;
+            }
+        }
+
+        public void Exit(int pid)
+        {
+            lock (Specs) { running.Remove(pid); }
+        }
+
         public void Register(StartSpec spec) => Register(spec, 9000 + Specs.IndexOf(spec));
+
+        // Codex's own process, under the launcher started for it, registering the session it chose.
+        public void RegisterCodex(StartSpec spec, int launcher, int pid, string id)
+        {
+            lock (Specs) { parents[pid] = launcher; }
+            RegisterCodex(spec, pid, id);
+        }
+
+        void RegisterCodex(StartSpec spec, int pid, string id)
+        {
+            var transcript = f.CodexTranscript(id);
+            Fixture.Append(transcript, Codex.Line("session_meta", new { id, cwd = spec.WorkingDirectory }, 0));
+            f.CodexRegistration(id, pid, transcript, updated: DateTimeOffset.UtcNow);
+            f.Processes.Run(AgentKind.Codex, pid, "codex", DateTimeOffset.UtcNow);
+        }
 
         void Register(StartSpec spec, int pid)
         {
             if (spec.Executable.EndsWith("codex.cmd", StringComparison.Ordinal))
             {
-                var transcript = f.CodexTranscript(CodexId);
-                Fixture.Append(transcript, Codex.Line("session_meta", new { id = CodexId, cwd = spec.WorkingDirectory }, 0));
-                f.CodexRegistration(CodexId, pid, transcript, updated: DateTimeOffset.UtcNow);
-                f.Processes.Run(AgentKind.Codex, pid, "codex", DateTimeOffset.UtcNow);
+                RegisterCodex(spec, pid, CodexId);
                 return;
             }
             var args = spec.Arguments.ToList();

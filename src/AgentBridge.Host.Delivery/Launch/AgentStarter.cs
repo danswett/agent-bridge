@@ -27,6 +27,11 @@ public interface IAgentStarter
 
     // Whether the process started is still the one running under its id.
     bool Running(Started started);
+
+    // Whether a process is the one started or runs under it (an npm shim's cmd.exe starts node,
+    // which may start the agent's own binary); null when that cannot be told, as when the
+    // process started has gone.
+    bool? Owns(Started started, int processId) => null;
 }
 
 // Exactly as agent-ha-bridge starts one on Windows (Start-BridgeCopilotSession: Start-Process,
@@ -96,6 +101,51 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
         finally { CloseHandle(process); }
     }
 
+    public bool? Owns(Started started, int processId)
+    {
+        if (!Running(started)) { return null; }
+        var parents = Parents();
+        if (parents is null) { return null; }
+        var current = processId;
+        var created = CreatedAt(current);
+        for (var depth = 0; depth < 16; depth++)
+        {
+            if (current == started.ProcessId) { return true; }
+            if (!parents.TryGetValue(current, out var parent) || parent == 0 || parent == current) { return false; }
+            // An id recycled since: a parent cannot have started after its child.
+            var parentCreated = CreatedAt(parent);
+            if (created is { } c && parentCreated is { } pc && pc > c) { return false; }
+            (current, created) = (parent, parentCreated);
+        }
+        return false;
+    }
+
+    // Every process's parent, from one snapshot.
+    static Dictionary<int, int>? Parents()
+    {
+        var snapshot = CreateToolhelp32Snapshot(Th32csSnapProcess, 0);
+        if (snapshot == -1) { return null; }
+        try
+        {
+            var map = new Dictionary<int, int>();
+            var entry = new ProcessEntry32 { Size = Marshal.SizeOf<ProcessEntry32>() };
+            for (var more = Process32FirstW(snapshot, ref entry); more; more = Process32NextW(snapshot, ref entry))
+            {
+                map[(int)entry.ProcessId] = (int)entry.ParentProcessId;
+            }
+            return map;
+        }
+        finally { CloseHandle(snapshot); }
+    }
+
+    static DateTimeOffset? CreatedAt(int processId)
+    {
+        var process = OpenProcess(ProcessQueryLimitedInformation, false, (uint)processId);
+        if (process == 0) { return null; }
+        try { return GetProcessTimes(process, out var created, out _, out _, out _) ? DateTimeOffset.FromFileTime(created).ToUniversalTime() : null; }
+        finally { CloseHandle(process); }
+    }
+
     static string? WindowStation()
     {
         var station = GetProcessWindowStation();
@@ -112,6 +162,28 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
     const int UoiName = 2;
     const uint ProcessQueryLimitedInformation = 0x1000;
     const uint StillActive = 259;
+    const uint Th32csSnapProcess = 0x2;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct ProcessEntry32
+    {
+        public int Size;
+        public uint Usage, ProcessId;
+        public nint DefaultHeapId;
+        public uint ModuleId, Threads, ParentProcessId;
+        public int PriorityClassBase;
+        public uint Flags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string ExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern nint CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool Process32FirstW(nint snapshot, ref ProcessEntry32 entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool Process32NextW(nint snapshot, ref ProcessEntry32 entry);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern nint OpenProcess(uint access, bool inherit, uint processId);
