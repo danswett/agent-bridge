@@ -136,6 +136,26 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [WindowsFact]
+    public void A_started_agent_gets_the_session_variable_on_top_of_the_hosts_own_environment()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Environment.SetEnvironmentVariable("AGENT_BRIDGE_TEST_INHERITED", "kept");
+        var shim = Path.Combine(root, "env.cmd");
+        File.WriteAllText(shim, $"@echo %{Launchers.SessionVariable}% %AGENT_BRIDGE_TEST_INHERITED%> \"{Out("env.txt")}\"\r\n");
+        var started = new WindowsAgentStarter(hidden: true).Start(new StartSpec(shim, [], root, new Dictionary<string, string> { [Launchers.SessionVariable] = "5b0e1f2a" }));
+
+        Assert.True(started.ProcessId > 0);
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        string? said = null;
+        while (said is null && DateTime.UtcNow < deadline)
+        {
+            try { said = File.ReadAllText(Out("env.txt")).Trim(); }
+            catch (IOException) { Thread.Sleep(50); }
+        }
+        Assert.Equal("5b0e1f2a kept", said);
+    }
+
+    [WindowsFact]
     public void A_process_is_the_launchs_own_only_if_it_runs_under_the_process_started_for_it()
     {
         if (!OperatingSystem.IsWindows()) { return; }

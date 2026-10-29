@@ -115,6 +115,7 @@ switch (command)
         }
     case "sign-in":
         {
+            if (Refused("sign in")) { return 4; }
             var identity = LoadIdentity();
             var relay = RelayUri(identity) ?? throw new ArgumentException("--relay is required");
             using var http = new HttpClient();
@@ -162,6 +163,7 @@ switch (command)
             var rest = new List<string>(arguments);
             var p = rest.IndexOf("--profile");
             if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
+            if (ConfigCommands.Writes(rest) && Refused("change the host's config")) { return 4; }
             return ConfigCommands.Run(rest, LoadIdentity().Folder, Console.Out, Console.Error);
         }
     default:
@@ -173,6 +175,16 @@ switch (command)
 }
 
 Identity LoadIdentity() => Identity.Load(Option("--profile") ?? "default");
+
+// What may only be done by a person never runs inside an agent session (§6.3 invariant 13): the
+// host's own command line refuses it there, as the pipe does.
+static bool Refused(string what)
+{
+    var inside = KnownAgents.Inside(Environment.GetEnvironmentVariable(Launchers.SessionVariable), ProcessChain.Of(Environment.ProcessId), () => KnownAgents.Running(new SystemProcessInspector()));
+    if (inside is null) { return false; }
+    Console.Error.WriteLine($"agent-bridge-host: refused to {what}: this is running {inside}. That is for a person to do, in a terminal of their own or from the Agent Bridge app.");
+    return true;
+}
 
 Uri? RelayUri(Identity identity)
 {
@@ -234,7 +246,12 @@ async Task<int> ServeAsync()
     // agent-ha-bridge runs for this user (looked at every few seconds, as the app's view of it is).
     Func<string?>? haActive = haProbe is null ? null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64);
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log);
-    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, new UsageService(usageMonitor, Log), Launcher(source, attachments));
+    var launcher = Launcher(source, attachments);
+    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, new UsageService(usageMonitor, Log), launcher);
+    // Who is on the other end of the pipe: the app beside this host, or something inside an
+    // agent session, which may not manage it (§6.3 invariant 13).
+    var inspector = new SystemProcessInspector();
+    var callers = new CallerGuard(() => KnownAgents.Of(source, launcher, inspector), OperatingSystem.IsWindows() ? Path.Combine(AppContext.BaseDirectory, "AgentBridge.App.exe") : null);
 
     // The desktop app's way in (docs/protocol/local-pipe.md): the same sessions ops, and the
     // host's management, which only the pipe reaches. It runs whether or not this profile has
@@ -282,7 +299,7 @@ async Task<int> ServeAsync()
         },
     }, Log);
     LocalServer? local = null;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);

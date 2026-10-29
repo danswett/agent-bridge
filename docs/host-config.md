@@ -100,6 +100,13 @@ agent-bridge-host workspace remove Bridge
 `add` refuses a folder that does not exist, a system folder, one already approved, a label in
 use, and `--isolate` outside a git repository. Every command takes `--profile <name>`.
 
+`workspace add` and `remove`, `config set` and `unset`, and `sign-in` are for a person. They
+refuse to run (exit code 4) inside an agent session: when anything they run inside is an agent
+CLI (`copilot`, `claude`, `codex`, `agency`, or Node or Bun running one), or when
+`AGENT_BRIDGE_SESSION` is set, as it is in every session the host launches. Run them in a
+terminal of your own. `list` and `show` work anywhere. Why, and what this does not stop:
+[local-pipe.md](protocol/local-pipe.md#who-may-manage-the-host).
+
 The rest of the file:
 
 ```

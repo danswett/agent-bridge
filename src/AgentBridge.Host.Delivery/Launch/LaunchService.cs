@@ -16,6 +16,10 @@ public interface ISessionLauncher
     Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default);
 
     Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default);
+
+    // The agents launches started that still run, registered or not: whatever runs inside one
+    // is an agent's, and may not manage the host (§6.3 invariant 13).
+    IReadOnlyList<Started> LaunchedProcesses() => [];
 }
 
 public sealed class LaunchServiceOptions
@@ -122,6 +126,11 @@ public sealed partial class LaunchService : ISessionLauncher
     }
 
     LaunchConfig Config => options.Config;
+
+    public IReadOnlyList<Started> LaunchedProcesses()
+    {
+        lock (pendingGate) { return [.. launchedOn.Values.Concat(pending.Select(p => p.Started)).Distinct().Where(starter.Running)]; }
+    }
 
     public bool Available => Config.Enabled && options.PlatformSupported && probe.Active() is null && starter.Unavailable() is null;
 
@@ -525,7 +534,7 @@ public sealed partial class LaunchService : ISessionLauncher
             var sessionId = plan.Resume?.Id ?? (plan.Launcher.ChoosesOwnSessionId ? "" : Guid.NewGuid().ToString());
             var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
                 Config.Agent(plan.Launcher.Id).ExtraArgs, plan.Profile, prompt);
-            var spec = new StartSpec(plan.Executable, args, directory);
+            var spec = new StartSpec(plan.Executable, args, directory, new Dictionary<string, string> { [Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched" });
             if (starter.CommandLine(spec, out var tooLong) is null)
             {
                 return Refused($"the prompt is too long to start {plan.Launcher.Label} with on this machine: {tooLong}; shorten it, or send the rest as a reply once it has started");

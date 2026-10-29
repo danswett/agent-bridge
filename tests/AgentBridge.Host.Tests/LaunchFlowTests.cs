@@ -177,6 +177,8 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         var spec = Assert.Single(starter.Specs);
         Assert.Equal((@"C:\fake\copilot.exe", api), (spec.Executable, spec.WorkingDirectory));
         Assert.Equal(["--session-id", o.Session!, "--banner", "-i", LaunchProtocol.Flatten(prompt)], spec.Arguments);
+        // Everything it runs knows it is inside a launched session, and so may not manage the host.
+        Assert.Equal(o.Session, spec.Environment![Launchers.SessionVariable]);
         Assert.True(Guid.TryParseExact(o.Session, "D", out _));
         Assert.NotNull(source.Get(o.Session!));
         Assert.Equal(("copilot", "API", api, "ask"), (o.Launched.GetProperty("agent").GetString(), o.Launched.GetProperty("workspace").GetString(), o.Launched.GetProperty("cwd").GetString(), o.Launched.GetProperty("permissions").GetString()));

@@ -7,8 +7,13 @@ using System.Security.Principal;
 namespace AgentBridge.Local;
 
 // Who is on the other end of a pipe connection: the client process, its user and whether it
-// runs elevated. The host serves only its own user at its own elevation.
-public sealed record PipePeer(int ProcessId, string? User, bool? Elevated, string? ProcessName);
+// runs elevated. The host serves only its own user at its own elevation. Chain is the process
+// and its ancestors, nearest first (ProcessChain), from which the host tells its app from an
+// agent session; empty when they could not be traced, as on a Unix socket for now.
+public sealed record PipePeer(int ProcessId, string? User, bool? Elevated, string? ProcessName)
+{
+    public IReadOnlyList<PeerProcess> Chain { get; init; } = [];
+}
 
 public static class PeerPolicy
 {
@@ -56,7 +61,7 @@ static class WindowsPeers
             try
             {
                 using var identity = new WindowsIdentity(token);
-                return new PipePeer((int)pid, identity.User?.Value, IsElevated(token), name);
+                return new PipePeer((int)pid, identity.User?.Value, IsElevated(token), name) { Chain = ProcessChain.Of((int)pid) };
             }
             finally { CloseHandle(token); }
         }

@@ -62,7 +62,8 @@ The same three shapes as a relay channel (v1-sessions.md, Messages):
 The first request must be `hello`. Every v1 op and event works as on a relay channel,
 served by the same `SessionService` and `UsageService`, except `push.*`: Web Push is for
 devices that reach the host through the relay (`push` is not in hello's capabilities
-here). Hello's capabilities on the pipe add `host.manage`.
+here). Hello's capabilities on the pipe add `host.manage` for the app, and are cut to
+reading for a process inside an agent session ([below](#who-may-manage-the-host)).
 
 Attachments differ in size only. The pipe is a direct path (design §4.6): its bytes cost
 the relay nothing, so hello offers `sessions.attach.direct` with `sessions.attach`, and
@@ -78,9 +79,45 @@ the connection closes:
 { "ev": "local.refused", "seq": 1, "data": { "reason": "the app runs elevated and the host does not" } }
 ```
 
+## Who may manage the host
+
+Design §6.3 invariant 13: no session the bridge launched, nor any agent process, may stop or
+restart its host. On 2026-10-15 an agent ran `agent-ha-bridge restart`. The new daemon took
+that agent for an unaccounted process, held discovery, and every resumable session vanished
+from the phone. The pipe admits any process of the user's at the host's elevation, so the
+host also asks *which* process each request comes from, op by op:
+
+| The caller | How the host tells | May |
+|---|---|---|
+| **Inside an agent session** | The connecting process, or any process it descends from, is a live session's own process (by id and start time, so a reused id does not count), one a launch started, any agent CLI found running (Copilot, Claude, Codex, including under Node or Bun), or an executable named `copilot`, `claude`, `codex` or `agency` | Read: `hello` (offering only `sessions.read` and `usage`), `sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `host.status`, `host.subscribe`. Everything else is refused: `refused: this connection is from pid 4120, inside the copilot session 1a2b3c4d (pid 3112); …` |
+| **The app** | Not inside an agent session, and its executable is `AgentBridge.App.exe` in the host's own folder, which is how the app ships | Everything, `host.manage` included |
+| **Anything else of the user's** | Neither, or a process that could not be traced | The sessions ops as before, `host.status` and `host.subscribe`; not the other management ops (`only the Agent Bridge app beside this host may stop, restart, sign in or change settings`) |
+
+The ancestry is read when the connection is accepted (`GetNamedPipeClientProcessId`, then a
+process snapshot for each parent, with start times checked so a parent id given to a later
+process ends the chain). It is matched against the agents the host knows at each request, so a
+session found after the app connected counts. Each refusal is logged.
+
+`agent-bridge-host`'s own commands that change its config or sign it in refuse in the same
+case, from their own ancestry. Every session a launch starts has `AGENT_BRIDGE_SESSION` in its
+environment too, which survives a process started detached from its parent
+([host-config.md](../host-config.md#approving-a-workspace-at-the-machine)).
+
+**What this is not.** Every process here runs as the same user, so this is not a security
+boundary, only a safety rail, like agent-ha-bridge's (an agent token and an instruction not to
+restart the bridge). Anything running as the user can read the device key and `config.json`,
+write the file directly, end the host from Task Manager, copy a program to the app's name, or
+start one through Explorer or a scheduled task so that it descends from nothing an agent
+runs. What it stops is the obvious door: an agent following an instruction to restart its
+host, or doing so by mistake. An agent that is determined to get past it, or malware, is not
+stopped. Sessions acting as an agent rather than as the person (design §5.5) are #45 and #46.
+On macOS and Linux the host cannot trace a socket client yet, so nothing there manages the
+host, and there is no app there to do it.
+
 ## Management ops
 
-Local only: a relay channel answers each of these with `unknown op`.
+Local only: a relay channel answers each of these with `unknown op`. All but `host.status`
+and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 
 | Op | Data | Result |
 |---|---|---|

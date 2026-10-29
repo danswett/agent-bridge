@@ -29,6 +29,9 @@ public sealed class LocalChannel : IProtocolChannel, IAsyncDisposable
     public string PeerId { get; }
     public string PeerName { get; }
     public string PeerKind { get; }
+    // The process on the other end and its ancestors, as the server found them when it
+    // accepted the connection. Null on a client's own end.
+    public PipePeer? Peer { get; internal set; }
     public bool IsOpen => !closed.Task.IsCompleted;
     public Task Closed => closed.Task;
     public Exception? CloseReason => closeReason;

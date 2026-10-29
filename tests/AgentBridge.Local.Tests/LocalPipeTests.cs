@@ -245,6 +245,47 @@ public sealed class LocalPipeTests : IAsyncDisposable
         if (OperatingSystem.IsWindows()) { Assert.StartsWith("AgentBridge.Host.", a.Address); }
         else { Assert.Equal(Path.Combine(folder, "a", "host.sock"), a.Address); }
     }
+
+    [Fact]
+    public async Task The_host_sees_the_connecting_process_and_what_it_runs_inside_nearest_first()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        PipePeer? seen = null;
+        Serve((ch, op, data) =>
+        {
+            seen = (ch as LocalChannel)?.Peer;
+            return Task.FromResult<object?>(new { ok = true });
+        });
+        var ch = await ConnectAsync();
+
+        await ch.CallAsync("who");
+
+        var chain = seen!.Chain;
+        Assert.Equal(Environment.ProcessId, chain[0].Id);
+        Assert.Equal(Environment.ProcessPath, chain[0].Image, ignoreCase: true);
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        Assert.True(Math.Abs((chain[0].StartedAt!.Value - self.StartTime.ToUniversalTime()).TotalSeconds) < 1);
+        // Something started this test; no parent started after its child.
+        Assert.True(chain.Count >= 2);
+        for (var i = 1; i < chain.Count; i++)
+        {
+            if (chain[i].StartedAt is { } parent && chain[i - 1].StartedAt is { } child) { Assert.True(parent <= child.AddSeconds(1)); }
+        }
+    }
+
+    [Fact]
+    public void A_process_that_has_gone_has_no_chain()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) { return; }
+        int id;
+        using (var gone = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(OperatingSystem.IsWindows() ? "cmd.exe" : "true", OperatingSystem.IsWindows() ? "/c exit" : "") { UseShellExecute = false, CreateNoWindow = true })!)
+        {
+            gone.WaitForExit();
+            id = gone.Id;
+        }
+
+        Assert.Empty(ProcessChain.Of(id));
+    }
 }
 
 public sealed class PeerPolicyTests
@@ -270,4 +311,5 @@ public sealed class PeerPolicyTests
     [Fact]
     public void A_process_the_host_cannot_identify_is_refused() =>
         Assert.Equal("the host could not verify the connecting process", PeerPolicy.Refusal(new PipePeer(10, null, null, null), Me, false));
+
 }

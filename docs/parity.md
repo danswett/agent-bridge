@@ -242,8 +242,8 @@ Of the 15 §6.3 invariants: 7 `Verified`, 2 `Implemented, untested live`, 2 `Par
 | Feature / behaviour | Agents | agent-ha-bridge | Status | Evidence in agent-bridge | Gap / validation |
 |---|---|---|---|---|---|
 | MCP tools: list, read, reply, launch (with settings), launch result, launch options, ask | All | `mcp/src/server.js`, `sessions.js`; `mcp/test/*.js` | `Missing` | No MCP server | #45. The old server keeps working through the in-flight HA connector |
-| Launched sessions drive as an agent principal, not as the person | All | `Get-BridgeAgentTokenEnvironment`; `tests/test-launch-permissions.ps1` | `Missing` | Launched agents get the host's environment (`docs/host-launch.md`) | #44, #45 |
-| A session cannot restart or stop the bridge | All | §6.3 invariant 13 | `Missing` | The local pipe admits any same-user process (`PeerPolicy.cs`) | #44 |
+| Launched sessions drive as an agent principal, not as the person | All | `Get-BridgeAgentTokenEnvironment`; `tests/test-launch-permissions.ps1` | `Partial` | Inside an agent session, the pipe refuses answering, replying, ending and launching rather than carry them as the person: `LocalApiTests.A_process_inside_a_live_agent_session_cannot_stop_restart_reconfigure_or_sign_in_the_host_but_the_app_can`. Launched agents carry `AGENT_BRIDGE_SESSION`: `LaunchPieceTests.A_started_agent_gets_the_session_variable_on_top_of_the_hosts_own_environment` | No agent principal yet (#45) |
+| A session cannot restart or stop the bridge | All | §6.3 invariant 13 | `Implemented, untested live` | `LocalApiTests.A_process_inside_a_live_agent_session_…`, `A_process_that_is_itself_an_agent_CLI_is_refused_…`, `Only_the_app_beside_the_host_manages_it_…`; `CallerGuardTests`; CLI: `CallerGuardTests.The_hosts_command_line_knows_it_runs_inside_a_session_…` | A safety rail, not a boundary (`docs/protocol/local-pipe.md`). Live check: #44 |
 
 ## 16. Platforms and Dev Box
 
@@ -340,7 +340,7 @@ agent-ha-bridge's manual checks, `tests/verify-mac-terminal.ps1`,
 | 10 | Live sessions never offered for resume; remote resume only in approved workspaces | `Partial` | `LaunchFlowTests.The_options_list_installed_agents_approved_workspaces_and_only_resumable_sessions_in_them`, `A_session_being_resumed_is_not_resumed_again_by_another_press_until_its_agent_has_gone`. Live: Progress › Launch (resume) | An incomplete discovery pass can drop a live session from the exclusion list (#43) |
 | 11 | Folder trust never answered remotely; a launch that meets one returns `busy` | `Implemented, untested live` | `LaunchFlowTests.A_folder_trust_question_is_left_for_the_machine_and_other_launches_are_busy_meanwhile`, `LaunchPieceTests.Questions_an_agent_stops_on_before_it_starts_are_told_apart_by_what_it_draws` | #39 |
 | 12 | End session: one press when idle, two within 10 s otherwise, enforced by the host | `Verified` | `StopFlowTests` (19), `pwa/test/stop.spec.mjs`, `CardTests.End_session_on_a_working_session_takes_a_second_press_with_the_hosts_token_inside_the_window`. Live: Progress › End session | |
-| 13 | No session launched by the bridge may restart the bridge | `Missing` | — | #44 |
+| 13 | No session launched by the bridge may restart the bridge | `Implemented, untested live` | `LocalApiTests.A_process_inside_a_live_agent_session_cannot_stop_restart_reconfigure_or_sign_in_the_host_but_the_app_can`, `CallerGuardTests` | #44's live check |
 | 14 | Hooks never fail the agent: the fixed safe reply on any error | `Missing` | Today the hook is agent-ha-bridge's (`hook/main.go`, tested by its `main_test.go`) | #37 |
 | 15 | One target per action; the HA connector keeps "count exactly one" | `Verified` | Commands name one session in a typed field (`StopTests`, `ReplyTests.A_reply_request_reads_from_and_writes_to_the_contract_json`). Live: every Progress run | The connector's rule is in flight (HA connector) |
 

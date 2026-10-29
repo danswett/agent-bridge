@@ -26,6 +26,9 @@ public sealed class LocalApiTests : IAsyncLifetime
     string events = "";
     int stops;
     int restarts;
+    // Who each connection is. The app, unless a test says otherwise.
+    readonly Callers callers = new();
+    readonly List<string> logged = [];
     Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> signIn = (_, _, _) => Task.FromException<SignInResult>(new InvalidOperationException("no relay in these tests"));
     (SignInResult Account, Uri Relay)? saved;
 
@@ -59,7 +62,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             Stop = () => Interlocked.Increment(ref stops),
             Restart = () => Interlocked.Increment(ref restarts),
         });
-        server = LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(service, control));
+        server = LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(service, control, callers, m => { lock (logged) { logged.Add(m); } }));
         owned.Add(server);
     }
 
@@ -280,6 +283,84 @@ public sealed class LocalApiTests : IAsyncLifetime
             Assert.Equal($"unknown op {op}", response.GetProperty("error").GetString());
         }
         Assert.Equal(0, Volatile.Read(ref stops));
+    }
+
+    // ---- §6.3 invariant 13: no agent session stops or restarts its host ----
+
+    [Fact]
+    public async Task A_process_inside_a_live_agent_session_cannot_stop_restart_reconfigure_or_sign_in_the_host_but_the_app_can()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        // This test's own parent stands in for the session's CLI, discovered as any session is.
+        var parent = ProcessChain.Of(Environment.ProcessId)[1];
+        const string Agent = "77777777-7777-4777-8777-777777777777";
+        f.CopilotSession(Agent, parent.Id, lockWrite: DateTimeOffset.UtcNow);
+        f.Processes.Run(AgentKind.Copilot, parent.Id, startedAt: parent.StartedAt);
+        await source.RefreshAsync();
+        // No agent names: whatever really runs this test (an agent CLI, at a developer's desk)
+        // must not decide it.
+        callers.Current = new CallerGuard(() => KnownAgents.Of(source, null, f.Processes), Environment.ProcessPath, agentNames: []);
+        var ch = await ConnectAsync();
+
+        var hello = await ch.HelloAsync();
+        Assert.DoesNotContain(HostOps.Capability, hello.Capabilities);
+        Assert.DoesNotContain(Capabilities.SessionsAnswer, hello.Capabilities);
+        foreach (var op in new[] { HostOps.Restart, HostOps.Stop, HostOps.Settings, HostOps.SignIn, HostOps.SignInCancel })
+        {
+            var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(op, new { }));
+            Assert.Equal($"refused: this connection is from pid {Environment.ProcessId}, inside the copilot session 77777777 (pid {parent.Id}); stopping, restarting, signing in and changing settings are for the person, from the Agent Bridge app", refused.Message);
+        }
+        var answer = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), text = "yes" }));
+        Assert.StartsWith("refused: this connection is from pid", answer.Message);
+        // Reading is still allowed: the same user can read the transcripts anyway.
+        Assert.Equal(2, (await ch.CallAsync<SessionList>(Ops.SessionsList)).Sessions.Count);
+        Assert.Equal(Environment.ProcessId, (await ch.CallAsync<HostStatus>(HostOps.Status)).ProcessId);
+        await Task.Delay(200);
+        Assert.Equal((0, 0), (Volatile.Read(ref stops), Volatile.Read(ref restarts)));
+        lock (logged) { Assert.Contains($"local pipe: refused host.restart from pid {Environment.ProcessId}, inside the copilot session 77777777 (pid {parent.Id})", logged); }
+
+        // Once that session has gone, the same process is the app again, and restarts the host.
+        f.Processes.Exit(AgentKind.Copilot, parent.Id);
+        await source.RefreshAsync();
+        Assert.True((await ch.CallAsync(HostOps.Restart)).GetProperty("restarting").GetBoolean());
+        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the app's restart", Patience);
+    }
+
+    [Fact]
+    public async Task A_process_that_is_itself_an_agent_CLI_is_refused_even_before_any_session_of_it_is_found()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        callers.Current = new CallerGuard(() => [new KnownProcess(Environment.ProcessId, ProcessChain.Of(Environment.ProcessId)[0].StartedAt, "a copilot process")], Environment.ProcessPath, agentNames: []);
+        var ch = await ConnectAsync();
+
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Restart));
+
+        Assert.Equal($"refused: this connection is from a copilot process (pid {Environment.ProcessId}); stopping, restarting, signing in and changing settings are for the person, from the Agent Bridge app", refused.Message);
+        Assert.Equal(0, Volatile.Read(ref restarts));
+    }
+
+    [Fact]
+    public async Task Only_the_app_beside_the_host_manages_it_and_any_other_process_of_the_user_still_reads_and_answers()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        callers.Current = new CallerGuard(() => [], Path.Combine(AppContext.BaseDirectory, "AgentBridge.App.exe"), agentNames: []);
+        var ch = await ConnectAsync();
+
+        var hello = await ch.HelloAsync();
+        Assert.DoesNotContain(HostOps.Capability, hello.Capabilities);
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Stop));
+        Assert.EndsWith("which is not the Agent Bridge app beside this host; only the Agent Bridge app beside this host may stop, restart, sign in or change settings", refused.Message);
+        var answered = await ch.CallAsync<AnswerResult>(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), text = "yes" });
+        Assert.Equal("this host does not take answers; answer at the machine", answered.Reason);
+        await Task.Delay(200);
+        Assert.Equal(0, Volatile.Read(ref stops));
+    }
+
+    // Swapped by a test before it connects; asked afresh for every op.
+    sealed class Callers : ICallerGuard
+    {
+        public ICallerGuard Current { get; set; } = new FixedCallerGuard(new Caller(CallerKind.App, "the Agent Bridge app"));
+        public Caller Classify(IProtocolChannel channel) => Current.Classify(channel);
     }
 
     [Theory]

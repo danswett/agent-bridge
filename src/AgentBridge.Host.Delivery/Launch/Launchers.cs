@@ -24,6 +24,11 @@ public sealed record Launcher(
 
 public static class Launchers
 {
+    // Set in every agent a launch starts, to its session id ("launched" for Codex, which picks
+    // its own), and inherited by everything it runs, however detached: what the host's own
+    // command line reads to tell that it is running inside a session (§6.3 invariant 13).
+    public const string SessionVariable = "AGENT_BRIDGE_SESSION";
+
     public static readonly IReadOnlyList<Launcher> All =
     [
         new("agency", "Agency", AgentKind.Copilot, "agency", "copilot", TakesProfile: true, TakesAttachments: true),
