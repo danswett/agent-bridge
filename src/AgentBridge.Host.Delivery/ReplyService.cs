@@ -314,7 +314,12 @@ public sealed class ReplyService : ISessionReplier
             {
                 if (send.After is { } after)
                 {
-                    box = await AwaitBoxAsync(agent, pid, after);
+                    try { box = await AwaitBoxAsync(agent, pid, after); }
+                    catch (Exception e)
+                    {
+                        // Keys have gone: the staged files must stay for the agent.
+                        return new Attempt(Unconfirmed($"the host could not read {name}'s screen part way through the reply ({e.Message}); check at the machine"), null, KeysWent: true);
+                    }
                     if (box is null)
                     {
                         log($"stopped typing a reply into {name} {Short(session.Id)}: its input box did not take an image path as an image");

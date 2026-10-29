@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using AgentBridge.Host.Delivery.Copilot;
 
 namespace AgentBridge.Host.Delivery.AgentReplies;
@@ -12,9 +13,10 @@ public sealed record AgentSend(string Text, bool Enter, string? After);
 // typed, which is what decides whether Enter may be pressed again.
 public sealed class AgentReply
 {
-    readonly bool images;
+    // How many "[Image #n]" placeholders lead the recorded text: those of the images pasted.
+    readonly int images;
 
-    AgentReply(string words, string composed, IReadOnlyList<string> files, bool images, IReadOnlyList<AgentSend> sends)
+    AgentReply(string words, string composed, IReadOnlyList<string> files, int images, IReadOnlyList<AgentSend> sends)
     {
         Words = words;
         Composed = composed;
@@ -35,9 +37,10 @@ public sealed class AgentReply
         new(send.Text, send.Enter, send.Enter ? CopilotPlanner.ReplyEnterDelayMs : 0, 0, box);
 
     // Whether a recorded prompt is this reply's words. Whitespace runs are one space and the
-    // ends are trimmed; for Codex, the placeholders standing for its images are not words.
+    // ends are trimmed. For Codex, the placeholders its pasted images left at the start are not
+    // words; one the person typed, anywhere, is.
     public bool Says(AgentPrompt prompt) => string.Equals(
-        InjectableText.Flatten(images ? CodexPrompts.Words(prompt.Text) : prompt.Text),
+        InjectableText.Flatten(images > 0 ? Regex.Replace(prompt.Text, $@"^(?:\s*\[Image #\d+\]){{0,{images}}}", "") : prompt.Text),
         InjectableText.Flatten(Words), StringComparison.Ordinal);
 
     // Whether the agent took in every file staged for the reply.
@@ -51,7 +54,7 @@ public sealed class AgentReply
     {
         var line = staged.Count > 0 ? CopilotReply.WithAttachments(text, staged) : InjectableText.Collapse(text);
         if (line is null) { return null; }
-        return new AgentReply(line, line, staged, images: false, [new AgentSend(line, true, null)]);
+        return new AgentReply(line, line, staged, images: 0, [new AgentSend(line, true, null)]);
     }
 
     // Codex does not read an @<path> mention (it is left as words, seen live with 0.165). It
@@ -66,7 +69,7 @@ public sealed class AgentReply
         var sends = staged.Select((path, i) => new AgentSend(path, false, i == 0 ? null : Placeholders(i))).ToList();
         var tail = staged.Count > 0 && words.Length > 0 ? " " + words : words;
         sends.Add(new AgentSend(tail, true, staged.Count == 0 ? null : Placeholders(staged.Count)));
-        return new AgentReply(words, Placeholders(staged.Count) + tail, staged, images: true, sends);
+        return new AgentReply(words, Placeholders(staged.Count) + tail, staged, images: staged.Count, sends);
     }
 
     static string Placeholders(int count) => string.Concat(Enumerable.Range(1, count).Select(i => $"[Image #{i}]"));
