@@ -180,14 +180,22 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_reply_is_refused_with_nothing_typed_while_words_are_already_in_the_input_box()
+    public async Task A_Codex_reply_is_refused_with_nothing_typed_while_words_are_already_in_its_input_box()
     {
-        console.Rows = ClaudeIdle("half a thought");
-        Assert.Contains("already typed in Claude's input box", (await ReplyAsync(ClaudeId, "hello")).Reason);
-
         console.Rows = CodexIdle("half a thought");
+
         Assert.Contains("already typed in Codex's input box", (await ReplyAsync(CodexId, "hello")).Reason);
         Assert.Empty(console.Plans);
+    }
+
+    [Fact]
+    public async Task A_Claude_box_showing_a_suggested_prompt_is_typed_into_since_its_screen_cannot_tell_that_from_typed_words()
+    {
+        // Claude 2.1 suggests a next prompt in its empty box, as text like any other.
+        console.Rows = ClaudeIdle("Name one colour of the owl in a single word.");
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+
+        Assert.Equal(AnswerOutcome.Delivered, (await ReplyAsync(ClaudeId, "hello")).Outcome);
     }
 
     [Fact]

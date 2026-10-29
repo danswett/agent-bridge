@@ -275,9 +275,9 @@ Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`:
 | `refused` | The host will not type it: an invalid reply (above), **a question or permission prompt pending in the session** (the words would answer it, and Enter accept it; answer it first, at the machine for one marked `answerAtMachine`), a transcript the host cannot read to rule that out, an attachment the host does not hold (expired, removed, sent by another device, still arriving, or gone with an earlier reply) or cannot hand over, an elevated or otherwise unreachable session, an agent or platform without delivery yet, or agent-ha-bridge active for this user | No |
 
 Copilot CLI, Claude Code and Codex sessions take replies. A Claude Code or Codex reply is
-typed only into the agent's empty input box as its screen shows it, since without
+typed only into the agent's input box as its screen shows it, since without
 agent-ha-bridge's hooks a host cannot otherwise see their permission prompts and questions;
-it is `refused` when that box is not on screen or already has words in it. Codex takes only
+it is `refused` when that box is not on screen, or for Codex already has words in it. Codex takes only
 images as attachments; a Codex reply with any other file is `refused`.
 
 A reply is never typed while the session is asking anything, which a host checks both in
