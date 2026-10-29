@@ -22,9 +22,10 @@ public sealed class SettingsTests : IAsyncLifetime
     sealed class Updater : IUpdater
     {
         public Action? OnApply;
+        public Exception? CheckFails;
         public bool Applied;
         public string? InstalledVersion => "0.1.0";
-        public Task<string?> CheckAsync() => Task.FromResult<string?>("0.2.0");
+        public Task<string?> CheckAsync() => CheckFails is { } e ? Task.FromException<string?>(e) : Task.FromResult<string?>("0.2.0");
         public Task DownloadAsync(Action<int> progress) { progress(100); return Task.CompletedTask; }
         public void ApplyAndRestart() { OnApply?.Invoke(); Applied = true; }
     }
@@ -157,6 +158,23 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Null(settings.Error);
         Assert.True(updater.Applied);
         Assert.True(stoppedFirst);
+    }
+
+    [Fact]
+    public async Task An_update_check_that_cannot_reach_the_network_says_so_on_the_page()
+    {
+        await Connected();
+        updater.CheckFails = new HttpRequestException("No such host is known.");
+
+        await settings.CheckForUpdatesAsync();
+
+        Assert.Equal("No such host is known.", settings.Error);
+        Assert.False(settings.Busy);
+        Assert.False(settings.UpdateAvailable);
+
+        updater.CheckFails = new TaskCanceledException();
+        await settings.CheckForUpdatesAsync();
+        Assert.Equal("it took too long; try again", settings.Error);
     }
 
     [Fact]

@@ -196,14 +196,17 @@ public sealed class SettingsViewModel : Observable
         updater.ApplyAndRestart();
     });
 
+    // Every action here ends up behind an async void click handler, where an escaping exception
+    // ends the app (and every unsent draft on its cards). So whatever goes wrong (the pipe, Task
+    // Scheduler, the registry, the network under an update check) is shown, not thrown.
     async Task RunAsync(Func<Task> act)
     {
         Error = null;
         Busy = true;
         try { await act(); }
-        catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or InvalidOperationException or UnauthorizedAccessException or ArgumentException or System.Runtime.InteropServices.COMException)
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            Error = e.Message;
+            Error = e is OperationCanceledException ? "it took too long; try again" : e.Message;
         }
         finally
         {
