@@ -135,6 +135,12 @@ public static class Worktrees
         var launchIn = relative.Length == 0 ? target : Path.GetFullPath(Path.Combine(target, relative));
         if (!Folders.IsAtOrUnder(launchIn, target)) { return new WorktreeResult(null, target, "The approved subdirectory escapes the isolated worktree; launch was refused.", string.Join("; ", detail)); }
         if (!Directory.Exists(launchIn)) { return new WorktreeResult(null, target, "The approved subdirectory is absent from the isolated base; the new worktree was retained without launching.", string.Join("; ", detail)); }
+        // Where it really is: the base may hold a link at that path, which Directory.Exists
+        // follows, out of the worktree into the checkout or anywhere else.
+        if (Folders.Physical(launchIn) is not { } physical || Folders.Physical(target) is not { } physicalTarget || !Folders.IsAtOrUnder(physical, physicalTarget))
+        {
+            return new WorktreeResult(null, target, "The approved subdirectory is a link out of the isolated worktree in its base; launch was refused.", string.Join("; ", detail));
+        }
         return new WorktreeResult(launchIn, target, null, string.Join("; ", detail));
     }
 

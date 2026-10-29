@@ -299,6 +299,26 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    public void A_workspace_folder_that_the_fetched_base_turns_into_a_link_out_of_the_worktree_is_never_launched_in()
+    {
+        var work = Repo();
+        var outside = Directory.CreateDirectory(Path.Combine(root, "outside")).FullName;
+        var origin = Path.Combine(root, "origin");
+        // origin replaces src/svc, a folder in the checkout, with a link to a folder elsewhere.
+        File.WriteAllText(Path.Combine(root, "link-target"), outside);
+        var blob = AgentBridge.Host.Delivery.Launch.Git.Run(origin, ["hash-object", "-w", Path.Combine(root, "link-target")]).Output.Trim();
+        Git(origin, "rm", "-r", "-q", "--cached", "src/svc");
+        Git(origin, "update-index", "--add", "--cacheinfo", $"120000,{blob},src/svc");
+        Git(origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "link");
+
+        var made = Worktrees.Create(Path.Combine(work, "src", "svc"), WorktreeConfig(), () => new DateTime(2026, 10, 28, 9, 0, 0));
+        // Where git can make the link it is caught as one; where it cannot (Windows without the
+        // privilege), git writes a file there instead, and the folder is absent. Never a launch.
+        Assert.Null(made.Path);
+        Assert.Matches("a link out of the isolated worktree|absent from the isolated base", made.Problem);
+    }
+
+    [Fact]
     public void A_folder_outside_git_fails_closed()
     {
         var plain = Directory.CreateDirectory(Path.Combine(root, "plain")).FullName;
@@ -349,6 +369,10 @@ public sealed class LaunchPieceTests : IDisposable
         File.WriteAllText(Path.Combine(rollout, $"rollout-2026-10-28T04-00-00-{Id(5)}.jsonl"),
             $$$"""{"type":"session_meta","payload":{"id":"{{{Id(5)}}}","cwd":"C:\\repos\\api"}}""" + "\n" + """{"type":"event_msg","payload":{"type":"user_message","message":"Add pagination"}}""" + "\n");
         File.WriteAllText(Path.Combine(codex, "session_index.jsonl"), $$"""{"id":"{{Id(5)}}","thread_name":"Pagination"}""" + "\n");
+        // Unnamed, from a Codex that records the prompt in the newer item_completed event.
+        File.WriteAllText(Path.Combine(rollout, $"rollout-2026-10-28T05-00-00-{Id(6)}.jsonl"),
+            $$$"""{"type":"session_meta","payload":{"id":"{{{Id(6)}}}","cwd":"C:\\repos\\api"}}""" + "\n"
+            + """{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"Measure four"}]}}}""" + "\n");
 
         var entries = new ResumableStore(copilot, claude, codex).Read(["copilot", "claude", "codex"]);
         var byId = entries.ToDictionary(e => e.Id);
@@ -358,6 +382,7 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.False(byId.ContainsKey(Id(3)));
         Assert.Equal(("Release plan", @"C:\repos\app", AgentKind.Claude), (byId[Id(4)].Summary, byId[Id(4)].Folder, byId[Id(4)].Agent));
         Assert.Equal(("Pagination", @"C:\repos\api", AgentKind.Codex), (byId[Id(5)].Summary, byId[Id(5)].Folder, byId[Id(5)].Agent));
+        Assert.Equal("Measure four", byId[Id(6)].Summary);
         Assert.DoesNotContain(entries, e => e.Agent == AgentKind.Claude && !byId.ContainsKey(e.Id));
         Assert.DoesNotContain(new ResumableStore(copilot, claude, codex).Read(["codex"]), e => e.Agent != AgentKind.Codex);
     }

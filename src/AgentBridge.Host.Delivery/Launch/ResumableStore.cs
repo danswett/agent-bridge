@@ -134,7 +134,10 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
             string id = "", folder = "", prompt = "";
             foreach (var line in FileEnds(file))
             {
-                if (!line.Contains("\"type\":\"session_meta\"", StringComparison.Ordinal) && !line.Contains("\"type\":\"user_message\"", StringComparison.Ordinal)) { continue; }
+                // The prompt is in the older user_message event, or the newer item_completed
+                // one carrying a UserMessage (as CodexParser reads both).
+                if (!line.Contains("\"type\":\"session_meta\"", StringComparison.Ordinal) && !line.Contains("\"type\":\"user_message\"", StringComparison.Ordinal)
+                    && !line.Contains("\"type\":\"UserMessage\"", StringComparison.Ordinal)) { continue; }
                 if (Parse(line) is not { } r || !r.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object) { continue; }
                 if (Str(r, "type") == "session_meta")
                 {
@@ -144,6 +147,11 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
                 else if (prompt.Length == 0 && Str(payload, "type") == "user_message" && payload.TryGetProperty("message", out var message))
                 {
                     prompt = PromptSummary(message);
+                }
+                else if (prompt.Length == 0 && Str(payload, "type") == "item_completed" && payload.TryGetProperty("item", out var item) && item.ValueKind == JsonValueKind.Object
+                    && Str(item, "type") == "UserMessage" && item.TryGetProperty("content", out var content))
+                {
+                    prompt = PromptSummary(content);
                 }
             }
             if (!Guid.TryParseExact(id, "D", out _)) { continue; }
