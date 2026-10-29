@@ -259,6 +259,10 @@ public sealed partial class HaConnector : IAsyncDisposable
         foreach (var node in await OrphansAsync(live, ct)) { inherited.Add(node); }
         lock (gate)
         {
+            // A session whose first publication a pause interrupted is retired like any other
+            // that has gone; a live one is simply published again.
+            foreach (var node in starting.Values) { inherited.Add(node); }
+            starting.Clear();
             foreach (var node in inherited.Where(n => !live.Contains(n))) { retiring.TryAdd(node, new Retiring()); }
             published.Clear();
             usageSignatures.Clear();
@@ -416,6 +420,9 @@ public sealed partial class HaConnector : IAsyncDisposable
         if (p is null)
         {
             lock (gate) { starting[s.Id] = node; }
+            // On disk before the first write: a host stopped part-way, whose session then ends
+            // while it is down, still retires what that write left behind.
+            SaveLedger();
             // Availability first and retained, so a session never appears already stale.
             await ha.PublishAsync(t.Availability, "online", true, ct);
             await PublishSensorConfigsAsync(t, name, ct);
@@ -427,8 +434,9 @@ public sealed partial class HaConnector : IAsyncDisposable
             {
                 starting.Remove(s.Id);
                 published[s.Id] = p;
-                if (retiring.Remove(node)) { SaveLedger(); }
+                retiring.Remove(node);
             }
+            SaveLedger();
         }
         else if (p.Name != name)
         {
@@ -623,14 +631,18 @@ public sealed partial class HaConnector : IAsyncDisposable
         return HaContract.Serialize(copy);
     }
 
+    // The nodes waiting for retirement and the nodes whose first publication had begun but not
+    // finished: both have entities in Home Assistant that nothing else may remember.
     IEnumerable<string> LoadLedger()
     {
         if (options.StateFile is not { } path || !File.Exists(path)) { return []; }
         try
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            if (!doc.RootElement.TryGetProperty("retiring", out var list) || list.ValueKind != JsonValueKind.Array) { return []; }
-            return [.. list.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!)
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) { return []; }
+            return [.. new[] { "retiring", "starting" }
+                .SelectMany(key => doc.RootElement.TryGetProperty(key, out var list) && list.ValueKind == JsonValueKind.Array ? list.EnumerateArray().ToArray() : [])
+                .Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!)
                 .Where(n => n.StartsWith("agent_bridge_", StringComparison.Ordinal))];
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
@@ -644,7 +656,14 @@ public sealed partial class HaConnector : IAsyncDisposable
     {
         if (options.StateFile is not { } path) { return; }
         string text;
-        lock (gate) { text = HaContract.Serialize(new JsonObject { ["retiring"] = new JsonArray([.. retiring.Keys.Order(StringComparer.Ordinal).Select(n => (JsonNode)n)]) }); }
+        lock (gate)
+        {
+            text = HaContract.Serialize(new JsonObject
+            {
+                ["retiring"] = new JsonArray([.. retiring.Keys.Order(StringComparer.Ordinal).Select(n => (JsonNode)n)]),
+                ["starting"] = new JsonArray([.. starting.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(n => (JsonNode)n)]),
+            });
+        }
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);

@@ -171,7 +171,8 @@ landed** (see the plan).
 3. Withdraw this machine's unserved controls; publish the update entity and pin it.
 4. Work out what this machine published before and is not running now: the nodes in its
    retained session list (whichever bridge wrote it), the nodes the connector remembered as
-   waiting for retirement (`ha-connector.json` in the profile's folder), and the orphan sweep
+   waiting for retirement or as part-way through their first publication (`ha-connector.json`
+   in the profile's folder, written before that first write), and the orphan sweep
    (`Clear-CopilotMqttOrphans`): session entities no machine lists and that are not running
    here. The sweep is skipped, not guessed, when no machine's session list is visible (Home
    Assistant still starting). All of these join the retirement queue; none is cleared yet.

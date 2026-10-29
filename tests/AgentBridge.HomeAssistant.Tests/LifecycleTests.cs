@@ -235,6 +235,30 @@ public sealed class LifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task A_session_whose_first_publication_a_crash_interrupted_is_retired_if_it_ended_meanwhile()
+    {
+        sessions.Set(FakeSessions.Copilot(A));
+        ha.Draw(NodeA);
+        // Never disposed: the host is killed, so only what was on disk before each write survives.
+        var first = Connector();
+        await Run(first, 3);
+        ha.PublishFailsFor = (topic, payload) => payload.Length == 0 && topic.Contains(NodeB, StringComparison.Ordinal);
+        sessions.Set(FakeSessions.Copilot(B));
+        await Pass(first, 1);
+        Assert.Contains(ha.Retained.Keys, k => k.Contains(NodeB, StringComparison.Ordinal));
+
+        // B ends while the host is down; nothing B left behind is in the retained session list.
+        sessions.End(B);
+        ha.PublishFailsFor = null;
+        await using var second = Connector();
+        await Run(second, 60);
+
+        Assert.DoesNotContain(ha.Retained.Keys, k => k.Contains(NodeB, StringComparison.Ordinal));
+        Assert.Empty(second.PendingRetirement);
+        Assert.Equal("idle", ha.Retained[HaContract.Topics(NodeA).StatusState]);
+    }
+
+    [Fact]
     public async Task A_dashboard_that_cannot_be_read_holds_every_retirement()
     {
         sessions.Set(FakeSessions.Copilot(B));
