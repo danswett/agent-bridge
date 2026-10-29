@@ -325,8 +325,9 @@ public sealed class ReplyService : ISessionReplier
     static Composer? Find(AgentKind agent, IReadOnlyList<string> rows) => agent == AgentKind.Claude ? ClaudeComposer.Find(rows) : CodexComposer.Find(rows);
 
     // Presses Enter again while the reply is still sitting in the input box unrecorded. A box
-    // still empty may not have drawn the reply yet (Codex draws late while it streams), so it
-    // is looked at again rather than given up on.
+    // still empty, or showing only the start of the reply, may not have taken all of it in yet
+    // (Codex takes keys in slowly while it streams, seen live), so it is looked at again rather
+    // than given up on.
     async Task SubmitAsync(string sessionId, AgentKind agent, int pid, string transcript, long from, AgentReply plan)
     {
         var pressed = 0;
@@ -352,7 +353,7 @@ public sealed class ReplyService : ISessionReplier
                 // Why not, for the log; never the words on screen.
                 var why = screen.Rows is not { } rows ? "its screen could not be read"
                     : Find(agent, rows) is not { } found ? "its input box is not on screen"
-                    : found.Empty ? null
+                    : found.Empty || found.Begins(plan.Composed) ? null
                     : !found.Holds(plan.Composed) ? $"its input box holds other words ({found.Content.Length} characters, not {plan.Composed.Length})"
                     : "";
                 if (why is null) { continue; }

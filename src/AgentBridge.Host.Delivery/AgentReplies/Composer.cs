@@ -13,6 +13,11 @@ public sealed record Composer(IReadOnlyList<ScreenRow> Rows, string Content, boo
     // wraps a long line wherever it likes, even inside a hyphenated word.
     public bool Holds(string words) => Dense(words).Length > 0 && string.Equals(Dense(Content), Dense(words), StringComparison.Ordinal);
 
+    // Whether the box holds the start of these words and no more: an agent busy drawing its own
+    // output takes typed keys in slowly, and shows them as it does.
+    public bool Begins(string words) => Dense(Content) is { Length: > 0 } dense && dense.Length < Dense(words).Length
+        && Dense(words).StartsWith(dense, StringComparison.Ordinal);
+
     static string Dense(string text) => string.Concat(text.Where(c => !char.IsWhiteSpace(c)));
 }
 

@@ -132,7 +132,9 @@ too). Each record confirms one reply. Anything else is `unconfirmed`.
 (the reason for `Confirm-DaemonClaudeSubmit`); Codex was seen live to make it a new line in
 the box instead. If nothing is recorded within 1.5 s, the host reads the screen and presses
 Enter alone, held to the box's rows, only if the box still holds exactly this reply; at most
-twice. A prompt that has taken the box's place, or words someone typed, stop it.
+twice. A box still empty or showing only the start of the reply is looked at again (Codex
+takes typed keys in slowly while it streams output, seen live). A prompt that has taken the
+box's place, or other words in it, stop it.
 
 **Attachments.** Claude reads a file its prompt mentions as `@<path>`, image or text, and
 records an `attachment` entry with `filename` set to the path for each (seen live), so the
