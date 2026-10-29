@@ -31,12 +31,26 @@ public sealed record HaConnectorOptions
     // (Update-DaemonRetireQueue), never with it.
     public TimeSpan RetireGrace { get; init; } = TimeSpan.FromSeconds(15);
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromSeconds(30);
+    // Home Assistant accounts that are agents rather than people (homeAssistant.agentUserIds):
+    // a press made through one drives the session's next turn as the agent's (the purple edge).
+    public IReadOnlyCollection<string> AgentUserIds { get; init; } = [];
+    // Field slots are republished for each question and need a moment to register before their
+    // ids are forced (Publish-CopilotMqttDecisionFields waits 900 ms).
+    public TimeSpan FieldPinDelay { get; init; } = TimeSpan.FromMilliseconds(900);
+    // How long a select is waited on to offer an option before it is set anyway
+    // (Set-CopilotMqttSelectOption: 12 attempts, 150 ms apart).
+    public int SelectAttempts { get; init; } = 12;
+    public TimeSpan SelectDelay { get; init; } = TimeSpan.FromMilliseconds(150);
+    // An arm left by a press stops counting for the next turn after this long
+    // (DriverArmSeconds): the turn it was for is not coming.
+    public TimeSpan DriverArm { get; init; } = TimeSpan.FromSeconds(600);
 }
 
-// The Home Assistant connector, read-only stage (docs/ha-connector.md): this machine's sessions,
-// liveness, version and agent usage on the dashboard agent-ha-bridge's publication writer
-// generates, in agent-ha-bridge's own per-machine contract (HaContract), so a machine moved off
-// the PowerShell daemon keeps its cards.
+// The Home Assistant connector (docs/ha-connector.md): this machine's sessions, liveness,
+// version and agent usage on the dashboard agent-ha-bridge's publication writer generates, in
+// agent-ha-bridge's own per-machine contract (HaContract), so a machine moved off the
+// PowerShell daemon keeps its cards; and, given the host's answer delivery, the answers given on
+// those cards (HaConnector.Answers.cs).
 //
 // What it never does, and why:
 //   * write the shared card, dashboard or publication policy. The writer is configured and fenced
@@ -46,8 +60,8 @@ public sealed record HaConnectorOptions
 //   * run while agent-ha-bridge runs for this user (design G5). Two publishers of one machine's
 //     entities would fight over every retained topic. Checked before every write, so the
 //     daemon starting part-way through a pass stops the rest of it;
-//   * answer, reply, launch, stop or update: later stages. Until they land, entities only those
-//     would serve are withdrawn rather than left as controls nothing acts on.
+//   * reply, launch, stop or update: later stages. Until they land, entities only those would
+//     serve are withdrawn rather than left as controls nothing acts on.
 public sealed partial class HaConnector : IAsyncDisposable
 {
     readonly HaConnectorOptions options;
@@ -81,6 +95,11 @@ public sealed partial class HaConnector : IAsyncDisposable
     bool helperExists;
     CancellationTokenSource? stop;
     Task loop = Task.CompletedTask;
+    Task watch = Task.CompletedTask;
+    readonly Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer;
+
+    // Whether the cards' answer controls are served: only with the host's answer delivery.
+    bool ServesAnswers => answer is not null;
 
     sealed class Published
     {
@@ -89,6 +108,35 @@ public sealed partial class HaConnector : IAsyncDisposable
         public required string Kind;
         public string? Status;
         public string? Activity;
+        // The activity attributes last published, which a transient status line is laid over.
+        public JsonObject? Detail;
+        // The question the card is armed with, and how many field slots that left armed (-1:
+        // not known, so a clear sweeps them all).
+        public Armed? Armed;
+        public int ArmedSlots = -1;
+        public bool Cleared;
+        // The reply-card publish last used (Add-DaemonAnswerStamp's answer_consumed_at).
+        public string? LastPayloadStamp;
+        public string? ToldUnserved;
+        // Who is driving the session's turn, and an arm left by a press for the next one
+        // (Set-DaemonDriverPending): consumed by the turn it was armed for, or lapsed.
+        public string Driver = "human";
+        public DateTimeOffset? DriverPendingAt;
+        public string? TurnKey;
+
+        public void ArmDriver(string driver, DateTimeOffset now)
+        {
+            Driver = driver;
+            DriverPendingAt = now;
+        }
+
+        // A new turn: the press that armed it drives it, or nobody did and the person at the
+        // machine is.
+        public void TurnStarted(DateTimeOffset now, TimeSpan arm)
+        {
+            if (DriverPendingAt is not { } at || now - at >= arm) { Driver = "human"; }
+            DriverPendingAt = null;
+        }
         // Which of the reply and the reasoning changed last. The host keeps the previous turn's
         // reply when a new turn starts, so "no reply yet" cannot say the newest line is a thought.
         public bool Seen;
@@ -120,9 +168,11 @@ public sealed partial class HaConnector : IAsyncDisposable
     sealed record Pin(string EntityId, DateTimeOffset NotBefore, int Attempts);
 
     public HaConnector(HaConnectorOptions options, IHomeAssistant ha, ISessionSource source, Func<string?> agentHaBridge,
-        Func<(UsageReport Report, long Version)>? usage = null, Action<string>? log = null, TimeProvider? time = null)
+        Func<(UsageReport Report, long Version)>? usage = null, Action<string>? log = null, TimeProvider? time = null,
+        Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer = null)
     {
         this.options = options;
+        this.answer = answer;
         // Every write asks first (design G5): a pass can run long (each request may take its
         // timeout), and agent-ha-bridge starting part-way through must stop the rest of it, not
         // race the daemon's own publishes until the pass ends.
@@ -160,6 +210,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 catch (OperationCanceledException) { break; }
             }
         }, token);
+        if (ServesAnswers) { watch = Task.Run(() => WatchLoopAsync(token), token); }
     }
 
     void OnChanged(object? sender, SessionChange change)
@@ -197,6 +248,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 }
             }
             await Step("sessions", () => SessionsAsync(now, cancellationToken));
+            await Step("answers", () => AnswersAsync(now, cancellationToken));
             await Step("global", () => GlobalAsync(now, cancellationToken));
             await Step("heartbeat", () => HeartbeatAsync(now, cancellationToken));
             await Step("usage", () => UsageAsync(now, cancellationToken));
@@ -311,8 +363,9 @@ public sealed partial class HaConnector : IAsyncDisposable
         return HaContract.MachineTopics(Slug).Where(t => !served.Contains(t));
     }
 
-    // A session's entities this stage does not serve: its question, reply and button entities.
-    static IEnumerable<string> UnservedSessionTopics(string node)
+    // A session's entities this stage does not serve: with answers, only Stop (and two state
+    // topics no daemon has published for years); without, everything but the two sensors.
+    IEnumerable<string> UnservedSessionTopics(string node)
     {
         var t = HaContract.Topics(node);
         var served = new HashSet<string>(StringComparer.Ordinal)
@@ -320,6 +373,13 @@ public sealed partial class HaConnector : IAsyncDisposable
             HaContract.DiscoveryTopic("sensor", node, "status"), HaContract.DiscoveryTopic("sensor", node, "activity"),
             t.StatusState, t.StatusAttributes, t.ActivityState, t.ActivityAttributes, t.Availability,
         };
+        if (ServesAnswers)
+        {
+            served.UnionWith(HaContract.SessionDiscoveryTopics(node).Where(x => x != HaContract.DiscoveryTopic("button", node, "stop")));
+            // The card's own publishes and the armed question: never withdrawn from under it.
+            served.Add(t.ReplyPayload);
+            served.Add(t.DecisionAttributes);
+        }
         return HaContract.SessionDiscoveryTopics(node).Concat(HaContract.SessionStateTopics(node)).Where(x => !served.Contains(x));
     }
 
@@ -417,7 +477,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             }
             log($"Home Assistant connector: session {id[..Math.Min(8, id.Length)]} ended; its entities go once its card has left the dashboard");
         }
-        if (gone.Count > 0) { SaveLedger(); }
+        if (gone.Count > 0) { SaveLedger(); WatchSetChanged(); }
         for (var i = 0; i < work.Count; i++)
         {
             try { await SessionAsync(live[work[i]], now, ct); }
@@ -446,10 +506,27 @@ public sealed partial class HaConnector : IAsyncDisposable
             SaveLedger();
             // Availability first and retained, so a session never appears already stale.
             await ha.PublishAsync(t.Availability, "online", true, ct);
-            await PublishSensorConfigsAsync(t, name, ct);
+            if (ServesAnswers)
+            {
+                await PublishControlsAsync(t, name, ct);
+            }
+            else
+            {
+                await PublishSensorConfigsAsync(t, name, ct);
+            }
             foreach (var topic in UnservedSessionTopics(node)) { await ha.PublishAsync(topic, "", true, ct); }
-            AddPin($"{node}_status", $"sensor.{node}_status", now);
-            AddPin($"{node}_activity", $"sensor.{node}_activity", now);
+            if (ServesAnswers)
+            {
+                // Before anything is armed on them: a select is driven by the id the dashboard uses
+                // (Publish-CopilotMqttSession forces them at once, after a moment to register).
+                await Task.Delay(options.FieldPinDelay, time, ct);
+                await PinNowAsync(SessionIds(node), now, ct);
+            }
+            else
+            {
+                AddPin($"{node}_status", $"sensor.{node}_status", now);
+                AddPin($"{node}_activity", $"sensor.{node}_activity", now);
+            }
             p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent) };
             lock (gate)
             {
@@ -458,6 +535,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 retiring.Remove(node);
             }
             SaveLedger();
+            WatchSetChanged();
         }
         else if (p.Name != name)
         {
@@ -466,6 +544,11 @@ public sealed partial class HaConnector : IAsyncDisposable
             await PublishSensorConfigsAsync(t, name, ct);
             p.Name = name;
         }
+
+        // A new turn (a new message from the person or an agent) decides who drives it.
+        var turn = $"{full.Activity.TurnCount}\n{full.Activity.UserMessage}";
+        if (p.TurnKey is not null && p.TurnKey != turn) { p.TurnStarted(now, options.DriverArm); }
+        p.TurnKey = turn;
 
         var status = HaPayloads.Status(s);
         var statusAttributes = HaPayloads.StatusAttributes(s, name, options.MachineName, now);
@@ -478,13 +561,57 @@ public sealed partial class HaConnector : IAsyncDisposable
         }
 
         var summary = HaPayloads.ActivitySummary(full);
-        var detail = HaPayloads.ActivityAttributes(full, name, options.MachineName, verbose, now, thinking: p.Observe(full.Activity.Response, full.Activity.Reasoning));
+        var detail = HaPayloads.ActivityAttributes(full, name, options.MachineName, verbose, now, driver: p.Driver,
+            thinking: p.Observe(full.Activity.Response, full.Activity.Reasoning), answerConsumedAt: p.LastPayloadStamp);
         var activitySignature = summary + "\n" + Signature(detail);
         if (activitySignature != p.Activity)
         {
             await ha.PublishAsync(t.ActivityState, summary, true, ct);
             await PublishAsync(t.ActivityAttributes, detail, true, ct);
             p.Activity = activitySignature;
+        }
+        p.Detail = detail;
+
+        await QuestionAsync(full, p, name, now, ct);
+    }
+
+    // Publish-CopilotMqttSession: every entity of a session's card, the selector parked on Idle.
+    async Task PublishControlsAsync(SessionTopics t, string name, CancellationToken ct)
+    {
+        var machine = options.MachineName;
+        var configs = new List<(string Topic, JsonObject Config)>
+        {
+            HaContract.DecisionConfig(t, name, machine, [HaDecision.Idle], enabledByDefault: true),
+            HaContract.ReplyConfig(t, name, machine),
+            HaContract.ReplyPayloadConfig(t, name, machine),
+            HaContract.StatusConfig(t, name, machine),
+            HaContract.ActivityConfig(t, name, machine),
+        };
+        for (var i = 1; i <= HaContract.MaxFields; i++) { configs.Add(HaContract.FieldConfig(t, name, machine, i, $"Field {i}", [HaDecision.Idle])); }
+        configs.Add(HaContract.SubmitConfig(t, name, machine));
+        foreach (var (topic, config) in configs) { await PublishAsync(topic, config, true, ct); }
+    }
+
+    // The ids a session's entities are pinned to, by unique_id.
+    Dictionary<string, string> SessionIds(string node)
+    {
+        var ids = new Dictionary<string, string>(HaContract.SessionSensorIds(node), StringComparer.Ordinal);
+        if (ServesAnswers) { foreach (var (u, e) in HaContract.SessionControlIds(node)) { ids[u] = e; } }
+        return ids;
+    }
+
+    // Pins now what has registered, and queues the rest for PinsAsync.
+    async Task PinNowAsync(IReadOnlyDictionary<string, string> wanted, DateTimeOffset now, CancellationToken ct)
+    {
+        var registry = await ha.ListEntityRegistryAsync(ct);
+        var byUniqueId = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var e in registry) { if (e.UniqueId is { } u) { byUniqueId[u] = e.EntityId; } }
+        foreach (var (uniqueId, entityId) in wanted)
+        {
+            if (!byUniqueId.TryGetValue(uniqueId, out var current)) { AddPin(uniqueId, entityId, now); continue; }
+            if (current == entityId) { continue; }
+            try { await ha.RenameEntityAsync(current, entityId, ct); }
+            catch (HaCommandException e) { log($"Home Assistant connector could not give {current} the id {entityId}: {e.Code}"); }
         }
     }
 
@@ -759,6 +886,15 @@ public sealed partial class HaConnector : IAsyncDisposable
             Check();
             return inner.RenameEntityAsync(entityId, newEntityId, cancellationToken);
         }
+
+        public Task CallServiceAsync(string domain, string service, JsonObject data, CancellationToken cancellationToken = default)
+        {
+            Check();
+            return inner.CallServiceAsync(domain, service, data, cancellationToken);
+        }
+
+        public IAsyncEnumerable<HaTrigger> WatchAsync(IReadOnlyCollection<string> entityIds, CancellationToken cancellationToken = default) => inner.WatchAsync(entityIds, cancellationToken);
+        public Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default) => inner.ReadTopicsAsync(filters, window, cancellationToken);
 
         public Task<HaState?> GetStateAsync(string entityId, CancellationToken cancellationToken = default) => inner.GetStateAsync(entityId, cancellationToken);
         public Task<IReadOnlyList<HaState>> GetStatesAsync(CancellationToken cancellationToken = default) => inner.GetStatesAsync(cancellationToken);

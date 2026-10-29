@@ -196,6 +196,93 @@ public static partial class HaContract
     public static string UpdateStateTopic(string slug) => $"{MachineTopicRoot(slug)}/update/state";
     public static string UpdateAttributesTopic(string slug) => $"{MachineTopicRoot(slug)}/update/attributes";
 
+    // Publish-CopilotMqttSession's answer controls: the selector parked on Idle, the reply box,
+    // the sensor the reply card publishes through, the twelve field slots and Send.
+    public const int ReplyMaxChars = 255;
+
+    public static (string Topic, JsonObject Config) DecisionConfig(SessionTopics t, string sessionName, string machineName, IEnumerable<string> options, bool enabledByDefault)
+    {
+        var config = new JsonObject
+        {
+            ["name"] = "Decision",
+            ["unique_id"] = $"{t.Node}_decision",
+            ["command_topic"] = t.DecisionCommand,
+            ["json_attributes_topic"] = t.DecisionAttributes,
+            ["options"] = new JsonArray([.. options.Select(o => (JsonNode)o)]),
+            ["icon"] = "mdi:comment-question-outline",
+            ["device"] = SessionDevice(t.Node, sessionName, machineName),
+            ["availability"] = SessionAvailability(t),
+        };
+        // Only the session's first publish says so; arming and clearing never did.
+        if (enabledByDefault) { config["enabled_by_default"] = true; }
+        return (DiscoveryTopic("select", t.Node, "decision"), config);
+    }
+
+    public static (string Topic, JsonObject Config) ReplyConfig(SessionTopics t, string sessionName, string machineName) =>
+        (DiscoveryTopic("text", t.Node, "reply"), new JsonObject
+        {
+            ["name"] = "Reply",
+            ["unique_id"] = $"{t.Node}_reply",
+            ["command_topic"] = t.ReplyCommand,
+            ["max"] = ReplyMaxChars,
+            ["mode"] = "text",
+            ["icon"] = "mdi:reply",
+            ["device"] = SessionDevice(t.Node, sessionName, machineName),
+            ["availability"] = SessionAvailability(t),
+        });
+
+    // New-CopilotMqttReplyPayloadConfig: its state is the publish's stamp, its attributes what
+    // was sent.
+    public static (string Topic, JsonObject Config) ReplyPayloadConfig(SessionTopics t, string sessionName, string machineName) =>
+        (DiscoveryTopic("sensor", t.Node, "replypayload"), new JsonObject
+        {
+            ["name"] = "Reply payload",
+            ["unique_id"] = $"{t.Node}_reply_payload",
+            ["state_topic"] = t.ReplyPayload,
+            ["value_template"] = "{{ value_json.at }}",
+            ["json_attributes_topic"] = t.ReplyPayload,
+            ["icon"] = "mdi:reply-all",
+            ["device"] = SessionDevice(t.Node, sessionName, machineName),
+            ["availability"] = SessionAvailability(t),
+        });
+
+    public static (string Topic, JsonObject Config) FieldConfig(SessionTopics t, string sessionName, string machineName, int index, string label, IEnumerable<string> options) =>
+        (DiscoveryTopic("select", t.Node, $"f{index}"), new JsonObject
+        {
+            ["name"] = label,
+            ["unique_id"] = $"{t.Node}_f{index}",
+            ["command_topic"] = $"{t.FieldCommandPrefix}{index}/set",
+            ["options"] = new JsonArray([.. options.Select(o => (JsonNode)o)]),
+            ["icon"] = "mdi:form-select",
+            ["device"] = SessionDevice(t.Node, sessionName, machineName),
+            ["availability"] = SessionAvailability(t),
+        });
+
+    public static (string Topic, JsonObject Config) SubmitConfig(SessionTopics t, string sessionName, string machineName) =>
+        (DiscoveryTopic("button", t.Node, "submit"), new JsonObject
+        {
+            ["name"] = "Submit answer",
+            ["unique_id"] = $"{t.Node}_submit",
+            ["command_topic"] = t.SubmitCommand,
+            ["icon"] = "mdi:send-check",
+            ["device"] = SessionDevice(t.Node, sessionName, machineName),
+            ["availability"] = SessionAvailability(t),
+        });
+
+    // The ids of the controls a session publishes now, keyed by unique_id, for pinning.
+    public static IReadOnlyDictionary<string, string> SessionControlIds(string node)
+    {
+        var ids = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [$"{node}_decision"] = SessionEntities.Decision(node),
+            [$"{node}_reply"] = SessionEntities.Reply(node),
+            [$"{node}_reply_payload"] = SessionEntities.ReplyPayload(node),
+            [$"{node}_submit"] = SessionEntities.Submit(node),
+        };
+        for (var i = 1; i <= MaxFields; i++) { ids[$"{node}_f{i}"] = SessionEntities.Field(node, i); }
+        return ids;
+    }
+
     // Get-CopilotMqttSessionDiscoveryTopic: every retained discovery topic of one session node.
     public static IReadOnlyList<string> SessionDiscoveryTopics(string node)
     {
@@ -309,7 +396,7 @@ public static partial class HaContract
     };
 }
 
-// Get-CopilotMqttTopics, for the topics a session's sensors use.
+// Get-CopilotMqttTopics: the topics one session node's entities use.
 public sealed record SessionTopics(string Node)
 {
     public string Root => $"{HaContract.TopicRoot}/{Node}";
@@ -318,6 +405,27 @@ public sealed record SessionTopics(string Node)
     public string StatusAttributes => $"{Root}/status/attr";
     public string ActivityState => $"{Root}/activity/state";
     public string ActivityAttributes => $"{Root}/activity/attr";
+    public string DecisionCommand => $"{Root}/decision/set";
+    public string DecisionAttributes => $"{Root}/decision/attr";
+    public string ReplyCommand => $"{Root}/reply/set";
+    public string ReplyPayload => $"{Root}/replypayload/set";
+    public string FieldCommandPrefix => $"{Root}/field";
+    public string SubmitCommand => $"{Root}/submit/set";
+    public string StopCommand => $"{Root}/stop/set";
+}
+
+// The entity ids of one session's controls, as the daemon pins them (Get-CopilotMqttEntityIds).
+public static class SessionEntities
+{
+    public static string Decision(string node) => $"select.{node}_decision";
+    public static string Reply(string node) => $"text.{node}_reply";
+    public static string ReplyPayload(string node) => $"sensor.{node}_reply_payload";
+    public static string Submit(string node) => $"button.{node}_submit";
+    public static string Stop(string node) => $"button.{node}_stop";
+    public static string Status(string node) => $"sensor.{node}_status";
+    public static string Activity(string node) => $"sensor.{node}_activity";
+    // Get-CopilotMqttFieldEntityId.
+    public static string Field(string node, int index) => $"select.{node}_f{index}";
 }
 
 // One mqtt.publish: the topic, the payload as sent, and whether the broker keeps it.

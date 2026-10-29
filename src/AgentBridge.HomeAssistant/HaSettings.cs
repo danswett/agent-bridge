@@ -36,6 +36,9 @@ public sealed record HaSettings
     // Says the Home Assistant at BaseUrl is a disposable one. A development build connects to
     // no other (design G6: no writes to the production HA from development builds).
     public bool Disposable { get; init; }
+    // Home Assistant user ids that are agents, not people (agentUserIds there): a press made by
+    // one of them is the agent's, and the card's edge says so.
+    public IReadOnlyList<string> AgentUserIds { get; init; } = [];
 
     public static readonly HaSettings Default = new();
 
@@ -68,6 +71,14 @@ public sealed record HaSettings
             DashboardUrlPath = Text("dashboardUrlPath") ?? DefaultDashboard,
             MachineName = Text("machineName"),
         };
+        if (s.TryGetProperty("agentUserIds", out var ids) && ids.ValueKind != JsonValueKind.Null)
+        {
+            if (ids.ValueKind == JsonValueKind.Array && ids.EnumerateArray().All(i => i.ValueKind == JsonValueKind.String))
+            {
+                settings = settings with { AgentUserIds = [.. ids.EnumerateArray().Select(i => i.GetString()!.Trim()).Where(i => i.Length > 0).Distinct(StringComparer.Ordinal)] };
+            }
+            else { problems.Add("homeAssistant.agentUserIds is not a list of user ids"); }
+        }
         if (Text("baseUrl") is { } url)
         {
             if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) && string.IsNullOrEmpty(uri.UserInfo))

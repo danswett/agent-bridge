@@ -1,6 +1,7 @@
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Usage;
+using AgentBridge.Host.Delivery;
 
 namespace AgentBridge.Host;
 
@@ -15,7 +16,7 @@ public sealed class HaRunning : IAsyncDisposable
     HaRunning(HaConnector connector, HttpClient http, Mutex claim) { this.connector = connector; this.http = http; this.claim = claim; }
 
     public static HaRunning? Start(HostSettings settings, string folder, ISessionSource source, UsageMonitor usage,
-        Func<string?>? agentHaBridge, bool devBuild, string version, Action<string> log)
+        Func<string?>? agentHaBridge, bool devBuild, string version, Action<string> log, ISessionAnswerer? answers = null)
     {
         foreach (var p in settings.HomeAssistantProblems) { log($"config.json: {p}"); }
         var ha = settings.HomeAssistant;
@@ -50,6 +51,10 @@ public sealed class HaRunning : IAsyncDisposable
             return null;
         }
         var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        // Answers from the cards go through the host's own delivery, as an app's do; a host that
+        // cannot type into sessions here serves no answer controls rather than dead ones.
+        Func<AgentBridge.Protocol.AnswerRequest, CancellationToken, Task<AgentBridge.Protocol.AnswerResult>>? answer =
+            answers is null or UnsupportedPlatformAnswerer ? null : answers.AnswerAsync;
         var connector = new HaConnector(new HaConnectorOptions
         {
             MachineName = machine,
@@ -58,9 +63,11 @@ public sealed class HaRunning : IAsyncDisposable
             DetailedActivityFallback = ha.DetailedActivity,
             DashboardUrlPath = ha.DashboardUrlPath,
             StateFile = Path.Combine(folder, "ha-connector.json"),
-        }, new HomeAssistantClient(ha.BaseUrl!, token, http), source, agentHaBridge!, () => usage.Current, log);
+            AgentUserIds = ha.AgentUserIds,
+        }, new HomeAssistantClient(ha.BaseUrl!, token, http), source, agentHaBridge!, () => usage.Current, log, answer: answer);
         connector.Start();
-        log($"the Home Assistant connector is on: {ha.BaseUrl} as agent_bridge_{slug}{(ha.Disposable ? " (disposable)" : "")}; status only, no answers, replies, launches or stops yet");
+        log($"the Home Assistant connector is on: {ha.BaseUrl} as agent_bridge_{slug}{(ha.Disposable ? " (disposable)" : "")}; " +
+            (answer is null ? "status only" : "status and answers") + ", no replies, launches or stops yet");
         return new HaRunning(connector, http, claim);
     }
 

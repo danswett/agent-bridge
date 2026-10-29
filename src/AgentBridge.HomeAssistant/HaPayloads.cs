@@ -115,7 +115,7 @@ public static class HaPayloads
     // this host (docs/ha-connector.md, later PRs). thinking says the newest line is the
     // reasoning rather than the reply; the connector knows which changed last, and without it
     // the reasoning is newest only while there is no reply at all.
-    public static JsonObject ActivityAttributes(Session full, string sessionName, string machineName, bool verbose, DateTimeOffset now, string driver = "human", bool? thinking = null)
+    public static JsonObject ActivityAttributes(Session full, string sessionName, string machineName, bool verbose, DateTimeOffset now, string driver = "human", bool? thinking = null, string? answerConsumedAt = null)
     {
         var detail = new JsonObject
         {
@@ -130,6 +130,9 @@ public static class HaPayloads
         var reasoning = full.Activity.Reasoning;
         var isThinking = !string.IsNullOrWhiteSpace(reasoning) && (thinking ?? string.IsNullOrWhiteSpace(response));
         AddCardText(detail, InlineReasoning(full.Agent), verbose, response, isThinking ? reasoning : response, isThinking, reasoning);
+        // Add-DaemonAnswerStamp: the reply-card publish last used, on every update, so a card
+        // that sent it can tell it was.
+        if (!string.IsNullOrWhiteSpace(answerConsumedAt)) { detail["answer_consumed_at"] = answerConsumedAt; }
         return detail;
     }
 

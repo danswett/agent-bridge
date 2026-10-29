@@ -247,7 +247,7 @@ async Task<int> ServeAsync()
     // agent-ha-bridge's writer generates. Off unless config.json turns it on, and paused while
     // agent-ha-bridge runs for this user (looked at every few seconds, as the app's view of it is).
     Func<string?>? haActive = haProbe is null ? null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64);
-    await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log);
+    await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers);
     var launcher = Launcher(source, attachments);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, new UsageService(usageMonitor, Log), launcher);
     // Who is on the other end of the pipe: the app beside this host, or something inside an

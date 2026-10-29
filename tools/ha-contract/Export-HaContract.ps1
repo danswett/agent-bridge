@@ -27,7 +27,9 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Source,
-    [string]$Output = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-contract.json')
+    [string]$Output = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-contract.json'),
+    # Questions: how the daemon arms, clears and reads a session's answer controls.
+    [string]$DecisionsOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-decisions.json')
 )
 
 Set-StrictMode -Version Latest
@@ -61,9 +63,36 @@ foreach ($statement in $mqttAst.EndBlock.Statements) {
     throw "decision-mqtt.ps1 has top-level code that is not an assignment: $($statement.Extent.Text)"
 }
 
+function Import-SpecAssignment {
+    # Evaluates the named top-level $script: assignments from one source file, and nothing else
+    # in it. Each must be a constant: anything that calls out is refused rather than run.
+    param([string]$Path, [string[]]$Name)
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Source $Path), [ref]$null, [ref]$null)
+    foreach ($n in $Name) {
+        $found = @($ast.EndBlock.Statements | Where-Object {
+            $_ -is [System.Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq "`$script:$n" })
+        if ($found.Count -ne 1) { throw "$Path assigns `$script:$n $($found.Count) times" }
+        $right = $found[0].Right.Extent.Text
+        if ($right -notmatch "^(\d+|'[^']*')$") { throw "$Path assigns `$script:$n something that is not a constant: $right" }
+        . ([scriptblock]::Create($found[0].Extent.Text))
+    }
+}
+
 Import-SpecFunction 'hooks\decision-bridge-common.ps1' @(
     'Get-BridgeMachineSlug', 'Remove-CopilotTemplateMarkup', 'Assert-HomeAssistantServiceTarget',
-    'Get-BridgeThoughtLine', 'Get-CopilotSafeSessionKey', 'Get-CopilotSessionDisplay')
+    'Get-BridgeThoughtLine', 'Get-CopilotSafeSessionKey', 'Get-CopilotSessionDisplay',
+    'ConvertFrom-DecisionJson', 'Get-DecisionSchemaFieldChoices', 'Test-DecisionFieldIsText', 'Test-DecisionFieldIsMultiSelect',
+    'Test-DecisionTakesTypedAnswer', 'Get-DecisionMultiSelectChecked', 'Get-DecisionMultiSelectCode',
+    'Test-DecisionMultiSelectCodeSafe', 'Test-DecisionMultiSelectAllowsEmpty', 'Resolve-DecisionMultiSelectIndexes',
+    'Get-DecisionMultiSelectMasks', 'Get-DecisionMultiSelectLabel', 'Get-DecisionMultiSelectSpelledChoices',
+    'Get-DecisionMultiSelectCodes', 'Get-DecisionMultiSelectEmptyCode', 'Get-DecisionMultiSelectEmptyChoices',
+    'Get-DecisionMultiSelectEmptyChoice', 'Test-DecisionMultiSelectEmptyChoice', 'Get-DecisionMultiSelectChoices',
+    'Test-DecisionFieldsAnswerable', 'Get-DecisionSchemaFields')
+Import-SpecAssignment 'hooks\decision-bridge-common.ps1' @(
+    'DecisionMultiSelectMaxChoices', 'DecisionMultiSelectSeparator', 'DecisionMultiSelectMaxCodes',
+    'DecisionMultiSelectMaxOptions', 'DecisionMultiSelectCodePattern', 'DecisionMultiSelectEmptyLabel',
+    'DecisionMultiSelectEmptyCode')
+Import-SpecFunction 'hooks\copilot-hooks.ps1' @('Get-CopilotMixedFormHint')
 $script:DecisionMaxFormFields = 12
 . $mqttPath
 Import-SpecFunction 'hooks\daemon-activity.ps1' @('Get-DaemonBackgroundAgentCount', 'Get-DaemonBackgroundShellCount', 'Get-DaemonCompactionCount', 'Add-DaemonCardText', 'Add-DaemonAnswerStamp')
@@ -80,11 +109,18 @@ function script:Get-DaemonEntryKind { param($Entry) [string]$Entry.Kind }
 function script:Get-DaemonAgent { param([string]$Kind) @{ InlineReasoning = ($Kind -in @('copilot', 'claude', 'codex')) } }
 
 $script:Recorded = [System.Collections.Generic.List[object]]::new()
+# Arming a question also drives its optimistic selects; nothing else is ever allowed through.
+$script:RecordedServices = @('mqtt.publish')
 function script:Invoke-HomeAssistantService {
     param([string]$Domain, [string]$Service, [hashtable]$Data, [hashtable]$Headers, [int]$TimeoutSec = 15)
     Assert-HomeAssistantServiceTarget -Data $Data
-    if ("$Domain.$Service" -ne 'mqtt.publish') { throw "the contract only publishes; $Domain.$Service was called" }
-    $script:Recorded.Add([ordered]@{ topic = [string]$Data.topic; payload = [string]$Data.payload; retain = [bool]$Data.retain; qos = [int]$Data.qos })
+    if ("$Domain.$Service" -notin $script:RecordedServices) { throw "the contract does not call $Domain.$Service here" }
+    if ("$Domain.$Service" -eq 'mqtt.publish') {
+        $script:Recorded.Add([ordered]@{ topic = [string]$Data.topic; payload = [string]$Data.payload; retain = [bool]$Data.retain; qos = [int]$Data.qos })
+    }
+    else {
+        $script:Recorded.Add([ordered]@{ service = "$Domain.$Service"; entity_id = [string]$Data.entity_id; option = [string]$Data.option })
+    }
 }
 $headers = @{ Authorization = 'Bearer not-a-token' }
 
@@ -93,6 +129,7 @@ function ConvertTo-Fixture {
     # the contract; Home Assistant parses it), and the clock-dependent stamps replaced by a
     # marker the tests replace the same way.
     param($Publication)
+    if ($Publication.Contains('service')) { return $Publication }
     $payload = [string]$Publication.payload
     $value = $payload
     $json = $false
@@ -101,6 +138,7 @@ function ConvertTo-Fixture {
         # reparsed into this machine's time zone.
         $value = $payload | ConvertFrom-Json -AsHashtable -Depth 20 -DateKind String
         if ($value -is [System.Collections.IDictionary] -and $value.Contains('updated')) { $value['updated'] = '<now>' }
+        if ($value -is [System.Collections.IDictionary] -and $value.Contains('asked_at')) { $value['asked_at'] = '<now>' }
         $json = $true
     }
     [ordered]@{ topic = $Publication.topic; retain = $Publication.retain; qos = $Publication.qos; json = $json; payload = $value }
@@ -314,8 +352,160 @@ $fixture = [ordered]@{
     })
 }
 
-$json = $fixture | ConvertTo-Json -Depth 30
+function ConvertTo-Stable {
+    # Hashtable key order changes from one process to the next, which turned every regeneration
+    # into a diff of the whole file. Unordered tables are written with their keys sorted;
+    # ordered ones and objects keep the order they were built in.
+    param($Value)
+    if ($null -eq $Value -or $Value -is [string] -or $Value -is [ValueType]) { return $Value }
+    if ($Value -is [System.Collections.Hashtable]) {
+        $sorted = [ordered]@{}
+        foreach ($key in @($Value.Keys | Sort-Object { [string]$_ } -CaseSensitive)) { $sorted[$key] = ConvertTo-Stable $Value[$key] }
+        return $sorted
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $copy = [ordered]@{}
+        foreach ($key in @($Value.Keys)) { $copy[$key] = ConvertTo-Stable $Value[$key] }
+        return $copy
+    }
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $copy = [ordered]@{}
+        foreach ($p in $Value.PSObject.Properties) { $copy[$p.Name] = ConvertTo-Stable $p.Value }
+        return $copy
+    }
+    if ($Value -is [System.Collections.IEnumerable]) { return , @($Value | ForEach-Object { ConvertTo-Stable $_ }) }
+    $Value
+}
+
+$json = (ConvertTo-Stable $fixture) | ConvertTo-Json -Depth 30
 $full = [IO.Path]::GetFullPath($Output)
 [void](New-Item -ItemType Directory -Path (Split-Path $full) -Force)
 [IO.File]::WriteAllText($full, $json + "`n", [Text.UTF8Encoding]::new($false))
 Write-Host "wrote $full from agent-ha-bridge $commit$(if ($dirty) { ' (with local changes)' })"
+
+# ---- Questions -------------------------------------------------------------------------------
+# What the daemon publishes to arm a session's answer controls for a question, to clear them, and
+# how it reads a multi-select slot back. Driven through Set-CopilotMqttDecision and
+# Clear-CopilotMqttDecision, with fields built by Get-DecisionSchemaFields from ask_user schemas,
+# exactly as the Copilot hook does (hooks/copilot-hooks.ps1).
+
+$script:DecisionBridgeConfig = @{ DecisionQuestionMaxChars = 6000 }
+$script:RecordedServices = @('mqtt.publish', 'select.select_option')
+# The answer channels' snapshot is the daemon's own state file; arming here always has one.
+function script:Initialize-CopilotDecisionBaseline { [pscustomobject]@{ Recorded = $true; Reason = '' } }
+# What the last question left armed, which the daemon reads from the decision entity.
+$script:ArmedSlots = -1
+function script:Get-CopilotMqttArmedFieldCount { $script:ArmedSlots }
+# Waits for Home Assistant to take a discovery config before driving the select; the call it
+# makes is what is recorded.
+function script:Set-CopilotMqttSelectOption {
+    param([string]$EntityId, [string]$Option, [hashtable]$Headers)
+    Invoke-HomeAssistantService -Domain 'select' -Service 'select_option' -Headers $Headers -Data @{ entity_id = $EntityId; option = $Option }
+    $true
+}
+function script:Start-Sleep { }
+
+function ConvertTo-FieldFixture {
+    param($Field)
+    [ordered]@{
+        name = [string]$Field.Name; label = [string]$Field.Label
+        options = @($Field.Options | ForEach-Object { [string]$_ })
+        values = @($Field.Values)
+        isText = [bool]$Field.IsText; multiSelect = [bool]$Field.MultiSelect
+        defaultIndexes = @($Field.DefaultIndexes); allowsEmpty = [bool]$Field.AllowsEmpty
+    }
+}
+
+$schemas = [ordered]@{
+    single = '{"type":"object","properties":{"release":{"type":"string","title":"Release","enum":["cut_now","wait"],"enumNames":["Cut the release now","Wait for the fix"]}},"required":["release"]}'
+    boolean = '{"type":"object","properties":{"push":{"type":"boolean","title":"Push now"}}}'
+    text = '{"type":"object","properties":{"name":{"type":"string","title":"Name"}}}'
+    form = '{"type":"object","properties":{"visibility":{"type":"string","title":"Visibility","oneOf":[{"const":"public","title":"Public"},{"const":"private","title":"Private"}]},"push":{"type":"boolean","title":"Push now"},"areas":{"type":"array","title":"Areas","items":{"type":"string","enum":["Auth","Search","Billing"]},"default":["Search"]},"notes":{"type":"string","title":"Anything else?"}},"required":["visibility","push"]}'
+    manyMulti = '{"type":"object","properties":{"followups":{"type":"array","title":"Follow-ups","minItems":1,"items":{"type":"string","enum":["one","two","three","four","five","six","seven"]}}}}'
+    unsafeMulti = '{"type":"object","properties":{"picks":{"type":"array","title":"Picks","items":{"type":"string","enum":["A","B","#1"]}}}}'
+    emptyMulti = '{"type":"object","properties":{"extras":{"type":"array","title":"Extras","items":{"type":"string","enum":["Docs","(none)"]},"default":[]}}}'
+}
+
+$questions = [System.Collections.Generic.List[object]]::new()
+function Add-Question {
+    param([string]$Name, [string]$Question, [string[]]$Choices = @(), [object[]]$Fields = @(), [int]$Armed = -1, [switch]$AnswerOnTap, [string]$Schema)
+    $script:ArmedSlots = $Armed
+    $published = Get-Published {
+        Set-CopilotMqttDecision -SessionId $copilotId -SessionName $sessionName -Machine $machine -Question $Question `
+            -Choices $Choices -Fields $Fields -DecisionId 'decision-1' -Headers $headers -AnswerOnTap:$AnswerOnTap
+    }
+    $questions.Add([ordered]@{
+        name = $Name; schema = $Schema; question = $Question; choices = @($Choices); answerOnTap = [bool]$AnswerOnTap; armedSlots = $Armed
+        fields = @($Fields | ForEach-Object { ConvertTo-FieldFixture $_ })
+        takesTypedAnswer = [bool](Test-DecisionTakesTypedAnswer -Fields $(if ($Fields.Count -ge 1) { $Fields } else { @() }) -Choices $Choices -AnswerOnTap:$AnswerOnTap)
+        published = $published
+    })
+}
+
+# As the Copilot hook does it: a lone field's options also ride as the selector's choices, and a
+# form mixing dropdowns with a free-text field says which control takes the words.
+function Add-SchemaQuestion {
+    param([string]$Name, [string]$Message, [int]$Armed = -1)
+    $schema = ConvertFrom-DecisionJson -Json $schemas[$Name]
+    $fields = @(Get-DecisionSchemaFields -Schema $schema)
+    [string[]]$choices = @()
+    if ($fields.Count -eq 1) { $choices = @($fields[0].Options) }
+    $text = @($fields | Where-Object { Test-DecisionFieldIsText -Field $_ }) | Select-Object -First 1
+    if ($fields.Count -gt 1 -and $null -ne $text) { $Message = "$Message`n`n$(Get-CopilotMixedFormHint -Label ([string]$text.Label))" }
+    Add-Question -Name $Name -Question $Message -Choices $choices -Fields $fields -Armed $Armed -Schema $schemas[$Name]
+}
+
+Add-Question -Name 'freeform' -Question 'What should the release be called?'
+Add-Question -Name 'approval' -Question "Codex wants to run:`n`ngit push" -Choices @('Approve', 'Deny') -AnswerOnTap
+Add-Question -Name 'longQuestion' -Question ('Q' * 6100)
+Add-SchemaQuestion 'single' 'Cut the release now?'
+Add-SchemaQuestion 'boolean' 'Push the branch?'
+Add-SchemaQuestion 'text' 'What should it be called?'
+Add-SchemaQuestion 'form' 'Set up the repository' -Armed 0
+Add-SchemaQuestion 'manyMulti' 'Which follow-ups?' -Armed 6
+Add-SchemaQuestion 'unsafeMulti' 'Which picks?'
+Add-SchemaQuestion 'emptyMulti' 'Any extras?' -Armed 1
+
+$clears = [ordered]@{}
+foreach ($armed in @(4, 0, -1)) {
+    $script:ArmedSlots = $armed
+    $clears["armed$armed"] = Get-Published { Clear-CopilotMqttDecision -SessionId $copilotId -SessionName $sessionName -Machine $machine -Headers $headers }
+}
+
+# How each multi-select field's slot values are read back.
+$multi = foreach ($pair in @(@('form', 'areas'), @('manyMulti', 'followups'), @('unsafeMulti', 'picks'), @('emptyMulti', 'extras'))) {
+    $field = @(Get-DecisionSchemaFields -Schema (ConvertFrom-DecisionJson -Json $schemas[$pair[0]])) | Where-Object { $_.Name -eq $pair[1] }
+    $offered = @(Get-DecisionMultiSelectChoices -Field $field)
+    $probes = @($offered) + @('#1,1', '#9', '#0', '(none)', 'Choose...', 'A + B + C', '#1,', '')
+    [ordered]@{
+        schema = $pair[0]; field = $pair[1]
+        choices = $offered
+        codes = @(Get-DecisionMultiSelectCodes -Field $field)
+        codeSafe = [bool](Test-DecisionMultiSelectCodeSafe -Field $field)
+        emptyChoice = [string](Get-DecisionMultiSelectEmptyChoice -Field $field)
+        resolve = @($probes | Select-Object -Unique | ForEach-Object {
+            [ordered]@{
+                value = $_
+                indexes = @(Resolve-DecisionMultiSelectIndexes -Field $field -Value $_)
+                empty = [bool](Test-DecisionMultiSelectEmptyChoice -Field $field -Choice $_)
+            }
+        })
+    }
+}
+
+$decisions = [ordered]@{
+    source = $fixture.source
+    sessionId = $copilotId; sessionName = $sessionName; machine = $machine
+    constants = [ordered]@{
+        separator = $script:DecisionMultiSelectSeparator; emptyLabel = $script:DecisionMultiSelectEmptyLabel
+        emptyCode = $script:DecisionMultiSelectEmptyCode; questionMaxChars = $script:DecisionBridgeConfig.DecisionQuestionMaxChars
+        replyMaxChars = $script:CopilotMqttConfig.ReplyMaxChars
+    }
+    mixedHint = Get-CopilotMixedFormHint -Label 'Anything else?'
+    questions = $questions
+    clears = $clears
+    multiSelect = @($multi)
+}
+$full = [IO.Path]::GetFullPath($DecisionsOutput)
+[IO.File]::WriteAllText($full, ((ConvertTo-Stable $decisions) | ConvertTo-Json -Depth 30) + "`n", [Text.UTF8Encoding]::new($false))
+Write-Host "wrote $full"

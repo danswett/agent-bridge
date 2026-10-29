@@ -12,6 +12,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="AgentBridge.Host.Core.Tests" />
     <InternalsVisibleTo Include="AgentBridge.Host.Delivery.Tests" />
+    <!-- The HA connector's contract tests build questions the way the host parses them. -->
+    <InternalsVisibleTo Include="AgentBridge.HomeAssistant.Tests" />
   </ItemGroup>
 
   <ItemGroup>
