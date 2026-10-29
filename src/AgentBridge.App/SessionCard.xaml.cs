@@ -136,63 +136,71 @@ public sealed partial class SessionCard : UserControl
     }
 
     // A pasted picture or file goes with the reply, as on the PWA; pasted text is just text.
+    // These handlers are async void: anything they let escape would end the app and every
+    // unsent draft with it, so the clipboard and files failing (locked, deleted, offline) is
+    // reported on the reply instead.
     async void OnPaste(object sender, TextControlPasteEventArgs e)
     {
         if (Card?.Reply is not { ShowAttach: true } reply) { return; }
-        var clip = Clipboard.GetContent();
-        if (clip.Contains(StandardDataFormats.StorageItems))
+        try
         {
-            e.Handled = true;
-            foreach (var item in await clip.GetStorageItemsAsync())
+            var clip = Clipboard.GetContent();
+            if (clip.Contains(StandardDataFormats.StorageItems))
             {
-                if (item is StorageFile file) { await AddFileAsync(reply, file); }
+                e.Handled = true;
+                foreach (var item in await clip.GetStorageItemsAsync())
+                {
+                    if (item is StorageFile file) { await AddFileAsync(reply, file); }
+                }
             }
-        }
-        else if (clip.Contains(StandardDataFormats.Bitmap))
-        {
-            e.Handled = true;
-            try
+            else if (clip.Contains(StandardDataFormats.Bitmap))
             {
+                e.Handled = true;
                 var reference = await clip.GetBitmapAsync();
                 using var stream = await reference.OpenReadAsync();
                 await reply.AddAsync("pasted.png", "image/png", await AsPngAsync(stream));
             }
-            catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or ArgumentException)
-            {
-                reply.Unreadable("the pasted picture");
-            }
         }
+        catch (Exception ex) when (Unreadable(ex)) { reply.Unreadable("what was pasted"); }
     }
 
     async void OnAttach(object sender, RoutedEventArgs e)
     {
         if (Card?.Reply is not { } reply) { return; }
-        var picker = new FileOpenPicker();
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, MainWindow.CurrentHandle);
-        picker.FileTypeFilter.Add("*");
-        var files = await picker.PickMultipleFilesAsync();
-        foreach (var file in files) { await AddFileAsync(reply, file); }
+        try
+        {
+            var picker = new FileOpenPicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, MainWindow.CurrentHandle);
+            picker.FileTypeFilter.Add("*");
+            var files = await picker.PickMultipleFilesAsync();
+            foreach (var file in files) { await AddFileAsync(reply, file); }
+        }
+        catch (Exception ex) when (Unreadable(ex)) { reply.Unreadable("the chosen file"); }
     }
 
+    static bool Unreadable(Exception e) => e is IOException or UnauthorizedAccessException or ArgumentException or System.Runtime.InteropServices.COMException;
+
+    // Each file on its own: one that went missing does not stop the others.
     static async Task AddFileAsync(ReplyViewModel reply, StorageFile file)
     {
-        var size = (long)(await file.GetBasicPropertiesAsync()).Size;
-        var type = file.ContentType;
-        var image = type.StartsWith("image/", StringComparison.Ordinal);
-        if (size > Protocol.AttachmentLimits.Bytes && (!image || size > MostRead))
-        {
-            reply.Refuse(file.Name, type, size);
-            return;
-        }
+        string type;
         byte[] bytes;
         try
         {
+            var size = (long)(await file.GetBasicPropertiesAsync()).Size;
+            type = file.ContentType;
+            var image = type.StartsWith("image/", StringComparison.Ordinal);
+            if (size > Protocol.AttachmentLimits.Bytes && (!image || size > MostRead))
+            {
+                reply.Refuse(file.Name, type, size);
+                return;
+            }
             var buffer = await FileIO.ReadBufferAsync(file);
             bytes = new byte[buffer.Length];
             using var reader = DataReader.FromBuffer(buffer);
             reader.ReadBytes(bytes);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
+        catch (Exception e) when (Unreadable(e))
         {
             reply.Unreadable(file.Name);
             return;

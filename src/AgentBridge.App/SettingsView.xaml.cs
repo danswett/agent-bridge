@@ -43,9 +43,14 @@ public sealed partial class SettingsView : UserControl
     async void OnOpenSignIn(object sender, RoutedEventArgs e)
     {
         if (viewModel is not { SignInCode: { } code, SignInUri: { } uri }) { return; }
-        var data = new DataPackage();
-        data.SetText(code);
-        Clipboard.SetContent(data);
-        if (Uri.TryCreate(uri, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps) { await Windows.System.Launcher.LaunchUriAsync(u); }
+        try
+        {
+            var data = new DataPackage();
+            data.SetText(code);
+            Clipboard.SetContent(data);
+            if (Uri.TryCreate(uri, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps) { await Windows.System.Launcher.LaunchUriAsync(u); }
+        }
+        // async void: an escape would end the app. The code and the page are on screen anyway.
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or UnauthorizedAccessException) { }
     }
 }
