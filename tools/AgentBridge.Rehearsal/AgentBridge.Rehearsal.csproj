@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>agent-bridge-rehearsal</AssemblyName>
+    <RootNamespace>AgentBridge.Rehearsal</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The host's own pipe client, contract records and agent-ha-bridge probe, so the checks
+         read what the product reads rather than a copy of its rules. -->
+    <ProjectReference Include="..\..\src\AgentBridge.Local\AgentBridge.Local.csproj" />
+    <ProjectReference Include="..\..\src\AgentBridge.Protocol\AgentBridge.Protocol.csproj" />
+    <ProjectReference Include="..\..\src\AgentBridge.Transport\AgentBridge.Transport.csproj" />
+    <ProjectReference Include="..\..\src\AgentBridge.Host.Delivery\AgentBridge.Host.Delivery.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AgentBridge.Rehearsal.Tests" />
+  </ItemGroup>
+
+</Project>
