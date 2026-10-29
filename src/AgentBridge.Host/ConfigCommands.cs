@@ -31,6 +31,8 @@ public static class ConfigCommands
         "launch.enabled", "launch.defaultWorkspace", "launch.defaultAgent", "launch.permissions",
         "launch.worktrees.root", "launch.worktrees.limit", "launch.worktrees.idleHours",
         "launch.profiles", "launch.defaultProfile", "launch.resumeCount",
+        "homeAssistant.enabled", "homeAssistant.baseUrl", "homeAssistant.dashboardUrlPath", "homeAssistant.detailedActivity",
+        "homeAssistant.machineName", "homeAssistant.disposable",
     ];
 
     static readonly string[] AgentKeys = ["path", "model", "effort", "context", "models", "efforts", "contexts", "extraArgs"];
@@ -96,7 +98,7 @@ public static class ConfigCommands
         output.WriteLine(File.Exists(path) ? File.ReadAllText(path) : "(no file: every setting is its default, and no workspace is approved)");
         var (settings, problem) = HostSettings.Load(Path.GetDirectoryName(path)!);
         if (problem is not null) { output.WriteLine(problem); }
-        foreach (var p in settings.LaunchProblems) { output.WriteLine(p); }
+        foreach (var p in settings.LaunchProblems.Concat(settings.HomeAssistantProblems)) { output.WriteLine(p); }
         return 0;
     }
 
@@ -163,7 +165,7 @@ public static class ConfigCommands
             || (parts.Length == 4 && parts[0] == "launch" && parts[1] == "agents" && Delivery.Launch.Launchers.Find(parts[2]) is not null && AgentKeys.Contains(parts[3]));
         if (!known)
         {
-            error.WriteLine($"'{key}' is not a setting. Settings: {string.Join(", ", Keys)}, launch.agents.<agency|copilot|claude|codex>.<{string.Join("|", AgentKeys)}>; workspaces are changed with agent-bridge-host workspace");
+            error.WriteLine($"'{key}' is not a setting. Settings: {string.Join(", ", Keys)}, launch.agents.<agency|copilot|claude|codex>.<{string.Join("|", AgentKeys)}>; workspaces are changed with agent-bridge-host workspace, and the Home Assistant token with agent-bridge-host ha token set");
             return 2;
         }
         var root = Read(path);
@@ -211,7 +213,7 @@ public static class ConfigCommands
         {
             File.WriteAllText(Path.Combine(check, HostSettings.FileName), text);
             var (settings, problem) = HostSettings.Load(check);
-            var problems = (problem is null ? [] : new[] { problem }).Concat(settings.LaunchProblems).ToList();
+            var problems = (problem is null ? [] : new[] { problem }).Concat(settings.LaunchProblems).Concat(settings.HomeAssistantProblems).ToList();
             if (problems.Count > 0)
             {
                 error.WriteLine("Not written: " + string.Join("; ", problems.Select(p => p.Replace(check, folder, StringComparison.OrdinalIgnoreCase))));

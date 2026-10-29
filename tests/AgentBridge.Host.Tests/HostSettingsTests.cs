@@ -115,4 +115,53 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Equal(0, Run("config", "unset", "launch.permissions"));
         Assert.Equal("ask", HostSettings.Load(folder).Settings.Launch.Permissions);
     }
+
+    [Fact]
+    public void The_home_assistant_connector_is_off_by_default_and_a_wrong_section_turns_off_only_it()
+    {
+        var off = With(null).Settings;
+        Assert.False(off.HomeAssistant.Enabled);
+
+        var (settings, problem) = With("""{ "permissions": { "remoteApproval": false }, "homeAssistant": { "enabled": true, "baseUrl": "not a url" } }""");
+        Assert.Null(problem);
+        Assert.False(settings.RemoteApproval);
+        Assert.False(settings.HomeAssistant.Enabled);
+        Assert.Contains(settings.HomeAssistantProblems, p => p.Contains("baseUrl", StringComparison.Ordinal));
+
+        // Set at the machine, checked as serve would read it: on without an address is not written.
+        File.Delete(Path.Combine(folder, HostSettings.FileName));
+        Assert.Equal(1, Run("config", "set", "homeAssistant.enabled", "true"));
+        Assert.Contains("Not written", Said);
+        Assert.Equal(0, Run("config", "set", "homeAssistant.baseUrl", "http://ha.test:8123"));
+        Assert.Equal(0, Run("config", "set", "homeAssistant.enabled", "true"));
+        Assert.Equal(0, Run("config", "set", "homeAssistant.disposable", "true"));
+        var ha = HostSettings.Load(folder).Settings.HomeAssistant;
+        Assert.True(ha is { Enabled: true, Disposable: true });
+        Assert.Equal(new Uri("http://ha.test:8123"), ha.BaseUrl);
+    }
+
+    [Fact]
+    public void The_home_assistant_token_is_read_without_an_argument_kept_protected_and_never_shown()
+    {
+        const string token = "fixture-token-that-must-not-be-printed";
+        var output = new StringWriter();
+        var error = new StringWriter();
+        Assert.Equal(0, HaCommands.Run(["ha", "token", "set"], folder, () => token, output, error, devBuild: true, agentHaBridge: () => null));
+        Assert.DoesNotContain(token, output.ToString(), StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(folder, HostSettings.FileName)));
+        Assert.Equal(token, AgentBridge.HomeAssistant.HaTokenStore.Load(folder));
+
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName), """{ "homeAssistant": { "enabled": true, "baseUrl": "http://ha.test:8123" } }""");
+        output = new StringWriter();
+        Assert.Equal(0, HaCommands.Run(["ha", "status"], folder, () => null, output, error, devBuild: true, agentHaBridge: () => null));
+        var status = output.ToString();
+        Assert.Contains("development build", status, StringComparison.Ordinal);
+        Assert.Contains("token: stored, protected", status, StringComparison.Ordinal);
+        Assert.DoesNotContain(token, status, StringComparison.Ordinal);
+
+        Assert.Equal(1, HaCommands.Run(["ha", "token", "set"], folder, () => "  ", output, error, devBuild: true, agentHaBridge: () => null));
+        Assert.Equal(token, AgentBridge.HomeAssistant.HaTokenStore.Load(folder));
+        Assert.Equal(0, HaCommands.Run(["ha", "token", "clear"], folder, () => null, output, error, devBuild: true, agentHaBridge: () => null));
+        Assert.Null(AgentBridge.HomeAssistant.HaTokenStore.Load(folder));
+    }
 }

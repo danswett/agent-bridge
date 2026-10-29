@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Delivery.Launch;
 
 namespace AgentBridge.Host;
@@ -20,6 +21,9 @@ namespace AgentBridge.Host;
 // (LaunchConfig, docs/host-launch.md). Nothing is approved until a person adds it here at the
 // machine (agent-bridge-host workspace add). A file that cannot be read turns launching off.
 //
+// homeAssistant: the Home Assistant connector (HaSettings, docs/ha-connector.md). Off unless
+// turned on; a file that cannot be read leaves it off.
+//
 // version: the schema's. A file from a newer schema is not guessed at: both are off.
 public sealed record HostSettings(bool RemoteApproval)
 {
@@ -32,6 +36,12 @@ public sealed record HostSettings(bool RemoteApproval)
 
     // What was wrong with the launch section, entry by entry; launching stays on for what was right.
     public IReadOnlyList<string> LaunchProblems { get; init; } = [];
+
+    // The Home Assistant connector (docs/ha-connector.md): off unless turned on here. What was
+    // wrong with its section turns it off and is said, without touching anything else.
+    public HaSettings HomeAssistant { get; init; } = HaSettings.Default;
+
+    public IReadOnlyList<string> HomeAssistantProblems { get; init; } = [];
 
     static HostSettings Off => Default with { RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false } };
 
@@ -62,7 +72,14 @@ public sealed record HostSettings(bool RemoteApproval)
                 }
             }
             var (launch, launchProblems) = LaunchConfig.Read(root.TryGetProperty("launch", out var l) ? l : null);
-            var settings = Default with { Launch = launch, LaunchProblems = launchProblems.Count == 0 ? [] : launchProblems };
+            var (homeAssistant, homeAssistantProblems) = HaSettings.Read(root.TryGetProperty("homeAssistant", out var h) ? h : null);
+            var settings = Default with
+            {
+                Launch = launch,
+                LaunchProblems = launchProblems.Count == 0 ? [] : launchProblems,
+                HomeAssistant = homeAssistant,
+                HomeAssistantProblems = homeAssistantProblems.Count == 0 ? [] : homeAssistantProblems,
+            };
             if (!root.TryGetProperty("permissions", out var permissions)) { return (settings, null); }
             if (permissions.ValueKind != JsonValueKind.Object) { throw new JsonException("permissions is not an object"); }
             if (!permissions.TryGetProperty("remoteApproval", out var remote)) { return (settings, null); }
