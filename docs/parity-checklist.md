@@ -42,7 +42,9 @@ agent-ha-bridge names its per-machine entities after the computer, with no overr
 `Get-BridgeMachineSlug` takes `[Environment]::MachineName` (`hooks/decision-bridge-common.ps1`).
 So two Windows users on one VM would publish the same `online`, `sessions`, `update` and
 launch entities. Their session counts and heartbeats would overwrite each other. The
-publication writer therefore runs on a computer of its own.
+publication writer therefore runs on a computer of its own. This replaces the single-VM,
+two-user arrangement in [ha-connector.md](ha-connector.md) › Validation plan. The connector's
+`machineName` renames only the migrated host, not agent-ha-bridge before it.
 
 | Machine | Computer name (slug) | Runs |
 |---|---|---|
@@ -79,7 +81,7 @@ each issue or PR:
 | **#41** | Claude and Codex replies | `sessions.reply` delivers to Claude and Codex |
 | **#43** | Discovery holds | An incomplete pass holds removal, resume offers and reclaim |
 | **#44** | Sessions cannot manage their host | `host.restart` and `host.stop` from a process inside a session the host can see are refused |
-| **HA1** | HA connector stage 1 (#60) | `homeAssistant.*` config, `agent-bridge-host ha token set\|status`. Read-only status in agent-ha-bridge's contract: `binary_sensor.agent_bridge_<slug>_online`, `sensor.agent_bridge_<slug>_sessions`, per-session `sensor.agent_bridge_<node>_status` and `_activity`. Paused while agent-ha-bridge runs for the user |
+| **HA1** | HA connector stage 1 (#60, merged) | `homeAssistant.*` config, `agent-bridge-host ha token set\|status`. Read-only status in agent-ha-bridge's contract: `binary_sensor.agent_bridge_<slug>_online`, `sensor.agent_bridge_<slug>_sessions`, per-session `sensor.agent_bridge_<node>_status` and `_activity`. Paused while agent-ha-bridge runs for the user |
 | **HA2** | HA connector later stages | The old dashboard's controls (answer, reply, end, launch, install update, Detail toggle) and actionable notifications, wire-compatible |
 | **Blob** | Blob store (#61, merged; production storage is deployed separately, `deploy.ps1 -Production`) | Files over 256 KiB up to 100 MiB: `sessions.attach.blob` from a device through the relay, `sessions.attach.direct` from the app over the pipe ([host-replies.md](host-replies.md) › Large files) |
 | **Transfer** | Session transfer, after the blob store | Copy a session to another machine and resume it there |
@@ -125,7 +127,7 @@ $base = 'C:\rehearsal\evidence\baseline-S1.json'
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
-| **A-01** | | VM-W | Docker; the compose file, onboarding, MQTT integration and long-lived token from ha-connector.md › Validation plan, with the live instance's HA version; token written to `C:\rehearsal\ha.token` | `/api/states` answers with that token | `agent-bridge-rehearsal ha --token-file $ha --step A-01` | HA1 doc |
+| **A-01** | | VM-W | Docker; the compose file, onboarding, MQTT integration and long-lived token from ha-connector.md › Validation plan, with the live instance's HA version; token written to `C:\rehearsal\ha.token` | `/api/states` answers with that token | `agent-bridge-rehearsal ha --token-file $ha --step A-01` | |
 | **A-02** | | VM-M | Rename the computer `REHEARSAL-M`. Create user `rehearsal` (standard user). Install Git, Copilot CLI, Claude Code and Codex, each signed in. Create `$repo` as a clone of a small local bare repository, so `origin` can be fetched | `copilot --version`, `claude --version`, `codex --version` and `git -C $repo fetch` succeed | `agent-bridge-rehearsal note --step A-02 --result pass --detail "<versions>"` | |
 | **A-03** | | VM-M | Start the tunnel `ssh -N -L 8123:127.0.0.1:8123 rehearsal@VM-W` in its own window and copy the token file across | Home Assistant answers on VM-M's loopback | `agent-bridge-rehearsal ha --token-file $ha --step A-03` | |
 | **A-04** | | Both | `dotnet publish tools/AgentBridge.Rehearsal -c Release -r win-x64 --self-contained -o C:\rehearsal\tool`, and put `C:\rehearsal\tool` on `PATH` | The help lists every command | `agent-bridge-rehearsal report --step A-04` | |
