@@ -197,6 +197,22 @@ public sealed class LifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task A_change_landing_while_a_pass_reads_the_sessions_is_published_by_the_next_one()
+    {
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Working));
+        await using var c = Connector();
+        await Run(c, 3);
+        var t = HaContract.Topics(NodeA);
+        Assert.Equal("working", ha.Retained[t.StatusState]);
+
+        // The session's last change: noticed once, between this pass's snapshot and its publishing.
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Working, response: "Halfway"));
+        sessions.AfterSnapshot = () => sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Idle, response: "Done"));
+        await Run(c, 5);
+        Assert.Equal("idle", ha.Retained[t.StatusState]);
+    }
+
+    [Fact]
     public async Task A_dashboard_that_cannot_be_read_holds_every_retirement()
     {
         sessions.Set(FakeSessions.Copilot(B));

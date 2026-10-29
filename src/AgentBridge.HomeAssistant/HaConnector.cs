@@ -358,15 +358,25 @@ public sealed partial class HaConnector : IAsyncDisposable
 
     async Task SessionsAsync(DateTimeOffset now, CancellationToken ct)
     {
+        // Drain the notifications before taking the snapshot, never after: a change landing in
+        // between would otherwise be cleared while this pass publishes the older state, and an
+        // already-published session would keep showing it until something else changed it.
+        List<string> notified;
+        bool everything;
+        lock (gate)
+        {
+            notified = [.. dirty];
+            everything = allDirty;
+            dirty.Clear();
+            allDirty = false;
+        }
         var live = source.Snapshot().ToDictionary(s => s.Id, StringComparer.Ordinal);
         List<string> work;
         List<(string Id, string Node)> gone;
         lock (gate)
         {
             gone = [.. published.Where(p => !live.ContainsKey(p.Key)).Select(p => (p.Key, p.Value.Node))];
-            work = allDirty ? [.. live.Keys] : [.. dirty.Where(live.ContainsKey).Concat(live.Keys.Where(id => !published.ContainsKey(id))).Distinct()];
-            dirty.Clear();
-            allDirty = false;
+            work = everything ? [.. live.Keys] : [.. notified.Where(live.ContainsKey).Concat(live.Keys.Where(id => !published.ContainsKey(id))).Distinct()];
         }
         foreach (var (id, node) in gone)
         {
