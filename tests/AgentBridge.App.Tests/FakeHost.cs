@@ -29,6 +29,7 @@ sealed class FakeHost : IAsyncDisposable
         On(HostOps.Subscribe, _ => Status);
         On(HostOps.Status, _ => Status);
         On(UsageProtocol.Subscribe, _ => UsageReport.Empty);
+        On(UsageProtocol.Get, _ => UsageReport.Empty);
     }
 
     public string Folder => folder;

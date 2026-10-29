@@ -53,7 +53,7 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_gap_in_the_events_after_a_reconnect_still_subscribes_the_sessions_again()
+    public async Task A_gap_in_the_events_after_a_reconnect_reads_the_sessions_status_and_usage_again()
     {
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Get("s1") is not null, "the snapshot");
         await host.StopAsync();
@@ -62,10 +62,14 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the reconnect");
         var before = host.Sent(Ops.SessionsSubscribe).Count;
 
+        // The dropped events may have included the host's status (a finished sign-in, say).
+        host.Status = FakeHost.StatusOf(RelayState.Connected);
         foreach (var ch in host.Channels.OfType<LocalChannel>().Where(c => c.IsOpen).Distinct()) { ch.SkipEventSeq(3); }
         await host.SendAsync(Events.SessionUpsert, Make.Session("s2"));
 
         await Wait.UntilAsync(() => host.Sent(Ops.SessionsSubscribe).Count == before + 1, "the sessions to be subscribed again");
+        await Wait.UntilAsync(() => connection.Status?.Relay.State == RelayState.Connected, "the status to be read again");
+        Assert.NotEmpty(host.Sent(UsageProtocol.Get));
     }
 
     [Fact]

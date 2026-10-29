@@ -128,7 +128,7 @@ public sealed class HostConnection : IAsyncDisposable
                     if (done == again)
                     {
                         again = null;
-                        await SubscribeSessionsAsync(ch, ct);
+                        await RecoverAsync(ch, hello, ct);
                     }
                     else if (done == tick) { await RefreshAsync(ch, ct); }
                     else { break; }
@@ -166,6 +166,25 @@ public sealed class HostConnection : IAsyncDisposable
         await ch.CallAsync<SubscribeResult>(Ops.SessionsSubscribe, ct: ct);
     }
 
+    // Events were dropped, and any of them may have been the host's status or usage, not
+    // only sessions: all three are read again, each applied only if no newer event of its
+    // kind arrived meanwhile, as when connecting.
+    async Task RecoverAsync(LocalChannel ch, HelloResult hello, CancellationToken ct)
+    {
+        if (hello.Capabilities.Contains(HostOps.Capability))
+        {
+            var heardStatus = Interlocked.Read(ref statusEvents);
+            var status = await ch.CallAsync<HostStatus>(HostOps.Status, ct: ct);
+            ui.Post(() => { if (Interlocked.Read(ref statusEvents) == heardStatus) { Status = status; Changed?.Invoke(); } });
+        }
+        if (hello.Capabilities.Contains(UsageProtocol.Capability))
+        {
+            var heardUsage = Interlocked.Read(ref usageEvents);
+            var usage = await ch.CallAsync<UsageReport>(UsageProtocol.Get, ct: ct);
+            ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; Changed?.Invoke(); } });
+        }
+        await SubscribeSessionsAsync(ch, ct);
+    }
     // What the host offers now, and its status (whose agent-ha-bridge note the host works out
     // when asked rather than announcing). Applied only when something changed.
     async Task RefreshAsync(LocalChannel ch, CancellationToken ct)
