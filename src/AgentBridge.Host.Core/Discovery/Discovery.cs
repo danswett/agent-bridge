@@ -282,7 +282,9 @@ internal static class CodexLockDiscovery
                 && running.TryGetValue(cached.Pid, out var holder) && holder.StartedAt == cached.Started))
             {
                 known.Remove(file);
-                var terminals = holders(file).Where(pid => running.TryGetValue(pid, out var p) && !IsAppServer(p.CommandLine)).Distinct().ToList();
+                // A holder whose command line could not be read may be the shared daemon, whose stop
+                // would end every session it serves: it names no session, and is asked about again.
+                var terminals = holders(file).Where(pid => running.TryGetValue(pid, out var p) && IsTerminal(p.CommandLine)).Distinct().ToList();
                 if (terminals.Count != 1) { continue; }
                 // A holder whose start is unknown cannot be told from a successor, so it is
                 // asked about afresh on every pass rather than remembered.
@@ -295,6 +297,9 @@ internal static class CodexLockDiscovery
         foreach (var gone in known.Keys.Where(k => !seen.Contains(k)).ToList()) { known.Remove(gone); }
         return live;
     }
+
+    // A Codex process known to be a terminal: its command line read, and not an app-server.
+    internal static bool IsTerminal(string? commandLine) => commandLine is { Length: > 0 } && !IsAppServer(commandLine);
 
     // Codex's app-server: the daemon, its updater, or one an IDE runs. Never a terminal.
     internal static bool IsAppServer(string? commandLine) =>
