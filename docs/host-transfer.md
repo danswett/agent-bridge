@@ -93,7 +93,7 @@ A host that stops part way leaves only its own names in its staging folder (`<he
 `SessionBundles.Install` unpacks into a fresh folder in the private staging folder, then:
 
 * accepts only the names a session of that agent has, never `..`, a rooted path or a name
-  twice, and stops at `maxSourceBytes` unpacked or 20,000 files;
+  twice, and stops at `maxSourceBytes` unpacked or 20,000 files, or a transcript line over 16 MiB;
 * requires the transcript;
 * replaces the old id with the new one in the transcript and its metadata (`.jsonl`,
   `.yaml`, `.json`, `.md`), line by line;

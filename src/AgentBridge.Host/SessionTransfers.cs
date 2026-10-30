@@ -263,7 +263,7 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
             // Checked again: resumed at the machine since the list was made, it is being written.
             if (launcher.Running(entry.Id)) { throw new InvalidOperationException("that session is running on its machine; it can be brought over once it has ended there"); }
             SessionBundles.Packed packed;
-            try { packed = await Task.Run(() => SessionBundles.Pack(entry.Agent, launcher.Homes, entry.Id, zip, config.MaxSourceBytes), deadline.Token); }
+            try { packed = await Task.Run(() => SessionBundles.Pack(entry.Agent, launcher.Homes, entry.Id, zip, config.MaxSourceBytes, cancellationToken: deadline.Token), deadline.Token); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { throw new InvalidOperationException($"that session could not be read ({e.Message})"); }
             if (packed.Bytes > most)
             {

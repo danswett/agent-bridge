@@ -173,17 +173,19 @@ day after it was written regardless.
 
 ## The bundle
 
-A zip of the session's files as its agent keeps them, paths relative to the agent's home:
+A zip of the session's files. Entry names are `/`-separated and relative to the session, not
+to the agent's home; the receiving host decides where each goes:
 
-| Agent | Holds |
-|---|---|
-| Copilot (and Agency) | `session-state/<id>/events.jsonl` (required), `workspace.yaml`, `checkpoints/**`, `files/**` |
-| Claude | `projects/<project>/<id>.jsonl` |
-| Codex | `sessions/<yyyy>/<MM>/<dd>/rollout-<stamp>-<id>.jsonl` |
+| Agent | Entry names | From, on the source (agent home) |
+|---|---|---|
+| Copilot (and Agency) | `events.jsonl` (required), `workspace.yaml`, `checkpoints/…`, `files/…` | `session-state/<id>/` |
+| Claude | `<id>.jsonl`, the one entry | `projects/<project>/<id>.jsonl` |
+| Codex | `rollout-<stamp>-<id>.jsonl`, the one entry | `sessions/<yyyy>/<MM>/<dd>/` |
 
-Links are never followed when packing. Installing accepts only those names, refuses `..`,
-rooted paths and duplicates, counts what it unpacks against a limit, and requires the
-transcript. The old id is replaced by the new one in the transcript and its metadata, and the
+Links are never followed when packing, and each file is read only to the length it had when
+packing began. Installing accepts only those names, refuses `..`, rooted paths, drive letters,
+backslashes and duplicates, counts what it unpacks against a limit, requires the transcript,
+and rewrites transcript lines of at most 16 MiB each (a longer line is refused). The old id is replaced by the new one in the transcript and its metadata, and the
 folder it now opens in replaces the other machine's where each agent records it (Copilot's
 `workspace.yaml`, Claude's `cwd` on each line, Codex's `session_meta` and `turn_context`).
 

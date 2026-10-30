@@ -72,6 +72,8 @@ export class LaunchPanel {
   #jumped = null;
   #open = false;
   #signing = false;
+  // Counts changes of the machine picked, which presence updates for the same one do not.
+  #selection = 0;
 
   // root: the #launch section. service: a LaunchService. jump(sessionId): shows a session's
   // card, true once it is on screen.
@@ -144,6 +146,7 @@ export class LaunchPanel {
     if (same) { this.#target = target; this.#title(); this.#draw(); return; }
     this.#unwatch?.();
     this.#unwatch = null;
+    this.#selection++;
     this.#target = target;
     this.#options = null;
     this.#remote = [];
@@ -174,7 +177,9 @@ export class LaunchPanel {
     // and one that is slow to answer must not hold up this machine's own choices.
     if (target.transfers) {
       const asking = this.#asking = target.transfers.remotes().catch(() => []).then((remote) => {
-        if (this.#asking !== asking || this.#target !== target) { return; }
+        // Only a newer ask, or another machine picked, makes this one stale: a presence update
+        // hands in a new target object for the same machine.
+        if (this.#asking !== asking) { return; }
         this.#remote = remote;
         this.#draw();
       });
@@ -322,6 +327,7 @@ export class LaunchPanel {
       // Signed once, for this press: a resend carries the same command, which the machine the
       // session is on acts on once.
       const remote = this.#resumable()?.remote;
+      const selection = this.#selection;
       this.#signing = true;
       this.els.launch.disabled = true;
       try { launch.transfer.command = await target.transfers.sign(remote, launch.transfer.session); }
@@ -332,7 +338,7 @@ export class LaunchPanel {
         this.#signing = false;
         this.els.launch.disabled = false;
       }
-      if (this.#target !== target) { return; }
+      if (this.#selection !== selection) { return; }
     }
     this.#jumped = null;
     this.service.submit({ hostId: target.hostId, launch });

@@ -186,6 +186,8 @@ test.describe('bringing a session from another machine', () => {
     await openPanel(page);
     await expect(field(page, 'resume').locator('option')).toHaveText(['New session', 'Fix the flaky relay test · agent-bridge']);
     await field(page, 'resume').selectOption(RESUMABLE);
+    // A presence update for the same machine meanwhile does not lose them.
+    await page.evaluate(() => window.agentBridgeDemo.retarget());
     // They join the list when they come, and what was picked stays picked.
     await expect(field(page, 'resume').locator('option')).toHaveCount(4, { timeout: 10000 });
     await expect(field(page, 'resume')).toHaveValue(RESUMABLE);

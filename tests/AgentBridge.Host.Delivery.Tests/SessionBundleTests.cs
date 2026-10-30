@@ -199,4 +199,37 @@ public sealed class SessionBundleTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(target.Claude, "projects")) && Directory.EnumerateFiles(Path.Combine(target.Claude, "projects"), "*", SearchOption.AllDirectories).Any());
         Assert.False(Directory.Exists(Unpack));
     }
+
+    [Fact]
+    public void A_transcript_line_too_long_to_rewrite_safely_is_refused_and_nothing_is_installed()
+    {
+        Bundle(Zip, ($"{Id}.jsonl", "{\"type\":\"user\"}\n" + new string('x', SessionBundles.MaxLine + 1) + "\n"));
+        Assert.Equal("the bundle holds a line over 16 MiB, which this machine does not rewrite",
+            Assert.Throws<InvalidDataException>(() => SessionBundles.Install(Zip, AgentKind.Claude, Id, NewId, root, target, Unpack, long.MaxValue, Now)).Message);
+        Assert.False(Directory.Exists(Path.Combine(target.Claude, "projects")) && Directory.EnumerateFiles(Path.Combine(target.Claude, "projects"), "*", SearchOption.AllDirectories).Any());
+        Assert.False(Directory.Exists(Unpack));
+    }
+
+    [Fact]
+    public void A_saved_file_named_like_a_rewrite_in_progress_arrives_intact_beside_its_namesake()
+    {
+        var dir = CopilotSession();
+        File.WriteAllText(Path.Combine(dir, "files", "notes", "design.md.rename"), "a file of its own");
+        SessionBundles.Pack(AgentKind.Copilot, source, Id, Zip, long.MaxValue);
+        SessionBundles.Install(Zip, AgentKind.Copilot, Id, NewId, root, target, Unpack, long.MaxValue, Now);
+        var notes = Path.Combine(target.Copilot, "session-state", NewId, "files", "notes");
+        Assert.Equal("saved to files\\notes", File.ReadAllText(Path.Combine(notes, "design.md")));
+        Assert.Equal("a file of its own", File.ReadAllText(Path.Combine(notes, "design.md.rename")));
+        Assert.Equal(["design.md", "design.md.rename"], Directory.GetFiles(notes).Select(f => Path.GetFileName(f)!).Order().ToArray());
+    }
+
+    [Fact]
+    public void Packing_stops_when_its_deadline_passes_and_leaves_no_bundle()
+    {
+        CopilotSession();
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Assert.ThrowsAny<OperationCanceledException>(() => SessionBundles.Pack(AgentKind.Copilot, source, Id, Zip, long.MaxValue, cancellationToken: cancelled.Token));
+        Assert.False(File.Exists(Zip));
+    }
 }

@@ -112,7 +112,8 @@ public static class SessionBundles
 
     // Packs a session into zip (a new file), bounded by maxSource bytes read and maxFiles files.
     // Throws InvalidOperationException, saying why, for one that cannot be sent.
-    public static Packed Pack(AgentKind kind, AgentHomes homes, string id, string zip, long maxSource, int maxFiles = TransferLimits.MaxFiles)
+    // cancellationToken is checked between and within files, so a deadline stops a slow pack.
+    public static Packed Pack(AgentKind kind, AgentHomes homes, string id, string zip, long maxSource, int maxFiles = TransferLimits.MaxFiles, CancellationToken cancellationToken = default)
     {
         var spec = Find(kind, homes, id) ?? throw new InvalidOperationException("that session's files are not on this machine");
         if (spec.Files.Count > maxFiles) { throw new InvalidOperationException($"that session has {spec.Files.Count} files, over the {maxFiles} a transfer takes"); }
@@ -132,17 +133,18 @@ public static class SessionBundles
                     var entry = archive.CreateEntry(name, CompressionLevel.Optimal);
                     using var from = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
                     using var to = entry.Open();
-                    from.CopyTo(to);
+                    Copy(from, to, witness[file].Length, cancellationToken);
                 }
             }
             // Read again after the copy: a file that grew or was rewritten while it was read
             // makes the archive a snapshot of no single moment.
             if (spec.Files.Any(f => !File.Exists(f) || Witness(f) != witness[f]))
             {
-                throw new InvalidOperationException("that session changed while it was being packed; it is probably open somewhere");
+                throw new InvalidOperationException(Changed);
             }
             byte[] sha;
             long bytes;
+            cancellationToken.ThrowIfCancellationRequested();
             using (var read = File.OpenRead(zip)) { sha = SHA256.HashData(read); bytes = read.Length; }
             return new Packed(bytes, sha, spec.Files.Count);
         }
@@ -152,6 +154,26 @@ public static class SessionBundles
             throw;
         }
     }
+
+    // Exactly the length witnessed before packing: the agent may be writing to the file (it was
+    // resumed at its machine meanwhile), and reading to its end would read and stage whatever it
+    // grows to, past maxSource, before the check after the copy refused it.
+    static void Copy(Stream from, Stream to, long length, CancellationToken cancellationToken)
+    {
+        var buffer = new byte[81920];
+        var left = length;
+        while (left > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var n = from.Read(buffer, 0, (int)Math.Min(buffer.Length, left));
+            if (n == 0) { throw new InvalidOperationException(Changed); }
+            to.Write(buffer, 0, n);
+            left -= n;
+        }
+        if (from.ReadByte() >= 0) { throw new InvalidOperationException(Changed); }
+    }
+
+    const string Changed = "that session changed while it was being packed; it is probably open somewhere";
 
     static (long Length, long Written) Witness(string file)
     {
@@ -292,14 +314,18 @@ public static class SessionBundles
     // new id, line by line, so a transcript of any size is never held whole.
     static void Rename(string file, string oldId, string newId, Func<string, string>? relocate = null)
     {
-        var temp = file + ".rename";
+        // A name no entry can have (files/ may hold "x.md.rename" beside "x.md"), made new, never
+        // opened over something already there.
+        var temp = Path.Combine(Path.GetDirectoryName(file)!, $".{Guid.NewGuid():N}.rename");
         var changed = false;
-        using (var reader = new StreamReader(file, new UTF8Encoding(false)))
-        using (var writer = new StreamWriter(temp, false, new UTF8Encoding(false)))
+        try
         {
+            using var reader = new StreamReader(file, new UTF8Encoding(false));
+            using var writer = new StreamWriter(new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None), new UTF8Encoding(false));
             string? line;
             var first = true;
-            while ((line = reader.ReadLine()) is not null)
+            var buffer = new StringBuilder();
+            while ((line = ReadLine(reader, buffer)) is not null)
             {
                 if (!first) { writer.Write('\n'); }
                 first = false;
@@ -319,8 +345,31 @@ public static class SessionBundles
             // A final line break is kept as it was.
             if (!first && EndsWithNewline(file)) { writer.Write('\n'); }
         }
+        catch
+        {
+            File.Delete(temp);
+            throw;
+        }
         if (changed) { File.Move(temp, file, overwrite: true); }
         else { File.Delete(temp); }
+    }
+
+    // A transcript line, at most MaxLine characters: one line is held whole to be rewritten,
+    // and a bundle small enough to send can unpack to a single line of hundreds of megabytes.
+    public const int MaxLine = 16 * 1024 * 1024;
+
+    static string? ReadLine(StreamReader reader, StringBuilder line)
+    {
+        line.Clear();
+        int c;
+        while ((c = reader.Read()) >= 0 && c != '\n')
+        {
+            if (line.Length >= MaxLine) { throw new InvalidDataException($"the bundle holds a line over {MaxLine / (1024 * 1024)} MiB, which this machine does not rewrite"); }
+            line.Append((char)c);
+        }
+        if (c < 0 && line.Length == 0) { return null; }
+        if (line.Length > 0 && line[^1] == '\r') { line.Length--; }
+        return line.ToString();
     }
 
     static bool EndsWithNewline(string file)

@@ -227,13 +227,15 @@ async function startDemo() {
     book.set(hello.machine.id, await client.subscribeUsage());
   }
   const launchPanel = new LaunchPanel($('launch'), { service: launches, jump: showSession });
-  if (hello.capabilities.includes(LAUNCH.capability)) {
-    const transfers = hello.capabilities.includes(TRANSFER.capability) ? await demoTransfers(host, hello.machine.id) : null;
-    launchPanel.setTarget({ hostId: hello.machine.id, machineName: hello.machine.name, load: () => client.launchOptions(), transfers });
-  }
+  const transfers = hello.capabilities.includes(TRANSFER.capability) ? await demoTransfers(host, hello.machine.id) : null;
+  // A new target object each time, for the same machine, as a presence update hands in.
+  const target = () => ({ hostId: hello.machine.id, machineName: hello.machine.name, load: () => client.launchOptions(), transfers });
+  if (hello.capabilities.includes(LAUNCH.capability)) { launchPanel.setTarget(target()); }
   const script = params.get('static') === '1' ? null : runScript(host, { tickMs: Number(params.get('tick')) || 4000 });
   window.agentBridgeDemo = {
     host, client, store, view, answers, replies, stops, launches, launchPanel, book, blobs: blobStore,
+    // The launch panel told about the same machine again, as presence updates tell it.
+    retarget: () => launchPanel.setTarget(target()),
     // A new usage report from the host, sent as usage.update.
     usage: (report) => host.setUsage(report),
     // The next answers' outcomes, in order: 'delivered' (the default once these run out),
