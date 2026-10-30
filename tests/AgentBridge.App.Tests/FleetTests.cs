@@ -230,6 +230,27 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_launched_session_still_opens_when_it_registers_after_a_reconnect()
+    {
+        await BothMachinesAsync();
+        var opened = new List<string>();
+        ui.Post(() =>
+        {
+            main.OpenRequested += c => opened.Add(c.Id);
+            main.Open(null, "late", untilItArrives: true);
+        });
+
+        // The host's list after reconnecting does not have it yet: it is still asking about trust.
+        await localHost.StopAsync();
+        await Wait.UntilAsync(() => local.State != LinkState.Connected, "the host to go");
+        localHost.Start();
+        await Wait.UntilAsync(() => local.State == LinkState.Connected, "the host to come back");
+        await localHost.SendAsync(Events.SessionUpsert, Make.Session("late", updated: Make.T0.AddMinutes(5)));
+
+        await Wait.UntilAsync(() => { lock (opened) { return opened.Contains("late"); } }, "the session to open");
+    }
+
+    [Fact]
     public async Task Machines_still_come_and_go_while_this_machines_host_is_away()
     {
         await BothMachinesAsync();

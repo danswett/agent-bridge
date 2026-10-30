@@ -43,6 +43,15 @@ public sealed class LaunchViewModel : Observable
     // Every machine's launches are followed, not only the one on screen: one pressed before
     // switching machines still opens its session when it starts.
     readonly Dictionary<Machine, Action<Delivery>> watching = [];
+    // The last launch pressed here, whichever machine it went to: its progress and outcome stay on
+    // the page until the next press, whatever is picked since. One is on its way at a time. lost:
+    // its machine left before saying what became of it.
+    Machine? lastMachine;
+    string lastName = "";
+    Delivery? last;
+    string? lost;
+    // The machine last picked by hand, picked again when it comes back after dropping out.
+    string? wanted;
     string prompt = "";
     (string Text, Tone Tone)? local;
 
@@ -66,6 +75,7 @@ public sealed class LaunchViewModel : Observable
         {
             if (filling || value is null || value.Value == selectedMachine?.Value) { return; }
             selectedMachine = value;
+            wanted = value.Value;
             Raise();
             Target(main.MachineOf(value.Value));
         }
@@ -131,13 +141,12 @@ public sealed class LaunchViewModel : Observable
     public string StatusText { get; private set; } = "";
     public Tone StatusTone { get; private set; }
     public bool CanLaunch => options is not null && !Pending;
-    public bool ShowResend => Entry?.State == DeliveryState.Failed;
-    public bool ShowOpen => Entry is { State: DeliveryState.Done } e && Result(e)?.Session is not null;
+    public bool ShowResend => lost is null && last?.State == DeliveryState.Failed && lastMachine is { } m && main.AllMachines.Contains(m);
+    public bool ShowOpen => lost is null && last is { State: DeliveryState.Done } e && Result(e)?.Session is not null;
     // What the last launch came to, for tests and the self-test: none, sending, waiting, failed or its outcome.
-    public string State => Entry is not { } e ? "none" : e.State != DeliveryState.Done ? e.State.ToString().ToLowerInvariant() : OutcomeOf(e);
+    public string State => lost is not null ? "unconfirmed" : last is not { } e ? "none" : e.State != DeliveryState.Done ? e.State.ToString().ToLowerInvariant() : OutcomeOf(e);
 
-    Delivery? Entry => machine?.Deliveries.Get(Key);
-    bool Pending => Entry?.State is DeliveryState.Sending or DeliveryState.Waiting;
+    bool Pending => lost is null && last?.State is DeliveryState.Sending or DeliveryState.Waiting;
 
     void Pick(ref Choice? field, Choice? value, bool redraw = false, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
     {
@@ -156,24 +165,28 @@ public sealed class LaunchViewModel : Observable
             watching[m] = Watch;
             m.Deliveries.Changed += Watch;
         }
-        // A machine that left with a launch on its way takes the launch's outcome with it (a machine
-        // that comes back is a new one, with no memory of it): the session may have started.
-        string? lost = null;
         foreach (var (m, watch) in watching.Where(p => !main.AllMachines.Contains(p.Key)).ToList())
         {
+            // An outcome already in, whose notice is still on its way, is handled before letting go.
+            // One still on its way leaves with the machine (one that comes back is a new one, with no
+            // memory of it), and the session may have started.
+            if (m == lastMachine && lost is null && m.Deliveries.Get(Key) is { } final && final.Request == last?.Request)
+            {
+                if (final.State == DeliveryState.Done) { OnDelivery(m, final); }
+                else if (final.State is DeliveryState.Sending or DeliveryState.Waiting)
+                {
+                    lost = $"Not confirmed: {m.Name} left before saying whether the launch started. Check at that machine before launching again.";
+                }
+            }
             m.Deliveries.Changed -= watch;
             watching.Remove(m);
-            if (m.Deliveries.Get(Key) is { State: DeliveryState.Sending or DeliveryState.Waiting })
-            {
-                lost = $"Not confirmed: {m.Name} left before saying whether the launch started. Check at that machine before launching again.";
-            }
         }
         var list = main.AllMachines.Where(m => m.Host.Can(LaunchProtocol.Capability))
             .OrderBy(m => m.IsLocal ? 0 : 1)
             .Select(m => new Choice(m.Key, m.IsLocal ? $"{m.Name} (this machine)" : m.Name)).ToList();
         if (list.SequenceEqual(Machines))
         {
-            if (lost is not null) { local = (lost, Tone.Warn); Show(); }
+            Show();
             return;
         }
         Machines = list;
@@ -182,12 +195,12 @@ public sealed class LaunchViewModel : Observable
         finally { filling = false; }
         Raise(nameof(Available));
         Raise(nameof(ShowMachines));
-        var keep = list.FirstOrDefault(c => c.Value == selectedMachine?.Value) ?? list.FirstOrDefault();
+        var keep = list.FirstOrDefault(c => c.Value == wanted) ?? list.FirstOrDefault(c => c.Value == selectedMachine?.Value) ?? list.FirstOrDefault();
         if (keep?.Value != selectedMachine?.Value) { selectedMachine = keep; Target(keep is null ? null : main.MachineOf(keep.Value)); }
         else { selectedMachine = keep; }
         Raise(nameof(SelectedMachine));
         Raise(nameof(Title));
-        if (lost is not null) { local = (lost, Tone.Warn); Show(); }
+        Show();
     }
 
     void Target(Machine? next)
@@ -204,6 +217,7 @@ public sealed class LaunchViewModel : Observable
         resume = agent = workspace = profile = model = effort = context = permissions = null;
         Raise(nameof(Title));
         Draw();
+        Show();
         if (machine is not null) { _ = RefreshAsync(); }
     }
 
@@ -374,33 +388,38 @@ public sealed class LaunchViewModel : Observable
             return;
         }
         local = null;
+        lost = null;
+        lastMachine = m;
+        lastName = m.Name;
+        last = null;
         // No request is ever replayed to a host that restarted meanwhile: it remembers requests in
         // memory only, so a second copy could start a second session.
-        m.Deliveries.Submit(Key, LaunchProtocol.Launch, request => launch with { Request = request }, _ => false, payload: launch, replayAfterRestart: false, timeout: LaunchTimeout, resendOnBusy: false);
+        last = m.Deliveries.Submit(Key, LaunchProtocol.Launch, request => launch with { Request = request }, _ => false, payload: launch, replayAfterRestart: false, timeout: LaunchTimeout, resendOnBusy: false);
         Show();
     }
 
     public void Resend()
     {
-        if (machine is null || Entry is not { State: DeliveryState.Failed, Payload: LaunchRequest launch }) { return; }
-        machine.Deliveries.Resend(Key, LaunchProtocol.Launch, request => launch with { Request = request });
+        if (!ShowResend || lastMachine is not { } m || last is not { Payload: LaunchRequest launch }) { return; }
+        local = null;
+        m.Deliveries.Resend(Key, LaunchProtocol.Launch, request => launch with { Request = request });
     }
 
     // The new session's card, which may arrive after the outcome.
     public void OpenSession()
     {
-        if (machine is not null && Entry is { } e) { Open(machine, e); }
+        if (lost is null && lastMachine is { } m && last is { } e) { Open(m, e); }
     }
 
     void Open(Machine m, Delivery e)
     {
-        if (Result(e)?.Session is { } id) { main.Open(m.Key, id); }
+        if (Result(e)?.Session is { } id) { main.Open(m.Key, id, untilItArrives: true); }
     }
 
     void OnDelivery(Machine m, Delivery d)
     {
         if (d.Key != Key) { return; }
-        if (m == machine) { Show(); }
+        if (m == lastMachine && (last is null || d.Request == last.Request)) { last = d; Show(); }
         if (d.State != DeliveryState.Done || handled == d.Request) { return; }
         handled = d.Request;
         var outcome = OutcomeOf(d);
@@ -427,7 +446,7 @@ public sealed class LaunchViewModel : Observable
 
     void Show()
     {
-        (StatusText, StatusTone) = Entry is { } e && local is null ? Describe(e, machine?.Name) : local ?? ("", Tone.None);
+        (StatusText, StatusTone) = local ?? (lost is not null ? (lost, Tone.Warn) : last is { } e ? Describe(e, lastName) : ("", Tone.None));
         foreach (var p in new[] { nameof(StatusText), nameof(StatusTone), nameof(CanLaunch), nameof(ShowResend), nameof(ShowOpen), nameof(State) }) { Raise(p); }
     }
 

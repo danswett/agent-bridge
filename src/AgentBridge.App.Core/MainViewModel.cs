@@ -194,6 +194,8 @@ public sealed class MainViewModel : Observable
         }
         m.Toasts?.MachineGone();
         MachineRemoved?.Invoke(key);
+        launchOpens.RemoveWhere(p => p.Machine == key);
+        pendingOpens.RemoveWhere(p => p.Machine == key);
         unhook.Remove(m, out var undo);
         undo?.Invoke();
         machines.Remove(m);
@@ -239,17 +241,21 @@ public sealed class MainViewModel : Observable
     // A toast clicked with the app closed starts it before the host has sent its sessions; the
     // session asked for opens when it arrives.
     // Sessions asked to open before their cards arrived: several, since launches on two machines
-    // can both start before either card comes.
+    // can both start before either card comes. A toast's is dropped when the machine's next list
+    // lacks it (the session ended); a launch's waits for its session to register, which can come
+    // after such a list (a folder-trust question answered at the machine).
     readonly HashSet<(string Machine, string Session)> pendingOpens = [];
+    readonly HashSet<(string Machine, string Session)> launchOpens = [];
 
     public void Open(string? sessionId) => Open(null, sessionId);
 
-    public void Open(string? machineKey, string? sessionId)
+    public void Open(string? machineKey, string? sessionId, bool untilItArrives = false)
     {
         if (sessionId is null) { return; }
-        var key = CardKey(machineKey ?? Machine.LocalKey, sessionId);
-        if (!byId.TryGetValue(key, out var card)) { pendingOpens.Add((machineKey ?? Machine.LocalKey, sessionId)); return; }
-        pendingOpens.Remove((machineKey ?? Machine.LocalKey, sessionId));
+        var wanted = (machineKey ?? Machine.LocalKey, sessionId);
+        if (!byId.TryGetValue(CardKey(wanted.Item1, sessionId), out var card)) { (untilItArrives ? launchOpens : pendingOpens).Add(wanted); return; }
+        pendingOpens.Remove(wanted);
+        launchOpens.Remove(wanted);
         // A card the picker hides is shown: it is what was asked for.
         if (!Visible(card)) { SelectedMachine = Machines[0]; }
         card.Folded = false;
@@ -306,7 +312,7 @@ public sealed class MainViewModel : Observable
         }
         Raise(nameof(Waiting));
         Raise(nameof(Empty));
-        if (pendingOpens.Contains((m.Key, s.Id))) { Open(m.Key, s.Id); }
+        if (pendingOpens.Contains((m.Key, s.Id)) || launchOpens.Contains((m.Key, s.Id))) { Open(m.Key, s.Id); }
     }
 
     void OnRemoved(Machine m, string id)

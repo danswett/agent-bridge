@@ -227,6 +227,23 @@ public sealed class LaunchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Try_again_after_a_failed_send_shows_what_became_of_it_not_an_older_error()
+    {
+        var fail = true;
+        outcome = _ => fail ? throw new InvalidOperationException("the launcher could not be found") : new LaunchResult(LaunchOutcome.Started) { Session = "new-1" };
+        ui.Post(launch.Launch);
+        await Wait.UntilAsync(() => launch.ShowResend, "the failure");
+        ui.Post(() => { launch.Agent = Pick(launch.Agents, "codex"); launch.Prompt = ""; launch.Launch(); });
+        Assert.StartsWith("Not launched: Codex", launch.StatusText);
+
+        fail = false;
+        ui.Post(launch.Resend);
+
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        Assert.StartsWith("Session started", launch.StatusText);
+    }
+
+    [Fact]
     public async Task A_machine_with_no_approved_folder_says_how_to_approve_one_at_the_machine()
     {
         options = options with { Workspaces = [], Resumable = [] };
@@ -347,6 +364,8 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
 
         await Wait.UntilAsync(() => opened.Contains("there-new"), "the other machine's new session to open");
         Assert.Equal("", launch.Prompt);
+        // What became of it is shown whichever machine is picked now.
+        Assert.Equal("Session started.", launch.StatusText);
     }
 
     [Fact]
@@ -365,6 +384,12 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
 
         await Wait.UntilAsync(() => launch.StatusText.StartsWith("Not confirmed: Build server left", StringComparison.Ordinal), "the launch to be called unconfirmed");
         Assert.Equal(Tone.Warn, launch.StatusTone);
+        await Wait.UntilAsync(() => launch.CanLaunch, "another launch to be possible");
         gate.SetResult();
+
+        // It comes back: picked again, as it was picked by hand, and the warning stays until the next press.
+        link.Set(FleetState.Connected, ("remote-id", "Build server"));
+        await Wait.UntilAsync(() => launch.SelectedMachine?.Value == "remote-id" && launch.ShowForm, "the machine to come back");
+        Assert.StartsWith("Not confirmed: Build server left", launch.StatusText);
     }
 }
