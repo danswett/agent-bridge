@@ -171,3 +171,31 @@ test("a look still under way when its machine is chosen does not overwrite what 
 
   assert.equal(book.entries()[0].windows[0].percent, 55);
 });
+
+test('the machine being viewed is asked again on its own channel every minute, and its status says when it is read-only', async () => {
+  let now = 0;
+  const { connection, hosts, fleet } = fleetWith({ v: { machine: {}, capabilities: [] } }, { now: () => now });
+  let refreshed = 0;
+  const client = { synced: false, on() {}, subscribeUsage: async () => usage(10) };
+  Object.assign(hosts, {
+    targetId: 'v', phase: 'open', client, machine: { hostVersion: '0.1.0' }, capabilities: ['sessions.read'],
+    refresh: async () => {
+      refreshed++;
+      hosts.machine = { hostVersion: '0.1.0', readOnly: 'agent-ha-bridge is running for this user' };
+      hosts.change();
+    },
+  });
+  hosts.change();
+  await flush();
+  assert.equal(refreshed, 0);
+
+  now = 30000;
+  fleet.probe();
+  assert.equal(refreshed, 0);
+  now = 60000;
+  fleet.probe();
+  await flush();
+  assert.equal(refreshed, 1);
+  assert.deepEqual(connection.opened, []);
+  assert.equal(fleet.status('v'), '0.1.0 \u00b7 read-only: agent-ha-bridge is running for this user');
+});

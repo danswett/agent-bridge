@@ -15,6 +15,8 @@ export class FleetStatus {
   #queue = Promise.resolve();
   #queued = new Set();
   #viewed = null;
+  // When the machine being viewed was last asked for its hello again.
+  #viewedAt = 0;
   #timer = null;
   #started = false;
 
@@ -77,8 +79,11 @@ export class FleetStatus {
 
   #onHosts() {
     const { client, targetId: id } = this.hosts;
+    // What the viewed machine says now, refreshed hellos included (read-only, say).
+    if (this.hosts.phase === 'open' && client && client === this.#viewed) { this.#note(id, this.hosts.machine); }
     if (this.hosts.phase === 'open' && client && client !== this.#viewed) {
       this.#viewed = client;
+      this.#viewedAt = this.now();
       this.#note(id, this.hosts.machine);
       if (this.hosts.capabilities.includes(USAGE.capability)) {
         client.on('usage', (r) => { if (this.#viewed === client) { this.book.set(id, r); } });
@@ -99,6 +104,12 @@ export class FleetStatus {
   // at once.
   probe() {
     if (!this.connection.ready || this.doc?.visibilityState === 'hidden') { return; }
+    // The machine being viewed is asked again on its own channel, as often: it may have become
+    // read-only, or stopped being, with nothing else to say so.
+    if (this.hosts.phase === 'open' && this.hosts.client && this.now() - this.#viewedAt >= this.probeEveryMs) {
+      this.#viewedAt = this.now();
+      this.hosts.refresh?.().catch(() => {});
+    }
     for (const d of this.connection.presence) {
       if (d.kind !== 'host' || d.id === this.me || d.id === this.hosts.targetId || this.#queued.has(d.id)) { continue; }
       const seen = this.#machines.get(d.id);

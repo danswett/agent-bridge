@@ -450,7 +450,7 @@ function begin(account) {
 
   hosts.onChange(() => {
     currentClient = hosts.client;
-    const caps = `${hosts.targetId}:${hosts.capabilities.join(' ')}`;
+    const caps = `${hosts.targetId}:${hosts.capabilities.join(' ')}:${hosts.machine?.readOnly ?? ''}`;
     if (caps !== shownCapabilities) { shownCapabilities = caps; view.refreshQuestions(); }
     if (hosts.phase === 'open') { answers.ready(); replies.ready(); stops.ready(); launches.ready(); }
     registerHere();

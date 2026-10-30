@@ -277,7 +277,9 @@ async Task<int> ServeAsync()
     {
         // What takes answering, replying, ending and launching away while it runs (design G5),
         // said in hello so a phone shows the machine read-only and why.
-        ReadOnly = haActive ?? (() => null),
+        // Asked afresh, as the delivery services ask it for what hello offers: a cached answer
+        // could say read-only beside actions offered, or offer none without saying why.
+        ReadOnly = () => OperatingSystem.IsWindows() ? haProbe?.Active() : null,
     };
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).

@@ -111,6 +111,12 @@ test('a machine where agent-ha-bridge runs is shown read-only with its reason, a
   await expect(page.locator('.end-session')).toHaveCount(0);
   await expect(page.locator('#launch')).toBeHidden();
   expect(await page.evaluate(() => window.agentBridgeDemo.calls)).not.toContain('launch.options');
+
+  // A prompt only the machine could answer anyway says that, and why the machine is read-only.
+  const prompt = (await page.evaluate((id) => window.agentBridgeDemo.host.get(id), COPILOT)).question;
+  await upsert(page, COPILOT, { question: { ...prompt, id: 'q-at-machine', answerAtMachine: true }, updatedAt: later() });
+  await expect(q.locator('.read-only-why')).toHaveText('This prompt can only be answered at the machine on Demo machine.');
+  await expect(q.locator('.read-only-machine')).toHaveText(`This machine is read-only from the phone: ${reason}.`);
 });
 
 test('each status has its glow: working and waiting breathe, idle is calm', async ({ page }) => {

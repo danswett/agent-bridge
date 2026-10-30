@@ -35,6 +35,22 @@ export class HostSession {
 
   onChange(fn) { this.#listeners.add(fn); return () => this.#listeners.delete(fn); }
 
+  // Asks the machine being viewed for its hello again, on the channel open to it: what it
+  // offers, and whether it is read-only and why, change without a new channel when
+  // agent-ha-bridge starts or stops there. Listeners hear only of a change.
+  async refresh() {
+    const client = this.client;
+    if (this.phase !== 'open' || !client) { return; }
+    const hello = await client.hello();
+    if (this.client !== client || this.phase !== 'open') { return; }
+    const machine = { ...hello.machine, name: hello.machine.name ?? this.machine?.name ?? null };
+    const key = (m, c) => JSON.stringify([m?.name, m?.hostVersion, m?.dev, m?.readOnly ?? null, c]);
+    const changed = key(machine, hello.capabilities) !== key(this.machine, this.capabilities);
+    this.machine = machine;
+    this.capabilities = hello.capabilities;
+    if (changed) { this.#emit(); }
+  }
+
   #emit() {
     for (const fn of this.#listeners) {
       try { fn(this); } catch (e) { console.error(e); }

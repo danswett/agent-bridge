@@ -110,6 +110,11 @@ export function renderQuestion(q, { machineName, why = 'machine', readOnly = nul
     section.append(h('ol', { class: 'fields' }, q.fields.map((f, k) => readOnlyField(f, `${idBase}-f${k}`))));
   }
   const at = where(machineName);
+  // A prompt only the machine could answer anyway still says why the machine is read-only.
+  if (readOnly && why !== 'machine') {
+    section.append(h('p', { class: 'note warn read-only-machine', role: 'note' },
+      `This machine is read-only from the phone: ${readOnly}${/[.!?]$/.test(readOnly) ? '' : '.'}`));
+  }
   section.append(why === 'truncated'
     ? h('p', { class: 'note warn read-only-why', role: 'note' },
       `Part of this question didn't fit in the message from the machine, so it can't be answered from here. Answer at the machine${at}.`)

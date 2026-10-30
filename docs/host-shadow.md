@@ -125,7 +125,8 @@ pwsh build/shadow-week.ps1 -Install -Relay    # and on the phone, read-only
    interactive token, `LeastPrivilege`, hidden, restarted every minute on failure (three
    times), no time limit, not stopped on battery, one instance:
    * `AgentBridgeShadowHost_shadow_<user hash>`: `agent-bridge-hostw serve --profile shadow --local-only`,
-     or with `-Relay`, `agent-bridge-hostw serve --profile shadow --name "<COMPUTERNAME> (shadow)"`.
+     or with `-Relay`, `agent-bridge-hostw serve --profile shadow --name "<COMPUTERNAME> (shadow)"
+     --relay <the relay its account came from>`.
    * `AgentBridgeShadowRun_shadow_<user hash>`: `agent-bridge-hostw shadow run --profile shadow
      --interval 15 --grace 60`, a minute after logon so the host is serving by then.
 
@@ -155,7 +156,7 @@ others, read-only:
   `sessions.answer`, `sessions.reply`, `sessions.stop` and `sessions.launch` (and transfers),
   and carries `machine.readOnly`, the reason ([v1-sessions.md](protocol/v1-sessions.md#hello)).
   The phone shows that reason on the machine's status line and on each question, offers no
-  reply box, End session or Launch, and shows questions read-only. This holds only **while
+  reply box, End session or Launch, and shows questions read-only. It asks the machine it shows again every minute, so this follows agent-ha-bridge starting or stopping without a reconnect. This holds only **while
   agent-ha-bridge runs**: if its daemon is stopped, the shadow host offers everything an
   ordinary host does, as G5 intends for a machine that has moved over. Uninstall the shadow
   host, or re-run `-Install` without `-Relay`, before stopping agent-ha-bridge for good.
@@ -163,6 +164,10 @@ others, read-only:
   `agent-bridge-host sign-in --profile shadow` prints an address and a device code; open it
   on any device and sign in as the account the phone uses. The relay is `-RelayUrl`, else
   `AGENT_BRIDGE_RELAY`, else the one the profile used before, else the app's own profile's.
+  The task names the relay that issued the profile's account (`--relay`), so the host never
+  sends that account's token to another relay, `AGENT_BRIDGE_RELAY` included. A profile already
+  signed in keeps its relay; a different `-RelayUrl` stops the install until it is signed in
+  again there.
   To do it by hand, from an ordinary terminal (inside an agent session it is refused, #67):
 
   ```powershell
