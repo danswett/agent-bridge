@@ -934,6 +934,31 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_new_approval_is_offered_once_the_sweep_after_the_clock_moved_back_is_done()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var clock = new ManualClock(_f.Time.GetUtcNow());
+        var intake = new HookIntake(new HookIntakeOptions { RuntimeRoot = _f.Runtime, ClaudeHome = _f.ClaudeHome, UseFileSystemWatcher = false, PruneInterval = TimeSpan.FromDays(1) }, _f.Processes, clock, _log.Add);
+        _intakes.Add(intake);
+        intake.Pass();
+        clock.Now += TimeSpan.FromSeconds(1);
+        // A Codex hook that could not spool, logged by the clock about to be wound back.
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "spool failed: disk", clock.Now, 3);
+        clock.Now += TimeSpan.FromSeconds(1);
+        intake.Pass();
+        clock.Now -= TimeSpan.FromMinutes(10);
+        intake.Pass();
+        clock.Now += TimeSpan.FromSeconds(1);
+        SpooledAt(clock.Now, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        clock.Now += TimeSpan.FromSeconds(1);
+
+        intake.Pass();
+
+        Assert.True(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+        Assert.Null(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
     public void A_marker_dated_ahead_of_now_is_withdrawn_when_the_host_takes_the_spool()
     {
         _f.CodexRegistration("x1", 60, null);

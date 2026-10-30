@@ -137,6 +137,16 @@ public sealed class HookLogWatch(string runtimeRoot, string agent, TimeProvider?
     // run came right after it.
     public DateTimeOffset? HistoryFrom { get; private set; }
 
+    // The clock moved back to now: times read from it before are ahead of every time to come, and
+    // would hold the cut-off there (suppressing every new approval) until it caught up. What they
+    // said is settled by the sweep that withdraws every approval; they count from now. (A rotation
+    // re-read finds them again, which only withholds approvals until the clock catches up.)
+    public void Forget(DateTimeOffset now)
+    {
+        if (Last > now) { Last = now; }
+        if (HistoryFrom > now) { HistoryFrom = now; }
+    }
+
     // False when the log could not be read: what happened since the last look is unknown.
     public bool Refresh()
     {

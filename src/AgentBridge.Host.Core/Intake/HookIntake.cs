@@ -269,9 +269,11 @@ public sealed class HookIntake : IAsyncDisposable
         {
             _log($"the clock moved back ({seen:o} to {now:o}); withdrawing every Codex approval");
             Gap();
-            // Cut-offs read from the clock ahead would hold back the sweep this one asks for.
+            // Cut-offs read from the clock ahead would hold back the sweep this one asks for, and then
+            // every approval after it.
             _settled = null;
             _pending = null;
+            _codexLog.Forget(now);
         }
         _clock = now;
         // Hooks gave up spooling once the heartbeat was this old, whether or not it can be renewed
