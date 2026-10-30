@@ -166,14 +166,18 @@ public class RelayDeploymentTests
             while (!stop.IsCancellationRequested) { listener.RecordObservableInstruments(); Thread.Yield(); }
         });
 
-        for (var i = 0; i < 10 && !collecting.IsCompleted; i++)
+        try
         {
-            var relay = await TestRelay.StartAsync();
-            await relay.ConnectAsync(relay.TokenFor(1, "octo"), "host-a", "host");
-            await relay.DisposeAsync();
+            for (var i = 0; i < 10 && !collecting.IsCompleted; i++)
+            {
+                await using var relay = await TestRelay.StartAsync();
+                await relay.ConnectAsync(relay.TokenFor(1, "octo"), "host-a", "host");
+            }
         }
-        stop.Cancel();
-
-        await collecting;
+        finally
+        {
+            stop.Cancel();
+            await collecting;
+        }
     }
 }

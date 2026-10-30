@@ -81,7 +81,8 @@ public static class LocalClient
     [SupportedOSPlatform("windows")]
     static async Task ConnectPipeAsync(NamedPipeClientStream pipe, TimeSpan wait, CancellationToken ct)
     {
-        var deadline = Environment.TickCount64 + (long)wait.TotalMilliseconds;
+        // Infinite (-1 ms) waits for the host or cancellation, as CancelAfter did.
+        var deadline = wait == Timeout.InfiniteTimeSpan ? long.MaxValue : Environment.TickCount64 + (long)wait.TotalMilliseconds;
         while (true)
         {
             ct.ThrowIfCancellationRequested();

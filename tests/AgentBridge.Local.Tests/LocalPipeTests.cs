@@ -211,6 +211,22 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_client_told_to_wait_without_limit_connects_to_a_host_that_starts_later()
+    {
+        // A pipe client waits for its pipe; a Unix socket client finds no socket and is told at once.
+        if (!OperatingSystem.IsWindows()) { return; }
+        using var cts = new CancellationTokenSource(Patience);
+        var connecting = LocalClient.ConnectAsync(Endpoint, Timeout.InfiniteTimeSpan, cts.Token);
+        await Task.Delay(200);
+        Assert.False(connecting.IsCompleted);
+
+        Serve(Echo);
+        var ch = await connecting;
+        owned.Add(ch);
+        Assert.True(ch.IsOpen);
+    }
+
+    [Fact]
     public async Task A_refused_process_is_told_why_when_it_says_hello()
     {
         var server = Serve(Echo);
