@@ -107,6 +107,8 @@ public sealed class Deliveries
         _ = RunAsync(entry, op, data, before, resend: true);
     }
 
+    static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
+
     async Task RunAsync(Delivery entry, string op, Func<string, object> data, Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before, bool resend)
     {
         // An op never replayed after a restart is counted from its first send, not from this Try
@@ -129,6 +131,10 @@ public sealed class Deliveries
             attempts++;
             Update(entry.Key, e => e with { State = DeliveryState.Sending, Attempts = attempts, Reason = null });
             JsonElement result;
+            // A Try again goes, and is waited on, only until the host may forget the request: a send
+            // still queued then is dropped unsent, and a wait cut short reads unconfirmed. Either way it
+            // can only lose an outcome, never act twice.
+            using var bound = fromFirst ? new CancellationTokenSource(Max(started + GiveUp - time.GetUtcNow(), TimeSpan.Zero), time) : null;
             try
             {
                 if (before is not null)
@@ -145,7 +151,7 @@ public sealed class Deliveries
                 // Which host it went to is read with the connection it goes on. An op never replayed
                 // after a restart waits until that host is known, and goes again only to the same one.
                 var call = host.CallAsync(op, data(entry.Request), entry.Timeout, knownHost: !entry.ReplayAfterRestart,
-                    onlyTo: entry.ReplayAfterRestart ? null : sentTo, out var to);
+                    onlyTo: entry.ReplayAfterRestart ? null : sentTo, out var to, bound?.Token ?? default);
                 if (to != sentTo) { sentTo = to; Update(entry.Key, e => e with { SentTo = to }); }
                 if (to is not null && firstSent is null)
                 {
@@ -160,6 +166,11 @@ public sealed class Deliveries
                 // A replacement host has no memory of the request, so for a reply or a launch sending
                 // it again could do it twice: what became of it is the machine's to say.
                 Update(entry.Key, x => x with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = Restarted, Progress = null });
+                return;
+            }
+            catch (OperationCanceledException) when (bound?.IsCancellationRequested == true)
+            {
+                Update(entry.Key, x => x with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = TooOld, Progress = null });
                 return;
             }
             catch (HostErrorException e)

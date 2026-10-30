@@ -373,6 +373,34 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_try_again_still_waiting_when_the_first_sends_window_closes_reads_unconfirmed()
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        var calls = 0;
+        var gate = new TaskCompletionSource();
+        host.On(Ops.SessionReply, _ =>
+        {
+            if (Interlocked.Increment(ref calls) == 1) { throw new InvalidOperationException("the host failed after reading it"); }
+            gate.Task.Wait(FakeHost.Patience);
+            return new ReplyResult(AnswerOutcome.Delivered);
+        });
+        var clock = new FakeTimeProvider(Make.T0);
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { GiveUp = TimeSpan.FromMinutes(9) };
+
+        deliveries.Submit("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Failed, "the failure");
+        clock.Advance(TimeSpan.FromMinutes(8));
+        deliveries.Resend("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" });
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionReply).Count == 2, "the try again to reach the host");
+        clock.Advance(TimeSpan.FromMinutes(2));
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
+        gate.SetResult();
+        Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
+        Assert.StartsWith("too long has passed since it was first sent", deliveries.Get("k")!.Reason);
+    }
+
+    [Fact]
     public async Task A_reply_whose_files_never_went_can_be_tried_again_however_long_after()
     {
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
