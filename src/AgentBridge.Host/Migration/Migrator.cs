@@ -222,7 +222,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
                 record.Save(options.ProfileFolder);
                 WriteBytes(hostConfig, bytes);
             }
-            new IntakeState(install.RuntimeRoot, install.BridgeHome, install.Id, _time.GetUtcNow()).Save(options.ProfileFolder);
+            new IntakeState(install.RuntimeRoot, install.BridgeHome, install.Id, _time.GetUtcNow()) { Homes = new(install.CopilotHome, install.ClaudeHome, install.CodexHome) }.Save(options.ProfileFolder);
             record.Save(options.ProfileFolder);
 
             if (await VerifyAsync(install, cancellationToken) is { } failed)
@@ -251,6 +251,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             ? $"* Daemon: stop it. There is no {install.TaskName} task, so nothing starts it at logon here."
             : $"* Daemon: stop it and disable {string.Join(" and ", tasks)}; the tasks are kept for a rollback.");
         say($"* Hook: install {options.HookPath}, pointing at {install.RuntimeRoot}.");
+        say($"* Agent homes: the host reads sessions where agent-ha-bridge's hooks were registered (Copilot {install.CopilotHome}, Claude {install.ClaudeHome}, Codex {install.CodexHome}), unless started with --copilot-home, --claude-home or --codex-home.");
         foreach (var plan in plans)
         {
             if (!plan.Existed) { say($"* {plan.Role}: no {Path.GetFileName(plan.Path)} here; nothing to re-point."); continue; }

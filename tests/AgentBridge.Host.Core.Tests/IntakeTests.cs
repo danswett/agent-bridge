@@ -1861,6 +1861,13 @@ public sealed class IntakeTests : IDisposable
         var saved = new IntakeState(_f.Runtime, Path.GetDirectoryName(_f.Runtime)!, new string('a', 32), _base);
         saved.Save(profile);
         Assert.Equal(saved, IntakeState.Load(profile).State);
+        // With the agents' homes the installation recorded; homes it could not use turn the intake off.
+        var homes = saved with { Homes = new(Path.Combine(_f.Root, "c"), Path.Combine(_f.Root, "cl"), Path.Combine(_f.Root, "cx")) };
+        homes.Save(profile);
+        Assert.Equal(homes, IntakeState.Load(profile).State);
+        var text = File.ReadAllText(Path.Combine(profile, IntakeState.FileName));
+        File.WriteAllText(Path.Combine(profile, IntakeState.FileName), text.Replace(JsonSerializer.Serialize(Path.Combine(_f.Root, "cx")), "\"relative\""));
+        Assert.Contains("unusable agentHomes", IntakeState.Load(profile).Problem);
         Assert.True(IntakeState.Delete(profile));
         Assert.Null(IntakeState.Load(profile).State);
     }

@@ -31,7 +31,8 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
     public int? Running(AgentBridge.Protocol.AgentKind agent)
     {
         var observed = new SystemProcessInspector().Observe(agent);
-        return observed.Known ? observed.Processes.Count : null;
+        // A runtime (node, bun) whose command line could not be read may be one of the agent's.
+        return observed.Known && observed.Unidentified.Count == 0 ? observed.Processes.Count : null;
     }
 
     public ScheduledTaskState? Task(string name) => WithTask(name, task => new ScheduledTaskState((bool)Get(task, "Enabled")!, (int)Get(task, "State")! == 4), missing: true);

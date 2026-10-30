@@ -88,9 +88,12 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                 Workspaces(ns["workspaces"], launch, imported, kept);
                 foreach (var (from, to) in new[] { ("defaultWorkspace", "defaultWorkspace"), ("launcher", "defaultAgent"), ("defaultProfile", "defaultProfile") })
                 {
-                    if (Str(ns[from]) is { } value) { Put(launch, to, from == "defaultWorkspace" ? DefaultLabel(launch, value) : value, $"newSession.{from}", $"launch.{to}"); }
+                    if (from == "defaultProfile") { continue; }
+                    if (Str(ns[from]) is { } value) { Put(launch, to, from == "defaultWorkspace" ? DefaultLabel(launch, ns["workspaces"], value) : value, $"newSession.{from}", $"launch.{to}"); }
                 }
                 if (Strings(ns["profiles"]) is { Count: > 0 } profiles) { Put(launch, "profiles", Array(profiles), "newSession.profiles", "launch.profiles"); }
+                // After the profiles, which it is matched against.
+                if (Str(ns["defaultProfile"]) is { } defaultProfile) { Put(launch, "defaultProfile", DefaultProfile(launch, defaultProfile), "newSession.defaultProfile", "launch.defaultProfile"); }
                 if (Number(ns["resumeCount"]) is { } resume)
                 {
                     var clamped = Math.Clamp((int)resume, 0, AgentBridge.Protocol.LaunchProtocol.MaxResumable);
@@ -224,14 +227,29 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
         string.IsNullOrWhiteSpace(label) ? AgentBridge.Host.Delivery.Launch.Folders.DefaultLabel(Key(path)) : label.Trim();
 
     // agent-ha-bridge finds its default workspace with PowerShell's -eq, which ignores case, and
-    // takes the first; the host compares labels exactly. So the default is carried as the label of
-    // the workspace agent-ha-bridge would have chosen, else as written (falling back to the first,
-    // in both).
-    static string DefaultLabel(JsonObject launch, string configured)
+    // takes the first; the host compares labels exactly. So the default is carried as the label
+    // the host gives the folder agent-ha-bridge would have chosen: the profile may already
+    // approve that folder under a label of its own, and then agent-ha-bridge's entry is not
+    // imported. Failing that, as the first label matching it whatever the case, else as written
+    // (falling back to the first workspace, in both).
+    static string DefaultLabel(JsonObject launch, JsonNode? source, string configured)
     {
-        var labels = (launch["workspaces"] as JsonArray ?? []).Select(Read).Where(e => e.Path is not null).Select(e => LabelOf(e.Label, e.Path!)).ToList();
-        return labels.FirstOrDefault(l => string.Equals(l, configured, StringComparison.OrdinalIgnoreCase)) ?? configured;
+        var entries = (launch["workspaces"] as JsonArray ?? []).Select(Read).Where(e => e.Path is not null).ToList();
+        var chosen = (source as JsonArray ?? []).Select(Read).FirstOrDefault(e => e.Path is not null && string.Equals(LabelOf(e.Label, e.Path), configured, StringComparison.OrdinalIgnoreCase));
+        if (chosen.Path is { } folder && entries.FirstOrDefault(e => string.Equals(Key(e.Path!), Key(folder), PathCase)) is { Path: { } path } kept)
+        {
+            return LabelOf(kept.Label, path);
+        }
+        return entries.Select(e => LabelOf(e.Label, e.Path!)).FirstOrDefault(l => string.Equals(l, configured, StringComparison.OrdinalIgnoreCase)) ?? configured;
     }
+
+    // The same for the Agency profile (Get-BridgeDefaultAgencyProfile's -eq), against the profiles
+    // the host offers from its configured list. Profiles Agency lists at launch are not known
+    // here, so with no list the default is carried as written.
+    static string DefaultProfile(JsonObject launch, string configured) =>
+        (launch["profiles"] as JsonArray ?? []).Select(p => Str(p)).FirstOrDefault(p => string.Equals(p, configured, StringComparison.OrdinalIgnoreCase)) ?? configured;
+
+    static readonly StringComparison PathCase = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     static void Workspaces(JsonNode? source, JsonObject launch, List<string> imported, List<string> kept)
     {

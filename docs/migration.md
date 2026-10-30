@@ -60,7 +60,8 @@ second snapshot the first's changes as the state to restore; the second is refus
      the host. (Entries running the Go hook are left: they hand their events to the spool);
    * an agent's registrations run agent-ha-bridge's PowerShell directly (an older install's
      `powershell`, `run-hook.cmd` or `pwsh -File` entries) while any of that agent's processes
-     runs, or they cannot all be identified. A session keeps the hooks it started with, so
+     runs, or they cannot all be identified (a node or bun whose command line could not be read
+     counts as one that may be the agent's). A session keeps the hooks it started with, so
      re-pointing the file would not reach it, and those scripts would go on writing
      registrations, approval markers and Home Assistant state beside the host. End its
      sessions, or let agent-ha-bridge's installer register its native hook first. Sessions
@@ -90,7 +91,10 @@ second snapshot the first's changes as the state to restore; the second is refus
    Each file's hash after is recorded before the file is written, so a migration cut short
    between the two still rolls back what it wrote.
 6. **Settings.** Carries agent-ha-bridge's settings into the profile's `config.json` (below).
-7. **Hand-over.** Writes `intake.json`, restarts the host, waits for its heartbeat in the
+7. **Hand-over.** Writes `intake.json` (the runtime folder, and the agents' homes the
+   installation recorded, whose hooks were re-pointed: the host reads sessions from those unless
+   started with `--copilot-home`, `--claude-home` or `--codex-home`, since the host the app
+   starts may not share the `COPILOT_HOME` agent-ha-bridge was installed under), restarts the host, waits for its heartbeat in the
    runtime folder, and runs the installed hook as Copilot would (`copilot agent_stop`). The
    hook gives the same fixed reply whether or not it could spool, so the proof is its own log
    line saying the run was spooled. It then waits until no event that old is left in the spool.
@@ -130,9 +134,9 @@ tells them apart by folder, as agent-ha-bridge did.
 |---|---|
 | `newSession.enabled` | `launch.enabled` |
 | `newSession.workspaces` (label, path, isolate) | `launch.workspaces` |
-| `newSession.defaultWorkspace` (as the label of the workspace it matched, whatever the case, as agent-ha-bridge's `-eq` did; the host matches exactly) | `launch.defaultWorkspace` |
+| `newSession.defaultWorkspace` (as the label the host gives the folder it chose: agent-ha-bridge's `-eq` ignores case, the host matches exactly, and the profile may already approve that folder under its own label) | `launch.defaultWorkspace` |
 | `newSession.launcher` | `launch.defaultAgent` |
-| `newSession.profiles`, `defaultProfile` | `launch.profiles`, `launch.defaultProfile` |
+| `newSession.profiles`, `defaultProfile` (as the listed profile it matched, whatever the case; as written when there is no list, since Agency's own are known only at launch) | `launch.profiles`, `launch.defaultProfile` |
 | `newSession.resumeCount` | `launch.resumeCount` (at most 50 here; a larger value is reported) |
 | `newSession.allowAllTools` | `launch.permissions` (`allowAll` or `ask`) |
 | `newSession.model` (text: every agent's, as agent-ha-bridge falls back to it; object: per agent) | `launch.agents.<agent>.model` |

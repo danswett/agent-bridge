@@ -97,9 +97,10 @@ string[] WithIntake(IReadOnlyList<string> roots, string folder) =>
     intakeState is null ? [.. roots] : [.. roots.Prepend(Path.Combine(intakeState.RuntimeRoot, folder)).Distinct(StringComparer.OrdinalIgnoreCase)];
 var options = new SessionSourceOptions
 {
-    CopilotHome = Option("--copilot-home") ?? defaults.CopilotHome,
-    ClaudeHome = Option("--claude-home") ?? defaults.ClaudeHome,
-    CodexHome = Option("--codex-home") ?? defaults.CodexHome,
+    // A migrated installation's agent homes, where its hooks were re-pointed, unless told otherwise.
+    CopilotHome = Option("--copilot-home") ?? intakeState?.Homes?.Copilot ?? defaults.CopilotHome,
+    ClaudeHome = Option("--claude-home") ?? intakeState?.Homes?.Claude ?? defaults.ClaudeHome,
+    CodexHome = Option("--codex-home") ?? intakeState?.Homes?.Codex ?? defaults.CodexHome,
     ClaudeRegistrationRoots = WithIntake(defaults.ClaudeRegistrationRoots, SpoolContract.ClaudeFolder),
     CodexRegistrationRoots = WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder),
     CopilotRemoteApproval = settings.RemoteApproval,

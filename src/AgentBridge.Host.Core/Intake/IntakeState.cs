@@ -12,6 +12,14 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
     public const string FileName = "intake.json";
     public const int Version = 1;
 
+    // The agents' homes the installation recorded, whose hook registrations the migration
+    // re-pointed: the host reads sessions from these unless told otherwise (--copilot-home and
+    // the rest), since the host the app starts may not share the COPILOT_HOME, CLAUDE_CONFIG_DIR
+    // or CODEX_HOME that agent-ha-bridge was installed under. Null in a record without them.
+    public AgentHomes? Homes { get; init; }
+
+    public sealed record AgentHomes(string Copilot, string Claude, string Codex);
+
     // Null when the profile has not migrated, or the file cannot be trusted: a file that cannot
     // be read is not taken as permission to consume another program's spool.
     public static (IntakeState? State, string? Problem) Load(string profileFolder)
@@ -34,7 +42,17 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
             {
                 return (null, $"{path} is incomplete; hook intake is off");
             }
-            return (new IntakeState(runtime, bridge, id, Json.Time(e, "migratedAt") ?? DateTimeOffset.MinValue), null);
+            AgentHomes? homes = null;
+            if (e.TryGetProperty("agentHomes", out var h))
+            {
+                string? Home(string name) => Json.Str(h, name) is { } p && Path.IsPathFullyQualified(p) ? p : null;
+                if (h.ValueKind != JsonValueKind.Object || Home("copilot") is not { } copilot || Home("claude") is not { } claude || Home("codex") is not { } codex)
+                {
+                    return (null, $"{path} has unusable agentHomes; hook intake is off");
+                }
+                homes = new AgentHomes(copilot, claude, codex);
+            }
+            return (new IntakeState(runtime, bridge, id, Json.Time(e, "migratedAt") ?? DateTimeOffset.MinValue) { Homes = homes }, null);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -56,6 +74,14 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
             writer.WriteString("bridgeHome", BridgeHome);
             writer.WriteString("installationId", InstallationId);
             writer.WriteString("migratedAt", MigratedAt.ToString("o"));
+            if (Homes is { } homes)
+            {
+                writer.WriteStartObject("agentHomes");
+                writer.WriteString("copilot", homes.Copilot);
+                writer.WriteString("claude", homes.Claude);
+                writer.WriteString("codex", homes.Codex);
+                writer.WriteEndObject();
+            }
             writer.WriteEndObject();
         }
         File.Move(partial, path, overwrite: true);

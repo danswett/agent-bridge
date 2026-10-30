@@ -579,6 +579,56 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_default_workspace_is_the_folder_agent_ha_bridge_chose_under_the_label_this_profile_already_gives_it()
+    {
+        var config = FakeAgentHaBridge.DefaultConfig();
+        var app = FakeAgentHaBridge.Rooted("repos", "app");
+        config["newSession"]!["workspaces"] = new JsonArray(new JsonObject { ["path"] = app, ["label"] = "App" });
+        config["newSession"]!["defaultWorkspace"] = "App";
+        await using var f = new FakeAgentHaBridge(config);
+        Directory.CreateDirectory(f.Profile);
+        var hostConfig = Path.Combine(f.Profile, "config.json");
+        File.WriteAllText(hostConfig, new JsonObject
+        {
+            ["version"] = 1,
+            ["launch"] = new JsonObject
+            {
+                ["workspaces"] = new JsonArray(
+                    new JsonObject { ["path"] = FakeAgentHaBridge.Rooted("repos", "docs"), ["label"] = "Docs" },
+                    new JsonObject { ["path"] = app, ["label"] = "MyApp" }),
+            },
+        }.ToJsonString());
+
+        Assert.True((await f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        // agent-ha-bridge's App is not imported beside MyApp, the same folder; "App" would match nothing.
+        Assert.Equal("MyApp", (string?)JsonNode.Parse(File.ReadAllText(hostConfig))!["launch"]!["defaultWorkspace"]);
+    }
+
+    [Fact]
+    public async Task The_default_profile_agent_ha_bridge_matched_whatever_its_case_stays_the_default()
+    {
+        var config = FakeAgentHaBridge.DefaultConfig();
+        config["newSession"]!["profiles"] = new JsonArray("work", "Home");
+        config["newSession"]!["defaultProfile"] = "home";
+        await using var f = new FakeAgentHaBridge(config);
+
+        Assert.True((await f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        Assert.Equal("Home", (string?)JsonNode.Parse(File.ReadAllText(Path.Combine(f.Profile, "config.json")))!["launch"]!["defaultProfile"]);
+    }
+
+    [Fact]
+    public async Task The_host_is_told_the_agent_homes_whose_hooks_were_re_pointed()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        var (state, problem) = AgentBridge.Host.Core.Intake.IntakeState.Load(_f.Profile);
+        Assert.Null(problem);
+        Assert.Equal(new(_f.CopilotHome, _f.ClaudeHome, _f.CodexHome), state!.Homes);
+    }
+
+    [Fact]
     public async Task Rolling_back_with_nothing_migrated_says_so()
     {
         var report = await _f.Migrator().RollbackAsync(dryRun: false);
