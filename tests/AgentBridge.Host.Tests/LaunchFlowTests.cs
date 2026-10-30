@@ -376,6 +376,47 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_Copilot_launch_answered_before_its_window_was_seen_ready_is_still_followed_and_unlocks_its_worktree_once_it_ends()
+    {
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "hi\n");
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "one");
+        screens.Rows = null;
+        Serve(Config(c => c with { Workspaces = [new("App", app, true), new("API", api, false)] }), readyWait: TimeSpan.FromMilliseconds(300));
+        var ch = await OpenAsync();
+        Assert.Equal("unconfirmed", (await LaunchAsync(ch, new { workspace = "App" })).Outcome_);
+        var cwd = starter.Specs[0].WorkingDirectory;
+        Assert.True(File.Exists(Path.Combine(Worktrees.AdminFolder(cwd)!, "locked")));
+
+        // A trust question drawn after that is still seen, and turns other launches away.
+        screens.Rows = ["Confirm folder trust", "Do you trust the files in this folder?", "❯ 1. Yes"];
+        await WaitAsync(async () => (await RequestAsync(ch, LaunchProtocol.Options, new { })).TryGetProperty("busy", out _));
+        Assert.Equal("busy", (await LaunchAsync(ch, new { workspace = "API" })).Outcome_);
+
+        // Declined at the machine, it closes: its worktree is unlocked, since it did register.
+        starter.Exit(starter.Pids[0]);
+        f.Processes.Exit(AgentKind.Copilot, starter.Pids[0]);
+        await WaitAsync(() => Task.FromResult(!File.Exists(Path.Combine(Worktrees.AdminFolder(cwd)!, "locked"))));
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task A_Copilot_launcher_that_hands_its_session_on_and_exits_is_not_started_while_the_session_asks_whether_to_trust_its_folder()
+    {
+        starter.ExitsAtOnce = true;
+        screens.Rows = ["Confirm folder trust", "Do you trust the files in this folder?", "❯ 1. Yes"];
+        var ch = await OpenAsync();
+
+        var first = await LaunchAsync(ch, new { workspace = "App" });
+
+        Assert.Equal("unconfirmed", first.Outcome_);
+        Assert.Contains("is asking whether to trust App", first.Reason);
+        Assert.Equal("busy", (await LaunchAsync(ch, new { workspace = "API" })).Outcome_);
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
     public async Task A_launch_whose_agent_exits_before_its_session_registers_has_failed()
     {
         starter.Registers = false;
