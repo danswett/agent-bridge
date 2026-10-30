@@ -164,12 +164,43 @@ public sealed partial class HaConnector : IAsyncDisposable
             DriverPendingAt = now;
         }
 
+        // An agent's launch: its opening turn, the prompt it launched with, is the agent's, and
+        // the arm is for that turn alone. The opening turn may be here already (the session
+        // registered before its launch was reported), so it is looked for as well as waited for;
+        // the turn after it is whoever's it is. Without a prompt there is no opening turn, and
+        // the arm waits for the first, as a press's does.
+        string? openingPrompt;
+        bool openingResumed;
+
+        public void ArmLaunch(DateTimeOffset at, string? prompt, bool resumed)
+        {
+            ArmDriver("agent", at);
+            openingPrompt = prompt is { Length: > 0 } ? Collapse(prompt) : null;
+            openingResumed = resumed;
+        }
+
+        // The current turn, seen: when it is the launch's opening turn, the arm is spent on it.
+        public void TurnSeen(Activity activity)
+        {
+            if (openingPrompt is not { } opening) { return; }
+            var message = activity.UserMessage is { } m ? Collapse(m) : "";
+            var head = opening[..Math.Min(80, opening.Length)];
+            if (message.StartsWith(head, StringComparison.Ordinal) || (!openingResumed && activity.TurnCount >= 1))
+            {
+                DriverPendingAt = null;
+                openingPrompt = null;
+            }
+        }
+
+        static string Collapse(string text) => System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+
         // A new turn: the press that armed it drives it, or nobody did and the person at the
         // machine is.
         public void TurnStarted(DateTimeOffset now, TimeSpan arm)
         {
             if (DriverPendingAt is not { } at || now - at >= arm) { Driver = "human"; }
             DriverPendingAt = null;
+            openingPrompt = null;
         }
         // Which of the reply and the reasoning changed last. The host keeps the previous turn's
         // reply when a new turn starts, so "no reply yet" cannot say the newest line is a thought.
@@ -350,6 +381,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         launchSignature = null;
         launchDefaultsPending = null;
         launchPressBaselined = false;
+        launchOutcomesRestored = false;
         foreach (var topic in Unserved()) { await ha.PublishAsync(topic, "", true, ct); }
 
         var (updateTopic, updateConfig) = HaContract.UpdateConfig(Slug, options.MachineName);
@@ -605,6 +637,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         // A new turn (a new message from the person or an agent) decides who drives it.
         var turn = $"{full.Activity.TurnCount}\n{full.Activity.UserMessage}";
         if (p.TurnKey is not null && p.TurnKey != turn) { p.TurnStarted(now, options.DriverArm); }
+        else { p.TurnSeen(full.Activity); }
         p.TurnKey = turn;
 
         var status = HaPayloads.Status(s);

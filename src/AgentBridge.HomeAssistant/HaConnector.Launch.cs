@@ -36,6 +36,7 @@ public sealed partial class HaConnector
     bool launchPressBaselined;
     string? launchPressHandled;
     bool launchBusy;
+    bool launchOutcomesRestored;
     // The press whose launch request could not be read, said once.
     string? launchPayloadUnreadable;
     int launchTouched;
@@ -50,7 +51,7 @@ public sealed partial class HaConnector
     readonly List<JsonObject> launchOutcomes = [];
     Dictionary<string, (string Id, string Launcher)> resumeByLabel = new(StringComparer.Ordinal);
     // Sessions an agent's press launched, to show as the agent's from the moment they appear.
-    readonly Dictionary<string, DateTimeOffset> launchedByAgent = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (DateTimeOffset At, string? Prompt, bool Resumed)> launchedByAgent = new(StringComparer.Ordinal);
 
     sealed record LaunchDone(LaunchRequest Request, string? RequestId, string Pressed, string Driver, JsonObject? Launched, Consumed? Prompt, LaunchResult Result);
 
@@ -79,7 +80,6 @@ public sealed partial class HaConnector
     async Task LaunchAsync(DateTimeOffset now, CancellationToken ct)
     {
         if (!launchServing) { return; }
-        await LaunchesDoneAsync(now, ct);
         var agentMoved = Interlocked.Exchange(ref launchAgentTouched, 0) == 1;
         if (launchOptions is null || agentMoved || now - launchOptionsAt >= options.LaunchRefresh)
         {
@@ -99,6 +99,9 @@ public sealed partial class HaConnector
             try { await LaunchPressAsync(now, ct); }
             catch { if (pressed) { Interlocked.Exchange(ref launchTouched, 1); } throw; }
         }
+        // After the presses: one made while a launch was starting is busy, even when that launch
+        // finished before this pass; the card said Starting... when it was made.
+        await LaunchesDoneAsync(now, ct);
         if (now >= nextNoteCheck && !launchBusy)
         {
             nextNoteCheck = now + TimeSpan.FromSeconds(60);
@@ -224,7 +227,10 @@ public sealed partial class HaConnector
         var press = await ObserveAsync(LaunchEntity("button", "new_session"), ct);
         if (!launchPressBaselined)
         {
-            if (press.Kind == "unknown") { return; }
+            // Once Home Assistant has the card on its ids (the pins land a pass or two after the
+            // configs): before that there is nothing to press, nor outcomes to read back.
+            if (press.Kind == "unknown" || press.Snapshot is null) { return; }
+            if (!await RestoreOutcomesAsync(ct)) { return; }
             launchPressHandled = press.Present ? press.Value : null;
             launchPressBaselined = true;
             return;
@@ -495,7 +501,9 @@ public sealed partial class HaConnector
         if (wantedResume.Length > 0)
         {
             if (Get("workspace").Length > 0) { return (null, null, "A resumed session reopens in its own folder - name a workspace or a session to resume, not both"); }
-            var match = resumeByLabel.FirstOrDefault(r => r.Key == wantedResume || r.Value.Id == wantedResume);
+            // As PowerShell's -eq compares them: a label or an id in any case, the offered one sent on.
+            var match = resumeByLabel.FirstOrDefault(r => string.Equals(r.Key, wantedResume, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(r.Value.Id, wantedResume, StringComparison.OrdinalIgnoreCase));
             if (match.Key is null) { return (null, null, $"No resumable session '{wantedResume}' on this machine - it is not on its resume list"); }
             resumeLabel = match.Key;
             var theirs = offered.Agents.FirstOrDefault(x => x.Id == match.Value.Launcher);
@@ -513,11 +521,12 @@ public sealed partial class HaConnector
         var wantedWorkspace = Get("workspace");
         if (wantedWorkspace.Length > 0)
         {
-            if (!offered.Workspaces.Any(w => w.Label == wantedWorkspace))
+            var known = offered.Workspaces.FirstOrDefault(w => string.Equals(w.Label, wantedWorkspace, StringComparison.OrdinalIgnoreCase));
+            if (known is null)
             {
                 return (null, null, $"Unknown workspace '{wantedWorkspace}' - this machine has {string.Join(", ", offered.Workspaces.Select(w => w.Label))}");
             }
-            workspace = wantedWorkspace;
+            workspace = known.Label;
         }
 
         string? profile = null;
@@ -527,8 +536,8 @@ public sealed partial class HaConnector
         {
             if (wantedProfile.Length > 0)
             {
-                if (!profiles.Contains(wantedProfile, StringComparer.Ordinal)) { return (null, null, $"Unknown profile '{wantedProfile}' - this machine has {string.Join(", ", profiles)}"); }
-                profile = wantedProfile;
+                profile = profiles.FirstOrDefault(p => string.Equals(p, wantedProfile, StringComparison.OrdinalIgnoreCase));
+                if (profile is null) { return (null, null, $"Unknown profile '{wantedProfile}' - this machine has {string.Join(", ", profiles)}"); }
             }
         }
         else if (wantedProfile.Length > 0)
@@ -542,16 +551,17 @@ public sealed partial class HaConnector
         {
             var wanted = Get(axis);
             if (wanted.Length == 0) { tuning[axis] = null; continue; }
-            if (wanted == HaContract.TuningDefault) { tuning[axis] = ""; continue; }
+            if (string.Equals(wanted, HaContract.TuningDefault, StringComparison.OrdinalIgnoreCase)) { tuning[axis] = ""; continue; }
             IReadOnlyList<string> values = agent is null ? [] : axis switch { "model" => agent.Models, "effort" => agent.Efforts, _ => agent.Contexts };
-            if (!values.Contains(wanted, StringComparer.Ordinal))
+            var offeredValue = values.FirstOrDefault(v => string.Equals(v, wanted, StringComparison.OrdinalIgnoreCase));
+            if (offeredValue is null)
             {
                 var all = (IReadOnlyList<string>)[HaContract.TuningDefault, .. values];
                 var name = label.ToLowerInvariant();
                 return (null, null, all.Count > 1 ? $"Unknown {name} '{wanted}' for {agent?.Label} - it offers {string.Join(", ", all)}"
                     : $"{agent?.Label} has no {name} to choose here, so '{wanted}' can't be used");
             }
-            tuning[axis] = wanted;
+            tuning[axis] = offeredValue;
         }
 
         string? permissions = null;
@@ -668,7 +678,7 @@ public sealed partial class HaConnector
                 if (done.Prompt is { } consumed) { await ClearPromptsAsync(consumed, ct); }
                 // The selectors were re-read on the next refresh: what is resumable has changed.
                 launchOptionsAt = DateTimeOffset.MinValue;
-                if (done.Driver == "agent" && result.Session is { Length: > 0 } session) { ArmLaunchedDriver(session, now); }
+                if (done.Driver == "agent" && result.Session is { Length: > 0 } session) { ArmLaunchedDriver(session, now, done.Request); }
             }
             launchesDone.TryDequeue(out _);
             launchBusy = false;
@@ -676,14 +686,14 @@ public sealed partial class HaConnector
         }
     }
 
-    void ArmLaunchedDriver(string sessionId, DateTimeOffset now)
+    void ArmLaunchedDriver(string sessionId, DateTimeOffset now, LaunchRequest request)
     {
         lock (gate)
         {
             // Already published, as a launch that registered before it was reported is: its
             // activity is published again with the agent as its driver.
-            if (published.TryGetValue(sessionId, out var p)) { p.ArmDriver("agent", now); dirty.Add(sessionId); return; }
-            launchedByAgent[sessionId] = now;
+            if (published.TryGetValue(sessionId, out var p)) { p.ArmLaunch(now, request.Prompt, request.Resume is not null); dirty.Add(sessionId); return; }
+            launchedByAgent[sessionId] = (now, request.Prompt, request.Resume is not null);
         }
     }
 
@@ -701,7 +711,7 @@ public sealed partial class HaConnector
     // Called under gate when a session is first published.
     void ApplyLaunchedDriver(string sessionId, Published p, DateTimeOffset now)
     {
-        if (launchedByAgent.Remove(sessionId, out var at) && now - at < options.DriverArm) { p.ArmDriver("agent", at); }
+        if (launchedByAgent.Remove(sessionId, out var arm) && now - arm.At < options.DriverArm) { p.ArmLaunch(arm.At, arm.Prompt, arm.Resumed); }
     }
 
     // Set-CopilotMqttNewSessionResult. Best effort where a press has been taken already: a note
@@ -746,6 +756,50 @@ public sealed partial class HaConnector
         {
             log($"Home Assistant connector: the launch outcome for {request} could not be published: {Describe(e)}");
         }
+    }
+
+    // What the outcomes said before this connector started, taken back before any press is: the
+    // requests they name were served, so a payload that could not be cleared is not served
+    // again, and the history agents read goes on rather than starting over. One left at starting
+    // was cut off by the restart; whether it started is not known, so it is said to be
+    // unconfirmed rather than launched again. False while the record cannot be read.
+    async Task<bool> RestoreOutcomesAsync(CancellationToken ct)
+    {
+        if (launchOutcomesRestored) { return true; }
+        HaState? state;
+        try { state = await ha.GetStateAsync(LaunchEntity("sensor", "new_session_result"), ct); }
+        catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { return false; }
+        launchOutcomesRestored = true;
+        if (launchOutcomes.Count > 0 || state?.Attributes is not { ValueKind: JsonValueKind.Object } a
+            || !a.TryGetProperty("recent", out var recent) || recent.ValueKind != JsonValueKind.Array)
+        {
+            return true;
+        }
+        var cut = false;
+        foreach (var item in recent.EnumerateArray().Take(HaContract.LaunchOutcomesKept))
+        {
+            if (JsonNode.Parse(item.GetRawText()) is not JsonObject o || o["request"] is not JsonValue r || !r.TryGetValue<string>(out var id)) { continue; }
+            if (o["outcome"] is JsonValue v && v.TryGetValue<string>(out var outcome) && outcome == "starting")
+            {
+                o["outcome"] = "unconfirmed";
+                o["note"] = "This machine's bridge restarted while the launch was starting, so whether it started is not known; check the machine.";
+                cut = true;
+            }
+            launchOutcomes.Add(o);
+            if (!launchRequestsHandled.Contains(id, StringComparer.Ordinal)) { launchRequestsHandled.Add(id); }
+        }
+        if (cut)
+        {
+            try
+            {
+                await PublishAsync(HaContract.LaunchOutcomeTopic(Slug), new JsonObject { ["recent"] = new JsonArray([.. launchOutcomes.Select(o => (JsonNode)o.DeepClone())]) }, true, ct);
+            }
+            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
+            {
+                log($"Home Assistant connector: the launch outcomes could not be published: {Describe(e)}");
+            }
+        }
+        return true;
     }
 
     // Format-DaemonInstant.

@@ -457,6 +457,92 @@ public sealed class LaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task A_press_made_while_a_launch_started_is_busy_even_when_that_launch_finished_before_it_was_read()
+    {
+        var release = new TaskCompletionSource<LaunchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        answer = _ => release.Task;
+        await using var c = await Ready();
+        c.Observe(ha.Press(Entity("button", "new_session")));
+        await Pass(c);
+        for (var i = 0; i < 500 && Volatile.Read(ref launchedCount) == 0; i++) { await Task.Delay(10); }
+        Payload(new JsonObject { ["request"] = "req-0013-abcd" });
+        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+        release.SetResult(new LaunchResult(LaunchOutcome.Started) { Session = "6f000000-0000-4000-8000-0000000000ee" });
+        await c.DeliveredAsync();
+        await Pass(c);
+        lock (launched) { Assert.Single(launched); }
+        Assert.Equal(("req-0013-abcd", "busy"), (Outcome()["request"]!.GetValue<string>(), Outcome()["outcome"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task A_request_names_what_this_machine_offers_in_any_case_and_the_host_gets_the_offered_spelling()
+    {
+        await using var c = await Ready();
+        Payload(new JsonObject { ["request"] = "req-0014-abcd", ["settings"] = new JsonObject
+        {
+            ["agent"] = "AGENCY", ["workspace"] = "SCRATCH", ["profile"] = "Work", ["model"] = "GPT-5.5", ["effort"] = "agent DEFAULT",
+        } });
+        await Launch(c, AgentUser);
+        var r = Assert.Single(launched);
+        Assert.Equal(("agency", "scratch", "work", "gpt-5.5", ""), (r.Agent, r.Workspace, r.Profile, r.Model, r.Effort));
+
+        ha.Now = ha.Now.AddSeconds(11);
+        Payload(new JsonObject { ["request"] = "req-0015-abcd", ["settings"] = new JsonObject { ["resume"] = "6F000000-0000-4000-8000-000000000001" } });
+        await Launch(c, AgentUser);
+        Assert.Equal("6f000000-0000-4000-8000-000000000001", launched[1].Resume);
+    }
+
+    [Fact]
+    public async Task The_turn_an_agent_launched_with_is_the_agents_and_the_next_one_is_the_persons()
+    {
+        var release = new TaskCompletionSource<LaunchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        answer = _ => release.Task;
+        await using var c = await Ready();
+        Payload(new JsonObject { ["text"] = "Fix the build", ["request"] = "req-0016-abcd" });
+        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+        await Pass(c);
+        for (var i = 0; i < 500 && Volatile.Read(ref launchedCount) == 0; i++) { await Task.Delay(10); }
+        // Registered, its opening turn under way, before the launch is reported.
+        const string id = "6f000000-0000-4000-8000-0000000000ff";
+        var session = FakeSessions.Copilot(id);
+        sessions.Set(session with { Activity = new Activity { TurnCount = 1, UserMessage = "Fix the build", Response = "On it" } });
+        await Pass(c);
+        release.SetResult(new LaunchResult(LaunchOutcome.Started) { Session = id });
+        await c.DeliveredAsync();
+        await Pass(c, 0.01);
+        await Pass(c);
+        var topic = HaContract.Topics(HaContract.NodeId(id)).ActivityAttributes;
+        Assert.Equal("agent", JsonNode.Parse(ha.Retained[topic])!["driver"]!.GetValue<string>());
+        // The person at the machine types next.
+        sessions.Set(session with { Activity = new Activity { TurnCount = 2, UserMessage = "Now the tests", Response = "On it" } });
+        await Pass(c);
+        Assert.Equal("human", JsonNode.Parse(ha.Retained[topic])!["driver"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_restarted_connector_keeps_the_outcomes_and_never_serves_a_request_they_name_again()
+    {
+        var outcomes = new JsonObject
+        {
+            ["recent"] = new JsonArray(
+                new JsonObject { ["request"] = "req-0017-abcd", ["outcome"] = "starting", ["session"] = "", ["note"] = "Received; checking its settings before launching.", ["pressed"] = "2026-10-29T19:59:00.0000000Z", ["at"] = "2026-10-29T19:59:00.0000000Z", ["launched"] = null },
+                new JsonObject { ["request"] = "req-0018-abcd", ["outcome"] = "started", ["session"] = "6f000000-0000-4000-8000-000000000011", ["note"] = "", ["pressed"] = "2026-10-29T19:58:00.0000000Z", ["at"] = "2026-10-29T19:58:00.0000000Z", ["launched"] = null }),
+        };
+        ha.Seed(HaContract.LaunchOutcomeTopic(Slug), HaContract.Serialize(outcomes));
+        await using var c = await Ready();
+        var recent = JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray();
+        Assert.Equal(["req-0017-abcd", "req-0018-abcd"], recent.Select(o => o!["request"]!.GetValue<string>()));
+        Assert.Equal("unconfirmed", recent[0]!["outcome"]!.GetValue<string>());
+
+        // The payload a lost clear left behind: not served a second time.
+        Payload(new JsonObject { ["text"] = "the request's words", ["request"] = "req-0018-abcd" });
+        await Launch(c, AgentUser);
+        var r = Assert.Single(launched);
+        Assert.Null(r.Prompt);
+        Assert.Equal(2, JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Count);
+    }
+
+    [Fact]
     public async Task A_stale_request_is_skipped_text_and_all_and_the_press_launches_from_the_card()
     {
         await using var c = await Ready();

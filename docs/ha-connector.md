@@ -444,7 +444,9 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
 * **An agent's request** (agent-ha-bridge #227): `{at, text, request, settings}` published to the
   prompt payload and then a press. Its settings are the only ones used: one left out is the
   machine's default, never what the card shows; one this machine does not offer is refused in
-  the daemon's words, naming what it does offer. Its outcome (`starting`, then `started`,
+  the daemon's words, naming what it does offer. Names are matched in any case, as the daemon's
+  PowerShell compares them, and the host is given the offered spelling; permissions alone must
+  be exact. Its outcome (`starting`, then `started`,
   `refused`, `busy`, `failed` or `unconfirmed`, with the session id and what was launched) is
   kept with the four before it, newest first, on `new_session_result`'s `recent`, which is what
   the bridge's MCP `launch_agent_session` reads. A request published after the press waits for
@@ -456,9 +458,14 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   A press whose prompt payload cannot be read waits for the next pass rather than launching from
   the card, since it may carry a request with settings of its own.
 * **The purple edge**: a session an agent's press launched is `agent`-driven from the moment it
-  appears.
+  appears, for the turn it was launched with (already under way or still to come); the turn
+  after that is whoever's it is.
 * **One at a time.** The launch runs beside the passes (the host follows it to registration); a
-  press meanwhile launches nothing, and a request hears `busy`.
+  press meanwhile launches nothing, and a request hears `busy`, even when the launch finished
+  before the press was read: the card still said `Starting...` when it was made.
+* **A restart** reads the outcomes back before taking any press: the requests they name are not
+  served again, the history agents read carries on, and one left at `starting` is reported
+  `unconfirmed` rather than launched a second time.
 * What the button holds when the connector first reads it is not a press, and the note is
   cleared after ten minutes, as the daemon clears it. A note that cannot be shown does not stop
   the launch it describes.
@@ -472,6 +479,7 @@ Where stage 5 knowingly differs from the daemon:
 | Refusals the host makes itself (an unapproved workspace, an agent that is not installed) carry the host's reason, not the daemon's, on the card's path | The host's launcher decides what may start; the connector does not second-guess it |
 | Whether the card is served is decided when the connector starts | The host's launcher does not come and go while it runs |
 | The note is not cleared when the launched session registers, only when the host says it started (or after ten minutes) | The host reports registration as `Started`; there is no separate signal to wait for |
+| Outcomes survive a restart (above); the daemon's start over | Beyond parity: otherwise a payload whose clear was lost could be served twice across a restart |
 
 ### The shadow: comparing with a running daemon
 
