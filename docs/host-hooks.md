@@ -47,7 +47,9 @@ The design's `agent-bridge-host hook --fallback` is this program's own fallback:
 heartbeat it prints the fixed reply and nothing else. `agent-bridge-host-hook --fallback
 <agent> <hook>` does the same unconditionally, for a registration that must never spool. It
 replies before touching stdin, then drains it for up to 2 s, so neither an inherited console nor
-a pipe left open can hold it, and a writer still sending its event is not cut off. Without
+a pipe left open can hold it, and a writer still sending its event is not cut off. Each such run
+is logged as unspooled (`reply`, `--fallback`), so a Codex hook that ran this way still counts
+as one the intake did not hear. Without
 `--fallback` it waits at most 5 s for the whole event (one arrives in milliseconds), then gives
 the fixed reply without spooling and logs `event not finished within 5s`: an agent that never
 closes stdin cannot hold `ask_user` (invariant 3). agent-ha-bridge's Go hook waits for the end.
@@ -178,8 +180,10 @@ session is over. Nothing else would ever delete them, and discovery reads every 
 second. It deletes:
 
 * a Claude registration whose process has gone and that was last written over 4 hours ago;
-* a Codex registration that is ended, or whose process has gone, or that has no process and
-  is over 4 hours old.
+* a Codex registration whose process has gone, or that has no process and is either ended or
+  over 4 hours old. An ended one stays while its process runs, as the daemon's
+  (`$endedCanPrune`): that process may still hold the thread's lock, and without the
+  registration saying the session ended, discovery would find it again through the lock.
 
 It prunes only when the process list is complete. A runtime (node, bun) whose command line
 could not be read counts as live: it may be the session's.
@@ -264,7 +268,9 @@ Until the markers are settled (after a gap, while the log cannot be read, after 
 run, or while a withdrawal is pending), the answer path refuses Codex approvals
 (`HookIntake.ApprovalsUnsettled`), so an answer cannot reach a marker that may already have been
 answered. A migrated profile whose `intake.json` cannot be read runs no intake, and refuses them
-all (`HookIntake.AnswerGate`).
+all (`HookIntake.AnswerGate`). And on a migrated profile only markers in the runtime the intake
+took are answerable: discovery still reads the other registration roots (the default runtime,
+the legacy temp folder), but nothing settles or withdraws a marker there.
 
 Answering an approval twice could type into whatever the terminal shows now; losing a remote
 answer only means answering at the terminal.

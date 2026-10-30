@@ -65,6 +65,12 @@ public static class HookRunner
                 // inherited console, or a pipe left open, must not hold it. What was sent is then
                 // drained for a moment, so a writer still writing is not cut off mid-event.
                 Reply();
+                // Logged as any unspooled run is: the intake reads a Codex hook that ran without
+                // spooling as one that may have settled an approval, and withdraws what is pending.
+                if (RuntimeRoot(env.ExecutableDirectory).Root is { } root)
+                {
+                    SpoolContract.Record(root, agent, hook, "reply", "--fallback", env.Now(), env.ElapsedMs());
+                }
                 var drain = Task.Run(() => ReadAll(stdin, SpoolContract.MaxEventBytes));
                 drain.Wait(env.FallbackDrain);
                 return 0;

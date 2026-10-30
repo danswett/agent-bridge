@@ -296,7 +296,7 @@ async Task<int> ServeAsync()
     // Set once the hook intake starts; until then, and until it has settled the markers, a Codex
     // approval on a migrated machine is not answered.
     HookIntake? runningIntake = null;
-    var codexUnsettled = HookIntake.AnswerGate(intakeState is not null, intakeProblem, () => runningIntake);
+    var codexUnsettled = HookIntake.AnswerGate(intakeState?.RuntimeRoot, intakeProblem, () => runningIntake);
     var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled);
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
@@ -601,7 +601,7 @@ static string OsName() =>
 // session at once. Files sent with replies are staged in the profile's own folder, private
 // to this user (docs/host-replies.md), and the prompts already
 // answered are recorded there too, so none is typed into twice.
-(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging, string attempts, IBlobSource blobs, Func<string?>? codexUnsettled)
+(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled)
 {
     if (!OperatingSystem.IsWindows())
     {

@@ -109,14 +109,33 @@ public sealed class HookIntake : IAsyncDisposable
     public string? ApprovalsUnsettled => _reconciled && !_handlers.WithdrawalsPending ? null
         : "the host has not yet checked Codex approvals against the hooks that ran while nobody took them; answer at the machine or try again shortly";
 
-    // The answer path's gate for Codex approvals on a profile (AnswerOptions.CodexApprovalsUnsettled):
-    // none where the profile never migrated; every approval refused while its intake.json cannot
-    // be read, since no intake then runs to withdraw what an outage left; otherwise the running
-    // intake's, and refused until it has started.
-    public static Func<string?>? AnswerGate(bool migrated, string? problem, Func<HookIntake?> running) =>
-        problem is not null ? () => $"this profile's hook intake is off ({problem}), so Codex approvals left from before cannot be checked; answer at the machine"
-        : !migrated ? null
-        : () => running() is { } intake ? intake.ApprovalsUnsettled : "the host is still starting its hook intake; try again shortly";
+    // The answer path's gate for Codex approvals on a profile (AnswerOptions.CodexApprovalsUnsettled),
+    // given the registration whose marker would be answered: none where the profile never migrated
+    // (runtimeRoot null); every approval refused while its intake.json cannot be read, since no
+    // intake then runs to withdraw what an outage left; otherwise the running intake's, refused
+    // until it has started. The intake settles only the markers in the runtime it took, so one in
+    // another registration root discovery still reads (the default runtime, the legacy temp
+    // folder) is never answerable from here: nothing withdraws it once answered at the terminal.
+    public static Func<string, string?>? AnswerGate(string? runtimeRoot, string? problem, Func<HookIntake?> running)
+    {
+        if (problem is not null) { return _ => $"this profile's hook intake is off ({problem}), so Codex approvals left from before cannot be checked; answer at the machine"; }
+        if (runtimeRoot is null) { return null; }
+        var settled = Path.Combine(runtimeRoot, SpoolContract.CodexFolder);
+        return registration => !InFolder(registration, settled)
+            ? $"this approval is recorded outside the hook runtime this host took ({settled}), so whether it was answered at the terminal cannot be checked; answer at the machine"
+            : running() is { } intake ? intake.ApprovalsUnsettled : "the host is still starting its hook intake; try again shortly";
+    }
+
+    static bool InFolder(string file, string folder)
+    {
+        try
+        {
+            var parent = Path.GetDirectoryName(Path.GetFullPath(file));
+            var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            return parent is not null && string.Equals(Path.TrimEndingDirectorySeparator(parent), Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)), comparison);
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
+    }
 
     // Why the intake is standing back now (agent-ha-bridge is running), or null.
     public string? Paused { get { lock (_gate) { return _paused; } } }
@@ -520,7 +539,11 @@ public sealed class HookIntake : IAsyncDisposable
                 var pid = Json.Int(doc.RootElement, "ProcessId") ?? 0;
                 var ended = Json.Bool(doc.RootElement, "Ended") == true;
                 var stale = Json.Time(doc.RootElement, "Updated") is { } u && now - u > _options.StaleAfter;
-                if (ended || (pid > 0 && !live.Contains(pid)) || (pid <= 0 && stale))
+                // An ended session's registration stays while its process runs, as the daemon's
+                // ($endedCanPrune): that process may still hold the thread's lock, and without the
+                // registration saying it ended, discovery would find the session through the lock.
+                var running = pid > 0 && live.Contains(pid);
+                if (!running && (ended || pid > 0 || stale))
                 {
                     if (!Ours()) { return; }
                     Delete(file);

@@ -146,6 +146,9 @@ public sealed class HookRunnerTests : IDisposable
         Assert.Equal("{}\n", Invoke("{}", "--fallback", "copilot", "agent_stop"));
         Assert.Equal("", Invoke("{}", "--fallback", "claude", "stop"));
         Assert.Empty(SpoolFiles());
+        // Each run is logged as unspooled, as the intake must know of a Codex hook that was not.
+        Assert.Equal(["copilot/agent_stop:reply:--fallback", "claude/stop:reply:--fallback"],
+            Log().Select(l => $"{l.GetProperty("agent").GetString()}/{l.GetProperty("hook").GetString()}:{l.GetProperty("path").GetString()}:{l.GetProperty("reason").GetString()}"));
     }
 
     [Fact]

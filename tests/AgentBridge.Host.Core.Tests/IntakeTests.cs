@@ -112,6 +112,19 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_Copilot_event_is_heard_with_the_session_it_names()
+    {
+        Spooled("0001", "copilot", "ask_user", new { sessionId = "c1", toolName = "ask_user" });
+        var intake = Intake();
+        var heard = intake.Subscribe();
+
+        intake.Pass();
+
+        Assert.True(heard.TryRead(out var notice));
+        Assert.Equal("c1", notice.SessionId);
+    }
+
+    [Fact]
     public void A_failed_event_is_kept_for_one_more_try_then_dropped_and_logged()
     {
         var unknown = Spooled("0031", "gemini", "stop", new { });
@@ -668,14 +681,27 @@ public sealed class IntakeTests : IDisposable
     [Fact]
     public void Codex_approvals_are_refused_on_a_migrated_profile_whose_intake_cannot_start_and_free_on_one_never_migrated()
     {
-        Assert.Null(HookIntake.AnswerGate(migrated: false, problem: null, () => null));
-        Assert.Contains("intake.json is not valid", HookIntake.AnswerGate(false, "intake.json is not valid", () => null)!());
-        Assert.Contains("still starting", HookIntake.AnswerGate(true, null, () => null)!());
+        var registration = Path.Combine(_f.CodexRegistrations, "x1.json");
+        Assert.Null(HookIntake.AnswerGate(runtimeRoot: null, problem: null, () => null));
+        Assert.Contains("intake.json is not valid", HookIntake.AnswerGate(null, "intake.json is not valid", () => null)!(registration));
+        Assert.Contains("still starting", HookIntake.AnswerGate(_f.Runtime, null, () => null)!(registration));
         var intake = Intake();
-        var gate = HookIntake.AnswerGate(true, null, () => intake)!;
-        Assert.NotNull(gate());
+        var gate = HookIntake.AnswerGate(_f.Runtime, null, () => intake)!;
+        Assert.NotNull(gate(registration));
         intake.Pass();
-        Assert.Null(gate());
+        Assert.Null(gate(registration));
+    }
+
+    [Fact]
+    public void A_Codex_approval_recorded_outside_the_runtime_the_intake_settles_is_never_answerable()
+    {
+        var intake = Intake();
+        intake.Pass();
+        var gate = HookIntake.AnswerGate(_f.Runtime, null, () => intake)!;
+        Assert.Null(gate(Path.Combine(_f.CodexRegistrations, "x1.json")));
+        // Discovery still reads agent-ha-bridge's legacy folder, but nothing withdraws a marker there.
+        var legacy = Path.Combine(_f.Root, "temp", "agent-bridge-codex", "x1.json");
+        Assert.Contains("outside the hook runtime", gate(legacy));
     }
 
     [Fact]
@@ -1261,7 +1287,9 @@ public sealed class IntakeTests : IDisposable
         File.SetLastWriteTimeUtc(Path.Combine(_f.ClaudeRegistrations, "dead-recent.json"), DateTime.UtcNow);
         var recent = JsonSerializer.Serialize(new { SessionId = "dead-recent", ProcessId = 32, Updated = _f.Time.GetUtcNow().ToString("o") });
         File.WriteAllText(Path.Combine(_f.ClaudeRegistrations, "dead-recent.json"), recent);
-        _f.CodexRegistration("ended", 60, null, ended: true);
+        _f.Processes.Run(AgentKind.Codex, 62);
+        _f.CodexRegistration("ended", 62, null, ended: true);
+        _f.CodexRegistration("ended-gone", 63, null, ended: true);
         _f.CodexRegistration("gone", 61, null);
         _f.CodexRegistration("running", 60, null);
 
@@ -1278,6 +1306,14 @@ public sealed class IntakeTests : IDisposable
             intake.Pass();
         }
         Assert.Equal(["dead-recent.json", "live.json"], Directory.GetFiles(_f.ClaudeRegistrations).Select(Path.GetFileName).Order());
+        // An ended session's stays until its process has gone.
+        Assert.Equal(["ended.json", "running.approval.json", "running.json"], Directory.GetFiles(_f.CodexRegistrations).Select(Path.GetFileName).Order());
+        _f.Processes.Exit(AgentKind.Codex, 62);
+        for (var i = 0; i < 3; i++)
+        {
+            _f.Time.Advance(TimeSpan.FromSeconds(45));
+            intake.Pass();
+        }
         Assert.Equal(["running.approval.json", "running.json"], Directory.GetFiles(_f.CodexRegistrations).Select(Path.GetFileName).Order());
 
         // A host that cannot see every process (the first has stopped, so this one takes the spool).
@@ -1290,6 +1326,25 @@ public sealed class IntakeTests : IDisposable
         blind.Pass();
         Assert.Null(blind.Paused);
         Assert.True(File.Exists(Path.Combine(_f.ClaudeRegistrations, "dead-old.json")));
+    }
+
+    [Fact]
+    public async Task An_ended_Codex_session_whose_process_still_holds_its_lock_does_not_come_back_once_registrations_are_pruned()
+    {
+        const string id = "11111111-1111-4111-8111-111111111111";
+        _f.CodexRegistration(id, 800, _f.CodexTranscript(id), status: "ended", ended: true);
+        _f.Processes.Run(AgentKind.Codex, 800, "codex.exe --no-daemon");
+        _f.Processes.Holders[_f.CodexLock(id)] = [800];
+        var intake = new HookIntake(new HookIntakeOptions { RuntimeRoot = _f.Runtime, ClaudeHome = _f.ClaudeHome, UseFileSystemWatcher = false, PruneInterval = TimeSpan.Zero }, _f.Processes, _f.Time);
+        _intakes.Add(intake);
+        intake.Pass();
+        _f.Time.Advance(TimeSpan.FromMinutes(2));
+        intake.Pass();
+
+        await using var source = _f.Source();
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
     }
 
     sealed class Blind : AgentBridge.Host.Core.Processes.IProcessInspector

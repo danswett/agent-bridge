@@ -50,7 +50,8 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
     {
         var e = spooled.Event;
         var eventName = Str(e, "hook_event_name");
-        var sessionId = Str(e, "session_id");
+        // Copilot's events name it sessionId (copilot-hooks.ps1 reads $HookEvent.sessionId).
+        var sessionId = Str(e, "session_id") ?? (spooled.Agent == "copilot" ? Str(e, "sessionId") : null);
         var notice = new HookNotice(spooled.Agent, spooled.Hook, eventName, string.IsNullOrWhiteSpace(sessionId) ? null : sessionId,
             null, null, null, e, spooled.Ancestors, spooled.ReceivedAt, time.GetUtcNow());
         return spooled.Key switch
