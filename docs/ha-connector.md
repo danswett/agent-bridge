@@ -260,8 +260,8 @@ the same service calls.
 content_type, b64}], driver?}` (not retained) to `copilot/cli/<node>/replypayload/set`, read
 through the reply payload sensor: its state is `at`, the stamp that makes a publish new. A new
 stamp is one reply. One tagged with a `decision_id` is words for a question, used by stage 2 or
-not at all. One whose `images` or `files` hold an entry the connector cannot read says `Reply
-NOT sent` (`The attachment metadata is incomplete; no reply was sent.`) and sends nothing. The
+not at all. One whose `images` or `files` hold an entry the connector cannot read, or are not
+lists, says `Reply NOT sent` (`The attachment metadata is incomplete; no reply was sent.`) and sends nothing. The
 images are fetched from Home Assistant's image store (`GET /api/image/serve/<id>/original`,
 ids of letters and digits only, at most 25 MiB, above Home Assistant's own 10 MiB upload
 limit, within the client's timeout for the whole body); the files are decoded inline, at most
@@ -297,7 +297,9 @@ not use is discarded afterwards. Delivery may take a minute to confirm, so it ru
 connector's passes, and the card is read again as soon as it is done; status, answers and the
 other cards are not held up meanwhile. A pause (agent-ha-bridge starting) does not lose track of
 a delivery under way: the card waits for it, and what it comes to touches only the driver arm
-it made.
+it made. Publishes the watch reports meanwhile wait their turn and each is sent, in the order they
+came (the sensor itself shows only the latest); any still waiting when the session asks a question
+are said to be not sent.
 
 **Which presses are replies.** What the reply controls hold when the connector first reads a
 card is never a reply: a card taken over from agent-ha-bridge, or from this host before a
@@ -314,6 +316,7 @@ Where stage 3 knowingly differs from the daemon:
 | A reply of attachments alone shows `(n attachments)` as `sent`, not the typed `@path` line | The connector never learns where the host staged them |
 | A press or publish made while the connector was not running is not sent at start | The daemon keeps what it handled in its state file; the connector cannot know what agent-ha-bridge already sent, so it never replays |
 | Words given while a question is open never become a reply once it goes | The host refuses replies while a question is open, and they belonged to the question |
+| Publishes made while a reply is being delivered are each sent, in order | The daemon reads only the sensor's latest, but types a reply in well under a second; the host's delivery waits up to a minute for confirmation |
 | More than ten attachments in one publish are refused before any is fetched | The host takes at most ten per reply; the daemon has no limit |
 | After a box reply, a box that cannot be read is left as it is | The daemon clears it then; here the press is already spent, so nothing is sent again, and clearing blind could delete a follow-up typed meanwhile |
 

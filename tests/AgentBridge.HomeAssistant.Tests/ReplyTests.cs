@@ -681,6 +681,127 @@ public sealed partial class ReplyTests : IDisposable
     }
 
     [Fact]
+    public async Task Publishes_sent_while_a_reply_is_delivering_are_each_sent_in_the_order_they_came()
+    {
+        var release = new TaskCompletionSource<ReplyResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        outcome = r =>
+        {
+            if (r.Text != "first") { return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered)); }
+            reached.TrySetResult();
+            return release.Task;
+        };
+        await using var c = await Ready();
+        c.Observe(ha.SendFromCard(Node, "first"));
+        await Pass(c);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // The sensor ends up showing only the third; the watch reported all of them.
+        c.Observe(ha.SendFromCard(Node, "second"));
+        c.Observe(ha.SendFromCard(Node, "third"));
+        await Pass(c);
+        c.Observe(ha.SendFromCard(Node, "fourth"));
+        await Pass(c);
+        Assert.Single(replied);
+
+        release.SetResult(new ReplyResult(AnswerOutcome.Delivered));
+        for (var i = 0; i < 4; i++)
+        {
+            await c.DeliveredAsync();
+            await Pass(c);
+        }
+        Assert.Equal(["first", "second", "third", "fourth"], replied.Select(r => r.Text));
+        await Pass(c, 20);
+        await c.DeliveredAsync();
+        await Pass(c);
+        Assert.Equal(4, replied.Count);
+    }
+
+    [Fact]
+    public async Task Replies_still_waiting_when_a_question_comes_are_said_to_be_not_sent()
+    {
+        var release = new TaskCompletionSource<ReplyResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        outcome = r =>
+        {
+            reached.TrySetResult();
+            return release.Task;
+        };
+        await using var c = await Ready();
+        c.Observe(ha.SendFromCard(Node, "first"));
+        await Pass(c);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        c.Observe(ha.SendFromCard(Node, "second"));
+        await Pass(c);
+
+        Idle(question: new Question { Id = "q1", Kind = QuestionKind.Form, Message = "What next?", AskedAt = FakeSessions.T0 });
+        await Pass(c);
+        Assert.Equal("Reply NOT sent", Activity);
+        Assert.Equal("the session asked a question before it could be sent", Detail.GetProperty("error").GetString());
+
+        release.SetResult(new ReplyResult(AnswerOutcome.Delivered));
+        await c.DeliveredAsync();
+        await Pass(c);
+        Idle(turn: 2);
+        await Pass(c);
+        await Pass(c, 20);
+        await c.DeliveredAsync();
+        await Pass(c);
+        Assert.Equal(["first"], replied.Select(r => r.Text));
+        Assert.Empty(answered);
+    }
+
+    [Fact]
+    public async Task Attachment_metadata_that_is_not_a_list_sends_nothing()
+    {
+        await using var c = await Ready();
+
+        // An object where the card puts a list of images, read by the sweep.
+        var payload = new JsonObject { ["at"] = $"{ha.Now:O}", ["text"] = "Look", ["images"] = new JsonObject { ["name"] = "shot.png" } };
+        await ha.PublishAsync(HaContract.Topics(Node).ReplyPayload, HaContract.Serialize(payload), true);
+        await Pass(c, 20);
+        await c.DeliveredAsync();
+        await Pass(c);
+
+        Assert.Empty(replied);
+        Assert.Equal("Reply NOT sent", Activity);
+        Assert.Equal("The attachment metadata is incomplete; no reply was sent.", Detail.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task Words_for_a_question_do_not_hold_up_a_send_pressed_in_the_same_pass()
+    {
+        await using var c = await Ready();
+        await Do(c, ha.Type(SessionEntities.Reply(Node), "Ship it"));
+
+        // The publish read from the sensor (its own report not yet in), the press reported.
+        ha.SendFromCard(Node, "for a question", decisionId: "q9");
+        c.Observe(ha.Press(SessionEntities.Submit(Node)));
+        await Pass(c);
+        await c.DeliveredAsync();
+        await Pass(c);
+
+        Assert.Equal("Ship it", Assert.Single(replied).Text);
+    }
+
+    [Fact]
+    public async Task An_image_delete_that_times_out_on_its_own_holds_up_nothing()
+    {
+        var first = ha.Upload([1, 2, 3], "dddd4444");
+        ha.DeleteFails = id => id == first ? new TaskCanceledException("image/delete: no answer in 15s") : null;
+        await using var c = await Ready();
+
+        await Do(c, ha.SendFromCard(Node, "one", images: [new JsonObject { ["id"] = first, ["name"] = "a.png" }]));
+        Assert.Equal("Reply sent", Activity);
+        await Do(c, ha.SendFromCard(Node, "two"));
+
+        Assert.Equal(["one", "two"], replied.Select(r => r.Text));
+        Assert.Equal("Reply sent", Activity);
+        Assert.Equal("two", Detail.GetProperty("sent").GetString());
+        Assert.Contains(log, l => l.Contains("could not delete image dddd4444", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Each_press_and_publish_is_its_own_request_and_the_same_one_is_the_same_request()
     {
         await using var c = await Ready();

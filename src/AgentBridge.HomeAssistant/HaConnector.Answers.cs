@@ -185,6 +185,19 @@ public sealed partial class HaConnector
         p.Cleared = false;
         // A Send waiting on the box's words was for a reply; the question takes the box now.
         p.Reply.PendingPress = null;
+        // Replies still waiting their turn would reach a session that is asking something: said,
+        // not sent and not dropped silently.
+        if (p.Reply.Waiting.Count > 0)
+        {
+            var waiting = p.Reply.Waiting.Count;
+            foreach (var w in p.Reply.Waiting) { p.Reply.Handle(w.State); }
+            p.Reply.Waiting.Clear();
+            await TransientAsync(p, "Reply NOT sent", new JsonObject
+            {
+                ["error"] = waiting == 1 ? "the session asked a question before it could be sent" : $"the session asked a question before {waiting} replies could be sent",
+                ["hint"] = "answer it first, then reply",
+            }, ct);
+        }
         p.Armed = new Armed
         {
             Question = question, Plan = plan, PayloadBaseline = payload, SubmitBaseline = submit, ReplyBaseline = reply,
@@ -394,7 +407,7 @@ public sealed partial class HaConnector
         var armed = p.Armed;
         if (armed is null && ServesReplies)
         {
-            await ReplyAsync(sessionId, p, now, ct);
+            await ReplyAsync(sessionId, p, seen, now, ct);
             return;
         }
         if (armed is null || armed.Plan.TerminalOnly || armed.Settled)

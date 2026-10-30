@@ -192,8 +192,12 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         }
     }
 
+    // A delete that fails, with what it throws (a command timing out on its own, say).
+    public Func<string, Exception?>? DeleteFails { get; set; }
+
     public Task DeleteImageAsync(string imageId, CancellationToken cancellationToken = default)
     {
+        if (DeleteFails?.Invoke(imageId) is { } failed) { throw failed; }
         lock (gate)
         {
             Images.Remove(imageId);

@@ -30,8 +30,14 @@ public sealed partial class HaConnector
         // not a reply. A card taken over from agent-ha-bridge, or from this host before a
         // restart, may hold one it already sent.
         public bool Baselined;
-        public string? HandledStamp;
         public string? HandledPress;
+        // Reply-card publishes used or passed over, most recent last: one read again, from the
+        // sensor or from the watch, is not new.
+        public readonly List<string> Handled = [];
+        // Publishes the watch reported that are not yet read, in the order they came. The sensor
+        // shows only the latest, so two sent while a reply was being delivered would otherwise
+        // be one.
+        public readonly List<HaState> Waiting = [];
         // A Send pressed at an empty box, waiting for the box's words (PendingSubmitAt).
         public string? PendingPress;
         public DateTimeOffset PendingSince;
@@ -39,7 +45,22 @@ public sealed partial class HaConnector
         public bool ReadAgain;
         // When the last reply-card publish went in (LastPayloadDeliveredAt).
         public DateTimeOffset? PayloadDeliveredAt;
+
+        public bool IsHandled(string stamp) => Handled.Contains(stamp, StringComparer.Ordinal);
+
+        public void Handle(string stamp)
+        {
+            if (IsHandled(stamp)) { return; }
+            Handled.Add(stamp);
+            if (Handled.Count > 64) { Handled.RemoveAt(0); }
+        }
     }
+
+    enum CardRead { Nothing, Taken, Delivering }
+
+    // The most publishes kept waiting for one card: more than a person or an agent sends while one
+    // reply goes in.
+    const int MaxWaiting = 16;
 
     // Arm: the driver arm the reply made when it started, so what came of it touches that arm
     // and never a newer one (an answer given meanwhile, say).
@@ -168,7 +189,9 @@ public sealed partial class HaConnector
         foreach (var id in images)
         {
             try { await ha.DeleteImageAsync(id, ct); }
-            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
+            // A command that timed out on its own is a failure like any other, not the host
+            // stopping: left to escape, it would hold every later completion.
+            catch (Exception e) when (!ct.IsCancellationRequested && e is not AgentHaBridgeRunning)
             {
                 log($"Home Assistant connector could not delete image {id}: {Describe(e)}");
             }
@@ -183,52 +206,82 @@ public sealed partial class HaConnector
         var payload = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
         var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
         if (payload.Kind == "unknown" || submit.Kind == "unknown") { return false; }
-        p.Reply.HandledStamp = payload.Present ? payload.Value : null;
+        if (payload.Present) { p.Reply.Handle(payload.Value); }
         p.Reply.HandledPress = submit.Present ? submit.Value : null;
         p.Reply.PendingPress = null;
+        p.Reply.Waiting.Clear();
         p.Reply.Baselined = true;
         return true;
     }
 
-    // A card with no question on it: its reply card's publish, else its reply box and Send.
-    async Task ReplyAsync(string sessionId, Published p, DateTimeOffset now, CancellationToken ct)
+    // A card with no question on it: its reply card's publishes, in the order they came, then
+    // what its sensor shows now (a publish made while the watch was down), else its reply box and
+    // Send. One delivery at a time; publishes reported meanwhile wait their turn.
+    async Task ReplyAsync(string sessionId, Published p, IReadOnlyList<(long Seq, HaTrigger Hit)> seen, DateTimeOffset now, CancellationToken ct)
     {
         if (!p.Reply.Baselined)
         {
             await BaselineRepliesAsync(p, ct);
             return;
         }
+        foreach (var (_, hit) in seen)
+        {
+            if (hit.EntityId != SessionEntities.ReplyPayload(p.Node) || !IsStamp(hit.State.State) || p.Reply.IsHandled(hit.State.State)
+                || p.Reply.Waiting.Any(w => w.State == hit.State.State))
+            {
+                continue;
+            }
+            if (p.Reply.Waiting.Count >= MaxWaiting)
+            {
+                log($"Home Assistant connector: more than {MaxWaiting} replies waiting for {sessionId[..Math.Min(8, sessionId.Length)]}; the sensor's latest is read when they have gone");
+                break;
+            }
+            p.Reply.Waiting.Add(hit.State);
+        }
         if (underWay.ContainsKey(sessionId)) { return; }
         p.Reply.ReadAgain = false;
-        if (await CardReplyAsync(sessionId, p, ct)) { return; }
+        while (p.Reply.Waiting.Count > 0)
+        {
+            var next = p.Reply.Waiting[0];
+            var read = await CardReplyAsync(sessionId, p, next, ct);
+            p.Reply.Waiting.RemoveAt(0);
+            if (read == CardRead.Delivering) { return; }
+        }
+        var current = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
+        if (current.Present && await CardReplyAsync(sessionId, p, current.Snapshot!, ct) != CardRead.Nothing) { return; }
         await BoxReplyAsync(sessionId, p, now, ct);
     }
 
-    // Send-DaemonCardPayload: a new publish from the reply card. Returns whether it took one.
-    async Task<bool> CardReplyAsync(string sessionId, Published p, CancellationToken ct)
+    static bool IsStamp(string state) => !string.IsNullOrWhiteSpace(state) && state is not ("unknown" or "unavailable");
+
+    // Send-DaemonCardPayload: one publish from the reply card, unless it was read before. Says
+    // whether it was nothing to send, taken without a delivery (refused, or words for a question),
+    // or is being delivered.
+    async Task<CardRead> CardReplyAsync(string sessionId, Published p, HaState state, CancellationToken ct)
     {
-        var current = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
-        if (!current.Present || current.Value == p.Reply.HandledStamp) { return false; }
-        var stamp = current.Value;
-        var a = current.Snapshot?.Attributes ?? default;
+        if (!IsStamp(state.State) || p.Reply.IsHandled(state.State)) { return CardRead.Nothing; }
+        var stamp = state.State;
+        var a = state.Attributes;
         var attributes = a.ValueKind == JsonValueKind.Object;
         var requested = 0;
         var images = new List<(string Id, string Name, string? Type)>();
         var files = new List<(string Name, string? Type, string Base64)>();
         if (attributes)
         {
-            if (a.TryGetProperty("images", out var im) && im.ValueKind == JsonValueKind.Array)
+            // Anything but a list where one belongs is one attachment that cannot be read, as the
+            // daemon's @(...) makes it: the metadata is incomplete, never silently dropped.
+            if (a.TryGetProperty("images", out var im) && im.ValueKind != JsonValueKind.Null)
             {
-                requested += im.GetArrayLength();
-                foreach (var i in im.EnumerateArray())
+                requested += im.ValueKind == JsonValueKind.Array ? im.GetArrayLength() : 1;
+                foreach (var i in im.ValueKind == JsonValueKind.Array ? im.EnumerateArray() : Enumerable.Empty<JsonElement>())
                 {
                     if (Str(i, "id") is { } id && !string.IsNullOrWhiteSpace(id)) { images.Add((id, Str(i, "name") ?? "", Str(i, "content_type"))); }
                 }
             }
-            if (a.TryGetProperty("files", out var fs) && fs.ValueKind == JsonValueKind.Array)
+            if (a.TryGetProperty("files", out var fs) && fs.ValueKind != JsonValueKind.Null)
             {
-                requested += fs.GetArrayLength();
-                foreach (var f in fs.EnumerateArray())
+                requested += fs.ValueKind == JsonValueKind.Array ? fs.GetArrayLength() : 1;
+                foreach (var f in fs.ValueKind == JsonValueKind.Array ? fs.EnumerateArray() : Enumerable.Empty<JsonElement>())
                 {
                     if (Str(f, "b64") is { } b64 && !string.IsNullOrWhiteSpace(b64)) { files.Add((Str(f, "name") ?? "", Str(f, "content_type"), b64)); }
                 }
@@ -237,12 +290,13 @@ public sealed partial class HaConnector
         var text = attributes ? Str(a, "text") ?? "" : "";
         var usable = !string.IsNullOrWhiteSpace(text) || images.Count > 0 || files.Count > 0;
         // Nothing to send, and nothing it meant to: not a reply, and left unread.
-        if (!usable && requested == 0) { return false; }
-        // Words for a question, published as it went: never a reply in their own right.
+        if (!usable && requested == 0) { return CardRead.Nothing; }
+        // Words for a question, published as it went: never a reply in their own right, and no
+        // reason to pass over a Send pressed meanwhile.
         if (attributes && Str(a, "decision_id") is { Length: > 0 })
         {
-            p.Reply.HandledStamp = stamp;
-            return true;
+            p.Reply.Handle(stamp);
+            return CardRead.Nothing;
         }
         // Each said before the publish is marked used: if saying it fails, the next pass reads the
         // same publish again rather than finding it used with nothing done.
@@ -251,19 +305,19 @@ public sealed partial class HaConnector
         {
             p.DriverPendingAt = null;
             await TransientAsync(p, "Reply NOT sent", new JsonObject { ["error"] = "The attachment metadata is incomplete; no reply was sent." }, ct);
-            p.Reply.HandledStamp = stamp;
-            return true;
+            p.Reply.Handle(stamp);
+            return CardRead.Taken;
         }
         // More than a reply carries is refused before anything is fetched, not after.
         if (images.Count + files.Count > AttachmentLimits.PerReply)
         {
             p.DriverPendingAt = null;
             await TransientAsync(p, "Reply NOT sent", new JsonObject { ["error"] = $"A reply carries at most {AttachmentLimits.PerReply} attachments; no reply was sent." }, ct);
-            p.Reply.HandledStamp = stamp;
-            return true;
+            p.Reply.Handle(stamp);
+            return CardRead.Taken;
         }
         await TransientAsync(p, "Sending...", [], ct);
-        p.Reply.HandledStamp = stamp;
+        p.Reply.Handle(stamp);
         var shown = Preview(text, images.Count + files.Count);
         var request = RequestId(sessionId, "reply", "card:" + stamp);
         Deliver(p, sessionId, shown, box: false, text: null, [.. images.Select(i => i.Id)], async token =>
@@ -294,7 +348,7 @@ public sealed partial class HaConnector
         });
         log($"Home Assistant connector took a reply-card reply for {sessionId[..Math.Min(8, sessionId.Length)]}" +
             (images.Count + files.Count > 0 ? $" with {images.Count + files.Count} attachment(s)" : ""));
-        return true;
+        return CardRead.Delivering;
     }
 
     static (ReplyResult, bool) Failure(string why) => (new ReplyResult(AnswerOutcome.Refused, why), true);
