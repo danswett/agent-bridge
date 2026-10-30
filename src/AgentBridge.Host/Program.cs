@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
+using AgentBridge.Hooks;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
@@ -45,6 +47,10 @@ using AgentBridge.Transport;
 //   agent-bridge-host shadow run|once|summary   compare what this host shows with what
 //                                               agent-ha-bridge's daemon shows, read-only, and
 //                                               report the week (docs/host-shadow.md)
+//   agent-bridge-host hooks status              hook handling on this machine: whether this
+//                                               profile has taken over agent-ha-bridge's hook
+//                                               spool, its heartbeat, and the hooks' timings
+//                                               (docs/host-hooks.md)
 //
 // Roots default to the current user's; --copilot-home, --claude-home and --codex-home
 // point elsewhere. Nothing under them is ever written. sign-in, serve and whoami take
@@ -68,20 +74,30 @@ var defaults = SessionSourceOptions.ForCurrentUser();
 // serve reads what it may do on this machine from the profile's config.json (HostSettings), and
 // so do ha shadow, which must see the sessions as serve would (permissions.remoteApproval), and
 // usage, which reads what serve would (usage.*). usage only reads the file: it never makes the
-// profile a device key, as loading its identity would.
-var (settings, settingsProblem) = command == "serve" || (command == "ha" && arguments.ElementAtOrDefault(1) == "shadow")
-    ? HostSettings.Load(LoadIdentity().Folder)
+// profile a device key, as loading its identity would. serve and ha shadow also read whether this
+// profile has taken over agent-ha-bridge's hooks (IntakeState, docs/host-hooks.md).
+var serveFolder = command == "serve" || (command == "ha" && arguments.ElementAtOrDefault(1) == "shadow") ? LoadIdentity().Folder : null;
+var (settings, settingsProblem) = serveFolder is not null
+    ? HostSettings.Load(serveFolder)
     : command == "usage" && Identity.IsValidProfile(Option("--profile") ?? "default")
         ? HostSettings.Load(Path.Combine(Identity.DefaultRoot, Option("--profile") ?? "default"))
         // An invalid profile is refused by the usage command itself, before anything is read.
         : (HostSettings.Default, null);
+// sessions, get, watch and usage read a migrated installation's registrations as serve does, from
+// the same profile; they look for its folder without creating one.
+var profileName = Option("--profile") ?? "default";
+var intakeFolder = serveFolder ?? (Identity.IsValidProfile(profileName) ? Path.Combine(Identity.DefaultRoot, profileName) : null);
+var (intakeState, intakeProblem) = intakeFolder is not null && Directory.Exists(intakeFolder) ? IntakeState.Load(intakeFolder) : (null, null);
+// A migrated installation's registrations are read where its runtime is, wherever that is.
+string[] WithIntake(IReadOnlyList<string> roots, string folder) =>
+    intakeState is null ? [.. roots] : [.. roots.Prepend(Path.Combine(intakeState.RuntimeRoot, folder)).Distinct(StringComparer.OrdinalIgnoreCase)];
 var options = new SessionSourceOptions
 {
     CopilotHome = Option("--copilot-home") ?? defaults.CopilotHome,
     ClaudeHome = Option("--claude-home") ?? defaults.ClaudeHome,
     CodexHome = Option("--codex-home") ?? defaults.CodexHome,
-    ClaudeRegistrationRoots = defaults.ClaudeRegistrationRoots,
-    CodexRegistrationRoots = defaults.CodexRegistrationRoots,
+    ClaudeRegistrationRoots = WithIntake(defaults.ClaudeRegistrationRoots, SpoolContract.ClaudeFolder),
+    CodexRegistrationRoots = WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder),
     CopilotRemoteApproval = settings.RemoteApproval,
     Log = command == "serve" ? Log : null,
 };
@@ -210,10 +226,15 @@ switch (command)
             if (ConfigCommands.Writes(rest) && Refused("change the host's config")) { return 4; }
             return ConfigCommands.Run(rest, LoadIdentity().Folder, Console.Out, Console.Error);
         }
+    case "hooks" when arguments.ElementAtOrDefault(1) == "status":
+        // Read only: the profile's folder is looked in, never created, and no identity is loaded.
+        if (intakeFolder is null) { Console.Error.WriteLine("agent-bridge-host: --profile is not a valid profile name"); return 2; }
+        return HookCommands.Status(intakeFolder, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge", "runtime"), Console.Out, DateTimeOffset.Now);
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
+        Console.Error.WriteLine("       agent-bridge-host hooks status");
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");
         return command == "help" ? 0 : 2;
 }
@@ -272,7 +293,11 @@ async Task<int> ServeAsync()
     await source.StartAsync(stop.Token);
     // Files over 256 KiB come from the relay's blob store, through whichever connection is up.
     using var relayBlobs = new RelayBlobs();
-    var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs);
+    // Set once the hook intake starts; until then, and until it has settled the markers, a Codex
+    // approval on a migrated machine is not answered.
+    HookIntake? runningIntake = null;
+    var codexUnsettled = HookIntake.AnswerGate(intakeState?.RuntimeRoot, intakeProblem, () => runningIntake);
+    var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled);
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
     // app closed. Subscriptions live in the profile's own folder, for this account only. None at
@@ -320,6 +345,10 @@ async Task<int> ServeAsync()
     // agent session, which may not manage it (§6.3 invariant 13).
     var inspector = new SystemProcessInspector();
     var callers = new CallerGuard(() => KnownAgents.Of(source, launcher, inspector), OperatingSystem.IsWindows() ? Path.Combine(AppContext.BaseDirectory, CallerGuard.AppExecutable) : null);
+    // On a machine migrated from agent-ha-bridge, the hooks hand their events to this host
+    // (docs/host-hooks.md). Its notices are there for the Home Assistant connector to subscribe to.
+    await using var intake = StartIntake(haProbe, stop.Token);
+    runningIntake = intake;
 
     // The desktop app's way in (docs/protocol/local-pipe.md): the same sessions ops, and the
     // host's management, which only the pipe reaches. It runs whether or not this profile has
@@ -538,6 +567,30 @@ void RestartSelf()
     using var _ = Process.Start(start);
 }
 
+// Hook intake (docs/host-hooks.md): only for a profile that has migrated from agent-ha-bridge,
+// and only where agent-ha-bridge's daemon can be seen, since the intake must stand back
+// whenever it runs (G5). Null when off.
+HookIntake? StartIntake(AgentHaBridgeProbe? probe, CancellationToken cancellationToken)
+{
+    if (intakeProblem is not null) { Log(intakeProblem); }
+    if (intakeState is null) { return null; }
+    if (!OperatingSystem.IsWindows() || probe is null)
+    {
+        Log("hook intake is off: this platform cannot yet tell whether agent-ha-bridge is running, which it must know before touching the hook spool");
+        return null;
+    }
+    var active = HostControl.Cached(() => OperatingSystem.IsWindows() ? probe.Active() : "not Windows", () => Environment.TickCount64, everyMs: 2000);
+    var intake = new HookIntake(new HookIntakeOptions
+    {
+        RuntimeRoot = intakeState.RuntimeRoot,
+        ClaudeHome = options.ClaudeHome,
+        AgentHaBridgeActive = active,
+    }, new SystemProcessInspector(), log: Log);
+    intake.Start(cancellationToken);
+    Log($"hook intake is on: taking agent-ha-bridge installation {intakeState.InstallationId}'s hook spool in {intakeState.RuntimeRoot}{(active() is { } why ? $", once it stops ({why})" : "")}");
+    return intake;
+}
+
 static string OsName() =>
     OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
 
@@ -548,7 +601,7 @@ static string OsName() =>
 // session at once. Files sent with replies are staged in the profile's own folder, private
 // to this user (docs/host-replies.md), and the prompts already
 // answered are recorded there too, so none is typed into twice.
-(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging, string attempts, IBlobSource blobs)
+(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled)
 {
     if (!OperatingSystem.IsWindows())
     {
@@ -566,7 +619,7 @@ static string OsName() =>
     Log($"approving Copilot permission prompts from other devices is {(settings.RemoteApproval ? "on" : "off")} (permissions.remoteApproval)");
     var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log, blobs: blobs);
     return (
-        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval }, Log, gate),
+        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled }, Log, gate),
         new ReplyService(source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome }, Log, gate, attachments),
         attachments,
         new StopService(source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log, gate));

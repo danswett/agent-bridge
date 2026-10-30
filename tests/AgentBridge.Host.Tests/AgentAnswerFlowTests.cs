@@ -51,8 +51,9 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    AnswerService Answerer() => new(source, f.Processes, probe, guard, injector, new AnswerOptions
+    AnswerService Answerer(Func<string, string?>? codexUnsettled = null) => new(source, f.Processes, probe, guard, injector, new AnswerOptions
     {
+        CodexApprovalsUnsettled = codexUnsettled,
         CopilotHome = f.CopilotHome,
         PlatformSupported = true,
         ConfirmTimeout = TimeSpan.FromSeconds(2),
@@ -230,6 +231,21 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         await source.RefreshAsync();
         Assert.Equal(AnswerOutcome.Unconfirmed, (await Answerer().AnswerAsync(Request(CodexId, "node-2", new { decision = "deny" }))).Outcome);
         Assert.Equal("n", injector.Plans[1].Plan.Sends[0].Text);
+    }
+
+    [Fact]
+    public async Task A_Codex_approval_is_not_typed_while_the_hook_intake_has_yet_to_settle_markers_left_from_an_outage()
+    {
+        string? unsettled = "the host has not yet checked Codex approvals";
+
+        var refused = await Answerer(_ => unsettled).AnswerAsync(Request(CodexId, "node-1", new { decision = "approve" }));
+
+        Assert.Equal(AnswerOutcome.Refused, refused.Outcome);
+        Assert.Contains("not yet checked", refused.Reason);
+        Assert.Empty(injector.Plans);
+        // Nothing was claimed either, so once settled it can be answered.
+        unsettled = null;
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Answerer(_ => unsettled).AnswerAsync(Request(CodexId, "node-1", new { decision = "approve" }))).Outcome);
     }
 
     [Fact]

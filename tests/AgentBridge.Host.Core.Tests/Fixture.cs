@@ -171,6 +171,8 @@ internal sealed class Fixture : IDisposable
         foreach (var entry in Directory.EnumerateFileSystemEntries(Root, "*", SearchOption.AllDirectories))
         {
             var relative = Path.GetRelativePath(Root, entry);
+            // The intake's own claim: open for it alone while it runs, and gone when it stops.
+            if (Path.GetFileName(entry) == "agent-bridge-host-intake.lock") { continue; }
             if (Directory.Exists(entry)) { listing[relative] = "dir " + Directory.GetLastWriteTimeUtc(entry).Ticks; continue; }
             var info = new FileInfo(entry);
             var hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(entry)));
@@ -230,7 +232,14 @@ internal sealed class FakeProcesses : IProcessInspector
         list.Add(p with { CommandLine = null, StartedAt = startedAt ?? p.StartedAt });
     }
 
-    public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent) => _live.TryGetValue(agent, out var list) ? [.. list] : [];
+    // Called as each list is asked for: something that happens while a handler runs.
+    public Action<AgentKind>? Queried { get; set; }
+
+    public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent)
+    {
+        Queried?.Invoke(agent);
+        return _live.TryGetValue(agent, out var list) ? [.. list] : [];
+    }
 
     // Who has each file open, by full path, and how often the OS was asked.
     public Dictionary<string, int[]> Holders { get; } = new(StringComparer.OrdinalIgnoreCase);

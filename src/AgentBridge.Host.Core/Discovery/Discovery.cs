@@ -19,7 +19,8 @@ internal sealed record DiscoveredSession(
     DateTimeOffset? ProcessStartedAt = null);
 
 // One agent-ha-bridge hook registration (<id>.json), as written by its Claude and Codex
-// hooks. Only read; agent-ha-bridge prunes its own files.
+// hooks. Only read here: agent-ha-bridge prunes its own files, and on a machine migrated from
+// it the host's intake writes and prunes them in the same shapes (Intake/HookHandlers).
 internal sealed record Registration(
     string SessionId,
     int ProcessId,
@@ -834,10 +835,5 @@ internal static class RegistrationDiscovery
     }
 
     // agent-ha-bridge's file-safe session key: so a hostile id cannot escape the folder.
-    internal static string SafeKey(string sessionId)
-    {
-        var clean = new string(sessionId.Where(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-').ToArray()).TrimStart('.');
-        if (string.IsNullOrWhiteSpace(clean)) { return "unknown"; }
-        return clean.Length > 96 ? clean[..96] : clean;
-    }
+    internal static string SafeKey(string sessionId) => AgentBridge.Hooks.SpoolContract.SafeKey(sessionId);
 }

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The hook spool contract agent-ha-bridge's native hook (hook/main.go) and its daemon
+       (hooks/daemon-hookspool.ps1) share, and this product's own hook that speaks it. Used by
+       agent-bridge-host-hook, which is NativeAOT, so nothing here may need reflection. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AgentBridge.Hooks</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AgentBridge.Hooks.Tests" />
+  </ItemGroup>
+
+</Project>

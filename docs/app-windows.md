@@ -116,7 +116,8 @@ can register a task for themselves; nothing here needs elevation.
 
 ### Updates: Velopack, one version for app and host
 
-The Velopack package holds the app, the host, its launcher and the injector, published
+The Velopack package holds the app, the host, its launcher, the injector and the agents'
+hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
 into one folder with one version. An app update is a host update, so they never skew.
 
 * Pack id `AgentBridgeApp`, installed in `%LOCALAPPDATA%\AgentBridgeApp`. Not
@@ -239,7 +240,7 @@ reaches the real host or its profile.
   host through the in-process relay with the host's account), toast plans and activation handling, host lifecycle with a
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
-* CI (`app` job) runs `build/pack-app.ps1`: publishes the app, host, launcher and injector
+* CI (`app` job) runs `build/pack-app.ps1`: publishes the app, host, launcher, injector and hook
   into one folder, checks for the app's `.pri` and the executables, packs it with `vpk`
   and uploads `Setup.exe` and the packages as an artifact. It then starts the published
   app with `--self-test`, which runs the demo, finds the cards by automation id, answers a

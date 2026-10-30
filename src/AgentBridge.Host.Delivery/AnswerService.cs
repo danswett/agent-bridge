@@ -32,6 +32,12 @@ public sealed class AnswerOptions
     // come later.
     public bool PlatformSupported { get; init; } = OperatingSystem.IsWindows();
 
+    // Why a Codex approval cannot be answered yet, or null. On a migrated machine the host's hook
+    // intake must first settle markers left from before it took the spool, any of which may
+    // already have been answered at the terminal (HookIntake.ApprovalsUnsettled). Given the
+    // registration whose marker would be answered.
+    public Func<string, string?>? CodexApprovalsUnsettled { get; init; }
+
     // How long the transcript is watched for the answer once the keys have gone.
     public TimeSpan ConfirmTimeout { get; init; } = TimeSpan.FromSeconds(15);
 
@@ -453,6 +459,7 @@ public sealed class AnswerService : ISessionAnswerer
         try
         {
             if (probe.Active() is { } active) { return Refused(active); }
+            if (options.CodexApprovalsUnsettled?.Invoke(registration) is { } unsettled) { return Refused(unsettled); }
             if (source.Get(session.Id)?.Question?.Id != question.Id) { return Stale("the session is no longer asking for that approval"); }
             var marker = ApprovalMarkerRead.Read(registration, session.Id);
             switch (marker.State)
