@@ -47,6 +47,7 @@ public static partial class HaShadow
             FieldPinDelay = TimeSpan.Zero,
             SelectDelay = TimeSpan.Zero,
             SelectAttempts = 1,
+            ConsumeAnswers = false,
         };
         // Never asked to deliver anything: the dry run watches nothing, so no press reaches it.
         Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer = servesAnswers

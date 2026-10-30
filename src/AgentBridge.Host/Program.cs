@@ -65,8 +65,10 @@ string? Option(string name)
 bool Flag(string name) => arguments.Contains(name);
 
 var defaults = SessionSourceOptions.ForCurrentUser();
-// serve reads what it may do on this machine from the profile's config.json (HostSettings).
-var (settings, settingsProblem) = command == "serve" ? HostSettings.Load(LoadIdentity().Folder) : (HostSettings.Default, null);
+// serve reads what it may do on this machine from the profile's config.json (HostSettings), and
+// so does ha shadow, which must see the sessions as serve would (permissions.remoteApproval).
+var (settings, settingsProblem) = command == "serve" || (command == "ha" && arguments.ElementAtOrDefault(1) == "shadow")
+    ? HostSettings.Load(LoadIdentity().Folder) : (HostSettings.Default, null);
 var options = new SessionSourceOptions
 {
     CopilotHome = Option("--copilot-home") ?? defaults.CopilotHome,

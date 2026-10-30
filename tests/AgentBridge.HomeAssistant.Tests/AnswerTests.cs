@@ -631,6 +631,120 @@ public sealed class AnswerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_tap_made_while_the_next_approval_was_being_put_on_screen_does_not_answer_it()
+    {
+        static Session Approval(string id) => FakeSessions.Copilot(A, status: SessionStatus.Waiting) with
+        {
+            Agent = AgentKind.Codex,
+            Question = new Question
+            {
+                Id = id, Kind = QuestionKind.Approval, Message = $"Codex wants to run step {id}", AskedAt = FakeSessions.T0,
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
+            },
+        };
+        sessions.Set(Approval("a1"));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Deny"));
+        Assert.Single(answered);
+
+        // a2 arrives; Approve is tapped after the selector is reset but before a2's text is shown.
+        var tapped = false;
+        ha.BeforePublish = topic =>
+        {
+            if (tapped || topic != HaContract.Topics(Node).DecisionAttributes) { return; }
+            tapped = true;
+            c.Observe(ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        };
+        sessions.Set(Approval("a2"));
+        await Pass(c);
+        ha.BeforePublish = null;
+        Assert.True(tapped);
+        await Pass(c, 6);
+        await Pass(c, 6);
+        Assert.Single(answered);
+
+        // Once the selector waits under a2, a tap answers it.
+        Assert.Equal(HaDecision.Awaiting, State(SessionEntities.Decision(Node)));
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        Assert.Equal(2, answered.Count);
+        Assert.Equal(("a2", "approve"), (answered[1].Question, answered[1].Fields!["decision"].GetString()));
+    }
+
+    [Fact]
+    public async Task A_tap_on_a_card_showing_another_question_does_not_answer_this_one()
+    {
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with
+        {
+            Agent = AgentKind.Codex,
+            Question = new Question
+            {
+                Id = "a1", Kind = QuestionKind.Approval, Message = "Codex wants to run git push", AskedAt = FakeSessions.T0,
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
+            },
+        });
+        await using var c = Connector();
+        await Pass(c);
+        // Something else (agent-ha-bridge's hooks, mid-migration) puts its own question on the card.
+        await ha.PublishAsync(HaContract.Topics(Node).DecisionAttributes, """{"decision_id":"hook-question","question":"Delete the branch?"}""", true);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        await Pass(c, 6);
+        Assert.Empty(answered);
+    }
+
+    [Fact]
+    public async Task A_question_is_not_armed_until_the_reply_box_can_be_read_and_then_its_words_answer_it()
+    {
+        Ask(null);
+        await using var c = Connector();
+        await Pass(c);
+        ha.GetFailsFor = id => id == SessionEntities.Reply(Node);
+        Ask(Form("q1"));
+        await Pass(c);
+        Assert.NotEqual(HaDecision.Awaiting, State(SessionEntities.Decision(Node)));
+
+        ha.GetFailsFor = null;
+        await Pass(c);
+        Assert.Equal(HaDecision.Awaiting, State(SessionEntities.Decision(Node)));
+        await Do(c, ha.Type(SessionEntities.Reply(Node), "Call it Aurora"));
+        Assert.Equal("Call it Aurora", Assert.Single(answered).Text);
+    }
+
+    [Fact]
+    public async Task Words_typed_in_the_box_after_reply_card_words_were_held_are_the_ones_sent()
+    {
+        outcome = _ => new AnswerResult(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");
+        Ask(Form("q1"));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.SendFromCard(Node, "Call it Aurora", "q1"));
+        Assert.Equal("Answer NOT sent", Activity);
+
+        outcome = _ => new AnswerResult(AnswerOutcome.Delivered);
+        await Do(c, ha.Type(SessionEntities.Reply(Node), "Call it Borealis"));
+        Assert.Equal(2, answered.Count);
+        Assert.Equal("Call it Borealis", answered[1].Text);
+    }
+
+    [Fact]
+    public async Task A_connector_that_does_not_consume_answers_puts_the_question_up_and_answers_nothing()
+    {
+        Ask(Form("q1", Release));
+        await using var c = new HaConnector(new HaConnectorOptions
+        {
+            MachineName = Machine, Version = "0.1.0", StateFile = Path.Combine(folder, "ha-connector.json"),
+            FieldPinDelay = TimeSpan.Zero, SelectDelay = TimeSpan.Zero, ConsumeAnswers = false,
+        }, ha, sessions, () => null, time: time, answer: (r, _) => { answered.Add(r); return Task.FromResult(new AnswerResult(AnswerOutcome.Refused, "shadow")); });
+        await Pass(c);
+        Assert.Equal(HaDecision.Awaiting, State(SessionEntities.Decision(Node)));
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Wait for the fix"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        await Pass(c, 6);
+        Assert.Empty(answered);
+        Assert.NotEqual("Answer NOT sent", Activity);
+    }
+
+    [Fact]
     public async Task A_send_that_arrived_while_refused_words_were_being_delivered_does_not_send_them_again()
     {
         Ask(Form("q1"));

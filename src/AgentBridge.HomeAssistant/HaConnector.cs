@@ -47,6 +47,9 @@ public sealed record HaConnectorOptions
     // How often a card with an open question is read even though the watch reported nothing, so
     // a press made while the watch was reconnecting is not lost; the watch makes it immediate.
     public TimeSpan AnswerSweep { get; init; } = TimeSpan.FromSeconds(5);
+    // Whether presses on the cards are read and answered. Off for the shadow's dry pass, which
+    // publishes the controls to compare them but must act on nothing.
+    public bool ConsumeAnswers { get; init; } = true;
 }
 
 // The Home Assistant connector (docs/ha-connector.md): this machine's sessions, liveness,

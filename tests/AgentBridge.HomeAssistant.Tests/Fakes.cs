@@ -28,10 +28,15 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     public Func<string, string, bool>? PublishFailsFor { get; set; }
     // A service call (domain.service, entity) Home Assistant fails.
     public Func<string, string, bool>? ServiceFailsFor { get; set; }
+    // Something that happens on the card just before a topic is published.
+    public Action<string>? BeforePublish { get; set; }
+    // An entity whose state Home Assistant fails to return.
+    public Func<string, bool>? GetFailsFor { get; set; }
     public int RegistryLists { get; private set; }
 
     public Task PublishAsync(string topic, string payload, bool retain, CancellationToken cancellationToken = default)
     {
+        BeforePublish?.Invoke(topic);
         if (PublishFails is { } e) { throw e; }
         if (PublishFailsFor?.Invoke(topic, payload) == true) { throw new HttpRequestException("Connection reset"); }
         lock (gate)
@@ -79,6 +84,7 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
 
     public Task<HaState?> GetStateAsync(string entityId, CancellationToken cancellationToken = default)
     {
+        if (GetFailsFor?.Invoke(entityId) == true) { throw new HttpRequestException($"{entityId}: Home Assistant answered 502 Bad Gateway"); }
         lock (gate) { return Task.FromResult(States.TryGetValue(entityId, out var s) ? s : Derived(entityId)); }
     }
 

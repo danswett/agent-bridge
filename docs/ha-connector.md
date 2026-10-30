@@ -204,9 +204,10 @@ from the reply card or from the reply box with Send; a form's text field takes r
 or reply-box words typed since the question was shown (never what the box held before it). A
 free-text question is answered from the reply box or a reply-card payload whose `decision_id`
 matches. Reply-card words sent before a form is complete are said (`answer every field`) and
-held: they fill the form later, but only a press of Send submits it. An approval tap counts only
-on a selector that was set waiting for this question, so a tap left over from the last one
-never answers it. The answer goes through the host's `ISessionAnswerer`, the same
+held: they fill the form later, but only a press of Send submits it, and box words typed after
+them replace them. An approval tap counts only on a selector seen waiting after the question was
+put on screen, and naming it: a tap left over from the last question, made while this one was
+being shown, or made on a question something else put on the card never answers it. The answer goes through the host's `ISessionAnswerer`, the same
 path as the app's, so G5, the delivery gate and the attempt ledger apply unchanged.
 
 **Telling the card**, on the activity line, as `Set-DaemonTransientActivity` does:
@@ -246,7 +247,8 @@ Where stage 2 knowingly differs from the daemon:
 ### The shadow: comparing with a running daemon
 
 `agent-bridge-host ha shadow [--json] [--window <seconds>]` runs one connector pass against a
-Home Assistant that **forwards reads and records writes without sending any** (`HaShadow`), then
+Home Assistant that **forwards reads and records writes without sending any** (`HaShadow`), and
+reads or answers no press, then
 reads the broker's retained topics for this machine and for every session either side names
 (the daemon's from its `global/attr`), and compares them as JSON, ignoring `updated` and
 `asked_at`. It takes one reading of every agent's usage first, as `agent-bridge-host usage`

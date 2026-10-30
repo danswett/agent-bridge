@@ -35,10 +35,11 @@ public sealed partial class HaConnector
         public bool Settled;
         // Answers that reached nothing. Each new attempt is a request of its own, and nothing that
         // failed is sent again by itself: words in the reply box or from the reply card go again
-        // only with a Send (or box) hit the watch reported after the failure (FailedAt, in hit
-        // sequence), and a tap only once the selector has been seen waiting again.
+        // only with a Send (or box) hit the watch reported after the failure, and a tap only once
+        // the selector has been seen waiting again. Boundary is the hit number at arming, then at
+        // each failure: nothing reported before it is a press for what came after.
         public int Attempts;
-        public long FailedAt;
+        public long Boundary;
         public string? FailedBox;
         // A reply-card publish whose words may fill the form but cannot submit it by themselves:
         // it reached nothing, or came while a field was still unanswered.
@@ -50,6 +51,9 @@ public sealed partial class HaConnector
         // Field slots arming could not reset (slot, what it showed then, what it was to show): until
         // they change, what they show is the last question's, not an answer to this one.
         public Dictionary<int, (string? Stale, string Intended)> StaleSlots = [];
+        // The reply box when reply-card words were held: box words changed since then are newer,
+        // and replace the held ones.
+        public string? BoxAtHold;
         // Said once, not on every hit.
         public string? Told;
     }
@@ -160,27 +164,47 @@ public sealed partial class HaConnector
         var payload = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
         var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
         var reply = await ObserveAsync(SessionEntities.Reply(p.Node), ct);
-        if (payload.Kind == "unknown" || submit.Kind == "unknown")
+        if (payload.Kind == "unknown" || submit.Kind == "unknown" || reply.Kind == "unknown")
         {
             // No snapshot, no question on screen (Set-CopilotMqttDecision); tried again next pass.
+            // The reply box too: armed without its baseline, it could never be read for this one.
             lock (gate) { dirty.Add(full.Id); }
             return;
         }
         var plan = HaDecision.Plan(question, full.Agent);
         var armedSlots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
         var unset = await RunAsync(HaDecision.Arm(plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow()), p.Node, ct);
+        // Everything the card is told about this question is out; nothing reported before now was
+        // made seeing it.
+        var boundary = Interlocked.Read(ref hitSeq);
         p.ArmedSlots = plan.UsesFieldSlots ? plan.Fields.Count : 0;
         p.Cleared = false;
         p.Armed = new Armed
         {
             Question = question, Plan = plan, PayloadBaseline = payload, SubmitBaseline = submit, ReplyBaseline = reply,
-            // A selector that could not be set waiting may still show the last question's tap;
-            // that must not answer this one, so a tap counts only once it is seen waiting.
-            AwaitTap = plan.AnswerOnTap && unset.ContainsKey(SessionEntities.Decision(p.Node)),
+            Boundary = boundary,
+            // A tap counts only once the selector is seen waiting under this question: one left
+            // from the last question, or made while this one was being put on screen, was made
+            // looking at something else.
+            AwaitTap = plan.AnswerOnTap && !await ShowsWaitingAsync(p.Node, question.Id, ct),
             StaleSlots = await StaleSlotsAsync(plan, p.Node, unset, ct),
         };
         log($"Home Assistant connector armed {p.Node} for its question{(plan.TerminalOnly ? " (answered at the machine)" : "")}");
     }
+
+    // Whether the selector waits under this question; if it shows a choice, it is set waiting again.
+    async Task<bool> ShowsWaitingAsync(string node, string questionId, CancellationToken ct)
+    {
+        HaState? shown = null;
+        try { shown = await ha.GetStateAsync(SessionEntities.Decision(node), ct); }
+        catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { }
+        if (shown?.State == HaDecision.Awaiting) { return DecisionIdOf(shown) == questionId; }
+        await SelectAsync(SessionEntities.Decision(node), HaDecision.Awaiting, ct);
+        return false;
+    }
+
+    static string? DecisionIdOf(HaState? state) =>
+        state?.Attributes is { ValueKind: JsonValueKind.Object } a && a.TryGetProperty("decision_id", out var id) && id.ValueKind == JsonValueKind.String ? id.GetString() : null;
 
     // The choice slots arming could not reset, and what each showed instead.
     async Task<Dictionary<int, (string? Stale, string Intended)>> StaleSlotsAsync(DecisionPlan plan, string node, Dictionary<string, string> unset, CancellationToken ct)
@@ -306,7 +330,7 @@ public sealed partial class HaConnector
     // acted on.
     async Task AnswersAsync(DateTimeOffset now, CancellationToken ct)
     {
-        if (!ServesAnswers) { hits.Clear(); return; }
+        if (!ServesAnswers || !options.ConsumeAnswers) { hits.Clear(); return; }
         var touched = new Dictionary<string, List<(long Seq, HaTrigger Hit)>>(StringComparer.Ordinal);
         while (hits.TryDequeue(out var item))
         {
@@ -365,13 +389,17 @@ public sealed partial class HaConnector
             if (seen.Count > 0) { await UnservedAsync(p, seen[^1].Hit, ct); }
             return;
         }
-        var since = seen.Where(h => h.Seq > armed.FailedAt).Select(h => h.Hit).ToList();
+        var since = seen.Where(h => h.Seq > armed.Boundary).Select(h => h.Hit).ToList();
         var outcome = await ReadAnswerAsync(sessionId, p, armed, since, ct);
         if (outcome is null) { return; }
         if (outcome.Notice is { } notice)
         {
             if (outcome.Spend is { } spent) { armed.SpentPress = spent; }
-            if (outcome.HoldStamp is { } held) { armed.HeldStamp = held; }
+            if (outcome.HoldStamp is { } held)
+            {
+                armed.HeldStamp = held;
+                armed.BoxAtHold = await BoxValueAsync(p.Node, ct);
+            }
             // A Cancel is undone every time it is chosen, though said only once: left on Cancel,
             // the selector would hide every later answer.
             if (outcome.ResetDecision) { await SelectAsync(SessionEntities.Decision(p.Node), HaDecision.Awaiting, ct); }
@@ -426,7 +454,7 @@ public sealed partial class HaConnector
                 // press, publish or tap (the one that failed stays used, so it is never retried
                 // on its own), or for words already given, by a press of Send after this.
                 armed.Attempts++;
-                armed.FailedAt = Interlocked.Read(ref hitSeq);
+                armed.Boundary = Interlocked.Read(ref hitSeq);
                 armed.SubmitAtFailure = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
                 if (outcome.Box)
                 {
@@ -437,6 +465,7 @@ public sealed partial class HaConnector
                 {
                     armed.UsedStamp = null;
                     armed.HeldStamp = failedStamp;
+                    armed.BoxAtHold = await BoxValueAsync(p.Node, ct);
                 }
                 if (outcome.Tap) { armed.AwaitTap = true; }
                 await TransientAsync(p, "Answer NOT sent", new JsonObject
@@ -548,20 +577,34 @@ public sealed partial class HaConnector
             };
         }
         var card = await CardTextAsync(node, armed, ct);
+        if (card is { Retry: true } && !plan.AnswerOnTap)
+        {
+            // Words typed into the reply box since reply-card words were held are newer: they
+            // replace them, rather than the held words being sent in their place.
+            var newer = await ObserveAsync(SessionEntities.Reply(node), ct);
+            if (newer.Present && !string.IsNullOrWhiteSpace(newer.Value) && Changed(armed.ReplyBaseline, newer) && newer.Value != armed.BoxAtHold) { card = null; }
+        }
 
         if (plan.AnswerOnTap)
         {
             // The tap is the answer: Approve or Deny.
             var tapped = decision?.State;
+            var mine = armed.Question.Id;
             if (armed.AwaitTap)
             {
-                // After a refused tap, only a tap made once the selector is waiting again counts:
-                // seen waiting now, or reported waiting since (a quick second tap).
-                if (tapped != HaDecision.Awaiting && !since.Any(h => h.EntityId == SessionEntities.Decision(node) && h.State.State == HaDecision.Awaiting)) { return null; }
+                // Only a tap made once the selector waits under this question counts: seen waiting
+                // now, or reported waiting since (a quick tap).
+                if (!(tapped == HaDecision.Awaiting && DecisionIdOf(decision) == mine)
+                    && !since.Any(h => h.EntityId == SessionEntities.Decision(node) && h.State.State == HaDecision.Awaiting && DecisionIdOf(h.State) == mine))
+                {
+                    return null;
+                }
                 armed.AwaitTap = false;
                 armed.UsedPress = null;
             }
             if (tapped is not ("Approve" or "Deny")) { return null; }
+            // A selector naming another question was not showing this one.
+            if (DecisionIdOf(decision) != mine) { return null; }
             // One tap, however often it is read.
             var tap = "tap:" + tapped;
             if (tap == armed.UsedPress) { return null; }
@@ -794,6 +837,12 @@ public sealed partial class HaConnector
         Press = press,
         Driver = driver,
     };
+
+    async Task<string?> BoxValueAsync(string node, CancellationToken ct)
+    {
+        var box = await ObserveAsync(SessionEntities.Reply(node), ct);
+        return box.Present ? box.Value : null;
+    }
 
     static JsonElement? ExactNumber(string text)
     {
