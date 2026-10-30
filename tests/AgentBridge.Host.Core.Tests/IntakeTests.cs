@@ -1268,6 +1268,51 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void An_event_spooled_since_the_last_pass_holds_answers_until_it_is_handled()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Assert.Null(intake.ApprovalsUnsettled);
+
+        // Answered at the terminal by a session still on the Go hook, which leaves the marker.
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PreToolUse", tool_name = "shell" }, 60);
+
+        Assert.NotNull(intake.ApprovalsUnsettled);
+        intake.Pass();
+        Assert.Null(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
+    public void The_spool_is_not_looked_at_again_once_agent_ha_bridge_takes_it_mid_drain()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "s", hook_event_name = "SessionStart" }, 60);
+        var started = false;
+        var after = 0;
+        intake.Listing = () => { if (started) { after++; } };
+        _f.Processes.Queried = _ => { started = true; _agentHaBridge = "the daemon started"; };
+
+        intake.Pass();
+
+        Assert.Equal(0, after);
+        Assert.NotNull(intake.ApprovalsUnsettled);
+        Assert.Equal(0, after);
+
+        // Nor when it is seen at the start of a pass, with nothing found waiting before.
+        _agentHaBridge = null;
+        _f.Processes.Queried = null;
+        started = false;
+        var fresh = Running();
+        fresh.Listing = () => { if (started) { after++; } };
+        _agentHaBridge = "the daemon started";
+        started = true;
+        fresh.Pass();
+        Assert.NotNull(fresh.ApprovalsUnsettled);
+        Assert.Equal(0, after);
+    }
+
+    [Fact]
     public void A_hook_log_that_cannot_be_read_as_a_file_leaves_approvals_unanswerable()
     {
         var intake = Running();

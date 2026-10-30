@@ -304,7 +304,9 @@ delete them.
 Until the markers are settled (after a gap, while the log cannot be read, after a later unheard
 run, or while a withdrawal is pending), and while events wait in the spool (a `PermissionRequest`
 handled from a backlog arms its marker before the `PreToolUse` that answered it, further down, is
-reached), the answer path refuses Codex approvals
+reached; and one spooled since the last pass is not reflected in any marker yet, so the spool is
+looked at as each answer is admitted, never once agent-ha-bridge has been seen to take it), the
+answer path refuses Codex approvals
 (`HookIntake.ApprovalsUnsettled`), so an answer cannot reach a marker that may already have been
 answered. A migrated profile whose `intake.json` cannot be read runs no intake, and refuses them
 all (`HookIntake.AnswerGate`). And on a migrated profile only markers in the runtime the intake

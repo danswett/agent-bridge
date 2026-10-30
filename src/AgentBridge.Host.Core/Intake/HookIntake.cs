@@ -62,7 +62,8 @@ public sealed class HookIntake : IAsyncDisposable
     readonly Dictionary<string, int> _attempts = new(StringComparer.Ordinal);
     // Files handled whose delete failed (a reader that would not share it): deleted again, never
     // handled again.
-    readonly HashSet<string> _undeleted = new(StringComparer.Ordinal);
+    // Read by the answer path too (ApprovalsUnsettled), so safe to read while a pass changes it.
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _undeleted = new(StringComparer.Ordinal);
     readonly List<Channel<HookNotice>> _subscribers = [];
     readonly Lock _gate = new();
     readonly SemaphoreSlim _wake = new(0, int.MaxValue);
@@ -111,18 +112,35 @@ public sealed class HookIntake : IAsyncDisposable
     // markers against the hook log (the first after starting or taking the spool back, or while
     // the log cannot be read), a marker may be one already answered at the terminal, and typing
     // into it would land in whatever the terminal shows now.
-    public string? ApprovalsUnsettled => _queued ? "the host is still handling hook events that were waiting; try again shortly"
-        : _reconciled && !_handlers.WithdrawalsPending ? null
-        : "the host has not yet checked Codex approvals against the hooks that ran while nobody took them; answer at the machine or try again shortly";
+    //
+    // Asked as an answer is about to be typed (after the answer path's own G5 check), so what waits
+    // in the spool is looked at then, not as the last pass left it: an event spooled since (a
+    // PreToolUse answered at the terminal by a session still on the Go hook, a new
+    // PermissionRequest) is not yet reflected in the marker. A pass running meanwhile can only
+    // withdraw or replace the marker, which the answer path reads afresh after this.
+    public string? ApprovalsUnsettled
+    {
+        get
+        {
+            if (Paused is { } paused) { return $"agent-ha-bridge has the hook spool ({paused}); answer at the machine"; }
+            if (_queued || Waiting()) { return "the host is still handling hook events that are waiting; try again shortly"; }
+            return _reconciled && !_handlers.WithdrawalsPending ? null
+                : "the host has not yet checked Codex approvals against the hooks that ran while nobody took them; answer at the machine or try again shortly";
+        }
+    }
 
     // Events wait in the spool: a PermissionRequest handled from a backlog arms its marker before
     // the PreToolUse that answered it at the terminal, further down, has been reached. So no Codex
     // answer while any is queued (one whose deletion failed after it was handled aside).
     volatile bool _queued;
 
+    // A test's way to see each listing of the spool (G5: none once agent-ha-bridge has it).
+    internal Action? Listing { get; set; }
+
     bool Waiting()
     {
-        try { return Directory.EnumerateFiles(_spool, "*.json").Any(f => f.EndsWith(".json", StringComparison.Ordinal) && !_undeleted.Contains(Path.GetFileName(f))); }
+        Listing?.Invoke();
+        try { return Directory.EnumerateFiles(_spool, "*.json").Any(f => f.EndsWith(".json", StringComparison.Ordinal) && !_undeleted.ContainsKey(Path.GetFileName(f))); }
         catch (DirectoryNotFoundException) when (!File.Exists(_spool)) { return false; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return true; }
     }
@@ -496,8 +514,10 @@ public sealed class HookIntake : IAsyncDisposable
         _queued = true;
         Array.Sort(files, StringComparer.Ordinal);
         try { return Drain(files); }
-        // Open again once nothing waits, including what arrived while these were handled.
-        finally { _queued = Waiting(); }
+        // Open again once nothing waits, including what arrived while these were handled; never
+        // looked for once agent-ha-bridge has been seen to take the spool (G5: the drain asks before
+        // and after every file), and answers stay closed meanwhile.
+        finally { _queued = Paused is not null || Waiting(); }
     }
 
     int Drain(string[] files)
@@ -521,9 +541,9 @@ public sealed class HookIntake : IAsyncDisposable
             var name = Path.GetFileName(path);
             // Handled already; only its deletion failed. Its handler must not run twice: a Codex
             // PermissionRequest replayed after the PreToolUse that answered it would re-arm it.
-            if (_undeleted.Contains(name))
+            if (_undeleted.ContainsKey(name))
             {
-                if (Delete(path)) { _undeleted.Remove(name); }
+                if (Delete(path)) { _undeleted.TryRemove(name, out _); }
                 continue;
             }
             SpoolEvent? spooled = null;
@@ -539,7 +559,7 @@ public sealed class HookIntake : IAsyncDisposable
                 handled++;
                 Handled++;
                 _attempts.Remove(name);
-                if (!Delete(path)) { _undeleted.Add(name); }
+                if (!Delete(path)) { _undeleted[name] = true; }
                 Publish(notice);
             }
             // Not a failure: the intake has stood back, and the event waits for the daemon.
@@ -559,7 +579,7 @@ public sealed class HookIntake : IAsyncDisposable
                     // It may have been the Codex event that retired an approval: as good as a hook
                     // that never spooled.
                     if (spooled is null || spooled.Agent == "codex") { Gap(); }
-                    if (!Delete(path)) { _undeleted.Add(name); }
+                    if (!Delete(path)) { _undeleted[name] = true; }
                 }
                 else
                 {
@@ -579,7 +599,7 @@ public sealed class HookIntake : IAsyncDisposable
         }
         // A file that went away by other means is not waiting for a retry.
         foreach (var gone in _attempts.Keys.Where(n => !files.Any(f => f.EndsWith(n, StringComparison.Ordinal))).ToList()) { _attempts.Remove(gone); }
-        _undeleted.RemoveWhere(n => !files.Any(f => f.EndsWith(n, StringComparison.Ordinal)));
+        foreach (var gone in _undeleted.Keys.Where(n => !files.Any(f => f.EndsWith(n, StringComparison.Ordinal))).ToList()) { _undeleted.TryRemove(gone, out _); }
         if (_attempts.Count > 0) { Wake(); }
         return handled;
     }
