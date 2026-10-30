@@ -387,3 +387,37 @@ test.describe('installed', () => {
     expect(new URL(scope).pathname).toBe('/agent-bridge/app/');
   });
 });
+
+test('a long unbroken path never makes a card wider than a phone screen', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openDemo(page);
+  const path = 'C:\\Users\\AdminUser\\AppData\\Local\\AgentBridge\\default\\attachments\\5900c7370ce946f98d9cc5a6a7e669b4-IMG_3499.jpeg';
+  await upsert(page, CLAUDE, {
+    status: 'working',
+    title: `Read${'_'.repeat(20)}${path}`,
+    activity: { currentTool: { id: 'toolu_wide', name: 'Read', summary: path, status: 'running', startedAt: new Date().toISOString() } },
+  });
+  await expect(card(page, CLAUDE).locator('.tool-line')).toBeVisible();
+
+  const widths = await page.evaluate(() => ({
+    page: document.documentElement.scrollWidth,
+    view: document.documentElement.clientWidth,
+    cards: [...document.querySelectorAll('.session')].map((e) => Math.ceil(e.getBoundingClientRect().right)),
+  }));
+  expect(widths.page).toBeLessThanOrEqual(widths.view);
+  for (const right of widths.cards) expect(right).toBeLessThanOrEqual(widths.view);
+});
+test('a desktop-wide window puts the sessions side by side, a phone keeps one column', async ({ page }) => {
+  const columns = () => page.locator('.session').evaluateAll((els) => new Set(els.map((e) => Math.round(e.getBoundingClientRect().left))).size);
+  const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  await expect(page.locator('.session')).toHaveCount(4);
+  expect(await columns()).toBeGreaterThanOrEqual(2);
+  expect(await overflow()).toBeLessThanOrEqual(0);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(columns).toBe(1);
+  expect(await overflow()).toBeLessThanOrEqual(0);
+});
