@@ -24,10 +24,12 @@ public sealed partial class LaunchView : UserControl
     }
 
     // A launch's progress and outcome come long after the press: a screen reader hears each one.
+    // The peer is made if it is not there yet: the line starts collapsed, and a screen reader may
+    // never have visited it, so FromElement would find none and the first outcome would go unheard.
     void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName != nameof(LaunchViewModel.StatusText) || string.IsNullOrEmpty(viewModel?.StatusText)) { return; }
-        DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.FromElement(StatusLine)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
+        DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(StatusLine)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
     }
 
     public static Brush NoteBrush(bool warns) => warns ? Ui.Brush("AbWarningText") : Ui.Brush("AbMuted");
