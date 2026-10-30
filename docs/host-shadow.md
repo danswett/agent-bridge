@@ -6,8 +6,9 @@ method: trace replay plus shadow mode", step 4; issue #40). `agent-bridge-host s
 takes that diff. How long it runs is not fixed: it runs until it has covered enough of
 each kind of event, cleanly, which `shadow summary --gate` judges (see "The gate"). It never injects, launches, writes Home Assistant, or touches the
 daemon's spool, and it changes nothing in agent-ha-bridge. The only network requests it makes
-are reads of this machine's usage sensors and resume list in Home Assistant, approved by the
-owner (see "Home Assistant reads" below).
+are reads of this machine's usage sensors and resume list in Home Assistant, and of the usage
+sensor of the machine reading an account this one stands down for, approved by the owner
+(see "Home Assistant reads" below).
 
 ## How it sees each side
 
@@ -58,6 +59,20 @@ own token. Enforced in code (`Shadow/HaReader.cs`), and tested:
   `_usage_codex`, the further Copilot logins' `_usage_copilot_2` to `_4`, and
   `select.agent_bridge_<slug>_new_resume`. Never a POST, a service call,
   a WebSocket or MQTT. Redirects are not followed.
+* **The account's reader.** agent-ha-bridge asks the vendor about an account on one machine
+  at a time. While that machine's readings are current, the others stand down
+  (`Test-BridgeUsageCovered`) and their own sensors keep the last figure they read, hours
+  old. For an agent whose figure here has lapsed (older than the daemon's own pace,
+  `DaemonUsagePace.Lapsed`), the daemon's reading is the account reader's. That is the usage
+  sensor, for that agent, of a machine other than this one, whose current reading is of the
+  same agent (`client`), by that machine (`machine_slug`), for the same account (`account_id`,
+  else `account`, as `Test-BridgeUsageCovered` matches); the latest wins. The machines looked at are only those the
+  daemon itself names: the machines in its resume list's "<agent> on <machine>: …" options
+  (already read), its `dashboard.publication.writer`, and the reader found last, at most
+  eight. Each is read by its one exact entity, `sensor.agent_bridge_<their slug>_usage_<agent>`,
+  which the handler allows for that one request only. Never a listing of states or a
+  pattern. A machine that cannot be read is skipped. With no current reading found, the
+  lapsed figure stands and usage is **not compared** (see "Not compared").
 * **The token.** `homeAssistant.baseUrl` and `homeAssistant.token` are read from
   `~/.agent-ha-bridge/config.json` at the moment of each read (so a rotated token is the one
   used), sent in that request's `Authorization` header, and dropped. Never logged, written
@@ -339,7 +354,7 @@ five, and the comparison now classifies each as below.
 | `model` | The last `assistant.message` the daemon has read is a subagent's and names the daemon's model, and the host's is the session's own | agent-ha-bridge#260 |
 | `background.shells`, daemon higher | Every start of each extra id since its last end is in a subagent's tool result | agent-ha-bridge#261 |
 | `background.shells`, daemon higher | Each extra id's only start of the session's own is an "is still running" line that is not its tool result's last line | agent-ha-bridge#262 |
-| `question.missingOnHost`, and `status` daemon `waiting` | The daemon's question is the `ask_user` its marker names (by call id, else the one started within 10 s of the marker being armed); that `ask_user` has completed in the transcript, and its start lies more than 4 MiB before the end of the line that completed it. For `status`, the daemon's own status must also be the host's; when it is not, the mismatch stands and names the two statuses | agent-ha-bridge#263 |
+| `question.missingOnHost`, and `status` daemon `waiting` | The daemon's question is the `ask_user` its marker names (by call id, else the one started within 10 s of the marker being armed); that `ask_user` has completed in the transcript, and its start lies more than 4 MiB before the end of the line that completed it. For `status`, the daemon's own status must also be the host's; when it is not, the mismatch stands and names the two statuses | agent-ha-bridge#259 (filed as #263, closed as its duplicate) |
 
 What each bug does:
 
@@ -350,7 +365,7 @@ What each bug does:
 | `model`, flipping | Sets the session's model from every `assistant.message`, subagents' included, so a session whose agents run another model shows theirs whenever one speaks last. parity.md §1: a subagent's model is not the session's | agent-ha-bridge#260 |
 | `background.shells`, daemon higher, in a session with background agents | Counts a background agent's shells as the session's. Their ends go to the agent and often never reach the session's transcript: in the session that found it, nine shells agents had moved to the background had no process left and no recorded end, and stayed counted. The host leaves an agent's shells to the agent, which is counted while it runs | agent-ha-bridge#261 |
 | `background.shells`, daemon higher, a session reading `shell` while idle | Takes an "is still running" marker anywhere at a line's start in a tool result. A `view` of a file quoting one invented a shell nothing will end. The host takes it only as a result's last line, where Copilot writes it | agent-ha-bridge#262 |
-| `question.missingOnHost` and `status` daemon `waiting`, after the question was answered | Learns that a question was answered only from the last 4 MiB of the transcript (`Get-CopilotAskUserState`). When a session writes more than that while its question waits, the `ask_user` start has left the tail by the time it is answered, so the daemon never sees the question complete: the marker stays, and so do the card's question and "waiting for you", until the session asks again. Found when a question asked at 00:58 and answered at 09:32 PT, 7.1 MiB later, was still on the card 20 minutes after. The host read it answered at once | agent-ha-bridge#263 |
+| `question.missingOnHost` and `status` daemon `waiting`, after the question was answered | Learns that a question was answered only from the last 4 MiB of the transcript (`Get-CopilotAskUserState`). When a session writes more than that while its question waits, the `ask_user` start has left the tail by the time it is answered, so the daemon never sees the question complete: the marker stays, and so do the card's question and "waiting for you", until the session asks again. Found when a question asked at 00:58 and answered at 09:32 PT, 7.1 MiB later, was still on the card 20 minutes after. The host read it answered at once | agent-ha-bridge#259 (filed as #263, closed as its duplicate) |
 
 **The first minutes on DEV-VM1**, classified:
 
@@ -368,8 +383,8 @@ What each bug does:
 | Seen | What it was |
 |---|---|
 | `status` daemon `working`, host `waiting`, four episodes from 00:58 to 09:30 PT (6 h 45 min the longest), on the busy session | The same question pending all night, compared by a build from before the normalization above (#82). The host was right. These stay mismatches in that report: `gate.json` can explain them with `through` (below), or they stop failing the gate 24 hours after they ended |
-| `question.missingOnHost` and `status` daemon `waiting`, host `working` or `idle`, from 09:37 PT on, same session | That question, answered at 09:32, kept by the daemon (#263). The host was right; now classified |
-| `usageReadings` 0 events, with usage "compared" in nearly every sample | Another machine was reading the account's Copilot usage, so this machine's daemon had stood down (agent-ha-bridge's `Test-BridgeUsageCovered`), and its sensor held an 11-hour-old figure. No pair of readings was ever close enough to count, and none should have been called compared: a daemon figure older than its own pace is now **not compared**, with that reason. See "Not compared" |
+| `question.missingOnHost` and `status` daemon `waiting`, host `working` or `idle`, from 09:37 PT on, same session | That question, answered at 09:32, kept by the daemon (agent-ha-bridge#259; filed as #263). The host was right; now classified |
+| `usageReadings` 0 events, with usage "compared" in nearly every sample | Another machine (DSWETT-HOME) was reading the account's Copilot usage, so this machine's daemon had stood down (agent-ha-bridge's `Test-BridgeUsageCovered`), and its sensor held an 11-hour-old figure. No pair of readings was ever close enough to count, and none should have been called compared. The comparison now takes the account reader's figure ("Home Assistant reads"), and, with none current, does not compare usage |
 
 ### Fixed in the host
 
@@ -402,7 +417,7 @@ The same runs, and review, found four host bugs, all fixed:
 
 | What | Why |
 |---|---|
-| Usage the daemon is not reading on this machine | agent-ha-bridge asks the vendor about an account on one machine at a time, and the others stand down while that one's readings are current. A machine standing down keeps the last figure it read itself in its sensor. A figure older than the daemon's own pace allows (`usage.idleIntervalSeconds`, plus its half-hour re-assert, plus a minute) is that, and not compared: the sample counts toward `notComparedWhy` ("usage: the daemon is not reading it on this machine"), not `usageCompared`. While another machine reads the account all day, `usageReadings` stays at 0 and the gate waits for it |
+| Usage with no current reading of the account | A figure here older than the daemon's own pace allows (`usage.idleIntervalSeconds`, plus its re-assert, plus a minute) is one this machine's daemon has stopped reading, usually because another machine reads the account. The account reader's figure stands in for it ("Home Assistant reads"). When no machine the daemon names has a current one, the sample counts toward `notComparedWhy` ("usage: no current reading of the account, …"), not `usageCompared` |
 | Titles | agent-ha-bridge names sessions for Home Assistant ("Copilot: …") |
 | Reasoning and tool history | Bounded differently and shown differently (§1) |
 | Driver, the purple edge | Missing here (#46) |
@@ -523,8 +538,8 @@ those without excusing the next one. For example, for the first full day above:
 ```json
 "explained": [
   { "kind": "status", "session": "s8a666b6daa65", "through": "2026-10-30T16:31:00Z", "reason": "pre-#82 build: the armed question is the daemon's waiting" },
-  { "kind": "question.missingOnHost", "session": "s8a666b6daa65", "through": "2026-10-30T18:00:00Z", "reason": "agent-ha-bridge#263, before it was classified" },
-  { "kind": "status", "session": "s8a666b6daa65", "through": "2026-10-30T18:00:00Z", "reason": "agent-ha-bridge#263, before it was classified" }
+  { "kind": "question.missingOnHost", "session": "s8a666b6daa65", "through": "2026-10-30T18:00:00Z", "reason": "agent-ha-bridge#259, before it was classified" },
+  { "kind": "status", "session": "s8a666b6daa65", "through": "2026-10-30T18:00:00Z", "reason": "agent-ha-bridge#259, before it was classified" }
 ]
 ``` A host bug is not
 explained: it is fixed, and the gate passes once the last of it is over 24 hours old.

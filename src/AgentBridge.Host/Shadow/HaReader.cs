@@ -20,6 +20,8 @@ public sealed class HomeAssistantAccess(Uri baseUrl, string token)
     internal string Token { get; } = token;
     // How the daemon paces what it publishes there, from the same config.
     public DaemonUsagePace UsagePace { get; init; } = DaemonUsagePace.Default;
+    // dashboard.publication.writer: a machine that may be reading an account this one stands down for.
+    public string? PublicationWriter { get; init; }
     public override string ToString() => $"Home Assistant at {BaseUrl.Host}";
 }
 
@@ -73,11 +75,16 @@ public static class AgentHaBridgeConfig
                 return (null, "agent-ha-bridge's config holds no usable Home Assistant address");
             }
             baseUrl = new Uri(baseUrl.GetLeftPart(UriPartial.Authority) + "/");
-            return (new HomeAssistantAccess(baseUrl, token.Trim()) { UsagePace = Pace(doc.RootElement) }, null);
+            return (new HomeAssistantAccess(baseUrl, token.Trim()) { UsagePace = Pace(doc.RootElement), PublicationWriter = Writer(doc.RootElement) }, null);
         }
         // The parser's message can quote the file, and the file holds the token.
         catch (JsonException) { return (null, "agent-ha-bridge's config is not valid JSON"); }
     }
+
+    static string? Writer(JsonElement root) =>
+        root.TryGetProperty("dashboard", out var d) && d.ValueKind == JsonValueKind.Object
+            && d.TryGetProperty("publication", out var p) && p.ValueKind == JsonValueKind.Object
+            && p.TryGetProperty("writer", out var w) && w.ValueKind == JsonValueKind.String && w.GetString() is { Length: > 0 } s ? s : null;
 
     // usage.intervalSeconds and usage.idleIntervalSeconds as Get-BridgeUsageSetting reads them (a
     // number, or text that is one), the idle pace never quicker than the busy one; and whether a
@@ -109,7 +116,9 @@ public sealed class HomeAssistantRequestRefusedException(string message) : Inval
 // Every request the comparison makes of Home Assistant passes through this, and only a GET of
 // /api/states/<one of the named entities>, with no body and no query, gets through. It is the
 // enforcement, not the reader's good behaviour: anything else is refused before it leaves.
-public sealed class ReadOnlyHomeAssistantHandler(IEnumerable<string> entities, HttpMessageHandler inner) : DelegatingHandler(inner)
+// also: entities named one at a time besides the fixed ones (the usage sensors of the machines
+// that may be reading an account, DaemonHaReader.ReaderEntities); never a pattern.
+public sealed class ReadOnlyHomeAssistantHandler(IEnumerable<string> entities, HttpMessageHandler inner, Func<string, bool>? also = null) : DelegatingHandler(inner)
 {
     readonly HashSet<string> allowed = entities.ToHashSet(StringComparer.Ordinal);
 
@@ -138,7 +147,7 @@ public sealed class ReadOnlyHomeAssistantHandler(IEnumerable<string> entities, H
         // anything under another prefix is not the read that was approved.
         const string States = "/api/states/";
         var path = uri.AbsolutePath;
-        if (!path.StartsWith(States, StringComparison.Ordinal) || !allowed.Contains(Uri.UnescapeDataString(path[States.Length..])))
+        if (!path.StartsWith(States, StringComparison.Ordinal) || Uri.UnescapeDataString(path[States.Length..]) is var entity && !allowed.Contains(entity) && also?.Invoke(entity) != true)
         {
             throw new HomeAssistantRequestRefusedException("a request to Home Assistant for an entity the shadow comparison does not read was refused");
         }
@@ -184,7 +193,7 @@ public sealed class DaemonHaReader : IDisposable
         Entities = [.. usageEntities.Select(u => u.Entity), resumeEntity];
         patience = timeout ?? TimeSpan.FromSeconds(10);
         // No redirects: the token is for the address in the config and nowhere else.
-        http = new HttpClient(new ReadOnlyHomeAssistantHandler(Entities, transport ?? new SocketsHttpHandler { AllowAutoRedirect = false }))
+        http = new HttpClient(new ReadOnlyHomeAssistantHandler(Entities, transport ?? new SocketsHttpHandler { AllowAutoRedirect = false }, e => readerEntities.Contains(e)))
         {
             Timeout = Timeout.InfiniteTimeSpan,
         };
@@ -192,8 +201,22 @@ public sealed class DaemonHaReader : IDisposable
 
     public string Slug { get; }
 
-    // Exactly what may be read, and nothing else.
+    // Exactly what may be read, and nothing else, but for ReaderEntities.
     public IReadOnlyList<string> Entities { get; }
+
+    // agent-ha-bridge asks the vendor about an account on one machine at a time; the others stand
+    // down while its readings are current (Test-BridgeUsageCovered), and their own sensors keep the
+    // last figure they read, hours old (#40). For an agent this machine's daemon has stood down
+    // for, the daemon's reading is the account's reader's: the usage sensor of the machine, other
+    // than this one, whose current reading is of the same agent and the same account. The machines
+    // looked at are those the daemon itself names (its resume list's "<agent> on <machine>: …", and
+    // its dashboard.publication.writer) and the reader found last, at most MaxReaders of them, each
+    // by its one exact entity, allowed for that read only. Nothing found, or nothing readable, and
+    // the daemon's own lapsed figure stands: not compared.
+    public IReadOnlyCollection<string> ReaderEntities => readerEntities;
+    volatile HashSet<string> readerEntities = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string> lastReader = new(StringComparer.Ordinal);
+    const int MaxReaders = 8;
 
     public async Task<DaemonHaReading> ReadAsync(HomeAssistantAccess access, CancellationToken ct = default)
     {
@@ -210,6 +233,7 @@ public sealed class DaemonHaReader : IDisposable
                 else { standing.Remove(client); }
             }
             var resume = await GetAsync(access, resumeEntity, ct);
+            if (usage.Any(u => u.Value.Lapsed)) { await ReadersAsync(access, usage, resume, readAt, ct); }
             return resume is not { } r
                 ? new(usage, null, null, "the daemon has not published a resume list")
                 : new(usage, null, Labels(r), null);
@@ -220,6 +244,60 @@ public sealed class DaemonHaReader : IDisposable
             return new(null, "Home Assistant is unreachable", null, "Home Assistant is unreachable");
         }
     }
+
+    async Task ReadersAsync(HomeAssistantAccess access, Dictionary<string, ShadowUsage> usage, JsonElement? resume, DateTimeOffset readAt, CancellationToken ct)
+    {
+        var names = new List<string>();
+        if (resume is { } r && r.TryGetProperty("attributes", out var a) && a.ValueKind == JsonValueKind.Object && a.TryGetProperty("options", out var o) && o.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var x in o.EnumerateArray())
+            {
+                if (x.ValueKind == JsonValueKind.String && RemoteMachine.Match(x.GetString()!) is { Success: true } m) { names.Add(m.Groups[1].Value); }
+            }
+        }
+        var lapsed = usage.Where(u => u.Value.Lapsed).Select(u => u.Key).ToList();
+        foreach (var client in lapsed)
+        {
+            var own = usage[client];
+            if ((own.AccountKey is { Length: > 0 } ? own.AccountKey : own.Account) is not { Length: > 0 } key) { continue; }
+            var slugs = (lastReader.TryGetValue(client, out var last) ? [last] : Array.Empty<string>())
+                .Concat(access.PublicationWriter is { } w ? [w] : [])
+                .Concat(names)
+                .Select(HaContract.MachineSlug)
+                .Where(s => s != Slug)
+                .Distinct(StringComparer.Ordinal)
+                .Take(MaxReaders)
+                .ToList();
+            ShadowUsage? best = null;
+            string? bestSlug = null;
+            foreach (var slug in slugs)
+            {
+                var entity = HaContract.MachineEntityId("sensor", $"usage_{client}", slug);
+                readerEntities = new HashSet<string>([entity], StringComparer.Ordinal);
+                JsonElement? state;
+                // One machine that cannot be read is one fewer to choose from, never a reason to
+                // stop comparing the rest.
+                try { state = await GetAsync(access, entity, ct); }
+                catch (Exception e) when (e is Unavailable or HttpRequestException or IOException || e is OperationCanceledException && !ct.IsCancellationRequested) { continue; }
+                finally { readerEntities = new HashSet<string>(StringComparer.Ordinal); }
+                if (state is not { } s || !s.TryGetProperty("attributes", out var attributes) || attributes.ValueKind != JsonValueKind.Object) { continue; }
+                // Its own reading of this agent and this account, as Test-BridgeUsageCovered matches one.
+                if (Str(attributes, "client") != client || Str(attributes, "machine_slug") != slug) { continue; }
+                var u = Usage(s);
+                if (!u.Reading || (u.AccountKey is { Length: > 0 } ? u.AccountKey : u.Account) != key || access.UsagePace.Lapsed(u.MeasuredAt, readAt) || u.MeasuredAt is not { } at) { continue; }
+                if (best?.MeasuredAt is { } was && was >= at) { continue; }
+                (best, bestSlug) = (u, slug);
+            }
+            if (best is null || bestSlug is null) { continue; }
+            lastReader[client] = bestSlug;
+            usage[client] = Stood(client, best with { ConfirmedAt = access.UsagePace.ConfirmedAt(best.MeasuredAt, readAt) }, readAt);
+        }
+    }
+
+    // The machine a resume option from another machine names ("<agent> on <machine>: …").
+    static readonly System.Text.RegularExpressions.Regex RemoteMachine = new(
+        @"\A(?:" + string.Join('|', AgentBridge.Host.Delivery.Launch.Launchers.All.Select(l => System.Text.RegularExpressions.Regex.Escape(l.Label)).Append("Session")) + @") on ([^:]{1,100}): ",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     async Task<JsonElement?> GetAsync(HomeAssistantAccess access, string entity, CancellationToken outer)
     {
