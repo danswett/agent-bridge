@@ -26,23 +26,17 @@ namespace AgentBridge.Host;
 // JSON. pwa/js/transfer.js signs the same way, and a test vector holds both to it.
 public static class SignedCommands
 {
-    static readonly byte[] Salt = "agent-bridge command v1"u8.ToArray();
-
-    public static byte[] Key(P256KeyPair self, byte[] peerPublic, string signerId, string machineId)
-    {
-        var z = self.Dh(peerPublic);
-        return HKDF.DeriveKey(HashAlgorithmName.SHA256, z, 32, Salt, Encoding.ASCII.GetBytes($"{signerId}|{machineId}"));
-    }
+    // The MAC itself is AgentBridge.Transport's CommandMac, which the Windows app signs with too.
+    public static byte[] Key(P256KeyPair self, byte[] peerPublic, string signerId, string machineId) => CommandMac.Key(self, peerPublic, signerId, machineId);
 
     public static SignedCommand Sign(P256KeyPair signer, byte[] machinePublic, CommandBody body)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(body, ProtocolJson.Options);
-        var key = Key(signer, machinePublic, Wire.DeviceId(signer.Public), Wire.DeviceId(machinePublic));
         return new SignedCommand
         {
             Body = BlobFormat.Base64Url(bytes),
             By = BlobFormat.Base64Url(signer.Public),
-            Mac = BlobFormat.Base64Url(HMACSHA256.HashData(key, bytes)),
+            Mac = BlobFormat.Base64Url(CommandMac.Of(signer, machinePublic, bytes)),
         };
     }
 

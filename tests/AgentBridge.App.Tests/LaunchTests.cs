@@ -418,7 +418,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
             h.On(LaunchProtocol.Launch, _ => new LaunchResult(LaunchOutcome.Started) { Session = $"{label}-new" });
         }
         remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "linux", "0.1.0"),
-            [Capabilities.SessionsRead, Capabilities.SessionsAnswer, UsageProtocol.Capability, LaunchProtocol.Capability]));
+            [Capabilities.SessionsRead, Capabilities.SessionsAnswer, UsageProtocol.Capability, LaunchProtocol.Capability, TransferProtocol.Capability]));
         localHost.Start();
         remoteHost.Start();
         link.Endpoints["remote-id"] = remoteHost.Endpoint;
@@ -554,6 +554,86 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
 
         await Wait.UntilAsync(() => launch.SelectedMachine?.Value == "remote-id" && launch.ShowForm, "the machine to come back");
         Assert.Equal("there-2", launch.Workspace!.Value);
+    }
+
+    const string Brought = "0f3c4d5e-6a7b-4c8d-9e0f-a1b2c3d4e5f6";
+    const string LaptopId = "3f9a2c71b0de4a5f8c6d7e8f9a0b1c2d";
+
+    static TransferSource Laptop() => new(LaptopId, "Laptop", new byte[65],
+        [new ResumableSession { Id = Brought, Agent = AgentKind.Claude, Launcher = "claude", Title = "Fix the flaky test" }]);
+
+    [Fact]
+    public async Task A_session_from_a_third_machine_is_brought_to_another_with_a_command_signed_for_the_machine_it_is_on()
+    {
+        link.Sources.Add(Laptop());
+        remoteHost.On(LaunchProtocol.Launch, _ => new LaunchResult(LaunchOutcome.Started)
+        {
+            Session = "there-new",
+            Launched = new LaunchedWith { Agent = "claude", Permissions = LaunchProtocol.Ask, Workspace = "there-2", Transfer = new LaunchedTransfer { From = LaptopId, Session = Brought, Bytes = 4096 } },
+        });
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered");
+
+        ui.Post(() => launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"));
+        Assert.Equal("Fix the flaky test · on Laptop", launch.Resume!.Label);
+        Assert.Equal(["claude"], launch.Agents.Select(a => a.Value));
+        Assert.True(launch.ShowWorkspace);
+        Assert.StartsWith("This copies the session's whole conversation, with its checkpoints and files, from Laptop to Build server", launch.Note);
+        ui.Post(() => { launch.Workspace = launch.Workspaces.Single(w => w.Value == "there-2"); launch.Launch(); });
+
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        var sent = Assert.Single(remoteHost.Sent(LaunchProtocol.Launch));
+        var transfer = sent.GetProperty("transfer");
+        Assert.Equal((LaptopId, Brought, "body1"), (transfer.GetProperty("from").GetString(), transfer.GetProperty("session").GetString(), transfer.GetProperty("command").GetProperty("body").GetString()));
+        Assert.Equal("there-2", sent.GetProperty("workspace").GetString());
+        Assert.False(sent.TryGetProperty("resume", out _));
+        // Signed for the machine the session is on, to go to the one launching it.
+        Assert.Equal((LaptopId, Brought, "remote-id"), Assert.Single(link.Signed));
+        var delivery = main.MachineOf("remote-id")!.Deliveries.Get("launch")!;
+        Assert.Equal((Transfers.LaunchTimeout, Transfers.GiveUp), (delivery.Timeout, delivery.GiveUp));
+        Assert.Equal("Session brought over and started. The original is still on its machine.", launch.StatusText);
+    }
+
+    [Fact]
+    public async Task A_session_brought_to_this_machine_goes_to_its_host_through_the_relay_never_the_pipe()
+    {
+        link.Sources.Add(Laptop());
+        link.Endpoints["host-id"] = localHost.Endpoint;
+        localHost.Capabilities.Add(TransferProtocol.Capability);
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered here");
+
+        ui.Post(() => { launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"); launch.Launch(); });
+
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        Assert.Equal((LaptopId, Brought, "host-id"), Assert.Single(link.Signed));
+        Assert.NotNull(fleet.CurrentLoopback!.Deliveries.Get("launch"));
+        Assert.Null(main.MachineOf(Machine.LocalKey)!.Deliveries.Get("launch"));
+        Assert.Equal("here", Assert.Single(localHost.Sent(LaunchProtocol.Launch)).GetProperty("workspace").GetString());
+    }
+
+    [Fact]
+    public async Task Try_again_after_a_transfer_the_machine_reports_failed_signs_a_new_command()
+    {
+        link.Sources.Add(Laptop());
+        remoteHost.On(LaunchProtocol.Launch, _ => new LaunchResult(LaunchOutcome.Failed) { Reason = "the agent did not start" });
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
+        ui.Post(() => { launch.Resume = launch.Resumes.Single(r => r.Value.StartsWith('@')); launch.Launch(); });
+        await Wait.UntilAsync(() => launch.State == "failed" && launch.ShowResend, "the failure");
+
+        ui.Post(launch.Resend);
+
+        await Wait.UntilAsync(() => remoteHost.Sent(LaunchProtocol.Launch).Count == 2, "the second launch");
+        Assert.Equal(["body1", "body2"], remoteHost.Sent(LaunchProtocol.Launch).Select(s => s.GetProperty("transfer").GetProperty("command").GetProperty("body").GetString()));
     }
 
     [Fact]

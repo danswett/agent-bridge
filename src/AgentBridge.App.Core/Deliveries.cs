@@ -38,6 +38,9 @@ public sealed record Delivery
     // The same moment on the monotonic clock (TimeProvider.GetTimestamp), which every elapsed
     // check uses: a wall clock stepped back must not reopen the window and send a launch twice.
     public long? FirstSentAt { get; init; }
+    // How long it goes on being sent, when not the Deliveries' own GiveUp: a session transfer
+    // waits longer for its outcome, and is remembered longer by the host (v1-transfer.md).
+    public TimeSpan? GiveUp { get; init; }
 }
 
 // Sends answers, replies and stops (session.answer, session.reply, session.stop), each to
@@ -84,7 +87,7 @@ public sealed class Deliveries
     // stands, so doing it again sends nothing. before: work on the connection ahead of the op
     // (a reply's files), given a progress callback.
     public Delivery Submit(string key, string op, Func<string, object> data, Func<string, bool> final, object? payload = null,
-        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true, TimeSpan? timeout = null, bool resendOnBusy = true)
+        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true, TimeSpan? timeout = null, bool resendOnBusy = true, TimeSpan? giveUp = null)
     {
         Delivery entry;
         lock (gate)
@@ -94,7 +97,7 @@ public sealed class Deliveries
             {
                 return existing;
             }
-            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy };
+            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy, GiveUp = giveUp };
         }
         Publish(entry);
         _ = RunAsync(entry, op, data, before, resend: false);
@@ -121,8 +124,9 @@ public sealed class Deliveries
         var limited = !entry.ReplayAfterRestart;
         var started = time.GetTimestamp();
         var firstSent = entry.FirstSentAt;
-        TimeSpan RunLeft() => GiveUp - time.GetElapsedTime(started);
-        TimeSpan? WindowLeft() => limited && firstSent is { } f ? GiveUp - time.GetElapsedTime(f) : null;
+        var giveUp = entry.GiveUp ?? GiveUp;
+        TimeSpan RunLeft() => giveUp - time.GetElapsedTime(started);
+        TimeSpan? WindowLeft() => limited && firstSent is { } f ? giveUp - time.GetElapsedTime(f) : null;
         TimeSpan Left() => WindowLeft() is { } w && w < RunLeft() ? w : RunLeft();
         string Late() => WindowLeft() is { } w && w <= RunLeft() ? TooOld : NoOutcome;
         var busy = 0;

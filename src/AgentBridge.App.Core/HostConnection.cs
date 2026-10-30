@@ -49,6 +49,9 @@ public sealed class HostConnection : IAsyncDisposable
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromSeconds(2);
     // How often an open connection asks the host again what it offers. Tests shorten it.
     public TimeSpan CapabilityRefresh { get; init; } = TimeSpan.FromSeconds(10);
+    // Whether it follows the host's sessions and usage. A connection only for sending (this
+    // machine's host reached through the relay, for a transfer) does not: the pipe shows them.
+    public bool Subscribes { get; init; } = true;
 
     // Read on the UI thread.
     public LinkState State { get; private set; } = LinkState.Connecting;
@@ -129,14 +132,15 @@ public sealed class HostConnection : IAsyncDisposable
                 }
                 Volatile.Write(ref current, new Current(ch, instance));
                 var heardUsage = Interlocked.Read(ref usageEvents);
-                if (hello.Capabilities.Contains(UsageProtocol.Capability))
+                if (!Subscribes) { }
+                else if (hello.Capabilities.Contains(UsageProtocol.Capability))
                 {
                     var usage = await ch.CallAsync<UsageReport>(UsageProtocol.Subscribe, ct: ct);
                     ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; } });
                 }
                 // A host that reports no usage now (usage.publish off) has no figure to keep showing.
                 else { ui.Post(() => Usage = UsageReport.Empty); }
-                await SubscribeSessionsAsync(ch, ct);
+                if (Subscribes) { await SubscribeSessionsAsync(ch, ct); }
                 ui.Post(() => SetState(LinkState.Connected, null));
                 Volatile.Read(ref connected).TrySetResult();
                 log($"connected to the host ({hello.Machine.Name}, {hello.Machine.HostVersion})");
@@ -196,6 +200,7 @@ public sealed class HostConnection : IAsyncDisposable
     // kind arrived meanwhile, as when connecting.
     async Task RecoverAsync(IClientChannel ch, HelloResult hello, CancellationToken ct)
     {
+        if (!Subscribes) { return; }
         if (hello.Capabilities.Contains(HostOps.Capability))
         {
             var heardStatus = Interlocked.Read(ref statusEvents);

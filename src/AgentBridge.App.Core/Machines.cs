@@ -57,6 +57,10 @@ public interface IFleetLink : IAsyncDisposable
     Task<IClientChannel> OpenAsync(string hostId, CancellationToken ct);
     // The relay's blob store, for a reply's files over 256 KiB to these machines; none in a stand-in.
     IBlobStore? Blobs => null;
+    // Session transfer (Transfers): what the account's machines other than target hand on, and a
+    // command this app signs for one of them. None in a stand-in.
+    Task<IReadOnlyList<TransferSource>> TransferSourcesAsync(string target, CancellationToken ct) => Task.FromResult<IReadOnlyList<TransferSource>>([]);
+    SignedCommand? SignTransfer(TransferSource from, string session, string to) => null;
 }
 
 // The account's other machines, kept in step with the relay's presence: a machine for each
@@ -107,6 +111,45 @@ public sealed class Fleet : IAsyncDisposable
 
     public void Start() => link.Start();
 
+    public Task<IReadOnlyList<TransferSource>> TransferSourcesAsync(string target, CancellationToken ct) => link.TransferSourcesAsync(target, ct);
+    public SignedCommand? SignTransfer(TransferSource from, string session, string to) => link.SignTransfer(from, session, to);
+
+    // This machine's own host reached through the relay, as a device reaches it, for what the pipe
+    // does not carry: a session transfer is only ever launched on a channel through the relay
+    // (v1-transfer.md), whose peer is the device that signed it. Made when first needed, and only
+    // for sending: it follows no sessions, which the pipe shows. Null while this machine's id or
+    // the relay is not known.
+    Machine? loopback;
+    string? loopbackFor;
+
+    // Raised on the UI thread when the loopback's connection changes (what it offers, chiefly).
+    public event Action? LoopbackChanged;
+
+    // The loopback if made, without making it.
+    public Machine? CurrentLoopback => loopback;
+
+    public Machine? Loopback()
+    {
+        if (disposed || main.LocalMachineId is not { } me || link.State != FleetState.Connected) { return null; }
+        if (loopback is not null && loopbackFor == me) { return loopback; }
+        DropLoopback();
+        var conn = new HostConnection(ct => link.OpenAsync(me, ct), ui) { Subscribes = false, RetryDelay = TimeSpan.FromSeconds(5) };
+        conn.Changed += () => LoopbackChanged?.Invoke();
+        loopback = new Machine(Machine.LocalKey, conn, new CardContext { Deliveries = new Deliveries(conn, ui), Folds = new FoldStore(null), Capabilities = () => conn.Capabilities, Host = conn });
+        loopbackFor = me;
+        conn.Start();
+        return loopback;
+    }
+
+    void DropLoopback()
+    {
+        if (loopback is not { } was) { return; }
+        loopback = null;
+        loopbackFor = null;
+        _ = was.Host.DisposeAsync().AsTask();
+        LoopbackChanged?.Invoke();
+    }
+
     // On the UI thread.
     void Sync()
     {
@@ -138,6 +181,7 @@ public sealed class Fleet : IAsyncDisposable
         // another copy of the app shows them instead.
         var switched = now != account;
         account = now;
+        if (switched) { DropLoopback(); }
         if (state == FleetState.Connecting && !switched) { return; }
         foreach (var id in machines.Keys.Where(id => !hosts.ContainsKey(id)).ToList())
         {
@@ -150,6 +194,7 @@ public sealed class Fleet : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         disposed = true;
+        if (loopback is { } lb) { loopback = null; await lb.Host.DisposeAsync(); }
         foreach (var m in machines.Values) { await m.DisposeAsync(); }
         machines.Clear();
         await link.DisposeAsync();
@@ -396,6 +441,35 @@ public sealed class RelayFleetLink : IFleetLink
             throw new HostNotRunningException($"the machine did not answer through the relay ({e.Message})", e);
         }
     }
+
+    // Every host in the relay's presence but the target (this machine's own included: it can be a
+    // source too), asked at once, each over a short channel of its own.
+    public async Task<IReadOnlyList<TransferSource>> TransferSourcesAsync(string target, CancellationToken ct)
+    {
+        if (current is not { } c) { return []; }
+        var hosts = c.Relay.Presence.Where(p => p.Kind == "host" && p.Id != target && p.Id != c.Relay.DeviceId).ToList();
+        var found = await Task.WhenAll(hosts.Select(async h =>
+        {
+            try
+            {
+                await using var ch = await OpenAsync(h.Id, ct);
+                return await Transfers.AskAsync(ch, h.Id, h.Name, SourceOptionsTimeout, ct);
+            }
+            catch (Exception e) when (e is not OutOfMemoryException)
+            {
+                log($"{h.Name} offered no sessions to bring over: {e.Message}");
+                return null;
+            }
+        }));
+        return [.. found.OfType<TransferSource>()];
+    }
+
+    // launch.options can take a minute on a slow machine (LaunchViewModel.OptionsTimeout).
+    public TimeSpan SourceOptionsTimeout { get; init; } = TimeSpan.FromSeconds(90);
+
+    // Signed with this app's own device key, for the machine the session is on.
+    public SignedCommand SignTransfer(TransferSource from, string session, string to) =>
+        Transfers.Sign(key, from.Key, session, to, DateTimeOffset.UtcNow, Guid.NewGuid().ToString());
 
     public async ValueTask DisposeAsync()
     {

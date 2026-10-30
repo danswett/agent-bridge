@@ -130,6 +130,8 @@ public sealed class MainViewModel : Observable
     // Another machine gone, by its key, after its cards and toasts.
     public event Action<string>? MachineRemoved;
 
+    internal Fleet? Fleet => fleet;
+
     internal void AttachFleet(Fleet f)
     {
         fleet = f;

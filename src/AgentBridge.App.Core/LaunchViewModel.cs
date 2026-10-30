@@ -17,6 +17,12 @@ public sealed record Choice(string Value, string Label)
 // workspace or model the machine does not list cannot be picked. The machine's Deliveries send
 // each press, and resend it with the same request until there is an outcome; once a session
 // has started the window goes to its card. The prompt goes whole, up to 16 KiB.
+//
+// Where the machine takes sessions from the account's other machines (sessions.transfer), Resume
+// also lists the sessions they offer (sessions.transfer.serve), by machine. Picking one brings
+// its transcript over as a new session, in the workspace picked, with a command this app signs as
+// a person's device for the machine it is on (Transfers, v1-transfer.md); the original stays. A
+// transfer to this machine goes to its host through the relay, never the pipe (Fleet.Loopback).
 public sealed class LaunchViewModel : Observable
 {
     public const string ApproveHint = "agent-bridge-host workspace add <folder>";
@@ -62,6 +68,14 @@ public sealed class LaunchViewModel : Observable
     // What stops the form being launched now (no prompt for Codex, too long...): about the form,
     // not the last launch, so it is said apart from that launch's outcome and its Try again.
     string problem = "";
+    // What the account's other machines offer to bring here, for the machine shown.
+    IReadOnlyList<TransferSource> sources = [];
+    // Where the last launch went: its machine's Deliveries, or for a transfer to this machine, the
+    // loopback's; and for a transfer, what it was brought from, to sign again for a new request.
+    Machine? lastVia;
+    TransferSource? lastSource;
+    Machine? watchedLoopback;
+    Fleet? watchedFleet;
 
     public LaunchViewModel(MainViewModel main, IUiDispatcher ui)
     {
@@ -69,6 +83,26 @@ public sealed class LaunchViewModel : Observable
         this.ui = ui;
         main.MachinesUpdated += MachinesUpdated;
         MachinesUpdated();
+    }
+
+    // The loopback's launches are followed as this machine's, and what it offers redraws the page.
+    void WatchLoopback()
+    {
+        if (main.Fleet is { } f && f != watchedFleet)
+        {
+            watchedFleet = f;
+            f.LoopbackChanged += () => ui.Post(() => { WatchLoopback(); if (machine?.IsLocal == true) { Draw(); } });
+        }
+        var now = main.Fleet?.CurrentLoopback;
+        if (now == watchedLoopback) { return; }
+        if (watchedLoopback is { } was) { was.Deliveries.Changed -= OnLoopback; }
+        watchedLoopback = now;
+        if (now is not null) { now.Deliveries.Changed += OnLoopback; }
+    }
+
+    void OnLoopback(Delivery d)
+    {
+        if (main.MachineOf(Machine.LocalKey) is { } local) { OnDelivery(local, d, watchedLoopback); }
     }
 
     // The machines that can launch now, this one first.
@@ -179,6 +213,7 @@ public sealed class LaunchViewModel : Observable
 
     void MachinesUpdated()
     {
+        WatchLoopback();
         foreach (var m in main.AllMachines.Where(m => !watching.ContainsKey(m)).ToList())
         {
             void Watch(Delivery d) => OnDelivery(m, d);
@@ -193,7 +228,7 @@ public sealed class LaunchViewModel : Observable
             if (m == lastMachine && lost is null && last is not null)
             {
                 // Done or failed: shown as it ended, so the page is not left waiting on it.
-                if (m.Deliveries.Get(Key) is { State: DeliveryState.Done or DeliveryState.Failed } final && final.Request == last.Request) { OnDelivery(m, final); }
+                if ((lastVia ?? m).Deliveries.Get(Key) is { State: DeliveryState.Done or DeliveryState.Failed } final && final.Request == last.Request) { OnDelivery(m, final, lastVia); }
                 else if (Pending)
                 {
                     lost = $"Not confirmed: {m.Name} left before saying whether the launch started. Check at that machine before launching again.";
@@ -233,6 +268,7 @@ public sealed class LaunchViewModel : Observable
         }
         machine = next;
         options = null;
+        sources = [];
         error = null;
         SetProblem("");
         loads++;
@@ -276,6 +312,9 @@ public sealed class LaunchViewModel : Observable
         loading = true;
         error = null;
         Draw();
+        // The other machines' sessions are added when they arrive: asking each takes a handshake,
+        // and one slow to answer must not hold up this machine's own choices.
+        _ = SourcesAsync(m, load);
         LaunchOptions? got = null;
         string? failed = null;
         try { got = Known(await m.Host.CallAsync<LaunchOptions>(LaunchProtocol.Options, timeout: OptionsTimeout)); }
@@ -295,6 +334,34 @@ public sealed class LaunchViewModel : Observable
         await done.Task;
     }
 
+    async Task SourcesAsync(Machine m, int load)
+    {
+        IReadOnlyList<TransferSource> got = [];
+        if (main.Fleet is { } f && DeviceOf(m) is { } target)
+        {
+            if (m.IsLocal)
+            {
+                // This machine takes transfers only through the relay: its own host is asked there.
+                var lb = f.Loopback();
+                if (lb is not null)
+                {
+                    ui.Post(WatchLoopback);
+                    try { await lb.Host.WhenConnectedAsync().WaitAsync(TimeSpan.FromSeconds(20)); }
+                    catch (TimeoutException) { }
+                }
+            }
+            var takes = new TaskCompletionSource<bool>();
+            ui.Post(() => takes.SetResult(TakesTransfers(m)));
+            if (await takes.Task) { got = await f.TransferSourcesAsync(target, CancellationToken.None); }
+        }
+        ui.Post(() =>
+        {
+            if (load != loads || m != machine) { return; }
+            sources = got;
+            if (options is not null) { Draw(); }
+        });
+    }
+
     // An agent or launcher this app does not know cannot be launched from it, so it is left out.
     static LaunchOptions Known(LaunchOptions o) => o with
     {
@@ -304,6 +371,24 @@ public sealed class LaunchViewModel : Observable
 
     LaunchAgent? AgentOf(string? id) => options?.Agents.FirstOrDefault(a => a.Id == id);
     ResumableSession? Resumed => options?.Resumable.FirstOrDefault(r => r.Id == resume?.Value && r.Id.Length > 0);
+
+    // A session picked from another machine ("@<host>/<id>"), and the machine.
+    (TransferSource From, ResumableSession Session)? Brought
+    {
+        get
+        {
+            if (resume?.Value is not { Length: > 1 } v || v[0] != '@' || v.IndexOf('/') is var slash && slash < 0) { return null; }
+            var host = v[1..slash];
+            var id = v[(slash + 1)..];
+            return sources.FirstOrDefault(s => s.HostId == host) is { } s && s.Resumable.FirstOrDefault(r => r.Id == id) is { } r ? (s, r) : null;
+        }
+    }
+
+    // Whether the machine shown takes sessions from the others: its own host's word, through the
+    // relay for this machine (whose pipe never offers it).
+    bool TakesTransfers(Machine m) => m.IsLocal ? watchedLoopback?.Host.Can(TransferProtocol.Capability) == true : m.Host.Can(TransferProtocol.Capability);
+
+    string? DeviceOf(Machine m) => m.IsLocal ? main.LocalMachineId : m.Key;
 
     // Keeps what was picked if it is still offered, else the machine's preference, else the first.
     static Choice? Keep(IReadOnlyList<Choice> list, Choice? current, string? preferred) =>
@@ -333,11 +418,15 @@ public sealed class LaunchViewModel : Observable
             }
             else
             {
-                Resumes = [new Choice("", "New session"), .. o.Resumable.Select(r => new Choice(r.Id, $"{r.Title}{(r.Workspace is { Length: > 0 } w ? $" · {w}" : "")}"))];
+                var away = sources.SelectMany(s => s.Resumable.Select(r => new Choice($"@{s.HostId}/{r.Id}", $"{r.Title} · on {s.MachineName}"))).ToList();
+                Resumes = [new Choice("", "New session"), .. o.Resumable.Select(r => new Choice(r.Id, $"{r.Title}{(r.Workspace is { Length: > 0 } w ? $" · {w}" : "")}")), .. away];
                 resume = Keep(Resumes, resume, "");
                 var resumed = Resumed;
-                Agents = [.. o.Agents.Where(a => resumed is null || a.Kind == resumed.Agent).Select(a => new Choice(a.Id, a.Label))];
-                agent = Keep(Agents, agent, resumed?.Launcher ?? o.Defaults.Agent);
+                var brought = Brought;
+                // A session runs in an agent of its own kind, here as where it was.
+                var kind = resumed?.Agent ?? brought?.Session.Agent;
+                Agents = [.. o.Agents.Where(a => kind is null || a.Kind == kind).Select(a => new Choice(a.Id, a.Label))];
+                agent = Keep(Agents, agent, resumed?.Launcher ?? brought?.Session.Launcher ?? o.Defaults.Agent);
                 var a = AgentOf(agent?.Value);
                 Workspaces = [.. o.Workspaces.Select(w => new Choice(w.Label, w.Isolate == true ? $"{w.Label} (new worktree)" : w.Label))];
                 workspace = Keep(Workspaces, workspace, o.Defaults.Workspace);
@@ -355,15 +444,16 @@ public sealed class LaunchViewModel : Observable
                     permissions = PermissionChoices.First(p => p.Value == (o.Defaults.Permissions == LaunchProtocol.AllowAll ? LaunchProtocol.AllowAll : LaunchProtocol.Ask));
                     permissionsSet = true;
                 }
-                ShowResume = o.Resumable.Count > 0;
+                ShowResume = o.Resumable.Count > 0 || away.Count > 0;
                 ShowWorkspace = resumed is null && o.Workspaces.Count > 0;
                 ShowProfile = a?.Profiles is not null;
-                PromptPlaceholder = a?.NeedsPrompt == true && resumed is null ? $"{a.Label} starts on a first message: what should it do?" : "What should the session do first? (optional)";
+                PromptPlaceholder = a?.NeedsPrompt == true && resumed is null && brought is null ? $"{a.Label} starts on a first message: what should it do?" : "What should the session do first? (optional)";
                 var noAgent = o.Agents.Count == 0;
                 var noWorkspace = resumed is null && o.Workspaces.Count == 0;
                 NoteWarns = noAgent || noWorkspace;
                 Note = noAgent ? $"No agent is installed on {Name}: install Copilot, Claude or Codex there."
                     : noWorkspace ? $"No folder on {Name} is approved for launching yet. At the machine, run: {ApproveHint}"
+                    : brought is { } b ? $"This copies the session's whole conversation, with its checkpoints and files, from {b.From.MachineName} to {Name}, where it opens as a new session in the workspace picked. It stays on {b.From.MachineName} as it was."
                     : resumed is not null ? "A resumed session reopens in its own folder." : "";
             }
         }
@@ -390,9 +480,12 @@ public sealed class LaunchViewModel : Observable
     public LaunchRequest Settings()
     {
         var resumed = Resumed;
+        var brought = Brought;
         var a = AgentOf(agent?.Value);
         return new LaunchRequest
         {
+            // The command is signed at the press (Launch), for the machine the session is on.
+            Transfer = brought is { } b ? new LaunchTransfer { From = b.From.HostId, Session = b.Session.Id } : null,
             Request = "",
             Agent = agent?.Value,
             Permissions = permissions?.Value,
@@ -416,29 +509,53 @@ public sealed class LaunchViewModel : Observable
             ?? (launch.Resume is null && launch.Workspace is null
                 ? o.Workspaces.Count > 0 ? "pick a workspace" : $"no workspace is approved on this machine yet; approve one at the machine ({ApproveHint})"
                 : null)
-            ?? LaunchProtocol.Check(launch with { Request = Guid.Empty.ToString() })
-            ?? (a?.NeedsPrompt == true && launch.Resume is null && launch.Prompt is null ? $"{a.Label} starts its session only on a first message; give it a prompt" : null)
+            ?? (launch.Transfer is not null && !TakesTransfers(m) ? "this machine does not take sessions from other machines now" : null)
+            ?? LaunchProtocol.Check(launch with { Request = Guid.Empty.ToString(), Transfer = launch.Transfer is { } t0 ? t0 with { Command = Placeholder } : null })
+            ?? (a?.NeedsPrompt == true && launch.Resume is null && launch.Transfer is null && launch.Prompt is null ? $"{a.Label} starts its session only on a first message; give it a prompt" : null)
             // The host measures the request as sent, where quotes and backslashes count twice.
-            ?? (JsonSerializer.SerializeToUtf8Bytes(launch with { Request = Guid.Empty.ToString() }, ProtocolJson.Options).Length > LaunchProtocol.MaxRequest
+            ?? (JsonSerializer.SerializeToUtf8Bytes(launch with { Request = Guid.Empty.ToString(), Transfer = launch.Transfer is { } t1 ? t1 with { Command = Placeholder } : null }, ProtocolJson.Options).Length > LaunchProtocol.MaxRequest
                 ? $"the prompt is too long once sent (over {LaunchProtocol.MaxRequest / 1024} KiB); shorten it, and send the rest once the session has started" : null);
         if (problem is not null)
         {
             SetProblem($"Not launched: {Sentence(problem)}");
             return;
         }
+        TransferSource? from = null;
+        var via = m;
+        if (launch.Transfer is not null)
+        {
+            from = Brought!.Value.From;
+            if (m.IsLocal && watchedLoopback is null) { SetProblem("Not launched: this machine takes sessions from others only through the relay, which it is not connected to now."); return; }
+            via = m.IsLocal ? watchedLoopback! : m;
+            if (Signed(launch, from, m) is not { } signed) { SetProblem($"Not launched: couldn't sign the request for {from.MachineName}."); return; }
+            launch = signed;
+        }
         SetProblem("");
         lost = null;
         lastMachine = m;
+        lastVia = via;
+        lastSource = from;
         lastName = m.Name;
         last = null;
         // No request is ever replayed to a host that restarted meanwhile: it remembers requests in
         // memory only, so a second copy could start a second session.
-        Submit(m, launch);
+        Submit(via, launch);
     }
+
+    // Stands in for the command while the rest of the launch is checked: the same shape and size.
+    static readonly SignedCommand Placeholder = new() { Body = new string('A', 600), By = new string('A', 87), Mac = new string('A', 43) };
+
+    // Signed once per press, for five minutes: a resend of that launch carries the same command,
+    // which the machine the session is on acts on once.
+    LaunchRequest? Signed(LaunchRequest launch, TransferSource from, Machine target) =>
+        DeviceOf(target) is { } to && main.Fleet?.SignTransfer(from, launch.Transfer!.Session, to) is { } command
+            ? launch with { Transfer = launch.Transfer with { Command = command } } : null;
 
     void Submit(Machine m, LaunchRequest launch)
     {
-        var sent = m.Deliveries.Submit(Key, LaunchProtocol.Launch, request => launch with { Request = request }, _ => false, payload: launch, replayAfterRestart: false, timeout: LaunchTimeout, resendOnBusy: false);
+        var transfer = launch.Transfer is not null;
+        var sent = m.Deliveries.Submit(Key, LaunchProtocol.Launch, request => launch with { Request = request }, _ => false, payload: launch, replayAfterRestart: false,
+            timeout: transfer ? Transfers.LaunchTimeout : LaunchTimeout, resendOnBusy: false, giveUp: transfer ? Transfers.GiveUp : null);
         // Submit returns its first snapshot; the delivery may already have moved on (no connection:
         // waiting), and that newer state is the one to show.
         last = m.Deliveries.Get(Key) is { } now && now.Request == sent.Request ? now : sent;
@@ -447,9 +564,18 @@ public sealed class LaunchViewModel : Observable
 
     public void Resend()
     {
-        if (!ShowResend || lastMachine is not { } m || last is not { Payload: LaunchRequest launch } e) { return; }
-        if (e.State == DeliveryState.Done) { Submit(m, launch); }
-        else { m.Deliveries.Resend(Key, LaunchProtocol.Launch, request => launch with { Request = request }); }
+        if (!ShowResend || lastMachine is not { } m || last is not { Payload: LaunchRequest launch } e || lastVia is not { } via) { return; }
+        if (e.State == DeliveryState.Done)
+        {
+            // A new request: a transfer's command was spent on the last one, so it is signed again.
+            if (launch.Transfer is not null)
+            {
+                if (lastSource is not { } from || Signed(launch, from, m) is not { } again) { SetProblem("Not launched: couldn't sign the request again; pick the session and press Launch."); return; }
+                launch = again;
+            }
+            Submit(via, launch);
+        }
+        else { via.Deliveries.Resend(Key, LaunchProtocol.Launch, request => launch with { Request = request }); }
     }
 
     // The new session's card, which may arrive after the outcome.
@@ -463,10 +589,11 @@ public sealed class LaunchViewModel : Observable
         if (Result(e)?.Session is { } id) { main.Open(m.Key, id, untilItArrives: true); }
     }
 
-    void OnDelivery(Machine m, Delivery d)
+    // via: the Deliveries it came from, when not m's own (this machine's loopback).
+    void OnDelivery(Machine m, Delivery d, Machine? via = null)
     {
         if (d.Key != Key) { return; }
-        if (m == lastMachine && (last is null || d.Request == last.Request)) { last = d; Show(); }
+        if (m == lastMachine && (via ?? m) == lastVia && (last is null || d.Request == last.Request)) { last = d; Show(); }
         if (d.State != DeliveryState.Done || handled == d.Request) { return; }
         handled = d.Request;
         var outcome = OutcomeOf(d);
@@ -511,6 +638,8 @@ public sealed class LaunchViewModel : Observable
         var on = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
         switch (e.State)
         {
+            case DeliveryState.Sending when e.Payload is LaunchRequest { Transfer: not null }:
+                return ($"Bringing the session over and starting it{on}… A long session can take a few minutes.", Tone.Progress);
             case DeliveryState.Sending:
                 return ($"Starting the session{on}… This waits for it to start, up to a minute.", Tone.Progress);
             case DeliveryState.Waiting:
@@ -522,7 +651,7 @@ public sealed class LaunchViewModel : Observable
         var how = Result(e)?.Launched?.Worktree == true ? " in a new worktree" : "";
         return OutcomeOf(e) switch
         {
-            "started" => ($"Session started{how}.", Tone.Ok),
+            "started" => (Result(e)?.Launched?.Transfer is not null ? $"Session brought over and started{how}. The original is still on its machine." : $"Session started{how}.", Tone.Ok),
             // Also said here when the launch may never have gone (no reply, a host that restarted).
             "unconfirmed" => ($"Not confirmed whether the session started{(e.Reason is { } r ? $": {Sentence(r)}" : ".")} Check at the machine before launching again.", Tone.Warn),
             "busy" => ($"Not launched: {Sentence(e.Reason ?? "the machine is busy with another launch")} Try again in a moment.", Tone.Warn),
@@ -537,7 +666,7 @@ public sealed class LaunchViewModel : Observable
     static string Again(Delivery e, string? machineName)
     {
         if (e.Payload is not LaunchRequest l) { return ""; }
-        var where = l.Resume is not null ? "resuming its session" : l.Workspace is { } w ? $"in {w}" : "";
+        var where = l.Resume is not null ? "resuming its session" : l.Transfer is not null ? $"bringing its session over into {l.Workspace}" : l.Workspace is { } w ? $"in {w}" : "";
         var how = l.Permissions == LaunchProtocol.AllowAll ? "allow all" : "ask permission";
         return $" Try again sends that same launch to {NameOr(machineName)}: {l.Agent}{(where.Length > 0 ? $" {where}" : "")}, {how}.";
     }

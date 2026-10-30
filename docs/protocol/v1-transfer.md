@@ -12,7 +12,7 @@ installs it under a new id and resumes it.
 It extends [v1-launch.md](v1-launch.md) and [v1-sessions.md](v1-sessions.md), whose rules
 hold here. The bundle travels as a blob ([blobs.md](blobs.md)). C# records are in
 `src/AgentBridge.Protocol/Transfer.cs`, the signature in `src/AgentBridge.Host/SignedCommands.cs`;
-the PWA signs in `pwa/js/transfer.js`. How a Windows host carries one out, and its settings,
+the PWA signs in `pwa/js/transfer.js`, the Windows app in `src/AgentBridge.App.Core/Transfers.cs`, both with the MAC of `src/AgentBridge.Transport/CommandMac.cs`. How a Windows host carries one out, and its settings,
 are [host-transfer.md](../host-transfer.md). Design §9 ("Session transfer", "Fleet secret
 retired"), §5.5.
 
@@ -139,7 +139,7 @@ The target checks the command's body too, unsigned, before it opens a channel: i
 the device that sent the launch as the principal, this machine as `to`, and `transfer.from` and
 `transfer.session` as its target.
 
-The PWA signs a command once per press, for five minutes, and a resend of that launch carries
+The PWA and the Windows app sign a command once per press, for five minutes, and a resend of that launch carries
 the same command. A test vector keeps the two implementations to one MAC
 (`SignedCommandTests.The_same_bytes_and_keys_give_the_MAC_the_PWA_computes`,
 `pwa/test/unit/transfer.test.mjs`).
