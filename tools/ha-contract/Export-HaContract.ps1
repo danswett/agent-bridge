@@ -162,6 +162,16 @@ function Get-Published {
 
 $machine = 'DSWETT-DEV-VM1'
 $slug = Get-BridgeMachineSlug -MachineName $machine
+# A publisher that takes no machine name (Publish-CopilotMqttUpdate) names its device after the
+# computer it runs on, which made a recording depend on where it was made: on any computer but
+# the fixture's own, the update entity's device came out under that computer's name. The
+# fixture's machine stands in for "this computer", as it does everywhere else here.
+$specMachineDevice = ${function:Get-CopilotMqttMachineDevice}
+function script:Get-CopilotMqttMachineDevice {
+    param([string]$Slug, [string]$MachineName)
+    if (-not $MachineName) { $MachineName = $machine }
+    & $specMachineDevice -Slug $Slug -MachineName $MachineName
+}
 $copilotId = '6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20'
 $claudeId = 'c1a2b3c4-d5e6-4f70-8a91-b2c3d4e5f607'
 $codexId = '019a2b3c-4d5e-7f60-8192-a3b4c5d6e7f8'
