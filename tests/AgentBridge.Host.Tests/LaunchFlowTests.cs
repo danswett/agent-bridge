@@ -405,6 +405,9 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
     public async Task A_Copilot_launcher_that_hands_its_session_on_and_exits_is_not_started_while_the_session_asks_whether_to_trust_its_folder()
     {
         starter.ExitsAtOnce = true;
+        starter.HandsOn = true;
+        // Only the session's own window can be read; the launcher's went with it.
+        screens.Unreadable = pid => starter.Pids.Contains(pid);
         screens.Rows = ["Confirm folder trust", "Do you trust the files in this folder?", "❯ 1. Yes"];
         var ch = await OpenAsync();
 
@@ -413,6 +416,10 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         Assert.Equal("unconfirmed", first.Outcome_);
         Assert.Contains("is asking whether to trust App", first.Reason);
         Assert.Equal("busy", (await LaunchAsync(ch, new { workspace = "API" })).Outcome_);
+
+        // Answered at the machine: the session's window shows it ready, and launching is open again.
+        screens.Rows = CopilotReady;
+        await WaitAsync(async () => (await RequestAsync(ch, LaunchProtocol.Options, new { })).TryGetProperty("busy", out _) == false);
         Assert.Empty(screens.Typed);
     }
 
@@ -734,9 +741,13 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
             return Task.FromResult(new InjectionResult(InjectionStatus.Typed, "ok"));
         }
 
+        // A window that cannot be read: one whose process has gone.
+        public Func<int, bool>? Unreadable;
+
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref Reads);
+            if (Unreadable?.Invoke(processId) == true) { throw new IOException($"no console for pid {processId}"); }
             return Task.FromResult(new ConsoleScreen(Rows ?? [], null));
         }
     }
@@ -771,6 +782,8 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         public string? Unavailable_;
         public volatile bool Registers = true;
         public bool ExitsAtOnce;
+        // The launcher hands its session to a process of its own (its pid + 3000) and exits.
+        public bool HandsOn;
         public readonly string CodexId = "66666666-6666-4666-8666-666666666666";
         public readonly List<int> Pids = [];
         readonly HashSet<int> running = [];
@@ -785,7 +798,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         {
             int pid;
             lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } }
-            if (Registers) { Register(spec, pid); }
+            if (Registers) { Register(spec, HandsOn ? pid + 3000 : pid); }
             return new Started(pid, DateTimeOffset.UtcNow);
         }
 
