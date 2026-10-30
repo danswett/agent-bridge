@@ -325,6 +325,22 @@ public sealed class LaunchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_status_is_announced_only_when_it_changes()
+    {
+        ui.Post(launch.Launch);
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        var raised = 0;
+        launch.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(LaunchViewModel.StatusText)) { Interlocked.Increment(ref raised); } };
+
+        // Choices read again, and the machine's status updated: nothing new to say.
+        await launch.RefreshAsync();
+        await host.SendAsync(HostOps.StatusEvent, FakeHost.StatusOf());
+        await Task.Delay(200);
+
+        Assert.Equal(0, Volatile.Read(ref raised));
+    }
+
+    [Fact]
     public async Task A_machine_with_no_approved_folder_says_how_to_approve_one_at_the_machine()
     {
         options = options with { Workspaces = [], Resumable = [] };

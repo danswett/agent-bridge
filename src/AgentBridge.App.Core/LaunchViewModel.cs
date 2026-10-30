@@ -477,8 +477,16 @@ public sealed class LaunchViewModel : Observable
 
     void Show()
     {
-        (StatusText, StatusTone) = local ?? (lost is not null ? (lost, Tone.Warn) : last is { } e ? Describe(e, lastName) : ("", Tone.None));
-        foreach (var p in new[] { nameof(StatusText), nameof(StatusTone), nameof(CanLaunch), nameof(ShowResend), nameof(ShowOpen), nameof(State) }) { Raise(p); }
+        var (text, tone) = local ?? (lost is not null ? (lost, Tone.Warn) : last is { } e ? Describe(e, lastName) : ("", Tone.None));
+        // Only a change is news: the status line is announced to screen readers whenever it is
+        // raised, and this runs on every update of any machine.
+        if (text != StatusText || tone != StatusTone)
+        {
+            (StatusText, StatusTone) = (text, tone);
+            Raise(nameof(StatusText));
+            Raise(nameof(StatusTone));
+        }
+        foreach (var p in new[] { nameof(CanLaunch), nameof(ShowResend), nameof(ShowOpen), nameof(State) }) { Raise(p); }
     }
 
     // What a launch's progress or outcome says (describeLaunch in the PWA).
