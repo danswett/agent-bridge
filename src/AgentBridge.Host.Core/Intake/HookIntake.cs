@@ -502,6 +502,9 @@ public sealed class HookIntake : IAsyncDisposable
             // Whatever went wrong with one event, it costs that event, never the pass.
             catch (Exception e)
             {
+                // Unless the daemon started meanwhile: then the file is its own, neither a failed
+                // attempt of this host's nor this host's to drop.
+                if (!Ours()) { break; }
                 var attempts = _attempts.GetValueOrDefault(name) + 1;
                 if (attempts >= 2)
                 {

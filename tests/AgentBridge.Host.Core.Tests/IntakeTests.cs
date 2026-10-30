@@ -1148,6 +1148,24 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void An_event_failing_its_last_try_just_as_agent_ha_bridge_starts_is_left_for_it()
+    {
+        var intake = Running();
+        var failing = Spooled("0001", "gemini", "stop", new { });
+        intake.Pass();
+        Assert.True(File.Exists(failing));
+        // Its second try fails too, but the daemon has started by then.
+        var checks = 0;
+        _probe = () => ++checks > 2 ? "the daemon started" : null;
+
+        intake.Pass();
+
+        Assert.True(File.Exists(failing));
+        Assert.Equal(0, intake.Dropped);
+        Assert.Equal("the daemon started", intake.Paused);
+    }
+
+    [Fact]
     public void A_new_approval_is_not_offered_while_the_one_before_it_cannot_be_withdrawn()
     {
         // Only Windows lets a reader refuse a delete.

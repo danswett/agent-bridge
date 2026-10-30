@@ -139,7 +139,7 @@ completely:
 
 Those all belong to the daemon then, and two consumers would handle each event twice. An event
 being handled when the daemon is found commits nothing further and stays in the spool for it,
-and is not counted as a failed attempt. (The probe's 2 s cache, and the moment between a check
+and is not counted as a failed attempt, nor dropped, even when its handling failed. (The probe's 2 s cache, and the moment between a check
 and the write it guards, are the window left: agent-ha-bridge takes no lock the host could
 share.) It takes the spool again once the daemon is gone. Every read is of a copy in memory, through a
 handle that shares delete, so a reader never makes another consumer's delete fail. The shadow
