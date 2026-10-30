@@ -162,6 +162,64 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Null(Known(Daemon(new FileInfo(Paths.CopilotTranscript(Id)!).Length, model: "agent-model"), Host(), ShadowKinds.Model));
     }
 
+    static readonly DateTimeOffset Asked = new(2026, 1, 2, 8, 0, 0, TimeSpan.Zero);
+
+    static string AskUser(string call) => JsonSerializer.Serialize(new { type = "tool.execution_start", timestamp = Asked.ToString("o"), data = new { toolCallId = call, toolName = "ask_user", arguments = new { question = "Which one?" } } });
+
+    static string Answered(string call) => JsonSerializer.Serialize(new { type = "tool.execution_complete", data = new { toolCallId = call, success = true, result = new { content = "User selected: the first" } } });
+
+    // What a busy session writes while its question waits, none of which the witness parses.
+    static string Filler(int bytes) => Event("assistant.reasoning", new { content = new string('x', bytes) });
+
+    // The daemon's view of a session whose hook armed a question as the ask_user started.
+    static ShadowSession Asking(string status = "working", TimeSpan? armedAfter = null) => Daemon(0) with
+    {
+        Status = status,
+        Question = new ShadowQuestion { AskedAt = Asked + (armedAfter ?? TimeSpan.FromMilliseconds(50)), Fields = [new ShadowField("choice", 2, null)] },
+    };
+
+    ShadowDifference Difference(ShadowSession daemon, ShadowSession host, string kind)
+    {
+        var (d, h) = (new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = daemon } }, new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = host }, SeesAgentHaBridge = true });
+        return Assert.Single(new ShadowWitness(Paths).Explain(d, h, ShadowCompare.Compare(d, h).Differences), x => x.Kind == kind);
+    }
+
+    // Seen on DEV-VM1 (#40): a question asked at 00:58 and answered at 09:32 stayed on the daemon's
+    // card, and so did its waiting: the ask_user had started 7 MiB before its answer, beyond the
+    // 4 MiB the daemon reads to see it answered (agent-ha-bridge#263).
+    [Fact]
+    public void A_question_the_daemon_keeps_after_its_answer_is_put_down_to_its_tail_only_when_the_start_was_beyond_it()
+    {
+        Write(AskUser("ask-1"), Filler((int)TranscriptEvidence.DaemonQuestionTail), Answered("ask-1"));
+        var host = Host() with { Status = "working" };
+
+        Assert.Equal("agent-ha-bridge#263", Difference(Asking(), host, ShadowKinds.QuestionMissingOnHost).Known);
+        Assert.Equal("agent-ha-bridge#263", Difference(Asking(), host, ShadowKinds.Status).Known);
+        // The daemon's own status is not the host's either: that is the mismatch, and it says so.
+        var status = Difference(Asking(status: "idle"), host, ShadowKinds.Status);
+        Assert.Null(status.Known);
+        Assert.Equal("daemon=idle host=working", status.Detail);
+        // A marker armed well away from that ask_user is some other question.
+        Assert.Null(Difference(Asking(armedAfter: TimeSpan.FromMinutes(5)), host, ShadowKinds.QuestionMissingOnHost).Known);
+    }
+
+    [Fact]
+    public void A_question_answered_within_the_daemons_tail_or_not_answered_at_all_stays_a_mismatch()
+    {
+        var host = Host() with { Status = "working" };
+        // Still waiting in the transcript: the host missing it is the host's problem. Another
+        // call's completion that happens to quote its id is not its answer.
+        Write(AskUser("ask-1"), Filler((int)TranscriptEvidence.DaemonQuestionTail),
+            JsonSerializer.Serialize(new { type = "tool.execution_complete", data = new { toolCallId = "other-call", success = true, result = new { content = "done", about = "ask-1" } } }));
+        Assert.Null(Difference(Asking(), host, ShadowKinds.QuestionMissingOnHost).Known);
+
+        // Answered with its start still within the tail: the daemon can see it, and is only behind.
+        File.Delete(Paths.CopilotTranscript(Id)!);
+        Write(AskUser("ask-1"), Filler(1024), Answered("ask-1"), Filler((int)TranscriptEvidence.DaemonQuestionTail));
+        Assert.Null(Difference(Asking(), host, ShadowKinds.QuestionMissingOnHost).Known);
+        Assert.Null(Difference(Asking(), host, ShadowKinds.Status).Known);
+    }
+
     [Fact]
     public void Only_a_copilot_session_s_transcript_is_read_and_a_session_with_no_readable_one_keeps_its_difference()
     {

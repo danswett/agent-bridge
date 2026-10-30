@@ -795,6 +795,45 @@ public sealed class ShadowTests : IDisposable
         Assert.Null(await Confirmed(16));
     }
 
+    // Seen on DEV-VM1 (#40): another machine read the account's usage, so this machine's daemon
+    // stood down and its sensor kept an 11-hour-old figure. Every sample compared it all the same,
+    // and no reading was ever near enough the host's to count.
+    [Fact]
+    public async Task A_daemon_figure_older_than_its_own_pace_is_not_compared_since_the_daemon_is_not_reading_it_here()
+    {
+        Config();
+        var now = f.Time.GetUtcNow();
+        var measured = now - TimeSpan.FromHours(11);
+        var inner = new FakeHomeAssistant(e => e == "sensor.agent_bridge_fixture_usage_copilot" ? UsageState("copilot", 79, measured) : null);
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        async Task<ShadowComparison> Compare()
+        {
+            var daemon = new ShadowView { Usage = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage, Resumable = [] };
+            var host = new ShadowView { SeesAgentHaBridge = true, Usage = new Dictionary<string, ShadowUsage> { ["copilot"] = Reading(40, now) }, Resumable = [] };
+            return ShadowCompare.Compare(daemon, host);
+        }
+
+        var lapsed = await Compare();
+        Assert.False(lapsed.UsageCompared);
+        Assert.Contains(ShadowCompare.UsageLapsed, lapsed.NotCompared);
+        Assert.DoesNotContain(lapsed.Differences, d => d.Kind.StartsWith("usage.", StringComparison.Ordinal));
+        Assert.Empty(lapsed.UsageFresh);
+        // Nor is it a reading the host is missing.
+        var daemonOnly = ShadowCompare.Compare(
+            new ShadowView { Usage = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage, Resumable = [] },
+            new ShadowView { SeesAgentHaBridge = true, Usage = new Dictionary<string, ShadowUsage>(), Resumable = [] });
+        Assert.False(daemonOnly.UsageCompared);
+        Assert.DoesNotContain(daemonOnly.Differences, d => d.Kind.StartsWith("usage.", StringComparison.Ordinal));
+
+        // Within its pace (half an hour and a poll), the same figures are compared, and differ.
+        measured = now - TimeSpan.FromMinutes(1);
+        var current = await Compare();
+        Assert.True(current.UsageCompared);
+        Assert.DoesNotContain(ShadowCompare.UsageLapsed, current.NotCompared);
+        Assert.Contains(current.Differences, d => d.Kind == ShadowKinds.UsagePercent);
+        Assert.Equal(["copilot"], current.UsageFresh);
+    }
+
     // Found in review (#73): the daemon republishes an unchanged figure only every half hour, or
     // with a dashboard.publication at every poll with a new measured_at; either way a host reading
     // every fifteen minutes, seven after the daemon's polls, never landed within three minutes of

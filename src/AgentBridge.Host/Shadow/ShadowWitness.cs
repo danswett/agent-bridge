@@ -7,7 +7,8 @@ namespace AgentBridge.Host.Shadow;
 // The evidence for a difference agent-ha-bridge's daemon is known to cause. The first live runs
 // found five daemon bugs (agent-ha-bridge#258 to #262, docs/host-shadow.md); each leaves the
 // daemon's background agents, shells or model different from the host's in a way that has a
-// signature in the session's transcript. A difference is put down to one of them only when the
+// signature in the session's transcript. A sixth (#263) leaves an answered question on the
+// daemon's card, and with it its waiting. A difference is put down to one of them only when the
 // transcript shows that signature for every id it involves and the counts then add up exactly,
 // never because of the field it is in: a difference of the same kind with any other cause stays
 // a mismatch.
@@ -40,8 +41,19 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
                     ShadowKinds.BackgroundAgents => e.Agents(ds, hs),
                     ShadowKinds.BackgroundShells => e.Shells(ds, hs),
                     ShadowKinds.Model => e.Model(ds, hs),
+                    ShadowKinds.QuestionMissingOnHost => e.AnsweredQuestion(ds, hs),
+                    // Only the waiting the daemon's question gives it: its own status must be the host's.
+                    ShadowKinds.Status when ShadowCompare.Comparable(ds.Status) == hs.Status => e.AnsweredQuestion(ds, hs),
                     _ => null,
                 };
+            }
+            // The daemon's question is one it should have cleared (#263), but its own status is not
+            // the host's either: that is the disagreement, so it is what the mismatch says.
+            if (known is null && d.Kind == ShadowKinds.Status && ids.TryGetValue(d.Session!, out var sid) && daemon.Sessions.TryGetValue(sid, out var dss)
+                && host.Sessions.TryGetValue(sid, out var hss) && dss.Agent == "copilot" && Evidence(sid)?.AnsweredQuestion(dss, hss) is not null)
+            {
+                result.Add(d with { Detail = $"daemon={ShadowHash.Token(dss.Status)} host={ShadowHash.Token(hss.Status)}" });
+                continue;
             }
             result.Add(known is null ? d : d with { Known = known });
         }
@@ -49,7 +61,8 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
     }
 
     static bool Explainable(ShadowDifference d) =>
-        d.Known is null && d.Session is not null && d.Kind is ShadowKinds.BackgroundAgents or ShadowKinds.BackgroundShells or ShadowKinds.Model;
+        d.Known is null && d.Session is not null && d.Kind is ShadowKinds.BackgroundAgents or ShadowKinds.BackgroundShells or ShadowKinds.Model
+            or ShadowKinds.QuestionMissingOnHost or ShadowKinds.Status;
 
     TranscriptEvidence? Evidence(string id)
     {
@@ -130,6 +143,26 @@ public sealed partial class TranscriptEvidence(string path)
     string? ownModel;
     long offset;
 
+    // The session's own ask_user calls, latest last: where each started, when, and where the line
+    // that completed it ends (-1 while it waits).
+    sealed class Ask(string callId, long start, DateTimeOffset? at)
+    {
+        public string CallId { get; } = callId;
+        public byte[] Quoted { get; } = Encoding.UTF8.GetBytes("\"" + callId + "\"");
+        public long Start { get; } = start;
+        public DateTimeOffset? At { get; } = at;
+        public long CompletedThrough = -1;
+    }
+    readonly List<Ask> asks = [];
+    int waiting;
+
+    // How much of the transcript agent-ha-bridge reads to see whether a question was answered
+    // (Get-CopilotTranscriptTailLines' MaxBytes, from Get-CopilotAskUserState).
+    public const long DaemonQuestionTail = 4L * 1024 * 1024;
+    // The hook arms the marker as the ask_user starts; its clock and the transcript's agree to well
+    // within this.
+    static readonly TimeSpan ArmedWithin = TimeSpan.FromSeconds(10);
+
     // Reads what was appended since the last time; false when the transcript cannot be read now.
     public bool Catch()
     {
@@ -186,6 +219,8 @@ public sealed partial class TranscriptEvidence(string path)
         completed.Clear();
         models.Clear();
         ownModel = null;
+        asks.Clear();
+        waiting = 0;
         offset = 0;
     }
 
@@ -194,10 +229,23 @@ public sealed partial class TranscriptEvidence(string path)
         "\"agentId\""u8.ToArray(), "\"subagent."u8.ToArray(), "shellId"u8.ToArray(), "command with id: "u8.ToArray(),
         "\"system.notification\""u8.ToArray(), "\"session.shutdown\""u8.ToArray(), "\"assistant.message\""u8.ToArray(),
         "\"session.model_change\""u8.ToArray(), "\"session.start\""u8.ToArray(), "\"session.resume\""u8.ToArray(),
+        "\"ask_user\""u8.ToArray(),
     ];
 
     void Line(ReadOnlySpan<byte> bytes, long at)
     {
+        // An ask_user's completion names only its call, so while one waits each completion is looked
+        // at for it: by bytes first, then parsed to be sure it is that call's and not one quoting it.
+        if (waiting > 0 && bytes.IndexOf("\"tool.execution_complete\""u8) >= 0)
+        {
+            Ask? matched = null;
+            foreach (var ask in asks) { if (ask.CompletedThrough < 0 && bytes.IndexOf(ask.Quoted) >= 0) { matched = ask; break; } }
+            if (matched is not null && CompletedCall(bytes) is { } call && asks.FirstOrDefault(a => a.CompletedThrough < 0 && a.CallId == call) is { } done)
+            {
+                done.CompletedThrough = at + bytes.Length + 1;
+                waiting--;
+            }
+        }
         var wanted = false;
         foreach (var w in Wanted) { if (bytes.IndexOf(w) >= 0) { wanted = true; break; } }
         if (!wanted) { return; }
@@ -259,6 +307,11 @@ public sealed partial class TranscriptEvidence(string path)
             case "abort" or "session.shutdown" when agentId is not null && agents.TryGetValue(agentId, out var ended):
                 EndRun(ended);
                 ended.AskedForTools = false;
+                break;
+            case "tool.execution_start" when agentId is null && Str(data, "toolName") == "ask_user" && Str(data, "toolCallId") is { } askId:
+                if (asks.Count >= 64) { if (asks[0].CompletedThrough < 0) { waiting--; } asks.RemoveAt(0); }
+                asks.Add(new Ask(askId, at, Str(e, "timestamp") is { } ts && DateTimeOffset.TryParse(ts, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var started) ? started : null));
+                waiting++;
                 break;
             case "user.message" or "assistant.turn_start" or "tool.execution_start" when agentId is not null && agents.TryGetValue(agentId, out var active):
                 Wake(active, at);
@@ -387,6 +440,32 @@ public sealed partial class TranscriptEvidence(string path)
         var read = models.Where(m => m.Offset < through).ToList();
         return read.Count > 0 && read[^1] is { Subagent: true } last && last.Model == daemon.Model
             && host.Model is not null && host.Model == ownModel ? Name([260]) : null;
+    }
+
+    // The daemon still shows a question the host does not (and so its waiting), and that question's
+    // ask_user has completed in the transcript, but the daemon could not see it complete: its start
+    // lay further back than the tail the daemon reads, by the time the completion was written. The
+    // daemon then never clears the question (#263). The question is the marker's: by its call id
+    // when it has one, else the ask_user that started as the hook armed it.
+    public string? AnsweredQuestion(ShadowSession daemon, ShadowSession host)
+    {
+        if (daemon.Question is not { } q || host.Question is not null) { return null; }
+        var ask = q.CallId is { } id
+            ? asks.LastOrDefault(a => a.CallId == id)
+            : q.AskedAt is { } armed ? asks.Where(a => a.At is { } s && (s - armed).Duration() <= ArmedWithin).MinBy(a => (a.At!.Value - armed).Duration()) : null;
+        return ask is { CompletedThrough: >= 0 } && ask.CompletedThrough - ask.Start > DaemonQuestionTail ? Name([263]) : null;
+    }
+
+    // The call a tool.execution_complete event completes, or null when the line is not one.
+    static string? CompletedCall(ReadOnlySpan<byte> bytes)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(bytes.ToArray());
+            var e = doc.RootElement;
+            return Str(e, "type") == "tool.execution_complete" && e.TryGetProperty("data", out var d) ? Str(d, "toolCallId") : null;
+        }
+        catch (JsonException) { return null; }
     }
 
     static string Name(SortedSet<int> issues) => string.Join(", ", issues.Select(ShadowWitness.Issue));
