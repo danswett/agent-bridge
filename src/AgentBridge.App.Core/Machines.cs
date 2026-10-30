@@ -112,6 +112,9 @@ public sealed class Fleet : IAsyncDisposable
         Changed?.Invoke();
         // Without this machine's own id the list could take its host for another machine's.
         if (main.LocalMachineId is not { } me) { return; }
+        // The account before the hosts: a switch between the two reads leaves this pass with the
+        // old account's hosts and the old account, so the next pass still sees the switch.
+        var now = link.Account;
         var hosts = link.Hosts.Where(h => h.Id != me).ToDictionary(h => h.Id, StringComparer.Ordinal);
         foreach (var (id, h) in hosts)
         {
@@ -126,8 +129,8 @@ public sealed class Fleet : IAsyncDisposable
         // it was. Otherwise the list is the answer: presence while connected, and none when there is
         // no account to find them through (signed out, refused), the account is another one now, or
         // another copy of the app shows them instead.
-        var switched = link.Account != account;
-        account = link.Account;
+        var switched = now != account;
+        account = now;
         if (link.State == FleetState.Connecting && !switched) { return; }
         foreach (var id in machines.Keys.Where(id => !hosts.ContainsKey(id)).ToList())
         {

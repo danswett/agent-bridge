@@ -155,6 +155,20 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_switch_between_reading_the_hosts_and_the_account_is_still_seen_on_the_next_pass()
+    {
+        await BothMachinesAsync();
+
+        // This pass reads the last account's hosts, and the account changes right after.
+        link.AfterHostsRead = () => link.Switch(announce: false);
+        link.Raise();
+        await Wait.UntilAsync(() => link.AfterHostsRead is null, "the pass");
+        link.Raise();
+
+        await Wait.UntilAsync(() => Card("there") is null, "the last account's machine to go");
+    }
+
+    [Fact]
     public async Task Machines_still_come_and_go_while_this_machines_host_is_away()
     {
         await BothMachinesAsync();
@@ -328,17 +342,37 @@ public sealed class FleetTests : IAsyncLifetime
         public Dictionary<string, LocalEndpoint> Endpoints { get; } = [];
         public FleetState State { get; private set; } = FleetState.Connecting;
         public string? Detail => null;
-        public IReadOnlyList<FleetHost> Hosts { get; private set; } = [];
+        IReadOnlyList<FleetHost> hosts = [];
         public event Action? Changed;
 
         public int Account { get; private set; }
 
-        // Another account, still connecting.
-        public void Switch()
+        // Runs once, right after the next read of the hosts: for a change between two reads.
+        public Action? AfterHostsRead { get; set; }
+
+        public IReadOnlyList<FleetHost> Hosts
+        {
+            get
+            {
+                var now = hosts;
+                var then = AfterHostsRead;
+                AfterHostsRead = null;
+                then?.Invoke();
+                return now;
+            }
+            private set => hosts = value;
+        }
+
+        // Another account, still connecting; announced or not.
+        public void Switch(bool announce = true)
         {
             Account++;
-            Set(FleetState.Connecting);
+            State = FleetState.Connecting;
+            hosts = [];
+            if (announce) { Changed?.Invoke(); }
         }
+
+        public void Raise() => Changed?.Invoke();
 
         public void Set(FleetState state, params (string Id, string Name)[] hosts)
         {
