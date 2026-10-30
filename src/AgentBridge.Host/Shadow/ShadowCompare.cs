@@ -94,6 +94,13 @@ public sealed record ShadowUsage
     // The daemon's only: since when the same figure has stood, read after read, when earlier than
     // MeasuredAt (it republishes an unchanged figure with a new measured_at).
     public DateTimeOffset? HeldSince { get; init; }
+    // The daemon's only: its figure is older than its own pace allows (DaemonUsagePace.Lapsed). It
+    // asks the vendor about an account on one machine and stands down on the rest while that one's
+    // readings are current (agent-ha-bridge#142's Test-BridgeUsageCovered), so this machine's sensor
+    // then keeps the last figure it read itself, hours old. That is not a reading to compare: on
+    // DEV-VM1 it was 11 hours old in every sample of a day, compared all the same, and no reading
+    // was ever close enough to count (#40).
+    public bool Lapsed { get; init; }
 }
 
 // One disagreement in one sample. Session is a hashed session id, or for a usage kind the agent
@@ -341,20 +348,31 @@ public static class ShadowCompare
     const double PercentTolerance = 5;
     static readonly TimeSpan ReadingsApart = TimeSpan.FromMinutes(3);
 
+    public const string UsageLapsed = "usage: the daemon is not reading it on this machine (its figure is older than its own pace; another machine may read the account)";
+
     static bool Usage(ShadowView daemon, ShadowView host, List<ShadowDifference> diffs, List<string> notCompared, ShadowMemory? memory, List<string> judgedFresh)
     {
         if (daemon.Usage is null) { notCompared.Add("usage: " + (daemon.UsageProblem ?? "the daemon's was not read")); }
         if (host.Usage is null) { notCompared.Add("usage: " + (host.UsageProblem ?? "the host's was not read")); }
         if (daemon.Usage is null || host.Usage is null) { return false; }
         var judged = new HashSet<string>(StringComparer.Ordinal);
+        // Compared when any agent's readings were, or neither side had one to compare.
+        var (readings, compared) = (false, false);
         foreach (var client in daemon.Usage.Keys.Union(host.Usage.Keys).Order(StringComparer.Ordinal))
         {
             var a = daemon.Usage.GetValueOrDefault(client);
             var b = host.Usage.GetValueOrDefault(client);
             var name = ShadowHash.Token(client);
             if (a?.Reading != true && b?.Reading != true) { continue; }
-            if (b?.Reading != true) { diffs.Add(new(ShadowKinds.UsageMissingOnHost, name, "the daemon has a reading and the host none")); continue; }
-            if (a?.Reading != true) { diffs.Add(new(ShadowKinds.UsageMissingOnDaemon, name, "the host has a reading and the daemon none")); continue; }
+            readings = true;
+            if (b?.Reading != true) { diffs.Add(new(ShadowKinds.UsageMissingOnHost, name, "the daemon has a reading and the host none")); compared = true; continue; }
+            if (a?.Reading != true) { diffs.Add(new(ShadowKinds.UsageMissingOnDaemon, name, "the host has a reading and the daemon none")); compared = true; continue; }
+            if (a.Lapsed)
+            {
+                if (!notCompared.Contains(UsageLapsed)) { notCompared.Add(UsageLapsed); }
+                continue;
+            }
+            compared = true;
             if (Differs(a.Account, b.Account) || Differs(a.AccountKey, b.AccountKey))
             {
                 diffs.Add(new(ShadowKinds.UsageAccount, name, "the account differs"));
@@ -406,7 +424,7 @@ public static class ShadowCompare
         }
         // An agent no longer read on both sides starts afresh when it is.
         if (memory is not null) { foreach (var gone in memory.Percent.Keys.Where(k => !judged.Contains(k)).ToList()) { memory.Percent.Remove(gone); } }
-        return true;
+        return compared || !readings;
 
         // When a side's figure is known to have held: from its measurement to its confirmation.
         static (DateTimeOffset From, DateTimeOffset To)? Held(ShadowUsage u) =>

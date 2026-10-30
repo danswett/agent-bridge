@@ -285,7 +285,7 @@ comparing:
 
 ### Known daemon bugs
 
-The first live runs, on DSWETT-DEV-VM1 against agent-ha-bridge 1.33.32, turned up five
+The first live runs, on DSWETT-DEV-VM1 against agent-ha-bridge 1.33.32, turned up six
 places where the daemon is wrong and the host right, each checked against the transcript
 and, for shells, against the processes actually running under the session's CLI. Each is
 filed against agent-ha-bridge and left there.
@@ -311,6 +311,7 @@ five, and the comparison now classifies each as below.
 | `model` | The last `assistant.message` the daemon has read is a subagent's and names the daemon's model, and the host's is the session's own | agent-ha-bridge#260 |
 | `background.shells`, daemon higher | Every start of each extra id since its last end is in a subagent's tool result | agent-ha-bridge#261 |
 | `background.shells`, daemon higher | Each extra id's only start of the session's own is an "is still running" line that is not its tool result's last line | agent-ha-bridge#262 |
+| `question.missingOnHost`, and `status` daemon `waiting` | The daemon's question is the `ask_user` its marker names (by call id, else the one started within 10 s of the marker being armed); that `ask_user` has completed in the transcript, and its start lies more than 4 MiB before the end of the line that completed it. For `status`, the daemon's own status must also be the host's; when it is not, the mismatch stands and names the two statuses | agent-ha-bridge#263 |
 
 What each bug does:
 
@@ -321,6 +322,7 @@ What each bug does:
 | `model`, flipping | Sets the session's model from every `assistant.message`, subagents' included, so a session whose agents run another model shows theirs whenever one speaks last. parity.md §1: a subagent's model is not the session's | agent-ha-bridge#260 |
 | `background.shells`, daemon higher, in a session with background agents | Counts a background agent's shells as the session's. Their ends go to the agent and often never reach the session's transcript: in the session that found it, nine shells agents had moved to the background had no process left and no recorded end, and stayed counted. The host leaves an agent's shells to the agent, which is counted while it runs | agent-ha-bridge#261 |
 | `background.shells`, daemon higher, a session reading `shell` while idle | Takes an "is still running" marker anywhere at a line's start in a tool result. A `view` of a file quoting one invented a shell nothing will end. The host takes it only as a result's last line, where Copilot writes it | agent-ha-bridge#262 |
+| `question.missingOnHost` and `status` daemon `waiting`, after the question was answered | Learns that a question was answered only from the last 4 MiB of the transcript (`Get-CopilotAskUserState`). When a session writes more than that while its question waits, the `ask_user` start has left the tail by the time it is answered, so the daemon never sees the question complete: the marker stays, and so do the card's question and "waiting for you", until the session asks again. Found when a question asked at 00:58 and answered at 09:32 PT, 7.1 MiB later, was still on the card 20 minutes after. The host read it answered at once | agent-ha-bridge#263 |
 
 **The first minutes on DEV-VM1**, classified:
 
@@ -332,6 +334,14 @@ What each bug does:
 | `status` daemon `shell`, host `working`, for 0 s | Timing: the host saw a new turn start a sample before the daemon's pass. Never lasted the grace |
 | `activity.response` differing for 91 s on the busy session | Timing: its sub-agents' messages changed the latest response every few seconds, and the daemon, writing on its own pass, kept showing the one the host had shown a sample or two before. Now classified: a response one side is showing that the other showed in the last three minutes is a `timing` known difference; one neither showed is still a mismatch |
 | `status` daemon `working`, host `waiting`, for 60 s and 167 s, after the redeploy | The busy session asking its user a question (`ask_user`) with background agents running. The daemon's state stays `working`, but its cards show "waiting for you" from the armed question, so the host is right; now normalized (above) |
+
+**The first full day** (2026-10-30), classified:
+
+| Seen | What it was |
+|---|---|
+| `status` daemon `working`, host `waiting`, four episodes from 00:58 to 09:30 PT (6 h 45 min the longest), on the busy session | The same question pending all night, compared by a build from before the normalization above (#82). The host was right. These stay mismatches in that report: `gate.json` can explain them with `through` (below), or they stop failing the gate 24 hours after they ended |
+| `question.missingOnHost` and `status` daemon `waiting`, host `working` or `idle`, from 09:37 PT on, same session | That question, answered at 09:32, kept by the daemon (#263). The host was right; now classified |
+| `usageReadings` 0 events, with usage "compared" in nearly every sample | Another machine was reading the account's Copilot usage, so this machine's daemon had stood down (agent-ha-bridge's `Test-BridgeUsageCovered`), and its sensor held an 11-hour-old figure. No pair of readings was ever close enough to count, and none should have been called compared: a daemon figure older than its own pace is now **not compared**, with that reason. See "Not compared" |
 
 ### Fixed in the host
 
@@ -365,6 +375,7 @@ The same runs, and review, found four host bugs, all fixed:
 | What | Why |
 |---|---|
 | Usage of extra Copilot accounts | Published under other entity names; only the three `usage_<agent>` sensors are read |
+| Usage the daemon is not reading on this machine | agent-ha-bridge asks the vendor about an account on one machine at a time, and the others stand down while that one's readings are current. A machine standing down keeps the last figure it read itself in its sensor. A figure older than the daemon's own pace allows (`usage.idleIntervalSeconds`, plus its half-hour re-assert, plus a minute) is that, and not compared: the sample counts toward `notComparedWhy` ("usage: the daemon is not reading it on this machine"), not `usageCompared`. While another machine reads the account all day, `usageReadings` stays at 0 and the gate waits for it |
 | Titles | agent-ha-bridge names sessions for Home Assistant ("Copilot: …") |
 | Reasoning and tool history | Bounded differently and shown differently (§1) |
 | Driver, the purple edge | Missing here (#46) |
@@ -476,8 +487,19 @@ is the operator's; the host never writes it. Every key is optional, and comments
 ```
 
 `explained` is where a mismatch that has been investigated and documented as a known
-difference (above) goes: by kind, and by the session's hash to explain only that one. A
-mismatch it matches no longer fails the gate or counts against the rate. A host bug is not
+difference (above) goes: by kind, by the session's hash to explain only that one, and by
+`through` (a time, ISO 8601) to explain only what had ended by then. A mismatch it matches
+no longer fails the gate or counts against the rate. `through` is for a report written
+before the comparison classified a cause, which keeps the mismatch for good: it explains
+those without excusing the next one. For example, for the first full day above:
+
+```json
+"explained": [
+  { "kind": "status", "session": "s8a666b6daa65", "through": "2026-10-30T16:31:00Z", "reason": "pre-#82 build: the armed question is the daemon's waiting" },
+  { "kind": "question.missingOnHost", "session": "s8a666b6daa65", "through": "2026-10-30T18:00:00Z", "reason": "agent-ha-bridge#263, before it was classified" },
+  { "kind": "status", "session": "s8a666b6daa65", "through": "2026-10-30T18:00:00Z", "reason": "agent-ha-bridge#263, before it was classified" }
+]
+``` A host bug is not
 explained: it is fixed, and the gate passes once the last of it is over 24 hours old.
 
 Mismatches from before the redeploy that the comparison now classifies as known (the

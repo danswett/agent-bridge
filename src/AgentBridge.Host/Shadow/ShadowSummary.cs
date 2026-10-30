@@ -207,7 +207,7 @@ public sealed record ShadowSummary(
             {
                 // Each failed question once, whatever kinds of mismatch it had and however many
                 // questions one mismatch ran on across: explained only if all its kinds are.
-                explained = failedQuestions.Values.Count(q => q.Kinds.All(k => config.Explaining(new ShadowEpisode { Kind = k, Session = q.Session }) is not null));
+                explained = failedQuestions.Values.Count(q => q.Kinds.All(k => config.Explaining(new ShadowEpisode { Kind = k, Session = q.Session, Last = q.Last }) is not null));
                 m = failedQuestions.Count - explained;
             }
             else if (ShadowCoverageKinds.IsState(kind))

@@ -42,6 +42,10 @@ public sealed record DaemonUsagePace(TimeSpan Poll, TimeSpan Reassert)
     // later than measuredAt itself.
     public DateTimeOffset? ConfirmedAt(DateTimeOffset? measuredAt, DateTimeOffset readAt) =>
         measuredAt is { } m && readAt - m <= Reassert + Poll + Slack && readAt - Poll - Slack is var c && c > m ? c : null;
+
+    // Past Reassert and a Poll: the daemon is no longer reading it here, and what it shows is no
+    // reading of now to compare with.
+    public bool Lapsed(DateTimeOffset? measuredAt, DateTimeOffset readAt) => measuredAt is { } m && readAt - m > Reassert + Poll + Slack;
 }
 
 public static class AgentHaBridgeConfig
@@ -199,7 +203,7 @@ public sealed class DaemonHaReader : IDisposable
             {
                 if (await GetAsync(access, entity, ct) is { } state && Usage(state) is var u)
                 {
-                    usage[client] = Stood(client, u with { ConfirmedAt = access.UsagePace.ConfirmedAt(u.MeasuredAt, readAt) }, readAt);
+                    usage[client] = Stood(client, u with { ConfirmedAt = access.UsagePace.ConfirmedAt(u.MeasuredAt, readAt), Lapsed = access.UsagePace.Lapsed(u.MeasuredAt, readAt) }, readAt);
                 }
                 else { standing.Remove(client); }
             }

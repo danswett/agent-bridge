@@ -345,6 +345,10 @@ public sealed class ShadowCoverageTests : IDisposable
         Assert.Contains("status x1", Assert.Single(failing.Failing));
         Gate(new { questions = 1, questionsMaxRate = 1.0, sessions = 3, statusTransitions = 1, background = 0, compactions = 0, resumeSnapshots = 1, usageReadings = 0, machineEvents = 1, comparedHours = 0.01, explained = new[] { new { kind = ShadowKinds.Status, session = ShadowHash.Session(A), reason = "investigated: the daemon's pass was late" } } });
         Assert.Equal(ShadowGate.Pass, Verdict().Outcome);
+        // Explained only through a time before it ended (a report from before its cause was
+        // classified, say): it still fails.
+        Gate(new { questions = 1, questionsMaxRate = 1.0, sessions = 3, statusTransitions = 1, background = 0, compactions = 0, resumeSnapshots = 1, usageReadings = 0, machineEvents = 1, comparedHours = 0.01, explained = new[] { new { kind = ShadowKinds.Status, session = ShadowHash.Session(A), through = time.GetUtcNow() - TimeSpan.FromMinutes(5), reason = "an earlier one" } } });
+        Assert.Equal(ShadowGate.Fail, Verdict().Outcome);
     }
 
     // Found in review (#77): one mismatch running on across several questions in a session was
@@ -389,6 +393,12 @@ public sealed class ShadowCoverageTests : IDisposable
         var explained = Verdict();
         Assert.Equal(ShadowGate.NotYet, explained.Outcome);
         Assert.Equal(["questions: upper bound 7.5% over 3.0%, more questions needed"], explained.Missing);
+        // Explained only through a time before they failed: they still count against the rate.
+        var before = time.GetUtcNow() - TimeSpan.FromMinutes(10);
+        Config(100, new { kind = ShadowKinds.QuestionOptions, session, through = before }, new { kind = ShadowKinds.QuestionFieldType, session, through = before });
+        Assert.Equal(ShadowGate.Fail, Verdict().Outcome);
+        Config(40, new { kind = ShadowKinds.QuestionOptions, session, through = time.GetUtcNow() }, new { kind = ShadowKinds.QuestionFieldType, session, through = time.GetUtcNow() });
+        Assert.Equal(ShadowGate.NotYet, Verdict().Outcome);
     }
 
     // Found in review (#77): a question one side stops showing is the same question, and a question

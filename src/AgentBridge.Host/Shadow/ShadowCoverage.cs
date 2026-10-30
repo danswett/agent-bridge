@@ -419,7 +419,7 @@ public sealed class ShadowGateConfig
     // An agent with fewer sessions than this is reported as not covered, not failed.
     public int AgentSessions { get; set; } = 5;
     // Mismatches investigated and documented as known differences (docs/host-shadow.md), each by
-    // kind and, optionally, the one session it was seen on.
+    // kind and, optionally, the one session it was seen on and the time it must have ended by.
     public List<ShadowExplanation> Explained { get; set; } = [];
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
@@ -436,13 +436,16 @@ public sealed class ShadowGateConfig
     }
 
     public ShadowExplanation? Explaining(ShadowEpisode m) =>
-        Explained.FirstOrDefault(x => x.Kind == m.Kind && (x.Session is null || x.Session == m.Session));
+        Explained.FirstOrDefault(x => x.Kind == m.Kind && (x.Session is null || x.Session == m.Session) && (x.Through is null || m.Last <= x.Through));
 }
 
 public sealed class ShadowExplanation
 {
     public string Kind { get; set; } = "";
     public string? Session { get; set; }
+    // Only what had ended by then: a report written before the comparison could classify a cause
+    // keeps it as a mismatch for good, and this explains those without excusing the next one.
+    public DateTimeOffset? Through { get; set; }
     [JsonPropertyName("reason")]
     public string? Reason { get; set; }
 }
