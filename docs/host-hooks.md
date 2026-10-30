@@ -238,9 +238,11 @@ happens whether or not the heartbeat could be written, and a cut-off counts as s
 every marker it covers is gone; a marker that could not be deleted is tried again next pass.
 The log is always read through a handle that lets hooks keep appending (`hooks status` too), and
 markers through one that lets a starting daemon replace or delete them. Until a pass has settled
-the markers (after starting, taking the spool back, or while the log cannot be read), the answer
-path refuses Codex approvals (`HookIntake.ApprovalsUnsettled`), so an answer cannot reach a
-marker an outage left behind before it is withdrawn.
+the markers (after starting, taking the spool back, while the log cannot be read, or after a
+later unheard run until every marker it covers is gone), the answer path refuses Codex approvals
+(`HookIntake.ApprovalsUnsettled`), so an answer cannot reach a marker an outage left behind
+before it is withdrawn. A migrated profile whose `intake.json` cannot be read runs no intake, and
+refuses them all (`HookIntake.AnswerGate`).
 Answering an approval twice could type into whatever the terminal shows now; losing a remote
 answer only means answering at the terminal.
 

@@ -294,8 +294,7 @@ async Task<int> ServeAsync()
     // Set once the hook intake starts; until then, and until it has settled the markers, a Codex
     // approval on a migrated machine is not answered.
     HookIntake? runningIntake = null;
-    Func<string?>? codexUnsettled = intakeState is null ? null
-        : () => runningIntake is { } i ? i.ApprovalsUnsettled : "the host is still starting its hook intake; try again shortly";
+    var codexUnsettled = HookIntake.AnswerGate(intakeState is not null, intakeProblem, () => runningIntake);
     var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled);
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the

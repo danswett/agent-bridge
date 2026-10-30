@@ -102,6 +102,15 @@ public sealed class HookIntake : IAsyncDisposable
     public string? ApprovalsUnsettled => _reconciled ? null
         : "the host has not yet checked Codex approvals against the hooks that ran while nobody took them; answer at the machine or try again shortly";
 
+    // The answer path's gate for Codex approvals on a profile (AnswerOptions.CodexApprovalsUnsettled):
+    // none where the profile never migrated; every approval refused while its intake.json cannot
+    // be read, since no intake then runs to withdraw what an outage left; otherwise the running
+    // intake's, and refused until it has started.
+    public static Func<string?>? AnswerGate(bool migrated, string? problem, Func<HookIntake?> running) =>
+        problem is not null ? () => $"this profile's hook intake is off ({problem}), so Codex approvals left from before cannot be checked; answer at the machine"
+        : !migrated ? null
+        : () => running() is { } intake ? intake.ApprovalsUnsettled : "the host is still starting its hook intake; try again shortly";
+
     // Why the intake is standing back now (agent-ha-bridge is running), or null.
     public string? Paused { get { lock (_gate) { return _paused; } } }
 
@@ -250,6 +259,9 @@ public sealed class HookIntake : IAsyncDisposable
         var cutoff = known ? Later(_codexLog.Last, _codexLog.HistoryFrom) : _time.GetLocalNow();
         if (cutoff is not { } unheard || (_reconciled && _settled is { } done && unheard <= done)) { _reconciled = known; return true; }
         _handlers.ApprovalsSettledBefore = unheard;
+        // A new cut-off unsettles what an earlier one settled: until its markers are gone, one of
+        // them may have been answered at the terminal, so no Codex approval is answered meanwhile.
+        _reconciled = false;
         // Settled only once every marker it covers is gone; otherwise the next pass tries again.
         var complete = true;
         string[] markers;

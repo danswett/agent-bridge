@@ -600,6 +600,44 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_later_unheard_Codex_run_keeps_approvals_unanswerable_until_every_marker_it_covers_is_withdrawn()
+    {
+        // Only Windows lets a reader refuse a delete.
+        if (!OperatingSystem.IsWindows()) { return; }
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        var intake = Intake();
+        intake.Pass();
+        Assert.Null(intake.ApprovalsUnsettled);
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "spool not writable", Fixture.T0.AddSeconds(5), 3);
+
+        using (new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            intake.Pass();
+            Assert.True(File.Exists(marker));
+            Assert.NotNull(intake.ApprovalsUnsettled);
+        }
+        intake.Pass();
+
+        Assert.False(File.Exists(marker));
+        Assert.Null(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
+    public void Codex_approvals_are_refused_on_a_migrated_profile_whose_intake_cannot_start_and_free_on_one_never_migrated()
+    {
+        Assert.Null(HookIntake.AnswerGate(migrated: false, problem: null, () => null));
+        Assert.Contains("intake.json is not valid", HookIntake.AnswerGate(false, "intake.json is not valid", () => null)!());
+        Assert.Contains("still starting", HookIntake.AnswerGate(true, null, () => null)!());
+        var intake = Intake();
+        var gate = HookIntake.AnswerGate(true, null, () => intake)!;
+        Assert.NotNull(gate());
+        intake.Pass();
+        Assert.Null(gate());
+    }
+
+    [Fact]
     public void An_approval_whose_answering_hook_failed_to_spool_is_withdrawn_on_the_next_pass()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
