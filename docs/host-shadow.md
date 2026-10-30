@@ -53,9 +53,10 @@ own token. Enforced in code (`Shadow/HaReader.cs`), and tested:
 
 * **GET only, of an exact list.** Every request passes through `ReadOnlyHomeAssistantHandler`,
   which refuses, before anything is sent, any method but GET, any body, any query, and any
-  path but `/api/states/<entity>` for one of four entities named from this machine's slug
+  path but `/api/states/<entity>` for one of seven entities named from this machine's slug
   (`HaContract.MachineSlug`): `sensor.agent_bridge_<slug>_usage_copilot`, `_usage_claude`,
-  `_usage_codex`, and `select.agent_bridge_<slug>_new_resume`. Never a POST, a service call,
+  `_usage_codex`, the further Copilot logins' `_usage_copilot_2` to `_4`, and
+  `select.agent_bridge_<slug>_new_resume`. Never a POST, a service call,
   a WebSocket or MQTT. Redirects are not followed.
 * **The token.** `homeAssistant.baseUrl` and `homeAssistant.token` are read from
   `~/.agent-ha-bridge/config.json` at the moment of each read (so a rotated token is the one
@@ -261,7 +262,7 @@ minute:
 
 | Kind | Disagreement |
 |---|---|
-| `usage.missingOnHost`, `usage.missingOnDaemon` | One side has a reading for an agent (Copilot, Claude, Codex) and the other none. The report names the agent in place of a session |
+| `usage.missingOnHost`, `usage.missingOnDaemon` | One side has a reading for an agent (Copilot, Claude, Codex), or for a further Copilot login in a place (`copilot_2` to `copilot_4`, agent-ha-bridge's and the host's `usage.copilotAccounts`), and the other none. The report names the agent or the place in place of a session, never the login |
 | `usage.account` | The account the reading is for differs (compared case-insensitively, never written) |
 | `usage.windows` | The metered windows differ (by key: `monthly`, `five_hour`, …) |
 | `usage.percent` | A window's percent used differs by more than 5 points. Judged only on a pair of fresh readings, within 3 minutes of each other: the host reads every 15 minutes while the daemon runs, so this is now and then. The daemon publishes a change at its next poll but an unchanged figure only every half hour (every two intervals with a `dashboard.publication`), and republishes it with a new `measured_at`, so its figure counts as holding from when it first stood (the same figure read again, minute by minute, republished or not) until its last poll could have been: the read less `usage.idleIntervalSeconds` and a minute, while `measured_at` is recent enough for the daemon still to be republishing it. `run` counts it once two such pairs in a row disagree, the second with both sides having read again since the first, and keeps it until a fresh pair agrees, so a lasting difference outlasts the grace and a rise one side has not read yet never counts. `once` reports a single fresh pair |
@@ -401,7 +402,6 @@ The same runs, and review, found four host bugs, all fixed:
 
 | What | Why |
 |---|---|
-| Usage of extra Copilot accounts | Published under other entity names; only the three `usage_<agent>` sensors are read |
 | Usage the daemon is not reading on this machine | agent-ha-bridge asks the vendor about an account on one machine at a time, and the others stand down while that one's readings are current. A machine standing down keeps the last figure it read itself in its sensor. A figure older than the daemon's own pace allows (`usage.idleIntervalSeconds`, plus its half-hour re-assert, plus a minute) is that, and not compared: the sample counts toward `notComparedWhy` ("usage: the daemon is not reading it on this machine"), not `usageCompared`. While another machine reads the account all day, `usageReadings` stays at 0 and the gate waits for it |
 | Titles | agent-ha-bridge names sessions for Home Assistant ("Copilot: …") |
 | Reasoning and tool history | Bounded differently and shown differently (§1) |

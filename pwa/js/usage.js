@@ -41,6 +41,9 @@ function readAgent(raw) {
     windows: Array.isArray(a.windows) ? a.windows.map(readWindow).filter(Boolean) : [],
     error: str(a.error),
     measuredAt: str(a.measuredAt),
+    // A further account the host was asked to report (usage.copilotAccounts), by its place. Rows
+    // are grouped by account, not by this: one machine's further account is another's own.
+    slot: Number.isInteger(a.slot) ? a.slot : null,
   };
 }
 
@@ -171,6 +174,13 @@ export class UsageBook {
   set(machineId, report) {
     if (!machineId) { return; }
     this.#reports.set(machineId, readUsage(report));
+    this.#emit();
+  }
+
+  // A machine that has said it reports no usage (hello without the capability: usage.publish
+  // off) has nothing to outvote; its last report would otherwise be shown for good.
+  delete(machineId) {
+    if (!this.#reports.delete(machineId)) { return; }
     this.#emit();
   }
 

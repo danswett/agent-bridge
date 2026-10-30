@@ -13,6 +13,13 @@ namespace AgentBridge.Host.Core.Usage;
 // One difference: while agent-ha-bridge's daemon runs for this user it is already asking the
 // same vendors for the same accounts, so this host asks only at the idle pace.
 //
+// Further Copilot accounts (usage.copilotAccounts) are read as agent-ha-bridge reads them: each on
+// a clock of its own, always at the idle pace (the sessions here spend the signed-in account, never
+// theirs), one a pass at most and the one that has waited longest. An endpoint that accepts a
+// connection and never answers holds a read for its whole timeout and retries, so three in one pass
+// could hold the others' reads for minutes; and in a fixed order a short pace would keep the later
+// accounts waiting for good.
+//
 // A reading is announced (Changed) when anything but its time changed, or when the last
 // announcement of it is Republish old, so a client can tell a host still confirming an
 // unchanged figure from one that stopped.
@@ -24,7 +31,7 @@ public sealed class UsageMonitor : IAsyncDisposable
     readonly TimeProvider time;
     readonly Func<string?> agentHaBridge;
     readonly Action<string> log;
-    readonly Dictionary<AgentKind, State> states = [];
+    readonly Dictionary<string, State> states = new(StringComparer.Ordinal);
     readonly SemaphoreSlim pass = new(1, 1);
     readonly object sync = new();
     readonly CancellationTokenSource stop = new();
@@ -43,7 +50,7 @@ public sealed class UsageMonitor : IAsyncDisposable
         this.time = time ?? TimeProvider.System;
         this.agentHaBridge = agentHaBridge ?? (() => null);
         this.log = log ?? (_ => { });
-        foreach (var c in this.collectors) { states[c.Agent] = new State(); }
+        foreach (var c in this.collectors) { states[c.Key] = new State(); }
     }
 
     // Raised after a pass that changed what a client shows, with the report and its version.
@@ -56,11 +63,13 @@ public sealed class UsageMonitor : IAsyncDisposable
         get { lock (sync) { return (report, version); } }
     }
 
-    public static IReadOnlyList<IUsageCollector> Collectors(UsageOptions options, IUsageHttp http, ICommandRunner commands, TimeProvider? time = null, Action<string>? log = null)
+    public static IReadOnlyList<IUsageCollector> Collectors(UsageOptions options, IUsageHttp http, ICommandRunner commands, TimeProvider? time = null, Action<string>? log = null,
+        IReadOnlyList<CopilotAccount>? accounts = null)
     {
         var store = OperatingSystem.IsWindows() ? new WindowsCredentialStore() : null;
         var credentials = new CopilotCredentials(options, commands, store, time: time, log: log);
-        return [new CopilotUsageCollector(options, http, credentials, time), new ClaudeUsageCollector(options, http, time), new CodexUsageCollector(options)];
+        return [new CopilotUsageCollector(options, http, credentials, time), new ClaudeUsageCollector(options, http, time), new CodexUsageCollector(options),
+            .. (accounts ?? []).OrderBy(a => a.Slot).Select(a => new CopilotAccountCollector(options, http, credentials, a, time))];
     }
 
     public void Start()
@@ -93,9 +102,15 @@ public sealed class UsageMonitor : IAsyncDisposable
         var open = sessions.Snapshot().Select(s => s.Agent).ToHashSet();
         bool? defer = null;
         var due = new List<(IUsageCollector Collector, State State)>();
+        var further = new List<(IUsageCollector Collector, State State)>();
         foreach (var collector in collectors)
         {
-            var state = states[collector.Agent];
+            var state = states[collector.Key];
+            if (collector.Slot is not null)
+            {
+                if (Due(state, false, now)) { further.Add((collector, state)); }
+                continue;
+            }
             var sessionOpen = open.Contains(collector.Agent);
             // Asked only when a session would otherwise set the busy pace: the probe lists
             // named objects and scheduled tasks, which is not free.
@@ -112,22 +127,36 @@ public sealed class UsageMonitor : IAsyncDisposable
             state.Busy = busy;
             due.Add((collector, state));
         }
+        // A turn stamped ahead of the clock has waited longest of all, as Due counts it overdue.
+        if (further.OrderByDescending(f => f.State.CheckedAt > now ? TimeSpan.MaxValue : now - f.State.CheckedAt).ThenBy(f => f.Collector.Slot).FirstOrDefault() is { Collector: not null } next)
+        {
+            next.State.CheckedAt = now;
+            due.Add(next);
+        }
         if (due.Count == 0) { return false; }
 
         var announce = false;
         foreach (var (collector, state) in due)
         {
             AgentUsage? read;
-            try { read = await collector.CollectAsync(cancellationToken); }
+            // What the log may say of a failure: a further account's errors name its login, for the
+            // account's own devices, and the host's log names no account.
+            string? plain;
+            try
+            {
+                read = await collector.CollectAsync(cancellationToken);
+                plain = collector is CopilotAccountCollector c ? c.Plain : read?.Error;
+            }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception e)
             {
-                read = UsageRead.Failure(collector.Agent, $"Usage for {collector.Agent.ToString().ToLowerInvariant()} could not be collected: {UsageFetch.Describe(e)}", now);
+                read = UsageRead.Failure(collector.Agent, $"Usage for {collector.Agent.ToString().ToLowerInvariant()} could not be collected: {UsageFetch.Describe(e)}", now) with { Slot = collector.Slot };
+                plain = read.Error;
             }
             // Nothing to say: whatever was read before stands and ages.
             if (read is null) { continue; }
             read = UsageProtocol.FitAgent(read);
-            Say(collector.Agent, state, read);
+            Say(collector, state, read, plain);
             lock (sync) { state.Latest = read; }
             var signature = Signature(read);
             if (signature == state.Signature && now - state.PublishedAt < options.Republish) { continue; }
@@ -140,7 +169,7 @@ public sealed class UsageMonitor : IAsyncDisposable
         long v;
         lock (sync)
         {
-            report = UsageProtocol.Fit(new UsageReport([.. collectors.Select(c => states[c.Agent].Latest).OfType<AgentUsage>()]));
+            report = UsageProtocol.Fit(new UsageReport([.. collectors.Select(c => states[c.Key].Latest).OfType<AgentUsage>()]));
             if (announce) { version++; }
             (current, v) = (report, version);
         }
@@ -177,15 +206,17 @@ public sealed class UsageMonitor : IAsyncDisposable
         return now;
     }
 
-    // Said when an agent's state changes, not every poll, and never with an account in it.
-    void Say(AgentKind agent, State state, AgentUsage read)
+    // Said when an agent's state changes, not every poll, and never with an account in it: a
+    // further account is named by its place.
+    void Say(IUsageCollector collector, State state, AgentUsage read, string? plain)
     {
         var said = read.Windows.Count > 0
-            ? $"read from {read.Source.ToString().ToLowerInvariant()}{(read.Error is null ? "" : $" ({read.Error})")}"
-            : $"could not be read: {read.Error}";
+            ? $"read from {read.Source.ToString().ToLowerInvariant()}{(plain is null ? "" : $" ({plain})")}"
+            : $"could not be read: {plain}";
         if (said == state.Said) { return; }
         state.Said = said;
-        log($"usage: {agent.ToString().ToLowerInvariant()} {said}");
+        var who = collector.Slot is { } slot ? $"further Copilot account {slot}" : collector.Agent.ToString().ToLowerInvariant();
+        log($"usage: {who} {said}");
     }
 
     // Everything a client shows about a reading but when it was taken: the same windows under

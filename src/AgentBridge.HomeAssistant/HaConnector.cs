@@ -34,6 +34,13 @@ public sealed record HaConnectorOptions
     // Home Assistant accounts that are agents rather than people (homeAssistant.agentUserIds):
     // a press made through one drives the session's next turn as the agent's (the purple edge).
     public IReadOnlyCollection<string> AgentUserIds { get; init; } = [];
+    // The numbered usage sensors of the further Copilot logins this host is configured to report
+    // (usage.copilotAccounts: copilot_2 for the first listed). The rest are withdrawn when the
+    // connector starts, as the daemon withdraws every numbered sensor not in use on its first pass,
+    // so a login taken off the list does not leave its last reading with nothing to refresh it.
+    // From the configuration rather than the readings, so one not yet read is not withdrawn and
+    // registered again under a new id moments later.
+    public IReadOnlyList<string> UsageAccountSensors { get; init; } = [];
     // Field slots are republished for each question and need a moment to register before their
     // ids are forced (Publish-CopilotMqttDecisionFields waits 900 ms).
     public TimeSpan FieldPinDelay { get; init; } = TimeSpan.FromMilliseconds(900);
@@ -445,9 +452,12 @@ public sealed partial class HaConnector : IAsyncDisposable
             served.UnionWith(HaContract.LaunchConfigs(Slug, options.MachineName, new HaContract.LaunchCard()).Select(c => c.Topic));
             served.UnionWith([HaContract.LaunchResultTopic(Slug), HaContract.LaunchOutcomeTopic(Slug), HaContract.PromptPayloadTopic(Slug)]);
         }
-        // The agents' own usage sensors are the usage pass's; the numbered ones for further Copilot
-        // logins the host does not report, so they go rather than keep a reading nothing refreshes.
-        served.UnionWith(HaContract.UsageTopics(Slug, HaContract.UsageClients));
+        // The agents' own usage sensors are the usage pass's, and so are the numbered ones of the
+        // further Copilot logins it reports; the other numbered ones go rather than keep a reading
+        // nothing refreshes. With no usage at all (usage.publish off) every one goes, for the same
+        // reason: agent-ha-bridge leaves its sensors when told not to publish, but a reading left on
+        // the card with nothing to refresh it is the stale figure this exists to prevent.
+        if (usage is not null) { served.UnionWith(HaContract.UsageTopics(Slug, [.. HaContract.UsageClients, .. options.UsageAccountSensors])); }
         return HaContract.MachineTopics(Slug).Where(t => !served.Contains(t));
     }
 
@@ -757,14 +767,18 @@ public sealed partial class HaConnector : IAsyncDisposable
         foreach (var agent in report.Agents)
         {
             if (HaPayloads.Usage(agent, options.MachineName, Slug, now) is not { } u) { continue; }
+            // A further login's reading goes on its own numbered sensor, and only one this host was
+            // configured with: the rest were withdrawn when it started.
+            var further = u.Key != u.Client;
+            if (further && !options.UsageAccountSensors.Contains(u.Key)) { continue; }
             var signature = u.State + "\n" + Signature(u.Attributes);
-            if (usageSignatures.TryGetValue(u.Client, out var previous) && previous == signature) { continue; }
-            var (topic, config) = HaContract.UsageConfig(Slug, options.MachineName, u.Client, u.Label);
+            if (usageSignatures.TryGetValue(u.Key, out var previous) && previous == signature) { continue; }
+            var (topic, config) = HaContract.UsageConfig(Slug, options.MachineName, u.Key, u.Label, further ? agent.Account ?? "" : null);
             await PublishAsync(topic, config, true, ct);
-            await ha.PublishAsync(HaContract.UsageStateTopic(Slug, u.Client), u.State, true, ct);
-            await PublishAsync(HaContract.UsageAttributesTopic(Slug, u.Client), u.Attributes, true, ct);
-            if (previous is null) { AddPin($"agent_bridge_{Slug}_usage_{u.Client}", HaContract.MachineEntityId("sensor", $"usage_{u.Client}", Slug), now); }
-            usageSignatures[u.Client] = signature;
+            await ha.PublishAsync(HaContract.UsageStateTopic(Slug, u.Key), u.State, true, ct);
+            await PublishAsync(HaContract.UsageAttributesTopic(Slug, u.Key), u.Attributes, true, ct);
+            if (previous is null) { AddPin($"agent_bridge_{Slug}_usage_{u.Key}", HaContract.MachineEntityId("sensor", $"usage_{u.Key}", Slug), now); }
+            usageSignatures[u.Key] = signature;
         }
         usageVersion = version;
     }

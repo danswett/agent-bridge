@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.HomeAssistant;
+using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery.Launch;
 
 namespace AgentBridge.Host;
@@ -34,6 +35,9 @@ namespace AgentBridge.Host;
 // beside agent-ha-bridge is (docs/host-shadow.md). A value that is not true or false, or a file
 // that cannot be read, turns it off.
 //
+// usage: how agents' allowances are read (UsageSettings): whether at all, the pace, and further
+// Copilot accounts. What is wrong is said, and read in the direction that does least.
+//
 // version: the schema's. A file from a newer schema is not guessed at: both are off.
 public sealed record HostSettings(bool RemoteApproval)
 {
@@ -53,6 +57,15 @@ public sealed record HostSettings(bool RemoteApproval)
 
     public IReadOnlyList<string> HomeAssistantProblems { get; init; } = [];
 
+    // Agent usage (docs/host-config.md): on at agent-ha-bridge's pace with no further account,
+    // unless this section says otherwise.
+    public UsageSettings Usage { get; init; } = UsageSettings.Default;
+
+    public IReadOnlyList<string> UsageProblems { get; init; } = [];
+
+    // Every problem a section reported, for the log, config show, and config set's check.
+    public IEnumerable<string> SectionProblems => LaunchProblems.Concat(HomeAssistantProblems).Concat(UsageProblems);
+
     public bool Push { get; init; } = true;
 
     public bool ReadOnly { get; init; }
@@ -61,7 +74,13 @@ public sealed record HostSettings(bool RemoteApproval)
     public const string ReadOnlyReason = "this is a read-only comparison host (delivery.readOnly in its config); answer at the machine";
     public const string ProblemReason = "this host's config.json has a problem, so it takes nothing from other devices; answer at the machine";
 
-    static HostSettings Off => Default with { RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, ReadOnly = true };
+    // Usage too: a file that cannot be read may have said usage.publish false, and asking vendors
+    // anyway would read a setting meant as off as on.
+    static HostSettings Off => Default with
+    {
+        RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, ReadOnly = true,
+        Usage = UsageSettings.Default with { Publish = false },
+    };
 
     public static (HostSettings Settings, string? Problem) Load(string folder)
     {
@@ -74,8 +93,16 @@ public sealed record HostSettings(bool RemoteApproval)
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return (Off, $"{path} could not be read ({e.Message}); remote approval of permission prompts, launching and notifications are off, and the host is read-only");
+            return (Off, $"{path} could not be read ({e.Message}); remote approval of permission prompts, launching, notifications and agent usage are off, and the host is read-only");
         }
+        return Parse(text, path);
+    }
+
+    // The file's text as Load reads it, path only naming it in what is said: config set checks a
+    // change with this before anything is written, so a value it refuses (a token pasted where a
+    // login belongs) never reaches the disk.
+    public static (HostSettings Settings, string? Problem) Parse(string text, string path)
+    {
         try
         {
             using var doc = JsonDocument.Parse(text, Options);
@@ -86,17 +113,20 @@ public sealed record HostSettings(bool RemoteApproval)
                 if (version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out var v) || v < 1) { throw new JsonException("version is not a whole number from 1"); }
                 if (v > Version)
                 {
-                    return (Off, $"{path} is version {v}, written by a newer Agent Bridge than this host (version {Version}); remote approval of permission prompts, launching and notifications are off, and the host is read-only, until the host is updated");
+                    return (Off, $"{path} is version {v}, written by a newer Agent Bridge than this host (version {Version}); remote approval of permission prompts, launching, notifications and agent usage are off, and the host is read-only, until the host is updated");
                 }
             }
             var (launch, launchProblems) = LaunchConfig.Read(root.TryGetProperty("launch", out var l) ? l : null);
             var (homeAssistant, homeAssistantProblems) = HaSettings.Read(root.TryGetProperty("homeAssistant", out var h) ? h : null);
+            var (usage, usageProblems) = UsageSettings.Read(root.TryGetProperty("usage", out var u) ? u : null);
             var settings = Default with
             {
                 Launch = launch,
                 LaunchProblems = launchProblems.Count == 0 ? [] : launchProblems,
                 HomeAssistant = homeAssistant,
                 HomeAssistantProblems = homeAssistantProblems.Count == 0 ? [] : homeAssistantProblems,
+                Usage = usage,
+                UsageProblems = usageProblems.Count == 0 ? [] : usageProblems,
             };
             if (root.TryGetProperty("delivery", out var delivery) && delivery.ValueKind != JsonValueKind.Null)
             {
@@ -142,7 +172,7 @@ public sealed record HostSettings(bool RemoteApproval)
         }
         catch (JsonException e)
         {
-            return (Off, $"{path} is not valid ({e.Message}); remote approval of permission prompts, launching and notifications are off, and the host is read-only");
+            return (Off, $"{path} is not valid ({e.Message}); remote approval of permission prompts, launching, notifications and agent usage are off, and the host is read-only");
         }
     }
 

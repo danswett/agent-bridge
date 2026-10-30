@@ -10,6 +10,14 @@ public interface IUsageCollector
 {
     AgentKind Agent { get; }
 
+    // What the monitor keeps this collector's reading under: the agent's name, or for a further
+    // Copilot account, copilot_<slot>, as agent-ha-bridge names its sensors.
+    string Key => Agent.ToString().ToLowerInvariant();
+
+    // A further account's place (usage.copilotAccounts), or null for the agent's signed-in one.
+    // Its reading is never what the sessions here spend, so it is asked at the idle pace.
+    int? Slot => null;
+
     Task<AgentUsage?> CollectAsync(CancellationToken cancellationToken = default);
 
     // A session of this agent has just opened here, so somebody is at the machine. Returns
@@ -30,6 +38,12 @@ public sealed class CopilotUsageCollector(UsageOptions options, IUsageHttp http,
 
     public bool SessionOpened(DateTimeOffset now) => credentials.ReleaseHold(now);
 
+    // One /copilot_internal/user read with the token given: the request both Copilot readers
+    // make, written once so the two cannot drift apart.
+    internal static Task<JsonDocument> FetchAsync(IUsageHttp http, string token, UsageOptions options, CancellationToken cancellationToken) =>
+        UsageFetch.GetJsonAsync(http, Quota,
+            [new("Authorization", $"token {token}"), new("Accept", "application/json"), new("User-Agent", "agent-bridge")], options, cancellationToken);
+
     public async Task<AgentUsage?> CollectAsync(CancellationToken cancellationToken = default)
     {
         if (Account() is not var (login, host)) { return null; }
@@ -42,9 +56,8 @@ public sealed class CopilotUsageCollector(UsageOptions options, IUsageHttp http,
         {
             try
             {
-                using var body = await UsageFetch.GetJsonAsync(http, Quota,
-                    [new("Authorization", $"token {token}"), new("Accept", "application/json"), new("User-Agent", "agent-bridge")], options, cancellationToken);
-                if (Convert(body.RootElement, UsageSource.Api, null) is { } read) { return read; }
+                using var body = await FetchAsync(http, token, options, cancellationToken);
+                if (Convert(body.RootElement, UsageSource.Api, null, clock) is { } read) { return read; }
                 failure = "GitHub returned no premium-interaction quota for this account.";
             }
             catch (Exception e) when (e is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -98,13 +111,13 @@ public sealed class CopilotUsageCollector(UsageOptions options, IUsageHttp http,
             if (UsageRead.Property(entry.Value, "response") is not { } response || UsageRead.String(response, "login") != login) { continue; }
             if (UsageRead.Instant(entry.Value, "retrievedAt") is { } at && at > newestAt) { (newest, newestAt) = (response, at); }
         }
-        return newest is { } n ? Convert(n, UsageSource.Cache, newestAt) : null;
+        return newest is { } n ? Convert(n, UsageSource.Cache, newestAt, clock) : null;
     }
 
     // Only premium_interactions is drawn. The other snapshots on an enterprise seat report
     // unlimited with a zero entitlement: a bar that is always empty beside the one number
     // that can run out.
-    internal AgentUsage? Convert(JsonElement response, UsageSource source, DateTimeOffset? measuredAt)
+    internal static AgentUsage? Convert(JsonElement response, UsageSource source, DateTimeOffset? measuredAt, TimeProvider clock)
     {
         if (UsageRead.Property(response, "quota_snapshots") is not { } snapshots || UsageRead.Property(snapshots, "premium_interactions") is not { } premium) { return null; }
         if (UsageRead.Number(premium, "entitlement") is not { } limit || limit <= 0) { return null; }
@@ -124,5 +137,82 @@ public sealed class CopilotUsageCollector(UsageOptions options, IUsageHttp http,
             Windows = [window],
             MeasuredAt = measuredAt ?? UsageRead.Instant(premium, "timestamp_utc") ?? clock.GetUtcNow(),
         };
+    }
+}
+
+// A further Copilot login that usage.copilotAccounts names, in its own row (agent-ha-bridge's
+// Get-BridgeCopilotLoginAllowance, #200).
+//
+// Its token comes from gh, asked for exactly that login, and from nothing else: the environment's
+// token and the CLI's stored login belong to whoever Copilot is signed in as, and spent for
+// another login they would publish the wrong account's figure under this one's name. That is also
+// why an answer is checked against the login before it is believed. Nor is the CLI's cache a
+// fallback: only the sessions Copilot runs refresh it, and those spend the signed-in account. A
+// login gh holds no token for is reported as having no credential, with gh's reason, rather than
+// disappearing.
+public sealed class CopilotAccountCollector(UsageOptions options, IUsageHttp http, CopilotCredentials credentials, CopilotAccount account, TimeProvider? time = null) : IUsageCollector
+{
+    readonly TimeProvider clock = time ?? TimeProvider.System;
+    // How GitHub spells the login, as this host last read it. A failure only has the spelling the
+    // list gave, and a client grouping rows by account would otherwise draw one account twice.
+    string spelling = account.Login;
+
+    public AgentKind Agent => AgentKind.Copilot;
+    public string Key => $"copilot_{account.Slot}";
+    public int? Slot => account.Slot;
+
+    // The last failure as the log may say it, with no account in it: the reading's error names the
+    // login, for the account's own devices, and the host's log names none. Null after a reading.
+    public string? Plain { get; private set; }
+
+    public async Task<AgentUsage?> CollectAsync(CancellationToken cancellationToken = default)
+    {
+        var login = account.Login;
+        string? token;
+        try { token = await credentials.FromGhOnlyAsync(login, $"further account {account.Slot}", cancellationToken); }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            var why = UsageFetch.Describe(e);
+            return Failed($"The Copilot credential for {login} could not be read: {why}", $"its credential could not be read: {why}");
+        }
+        if (token is null)
+        {
+            var why = credentials.GhReason(login, CopilotCredentials.GitHub);
+            return Failed(why is null ? $"No Copilot credential was available for {login}." : $"No Copilot credential was available for {login} ({why}).",
+                why is null ? "no Copilot credential was available" : $"no Copilot credential was available ({why})");
+        }
+        try
+        {
+            using var body = await CopilotUsageCollector.FetchAsync(http, token, options, cancellationToken);
+            if (CopilotUsageCollector.Convert(body.RootElement, UsageSource.Api, null, clock) is not { } read)
+            {
+                return Failed($"GitHub returned no premium-interaction quota for {login}.", "GitHub returned no premium-interaction quota for it");
+            }
+            // An answer that does not say whose allowance it is is not believed to be this login's:
+            // shown under its name, it could be anybody's.
+            if (read.Account is not { Length: > 0 } answered)
+            {
+                return Failed($"GitHub's answer for {login} did not say whose allowance it is.", "GitHub's answer for it did not say whose allowance it is");
+            }
+            // Logins are not case-sensitive, so neither is this.
+            if (!string.Equals(answered, login, StringComparison.OrdinalIgnoreCase))
+            {
+                return Failed($"The token gh holds for {login} reads the allowance of {answered} instead.", "the token gh holds for it reads another account's allowance");
+            }
+            spelling = answered;
+            Plain = null;
+            return read with { Account = spelling, Slot = account.Slot };
+        }
+        catch (Exception e) when (e is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            var why = UsageFetch.Describe(e);
+            return Failed($"The Copilot quota for {login} could not be read: {why}", $"its quota could not be read: {why}");
+        }
+    }
+
+    AgentUsage Failed(string error, string plain)
+    {
+        Plain = plain;
+        return UsageRead.Failure(AgentKind.Copilot, error, clock.GetUtcNow(), account: spelling) with { Slot = account.Slot };
     }
 }

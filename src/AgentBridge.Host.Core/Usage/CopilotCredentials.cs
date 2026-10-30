@@ -64,8 +64,8 @@ public sealed class WindowsCredentialStore : ICredentialStore
 //
 // macOS's keychain item is not read: reading it raises an authorization panel that the CLI's
 // next token refresh invalidates, so the prompt cannot be made to stop by answering it
-// (agent-ha-bridge #122). agent-ha-bridge reads it only when configured to; this host has no
-// configuration yet, so it never does.
+// (agent-ha-bridge #122). agent-ha-bridge reads it only when usage.keychain says to; this host
+// does not take that setting yet (#52), so it never does.
 public sealed class CopilotCredentials(UsageOptions options, ICommandRunner commands, ICredentialStore? store = null,
     Func<string, string?>? environment = null, Func<string?>? findGh = null, TimeProvider? time = null, Action<string>? log = null)
 {
@@ -106,6 +106,14 @@ public sealed class CopilotCredentials(UsageOptions options, ICommandRunner comm
         return await FromGhAsync(login, hostUrl, cancellationToken);
     }
 
+    // The token gh holds for exactly this github.com login, and nothing else: for a further account
+    // (usage.copilotAccounts), whose allowance the environment's token or the CLI's stored login,
+    // both the signed-in account's, would misreport under its name.
+    public Task<string?> FromGhOnlyAsync(string login, string who, CancellationToken cancellationToken = default) =>
+        string.IsNullOrWhiteSpace(login) ? Task.FromResult<string?>(null) : FromGhAsync(login, GitHub, cancellationToken, who);
+
+    public const string GitHub = "https://github.com";
+
     // Why gh gave no token for this login, for the reading's error; null when it was not asked.
     public string? GhReason(string login, string hostUrl)
     {
@@ -125,7 +133,7 @@ public sealed class CopilotCredentials(UsageOptions options, ICommandRunner comm
         }
     }
 
-    async Task<string?> FromGhAsync(string login, string hostUrl, CancellationToken cancellationToken)
+    async Task<string?> FromGhAsync(string login, string hostUrl, CancellationToken cancellationToken, string? who = null)
     {
         var key = Key(login, hostUrl);
         string reason;
@@ -168,7 +176,7 @@ public sealed class CopilotCredentials(UsageOptions options, ICommandRunner comm
             changed = !reasons.TryGetValue(key, out var previous) || previous != reason;
             reasons[key] = reason;
         }
-        if (changed) { say($"usage: the Copilot allowance could not be read through gh: {reason}"); }
+        if (changed) { say($"usage: the Copilot allowance{(who is null ? "" : $" of {who}")} could not be read through gh: {reason}"); }
         return null;
     }
 

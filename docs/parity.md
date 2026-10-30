@@ -36,13 +36,13 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 | Status | Rows |
 |---|---|
 | `Verified` | 48 |
-| `Implemented, untested live` | 35 |
+| `Implemented, untested live` | 36 |
 | `Partial` | 2 |
 | `Missing` | 19 |
 | `Intentionally different` | 17 |
 | `N/A` | 12 |
 | `In flight (…)` | 13: Claude/Codex live 8, HA connector 5 |
-| **Total** | **146** feature rows in §1–§18 |
+| **Total** | **147** feature rows in §1–§18 |
 
 Of the 15 §6.3 invariants: 8 `Verified`, 5 `Implemented, untested live`, 1 `Partial`, 1
 `Missing`. Every `Missing` and `Partial` row links an issue labelled
@@ -168,7 +168,8 @@ Of the 15 §6.3 invariants: 8 `Verified`, 5 `Implemented, untested live`, 1 `Par
 | Pace: 2 min with a session, 15 min without, at least 30 s apart; republished every 30 min | All | README "How current it is" | `Implemented, untested live` | `UsageTests.An_agent_with_no_session_here_is_asked_every_quarter_hour_and_one_with_a_session_every_two_minutes`, `An_unchanged_reading_is_announced_again_only_after_half_an_hour` | #39 |
 | Bars with pace mark, amber at 75 %, red at 90 %, "resets in"; one row per account across machines | All | Usage card | `Verified` | `pwa/test/unit/usage.test.mjs`, `ModelTests.Rows_are_fullest_first_coloured_at_75_and_90_with_their_pace_and_reset`. Live: Progress › Usage (matches the HA card) | |
 | A failure is shown only beside a reading over an hour old | All | README "When a read fails" | `Implemented, untested live` | `ModelTests.A_failure_beside_a_fresh_reading_is_not_shown_but_one_beside_an_old_reading_is`, `pwa/test/unit/usage.test.mjs: "an error is shown unless there is a reading that is not stale"` | #39 |
-| `usage.copilotAccounts`, `usage.publish: false`, the pace settings, `usage.keychain` (macOS) | Cp, All | `config.json` `usage.*` | `Missing` | Fixed defaults (`UsageOptions.cs`) | #52 |
+| `usage.copilotAccounts`, `usage.publish: false`, the pace settings | Cp, All | `config.json` `usage.*`; README "More than one Copilot account" | `Implemented, untested live` | `UsageSettings`, `CopilotAccountCollector` (`gh auth token --user <login>` only, an answer for another login refused). `UsageTests.A_further_account_is_read_only_with_the_token_gh_holds_for_exactly_that_login`, `Further_accounts_are_read_one_a_pass_longest_waiting_first_at_the_idle_pace_whatever_is_open`, `LifecycleTests.A_further_copilot_login_goes_on_the_numbered_sensor_of_its_place_and_one_no_longer_listed_is_withdrawn`, the contract fixture's `usage_copilot_2` and `_4`. Live: `agent-bridge-host usage` on DSWETT-DEV-VM1 read both `gh` logins | Both rows on the phone (E8-04); `migrate` carries `usage.*` once #68 lands |
+| `usage.keychain` (macOS) | Cp | `config.json` `usage.keychain` | `Missing` | The macOS keychain item is never read (`CopilotCredentials.cs`) | #52 |
 | Only the publication writer asks for a shared account's figure | All | README "Only one machine asks" | `N/A` | Clients merge readings by account (`pwa/test/unit/usage.test.mjs: "one allowance read by two machines is one row…"`) | Tied to the HA writer role |
 
 ## 9. Machines, fleet and updates

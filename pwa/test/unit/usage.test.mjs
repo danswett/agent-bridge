@@ -45,6 +45,18 @@ test('two accounts no vendor names are kept apart by a few characters of their k
   assert.equal(mergeUsage([readUsage({ agents: [claude('aaaa1111bbbb', 10)] })])[0].account, null);
 });
 
+test('a further Copilot account is a row of its own under its login, and one machine reading it as its own account is the same row', () => {
+  // DSWETT-DEV-VM1 is signed in as octo and lists dswett_microsoft as a further account; the
+  // laptop is signed in as dswett_microsoft itself, and its failed read lends the row its error.
+  const vm = { agents: [reading(), reading({ account: 'DSwett_Microsoft', slot: 2, measuredAt: iso(-H) }, [{ key: 'plan', label: 'Plan', percent: 12 }])] };
+  const laptop = { agents: [failure({ account: 'dswett_microsoft' })] };
+  const rows = mergeUsage([vm, laptop].map(readUsage));
+  assert.deepEqual(rows.map((r) => [r.account, r.windows[0]?.percent ?? null, r.error]), [['octo', 40, null], ['DSwett_Microsoft', 12, 'gh is not installed']]);
+  // And a further account no machine can read still has its row, saying why.
+  const unread = mergeUsage([readUsage({ agents: [reading(), failure({ account: 'monalisa', slot: 3, error: 'No Copilot credential was available for monalisa.' })] })]);
+  assert.deepEqual(unread.map((r) => [r.account, r.error]), [['octo', null], ['monalisa', 'No Copilot credential was available for monalisa.']]);
+});
+
 test('rows come fullest window first', () => {
   const r = readUsage({ agents: [
     reading({ agent: 'codex', label: 'Codex', account: null }, [{ key: 'primary', label: '5h', percent: 5 }, { key: 'secondary', label: 'Weekly', percent: 91 }]),

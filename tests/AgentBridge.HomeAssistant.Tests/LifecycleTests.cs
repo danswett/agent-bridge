@@ -24,6 +24,8 @@ public sealed class LifecycleTests : IDisposable
     Func<string?>? agentHaBridgeProbe;
     UsageReport usage = UsageReport.Empty;
     long usageVersion;
+    IReadOnlyList<string> accountSensors = [];
+    bool usageOff;
 
     public void Dispose()
     {
@@ -36,7 +38,8 @@ public sealed class LifecycleTests : IDisposable
         Version = "0.1.0",
         Dev = true,
         StateFile = Path.Combine(folder, "ha-connector.json"),
-    }, ha, sessions, () => agentHaBridgeProbe is { } probe ? probe() : agentHaBridge, () => (usage, usageVersion), m => { lock (log) { log.Add(m); } }, time);
+        UsageAccountSensors = accountSensors,
+    }, ha, sessions, () => agentHaBridgeProbe is { } probe ? probe() : agentHaBridge, usageOff ? null : () => (usage, usageVersion), m => { lock (log) { log.Add(m); } }, time);
 
     async Task Pass(HaConnector c, double seconds = 0)
     {
@@ -394,6 +397,62 @@ public sealed class LifecycleTests : IDisposable
         Assert.Equal("42", ha.Retained[HaContract.UsageStateTopic(Slug, "copilot")]);
         // The beat's time is never retained, and never cleared as if it were.
         Assert.DoesNotContain(ha.Log, p => p.Topic == HaContract.OnlineAttributesTopic(Slug) && (p.Retain || p.Payload.Length == 0));
+    }
+
+    [Fact]
+    public async Task A_further_copilot_login_goes_on_the_numbered_sensor_of_its_place_and_one_no_longer_listed_is_withdrawn()
+    {
+        var node = HaContract.MachineNode(Slug);
+        var device = $"AI Agent Bridge ({Machine})";
+        // An earlier configuration's readings: copilot_3 is no longer listed, copilot_2 still is.
+        foreach (var key in new[] { "copilot_2", "copilot_3" })
+        {
+            ha.Seed(HaContract.DiscoveryTopic("sensor", node, $"usage_{key}"), Config("GitHub Copilot usage (old)", $"agent_bridge_{Slug}_usage_{key}", device));
+            ha.Seed(HaContract.UsageStateTopic(Slug, key), "12");
+        }
+        accountSensors = ["copilot_2"];
+        usage = new UsageReport(
+        [
+            new AgentUsage { Agent = AgentKind.Copilot, Label = "GitHub Copilot", Account = "octocat", Source = UsageSource.Api, MeasuredAt = FakeSessions.T0,
+                Windows = [new UsageWindow { Key = "plan", Label = "Plan", Percent = 40 }] },
+            new AgentUsage { Agent = AgentKind.Copilot, Label = "GitHub Copilot", Account = "hubot", Source = UsageSource.Api, MeasuredAt = FakeSessions.T0, Slot = 2,
+                Windows = [new UsageWindow { Key = "plan", Label = "Plan", Percent = 7.5 }] },
+            // A reading for a place this host was not configured with is not published.
+            new AgentUsage { Agent = AgentKind.Copilot, Label = "GitHub Copilot", Account = "monalisa", Source = UsageSource.None, MeasuredAt = FakeSessions.T0, Slot = 3,
+                Error = "No Copilot credential was available for monalisa." },
+        ]);
+        usageVersion = 1;
+
+        await using var c = Connector();
+        await Run(c, 3);
+
+        Assert.DoesNotContain(ha.Retained.Keys, k => k.Contains("copilot_3", StringComparison.Ordinal));
+        Assert.Equal("40", ha.Retained[HaContract.UsageStateTopic(Slug, "copilot")]);
+        Assert.Equal("7.5", ha.Retained[HaContract.UsageStateTopic(Slug, "copilot_2")]);
+        using var config = JsonDocument.Parse(ha.Retained[HaContract.DiscoveryTopic("sensor", node, "usage_copilot_2")]);
+        Assert.Equal("GitHub Copilot usage (hubot)", config.RootElement.GetProperty("name").GetString());
+        using var attributes = JsonDocument.Parse(ha.Retained[HaContract.UsageAttributesTopic(Slug, "copilot_2")]);
+        Assert.Equal(("copilot", "hubot"), (attributes.RootElement.GetProperty("client").GetString(), attributes.RootElement.GetProperty("account").GetString()));
+        // Its entity id forced onto the one the dashboard lists, as the agents' own are.
+        await Run(c, 15);
+        Assert.Equal($"sensor.agent_bridge_{Slug}_usage_copilot_2", ha.Registry[$"agent_bridge_{Slug}_usage_copilot_2"]);
+    }
+
+    [Fact]
+    public async Task With_usage_turned_off_every_usage_sensor_this_machine_left_is_withdrawn()
+    {
+        var node = HaContract.MachineNode(Slug);
+        foreach (var key in new[] { "copilot", "claude", "copilot_2" })
+        {
+            ha.Seed(HaContract.DiscoveryTopic("sensor", node, $"usage_{key}"), Config("usage", $"agent_bridge_{Slug}_usage_{key}", $"AI Agent Bridge ({Machine})"));
+            ha.Seed(HaContract.UsageStateTopic(Slug, key), "42");
+        }
+        usageOff = true;
+
+        await using var c = Connector();
+        await Run(c, 3);
+
+        Assert.DoesNotContain(ha.Retained.Keys, k => k.Contains("/usage", StringComparison.Ordinal));
     }
 
     [Fact]

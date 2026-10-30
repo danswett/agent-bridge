@@ -65,8 +65,9 @@ public sealed record ShadowView
     public bool? Dev { get; init; }
     // The host only: whether it sees agent-ha-bridge running (design G5), so it does not deliver.
     public bool? SeesAgentHaBridge { get; init; }
-    // Each agent's allowance by client (copilot, claude, codex), or null when this side's could
-    // not be read this time, with why in UsageProblem. The daemon's comes from Home Assistant.
+    // Each agent's allowance by client (copilot, claude, codex, and copilot_2 to _4 for further
+    // Copilot logins), or null when this side's could not be read this time, with why in
+    // UsageProblem. The daemon's comes from Home Assistant.
     public IReadOnlyDictionary<string, ShadowUsage>? Usage { get; init; }
     public string? UsageProblem { get; init; }
     // The resume list's labels, newest first, whitespace collapsed; in memory only. Null when
@@ -160,7 +161,6 @@ public static class ShadowKinds
     // every report so a "clean" run is never read as covering them.
     public static readonly IReadOnlyList<string> NotCompared =
     [
-        "usage of extra Copilot accounts (usage.copilotAccounts; only usage_copilot, usage_claude and usage_codex are read)",
         "titles (agent-ha-bridge names sessions for Home Assistant)",
         "reasoning and tool history (bounded differently, parity §1)",
         "driver and the purple edge (missing here, #46)",

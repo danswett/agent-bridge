@@ -58,9 +58,11 @@ arrive once. `seq` is the channel's, shared with session events.
 
 ### Usage
 
-`{ "agents": [AgentUsage…] }`, at most 8 agents and 24 KiB as sent. An agent that has never
-run on the machine is absent: "no data" and "none used" look the same as a bar and mean
-opposite things.
+`{ "agents": [AgentUsage…] }`, at most 8 entries and 24 KiB as sent: one per agent, and one more
+per further Copilot account the machine was asked to report (`slot`), after the agents. An agent
+that has never run on the machine is absent: "no data" and "none used" look the same as a bar
+and mean opposite things. A further account is never absent: one that cannot be read is a
+failure under its login, saying why.
 
 ### AgentUsage
 
@@ -75,6 +77,7 @@ opposite things.
 | `windows` | Window[] | At most 6. Empty for a failure |
 | `error` | string? | Why there is no fresh reading. Beside windows, the reading is an older fallback (Copilot's cache). At most 512 bytes |
 | `measuredAt` | time | When the figure was taken. For a failure, when the attempt was made |
+| `slot` | number? | A further account the machine was asked to report beside the one the agent is signed in as (the host's `usage.copilotAccounts`, [host-config.md](../host-config.md)): its place, `2` for the first listed, to `4`. Absent for the signed-in account. Added after the first release of this contract; a client that does not know it still shows the row by `account`. It does not change grouping: one machine's further account is another's signed-in one, and they are one row |
 
 ### Window
 
@@ -118,12 +121,16 @@ Agent-ha-bridge's usage card, kept exactly:
 | Agent | Source | Credential |
 |---|---|---|
 | Copilot | `GET https://api.github.com/copilot_internal/user`, `quota_snapshots.premium_interactions`: `entitlement` is the limit, `entitlement − remaining` is used, `quota_reset_date_utc` the reset, a month before it the start. Failing that, the CLI's own cache, `copilot-user-cache.json` (the newest entry for the login), with the failure as `error` | The account is the login in `~/.copilot/config.json` `loggedInUsers` (`lastLoggedInUser` when there are several). Its token, in the CLI's own order: `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, the CLI's stored login (Windows Credential Manager, `https://github.com:<login>.copilot-cli`), then `gh auth token --hostname github.com --user <login>` |
+| Copilot, further accounts | The same request, with no cache fallback: only the CLI's own sessions refresh its cache, and they spend the signed-in account. An answer whose `login` is not the account asked for (ignoring case) is refused: `The token gh holds for <login> reads the allowance of <other> instead.` | Only `gh auth token --hostname github.com --user <login>`: the environment's tokens and the CLI's stored login are the signed-in account's. None from `gh` is `No Copilot credential was available for <login> (<why>).` |
 | Claude | `GET https://api.anthropic.com/api/oauth/usage`, `limits[]`: `kind`, `percent`, `resets_at`; `seven_day_breakdown.window_started_at` starts the weekly windows | `claudeAiOauth.accessToken` in `~/.claude/.credentials.json`. The account key from `~/.claude.json` `oauthAccount` |
 | Codex | The newest `rate_limits` (by its event's time) in the 5 most recently written transcripts under `~/.codex/sessions`, searching the last 8 MiB of each: `primary` and `secondary`, `used_percent`, `window_minutes`, `resets_at`, `plan_type` | None: no request leaves the machine |
 
 **Pace.** A host asks about an agent every 2 minutes while a session of it is open on the
 machine, and every 15 minutes while none is: the allowance belongs to the account, and only a
-machine spending it sees it move. A session opening or closing brings the next ask forward,
+machine spending it sees it move (`usage.intervalSeconds` and `usage.idleIntervalSeconds` change
+both). A further Copilot account is asked at the second pace whatever is open, since the sessions
+here never spend it, and one at a time: at most one a pass, every 15 s, the one that has waited
+longest. A session opening or closing brings the next ask forward,
 but never within 30 s of the last. While agent-ha-bridge's daemon runs for the same user it
 already asks every 2 minutes, so a host then asks only every 15. Each request is tried up to 3
 times, 400 ms and 800 ms apart, for network failures, timeouts (15 s), 408, 429 and 5xx; any
@@ -141,17 +148,16 @@ Copilot: reading it raises a prompt that the CLI's next token refresh brings bac
 ## Privacy
 
 Tokens never leave the machine except to the vendor that issued them, and are never logged
-or written anywhere. A host's log names agents, sources and reasons, never an account. The
+or written anywhere. A host's log names agents, sources and reasons, never an account: a
+further Copilot account is "further Copilot account 2", and its reading's error, which names
+its login, is logged without it. The
 account a reading belongs to travels only inside the end-to-end channel, to the account's
 own devices.
 
 ## Not carried over yet
 
-* **Further Copilot logins** (agent-ha-bridge's `usage.copilotAccounts`). A host has no
-  configuration yet; the report already holds one entry per account, so they need no
-  contract change.
 * **Standing down for another machine** reading the same account (agent-ha-bridge #142).
   That bridge sees every machine's readings in Home Assistant; hosts here do not see each
   other's. Each host asks for itself, at the pace above.
-* **macOS keychain opt-in** (agent-ha-bridge's `usage.keychain`), for the same lack of
-  configuration.
+* **macOS keychain opt-in** (agent-ha-bridge's `usage.keychain`, #52). A host on a Mac reads
+  Copilot's allowance from the environment's tokens and `gh`, never the keychain.

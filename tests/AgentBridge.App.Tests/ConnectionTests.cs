@@ -119,6 +119,22 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_host_restarted_with_usage_off_leaves_no_usage_behind()
+    {
+        var report = new UsageReport([new AgentUsage { Agent = AgentKind.Copilot, Label = "Copilot", Source = UsageSource.Api, MeasuredAt = Make.T0 }]);
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the connection");
+        await host.SendAsync(UsageProtocol.Update, report);
+        await Wait.UntilAsync(() => connection.Usage.Agents.Count == 1, "the usage");
+
+        await host.StopAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the host to go");
+        host.Capabilities.Remove(UsageProtocol.Capability);
+        host.Start();
+
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Usage.Agents.Count == 0, "the usage to go");
+    }
+
+    [Fact]
     public async Task After_the_host_restarts_the_app_reconnects_and_drops_sessions_that_ended_meanwhile()
     {
         await Wait.UntilAsync(() => Volatile.Read(ref syncs) > 0 && connection.Sessions.Get("s1") is not null, "the snapshot");

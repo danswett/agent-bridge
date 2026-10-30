@@ -177,7 +177,9 @@ public sealed class DaemonHaReader : IDisposable
     {
         clock = time ?? TimeProvider.System;
         Slug = HaContract.MachineSlug(machineName);
-        usageEntities = [.. HaContract.UsageClients.Select(c => (c, HaContract.MachineEntityId("sensor", $"usage_{c}", Slug)))];
+        // The numbered sensors of further Copilot logins too (usage.copilotAccounts), each compared
+        // with the host's reading in the same place.
+        usageEntities = [.. HaContract.UsageSensorKeys.Select(c => (c, HaContract.MachineEntityId("sensor", $"usage_{c}", Slug)))];
         resumeEntity = HaContract.MachineEntityId("select", "new_resume", Slug);
         Entities = [.. usageEntities.Select(u => u.Entity), resumeEntity];
         patience = timeout ?? TimeSpan.FromSeconds(10);

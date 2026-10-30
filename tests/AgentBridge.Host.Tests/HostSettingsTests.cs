@@ -26,15 +26,18 @@ public sealed class HostSettingsTests : IDisposable
     [InlineData("{ \"permissions\": { \"remoteApproval\": \"no\" } }")]
     [InlineData("{ \"permissions\": false }")]
     [InlineData("not json")]
+    // usage.publish false beside a value that spoils the file: the opt-out must hold.
+    [InlineData("{ \"usage\": { \"publish\": false }, \"push\": { \"enabled\": \"false\" } }")]
     public void A_setting_that_cannot_be_read_as_true_or_false_turns_remote_approval_off_and_says_why(string text)
     {
         var (settings, problem) = With(text);
 
         Assert.False(settings.RemoteApproval);
-        Assert.Contains("remote approval of permission prompts, launching and notifications are off", problem);
+        Assert.Contains("remote approval of permission prompts, launching, notifications and agent usage are off", problem);
         Assert.False(settings.Launch.Enabled);
         Assert.False(settings.Push);
         Assert.True(settings.ReadOnly);
+        Assert.False(settings.Usage.Publish);
     }
 
     [Theory]
@@ -186,6 +189,29 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Equal(1, Run("config", "set", "homeAssistant.agentUserIds", "agent-user"));
         Assert.Equal(0, Run("config", "unset", "homeAssistant.agentUserIds"));
         Assert.Empty(HostSettings.Load(folder).Settings.HomeAssistant.AgentUserIds);
+    }
+
+    [Fact]
+    public void Usage_is_set_at_the_machine_and_a_token_pasted_where_a_login_belongs_is_not_written_or_repeated()
+    {
+        Assert.Equal(0, Run("config", "set", "usage.copilotAccounts", """["dswett_microsoft"]"""));
+        Assert.Equal(0, Run("config", "set", "usage.idleIntervalSeconds", "600"));
+        var settings = HostSettings.Load(folder).Settings;
+        Assert.Equal([(2, "dswett_microsoft")], settings.Usage.CopilotAccounts.Select(a => (a.Slot, a.Login)));
+        Assert.Equal(TimeSpan.FromMinutes(10), settings.Usage.IdleInterval);
+        Assert.Empty(settings.UsageProblems);
+
+        var text = File.ReadAllText(Path.Combine(folder, HostSettings.FileName));
+        Assert.Equal(1, Run("config", "set", "usage.copilotAccounts", """["gho_0123456789abcdef"]"""));
+        Assert.Contains("Not written: usage.copilotAccounts entry 1 looks like a token", Said);
+        Assert.DoesNotContain("gho_", Said);
+        // Never on disk at all, not even while it is being checked.
+        Assert.DoesNotContain(Directory.GetFiles(folder, "*", SearchOption.AllDirectories), f => File.ReadAllText(f).Contains("gho_", StringComparison.Ordinal));
+        Assert.Equal(1, Run("config", "set", "usage.publish", "off"));
+        Assert.Equal(text, File.ReadAllText(Path.Combine(folder, HostSettings.FileName)));
+
+        Assert.Equal(0, Run("config", "set", "usage.publish", "false"));
+        Assert.False(HostSettings.Load(folder).Settings.Usage.Publish);
     }
 
     [Fact]

@@ -83,7 +83,7 @@ public sealed class ShadowTests
     }
 
     [Fact]
-    public async Task The_update_check_launch_outcomes_and_further_logins_usage_are_said_to_be_by_design()
+    public async Task The_update_check_launch_outcomes_and_further_logins_the_host_is_not_configured_with_are_said_to_be_by_design()
     {
         DaemonPublished();
         var slug = HaContract.MachineSlug(Machine);
@@ -100,7 +100,7 @@ public sealed class ShadowTests
         Assert.Equal("launch card not compared (the shadow takes no launch options)", report.Differences.Single(d => d.Topic.EndsWith("/newsession/outcome", StringComparison.Ordinal)).Note);
         foreach (var topic in new[] { HaContract.DiscoveryTopic("sensor", node, "usage_copilot_2"), HaContract.UsageStateTopic(slug, "copilot_2") })
         {
-            Assert.Equal("further Copilot logins' usage is not reported by the host", report.Differences.Single(d => d.Topic == topic).Note);
+            Assert.Equal("a further Copilot login this host is not configured to report (usage.copilotAccounts)", report.Differences.Single(d => d.Topic == topic).Note);
         }
     }
 
@@ -121,10 +121,12 @@ public sealed class ShadowTests
             Assert.Equal("usage not compared (no reading was taken)", entry.Note);
         }
 
-        var with = await HaShadow.CompareAsync(ha, sessions, new HaConnectorOptions { MachineName = Machine, Version = "0.1.0", Dev = true }, true,
+        var with = await HaShadow.CompareAsync(ha, sessions, new HaConnectorOptions { MachineName = Machine, Version = "0.1.0", Dev = true, UsageAccountSensors = ["copilot_2", "copilot_4"] }, true,
             TimeSpan.Zero, () => (new AgentBridge.Protocol.UsageReport(ContractTests.UsageReadings), 1));
         Assert.DoesNotContain(with.Differences, d => d.Topic == config);
         Assert.DoesNotContain(with.Differences, d => d.Topic == HaContract.UsageStateTopic(slug, "copilot"));
+        // Further Copilot logins the host reports are compared like the rest, and agree.
+        Assert.DoesNotContain(with.Differences, d => d.Topic.Contains("copilot_2", StringComparison.Ordinal) || d.Topic.Contains("copilot_4", StringComparison.Ordinal));
     }
 
     [Fact]

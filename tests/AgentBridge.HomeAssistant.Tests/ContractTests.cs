@@ -249,10 +249,23 @@ public class ContractTests
             Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.None, Error = "The Codex usage could not be read: no rollout",
             MeasuredAt = DateTimeOffset.Parse("2026-10-29T19:00:02Z", System.Globalization.CultureInfo.InvariantCulture),
         },
+        // Further Copilot logins (usage.copilotAccounts) on the numbered sensors of their places.
+        new AgentUsage
+        {
+            Agent = AgentKind.Copilot, Label = "GitHub Copilot", Account = "hubot", Plan = "individual", Source = UsageSource.Api, Slot = 2,
+            MeasuredAt = DateTimeOffset.Parse("2026-10-29T19:00:03Z", System.Globalization.CultureInfo.InvariantCulture),
+            Windows = [new UsageWindow { Key = "premium", Label = "Premium requests", Percent = 42.3, Used = 127, Limit = 300, Unit = "requests", ResetsAt = DateTimeOffset.Parse("2026-11-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture) }],
+        },
+        new AgentUsage
+        {
+            Agent = AgentKind.Copilot, Label = "GitHub Copilot", Account = "monalisa", Source = UsageSource.None, Slot = 4,
+            Error = "No Copilot credential was available for monalisa (gh has no token for monalisa - run gh auth login).",
+            MeasuredAt = DateTimeOffset.Parse("2026-10-29T19:00:04Z", System.Globalization.CultureInfo.InvariantCulture),
+        },
     };
 
     [Fact]
-    public void Usage_sensors_match_the_contract_for_a_reading_and_a_failure()
+    public void Usage_sensors_match_the_contract_for_a_reading_and_a_failure_and_for_further_copilot_logins()
     {
         var recorded = Contract.Publications("usage");
         var now = DateTimeOffset.Parse("2026-10-29T19:00:05Z", System.Globalization.CultureInfo.InvariantCulture);
@@ -262,10 +275,10 @@ public class ContractTests
         foreach (var r in readings)
         {
             var u = HaPayloads.Usage(r, Machine, Slug, now)!.Value;
-            var (topic, config) = HaContract.UsageConfig(Slug, Machine, u.Client, u.Label);
+            var (topic, config) = HaContract.UsageConfig(Slug, Machine, u.Key, u.Label, u.Key == u.Client ? null : r.Account);
             actual.Add(new Published(topic, HaContract.Serialize(config), true));
-            actual.Add(new Published(HaContract.UsageStateTopic(Slug, u.Client), u.State, true));
-            actual.Add(new Published(HaContract.UsageAttributesTopic(Slug, u.Client), HaContract.Serialize(u.Attributes), true));
+            actual.Add(new Published(HaContract.UsageStateTopic(Slug, u.Key), u.State, true));
+            actual.Add(new Published(HaContract.UsageAttributesTopic(Slug, u.Key), HaContract.Serialize(u.Attributes), true));
         }
         Contract.Equal(recorded, actual);
     }

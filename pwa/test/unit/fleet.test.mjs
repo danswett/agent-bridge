@@ -79,6 +79,27 @@ test('every other online machine is asked once, one at a time, for its status an
   assert.equal(book.entries()[0].windows[0].percent, 40);
 });
 
+test('a machine that stops offering usage has its last report dropped, and one that cannot be reached keeps it', async () => {
+  let now = 0;
+  const { connection, book, fleet } = fleetWith({
+    a: { machine: { hostVersion: '0.1.0' }, capabilities: ['usage'], usage: usage(40) },
+    b: { machine: { hostVersion: '0.1.0' }, capabilities: ['usage'], usage: usage(20) },
+  }, { now: () => now });
+  fleet.probe();
+  await fleet.idle();
+  assert.equal(book.size, 2);
+
+  // a restarted with usage.publish off; b went away.
+  connection.hosts.a.capabilities = ['sessions.read'];
+  connection.hosts.b.fail = true;
+  now = 60000;
+  fleet.probe();
+  await fleet.idle();
+
+  assert.equal(book.size, 1);
+  assert.equal(book.entries()[0].windows[0].percent, 20);
+});
+
 test('a machine is not asked again within the minute, and is afterwards', async () => {
   let now = 0;
   const { connection, fleet } = fleetWith({ a: { machine: { hostVersion: '0.1.0' }, capabilities: [] } }, { now: () => now });

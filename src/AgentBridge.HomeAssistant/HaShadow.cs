@@ -107,19 +107,21 @@ public static partial class HaShadow
                 if (Equivalent(d, h)) { same++; continue; }
                 differences.Add(new ShadowEntry(topic, Differs, d, h, Keys(d, h)));
             }
-            else if (d is not null) { differences.Add(new ShadowEntry(topic, DaemonOnly, d, null, NotServed(topic, servesAnswers, usage is not null))); }
+            else if (d is not null) { differences.Add(new ShadowEntry(topic, DaemonOnly, d, null, NotServed(topic, servesAnswers, usage is not null, options.UsageAccountSensors))); }
             else { differences.Add(new ShadowEntry(topic, HostOnly, null, h, null)); }
         }
         return new ShadowReport(options.MachineName, slug, hostNodes, [.. daemonNodes.Distinct().Order(StringComparer.Ordinal)], same, differences);
     }
 
     // Why a topic the daemon holds is not one this host publishes, when that is by design.
-    static string? NotServed(string topic, bool servesAnswers, bool hasUsage)
+    static string? NotServed(string topic, bool servesAnswers, bool hasUsage, IReadOnlyList<string> accountSensors)
     {
         if (!hasUsage && (topic.Contains("/usage_", StringComparison.Ordinal) || topic.Contains("/usage/", StringComparison.Ordinal))) { return "usage not compared (no reading was taken)"; }
-        if (topic.Contains("/usage_copilot_", StringComparison.Ordinal) || topic.Contains("/usage/copilot_", StringComparison.Ordinal))
+        // A further login's sensor is compared like any other when the host reports that login; one
+        // it is not configured with is the daemon's alone, and the connector withdraws it.
+        if (NumberedUsage().Match(topic) is { Success: true } m && !accountSensors.Contains(m.Groups[1].Value))
         {
-            return "further Copilot logins' usage is not reported by the host";
+            return "a further Copilot login this host is not configured to report (usage.copilotAccounts)";
         }
         // The card's choices are the launcher's, which a shadow does not ask for.
         if (topic.Contains("/new_", StringComparison.Ordinal) || topic.Contains("/newsession/", StringComparison.Ordinal))
@@ -140,6 +142,9 @@ public static partial class HaShadow
 
     [System.Text.RegularExpressions.GeneratedRegex("/f[0-9]+/config$")]
     private static partial System.Text.RegularExpressions.Regex FieldConfig();
+
+    [System.Text.RegularExpressions.GeneratedRegex("/usage[_/](copilot_[0-9]+)/")]
+    private static partial System.Text.RegularExpressions.Regex NumberedUsage();
 
     // Payloads as Home Assistant reads them: JSON by value, the moment of writing left out.
     static bool Equivalent(string a, string b) => a == b || (Parse(a) is { } x && Parse(b) is { } y && JsonNode.DeepEquals(x, y));
