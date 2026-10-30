@@ -251,6 +251,26 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_launched_session_still_opens_when_its_machine_drops_out_and_comes_back_first()
+    {
+        await BothMachinesAsync();
+        var opened = new List<string>();
+        ui.Post(() =>
+        {
+            main.OpenRequested += c => opened.Add(c.Id);
+            main.Open("remote-id", "late", untilItArrives: true);
+        });
+
+        link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        await Wait.UntilAsync(() => Card("there") is null, "the other machine to go");
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        await Wait.UntilAsync(() => Card("there") is not null, "the other machine to come back");
+        await remoteHost.SendAsync(Events.SessionUpsert, Make.Session("late", updated: Make.T0.AddMinutes(5)));
+
+        await Wait.UntilAsync(() => { lock (opened) { return opened.Contains("late"); } }, "the session to open");
+    }
+
+    [Fact]
     public async Task Machines_still_come_and_go_while_this_machines_host_is_away()
     {
         await BothMachinesAsync();

@@ -194,7 +194,7 @@ public sealed class MainViewModel : Observable
         }
         m.Toasts?.MachineGone();
         MachineRemoved?.Invoke(key);
-        launchOpens.RemoveWhere(p => p.Machine == key);
+        // A launch's open stays: the machine may be back in a moment, with the session it started.
         pendingOpens.RemoveWhere(p => p.Machine == key);
         unhook.Remove(m, out var undo);
         undo?.Invoke();
