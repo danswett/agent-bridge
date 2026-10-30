@@ -211,8 +211,9 @@ and its event goes nowhere, so the `PreToolUse` or `Stop` that ended an approval
 terminal may never arrive. When the intake takes the spool again (it starts, agent-ha-bridge
 stops, or the heartbeat can be written again), it withdraws every approval marker asked before
 the last Codex hook run the hook log records as not spooled. One asked after it is still
-pending. Answering an approval twice could type into whatever the terminal shows now; losing a
-remote answer only means answering at the terminal.
+pending. A `PermissionRequest` still waiting in the spool from before that run is handled but
+arms no approval, for the same reason. Answering an approval twice could type into whatever the
+terminal shows now; losing a remote answer only means answering at the terminal.
 
 **The owning process** is found from the recorded ancestry, so the shells in between can have
 exited:

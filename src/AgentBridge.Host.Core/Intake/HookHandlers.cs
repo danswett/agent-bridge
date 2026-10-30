@@ -27,6 +27,10 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
     public string ClaudeRoot { get; } = Path.Combine(runtimeRoot, SpoolContract.ClaudeFolder);
     public string CodexRoot { get; } = Path.Combine(runtimeRoot, SpoolContract.CodexFolder);
 
+    // A Codex approval asked at or before this may have been answered at the terminal while no
+    // one took events (HookIntake.ReconcileApprovals), so it arms no marker.
+    public DateTimeOffset? ApprovalsSettledBefore { get; set; }
+
     static readonly string[] ClaudeBlocking = ["permission_prompt", "worker_permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input"];
 
     // Throws when the event cannot be handled, so the intake tries it once more.
@@ -141,6 +145,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         WriteCodexRegistration(sessionId, Str(e, "transcript_path"), Str(e, "cwd"), Str(e, "model"), status, activity, owner, ended: eventName == "SessionEnd", At(spooled));
 
         string? approvalId = null;
+        if (approval && ApprovalsSettledBefore is { } settled && (spooled.ReceivedAt ?? time.GetUtcNow()) <= settled) { approval = false; }
         if (approval)
         {
             // agent-ha-bridge's generation: the session's node id and the time, so an answer

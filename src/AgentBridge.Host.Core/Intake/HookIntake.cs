@@ -225,13 +225,15 @@ public sealed class HookIntake : IAsyncDisposable
     // to be answered again, typed into whatever the terminal shows now. So each approval asked
     // before the last such run is withdrawn when the intake takes the spool again; one asked
     // after it is still pending. The hook log is the record of those runs (both hooks write it).
+    // The same cut-off holds for a PermissionRequest still waiting in the spool from before the
+    // outage: it is handled, but arms no approval.
     void ReconcileApprovals()
     {
+        if (HookStats.LastUnspooled(_options.RuntimeRoot, "codex") is not { } unheard) { return; }
+        _handlers.ApprovalsSettledBefore = unheard;
         string[] markers;
         try { markers = Directory.Exists(_handlers.CodexRoot) ? Directory.GetFiles(_handlers.CodexRoot, "*.approval.json") : []; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; }
-        if (markers.Length == 0) { return; }
-        if (HookStats.LastUnspooled(_options.RuntimeRoot, "codex") is not { } unheard) { return; }
         foreach (var marker in markers)
         {
             DateTimeOffset? created = null;

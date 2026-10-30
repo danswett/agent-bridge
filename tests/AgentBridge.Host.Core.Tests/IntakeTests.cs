@@ -420,6 +420,33 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void An_approval_still_waiting_in_the_spool_from_before_an_outage_arms_nothing()
+    {
+        // The host died with its heartbeat fresh, so the PermissionRequest was spooled; then the
+        // heartbeat went stale and the answer at the terminal reached nobody.
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", Fixture.T0.AddSeconds(5), 3);
+        var intake = Intake();
+        var heard = intake.Subscribe();
+
+        Assert.Equal(1, intake.Pass());
+
+        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+        Assert.True(heard.TryRead(out var n));
+        Assert.Null(n.ApprovalId);
+
+        // A request asked after it arms as usual.
+        File.WriteAllText(Path.Combine(Spool, "0002.json"), JsonSerializer.Serialize(new
+        {
+            v = 1, agent = "codex", hook = "hook", ancestors = new[] { 60 }, receivedAt = Fixture.T0.AddSeconds(30).ToString("o"),
+            @event = new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" },
+        }));
+        Assert.Equal(1, intake.Pass());
+        Assert.True(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+    }
+
+    [Fact]
     public void A_resumed_Codex_session_does_not_offer_the_approval_its_previous_run_died_waiting_on()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
