@@ -355,8 +355,10 @@ card keeps while it asks (`Get-DaemonCardSummary`).
   runs beside the passes; a press while it does is not a second end, then or afterwards, and
   a confirmed end is never said to have lapsed however long the host takes. A press made
   before the card has said what came of the last one (even one reported only afterwards) never
-  confirms the question it then asks; and while it asks, the button is read every pass, so a
-  second press is seen within the window even with the watch down.
+  confirms the question it then asks, and one made the moment it asks is taken; while it asks,
+  the button is read every pass, so a second press is seen within the window even with the
+  watch down. The window is counted from when the press went to the host, so it never outlasts
+  the host's own, and a question the host puts too late to answer is not put.
 * What the button holds when the connector first reads it is not a press; a session asking a
   question can be ended like any other.
 
@@ -367,6 +369,7 @@ Where stage 4 knowingly differs from the daemon:
 | The second press is checked by the host (token, same process), not by the connector | The host's `session.stop` is the one rule for every client; the daemon's process-identity check is the same check |
 | A press with no process behind the session is refused (`Could not end session`) | The host never ends what it cannot identify; the daemon lets it through to a stop that then does nothing |
 | Closing the window the bridge opened is the host's launcher's concern, not the connector's | The connector only presses; the host owns its windows |
+| Another notice replacing the question on the card (`Answer sent`, say) withdraws it: the next press asks again | The daemon pins the question back at its next publish, but until then a press would end a session whose card no longer asks |
 
 ### The shadow: comparing with a running daemon
 

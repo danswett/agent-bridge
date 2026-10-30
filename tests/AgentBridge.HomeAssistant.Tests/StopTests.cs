@@ -410,6 +410,82 @@ public sealed class StopTests : IDisposable
     }
 
     [Fact]
+    public async Task A_second_press_made_the_moment_the_card_asks_is_taken()
+    {
+        await using var c = await Ready(SessionStatus.Working);
+        // Pressed as soon as the question is on the card, before the connector has finished the pass.
+        var pressed = false;
+        ha.PublishFailsFor = (topic, payload) =>
+        {
+            if (!pressed && topic == HaContract.Topics(Node).ActivityState && payload == HaStop.ConfirmNote)
+            {
+                pressed = true;
+                time.Advance(TimeSpan.FromMilliseconds(10));
+                c.Observe(ha.Press(SessionEntities.Stop(Node)));
+            }
+            return false;
+        };
+        await Press(c);
+        Assert.True(pressed);
+        await Pass(c);
+        await c.DeliveredAsync();
+        Assert.Equal([null, "token-1"], stopped.Select(r => r.Confirm));
+    }
+
+    [Fact]
+    public async Task A_question_the_host_answers_after_its_window_has_closed_is_never_put()
+    {
+        var release = new TaskCompletionSource<StopResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        outcome = _ =>
+        {
+            reached.TrySetResult();
+            return release.Task;
+        };
+        await using var c = await Ready(SessionStatus.Working);
+        c.Observe(ha.Press(SessionEntities.Stop(Node)));
+        await Pass(c);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await Pass(c, 11);
+        var mark = ha.Log.Count;
+
+        release.SetResult(new StopResult(StopOutcome.Confirm, "still working") { Confirm = "token-1", ConfirmSeconds = 10 });
+        await c.DeliveredAsync();
+        await Pass(c, 0.01);
+        Assert.DoesNotContain(NotesSince(mark), n => n.Summary == HaStop.ConfirmNote);
+
+        outcome = null;
+        await Press(c);
+        Assert.Equal([null, null], stopped.Select(r => r.Confirm));
+    }
+
+    [Fact]
+    public async Task A_notice_that_replaces_the_question_on_the_card_disarms_it()
+    {
+        Status(SessionStatus.Waiting);
+        var go = new Field { Name = "go", Title = "Go on?", Type = FieldType.Choice, Required = true, Options = [new Option("yes", "Yes"), new Option("no", "No")] };
+        sessions.Set(sessions.Get(A)! with { Question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Go on?", AskedAt = FakeSessions.T0, Fields = [go] } });
+        await using var c = Connector();
+        await Pass(c);
+        await Pass(c);
+        await Press(c);
+        Assert.Equal(HaStop.ConfirmNote, Activity);
+
+        c.Observe(ha.Choose(SessionEntities.Field(Node, 1), "Yes"));
+        await Pass(c);
+        c.Observe(ha.Press(SessionEntities.Submit(Node)));
+        await Pass(c);
+        await c.DeliveredAsync();
+        await Pass(c, 0.01);
+        Assert.Equal("Answer sent", Activity);
+
+        // The card shows the answer, not the question: the next press asks afresh.
+        await Press(c);
+        Assert.Equal([null, null], stopped.Select(r => r.Confirm));
+        Assert.Equal(HaStop.ConfirmNote, Activity);
+    }
+
+    [Fact]
     public async Task A_second_press_is_read_within_the_window_even_with_no_report_of_it()
     {
         await using var c = await Ready(SessionStatus.Working);

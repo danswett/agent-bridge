@@ -576,6 +576,9 @@ public sealed partial class HaConnector
         await PublishAsync(t.ActivityAttributes, detail, true, ct);
         // The next change of the session's own activity replaces it, as the daemon's does.
         p.Activity = null;
+        // A card that no longer asks for a second press of End session does not take one: the
+        // next press is a first press again, so nothing ends on a question nobody can see.
+        if (summary != HaStop.ConfirmNote) { p.Stop.Token = null; }
     }
 
     sealed record Notice(string Summary, JsonObject Extra);

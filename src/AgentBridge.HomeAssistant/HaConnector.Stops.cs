@@ -62,8 +62,9 @@ public sealed partial class HaConnector
     }
 
     // Status: what the card showed when the press came, for the hint. Ending: whether the card
-    // was already told the session is ending.
-    sealed record StopDone(string SessionId, string Node, string Name, Session? Session, string Status, bool Ending, StopResult Result);
+    // was already told the session is ending. Sent: when the request went to the host, which
+    // starts any confirmation window no later than that.
+    sealed record StopDone(string SessionId, string Node, string Name, Session? Session, string Status, bool Ending, DateTimeOffset Sent, StopResult Result);
 
     readonly Func<StopRequest, CancellationToken, Task<StopResult>>? stopper;
     readonly ConcurrentQueue<StopDone> stopsDone = new();
@@ -146,7 +147,7 @@ public sealed partial class HaConnector
             try { result = await stopper!(request, cancel); }
             catch (OperationCanceledException) when (cancel.IsCancellationRequested) { result = new StopResult(StopOutcome.Failed, "the host stopped while ending the session"); }
             catch (Exception e) { result = new StopResult(StopOutcome.Failed, $"ending failed: {e.GetType().Name}"); }
-            stopsDone.Enqueue(new StopDone(sessionId, p.Node, p.Name, session, status, ending, result));
+            stopsDone.Enqueue(new StopDone(sessionId, p.Node, p.Name, session, status, ending, now, result));
         }, CancellationToken.None));
     }
 
@@ -157,7 +158,16 @@ public sealed partial class HaConnector
         {
             Published? p;
             lock (gate) { p = published.TryGetValue(done.SessionId, out var found) ? found : null; }
-            if (p is not null) { await StopDoneAsync(p, done, now, ct); }
+            Observation? before = null;
+            if (p is not null)
+            {
+                // What the button holds before the card says what came of this press was pressed
+                // before it did, even if its report is still on the way: it neither confirms the
+                // question about to be put nor retries an end that failed. Read first, so a press
+                // made once the card has said so is taken as ever.
+                before = await ObserveAsync(SessionEntities.Stop(p.Node), ct);
+                await StopDoneAsync(p, done, now, ct);
+            }
             else if (done.Result.Outcome == StopOutcome.Ended && IsRetiring(done.Node))
             {
                 // Ended and already gone from the list, as the host drops it at once: the card says
@@ -167,12 +177,17 @@ public sealed partial class HaConnector
             stopsDone.TryDequeue(out _);
             if (p is not null)
             {
-                // Whatever the button holds now was pressed before the card said what came of
-                // this one, even if its report is still on the way: read as a baseline, later
-                // this pass, so it neither confirms the question just put nor retries an end
-                // that failed. Presses made once the card has said so are taken as ever.
                 p.Stop.Busy = false;
-                p.Stop.Baselined = false;
+                if (before is { Kind: not "unknown" })
+                {
+                    p.Stop.Handled = before.Present ? before.Value : null;
+                }
+                else
+                {
+                    // Unreadable: read again as a baseline, later. A press made in between is lost,
+                    // never taken for one that was not made.
+                    p.Stop.Baselined = false;
+                }
             }
         }
     }
@@ -192,8 +207,17 @@ public sealed partial class HaConnector
                 // The host asks for what it sees; a session the card shows idle has something going
                 // on that only the host's own words name.
                 var hint = done.Status == "idle" && result.Reason is { Length: > 0 } why ? why : HaStop.Hint(done.Status, seconds);
+                // The host's window began when it gave the token, after the request went; this one
+                // ends no later than the host's, and a question already past it is never put.
+                var until = done.Sent + TimeSpan.FromSeconds(seconds);
+                if (now >= until)
+                {
+                    log($"Home Assistant connector: end of {short8} asked for a second press too late to be given one");
+                    Refresh(done.SessionId, p);
+                    break;
+                }
                 p.Stop.Token = result.Confirm;
-                p.Stop.Until = now + TimeSpan.FromSeconds(seconds);
+                p.Stop.Until = until;
                 p.Stop.Seconds = seconds;
                 p.Stop.Hint = hint;
                 p.Stop.RetryAt = DateTimeOffset.MinValue;
