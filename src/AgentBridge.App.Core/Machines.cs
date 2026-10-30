@@ -112,10 +112,15 @@ public sealed class Fleet : IAsyncDisposable
         Changed?.Invoke();
         // Without this machine's own id the list could take its host for another machine's.
         if (main.LocalMachineId is not { } me) { return; }
-        // The account before the hosts: a switch between the two reads leaves this pass with the
-        // old account's hosts and the old account, so the next pass still sees the switch.
+        // One consistent reading of the link: its account and state, the hosts, and the account and
+        // state again. The link changes them from its own thread (connecting, dropping, switching),
+        // each change announced, so a pass that saw one under it does nothing and the next pass,
+        // already on its way, reads again. Otherwise an empty list read just before a reconnect
+        // published its presence would be taken, with the state read after, for every machine gone.
         var now = link.Account;
+        var state = link.State;
         var hosts = link.Hosts.Where(h => h.Id != me).ToDictionary(h => h.Id, StringComparer.Ordinal);
+        if (link.Account != now || link.State != state) { return; }
         foreach (var (id, h) in hosts)
         {
             if (machines.TryGetValue(id, out var known)) { known.PresenceName = h.Name; continue; }
@@ -131,7 +136,7 @@ public sealed class Fleet : IAsyncDisposable
         // another copy of the app shows them instead.
         var switched = now != account;
         account = now;
-        if (link.State == FleetState.Connecting && !switched) { return; }
+        if (state == FleetState.Connecting && !switched) { return; }
         foreach (var id in machines.Keys.Where(id => !hosts.ContainsKey(id)).ToList())
         {
             machines.Remove(id, out var gone);
@@ -377,7 +382,9 @@ public sealed class RelayFleetLink : IFleetLink
             var ch = await c.Hub.OpenAsync(hostId, TimeSpan.FromSeconds(15)).WaitAsync(ct);
             return new RelayClientChannel(c.Hub, ch);
         }
-        catch (Exception e) when (e is TimeoutException or IOException or System.Net.WebSockets.WebSocketException or System.Security.Cryptography.CryptographicException or InvalidOperationException)
+        // Whatever ends a handshake (ChannelHub.EndsChannel: a malformed introduction too) is the
+        // machine not answering for now; the connection loop tries again rather than stopping.
+        catch (Exception e) when (e is TimeoutException or IOException or System.Net.WebSockets.WebSocketException || ChannelHub.EndsChannel(e))
         {
             throw new HostNotRunningException($"the machine did not answer through the relay ({e.Message})", e);
         }

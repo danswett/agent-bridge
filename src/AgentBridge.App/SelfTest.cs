@@ -72,11 +72,30 @@ static class SelfTest
             else { Check(false, "finds the other machine's question's option button"); }
 
             // The picker narrows the list to one machine.
+            var watched = main.AllCards.First(c => !c.Id.StartsWith("demo-remote", StringComparison.Ordinal));
             main.SelectedMachine = main.Machines.First(m => m.Key == DemoHost.RemoteId);
             var narrowed = await Until(() => Find<SessionCard>(window.RootElement).Count == remote.Count, TimeSpan.FromSeconds(10));
             Check(narrowed, "shows only the chosen machine's cards");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".remote.png"));
+            await Task.Delay(500);
+            var hidden = Listeners(watched);
             main.SelectedMachine = main.Machines[0];
+            await Until(() => Find<SessionCard>(window.RootElement).Count == expected, TimeSpan.FromSeconds(10));
+            await Task.Delay(500);
+            var shown = Listeners(watched);
+
+            // Back and forth: each time the cards get new controls, and the old ones let go.
+            for (var i = 0; i < 5; i++)
+            {
+                main.SelectedMachine = main.Machines.First(m => m.Key == DemoHost.RemoteId);
+                await Until(() => Find<SessionCard>(window.RootElement).Count == remote.Count, TimeSpan.FromSeconds(10));
+                main.SelectedMachine = main.Machines[0];
+                await Until(() => Find<SessionCard>(window.RootElement).Count == expected, TimeSpan.FromSeconds(10));
+            }
+            var settled = await Until(() => Listeners(watched) == shown, TimeSpan.FromSeconds(10));
+            var again = Find<SessionCard>(window.RootElement).FirstOrDefault(c => c.Card?.Id == "demo-approval");
+            Check(again is not null && ById<Button>(again, "Option:approve") is { IsEnabled: true }, "still shows a question's choices on a card drawn again after the picker changes");
+            Check(settled && shown > hidden && hidden >= 0, $"a card's control listens while shown and lets go when hidden, however often the picker changes ({hidden} listeners hidden, {shown} shown, {Listeners(watched)} after five more changes)");
 
             window.ShowPage("usage");
             await Task.Delay(500);
@@ -96,6 +115,13 @@ static class SelfTest
         await File.WriteAllTextAsync(outFile, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
         exit(failures.Count == 0 ? 0 : 1);
     }
+
+    // How many are listening to a card: its controls (on screen, once each) and the app's own.
+    // -1 when the event cannot be found at all, so the check cannot pass by not looking.
+    static int Listeners(AgentBridge.App.Core.Observable o) =>
+        typeof(AgentBridge.App.Core.Observable).GetField(nameof(o.PropertyChanged), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance) is { } field
+            ? (field.GetValue(o) as Delegate)?.GetInvocationList().Length ?? 0
+            : -1;
 
     static async Task<bool> Until(Func<bool> condition, TimeSpan timeout)
     {

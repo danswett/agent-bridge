@@ -227,6 +227,32 @@ public class ChannelTests
     }
 
     [Fact]
+    public async Task An_authenticated_but_malformed_frame_reaches_a_client_waiting_on_the_channel_as_a_lost_connection()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(1, "octo");
+        var host = await relay.ConnectAsync(token, "host", "host");
+        var never = new TaskCompletionSource<object?>();
+        host.Hub.Handler = (_, _, _) => never.Task;
+        var accepted = new TaskCompletionSource<SecureChannel>();
+        host.Hub.Accepted += ch => accepted.TrySetResult(ch);
+        var app = await relay.ConnectAsync(token, "app", "app");
+        await app.Relay.WaitForPeerAsync(p => p.Id == host.Id, TimeSpan.FromSeconds(10));
+        await using var client = new RelayClientChannel(app.Hub, await app.Hub.OpenAsync(host.Id));
+        var atHost = await accepted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var pending = client.RequestAsync("sessions.answer", new { }, TimeSpan.FromSeconds(30));
+        await Wait.UntilAsync(() => atHost.IsOpen, "the request to be on its way");
+
+        // An event without seq: it decrypts, and the channel cannot take it in.
+        await atHost.SendJsonAsync(new { ev = "session.upsert", data = new { } });
+
+        var lost = await Assert.ThrowsAsync<IOException>(() => pending.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.IsType<KeyNotFoundException>(lost.InnerException);
+        Assert.False(client.IsOpen);
+        never.TrySetResult(null);
+    }
+
+    [Fact]
     public async Task A_channel_whose_peer_leaves_within_the_presence_grace_still_ends_once_the_grace_has_passed()
     {
         await using var relay = await TestRelay.StartAsync();

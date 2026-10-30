@@ -185,6 +185,29 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_reconnect_landing_while_the_hosts_are_read_does_not_pass_for_every_machine_gone()
+    {
+        await BothMachinesAsync();
+        Machine? before = null;
+        ui.Post(() => before = main.MachineOf("remote-id"));
+        link.Set(FleetState.Connecting);
+
+        // This pass reads no hosts (still connecting), and the reconnect lands right after.
+        link.AfterHostsRead = () => link.Quietly(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        link.Raise();
+        await Wait.UntilAsync(() => link.AfterHostsRead is null, "the pass");
+        Machine? after = null;
+        ui.Post(() => after = main.MachineOf("remote-id"));
+        Assert.Same(before, after);
+        Assert.NotNull(Card("there"));
+
+        // The reconnect's own announcement: the same machine, still there.
+        link.Raise();
+        ui.Post(() => after = main.MachineOf("remote-id"));
+        Assert.Same(before, after);
+    }
+
+    [Fact]
     public async Task Machines_still_come_and_go_while_this_machines_host_is_away()
     {
         await BothMachinesAsync();
@@ -390,6 +413,13 @@ public sealed class FleetTests : IAsyncLifetime
 
         public void Raise() => Changed?.Invoke();
 
+        // A change not yet announced, as the link's own thread makes one before it says so.
+        public void Quietly(FleetState state, params (string Id, string Name)[] now)
+        {
+            State = state;
+            hosts = [.. now.Select(h => new FleetHost(h.Id, h.Name))];
+        }
+
         public void Set(FleetState state, params (string Id, string Name)[] hosts)
         {
             State = state;
@@ -435,6 +465,22 @@ public sealed class RelayFleetLinkTests
         await Wait.UntilAsync(() => host.Relay.Presence.Any(p => p.Id == link.DeviceId), "the app in the host's presence", Patience);
         Assert.Equal("app", host.Relay.Presence.Single(p => p.Id == link.DeviceId).Kind);
         Assert.Equal(1, Volatile.Read(ref asked));
+    }
+
+    [Fact]
+    public async Task A_host_whose_introduction_is_malformed_is_offline_for_now_not_the_end_of_trying()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(7, "octo");
+        await using var host = await relay.ConnectAsync(token, "Build server", "host");
+        // A peer that introduces itself without a name or kind.
+        typeof(ChannelHub).GetField("intro", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(host.Hub, "{}"u8.ToArray());
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), P256KeyPair.Generate(), "Test PC · Agent Bridge app");
+        link.Start();
+        await Wait.UntilAsync(() => link.Hosts.Any(h => h.Id == host.Id), "the other machine in presence", Patience);
+
+        var e = await Assert.ThrowsAsync<HostNotRunningException>(() => link.OpenAsync(host.Id, default));
+        Assert.IsType<KeyNotFoundException>(e.InnerException);
     }
 
     [Fact]

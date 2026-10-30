@@ -29,9 +29,9 @@ public sealed class RelayClientChannel(ChannelHub hub, SecureChannel channel) : 
     public ChannelReader<ChannelEvent> Events => channel.Events;
 
     // A channel that ends under a call (a frame that fails to decrypt, a handshake repeated on an
-    // open channel) is a lost connection to whoever holds it: the pipe's callers recover from
-    // IOException, and would otherwise stop for good. Anything else, with the channel still open,
-    // is left as it is.
+    // open channel, an authenticated frame that is malformed) is a lost connection to whoever
+    // holds it: the pipe's callers recover from IOException, and would otherwise stop for good, or
+    // leave an answer sending. Anything else, with the channel still open, is left as it is.
     public async Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
     {
         try { return await channel.RequestAsync(op, data, timeout, ct); }
@@ -44,7 +44,7 @@ public sealed class RelayClientChannel(ChannelHub hub, SecureChannel channel) : 
         catch (Exception e) when (Ended(e)) { throw new IOException($"the channel to {channel.PeerName} failed: {e.Message}", e); }
     }
 
-    bool Ended(Exception e) => e is CryptographicException || (e is InvalidOperationException && !channel.IsOpen);
+    bool Ended(Exception e) => e is CryptographicException || (ChannelHub.EndsChannel(e) && !channel.IsOpen);
 
     public async ValueTask DisposeAsync()
     {

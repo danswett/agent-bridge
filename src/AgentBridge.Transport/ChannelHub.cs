@@ -204,13 +204,19 @@ public sealed class ChannelHub
                     break;
             }
         }
-        catch (Exception e) when (e is CryptographicException or InvalidOperationException or JsonException or KeyNotFoundException or FormatException)
+        catch (Exception e) when (EndsChannel(e))
         {
             // A frame that fails authentication ends the channel; Noise state cannot resync.
             if (ch is not null) { Forget(ch, e); }
             Rejected?.Invoke(from, e);
         }
     }
+
+    // What a frame that cannot be taken in ends a channel with: it fails authentication, or it is
+    // authenticated but not what the protocol says (an introduction without a name, an event
+    // without seq). A client holding the channel sees that exception on its pending calls and on
+    // opening it, and treats it as a lost connection (RelayClientChannel, the app's fleet).
+    public static bool EndsChannel(Exception e) => e is CryptographicException or InvalidOperationException or JsonException or KeyNotFoundException or FormatException;
 
     void ReadIntro(SecureChannel ch, byte[] payload)
     {
