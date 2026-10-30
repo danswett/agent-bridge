@@ -29,7 +29,8 @@ public interface IAgentHaBridgeRuntime
     bool Seen(string installationId);
 
     // How many of the agent's processes run now, or null when they could not all be identified.
-    int? Running(AgentBridge.Protocol.AgentKind agent);
+    // With startedBefore, only those started before then, or whose start cannot be told.
+    int? Running(AgentBridge.Protocol.AgentKind agent, DateTimeOffset? startedBefore = null);
 }
 
 // The host serving this profile, as the migration needs it: to read intake.json (or its absence)

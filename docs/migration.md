@@ -67,8 +67,13 @@ second snapshot the first's changes as the state to restore; the second is refus
      re-pointing the file would not reach it, and those scripts would go on writing
      registrations, approval markers and Home Assistant state beside the host. End its
      sessions, or let agent-ha-bridge's installer register its native hook first. Sessions
-     holding the Go hook's entries do not matter: those spool to the host. (After a rollback,
-     a session holding the host's hook spools too, to the daemon, which takes the same spool);
+     holding the Go hook's entries do not matter: those spool to the host. But only a session
+     started since the file was last written is known to hold them: one started before (or
+     whose start cannot be told) may still hold the PowerShell entries the installer replaced,
+     so it refuses too, until those sessions end. (After a rollback, a session holding the
+     host's hook spools too, to the daemon, which takes the same spool);
+   * a hook settings file is there but cannot be read as JSON: whether it holds
+     agent-ha-bridge's entries, and a session started with them, cannot be told;
    * no host is serving the profile;
    * the settings to carry over would leave the profile's `config.json` with problems, in
      launching or in the Home Assistant connector (a `baseUrl` it could not use, say).

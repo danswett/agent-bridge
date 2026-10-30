@@ -264,7 +264,12 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
     // Each agent's running processes (none unless set); null when they could not all be identified.
     public Dictionary<AgentBridge.Protocol.AgentKind, int?> Agents { get; } = [];
 
-    public int? Running(AgentBridge.Protocol.AgentKind agent) => Agents.TryGetValue(agent, out var n) ? n : 0;
+    // When each agent's processes started; unknown when not given.
+    public Dictionary<AgentBridge.Protocol.AgentKind, DateTimeOffset> AgentsStarted { get; } = [];
+    public int? Running(AgentBridge.Protocol.AgentKind agent, DateTimeOffset? startedBefore = null) =>
+        !Agents.TryGetValue(agent, out var n) ? 0
+        : startedBefore is { } before && AgentsStarted.TryGetValue(agent, out var started) && started >= before ? 0
+        : n;
 }
 
 // The host serving the profile: a restart reads intake.json afresh and runs the real intake,

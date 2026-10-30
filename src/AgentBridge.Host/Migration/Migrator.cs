@@ -66,21 +66,37 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
     // An agent whose registrations run agent-ha-bridge's PowerShell directly, while any of its
     // processes runs: re-pointing the file does not reach a session that started before, and it
     // would go on running those scripts beside the host. Null when there is none.
+    //
+    // Entries that run the Go hook hand their events to the spool, but only a session started
+    // since the file was last written is known to have loaded them: one started earlier may hold
+    // the PowerShell hooks the installer replaced. So those count too, while any process of the
+    // agent started before that write (or when, cannot be told) runs.
     string? StillRunningPowerShell(AgentHaBridgeInstall install, IReadOnlyList<FilePlan> plans)
     {
         foreach (var plan in plans)
         {
-            if (!plan.Changes.Any(c => Registrations.RanPowerShell(install, c))) { continue; }
+            if (plan.Changes.Count == 0) { continue; }
+            var direct = plan.Changes.Any(c => Registrations.RanPowerShell(install, c));
             var (kind, name) = plan.Role switch
             {
                 "copilot" => (AgentBridge.Protocol.AgentKind.Copilot, "Copilot"),
                 "claude" => (AgentBridge.Protocol.AgentKind.Claude, "Claude"),
                 _ => (AgentBridge.Protocol.AgentKind.Codex, "Codex"),
             };
-            var running = runtime.Running(kind);
+            DateTimeOffset? written = null;
+            if (!direct)
+            {
+                // A few seconds' slack for file-time granularity: a session started in the same
+                // moment is not known to have read the file after the write.
+                try { written = new DateTimeOffset(File.GetLastWriteTimeUtc(plan.Path), TimeSpan.Zero) + TimeSpan.FromSeconds(2); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+            var running = direct || written is null ? runtime.Running(kind) : runtime.Running(kind, written);
             if (running == 0) { continue; }
             var state = running is { } n ? $"{n} {name} process{(n == 1 ? " is" : "es are")} running" : $"whether any {name} process is running could not be checked";
-            return $"{name}'s hooks run agent-ha-bridge's PowerShell directly ({plan.Path}), and {state}. A session keeps the hooks it started with, so it would go on writing registrations, approval markers and Home Assistant state beside the host. End {name}'s sessions and migrate again (or let agent-ha-bridge's installer register its native hook first).";
+            return direct
+                ? $"{name}'s hooks run agent-ha-bridge's PowerShell directly ({plan.Path}), and {state}. A session keeps the hooks it started with, so it would go on writing registrations, approval markers and Home Assistant state beside the host. End {name}'s sessions and migrate again (or let agent-ha-bridge's installer register its native hook first)."
+                : $"{name}'s hooks ({plan.Path}) were last written after a {name} session still running started: {state} from before then. A session keeps the hooks it started with, which may be agent-ha-bridge's PowerShell ones its installer since replaced, and those would go on writing registrations, approval markers and Home Assistant state beside the host. End those sessions and migrate again.";
         }
         return null;
     }

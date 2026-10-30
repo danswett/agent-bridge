@@ -532,12 +532,35 @@ public sealed class MigrationTests : IAsyncLifetime
         // Not knowing is no better.
         _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Claude] = null;
         Assert.Contains("could not be checked", (await _f.Migrator().MigrateAsync(dryRun: true)).ToString());
-        // Sessions of the agents whose hooks run the Go hook do not matter: theirs spool to the host.
+        // Sessions of the agents whose hooks run the Go hook do not matter once they are known to
+        // have started with them (theirs spool to the host); one that may have started before the
+        // file was last written may still hold the PowerShell hooks it replaced.
         _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Claude] = 0;
         _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Copilot] = 2;
         _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Codex] = 2;
+        Assert.Contains("Copilot's hooks (", (await _f.Migrator().MigrateAsync(dryRun: true)).ToString());
+        _f.Runtime_.AgentsStarted[AgentBridge.Protocol.AgentKind.Copilot] = DateTimeOffset.UtcNow.AddMinutes(1);
+        _f.Runtime_.AgentsStarted[AgentBridge.Protocol.AgentKind.Codex] = new DateTimeOffset(File.GetLastWriteTimeUtc(_f.CodexHooks), TimeSpan.Zero);
+        Assert.Contains("2 Codex processes are running from before then", (await _f.Migrator().MigrateAsync(dryRun: true)).ToString());
+        _f.Runtime_.AgentsStarted[AgentBridge.Protocol.AgentKind.Codex] = DateTimeOffset.UtcNow.AddMinutes(1);
         var report = await _f.Migrator().MigrateAsync(dryRun: false);
         Assert.True(report.Ok, report.ToString());
+    }
+
+    [Fact]
+    public async Task A_hook_file_that_cannot_be_read_refuses_the_migration_before_anything_is_touched()
+    {
+        // Nothing in it to re-point, so nothing would check for a session started with
+        // agent-ha-bridge's PowerShell hooks before it was broken.
+        File.WriteAllText(_f.ClaudeSettings, "{ \"hooks\": ");
+        var listing = _f.Listing();
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains($"{_f.ClaudeSettings} could not be read as JSON", report.ToString());
+        Assert.Equal(listing, _f.Listing());
+        Assert.Empty(_f.Runtime_.Calls);
     }
 
     [Fact]

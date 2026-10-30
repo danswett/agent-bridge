@@ -207,18 +207,25 @@ public static class Registrations
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return false; }
     }
 
+    // A file that is there but cannot be read refuses the migration: a session may have started
+    // while it still held agent-ha-bridge's PowerShell hooks, and with no entries to re-point,
+    // nothing would check for one still running them beside the host.
     static FilePlan Plan(string role, string path, Func<JsonObject, List<EntryChange>> rewrite)
     {
         if (!File.Exists(path)) { return new FilePlan(role, path, false, [], null, [], []); }
-        var original = File.ReadAllBytes(path);
+        byte[] original;
         JsonObject root;
         try
         {
+            original = File.ReadAllBytes(path);
             root = JsonNode.Parse(Decode(original), documentOptions: Lenient) as JsonObject ?? throw new JsonException("not a JSON object");
         }
-        catch (JsonException e)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
-            return new FilePlan(role, path, true, original, null, [], [$"{path} is not valid JSON ({e.Message}); its hooks were left as they are"]);
+            return new FilePlan(role, path, true, [], null, [], [])
+            {
+                Refusal = $"{path} could not be read as JSON ({e.Message}), so whether it holds agent-ha-bridge's hooks (and a running session started with them) cannot be told; fix it and migrate again",
+            };
         }
         var changes = rewrite(root);
         return new FilePlan(role, path, true, original, changes.Count == 0 ? null : Encode(root, original), changes, []);
