@@ -177,7 +177,14 @@ In order, for every reply:
    amount after it (and the session source does not report a subagent's question): it is
    read from the start once per session, before the typing turn, and from where it was
    left on every later read. A transcript that cannot be read is `refused`, never taken to
-   mean nothing is asking. The point read up to is where confirmation starts.
+   mean nothing is asking. A Copilot session with no `events.jsonl` yet (its folder there,
+   and no transcript ever read for it) is refused with its own reason. Copilot 1.0.105
+   creates the file only with the first prompt, and it registers the session while its
+   folder-trust question may still be on screen. There, typed words are dropped and Enter
+   answers "Yes" (seen live: a reply trusted the folder). Without a transcript, the host
+   cannot tell that question from an idle prompt, and only a person answers it. So the
+   first prompt is sent at the machine, or given at launch. The point read up to is where
+   confirmation starts.
 6. The worker types it. Nothing written is `refused`, and the staged files are deleted with
    the attachments kept for another try; a worker that stopped after its first write is
    `unconfirmed`, never retried. Either way once a key may have gone the attachments leave
