@@ -93,8 +93,8 @@ public static class Registrations
                         var name = ClaudeScripts.FirstOrDefault(s =>
                         {
                             var script = Path.Combine(install.ClaudeAdapterDir, s.Script);
-                            return string.Equals(command, $"\"{install.GoHook}\" claude {s.Name} \"{script}\"", PathCase)
-                                || string.Equals(command, $"\"{launcher}\" \"{script}\"", PathCase);
+                            return SameCommand(command, $"\"{install.GoHook}\" claude {s.Name} \"{script}\"")
+                                || SameCommand(command, $"\"{launcher}\" \"{script}\"");
                         }).Name;
                         if (name is null) { continue; }
                         var replacement = (JsonObject)h.DeepClone();
@@ -128,7 +128,7 @@ public static class Registrations
                     for (var i = 0; i < inner.Count; i++)
                     {
                         if (inner[i] is not JsonObject h || Text(h["command"]) is not { } command) { continue; }
-                        if (!string.Equals(command, native, PathCase) && !string.Equals(command, pwsh, PathCase)) { continue; }
+                        if (!SameCommand(command, native) && !SameCommand(command, pwsh)) { continue; }
                         var replacement = (JsonObject)h.DeepClone();
                         replacement["command"] = $"{hook} codex hook";
                         changes.Add(new EntryChange("codex", eventName, h.DeepClone(), replacement.DeepClone()));
@@ -166,7 +166,30 @@ public static class Registrations
     {
         if (Text(change.Original["exec"]) is { } exec) { return !string.Equals(exec, install.GoHook, PathCase); }
         if (Text(change.Original["command"]) is not { } command) { return true; }
-        return !command.StartsWith(install.GoHook + " ", PathCase) && !command.StartsWith($"\"{install.GoHook}\" ", PathCase);
+        var words = Words(command);
+        return !words.StartsWith(install.GoHook + " ", PathCase) && !words.StartsWith($"\"{install.GoHook}\" ", PathCase);
+    }
+
+    // The same command as a shell reads it: Claude and Codex run it through one, which takes
+    // "a  b" or a tab for "a b". Each word, quoted paths included, must still be exact; a second
+    // space or a tab must not hide an entry of agent-ha-bridge's, which would go on running its
+    // PowerShell (and writing to Home Assistant) beside the host.
+    static bool SameCommand(string command, string expected) => string.Equals(Words(command), Words(expected), PathCase);
+
+    // Runs of whitespace outside quotes as one space, and none at either end.
+    static string Words(string command)
+    {
+        var words = new StringBuilder(command.Length);
+        var quoted = false;
+        var gap = false;
+        foreach (var c in command.Trim())
+        {
+            if (c == '"') { quoted = !quoted; }
+            if (!quoted && char.IsWhiteSpace(c)) { gap = true; continue; }
+            if (gap) { words.Append(' '); gap = false; }
+            words.Append(c);
+        }
+        return words.ToString();
     }
 
     static string CodexPowerShell(AgentHaBridgeInstall install) => $"pwsh -NoProfile -ExecutionPolicy Bypass -File {install.CodexHookScript}";
@@ -179,7 +202,7 @@ public static class Registrations
             var pwsh = CodexPowerShell(install);
             return hooks.Select(e => e.Value).OfType<JsonArray>().SelectMany(g => g.OfType<JsonObject>())
                 .Select(g => g["hooks"]).OfType<JsonArray>().SelectMany(h => h.OfType<JsonObject>())
-                .Any(h => Text(h["command"]) is { } command && string.Equals(command, pwsh, PathCase));
+                .Any(h => Text(h["command"]) is { } command && SameCommand(command, pwsh));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return false; }
     }

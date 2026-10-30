@@ -541,6 +541,26 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_entry_of_agent_ha_bridge_s_spaced_differently_is_still_recognised_as_its_own()
+    {
+        // As a shell reads them: two spaces, or a tab, between the words.
+        var settings = FakeAgentHaBridge.Read(_f.ClaudeSettings);
+        settings["hooks"]!["SessionStart"]![0]!["hooks"]![0]!["command"] = $"\"{Path.Combine(_f.ClaudeHome, "ha-bridge", "run-hook.cmd")}\"  \t\"{Path.Combine(_f.ClaudeHome, "ha-bridge", "register-claude-session.ps1")}\" ";
+        File.WriteAllText(_f.ClaudeSettings, settings.ToJsonString(new() { WriteIndented = true }));
+        _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Claude] = 1;
+
+        // Still agent-ha-bridge's PowerShell, so not while a session that started with it runs,
+        var running = await _f.Migrator().MigrateAsync(dryRun: true);
+        Assert.Contains("1 Claude process is running", running.ToString());
+        _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Claude] = 0;
+
+        // and re-pointed with the rest.
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var after = FakeAgentHaBridge.Read(_f.ClaudeSettings)["hooks"]!;
+        Assert.Equal($"\"{_f.InstalledHook}\" claude register", (string?)after["SessionStart"]![0]!["hooks"]![0]!["command"]);
+    }
+
+    [Fact]
     public async Task A_workspace_flag_and_numeric_tuning_agent_ha_bridge_reads_are_carried_with_their_meaning()
     {
         var config = FakeAgentHaBridge.DefaultConfig();
@@ -943,6 +963,8 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task A_hook_update_that_cannot_be_put_in_place_leaves_the_previous_hook_where_agents_run_it()
     {
+        // Only Windows lets a reader refuse a rename of the file it holds.
+        if (!OperatingSystem.IsWindows()) { return; }
         Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
         var previous = File.ReadAllText(_f.InstalledHook);
         File.WriteAllText(_f.HookSource, "MZ the next version's hook");
