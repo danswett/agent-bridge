@@ -1219,6 +1219,90 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_withdrawal_is_retried_for_the_marker_it_retired_whatever_its_time_says()
+    {
+        // Only Windows lets a reader refuse a delete.
+        if (!OperatingSystem.IsWindows()) { return; }
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        var now = _f.Time.GetUtcNow();
+        // Dated after the event that retires it (a clock corrected meanwhile), within the slack.
+        _f.CodexApprovalMarker("x1", "d1", created: now.AddSeconds(3));
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        SpooledAt(now, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PreToolUse", tool_name = "shell" }, 60);
+        using (new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            intake.Pass();
+            intake.Pass();
+            Assert.NotNull(intake.ApprovalsUnsettled);
+        }
+
+        intake.Pass();
+
+        Assert.False(File.Exists(marker));
+        Assert.Null(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
+    public void No_approval_is_answered_while_events_are_still_waiting_to_be_handled()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Assert.Null(intake.ApprovalsUnsettled);
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        // A backlog: the prompt, another session's event, then the PreToolUse that answered the
+        // prompt at the terminal.
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        Spooled("0002", "codex", "hook", new { session_id = "x2", hook_event_name = "SessionStart" }, 60);
+        Spooled("0003", "codex", "hook", new { session_id = "x1", hook_event_name = "PreToolUse", tool_name = "shell" }, 60);
+        var meanwhile = new List<string?>();
+        _f.Processes.Queried = _ => { if (File.Exists(marker)) { meanwhile.Add(intake.ApprovalsUnsettled); } };
+
+        intake.Pass();
+
+        _f.Processes.Queried = null;
+        Assert.NotEmpty(meanwhile);
+        Assert.All(meanwhile, Assert.NotNull);
+        Assert.False(File.Exists(marker));
+        Assert.Null(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
+    public void A_hook_log_that_cannot_be_read_as_a_file_leaves_approvals_unanswerable()
+    {
+        var intake = Running();
+        Assert.Null(intake.ApprovalsUnsettled);
+        var log = SpoolContract.LogPath(_f.Runtime);
+        if (File.Exists(log)) { File.Delete(log); }
+        Directory.CreateDirectory(log);
+
+        intake.Pass();
+
+        Assert.NotNull(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
+    public void A_sweep_that_cannot_list_the_markers_is_not_counted_as_done()
+    {
+        _f.CodexApprovalMarker("x1", "d1", created: _base.AddMinutes(-5));
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        var aside = _f.CodexRegistrations + ".aside";
+        Directory.Move(_f.CodexRegistrations, aside);
+        File.WriteAllText(_f.CodexRegistrations, "");
+        var intake = Intake();
+
+        intake.Pass();
+        Assert.NotNull(intake.ApprovalsUnsettled);
+
+        File.Delete(_f.CodexRegistrations);
+        Directory.Move(aside, _f.CodexRegistrations);
+        intake.Pass();
+        // The same cut-off, swept once it could be.
+        Assert.False(File.Exists(marker));
+        Assert.Null(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
     public void Retried_withdrawals_stop_at_the_next_marker_once_agent_ha_bridge_starts()
     {
         // Only Windows lets a reader refuse a delete.

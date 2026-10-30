@@ -58,6 +58,15 @@ public static class HookRunner
             var (agent, hook) = (rest[0], rest[1]);
             reply = SpoolContract.Reply(agent, hook);
             if (reply is null) { return 0; }
+            // Copilot's ask_user needs nothing from its event to be let through (invariant 3), and
+            // the host reads its question from the transcript: told at once, its output closed, it
+            // is not held on stdin at all; the event is then read and spooled briefly, as it can be.
+            var letThrough = agent == "copilot" && hook == "ask_user";
+            if (letThrough && !forced)
+            {
+                Reply();
+                try { stdout.Dispose(); } catch (Exception e) when (e is IOException or ObjectDisposedException) { }
+            }
 
             if (forced)
             {
@@ -83,8 +92,9 @@ public static class HookRunner
             // that left it open would otherwise hold the agent (ask_user above all, invariant 3) on
             // a hook waiting for an end that never comes. Stopped at the deadline, the read is left
             // behind; the process ends without it.
+            var wait = letThrough && env.LetThroughInputWait < env.InputWait ? env.LetThroughInputWait : env.InputWait;
             var read = Task.Run(() => ReadAll(stdin, SpoolContract.MaxEventBytes));
-            var finished = read.Wait(env.InputWait);
+            var finished = read.Wait(wait);
             var (utf8, whole) = finished ? read.Result : ([], false);
 
             var (runtime, rootProblem) = RuntimeRoot(env.ExecutableDirectory);
@@ -98,13 +108,14 @@ public static class HookRunner
             var path = "reply";
             string? reason = null;
             string? codexSession = null;
+            string? codexEvent = null;
             try
             {
                 var (alive, why) = SpoolContract.ConsumerState(runtime, env.Now());
                 var trimmed = Trim(utf8);
-                if (agent == "codex" && finished && whole) { codexSession = SpoolContract.CodexSessionId(trimmed); }
+                if (agent == "codex" && finished && whole) { (codexSession, codexEvent) = SpoolContract.CodexEvent(trimmed); }
                 if (!alive) { reason = why; }
-                else if (!finished) { reason = $"event not finished within {env.InputWait.TotalSeconds:0.###}s"; }
+                else if (!finished) { reason = $"event not finished within {wait.TotalSeconds:0.###}s"; }
                 else if (!whole) { reason = "event too large"; }
                 else if (!SpoolContract.IsJson(trimmed)) { reason = "unusable event"; }
                 else
@@ -125,7 +136,12 @@ public static class HookRunner
                 // A Codex event nobody will hear may be the one that settled an approval at the
                 // terminal; on a full disk even the log line saying so can be lost. So its marker
                 // goes now, before Codex moves on to a prompt the phone could otherwise answer.
-                if (path != "spool" && codexSession is not null) { SpoolContract.WithdrawCodexApproval(runtime, codexSession); }
+                // One that retires the approval does the same even when spooled: until the intake
+                // reaches it (a backlog, a slow pass) the marker would offer an answered approval.
+                // After spooling, so a marker armed meanwhile from an older PermissionRequest is
+                // either removed here or meets this event still queued (the intake answers nothing
+                // while events wait).
+                if (codexSession is not null && (path != "spool" || SpoolContract.RetiresCodexApproval(codexEvent))) { SpoolContract.WithdrawCodexApproval(runtime, codexSession); }
                 Reply();
                 SpoolContract.Record(runtime, agent, hook, path, reason ?? rootProblem, env.Now(), env.ElapsedMs());
             }
@@ -219,6 +235,9 @@ public sealed class HookEnvironment
     // How long the hook waits for the whole event, so an agent that never closes stdin is not
     // held: an event comes in milliseconds.
     public TimeSpan InputWait { get; init; } = TimeSpan.FromSeconds(5);
+    // The same for Copilot's ask_user, which is let through before its event is read: the agent
+    // waits for the process too, and the event is only for the record.
+    public TimeSpan LetThroughInputWait { get; init; } = TimeSpan.FromMilliseconds(500);
 
     // How long the agent has waited on this process, from when the OS started it.
     static long SinceStart()

@@ -51,8 +51,11 @@ a pipe left open can hold it, and a writer still sending its event is not cut of
 is logged as unspooled (`reply`, `--fallback`), so a Codex hook that ran this way still counts
 as one the intake did not hear. Without
 `--fallback` it waits at most 5 s for the whole event (one arrives in milliseconds), then gives
-the fixed reply without spooling and logs `event not finished within 5s`: an agent that never
-closes stdin cannot hold `ask_user` (invariant 3). agent-ha-bridge's Go hook waits for the end.
+the fixed reply without spooling and logs `event not finished within 5s`. `ask_user` is not held
+even that long (invariant 3): its reply needs nothing from the event, so it is printed and the
+hook's output closed before stdin is read, and the event is then read for at most 0.5 s and
+spooled as it can be (the host reads the question from the transcript). agent-ha-bridge's Go hook
+waits for the end.
 
 ## The spool contract (both bridges)
 
@@ -64,7 +67,7 @@ holds every name; it is tested against files the Go hook writes and the daemon r
 |---|---|---|
 | `agent-bridge-daemon.heartbeat` | The consumer: the daemon each pass, the host's intake every 2 s | A hook spools only while this is younger than 60 s (`Test-BridgeDaemonAlive`). The daemon writes its pid; the host writes its own, so it can remove only its own when it stops |
 | `agent-bridge-spool\<name>.json` | Either hook | `{ "v": 1, "agent", "hook", "ancestors": [pids, nearest first], "receivedAt", "event": <stdin verbatim> }`, written as `<name>.json.tmp` and renamed so no reader sees half of one |
-| `agent-bridge-hook.log` (+ `.1`) | Either hook | One JSON line per run: `{ at, agent, hook, path, reason?, ms }`. `path` is `spool`, `fallback` (the Go hook ran its PowerShell) or `reply` (the fixed reply alone). Rotated at 1 MB, keeping one previous file. This product's hook appends each line in one write through an append-only handle (`FILE_APPEND_DATA`, as the Go hook's `O_APPEND`), so two hooks finishing together never overwrite each other's line on Windows |
+| `agent-bridge-hook.log` (+ `.1`) | Either hook | One JSON line per run: `{ at, agent, hook, path, reason?, ms }`. `path` is `spool`, `fallback` (the Go hook ran its PowerShell) or `reply` (the fixed reply alone). Rotated at 1 MB, keeping one previous file. This product's hooks rotate one at a time, under `agent-bridge-hook.log.lock`, and only a log still full once they hold it: two that both saw it full would otherwise move the first's fresh log over the megabyte just rotated (the Go hook rotates unlocked, as it always has). This product's hook appends each line in one write through an append-only handle (`FILE_APPEND_DATA`, as the Go hook's `O_APPEND`), so two hooks finishing together never overwrite each other's line on Windows |
 
 `<name>` is the time in Unix nanoseconds (20 digits), the hook's pid and 8 random hex digits.
 Names sort in the order the events happened, which is the order they are handled. Events are
@@ -251,7 +254,10 @@ approval. Nothing proves such an approval unanswered, so it is answered at the t
 The hook does not rely on the log alone. A Codex run it could not spool (no fresh heartbeat, a
 failed write, `--fallback`) deletes that session's marker itself before replying, as
 agent-ha-bridge's PowerShell hook removed it whenever an event did not reach the daemon; a
-delete needs no free space. And a full disk is a gap of its own: the heartbeat's few bytes fit in
+delete needs no free space. A spooled Codex event that retires the approval (`SessionStart`,
+`PreToolUse`, `UserPromptSubmit`, `Stop`, `SessionEnd`) does the same, after spooling and before
+replying: the intake may not reach it at once (a backlog, a slow pass), and until then the marker
+would offer an approval already answered at the terminal. And a full disk is a gap of its own: the heartbeat's few bytes fit in
 the file's own MFT record, so it can stay fresh while events, and the log lines that would say
 they were lost, fail. Before each heartbeat the intake allocates (and gives back) a realistic
 event's worth of space (1 MiB) in the runtime folder. While that fails it removes its own
@@ -278,12 +284,16 @@ While the intake runs, the log is followed every pass (only what it gained), and
 that fails to spool while the heartbeat is fresh withdraws every approval asked before it. Only
 one previous log is kept: the intake knows a rotation it followed (the log it was reading is the
 one now kept as `.1`) from one it missed, and after a missed one treats everything before the
-oldest line kept the same way. While the log cannot be read, no approval is offered at all.
+oldest line kept the same way. While the log cannot be read, no approval is offered at all;
+something there that is not a file (a folder of that name, a path that cannot be checked) is a
+log that cannot be read, not an empty one. So is a registration folder whose markers cannot be
+listed: that sweep is not done.
 
 A marker that cannot be deleted (a reader holding it without sharing its deletion), whether a
 cut-off or the session's next event retired it, is remembered and tried again every pass, apart
 from the event, which may be dropped after its retries; each retry asks first whether
-agent-ha-bridge has started. A new `PermissionRequest` first withdraws its session's previous
+agent-ha-bridge has started. It is remembered by the marker's generation (`DecisionId`), not its
+time: a clock corrected meanwhile can date the marker after the event that retired it. A new `PermissionRequest` first withdraws its session's previous
 marker, and arms nothing if that cannot be done yet: writing over a marker a reader holds fails,
 and the old one would be answerable for the new prompt. A cut-off counts as settled only once
 every marker it covers is gone, and the highest asked for is kept until then, so a later pass
@@ -292,7 +302,9 @@ appending (`hooks status` too), and markers through one that lets a starting dae
 delete them.
 
 Until the markers are settled (after a gap, while the log cannot be read, after a later unheard
-run, or while a withdrawal is pending), the answer path refuses Codex approvals
+run, or while a withdrawal is pending), and while events wait in the spool (a `PermissionRequest`
+handled from a backlog arms its marker before the `PreToolUse` that answered it, further down, is
+reached), the answer path refuses Codex approvals
 (`HookIntake.ApprovalsUnsettled`), so an answer cannot reach a marker that may already have been
 answered. A migrated profile whose `intake.json` cannot be read runs no intake, and refuses them
 all (`HookIntake.AnswerGate`). And on a migrated profile only markers in the runtime the intake

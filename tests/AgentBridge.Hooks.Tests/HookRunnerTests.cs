@@ -38,10 +38,11 @@ public sealed class HookRunnerTests : IDisposable
         File.SetLastWriteTimeUtc(path, _now.UtcDateTime - age);
     }
 
-    HookEnvironment Env(DateTimeOffset? at = null, TimeSpan? drain = null, TimeSpan? inputWait = null) => new()
+    HookEnvironment Env(DateTimeOffset? at = null, TimeSpan? drain = null, TimeSpan? inputWait = null, TimeSpan? letThrough = null) => new()
     {
         FallbackDrain = drain ?? TimeSpan.FromSeconds(2),
         InputWait = inputWait ?? TimeSpan.FromSeconds(5),
+        LetThroughInputWait = letThrough ?? TimeSpan.FromMilliseconds(500),
         ExecutableDirectory = Bin,
         Now = () => at ?? _now,
         ProcessId = 4242,
@@ -163,11 +164,78 @@ public sealed class HookRunnerTests : IDisposable
         var forced = Marker("x1");
         Invoke("{\"session_id\":\"x1\",\"hook_event_name\":\"Stop\"}", Env(drain: TimeSpan.FromSeconds(5)), "--fallback", "codex", "hook");
         Assert.False(File.Exists(forced));
-        // Spooled, it is the host's to settle.
+        // Spooled, a new prompt is the host's to settle.
         Heartbeat(TimeSpan.Zero);
         var heard = Marker("x1");
-        Invoke("{\"session_id\":\"x1\",\"hook_event_name\":\"PreToolUse\"}", "codex", "hook");
+        Invoke("{\"session_id\":\"x1\",\"hook_event_name\":\"PermissionRequest\"}", "codex", "hook");
         Assert.True(File.Exists(heard));
+    }
+
+    [Fact]
+    public void A_spooled_Codex_event_that_retires_an_approval_withdraws_its_marker_before_Codex_moves_on()
+    {
+        Heartbeat(TimeSpan.Zero);
+        var marker = SpoolContract.ApprovalMarkerPath(Runtime, "x1");
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        File.WriteAllText(marker, "{}");
+
+        // Answered at the terminal: until the host reaches the event, the marker would offer it.
+        Invoke("{\"session_id\":\"x1\",\"hook_event_name\":\"PreToolUse\"}", "codex", "hook");
+
+        Assert.False(File.Exists(marker));
+        Assert.Single(SpoolFiles());
+    }
+
+    [Fact]
+    public void Ask_user_is_let_through_before_its_event_is_read_and_is_not_held_by_an_open_stdin()
+    {
+        Heartbeat(TimeSpan.Zero);
+        // Told while it is still reading (here for up to 30 s), stdin still open.
+        var pipe = new OpenPipe("{\"toolName\":\"ask_user\"}"u8.ToArray());
+        var (run, output) = Started(pipe, Env(inputWait: TimeSpan.FromSeconds(30), letThrough: TimeSpan.FromSeconds(30)), "copilot", "ask_user");
+        var told = DateTime.UtcNow;
+        while (output.ToArray().Length == 0 && DateTime.UtcNow - told < TimeSpan.FromSeconds(10)) { Thread.Sleep(10); }
+        Assert.False(run.IsCompleted);
+        Assert.Equal("{\"permissionDecision\":\"allow\"}\n", Encoding.UTF8.GetString(output.ToArray()));
+        pipe.Close_();
+        Assert.True(run.Wait(TimeSpan.FromSeconds(10)));
+
+        // And done long before the 30 s any other hook would wait.
+        var open = new OpenPipe("{\"toolName\":\"ask_user\"}"u8.ToArray());
+        var (bounded, _) = Started(open, Env(inputWait: TimeSpan.FromSeconds(30)), "copilot", "ask_user");
+        Assert.True(bounded.Wait(TimeSpan.FromSeconds(10)), "the hook waited on stdin");
+        open.Close_();
+        Assert.Equal(0, bounded.Result);
+    }
+
+    [Fact]
+    public void A_hook_that_finds_another_rotating_the_log_leaves_the_megabyte_just_rotated()
+    {
+        var log = SpoolContract.LogPath(Runtime);
+        Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+        File.WriteAllText(log + ".1", "rotated by the first\n");
+        File.WriteAllText(log, new string('x', (int)SpoolContract.LogMaxBytes) + "\n");
+        // Saw a full log, but by the time it holds the lock the first has rotated it.
+        SpoolContract.BeforeRotate = l =>
+        {
+            File.Move(l, l + ".1", overwrite: true);
+            File.WriteAllText(l, "{\"first\":true}\n");
+        };
+        try { SpoolContract.Record(Runtime, "claude", "stop", "spool", null, DateTimeOffset.Now, 1); }
+        finally { SpoolContract.BeforeRotate = null; }
+
+        Assert.StartsWith("xxxx", File.ReadAllText(log + ".1"));
+        Assert.StartsWith("{\"first\":true}", File.ReadAllText(log));
+        Assert.Equal(2, File.ReadAllLines(log).Length);
+
+        // Nor rotates while another holds the lock.
+        File.WriteAllText(log, new string('x', (int)SpoolContract.LogMaxBytes) + "\n");
+        File.WriteAllText(log + ".1", "kept\n");
+        using (new FileStream(log + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            SpoolContract.Record(Runtime, "claude", "stop", "spool", null, DateTimeOffset.Now, 1);
+        }
+        Assert.Equal("kept\n", File.ReadAllText(log + ".1"));
     }
 
     [Fact]

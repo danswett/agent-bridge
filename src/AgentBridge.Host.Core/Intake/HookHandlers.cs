@@ -110,16 +110,16 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         // A later lifecycle event retires the prompt, whichever input answered it. SessionStart
         // too: a Codex that died waiting for an approval never sent SessionEnd, and its resumed
         // session must not offer the dead run's approval to be answered into the new process.
-        var retires = eventName is "SessionStart" or "PreToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd";
+        var retires = SpoolContract.RetiresCodexApproval(eventName);
         if (Superseded(CodexPath(sessionId), spooled))
         {
             // Still retires it: a clock wound back, by however little, can make the event that
             // answered an approval at the terminal look older than the registration. Withdrawing
             // one still pending (a true replay) costs only answering it at the machine.
-            if (retires) { Withdraw(sessionId, spooled.ReceivedAt ?? time.GetUtcNow()); }
+            if (retires) { Withdraw(sessionId); }
             return notice;
         }
-        if (retires) { Withdraw(sessionId, spooled.ReceivedAt ?? time.GetUtcNow()); }
+        if (retires) { Withdraw(sessionId); }
 
         string status;
         var activity = "";
@@ -174,7 +174,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             // The previous generation goes first, and the new one is written only once it has:
             // writing over a marker a reader holds fails, and the old one would stay answerable
             // for the new prompt; a retry that removed it later could also remove the new one.
-            Withdraw(sessionId, spooled.ReceivedAt ?? time.GetUtcNow());
+            Withdraw(sessionId);
             if (_withdrawals.ContainsKey(sessionId)) { approval = false; }
         }
         if (approval)
@@ -258,43 +258,48 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
 
 
     // Approval markers a lifecycle event retired but that could not be removed yet (a reader held
-    // one without sharing its deletion), by session, with the time of the latest event that
-    // retired it. Kept apart from the event, which may be dropped after its retries, and retried
-    // every pass (RetryWithdrawals); every Codex answer is refused while any is pending.
-    readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _withdrawals = new(StringComparer.Ordinal);
+    // one without sharing its deletion), by session, with the generation (DecisionId) of the
+    // marker it retired, or "" where that could not be read. Kept apart from the event, which may
+    // be dropped after its retries, and retried every pass (RetryWithdrawals); every Codex answer
+    // is refused while any is pending. By generation, not by time: a clock wound back can date
+    // the marker after the event that retired it.
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _withdrawals = new(StringComparer.Ordinal);
 
     public bool WithdrawalsPending => !_withdrawals.IsEmpty;
 
-    void Withdraw(string sessionId, DateTimeOffset upTo)
+    void Withdraw(string sessionId)
     {
         Commit();
+        var path = ApprovalPath(sessionId);
+        string? generation;
+        using (var marker = ReadJson(path)) { generation = marker is null ? null : Json.Str(marker.RootElement, "DecisionId"); }
         try
         {
-            File.Delete(ApprovalPath(sessionId));
+            File.Delete(path);
             _withdrawals.TryRemove(sessionId, out _);
         }
         catch (DirectoryNotFoundException) { }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            _withdrawals.AddOrUpdate(sessionId, upTo, (_, earlier) => earlier > upTo ? earlier : upTo);
+            _withdrawals[sessionId] = generation ?? "";
         }
     }
 
-    // True once none is pending. A marker created after the event that retired its session's
-    // last one is a new approval, and stays.
+    // True once none is pending. A marker of another generation is a new approval (a new
+    // PermissionRequest arms nothing while its predecessor's withdrawal is pending), and stays.
     // Ours is asked before each deletion (Withdraw); false stops the retries (agent-ha-bridge has started).
     public bool RetryWithdrawals()
     {
-        foreach (var (sessionId, upTo) in _withdrawals.ToArray())
+        foreach (var (sessionId, generation) in _withdrawals.ToArray())
         {
-            DateTimeOffset? created;
+            string? current;
             using (var marker = ReadJson(ApprovalPath(sessionId)))
             {
                 if (marker is null && !File.Exists(ApprovalPath(sessionId))) { _withdrawals.TryRemove(sessionId, out _); continue; }
-                created = marker is null ? null : Json.Time(marker.RootElement, "Created");
+                current = marker is null ? null : Json.Str(marker.RootElement, "DecisionId");
             }
-            if (created is { } c && c > upTo) { _withdrawals.TryRemove(sessionId, out _); continue; }
-            try { Withdraw(sessionId, upTo); }
+            if (generation.Length > 0 && current is not null && current != generation) { _withdrawals.TryRemove(sessionId, out _); continue; }
+            try { Withdraw(sessionId); }
             catch (StoodBack) { return false; }
         }
         return _withdrawals.IsEmpty;

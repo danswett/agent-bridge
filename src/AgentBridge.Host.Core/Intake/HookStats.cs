@@ -153,27 +153,27 @@ public sealed class HookLogWatch(string runtimeRoot, string agent, TimeProvider?
         try
         {
             var old = _log + ".1";
-            var rotated = File.Exists(old) ? File.GetLastWriteTimeUtc(old) : default;
-            var length = File.Exists(_log) ? new FileInfo(_log).Length : 0;
+            var rotated = Present(old) ? File.GetLastWriteTimeUtc(old) : default;
+            var length = Present(_log) ? new FileInfo(_log).Length : 0;
             if (_offset < 0 || rotated != _rotated || length < _offset)
             {
-                var oldHead = File.Exists(old) ? FirstLine(old) : null;
+                var oldHead = Present(old) ? FirstLine(old) : null;
                 // Unbroken only if the log this watch was reading is the one now kept as .1 (or,
                 // at the first look, if nothing was ever rotated out).
-                var unbroken = _offset < 0 ? !File.Exists(old) : rotated != _rotated && _head is not null && oldHead == _head;
+                var unbroken = _offset < 0 ? !Present(old) : rotated != _rotated && _head is not null && oldHead == _head;
                 if (!unbroken)
                 {
-                    var from = File.Exists(old)
+                    var from = Present(old)
                         ? Time(oldHead) ?? File.GetLastWriteTimeUtc(old)
-                        : Time(File.Exists(_log) ? FirstLine(_log) : null) ?? (time ?? TimeProvider.System).GetUtcNow();
+                        : Time(Present(_log) ? FirstLine(_log) : null) ?? (time ?? TimeProvider.System).GetUtcNow();
                     if (HistoryFrom is null || from > HistoryFrom) { HistoryFrom = from; }
                 }
-                if (File.Exists(old)) { Scan(old, 0); }
+                if (Present(old)) { Scan(old, 0); }
                 _rotated = rotated;
                 _offset = 0;
                 _head = null;
             }
-            if (File.Exists(_log))
+            if (Present(_log))
             {
                 _offset = Scan(_log, _offset);
                 if (_head is null && _offset > 0) { _head = FirstLine(_log); }
@@ -183,6 +183,17 @@ public sealed class HookLogWatch(string runtimeRoot, string agent, TimeProvider?
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
     }
 
+    // Whether a log is there to read. File.Exists is false for a directory, or a path that cannot
+    // be checked, and the history would then read as empty rather than unknown: only nothing at the
+    // path is absence; anything else there that is not a file fails the refresh.
+    static bool Present(string path)
+    {
+        FileAttributes attributes;
+        try { attributes = File.GetAttributes(path); }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return false; }
+        if (attributes.HasFlag(FileAttributes.Directory)) { throw new IOException($"{path} is not a file"); }
+        return true;
+    }
     static string? FirstLine(string path)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);

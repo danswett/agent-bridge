@@ -101,18 +101,29 @@ public static class SpoolContract
         Path.Combine(runtimeRoot, CodexFolder, SafeKey(sessionId) + ".approval.json");
 
     // The session_id a Codex event names, or null.
-    public static string? CodexSessionId(ReadOnlySpan<byte> utf8)
+    public static string? CodexSessionId(ReadOnlySpan<byte> utf8) => CodexEvent(utf8).Session;
+
+    // A Codex event's session and hook_event_name, either null where it has none.
+    public static (string? Session, string? Event) CodexEvent(ReadOnlySpan<byte> utf8)
     {
         try
         {
             // As deep as any event the hook accepts (IsJson), or a deep one would withdraw nothing.
             var reader = new Utf8JsonReader(utf8, new JsonReaderOptions { MaxDepth = MaxEventDepth });
             using var doc = JsonDocument.ParseValue(ref reader);
-            return doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("session_id", out var id)
-                && id.ValueKind == JsonValueKind.String && id.GetString() is { Length: > 0 } s ? s : null;
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) { return (null, null); }
+            string? Text(string name) => root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String && v.GetString() is { Length: > 0 } s ? s : null;
+            return (Text("session_id"), Text("hook_event_name"));
         }
-        catch (JsonException) { return null; }
+        catch (JsonException) { return (null, null); }
     }
+
+    // The Codex events after which a session's approval is no longer being asked, whichever input
+    // answered it. SessionStart too: a Codex that died waiting for an approval never sent
+    // SessionEnd, and its resumed session must not offer the dead run's approval.
+    public static bool RetiresCodexApproval(string? hookEventName) =>
+        hookEventName is "SessionStart" or "PreToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd";
 
     // Removes the session's approval marker, as agent-ha-bridge's PowerShell hook did whenever the
     // event did not reach its daemon. Best effort; a delete needs no free space.
@@ -215,8 +226,7 @@ public static class SpoolContract
             }
             try
             {
-                var info = new FileInfo(log);
-                if (info.Exists && info.Length >= LogMaxBytes) { File.Move(log, log + ".1", overwrite: true); }
+                if (new FileInfo(log) is { Exists: true, Length: >= LogMaxBytes }) { Rotate(log); }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
             buffer.Write("\n"u8);
@@ -224,6 +234,21 @@ public static class SpoolContract
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
     }
+
+    // Two hooks that both saw a full log would each move "the" log to .1, the second moving the
+    // first's fresh log over the megabyte just rotated, and with it the record of unspooled runs.
+    // So one rotates at a time, and only a log still full once it holds the lock; one that finds
+    // another rotating appends to whichever log is there. (agent-ha-bridge's Go hook rotates the
+    // same log unlocked, as it always has; this coordinates this product's own hooks.)
+    static void Rotate(string log)
+    {
+        using var rotating = new FileStream(log + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        BeforeRotate?.Invoke(log);
+        if (new FileInfo(log) is { Exists: true, Length: >= LogMaxBytes }) { File.Move(log, log + ".1", overwrite: true); }
+    }
+
+    // A test's way into the moment between taking the lock and looking again.
+    internal static Action<string>? BeforeRotate;
 
     // One spooled event, read back. Null when the file is not one: the reader drops it.
     public static SpoolEvent? Parse(ReadOnlySpan<byte> utf8, string name)

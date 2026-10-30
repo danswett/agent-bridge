@@ -111,8 +111,21 @@ public sealed class HookIntake : IAsyncDisposable
     // markers against the hook log (the first after starting or taking the spool back, or while
     // the log cannot be read), a marker may be one already answered at the terminal, and typing
     // into it would land in whatever the terminal shows now.
-    public string? ApprovalsUnsettled => _reconciled && !_handlers.WithdrawalsPending ? null
+    public string? ApprovalsUnsettled => _queued ? "the host is still handling hook events that were waiting; try again shortly"
+        : _reconciled && !_handlers.WithdrawalsPending ? null
         : "the host has not yet checked Codex approvals against the hooks that ran while nobody took them; answer at the machine or try again shortly";
+
+    // Events wait in the spool: a PermissionRequest handled from a backlog arms its marker before
+    // the PreToolUse that answered it at the terminal, further down, has been reached. So no Codex
+    // answer while any is queued (one whose deletion failed after it was handled aside).
+    volatile bool _queued;
+
+    bool Waiting()
+    {
+        try { return Directory.EnumerateFiles(_spool, "*.json").Any(f => f.EndsWith(".json", StringComparison.Ordinal) && !_undeleted.Contains(Path.GetFileName(f))); }
+        catch (DirectoryNotFoundException) when (!File.Exists(_spool)) { return false; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return true; }
+    }
 
     // The answer path's gate for Codex approvals on a profile (AnswerOptions.CodexApprovalsUnsettled),
     // given the registration whose marker would be answered: none where the profile never migrated
@@ -386,7 +399,10 @@ public sealed class HookIntake : IAsyncDisposable
         // Settled only once every marker it covers is gone; otherwise the next pass tries again.
         var complete = true;
         string[] markers;
-        try { markers = Directory.Exists(_handlers.CodexRoot) ? Directory.GetFiles(_handlers.CodexRoot, "*.approval.json") : []; }
+        // Listed, not Directory.Exists first: that is false too when the folder cannot be read, and
+        // an unperformed sweep would count as done.
+        try { markers = Directory.GetFiles(_handlers.CodexRoot, "*.approval.json"); }
+        catch (DirectoryNotFoundException) when (!File.Exists(_handlers.CodexRoot)) { markers = []; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { markers = []; complete = false; }
         foreach (var marker in markers)
         {
@@ -476,8 +492,16 @@ public sealed class HookIntake : IAsyncDisposable
             Gap();
             return 0;
         }
-        if (files.Length == 0) { return 0; }
+        if (files.Length == 0) { _queued = false; return 0; }
+        _queued = true;
         Array.Sort(files, StringComparer.Ordinal);
+        try { return Drain(files); }
+        // Open again once nothing waits, including what arrived while these were handled.
+        finally { _queued = Waiting(); }
+    }
+
+    int Drain(string[] files)
+    {
 
         var handled = 0;
         foreach (var path in files)
