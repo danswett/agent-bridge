@@ -262,6 +262,13 @@ public sealed class ShadowTests : IDisposable
         var m = Assert.Single(ShadowLedger.Read(reports, "2026-10-28")!.Mismatches);
         Assert.Equal(75L, m.Seconds);
         Assert.Equal(["daemon=2 host=0", "daemon=3 host=1"], m.Details);
+
+        // A question's field count is its shape: wrong either way, it is one disagreement.
+        ShadowDifference Fields(int daemon, int host) => new(ShadowKinds.QuestionFields, "s1", $"daemon={daemon} host={host}");
+        for (var i = 0; i < 4; i++) { Sample(Fields(2, 1)); }
+        for (var i = 0; i < 4; i++) { Sample(Fields(1, 2)); }
+        Sample();
+        Assert.Contains(ShadowLedger.Read(reports, "2026-10-28")!.Mismatches, x => x.Kind == ShadowKinds.QuestionFields && x.Seconds == 105);
     }
 
     [Fact]

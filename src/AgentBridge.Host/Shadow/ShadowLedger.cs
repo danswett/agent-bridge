@@ -119,8 +119,11 @@ public sealed partial class ShadowLedger
     // minute later, the daemon a pass behind each time, so it counted one the host did not and then
     // none where the host did; two lags in opposite directions, each shorter than the grace, ran on
     // as one disagreement of 60 s and became a mismatch.
-    static int? Direction(string detail) =>
-        CountPair().Match(detail) is { Success: true } m && long.TryParse(m.Groups[1].Value, out var d) && long.TryParse(m.Groups[2].Value, out var h) ? Math.Sign(d - h) : null;
+    // Only for the kinds that are two counts of running things (background work, compactions, the
+    // resume list's length): a question's field count is its shape, wrong whichever way it is.
+    static int? Direction(string kind, string detail) =>
+        kind is ShadowKinds.BackgroundAgents or ShadowKinds.BackgroundShells or ShadowKinds.Compactions or ShadowKinds.ResumableCount
+        && CountPair().Match(detail) is { Success: true } m && long.TryParse(m.Groups[1].Value, out var d) && long.TryParse(m.Groups[2].Value, out var h) ? Math.Sign(d - h) : null;
 
     [System.Text.RegularExpressions.GeneratedRegex(@"\Adaemon=(\d+) host=(\d+)\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex CountPair();
@@ -241,7 +244,7 @@ public sealed partial class ShadowLedger
         foreach (var (key, d) in current)
         {
             // A count that turns the other way is a new disagreement, judged against the grace afresh.
-            var direction = Direction(d.Detail);
+            var direction = Direction(d.Kind, d.Detail);
             if (open.TryGetValue(key, out var was) && was.Direction is { } before && direction is { } after && before != after)
             {
                 Close(was);
