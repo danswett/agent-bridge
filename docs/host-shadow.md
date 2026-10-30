@@ -235,7 +235,9 @@ because of the field it is in. The daemon's state file lists the ids behind its 
 (`BackgroundAgents` by tool call, `BackgroundShells` by shell id) and how far it has read the
 transcript (`Offset`). For a Copilot session with a difference in background work or model,
 the comparison reads the transcript and checks every id the difference involves for the bug's
-signature below, counting only what the daemon has read. Then the counts have to add up
+signature below, counting only what the daemon has read (an end, a completion or a wake it
+has not reached yet is the daemon being behind, not its bug). The daemon's list must carry
+every id behind its count. Then the counts have to add up
 exactly: the daemon's, less what the signatures explain, must equal the host's. Anything
 else, an id with no signature or a count left over, keeps the difference a mismatch. A
 difference that matches is a **known difference**: tallied in the day's `known`, by kind and
@@ -244,7 +246,7 @@ five, and the comparison now classifies each as below.
 
 | Kind | Signature in the transcript | Filed |
 |---|---|---|
-| `background.agents`, daemon lower | Each agent the host counts and the daemon does not is working again (its own events) after its first `subagent.completed`, and none of those the daemon lists is one of them | agent-ha-bridge#258 |
+| `background.agents`, daemon lower | Each agent the host counts and the daemon does not is working again (its own events) after its first `subagent.completed`, both before the daemon's `Offset`, and none of those the daemon lists is one of them | agent-ha-bridge#258 |
 | `background.shells` or `background.agents`, daemon higher | Each extra id's end (a completion line, a stop, a `shell_completed`; a `subagent.completed`) is in the transcript after its start and before the daemon's `Offset`: the daemon has read past it and not applied it | agent-ha-bridge#259 |
 | `model` | The last `assistant.message` the daemon has read is a subagent's and names the daemon's model, and the host's is the session's own | agent-ha-bridge#260 |
 | `background.shells`, daemon higher | Every start of each extra id since its last end is in a subagent's tool result | agent-ha-bridge#261 |
@@ -331,7 +333,7 @@ show it, in the day's `coverage`:
 | Kind | One event is | Mismatches counted against it |
 |---|---|---|
 | `sessions` | A session either side listed, with its agent | `session.*`, `agent` |
-| `questions` | A question either side showed, by identity, of kind `choice`, `multi` or `text`, answered or not. Each side knows it by its own identity (the host by the tool call, the daemon by its hook's clock), so a session's run of questions counts the larger of the two sides' counts | `question.*` |
+| `questions` | A question either side showed, by identity, of kind `choice`, `multi` or `text`, answered or not. Each side knows it by its own identity (the host by the tool call, the daemon by its hook's clock), so a session's run of questions counts the larger of the two sides' counts | Each question a `question.*` mismatch was about, once (`failedQuestions`), however many kinds it had and however many questions one mismatch ran on across |
 | `statusTransitions` | A session's status changing (working, idle, waiting, ending) as the daemon published it | `status`, `activity.response` |
 | `background` | A background agent or shell starting or finishing, as the daemon listed it (and `backgroundSessions`, the sessions that had any) | `background.*` |
 | `compactions` | A compaction finishing | `compactions` |
@@ -347,21 +349,24 @@ restart of the comparison is counted again; both are rare, and the counts err lo
 `summary` adds the days up and prints, for each kind, the events, the mismatches about them
 that `gate.json` does not explain, those it does, and the **95% upper bound** on the
 unexplained mismatch rate: one-sided, `3/n` with none (the rule of three), otherwise the
-exact Clopper-Pearson bound. Mismatches count only from when that kind's events did.
+exact Clopper-Pearson bound. Mismatches count only from when that kind's events did, and
+those past a day's cap (`overflow`) count as unexplained.
 
 **Counting starts** with the first sample a release with coverage writes; reports from before
 it (written by 30ef3a7, which DEV-VM1 started on 2026-10-29) have no `coverage`. What they do
 hold still counts: the sessions they list (agent `unknown` unless a later report names it),
 a side going down and coming back (a `machine.*` disagreement that ended, counted as
-`sideDownAndBack`), the time compared, the first sample and every mismatch. Every other
-event is counted from the redeploy.
+`sideDownAndBack`, also for the part of the redeploy's day before it), the time compared,
+the first sample and every mismatch. Every other event is counted from the redeploy.
 
 ## The gate
 
 `shadow summary --gate --profile shadow` ends with the verdict over every report:
 
-* **`FAIL (…)`** when any mismatch seen in the last 24 hours is unexplained, or
-  when the questions' observed mismatch rate is already over the allowed one.
+* **`FAIL (…)`** when any mismatch seen in the last 24 hours is unexplained, when a day in
+  that window has mismatches past its cap (they keep no time or session, so nothing can
+  explain them), or when the questions' observed unexplained failure rate is over the
+  allowed one, however few questions there are.
 * **`NOT YET (…)`**, listing what is missing, until all of these hold:
 
   | Needs | Default |
@@ -431,6 +436,7 @@ when `run` starts is kept beside it as `.unreadable-<time>`, never overwritten.
   },
   "coverage": {
     "since": "…", "sessions": { "s8a666b6daa65": "copilot" }, "questions": { "choice": 14, "text": 3 },
+    "failedQuestions": { "4c1d…": { "session": "s8a666b6daa65", "kinds": ["question.options"], "last": "…" } },
     "statusTransitions": 410, "backgroundSessions": ["s8a666b6daa65"], "backgroundStarts": 61,
     "backgroundFinishes": 58, "compactions": 2, "modelChanges": 0, "resumeSnapshots": 37,
     "usageReadings": 96, "usageResets": 1, "machineEvents": { "observerResumed": 1 },

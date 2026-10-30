@@ -96,6 +96,9 @@ public sealed partial class TranscriptEvidence(string path)
         public bool Completed;
         public int IdleOwed;
         public long Last;
+        // Where its first subagent.completed is, and where it was last woken after that.
+        public long CompletedAt = -1;
+        public long WokenAt = -1;
     }
 
     readonly Dictionary<string, Shell> shells = new(StringComparer.Ordinal);
@@ -215,6 +218,7 @@ public sealed partial class TranscriptEvidence(string path)
                     if (agentByCall.TryGetValue(call, out var key) && agents.TryGetValue(key, out var agent) && !agent.Completed)
                     {
                         agent.Completed = true;
+                        agent.CompletedAt = at;
                         EndRun(agent);
                     }
                     break;
@@ -310,6 +314,8 @@ public sealed partial class TranscriptEvidence(string path)
     public string? Shells(ShadowSession daemon, ShadowSession host)
     {
         if (daemon.Offset is not { } through) { return null; }
+        // Only when every id behind the daemon's count is known (DaemonReader keeps at most 1024).
+        if (daemon.ShellIds.Distinct(StringComparer.Ordinal).Count() != daemon.Shells) { return null; }
         var issues = new SortedSet<int>();
         var explained = 0;
         foreach (var id in daemon.ShellIds.Distinct(StringComparer.Ordinal))
@@ -337,8 +343,12 @@ public sealed partial class TranscriptEvidence(string path)
     {
         if (daemon.Offset is not { } through) { return null; }
         var listed = daemon.AgentIds.Distinct(StringComparer.Ordinal).ToList();
+        if (listed.Count != daemon.Agents) { return null; }
         var missed = listed.Count(c => completed.TryGetValue(c, out var at) && at < through);
-        var woken = agents.Where(a => a.Value.Working && a.Value.Completed).Select(a => a.Key).ToHashSet(StringComparer.Ordinal);
+        // Woken after a completion and a wake the daemon has both read: one it has not read yet is
+        // the daemon being behind, not #258.
+        var woken = agents.Where(a => a.Value.Working && a.Value.Completed && a.Value.CompletedAt >= 0 && a.Value.CompletedAt < through && a.Value.WokenAt >= 0 && a.Value.WokenAt < through)
+            .Select(a => a.Key).ToHashSet(StringComparer.Ordinal);
         // The daemon counts by tool call; none of those it lists may be one of the woken agents.
         if (listed.Any(c => agentByCall.TryGetValue(c, out var key) && woken.Contains(key))) { return null; }
         var issues = new SortedSet<int>();
@@ -390,6 +400,7 @@ public sealed partial class TranscriptEvidence(string path)
     {
         agent.Working = true;
         agent.Last = at;
+        if (agent.Completed) { agent.WokenAt = at; }
     }
 
     static void EndRun(Agent agent)

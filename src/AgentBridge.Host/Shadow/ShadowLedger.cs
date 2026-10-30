@@ -162,7 +162,14 @@ public sealed class ShadowLedger
         }
         if (comparison.Compared)
         {
-            coverage.Record(day.Coverage ??= new ShadowCoverage(), comparison, daemon, host, now, earlierSample);
+            if (day.Coverage is null)
+            {
+                day.Coverage = new ShadowCoverage();
+                // Redeployed partway through a day: what that day's earlier part saw of sides
+                // going down and coming back is kept, as a report from before coverage gives it.
+                if (ShadowCoverageTracker.SidesDownAndBack(day) is > 0 and var down) { day.Coverage.MachineEvents[ShadowCoverage.SideDownAndBack] = down; }
+            }
+            coverage.Record(day.Coverage, comparison, daemon, host, now, earlierSample);
         }
         day.Samples++;
         if (comparison.Compared)
@@ -207,7 +214,9 @@ public sealed class ShadowLedger
             episode.Last = now;
             episode.Samples++;
             if (episode.Details.Count < MaxDetails && !episode.Details.Contains(d.Detail)) { episode.Details.Add(d.Detail); }
-            if (episode.Last - episode.First >= GraceFor(d.Kind) && Persist(episode, date) is { } fresh) { made.Add(fresh); }
+            if (episode.Last - episode.First < GraceFor(d.Kind)) { continue; }
+            if (Persist(episode, date) is { } fresh) { made.Add(fresh); }
+            if (d.Kind.StartsWith("question.", StringComparison.Ordinal) && d.Session is { } s && day.Coverage is { } c) { coverage.QuestionFailed(c, s, d.Kind, now); }
         }
         Save(day);
         return made;

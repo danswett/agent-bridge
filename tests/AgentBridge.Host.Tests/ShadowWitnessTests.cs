@@ -79,6 +79,8 @@ public sealed class ShadowWitnessTests : IDisposable
             Known(Daemon(through, shells: ["own1", "sub1", "quoted1", "ended1"]), Host(shells: 1), ShadowKinds.BackgroundShells));
         // The session's own shell missing on the host is no daemon bug.
         Assert.Null(Known(Daemon(through, shells: ["own1", "sub1", "quoted1", "ended1"]), Host(shells: 0), ShadowKinds.BackgroundShells));
+        // Nor a count past the ids the daemon's list carries.
+        Assert.Null(Known(Daemon(through, shells: ["own1", "sub1", "quoted1", "ended1"]) with { Shells = 5 }, Host(shells: 1), ShadowKinds.BackgroundShells));
         // Nor is one the transcript never started.
         Assert.Null(Known(Daemon(through, shells: ["own1", "sub1", "mystery"]), Host(shells: 1), ShadowKinds.BackgroundShells));
         // An end the daemon has not read yet is the daemon being behind, not #259.
@@ -88,10 +90,11 @@ public sealed class ShadowWitnessTests : IDisposable
     [Fact]
     public void Missing_agents_are_put_down_to_the_daemon_only_when_they_are_exactly_those_woken_again_after_completing()
     {
-        Write(
+        var completedOnly = Write(
             Event("subagent.started", new { toolCallId = "c1", executionMode = "background" }, agentId: "a1"),
             Event("assistant.turn_end", new { }, agentId: "a1"),
-            Event("subagent.completed", new { toolCallId = "c1" }),
+            Event("subagent.completed", new { toolCallId = "c1" }));
+        Write(
             // Woken again with a message: its own turn, and no second subagent.started.
             Event("user.message", new { content = "carry on" }, agentId: "a1"),
             Event("assistant.turn_start", new { }, agentId: "a1"),
@@ -109,6 +112,10 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Equal("agent-ha-bridge#258, agent-ha-bridge#259", Known(Daemon(through, agents: ["c2", "c3", "c4"]), Host(agents: 2), ShadowKinds.BackgroundAgents));
         // One more on the host than the woken agent accounts for.
         Assert.Null(Known(Daemon(through, agents: ["c2"]), Host(agents: 3), ShadowKinds.BackgroundAgents));
+        // A daemon that has not read the wake yet is behind, whatever it will make of it.
+        Assert.Null(Known(Daemon(completedOnly), Host(agents: 1), ShadowKinds.BackgroundAgents));
+        // Nor is a count whose ids the daemon's list does not all carry.
+        Assert.Null(Known(Daemon(through, agents: ["c2"]) with { Agents = 2 }, Host(agents: 3), ShadowKinds.BackgroundAgents));
     }
 
     [Fact]

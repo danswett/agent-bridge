@@ -191,34 +191,79 @@ public sealed class ShadowCoverageTests : IDisposable
         Assert.Equal(ShadowGate.Pass, Verdict().Outcome);
     }
 
+    // Found in review (#77): one mismatch running on across several questions in a session was
+    // one episode against each question counted, and two kinds of mismatch on one question two.
     [Fact]
-    public void Questions_need_their_upper_bound_under_three_percent_and_a_rate_already_over_it_fails()
+    public void Each_failed_question_counts_once_and_a_failure_rate_over_the_limit_fails_however_few_questions_there_are()
     {
         Directory.CreateDirectory(reports);
         var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
-        // Forty questions, one at a time.
-        for (var i = 0; i < 40; i++)
+        var session = ShadowHash.Session(A);
+        void Ask(string call, int samples, params ShadowDifference[] diffs)
         {
-            var q = Asked("call-" + i, time.GetUtcNow(), new ShadowField("choice", 2, "h"));
-            Sample(ledger, View(null, null, null, Session(A, "waiting", question: q)), View(null, null, null, Session(A, "waiting", question: q)));
-            Sample(ledger, View(null, null, null, Session(A, "working")), View(null, null, null, Session(A, "working")));
-        }
-        Gate(new { questions = 40, sessions = 0, statusTransitions = 0, background = 0, compactions = 0, resumeSnapshots = 0, usageReadings = 0, machineEvents = 0, hours = 0, comparedHours = 0, cleanHours = 0 });
-        // Three over forty is 7.5%: no mismatch, and still not enough to say under 3%.
-        Assert.Equal(["questions: upper bound 7.5% over 3.0%, more questions needed"], Verdict().Missing);
-
-        // Two question mismatches in forty is a rate of 5%: no amount more makes that pass.
-        for (var i = 0; i < 2; i++)
-        {
-            for (var j = 0; j < 6; j++)
+            var q = Asked(call, time.GetUtcNow(), new ShadowField("choice", 2, "h"));
+            for (var i = 0; i < samples; i++)
             {
-                ledger.Record(new ShadowComparison(true, 1, 1, [new ShadowDifference(ShadowKinds.QuestionOptions, "s" + i, "field 1: daemon=2 host=3")], []), new ShadowView(), new ShadowView());
+                ledger.Record(new ShadowComparison(true, 1, 1, diffs, []), View(null, null, null, Session(A, "waiting", question: q)), View(null, null, null, Session(A, "waiting", question: q)));
                 time.Advance(TimeSpan.FromSeconds(15));
             }
-            ledger.Record(new ShadowComparison(true, 1, 1, [], []), new ShadowView(), new ShadowView());
         }
+        void Work() => Sample(ledger, View(null, null, null, Session(A, "working")), View(null, null, null, Session(A, "working")));
+        void Config(int questions, params object[] explained) => Gate(new { questions, sessions = 0, statusTransitions = 0, background = 0, compactions = 0, resumeSnapshots = 0, usageReadings = 0, machineEvents = 0, hours = 0, comparedHours = 0, cleanHours = 0, explained });
+
+        for (var i = 0; i < 38; i++) { Ask("fine-" + i, 1); Work(); }
+        Config(40);
+        Assert.Equal(["questions 38/40"], Verdict().Missing);
+
+        // Two questions in a row with the same two kinds of mismatch: one episode of each kind,
+        // running across both.
+        ShadowDifference[] wrong = [new(ShadowKinds.QuestionOptions, session, "field 1: daemon=2 host=3"), new(ShadowKinds.QuestionFieldType, session, "field 1: daemon=choice host=multi")];
+        Ask("wrong-1", 6, wrong);
+        Ask("wrong-2", 6, wrong);
+        Work();
+        Assert.Equal(2, ledger.Today!.Coverage!.FailedQuestions.Count);
+        // Two in forty is 5%, over the 3% allowed, however short of a hundred the questions are.
+        Config(100);
         var verdict = Verdict();
         Assert.Equal(ShadowGate.Fail, verdict.Outcome);
         Assert.Equal(["question mismatch rate 5.0% over 3.0%"], verdict.Failing);
+
+        // Investigated and explained, both kinds: no failure, and forty questions say too little.
+        Config(40, new { kind = ShadowKinds.QuestionOptions, session }, new { kind = ShadowKinds.QuestionFieldType, session });
+        var explained = Verdict();
+        Assert.Equal(ShadowGate.NotYet, explained.Outcome);
+        Assert.Equal(["questions: upper bound 7.5% over 3.0%, more questions needed"], explained.Missing);
+    }
+
+    // Found in review (#77): past a day's cap a mismatch keeps no time or session, so nothing can
+    // say it was explained or over.
+    [Fact]
+    public void Mismatches_past_a_days_cap_in_the_clean_window_fail_the_gate()
+    {
+        Directory.CreateDirectory(reports);
+        OldReport("2026-10-28", time.GetUtcNow().AddHours(-1));
+        var path = Path.Combine(reports, ShadowLedger.FileName("2026-10-28"));
+        var day = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        day["overflow"] = new JsonObject { [ShadowKinds.Status] = 3 };
+        File.WriteAllText(path, day.ToJsonString());
+        Gate(new { questions = 0, sessions = 0, statusTransitions = 0, background = 0, compactions = 0, resumeSnapshots = 0, usageReadings = 0, machineEvents = 0, hours = 0, comparedHours = 0 });
+
+        Assert.Equal([$"3 mismatches past a day's cap of {ShadowLedger.MaxMismatches} in the last 24 h"], Verdict().Failing);
+    }
+
+    // Found in review (#77): redeployed partway through a day, the coverage the release began
+    // writing lost the sides that went down and came back earlier that day.
+    [Fact]
+    public void A_day_begun_before_coverage_keeps_its_earlier_machine_events_once_coverage_starts()
+    {
+        Directory.CreateDirectory(reports);
+        OldReport("2026-10-28", time.GetUtcNow().AddMinutes(-26));
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+
+        Sample(ledger, View(null, null, null), View(null, null, null));
+
+        Assert.Equal(new Dictionary<string, int> { [ShadowCoverage.SideDownAndBack] = 1 }, ledger.Today!.Coverage!.MachineEvents);
+        var today = DateOnly.FromDateTime(time.GetUtcNow().UtcDateTime);
+        Assert.Equal(1, ShadowSummary.Build(reports, today, 1, time.GetUtcNow()).Coverage.Single(c => c.Kind == ShadowCoverageKinds.Machine).Events);
     }
 }

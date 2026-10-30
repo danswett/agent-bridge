@@ -21,6 +21,10 @@ public sealed class ShadowCoverage
     // Questions asked, by kind (choice, multi, text): one for each question either side showed,
     // however long it was pending and whether or not it was answered.
     public SortedDictionary<string, int> Questions { get; set; } = new(StringComparer.Ordinal);
+    // Questions a question.* mismatch was about (one that lasted the grace), each once however
+    // many kinds of mismatch it had, by a hash of its session and identity: what the question
+    // rate counts, since one mismatch can run on across several questions in a session.
+    public SortedDictionary<string, ShadowFailedQuestion> FailedQuestions { get; set; } = new(StringComparer.Ordinal);
     // A session's status changing (working, idle, waiting, ending) as the daemon published it.
     public int StatusTransitions { get; set; }
     // Sessions that had background agents or shells at some sample, and the starts and finishes
@@ -44,9 +48,19 @@ public sealed class ShadowCoverage
     public DateTimeOffset? DaemonStartedAt { get; set; }
     public DateTimeOffset? HostStartedAt { get; set; }
 
+    // A side down and back, counted from a day's transient and closed machine.* disagreements in
+    // a report from before coverage, and from the part of a day before it was redeployed.
+    public const string SideDownAndBack = "sideDownAndBack";
     public const string DaemonRestart = "daemonRestart";
     public const string HostRestart = "hostRestart";
     public const string ObserverResumed = "observerResumed";
+}
+
+public sealed class ShadowFailedQuestion
+{
+    public string Session { get; set; } = "";
+    public List<string> Kinds { get; set; } = [];
+    public DateTimeOffset Last { get; set; }
 }
 
 // Turns each compared sample into events, remembering what the previous one showed. One per run;
@@ -63,7 +77,30 @@ internal sealed class ShadowCoverageTracker
         public HashSet<string> Daemon { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Host { get; } = new(StringComparer.Ordinal);
         public int Counted;
+        // The question showing now, by the host's identity when it has one.
+        public string? Current;
     }
+
+    const int MaxFailed = 5000;
+
+    // A question.* mismatch, lasting its grace, on a session: the question showing there now failed.
+    public void QuestionFailed(ShadowCoverage c, string session, string kind, DateTimeOffset now)
+    {
+        if (!asked.TryGetValue(session, out var a) || a.Current is null) { return; }
+        var key = ShadowHash.Text(session + "\n" + a.Current);
+        if (!c.FailedQuestions.TryGetValue(key, out var failed))
+        {
+            if (c.FailedQuestions.Count >= MaxFailed) { return; }
+            c.FailedQuestions[key] = failed = new ShadowFailedQuestion { Session = session };
+        }
+        if (!failed.Kinds.Contains(kind)) { failed.Kinds.Add(kind); }
+        failed.Last = now;
+    }
+
+    // What a report from before coverage, or the part of a day before coverage began, says about
+    // sides going down and coming back.
+    public static int SidesDownAndBack(ShadowDay day) =>
+        day.Transient.Where(t => ShadowKinds.IsMachine(t.Key)).Sum(t => t.Value.Count) + day.Mismatches.Count(m => ShadowKinds.IsMachine(m.Kind) && !m.Open);
 
     ShadowView? lastDaemon;
     string? lastResume;
@@ -147,6 +184,7 @@ internal sealed class ShadowCoverageTracker
         if (!asked.TryGetValue(session, out var a)) { asked[session] = a = new Asked(); }
         if (d is not null) { a.Daemon.Add(Identity(d)); }
         if (h is not null) { a.Host.Add(Identity(h)); }
+        a.Current = Identity((h ?? d)!);
         var count = Math.Max(a.Daemon.Count, a.Host.Count);
         if (count <= a.Counted) { return; }
         var kind = ShadowCompare.QuestionKind((h ?? d)!);

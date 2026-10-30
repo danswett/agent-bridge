@@ -302,10 +302,12 @@ public static class ShadowCompare
     static bool Lagging(ShadowMemory memory, string session, string? daemon, string? host, DateTimeOffset at)
     {
         if (!memory.Responses.TryGetValue(session, out var seen)) { memory.Responses[session] = seen = ([], []); }
+        // Each entry is when that side last showed it: one shown for an hour was shown a moment ago.
         static void Note(List<(DateTimeOffset At, string Tail)> list, string? tail, DateTimeOffset at)
         {
+            if (tail is not null && list.Count > 0 && list[^1].Tail == tail) { list[^1] = (at, tail); }
+            else if (tail is not null) { list.Add((at, tail)); }
             list.RemoveAll(x => at - x.At > ResponseMemory);
-            if (tail is not null && (list.Count == 0 || list[^1].Tail != tail)) { list.Add((at, tail)); }
             if (list.Count > 64) { list.RemoveAt(0); }
         }
         Note(seen.Daemon, daemon, at);

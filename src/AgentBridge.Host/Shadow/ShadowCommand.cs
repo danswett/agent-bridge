@@ -108,14 +108,16 @@ public static class ShadowCommand
                         // The gate looks at every report there is (up to 92 days), unless told otherwise.
                         var gate = Flag("--gate");
                         var days = Number("--days", gate ? ShadowSummary.DaysSinceFirst(reports, today) : 7, 1, 92);
-                        var summary = ShadowSummary.Build(reports, today, days, time.GetUtcNow());
+                        // Read once, for both: its explanations change the counts the gate judges.
+                        var config = ShadowGateConfig.Read(reports);
+                        var summary = ShadowSummary.Build(reports, today, days, time.GetUtcNow(), config.Config);
                         var json = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
                         if (!gate)
                         {
                             output.Write(Flag("--json") ? JsonSerializer.Serialize(summary, json) + Environment.NewLine : summary.Format());
                             return 0;
                         }
-                        var verdict = ShadowGate.Evaluate(summary, ShadowGateConfig.Read(reports));
+                        var verdict = ShadowGate.Evaluate(summary, config);
                         output.Write(Flag("--json") ? JsonSerializer.Serialize(verdict, json) + Environment.NewLine : summary.Format() + Environment.NewLine + verdict.Format());
                         return verdict.Outcome == ShadowGate.Pass ? 0 : verdict.Outcome == ShadowGate.Fail ? 1 : 3;
                     }

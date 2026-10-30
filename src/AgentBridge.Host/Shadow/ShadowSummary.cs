@@ -74,6 +74,9 @@ public sealed record ShadowSummary(
         var background = new HashSet<string>(StringComparer.Ordinal);
         int transitions = 0, starts = 0, finishes = 0, compactions = 0, models = 0, resume = 0, usage = 0, resets = 0;
         var known = new Dictionary<(string Kind, string Cause), (int Samples, HashSet<string> Sessions)>();
+        var failedQuestions = new Dictionary<string, ShadowFailedQuestion>(StringComparer.Ordinal);
+        // Mismatches past a day's cap, by kind, from the days whose events they count against.
+        var overflowCounted = new Dictionary<string, int>(StringComparer.Ordinal);
         var list = new List<ShadowSummaryDay>();
         var episodes = new Dictionary<(string, string?, DateTimeOffset), ShadowEpisode>();
         var overflow = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -107,13 +110,22 @@ public sealed record ShadowSummary(
                 resume += c.ResumeSnapshots;
                 usage += c.UsageReadings;
                 resets += c.UsageResets;
+                // A question failing across midnight is in both days: once, with its latest.
+                foreach (var (key, q) in c.FailedQuestions)
+                {
+                    if (!failedQuestions.TryGetValue(key, out var was) || was.Last < q.Last) { failedQuestions[key] = q; }
+                    else { foreach (var k in q.Kinds.Where(k => !was.Kinds.Contains(k))) { was.Kinds.Add(k); } }
+                }
             }
-            else
+            else if (ShadowCoverageTracker.SidesDownAndBack(day) is > 0 and var down)
             {
                 // Before events were counted: a side going down and coming back is a machine
                 // disagreement that ended.
-                var down = day.Transient.Where(t => ShadowKinds.IsMachine(t.Key)).Sum(t => t.Value.Count) + day.Mismatches.Count(m => ShadowKinds.IsMachine(m.Kind) && !m.Open);
-                if (down > 0) { machine["sideDownAndBack"] = machine.GetValueOrDefault("sideDownAndBack") + down; }
+                machine[ShadowCoverage.SideDownAndBack] = machine.GetValueOrDefault(ShadowCoverage.SideDownAndBack) + down;
+            }
+            foreach (var (kind, n) in day.Overflow)
+            {
+                if (ShadowCoverageKinds.Of(kind) is { } of && (day.Coverage is not null || ShadowCoverageKinds.FromEveryReport(of))) { overflowCounted[of] = overflowCounted.GetValueOrDefault(of) + n; }
             }
             foreach (var (kind, causes) in day.Known)
             {
@@ -137,7 +149,7 @@ public sealed record ShadowSummary(
             }
             foreach (var (reason, n) in day.NotComparedWhy) { why[reason] = why.GetValueOrDefault(reason) + n; }
             var hours = Math.Round(day.ComparedSeconds / 3600.0, 3);
-            list.Add(new(date, day.Samples, day.Compared, hours, day.Mismatches.Count + day.Overflow.Values.Sum(), day.Verdict, day.UsageCompared, day.ResumableCompared));
+            list.Add(new(date, day.Samples, day.Compared, hours, day.Mismatches.Count + day.Overflow.Values.Sum(), day.Verdict, day.UsageCompared, day.ResumableCompared) { Overflow = day.Overflow.Values.Sum() });
         }
         var kinds = episodes.Values.GroupBy(e => e.Kind)
             .Select(g => new ShadowSummaryKind(g.Key, g.Count() + overflow.GetValueOrDefault(g.Key), g.Select(e => e.Session).Where(s => s is not null).Distinct().Count(), g.Max(e => e.Seconds)))
@@ -165,10 +177,22 @@ public sealed record ShadowSummary(
         {
             var since = ShadowCoverageKinds.FromEveryReport(kind) ? first : coverageSince;
             // A mismatch counts against the events counted over the same time.
-            var against = episodes.Values.Where(e => ShadowCoverageKinds.Of(e.Kind) == kind && since is { } s && e.Last >= s).ToList();
-            var explained = against.Count(e => config.Explaining(e) is not null);
             var n = counted[kind];
-            var m = against.Count - explained;
+            int m, explained;
+            if (kind == ShadowCoverageKinds.Questions)
+            {
+                // Each failed question once, whatever kinds of mismatch it had and however many
+                // questions one mismatch ran on across: explained only if all its kinds are.
+                explained = failedQuestions.Values.Count(q => q.Kinds.All(k => config.Explaining(new ShadowEpisode { Kind = k, Session = q.Session }) is not null));
+                m = failedQuestions.Count - explained;
+            }
+            else
+            {
+                var against = episodes.Values.Where(e => ShadowCoverageKinds.Of(e.Kind) == kind && since is { } s && e.Last >= s).ToList();
+                explained = against.Count(e => config.Explaining(e) is not null);
+                // Past a day's cap there is no session to explain them by.
+                m = against.Count - explained + overflowCounted.GetValueOrDefault(kind);
+            }
             lines.Add(new(kind, n, m, explained, since is null ? null : ShadowStats.UpperBound(m, n), since));
         }
         var agents = agentOf.Values.GroupBy(a => a).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
@@ -272,7 +296,11 @@ public sealed record ShadowSummary(
         seconds < 60 ? $"{seconds} s" : seconds < 3600 ? $"{seconds / 60} min {seconds % 60} s" : $"{seconds / 3600} h {seconds % 3600 / 60} min";
 }
 
-public sealed record ShadowSummaryDay(string Date, int Samples, int Compared, double ComparedHours, int Mismatches, string Verdict, int UsageCompared, int ResumableCompared);
+public sealed record ShadowSummaryDay(string Date, int Samples, int Compared, double ComparedHours, int Mismatches, string Verdict, int UsageCompared, int ResumableCompared)
+{
+    // Mismatches past the day's cap: counted, with no time or session to them.
+    public int Overflow { get; init; }
+}
 
 public sealed record ShadowSummaryReason(string Reason, int Samples);
 
@@ -307,11 +335,16 @@ public sealed record ShadowGate(string Outcome, IReadOnlyList<string> Missing, I
         }
 
         var questions = s.Coverage.FirstOrDefault(c => c.Kind == ShadowCoverageKinds.Questions);
-        if (questions is null || questions.Events < g.Questions) { missing.Add($"questions {questions?.Events ?? 0}/{g.Questions}"); }
+        // An observed rate over the limit fails however few questions there are: each of those
+        // failures has to be fixed or explained, and gate.json's explanations take it out.
+        if (questions is { Events: > 0 } && (double)questions.Mismatches / questions.Events > g.QuestionsMaxRate)
+        {
+            failing.Add($"question mismatch rate {Percent((double)questions.Mismatches / questions.Events)} over {Percent(g.QuestionsMaxRate)}");
+        }
+        else if (questions is null || questions.Events < g.Questions) { missing.Add($"questions {questions?.Events ?? 0}/{g.Questions}"); }
         else if (questions.UpperBound > g.QuestionsMaxRate)
         {
-            if ((double)questions.Mismatches / questions.Events > g.QuestionsMaxRate) { failing.Add($"question mismatch rate {Percent((double)questions.Mismatches / questions.Events)} over {Percent(g.QuestionsMaxRate)}"); }
-            else { missing.Add($"questions: upper bound {Percent(questions.UpperBound!.Value)} over {Percent(g.QuestionsMaxRate)}, more questions needed"); }
+            missing.Add($"questions: upper bound {Percent(questions.UpperBound!.Value)} over {Percent(g.QuestionsMaxRate)}, more questions needed");
         }
         AtLeast(ShadowCoverageKinds.Sessions, g.Sessions, "distinct sessions");
         AtLeast(ShadowCoverageKinds.Transitions, g.StatusTransitions, "status transitions");
@@ -330,6 +363,12 @@ public sealed record ShadowGate(string Outcome, IReadOnlyList<string> Missing, I
         var recent = s.Episodes.Where(e => e.Last >= now - TimeSpan.FromHours(g.CleanHours) && g.Explaining(e) is null)
             .GroupBy(e => e.Kind).OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => $"{x.Key} x{x.Count()}").ToList();
         if (recent.Count > 0) { failing.Add($"unexplained mismatches in the last {Hours(g.CleanHours)}: {string.Join(", ", recent)}"); }
+        // Past a day's cap a mismatch keeps no time or session, so a day that overflowed and might
+        // lie in the window fails it: nothing says those were explained or long over.
+        var zone = s.TimeZone is { } id && TryZone(id) is { } z ? z : TimeZoneInfo.Local;
+        var windowStart = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now - TimeSpan.FromHours(g.CleanHours), zone).DateTime);
+        var overflowed = s.Days.Where(d => d.Overflow > 0 && DateOnly.ParseExact(d.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture) >= windowStart).Sum(d => d.Overflow);
+        if (overflowed > 0) { failing.Add($"{overflowed} mismatches past a day's cap of {ShadowLedger.MaxMismatches} in the last {Hours(g.CleanHours)}"); }
 
         var notCovered = s.AgentSessions.Where(a => a.Key != "unknown" && a.Value < g.AgentSessions).Select(a => $"{a.Key} ({a.Value} session{(a.Value == 1 ? "" : "s")})").ToList();
         // Before any report counts events no session has a known agent, so none is said to be missing.
@@ -354,6 +393,12 @@ public sealed record ShadowGate(string Outcome, IReadOnlyList<string> Missing, I
     }
 
     static string Percent(double p) => (p * 100).ToString("0.0", CultureInfo.InvariantCulture) + "%";
+
+    static TimeZoneInfo? TryZone(string id)
+    {
+        try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
+        catch (Exception e) when (e is TimeZoneNotFoundException or InvalidTimeZoneException) { return null; }
+    }
 
     static string Hours(double h) => h.ToString("0.#", CultureInfo.InvariantCulture) + " h";
 }

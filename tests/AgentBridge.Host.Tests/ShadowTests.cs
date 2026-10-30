@@ -230,6 +230,10 @@ public sealed class ShadowTests : IDisposable
         // Remembered for minutes, not for ever: a daemon stuck on an old response differs.
         at += TimeSpan.FromMinutes(5);
         Assert.Null(Response("the second words", "the fourth words")!.Known);
+        // Remembered from when it was last shown: one both showed for five minutes was still
+        // showing a moment ago when one side moves on (found in review, #77).
+        for (var i = 0; i < 20; i++) { Assert.Null(Response("a long-standing answer", "a long-standing answer")); }
+        Assert.Equal(ShadowCompare.Timing, Response("a long-standing answer", "a newer answer")!.Known);
     }
 
     // The live shadow's first minutes (#40): a session's subagents' shells counted by the daemon as
