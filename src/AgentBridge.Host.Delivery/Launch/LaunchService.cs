@@ -744,8 +744,11 @@ public sealed partial class LaunchService : ISessionLauncher
         _ = Task.Run(() => FollowAsync(follow));
         var waited = await Task.WhenAny(follow.Decided.Task, Task.Delay(options.RegistrationWait, options.Time));
         if (waited == follow.Decided.Task) { return await follow.Decided.Task; }
-        var unconfirmed = new LaunchResult(LaunchOutcome.Unconfirmed,
-            $"{plan.Launcher.Label} started in {plan.Where} (pid {follow.Started.ProcessId}), but its session had not appeared after {options.RegistrationWait.TotalSeconds:0} s; it may still be starting, so check its window")
+        // A session that registered but whose window is not yet seen ready (Copilot) did appear;
+        // it is the window that is not known.
+        var unconfirmed = new LaunchResult(LaunchOutcome.Unconfirmed, follow.RegisteredAt is not null
+            ? $"{plan.Launcher.Label} started in {plan.Where}, but its window was not seen ready, so whether it is waiting on a question there is not known; check its window"
+            : $"{plan.Launcher.Label} started in {plan.Where} (pid {follow.Started.ProcessId}), but its session had not appeared after {options.RegistrationWait.TotalSeconds:0} s; it may still be starting, so check its window")
         {
             Session = follow.SessionId.Length > 0 ? follow.SessionId : null,
             Launched = launched,

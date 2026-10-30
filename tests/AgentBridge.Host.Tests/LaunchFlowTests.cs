@@ -376,6 +376,18 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_Copilot_that_registers_but_whose_window_is_not_ready_when_the_wait_ends_is_said_to_have_appeared()
+    {
+        screens.Rows = null;
+        Serve(Config(), wait: TimeSpan.FromMilliseconds(400));
+        var ch = await OpenAsync();
+
+        var o = await LaunchAsync(ch, new { workspace = "App" });
+
+        Assert.Equal(("unconfirmed", "Copilot started in App, but its window was not seen ready, so whether it is waiting on a question there is not known; check its window"), Pair(o));
+    }
+
+    [Fact]
     public async Task A_Copilot_launch_answered_before_its_window_was_seen_ready_is_still_followed_and_unlocks_its_worktree_once_it_ends()
     {
         Git(f.Root, "init", "-q", "-b", "main", app);
