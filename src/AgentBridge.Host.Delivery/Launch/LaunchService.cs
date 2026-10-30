@@ -52,7 +52,11 @@ public sealed class LaunchServiceOptions
     // that hands the session on to another process and exits.
     public TimeSpan ExitGrace { get; init; } = TimeSpan.FromSeconds(3);
 
-    public TimeSpan RememberFor { get; init; } = TimeSpan.FromMinutes(15);
+    // After a launch settles. A client resends a transfer launch for up to 20 minutes from its
+    // first send (pwa/js/launch-service.js), and settling comes after that send, so 25 minutes
+    // means a resend always finds the outcome rather than starting the launch again, which for a
+    // transfer would be refused (its command is spent) and read as not launched.
+    public TimeSpan RememberFor { get; init; } = TimeSpan.FromMinutes(25);
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
 
@@ -66,6 +70,12 @@ public sealed class LaunchServiceOptions
     // Which folders live sessions work in, asked before a finished worktree is removed. Null
     // is "cannot tell", which removes none.
     public IWorktreeUsage? WorktreeUsage { get; init; }
+
+    // Brings sessions from the account's other machines (session.launch's transfer). Null: none.
+    public ISessionFetcher? Transfers { get; init; }
+
+    // A private folder of this host's where a fetched bundle is unpacked before it is installed.
+    public string? TransferStaging { get; init; }
 }
 
 // Launches and resumes agent sessions as agent-ha-bridge's Launch button does
@@ -338,6 +348,38 @@ public sealed partial class LaunchService : ISessionLauncher
         return Folders.Containing(Config.Workspaces, physical) ?? Worktrees.Managed(Config.Workspaces, physical)?.Workspace;
     }
 
+    // ---- session.transfer, the source's half ----
+
+    public AgentHomes Homes => new(options.CopilotHome, options.ClaudeHome, options.CodexHome);
+
+    public TransferConfig TransferConfig => Config.Transfer;
+
+    // Whether this machine hands its sessions to the account's other machines now.
+    public string? ServeUnavailable => !Config.Transfer.Serve ? "this machine does not hand its sessions to other machines (launch.transfer.serve in its config)"
+        : !Config.Enabled ? "launching is turned off on this machine (launch.enabled in its config)"
+        : probe.Active();
+
+    // A session another machine asks for, if this machine offers it now, with its title; else
+    // why not. Only what the resume list offers can be taken: an ended session in an approved
+    // folder. The approved-folder filter on what is listed is a filter on what can be taken too,
+    // or any session in the agent's home could be asked for by name.
+    public async Task<(ResumeEntry? Entry, string? Title, string? Problem)> TransferableAsync(string id, CancellationToken cancellationToken = default)
+    {
+        if (ServeUnavailable is { } why) { return (null, null, why); }
+        var resolved = await ResolveAsync(cancellationToken);
+        var entry = resolved.Resumable.FirstOrDefault(e => string.Equals(e.Id, id, StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+        {
+            return (null, null, source.Get(id) is not null || Starting(id)
+                ? "that session is running on its machine; it can be brought over once it has ended there"
+                : "that session is not one its machine offers (it is not on its resume list)");
+        }
+        return (entry, resolved.Options.Resumable.FirstOrDefault(x => x.Id == entry.Id)?.Title ?? entry.Summary, null);
+    }
+
+    // Asked again just before a session is packed: one resumed at its machine meanwhile is live.
+    public bool Running(string id) => source.Get(id) is not null || Starting(id);
+
     // ---- session.launch ----
 
     public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
@@ -349,7 +391,7 @@ public sealed partial class LaunchService : ISessionLauncher
 
     // Everything a launch was settled on before it starts.
     sealed record Plan(Launcher Launcher, string Executable, string Directory, string? Workspace, WorkspaceConfig? Isolated, ResumeEntry? Resume,
-        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt);
+        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null);
 
     async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer)
     {
@@ -384,11 +426,30 @@ public sealed partial class LaunchService : ISessionLauncher
                 if (claim is null) { return Refused(missing!); }
             }
             var handed = new StrongBox<bool>();
-            try { return await StartAsync(plan, claim, key, handed); }
+            FetchedBundle? fetched = null;
+            try
+            {
+                // A session from another machine is fetched, and checked, before anything here is
+                // touched: a transfer that fails leaves no worktree and no session behind. Inside
+                // this try, so however it fails the attachments claimed above are released.
+                if (plan.Transfer is { } transfer)
+                {
+                    log($"launch {Short(key)}: bringing session {Short(transfer.Session)} from {Short(transfer.From)}");
+                    try { fetched = await options.Transfers!.FetchAsync(transfer, peer, Config.Transfer.MaxBytes, CancellationToken.None); }
+                    catch (TransferRefusedException e) { return Refused($"the session could not be brought from the other machine: {e.Message}"); }
+                    if (fetched.About.Agent != plan.Launcher.Kind)
+                    {
+                        var theirs = Launchers.Find(fetched.About.Launcher)?.Label ?? fetched.About.Agent.ToString();
+                        return Refused($"'{fetched.About.Title}' is a {theirs} session, so it resumes in {theirs}, not {plan.Launcher.Label}");
+                    }
+                }
+                return await StartAsync(plan, claim, key, handed, fetched);
+            }
             finally
             {
                 // Anything not handed to the agent stays held for another try.
                 if (claim is not null && !handed.Value) { attachments!.Release(claim); }
+                fetched?.Dispose();
             }
         }
         catch (Exception e)
@@ -407,7 +468,26 @@ public sealed partial class LaunchService : ISessionLauncher
         WorkspaceConfig? workspace = null;
         string directory;
         string where;
-        if (r.Resume is { } resumeId)
+        if (r.Transfer is { } transfer)
+        {
+            if (!Config.Transfer.Receive) { return (null, "bringing sessions from other machines is turned off here (launch.transfer.receive in the host's config)"); }
+            if (options.Transfers is null || options.TransferStaging is null) { return (null, "this host cannot bring sessions from other machines"); }
+            if (options.Transfers.Unavailable is { } unavailable) { return (null, unavailable); }
+            // The launcher it resumes in is named by the client, from the other machine's list,
+            // and checked against the bundle once it is here.
+            launcher = r.Agent is { } named ? Launchers.Find(named) : null;
+            if (launcher is null || !resolved.Executables.ContainsKey(launcher.Id))
+            {
+                return (null, r.Agent is null ? "name the agent that resumes it, as the other machine lists it" : $"{launcher?.Label ?? r.Agent} is not installed here, so that session can't be resumed here");
+            }
+            if (o.Workspaces.Count == 0) { return (null, "no workspace is approved on this machine yet; approve one at the machine (agent-bridge-host workspace add <folder>)"); }
+            workspace = Config.Workspaces.FirstOrDefault(w => w.Label == r.Workspace && o.Workspaces.Any(x => x.Label == w.Label));
+            if (workspace is null) { return (null, $"Unknown workspace '{Limits.KeepStart(r.Workspace, 64)}'; this machine has {string.Join(", ", o.Workspaces.Select(w => w.Label))}"); }
+            if (Folders.Physical(workspace.Path) is not { } physical) { return (null, "Launch refused: select a currently configured workspace."); }
+            directory = physical;
+            where = workspace.Label;
+        }
+        else if (r.Resume is { } resumeId)
         {
             resume = resolved.Resumable.FirstOrDefault(e => string.Equals(e.Id, resumeId, StringComparison.OrdinalIgnoreCase));
             if (resume is null)
@@ -489,10 +569,10 @@ public sealed partial class LaunchService : ISessionLauncher
         var allowAll = (r.Permissions ?? Config.Permissions) == LaunchProtocol.AllowAll;
 
         return (new Plan(launcher, resolved.Executables[launcher.Id], directory, workspace?.Label, workspace?.Isolate == true ? workspace : null, resume, where,
-            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt)), null);
+            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer), null);
     }
 
-    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed)
+    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched)
     {
         Pending follow;
         LaunchedWith launched;
@@ -549,13 +629,33 @@ public sealed partial class LaunchService : ISessionLauncher
                 prompt = line;
             }
 
-            var sessionId = plan.Resume?.Id ?? (plan.Launcher.ChoosesOwnSessionId ? "" : Guid.NewGuid().ToString());
-            var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
+            // A session from another machine resumes under an id of its own. The command line is
+            // checked before it is installed, so a refusal leaves no copy behind.
+            var newId = fetched is not null ? Guid.NewGuid().ToString() : null;
+            var sessionId = newId ?? plan.Resume?.Id ?? (plan.Launcher.ChoosesOwnSessionId ? "" : Guid.NewGuid().ToString());
+            var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null || newId is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
                 Config.Agent(plan.Launcher.Id).ExtraArgs, plan.Profile, prompt);
             var spec = new StartSpec(plan.Executable, args, directory, new Dictionary<string, string> { [Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched" });
             if (starter.CommandLine(spec, out var tooLong) is null)
             {
                 return Refused($"the prompt is too long to start {plan.Launcher.Label} with on this machine: {tooLong}; shorten it, or send the rest as a reply once it has started");
+            }
+
+            // It becomes one of this machine's sessions, working in the folder settled on here;
+            // then it resumes like any other.
+            if (fetched is not null && newId is not null)
+            {
+                try
+                {
+                    var unpack = Path.Combine(PrivateFolder.Ensure(options.TransferStaging!), $"unpack-{Guid.NewGuid():N}");
+                    await Task.Run(() => SessionBundles.Install(fetched.Zip, fetched.About.Agent, plan.Transfer!.Session, newId, directory, Homes, unpack, Config.Transfer.MaxSourceBytes, options.Time.GetUtcNow()));
+                }
+                catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
+                {
+                    return Refused($"the session from the other machine could not be installed here: {e.Message}; nothing was started");
+                }
+                log($"launch {Short(key)}: installed session {Short(plan.Transfer!.Session)} from {Short(fetched.From)} as {Short(newId)} ({TransferLimits.Mib(fetched.About.Size)}, {fetched.About.Files} file(s))");
+                plan = plan with { Resume = new ResumeEntry(newId, fetched.About.Agent, plan.Launcher.Id, fetched.About.Title, directory, options.Time.GetUtcNow()), Where = fetched.About.Title };
             }
 
             launched = new LaunchedWith
@@ -570,6 +670,7 @@ public sealed partial class LaunchService : ISessionLauncher
                 Effort = plan.Effort.Length > 0 ? plan.Effort : null,
                 Context = plan.Context.Length > 0 ? plan.Context : null,
                 Permissions = plan.AllowAll ? LaunchProtocol.AllowAll : LaunchProtocol.Ask,
+                Transfer = fetched is null ? null : new LaunchedTransfer { From = fetched.From, Session = plan.Transfer!.Session, Bytes = fetched.About.Size },
             };
             // And again last thing: preparing a worktree takes seconds, in which a hold can begin.
             // The reservation and any staged attachments are released below.

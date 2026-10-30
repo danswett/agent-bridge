@@ -93,7 +93,9 @@ replicas no stable addresses to forward to, so that step is the `standard` size 
    message, get "undeliverable" for an absent device, have an off-allowlist push refused,
    and leave presence; and (`--expect-blobs`) a 5 MiB file sealed, uploaded to the blob
    store, refused to another device of the account and to another account, fetched,
-   opened and checked by its recipient, deleted, and then not found.
+   opened and checked by its recipient, deleted, and then not found; then a 10 MiB file
+   streamed from disk as a host sends a session bundle ([host-transfer.md](host-transfer.md)),
+   fetched, checked and deleted the same way.
 4. **production** (`main` only, environment `production`): waits for approval by the
    required reviewer. `infra/roll-production.sh` refuses an app `infra/` has not adopted,
    writes the image it replaces to the job summary, rolls the digest, and the smoke test
@@ -358,7 +360,7 @@ West US 2 consumption prices; the subscription's monthly free grant is 180,000 v
 | Key Vault (2 vaults, secret reads on revision start and every 30 min) | < $0.05 | < $0.05 |
 | Requests (sign-in, health; probes are free) | $0 | $0 |
 | Egress (first 100 GB/month free) | $0 | ≈ $0 (about 25 GB/month at §5.9's 3-client rate) |
-| Blob store, 2 accounts: hot LRS, blobs kept 1–2 days, no fixed cost | < $0.05 | ≈ $0.10–2 (storage ≈ $0.06 for ≈ 3 GB held; writes ≈ $0.05; the rest is downloads to hosts, free inside the 100 GB with the relay's egress, ≈ $0.087/GB past it) |
+| Blob store, 2 accounts: hot LRS, blobs kept 1–2 days, no fixed cost; large attachments and session transfers, each deleted once fetched | < $0.05 | ≈ $0.10–2 (storage ≈ $0.06 for ≈ 3 GB held; writes ≈ $0.05; the rest is downloads to hosts, free inside the 100 GB with the relay's egress, ≈ $0.087/GB past it) |
 | **Total** | **≈ $19/month** | **≈ $19–22/month** |
 
 Levers when it matters: GHCR instead of ACR saves the $5 registry; a second region is

@@ -29,6 +29,7 @@ export class HostClient {
   #replyTimeoutMs;
   #stopTimeoutMs;
   #launchTimeoutMs;
+  #transferTimeoutMs;
   #listeners = new Map();
   #lastSeq = null;
   // While a subscription's snapshot is arriving: the ids received since subscribing.
@@ -42,7 +43,7 @@ export class HostClient {
   // than other requests before it counts as lost (and is resent with the same request). A
   // reply to a working session is confirmed only once the agent takes it, which a host
   // waits up to a minute for, so session.reply gets longer still.
-  constructor(transport, { store, timeoutMs = 15000, answerTimeoutMs = Math.max(timeoutMs, 30000), replyTimeoutMs = Math.max(answerTimeoutMs, 90000), stopTimeoutMs = Math.max(answerTimeoutMs, 45000), launchTimeoutMs = Math.max(answerTimeoutMs, 120000) } = {}) {
+  constructor(transport, { store, timeoutMs = 15000, answerTimeoutMs = Math.max(timeoutMs, 30000), replyTimeoutMs = Math.max(answerTimeoutMs, 90000), stopTimeoutMs = Math.max(answerTimeoutMs, 45000), launchTimeoutMs = Math.max(answerTimeoutMs, 120000), transferTimeoutMs = Math.max(launchTimeoutMs, 12 * 60000) } = {}) {
     this.#transport = transport;
     this.store = store;
     this.#timeoutMs = timeoutMs;
@@ -50,6 +51,7 @@ export class HostClient {
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#stopTimeoutMs = stopTimeoutMs;
     this.#launchTimeoutMs = launchTimeoutMs;
+    this.#transferTimeoutMs = transferTimeoutMs;
     transport.onmessage = (m) => this.#receive(m);
     transport.onclose = (e) => this.#closed(e);
   }
@@ -144,7 +146,10 @@ export class HostClient {
   // Launches or resumes a session: data is session.launch's settings with a request. A host
   // answers once the session has registered, which it waits up to a minute for, after making a
   // worktree if the workspace is isolated, so this waits longer than anything else.
-  async launch(data, { timeoutMs = this.#launchTimeoutMs } = {}) {
+  // A launch that brings a session from another machine first waits for it to be packed, sent
+  // and unpacked, which the machine allows ten minutes for: the launch's own wait would give up,
+  // and resend, long before.
+  async launch(data, { timeoutMs = data?.transfer ? this.#transferTimeoutMs : this.#launchTimeoutMs } = {}) {
     return readLaunchResult(await this.request(LAUNCH.launch, data, { timeoutMs }));
   }
 

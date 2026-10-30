@@ -1,7 +1,8 @@
 # How the host launches sessions
 
 `session.launch` and `launch.options` ([contract](protocol/v1-launch.md)) start or resume an
-agent session from another device, the way agent-ha-bridge's launch card does. The settings
+agent session from another device, the way agent-ha-bridge's launch card does. A session from
+another machine is a launch too: [host-transfer.md](host-transfer.md). The settings
 they draw on are the profile's `config.json` ([host-config.md](host-config.md)). The code is
 `src/AgentBridge.Host.Delivery/Launch/`.
 

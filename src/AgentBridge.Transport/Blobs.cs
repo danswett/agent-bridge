@@ -286,6 +286,49 @@ public static class BlobTransfer
         return new Sent(slot.Blob, key, SHA256.HashData(file), file.Length);
     }
 
+    // The same for a file on disk, sealed as it is uploaded, so a 200 MB session transfer is
+    // never held in memory, nor written twice.
+    public static async Task<Sent> SendFileAsync(RelayClient relay, HttpClient http, string to, string path, CancellationToken ct = default)
+    {
+        await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var size = file.Length;
+        var sha256 = await SHA256.HashDataAsync(file, ct);
+        file.Position = 0;
+        var slot = await relay.BlobPutAsync(to, BlobFormat.StoredSize(size), ct);
+        var url = BlobHttp.Resolve(relay.Relay, slot.Url) ?? throw new BlobRefusedException("bad-url");
+        var key = BlobFormat.NewKey();
+        var id = BlobFormat.IdOf(slot.Blob) ?? throw new BlobRefusedException("bad-ticket");
+        var pipe = new System.IO.Pipelines.Pipe();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var sealing = Task.Run(async () =>
+        {
+            try
+            {
+                await BlobFormat.SealAsync(file, size, key, id, pipe.Writer.AsStream(leaveOpen: true), stop.Token);
+                await pipe.Writer.CompleteAsync();
+            }
+            catch (Exception e)
+            {
+                await pipe.Writer.CompleteAsync(e);
+                throw;
+            }
+        }, CancellationToken.None);
+        try
+        {
+            await using var content = pipe.Reader.AsStream();
+            await BlobHttp.UploadAsync(http, url, content, BlobFormat.StoredSize(size), ct);
+        }
+        catch
+        {
+            // The upload gave up: the sealer is told, and waited for, before the file closes.
+            stop.Cancel();
+            try { await sealing; } catch (Exception) { }
+            throw;
+        }
+        await sealing;
+        return new Sent(slot.Blob, key, sha256, size);
+    }
+
     // Writes the file to output and returns its SHA-256; the caller compares it with the one
     // the sender gave, and deletes the blob once satisfied.
     public static async Task<byte[]> ReceiveAsync(RelayClient relay, HttpClient http, string blob, byte[] key, long size, Stream output, Action<long>? progress = null, CancellationToken ct = default)

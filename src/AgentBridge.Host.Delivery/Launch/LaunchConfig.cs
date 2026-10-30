@@ -30,6 +30,8 @@ public sealed record LaunchConfig
     public string? DefaultProfile { get; init; }
     public int ResumeCount { get; init; } = 12;
     public IReadOnlyDictionary<string, AgentConfig> Agents { get; init; } = new Dictionary<string, AgentConfig>();
+    // Moving ended sessions between this account's machines (docs/host-transfer.md).
+    public TransferConfig Transfer { get; init; } = TransferConfig.Default;
 
     public AgentConfig Agent(string id) => Agents.TryGetValue(id, out var a) ? a : AgentConfig.Default;
 
@@ -68,6 +70,7 @@ public sealed record LaunchConfig
             if (Get(l, "profiles") is { } profiles) { config = config with { Profiles = Strings(profiles, "launch.profiles") }; }
             if (Get(l, "defaultProfile") is { } dp) { config = config with { DefaultProfile = Text(dp, "launch.defaultProfile") }; }
             if (Get(l, "resumeCount") is { } rc) { config = config with { ResumeCount = (int)Number(rc, "launch.resumeCount", 0, LaunchProtocol.MaxResumable, whole: true) }; }
+            if (Get(l, "transfer") is { } tr) { config = config with { Transfer = ReadTransfer(tr) }; }
             if (Get(l, "agents") is { } agents)
             {
                 if (agents.ValueKind != JsonValueKind.Object) { throw new FormatException("launch.agents is not an object"); }
@@ -126,6 +129,24 @@ public sealed record LaunchConfig
         return list;
     }
 
+    static TransferConfig ReadTransfer(JsonElement t)
+    {
+        if (t.ValueKind != JsonValueKind.Object) { throw new FormatException("launch.transfer is not an object"); }
+        var config = TransferConfig.Default;
+        if (Get(t, "serve") is { } serve) { config = config with { Serve = Bool(serve, "launch.transfer.serve") }; }
+        if (Get(t, "receive") is { } receive) { config = config with { Receive = Bool(receive, "launch.transfer.receive") }; }
+        if (Get(t, "maxBytes") is { } max)
+        {
+            config = config with { MaxBytes = (long)Number(max, "launch.transfer.maxBytes", 1024 * 1024, TransferProtocol.MostBytes, whole: true) };
+        }
+        config = config with { MaxSourceBytes = config.MaxBytes * 10 };
+        if (Get(t, "maxSourceBytes") is { } source)
+        {
+            config = config with { MaxSourceBytes = (long)Number(source, "launch.transfer.maxSourceBytes", config.MaxBytes, 20L * 1024 * 1024 * 1024, whole: true) };
+        }
+        return config;
+    }
+
     static AgentConfig ReadAgent(JsonElement a, string at)
     {
         if (a.ValueKind != JsonValueKind.Object) { throw new FormatException($"{at} is not an object"); }
@@ -182,6 +203,21 @@ public sealed record LaunchConfig
         }
         return list;
     }
+}
+
+// launch.transfer: whether this machine hands its ended sessions to the account's other
+// machines (serve) and brings theirs in (receive), and how large a bundle may be: MaxBytes on
+// the wire, compressed (agent-ha-bridge's newSession.transferMaxBytes, 25 MB, at most 200 MB),
+// and MaxSourceBytes read from disk to make one (newSession.transferMaxSourceBytes, ten times
+// that), which also bounds what a bundle may unpack to here.
+public sealed record TransferConfig
+{
+    public static readonly TransferConfig Default = new();
+
+    public bool Serve { get; init; } = true;
+    public bool Receive { get; init; } = true;
+    public long MaxBytes { get; init; } = TransferProtocol.DefaultMaxBytes;
+    public long MaxSourceBytes { get; init; } = TransferProtocol.DefaultMaxBytes * 10;
 }
 
 // One approved folder. Path is absolute, as written (with ~ expanded); Isolate starts each new

@@ -6,6 +6,12 @@
 // request until there is an outcome; once a session has started the panel jumps to its card.
 //
 // Unlike the card, the prompt has no 255-character limit: it goes whole, up to 16 KiB.
+//
+// Where the machine takes sessions from the account's other machines (sessions.transfer), Resume
+// also lists the sessions they offer (sessions.transfer.serve), by machine. Picking one brings
+// its transcript here as a new session, in the workspace picked here, with a command this device
+// signs for the machine it is on (../transfer.js, docs/protocol/v1-transfer.md); the original
+// stays where it was.
 import { h } from './dom.js';
 import { ASK, ALLOW_ALL, MAX_PROMPT, checkLaunch } from '../launch.js';
 
@@ -20,7 +26,9 @@ export function describeLaunch(entry, { machineName } = {}) {
   const on = machineName ? ` on ${machineName}` : '';
   switch (entry.state) {
     case 'sending':
-      return { text: `Starting the session${on}… This waits for it to start, up to a minute.`, tone: 'progress' };
+      return entry.answer?.transfer
+        ? { text: `Bringing the session over and starting it${on}… A long session can take a few minutes.`, tone: 'progress' }
+        : { text: `Starting the session${on}… This waits for it to start, up to a minute.`, tone: 'progress' };
     case 'waiting':
       return { text: `Waiting for the connection to the machine${on}. The launch goes as soon as it is back.`, tone: 'progress' };
     case 'failed':
@@ -32,7 +40,7 @@ export function describeLaunch(entry, { machineName } = {}) {
   const how = d.launched?.worktree ? ' in a new worktree' : '';
   switch (entry.outcome) {
     case 'started':
-      return { text: `Session started${how}.`, tone: 'ok' };
+      return { text: d.launched?.transfer ? `Session brought over and started${how}. The original is still on its machine.` : `Session started${how}.`, tone: 'ok' };
     case 'unconfirmed':
       return { text: `Launched${how}, but not confirmed${entry.reason ? `: ${sentence(entry.reason)}` : '. Check at the machine.'}`, tone: 'warn' };
     case 'busy':
@@ -55,11 +63,17 @@ function tuning(values, preferred) {
 export class LaunchPanel {
   #target = null;
   #options = null;
+  // Sessions the account's other machines offer: [{ hostId, machineName, key, resumable }].
+  #remote = [];
+  #asking = null;
   #loading = null;
   #error = null;
   #unwatch = null;
   #jumped = null;
   #open = false;
+  #signing = false;
+  // Counts changes of the machine picked, which presence updates for the same one do not.
+  #selection = 0;
 
   // root: the #launch section. service: a LaunchService. jump(sessionId): shows a session's
   // card, true once it is on screen.
@@ -123,15 +137,20 @@ export class LaunchPanel {
     if (open && this.#target && !this.#loading) { this.refresh(); }
   }
 
-  // The machine shown, or null when it can't launch: { hostId, machineName, load } where
-  // load() is launch.options from it.
+  // The machine shown, or null when it can't launch: { hostId, machineName, load, transfers }
+  // where load() is launch.options from it, and transfers, when it takes sessions from the
+  // account's other machines, is { remotes(), sign(remote, session) }: what they offer, and a
+  // signed command for one (../transfer.js).
   setTarget(target) {
     const same = target && this.#target && target.hostId === this.#target.hostId;
     if (same) { this.#target = target; this.#title(); this.#draw(); return; }
     this.#unwatch?.();
     this.#unwatch = null;
+    this.#selection++;
     this.#target = target;
     this.#options = null;
+    this.#remote = [];
+    this.#asking = null;
     this.#error = null;
     this.#loading = null;
     // Another machine's choices: nothing picked on the last one carries over but the prompt.
@@ -154,6 +173,17 @@ export class LaunchPanel {
     const target = this.#target;
     if (!target) { return Promise.resolve(); }
     this.#error = null;
+    // The other machines' sessions are added when they arrive: asking each takes a handshake,
+    // and one that is slow to answer must not hold up this machine's own choices.
+    if (target.transfers) {
+      const asking = this.#asking = target.transfers.remotes().catch(() => []).then((remote) => {
+        // Only a newer ask, or another machine picked, makes this one stale: a presence update
+        // hands in a new target object for the same machine.
+        if (this.#asking !== asking) { return; }
+        this.#remote = remote;
+        this.#draw();
+      });
+    }
     const loading = this.#loading = target.load().then((o) => {
       if (this.#loading !== loading) { return; }
       this.#options = o;
@@ -170,8 +200,15 @@ export class LaunchPanel {
   #agent(id) { return this.#options?.agents.find((a) => a.id === id) ?? null; }
 
   #resumable() {
-    const id = this.els.resume.value;
-    return id ? this.#options?.resumable.find((r) => r.id === id) ?? null : null;
+    const value = this.els.resume.value;
+    if (!value) { return null; }
+    if (value.startsWith('@')) {
+      const [hostId, id] = value.slice(1).split('/');
+      const machine = this.#remote.find((m) => m.hostId === hostId);
+      const r = machine?.resumable.find((x) => x.id === id);
+      return r ? { ...r, remote: machine } : null;
+    }
+    return this.#options?.resumable.find((r) => r.id === value) ?? null;
   }
 
   // Replaces a select's options, keeping what was picked if it is still there and still about
@@ -200,7 +237,8 @@ export class LaunchPanel {
       return;
     }
 
-    LaunchPanel.#fill(e.resume, [['', 'New session'], ...o.resumable.map((r) => [r.id, `${r.title}${r.workspace ? ` · ${r.workspace}` : ''}`])], '');
+    const away = this.#remote.flatMap((m) => m.resumable.map((r) => [`@${m.hostId}/${r.id}`, `${r.title} · on ${m.machineName}`]));
+    LaunchPanel.#fill(e.resume, [['', 'New session'], ...o.resumable.map((r) => [r.id, `${r.title}${r.workspace ? ` · ${r.workspace}` : ''}`]), ...away], '');
     const resume = this.#resumable();
     const agents = resume ? o.agents.filter((a) => a.kind === resume.agent) : o.agents;
     LaunchPanel.#fill(e.agent, agents.map((a) => [a.id, a.label]), resume?.launcher ?? o.defaults.agent);
@@ -214,22 +252,25 @@ export class LaunchPanel {
     }
     if (e.permissions.dataset.scope !== 'set') { e.permissions.value = o.defaults.permissions; e.permissions.dataset.scope = 'set'; }
 
-    e.fields.resume.hidden = o.resumable.length === 0;
+    e.fields.resume.hidden = o.resumable.length === 0 && away.length === 0;
     e.fields.agent.hidden = false;
-    e.fields.workspace.hidden = !!resume || o.workspaces.length === 0;
+    // A session from another machine has no folder here: it opens in the workspace picked.
+    e.fields.workspace.hidden = (!!resume && !resume.remote) || o.workspaces.length === 0;
     e.fields.profile.hidden = !agent?.profiles;
     e.fields.permissions.hidden = false;
     e.fields.prompt.hidden = false;
     e.prompt.placeholder = agent?.needsPrompt && !resume ? `${agent.label} starts on a first message: what should it do?` : 'What should the session do first? (optional)';
 
     const noAgent = o.agents.length === 0;
-    const noWorkspace = !resume && o.workspaces.length === 0;
+    const noWorkspace = (!resume || !!resume.remote) && o.workspaces.length === 0;
     e.note.className = `note launch-note${noAgent || noWorkspace ? ' warn' : ''}`;
     e.note.textContent = noAgent
       ? `No agent is installed on ${name}: install Copilot, Claude or Codex there.`
       : noWorkspace
         ? `No folder on ${name} is approved for launching yet. At the machine, run: ${APPROVE_HINT}`
-        : resume ? 'A resumed session reopens in its own folder.' : '';
+        : resume?.remote
+          ? `This copies the session's whole conversation, with its checkpoints and files, from ${resume.remote.machineName} to ${name}, where it opens as a new session in the workspace picked. It stays on ${resume.remote.machineName} as it was.`
+          : resume ? 'A resumed session reopens in its own folder.' : '';
     e.note.hidden = !e.note.textContent;
     e.busy.textContent = o.busy ? `${name} is busy: ${sentence(o.busy)}` : '';
     e.busy.hidden = !o.busy;
@@ -251,7 +292,10 @@ export class LaunchPanel {
     const resume = this.#resumable();
     const agent = this.#agent(e.agent.value);
     const launch = { agent: e.agent.value, permissions: e.permissions.value };
-    if (resume) { launch.resume = resume.id; } else if (e.workspace.value) { launch.workspace = e.workspace.value; }
+    if (resume?.remote) {
+      if (e.workspace.value) { launch.workspace = e.workspace.value; }
+      launch.transfer = { from: resume.remote.hostId, session: resume.id };
+    } else if (resume) { launch.resume = resume.id; } else if (e.workspace.value) { launch.workspace = e.workspace.value; }
     if (agent?.profiles) { launch.profile = e.profile.value; }
     for (const axis of ['model', 'effort', 'context']) {
       if (!e.fields[axis].hidden) { launch[axis] = e[axis].value; }
@@ -262,25 +306,44 @@ export class LaunchPanel {
 
   #pending(entry) { return !!entry && (entry.state === 'sending' || entry.state === 'waiting'); }
 
-  #press() {
+  async #press() {
     const target = this.#target;
     if (!target || !this.#options) { return; }
-    if (this.#pending(this.service.get(target.hostId))) { return; }
+    if (this.#pending(this.service.get(target.hostId)) || this.#signing) { return; }
     const launch = this.settings();
     const agent = this.#agent(launch.agent);
     const problem = (!launch.agent ? 'no agent is installed on this machine' : null)
       ?? (!launch.resume && !launch.workspace
         ? this.#options.workspaces.length ? 'pick a workspace' : `no workspace is approved on this machine yet; approve one at the machine (${APPROVE_HINT})`
         : null)
+      ?? (launch.transfer && !target.transfers ? `this machine does not take sessions from other machines` : null)
       ?? checkLaunch(launch)
-      ?? (agent?.needsPrompt && !launch.resume && !launch.prompt ? `${agent.label} starts its session only on a first message; give it a prompt` : null);
+      ?? (agent?.needsPrompt && !launch.resume && !launch.transfer && !launch.prompt ? `${agent.label} starts its session only on a first message; give it a prompt` : null);
     if (problem) {
       this.#local({ text: `Not launched: ${sentence(problem)}`, tone: 'bad' });
       return;
     }
+    if (launch.transfer) {
+      // Signed once, for this press: a resend carries the same command, which the machine the
+      // session is on acts on once.
+      const remote = this.#resumable()?.remote;
+      const selection = this.#selection;
+      this.#signing = true;
+      this.els.launch.disabled = true;
+      try { launch.transfer.command = await target.transfers.sign(remote, launch.transfer.session); }
+      catch (e) {
+        this.#local({ text: `Not launched: couldn't sign the request for ${remote?.machineName ?? 'the other machine'}: ${sentence(e?.message ?? String(e))}`, tone: 'bad' });
+        return;
+      } finally {
+        this.#signing = false;
+        this.els.launch.disabled = false;
+      }
+      if (this.#selection !== selection) { return; }
+    }
     this.#jumped = null;
     this.service.submit({ hostId: target.hostId, launch });
   }
+
 
   #resend() { if (this.#target) { this.service.resend(this.#target.hostId); } }
 

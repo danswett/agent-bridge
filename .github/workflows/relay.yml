@@ -121,7 +121,8 @@ jobs:
         run: |
           # Staging's own token key (never production's): the smoke test mints a token for a
           # throwaway account and connects two devices with it. Staging has its blob store
-          # (infra/modules/blob-store.bicep), so a multi-MB blob goes up and down through it too.
+          # (infra/modules/blob-store.bicep), so a multi-MB blob goes up and down through it too,
+          # once from memory and once streamed from a file as a session transfer sends one.
           key=$(az keyvault secret show --vault-name "$STAGING_VAULT" -n token-key --query value -o tsv)
           echo "::add-mask::$key"
           RELAY_SMOKE_TOKEN_KEY="$key" dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- \
