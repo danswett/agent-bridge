@@ -803,7 +803,9 @@ public sealed partial class LaunchService : ISessionLauncher
                     try { await source.RefreshAsync(); } catch (Exception) { }
                     if (Registered(p) is not { } late)
                     {
-                        log($"launch {Short(p.Key)}: {label} (pid {p.Started.ProcessId}) exited before its session registered");
+                        log(p.RegisteredAt is null
+                            ? $"launch {Short(p.Key)}: {label} (pid {p.Started.ProcessId}) exited before its session registered"
+                            : $"launch {Short(p.Key)}: {label} in {p.Where} closed before its window was seen ready");
                         Decide(p, new LaunchResult(LaunchOutcome.Failed, $"{label} in {p.Where} closed before it started; start it at the machine to see why") { Launched = p.Launched });
                         return;
                     }
