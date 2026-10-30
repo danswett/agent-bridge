@@ -9,6 +9,11 @@ name: HA contract drift
 # Read-only against agent-ha-bridge: a shallow checkout with no credentials kept, read by the
 # exporter's syntax-tree loader and `git rev-parse`/`status`. Nothing is ever pushed anywhere,
 # and the committed fixtures are never touched (everything is recorded under RUNNER_TEMP).
+#
+# Two jobs, because recording runs agent-ha-bridge's functions, and loading them from the syntax
+# tree does not sandbox their bodies. `record` therefore holds no credential at all (contents:
+# read, no token persisted by either checkout), and `report`, the only job that may write an
+# issue, runs only this repository's scripts on what `record` wrote, as data.
 
 on:
   schedule:
@@ -27,18 +32,26 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
+# Every run that may write the issue shares one group, so two can never both find no issue open
+# and both open one. Pull requests, which never write it, queue only behind themselves.
 concurrency:
-  group: ha-contract-drift-${{ github.event_name }}-${{ github.ref }}
+  group: ${{ github.event_name == 'pull_request' && format('ha-contract-drift-pr-{0}', github.ref) || 'ha-contract-drift' }}
   cancel-in-progress: false
 
 jobs:
-  drift:
+  record:
     # Windows, where the exporter is developed and run by hand.
     runs-on: windows-latest
+    permissions:
+      contents: read
+    outputs:
+      code: ${{ steps.drift.outputs.code }}
+      ref: ${{ steps.ref.outputs.ref }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Which agent-ha-bridge commit
         id: ref
         shell: pwsh
@@ -71,20 +84,36 @@ jobs:
           name: ha-contract-drift
           path: ${{ runner.temp }}/ha-contract-drift
           if-no-files-found: ignore
-      - name: Open, update or close the parity issue
-        if: github.event_name != 'pull_request'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >
-          pwsh -NoProfile -File tools/ha-contract/Publish-HaContractDrift.ps1
-          -Code ${{ steps.drift.outputs.code }}
-          -OutDir "$env:RUNNER_TEMP/ha-contract-drift"
-          -Repository "${{ github.repository }}"
-          -RunUrl "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
       - name: Fail when the contract moved
         if: steps.drift.outputs.code != '0'
         shell: pwsh
         run: |
           Write-Host "::error::agent-ha-bridge ${{ steps.ref.outputs.ref }} does not match the fixtures (drift check exit ${{ steps.drift.outputs.code }}); see the run summary$(if ('${{ github.event_name }}' -ne 'pull_request') { ' and the parity issue' })."
           exit 1
+
+  report:
+    needs: record
+    if: always() && github.event_name != 'pull_request' && needs.record.outputs.code != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ha-contract-drift
+          path: ${{ runner.temp }}/ha-contract-drift
+      - name: Open, update or close the parity issue
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRIFT_CODE: ${{ needs.record.outputs.code }}
+        run: >
+          ./tools/ha-contract/Publish-HaContractDrift.ps1
+          -Code $env:DRIFT_CODE
+          -OutDir "$env:RUNNER_TEMP/ha-contract-drift"
+          -Repository "${{ github.repository }}"
+          -RunUrl "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

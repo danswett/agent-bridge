@@ -101,7 +101,11 @@ guard or the fixtures it runs against the pinned commit instead, which proves th
 fixtures are exactly what the exporter records there.
 
 It is read-only against agent-ha-bridge: a shallow checkout with no credentials kept, read by
-the exporter's syntax-tree loader and `git rev-parse`/`status`.
+the exporter's syntax-tree loader and `git rev-parse`/`status`. Recording runs
+agent-ha-bridge's functions, which loading them from the syntax tree does not sandbox, so it is
+a job holding no credential at all; a second job, the only one allowed to write the issue, runs
+only this repository's script on what the first wrote, as data. Every run that may write the
+issue shares one concurrency group, so two can never each open one.
 
 To re-pin, as its own pull request: regenerate from the new commit
 (`pwsh -NoProfile -File tools/ha-contract/Export-HaContract.ps1 -Source <checkout>`), make the

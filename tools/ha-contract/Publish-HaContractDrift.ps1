@@ -8,12 +8,16 @@
     open one with a note that the contract matches again. There is only ever one: it is found by
     its exact title among open `parity` issues.
 
+    What it reads from -OutDir was written by a job that ran agent-ha-bridge's code, so it is
+    treated as data only: the commit must be a commit id, the texts are length-capped, and
+    nothing of it is ever run or passed through a shell.
+
     -DryRun prints what would be done instead of doing it.
 #>
-#Requires -Version 7.5
+#Requires -Version 7.2
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][int]$Code,
+    [Parameter(Mandatory)][ValidateSet(0, 1, 2)][int]$Code,
     [Parameter(Mandatory)][string]$OutDir,
     [Parameter(Mandatory)][string]$Repository,
     [string]$RunUrl = '',
@@ -29,7 +33,9 @@ $label = 'parity'
 $maxDiff = 50000
 
 $upstream = (Get-Content -LiteralPath (Join-Path $OutDir 'upstream.txt') -Raw).Trim()
+if ($upstream -cnotmatch '^[0-9a-f]{40}$') { throw "upstream.txt does not hold a commit id" }
 $summary = Get-Content -LiteralPath (Join-Path $OutDir 'summary.md') -Raw
+if ($summary.Length -gt 8000) { $summary = $summary.Substring(0, 8000) + "`n`n(cut; the whole of it is in the run's artifact)" }
 $marker = "<!-- ha-contract-drift upstream: $upstream -->"
 
 function Invoke-Gh {
