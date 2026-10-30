@@ -207,7 +207,10 @@ public sealed class HostManager
         await WaitAsync(running: true, StartTimeout, ct);
     }
 
-    // Asks the host to stop and waits for its pipe to go; a host that will not go is ended.
+    // Asks the host to stop and waits for its pipe to go; a host that will not go is ended. One
+    // that answers no is not: it is running, and refused this process (one inside an agent
+    // session, design §6.3 invariant 13), so ending it anyway would be the very thing it refused.
+    // The 2026-10-29 review found an agent could run this through the app's uninstall hook.
     public async Task StopAsync(CancellationToken ct = default)
     {
         int? pid = null;
@@ -216,7 +219,8 @@ public sealed class HostManager
             await using var ch = await connect(ct);
             await ch.HelloAsync(ct);
             pid = (await ch.CallAsync<HostStatus>(HostOps.Status, ct: ct)).ProcessId;
-            await ch.CallAsync(HostOps.Stop, ct: ct);
+            try { await ch.CallAsync(HostOps.Stop, ct: ct); }
+            catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
         }
         catch (Exception e) when (e is IOException or HostErrorException or TimeoutException) { }
         try { await WaitAsync(running: false, StopTimeout, ct); }
@@ -230,6 +234,7 @@ public sealed class HostManager
         while (pid is { } p && processes.IsRunning(p) && DateTime.UtcNow < deadline) { await Task.Delay(Poll, ct); }
     }
 
+    // Restarting is stopping first, so a refused stop starts nothing either.
     public async Task RestartAsync(CancellationToken ct = default)
     {
         await StopAsync(ct);
@@ -336,3 +341,6 @@ public sealed class WindowsLogonTasks : ILogonTasks
         if (o is not null && Marshal.IsComObject(o)) { Marshal.ReleaseComObject(o); }
     }
 }
+
+// The host answered a stop or restart with no, and is still running.
+public sealed class HostRefusedException(string reason) : InvalidOperationException(reason);

@@ -88,9 +88,19 @@ static class Lifecycle
 
     static HostManager Manager() => App.ManagerFor("default");
 
+    // Inside an agent session the hooks do nothing to the host (LifecycleGuard), and say so in
+    // the app's log.
+    static bool Refused(string what)
+    {
+        if (LifecycleGuard.Refusal() is not { } why) { return false; }
+        AppLog.Write($"{what}: left the host alone: this is running {why}. Installing, updating and uninstalling are for a person.");
+        return true;
+    }
+
     // In the old version, before its folder is replaced: the host runs from that folder.
     public static void BeforeUpdate()
     {
+        if (Refused("update")) { return; }
         try { Manager().StopAsync().Wait(TimeSpan.FromSeconds(25)); }
         catch (Exception e) { AppLog.Write($"update: the host did not stop: {e.Message}"); }
     }
@@ -99,6 +109,7 @@ static class Lifecycle
     // for an update applied without a restart, so the host is not left stopped.
     public static void AfterUpdate()
     {
+        if (Refused("update")) { return; }
         try
         {
             var manager = Manager();
@@ -112,6 +123,7 @@ static class Lifecycle
     // like any app's data, so reinstalling picks up where it was; docs/app-windows.md.
     public static void BeforeUninstall()
     {
+        if (Refused("uninstall")) { return; }
         var manager = Manager();
         try { manager.StopAsync().Wait(TimeSpan.FromSeconds(25)); } catch (Exception e) { AppLog.Write($"uninstall: the host did not stop: {e.Message}"); }
         try { manager.SetStartAtSignIn(false); } catch (Exception e) { AppLog.Write($"uninstall: the logon task stays: {e.Message}"); }

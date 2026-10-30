@@ -29,7 +29,7 @@ public static class LocalApi
     {
         if (op.StartsWith("host.", StringComparison.Ordinal))
         {
-            if (!Reads.Contains(op) && callers.Classify(channel) is { Kind: not CallerKind.App } caller)
+            if (!Reads.Contains(op) && callers.Classify(channel, fresh: true) is { Kind: not CallerKind.App } caller)
             {
                 throw Refuse(op, caller, caller.Kind == CallerKind.Agent
                     ? "stopping, restarting, signing in and changing settings are for the person, from the Agent Bridge app"

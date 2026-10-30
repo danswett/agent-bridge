@@ -50,8 +50,10 @@ phone.
   ancestors. One that is, or runs inside, an agent session (a live session's process, one the
   host launched, or any agent CLI) may read sessions and nothing else; the app is
   `AgentBridge.exe` (the app) beside the host, started from anywhere but an agent session. Anything
-  else of the user's keeps the sessions ops but not management. A safety rail against an
-  agent restarting its own host, not a security boundary
+  else of the user's keeps the sessions ops but not management. A host that refuses the app's
+  stop or restart is left running, never ended, and the install, update and uninstall hooks do
+  nothing to the host from inside an agent session. A safety rail against an agent restarting
+  its own host, not a security boundary
   ([local-pipe.md](protocol/local-pipe.md#who-may-manage-the-host)).
 
 ### Starting the host at logon: a scheduled task

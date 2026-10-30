@@ -14,13 +14,12 @@ public enum CallerKind { App, Agent, Other }
 // person and the log ("inside the copilot session 1a2b3c4d (pid 4120)").
 public sealed record Caller(CallerKind Kind, string Description);
 
-// A process the host knows to be an agent's: a live session's own process, one it launched, or
-// any agent CLI running now. Which says what it is.
-public sealed record KnownProcess(int Id, DateTimeOffset? StartedAt, string Which);
-
 public interface ICallerGuard
 {
-    Caller Classify(IProtocolChannel channel);
+    // fresh asks again now; otherwise a classification of this connection a few seconds old
+    // will do. Managing the host always asks afresh; the session ops, of which an attachment
+    // upload sends thousands in a row, do not.
+    Caller Classify(IProtocolChannel channel, bool fresh = false);
 }
 
 // Design §6.3 invariant 13: no session launched by the bridge, nor any agent process, may stop
@@ -30,69 +29,65 @@ public interface ICallerGuard
 //
 // A connection is an agent's when its process, or any process it descends from, is one the host
 // knows to be an agent's (KnownProcess, matched by id and start time so a reused id does not
-// count) or is an agent CLI by name. It is the app when, failing that, its own executable is
-// AppExecutable beside this host, which is how the app ships (docs/app-windows.md).
-// Anything else is Other: a person's script, say, which may still read and answer as before, but
-// not manage the host.
+// count) or is an agent CLI by name (AgentAncestry). It is the app when, failing that, its
+// ancestry was read in full and its own executable is AppExecutable beside this host, which is
+// how the app ships (docs/app-windows.md). Anything else is Other: a person's script, say, which
+// may still read and answer as before, but not manage the host. So is one whose ancestry could
+// not be read in full: an agent may sit above what was read (fails closed).
 //
 // This is a safety rail, not a security boundary. Every process here runs as the same user, who
 // can read the device key and config.json, write config.json directly, end the host with Task
 // Manager, copy any executable to the app's name, or start one detached from the agent so that it
 // descends from nothing. What it stops is an agent following an instruction, or making a
 // mistake, through the obvious door: the agent-ha-bridge incident, not an attacker.
-public sealed class CallerGuard(Func<IReadOnlyList<KnownProcess>> known, string? appImage, IReadOnlyList<string>? agentNames = null) : ICallerGuard
+public sealed class CallerGuard(Func<IReadOnlyList<KnownProcess>> known, string? appImage, IReadOnlyList<string>? agentNames = null, TimeProvider? time = null,
+    Func<IProtocolChannel, ProcessAncestry>? ancestryOf = null) : ICallerGuard
 {
-    // Executables that are an agent CLI or its launcher whatever runs them. Node and Bun are
-    // recognised by the script they run, among the known processes.
-    public static readonly IReadOnlyList<string> AgentNames = ["copilot", "claude", "codex", "agency"];
-
     // The Windows app's executable as it ships: AgentBridge.App.csproj's AssemblyName, which
     // build/pack-app.ps1 packs beside the host. Not the project's name.
     public const string AppExecutable = "AgentBridge.exe";
 
-    readonly IReadOnlyList<string> names = agentNames ?? AgentNames;
+    // How long a connection's classification stands for the session ops. Each one lists every
+    // agent process (nine scans), and a 100 MiB attachment is some nine thousand chunks.
+    public static readonly TimeSpan MaxAge = TimeSpan.FromSeconds(5);
 
-    public Caller Classify(IProtocolChannel channel) => Classify((channel as LocalChannel)?.Peer?.Chain ?? []);
+    readonly IReadOnlyList<string> names = agentNames ?? AgentAncestry.AgentNames;
+    readonly TimeProvider clock = time ?? TimeProvider.System;
+    readonly System.Runtime.CompilerServices.ConditionalWeakTable<IProtocolChannel, Seen> seen = new();
 
-    public Caller Classify(IReadOnlyList<PeerProcess> chain)
+    sealed record Seen(Caller Caller, DateTimeOffset At);
+
+    public Caller Classify(IProtocolChannel channel, bool fresh = false)
     {
+        var now = clock.GetUtcNow();
+        if (!fresh && seen.TryGetValue(channel, out var last) && now - last.At < MaxAge) { return last.Caller; }
+        var caller = Classify(ancestryOf?.Invoke(channel) ?? (channel as LocalChannel)?.Peer?.Ancestry ?? ProcessAncestry.Unknown);
+        seen.AddOrUpdate(channel, new Seen(caller, now));
+        return caller;
+    }
+
+    public Caller Classify(IReadOnlyList<PeerProcess> chain) => Classify(new ProcessAncestry(chain, chain.Count > 0));
+
+    public Caller Classify(ProcessAncestry ancestry)
+    {
+        var chain = ancestry.Processes;
         // Not knowing who it is counts against it, as for PeerPolicy: it could be an agent.
         if (chain.Count == 0) { return new Caller(CallerKind.Other, "a process the host could not trace"); }
-        if (FindAgent(chain, known(), names) is { } found) { return Inside(chain, found.At, found.Which); }
+        if (AgentAncestry.Find(chain, known(), names) is { } found) { return Inside(chain, found.At, found.Which); }
         var self = chain[0];
+        if (!ancestry.Complete)
+        {
+            return new Caller(CallerKind.Other, $"{(AgentAncestry.FileName(self.Image) is { Length: > 0 } partial ? partial : "a process")} (pid {self.Id}), whose ancestry could not be read in full");
+        }
         if (appImage is not null && self.Image is { } image && string.Equals(Path.GetFullPath(image), Path.GetFullPath(appImage), StringComparison.OrdinalIgnoreCase))
         {
             return new Caller(CallerKind.App, "the Agent Bridge app");
         }
-        return new Caller(CallerKind.Other, $"{(FileName(self.Image) is { Length: > 0 } file ? file : "a process")} (pid {self.Id}), which is not the Agent Bridge app beside this host");
+        return new Caller(CallerKind.Other, $"{(AgentAncestry.FileName(self.Image) is { Length: > 0 } file ? file : "a process")} (pid {self.Id}), which is not the Agent Bridge app beside this host");
     }
-
-    // The nearest process in the chain that is an agent's, and what it is; null when none is.
-    public static (PeerProcess At, string Which)? FindAgent(IReadOnlyList<PeerProcess> chain, IReadOnlyList<KnownProcess> agents, IReadOnlyList<string>? agentNames = null)
-    {
-        agentNames ??= AgentNames;
-        foreach (var p in chain)
-        {
-            if (agents.FirstOrDefault(a => Same(a, p)) is { } agent) { return (p, agent.Which); }
-            if (Path.GetFileNameWithoutExtension(FileName(p.Image)) is { Length: > 0 } name && agentNames.Contains(name, StringComparer.OrdinalIgnoreCase))
-            {
-                return (p, $"a {name.ToLowerInvariant()} process");
-            }
-        }
-        return null;
-    }
-
-    // The last part of a path in either convention: a Windows image path read on any platform.
-    static string? FileName(string? path) => path?[(path.LastIndexOfAny(['\\', '/']) + 1)..];
 
     static Caller Inside(IReadOnlyList<PeerProcess> chain, PeerProcess at, string which) =>
         new(CallerKind.Agent, at == chain[0] ? $"{which} (pid {at.Id})" : $"pid {chain[0].Id}, inside {which} (pid {at.Id})");
-
-    // The same process: its id, and its start time when both sides know it. The chain was read
-    // a moment ago and every id in it was live then, so an id alone settles it when either side
-    // cannot say when its process started.
-    static bool Same(KnownProcess a, PeerProcess p) =>
-        a.Id == p.Id && (a.StartedAt is not { } x || p.StartedAt is not { } y || (x - y).Duration() < TimeSpan.FromSeconds(1));
 }
 
 public static class KnownAgents
@@ -115,14 +110,6 @@ public static class KnownAgents
     public static IReadOnlyList<KnownProcess> Running(IProcessInspector inspector) =>
         [.. new[] { AgentKind.Copilot, AgentKind.Claude, AgentKind.Codex }.SelectMany(k => inspector.GetAgentProcesses(k).Select(p => new KnownProcess(p.Id, p.StartedAt, $"a {Name(k)} process")))];
 
-    // Where a process with this chain runs inside an agent session, said for a person, or null
-    // when it does not. A launched session's variable settles it even where the chain was broken
-    // (a process started detached, whose parent has gone).
-    public static string? Inside(string? sessionVariable, IReadOnlyList<PeerProcess> chain, Func<IReadOnlyList<KnownProcess>> agents)
-    {
-        if (!string.IsNullOrWhiteSpace(sessionVariable)) { return $"inside a session the Bridge Host launched ({Launchers.SessionVariable} is set)"; }
-        return chain.Count > 0 && CallerGuard.FindAgent(chain, agents()) is { } found ? $"inside {found.Which} (pid {found.At.Id})" : null;
-    }
 
     static string Name(AgentKind kind) => kind.ToString().ToLowerInvariant();
 }
@@ -130,5 +117,5 @@ public static class KnownAgents
 // Every connection is the same caller. Tests use it; nothing else should.
 public sealed class FixedCallerGuard(Caller caller) : ICallerGuard
 {
-    public Caller Classify(IProtocolChannel channel) => caller;
+    public Caller Classify(IProtocolChannel channel, bool fresh = false) => caller;
 }

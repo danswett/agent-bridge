@@ -313,3 +313,46 @@ public sealed class PeerPolicyTests
         Assert.Equal("the host could not verify the connecting process", PeerPolicy.Refusal(new PipePeer(10, null, null, null), Me, false));
 
 }
+
+// Ancestry from a whole-process table, as macOS's ps gives it (and Windows' snapshot feeds the
+// same walk), without depending on what really runs the tests.
+public sealed class ProcessAncestryTests
+{
+    [Fact]
+    public void Macs_ps_listing_is_read_with_paths_that_hold_spaces_and_local_start_times()
+    {
+        var table = ProcessChain.ParsePs("""
+                1     0 Mon Oct 26 08:00:01 2026     /sbin/launchd
+              612     1 Thu Oct 29 09:15:00 2026     /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal
+              640   612 Thu Oct 29 09:15:02 2026     -zsh
+              700   640 Thu Oct 29 10:01:44 2026     /Users/me/.local/bin/copilot
+              733   700 Thu Oct 29 10:02:10 2026     /Applications/Visual Studio Code.app/Contents/MacOS/Electron
+            garbage line
+            """);
+
+        Assert.Equal(5, table.Count);
+        Assert.Equal("/Applications/Visual Studio Code.app/Contents/MacOS/Electron", table[733].Image);
+        Assert.Equal(new DateTimeOffset(new DateTime(2026, 10, 29, 10, 1, 44, DateTimeKind.Local)).ToUniversalTime(), table[700].StartedAt);
+        var chain = ProcessChain.Walk(733, table);
+        Assert.True(chain.Complete);
+        Assert.Equal([733, 700, 640, 612, 1], chain.Processes.Select(p => p.Id));
+    }
+
+    [Fact]
+    public void A_walk_ends_at_a_parent_that_has_gone_or_started_after_its_child_and_knows_nothing_of_a_process_not_listed()
+    {
+        var t = new DateTimeOffset(2026, 10, 29, 10, 0, 0, TimeSpan.Zero);
+        var table = new Dictionary<int, ProcessChain.Listed>
+        {
+            [30] = new(25, t.AddMinutes(5), "host"),
+            [25] = new(20, t.AddMinutes(9), "reused"),
+            [20] = new(1, t, "copilot"),
+            [40] = new(39, t, "orphan"),
+        };
+
+        Assert.Equal([30], ProcessChain.Walk(30, table).Processes.Select(p => p.Id));
+        Assert.True(ProcessChain.Walk(40, table).Complete);
+        Assert.Equal(ProcessAncestry.Unknown, ProcessChain.Walk(99, table));
+    }
+}
+

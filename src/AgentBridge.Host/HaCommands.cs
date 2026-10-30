@@ -12,6 +12,11 @@ namespace AgentBridge.Host;
 // process list, and never printed.
 public static class HaCommands
 {
+    // Whether these arguments change the stored token, which decides whether and where the
+    // connector runs: for a person only (Program's Refused).
+    public static bool Writes(IReadOnlyList<string> args) =>
+        args.ElementAtOrDefault(1) == "token" && args.ElementAtOrDefault(2) is "set" or "clear";
+
     public static int Run(IReadOnlyList<string> args, string folder, Func<string?> readSecret, TextWriter output, TextWriter error,
         bool devBuild, Func<string?>? agentHaBridge)
     {

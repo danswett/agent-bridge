@@ -90,18 +90,29 @@ host also asks *which* process each request comes from, op by op:
 | The caller | How the host tells | May |
 |---|---|---|
 | **Inside an agent session** | The connecting process, or any process it descends from, is a live session's own process (by id and start time, so a reused id does not count), one a launch started, any agent CLI found running (Copilot, Claude, Codex, including under Node or Bun), or an executable named `copilot`, `claude`, `codex` or `agency` | Read: `hello` (offering only `sessions.read` and `usage`), `sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `host.status`, `host.subscribe`. Everything else is refused: `refused: this connection is from pid 4120, inside the copilot session 1a2b3c4d (pid 3112); …` |
-| **The app** | Not inside an agent session, and its executable is `AgentBridge.exe` (the app) in the host's own folder, which is how the app ships | Everything, `host.manage` included |
-| **Anything else of the user's** | Neither, or a process that could not be traced | The sessions ops as before, `host.status` and `host.subscribe`; not the other management ops (`only the Agent Bridge app beside this host may stop, restart, sign in or change settings`) |
+| **The app** | Not inside an agent session, its whole ancestry read, and its executable is `AgentBridge.exe` (the app) in the host's own folder, which is how the app ships | Everything, `host.manage` included |
+| **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before, `host.status` and `host.subscribe`; not the other management ops (`only the Agent Bridge app beside this host may stop, restart, sign in or change settings`) |
 
-The ancestry is read when the connection is accepted (`GetNamedPipeClientProcessId`, then a
-process snapshot for each parent, with start times checked so a parent id given to a later
-process ends the chain). It is matched against the agents the host knows at each request, so a
-session found after the app connected counts. Each refusal is logged.
+The ancestry is read when the connection is accepted (`GetNamedPipeClientProcessId`, then one
+process snapshot for every parent and its executable's name, with start times checked so a
+parent id given to a later process ends the chain). A parent that has gone ends it as well, at
+its natural end; one that is there but cannot be read leaves it incomplete, and what was read
+still counts. It is matched against the agents the host knows: afresh for every management op,
+so a session found after the app connected counts, and at most every 5 seconds for the sessions
+ops, which an attachment upload sends thousands of in a row. Each refusal is logged.
 
-`agent-bridge-host`'s own commands that change its config or sign it in refuse in the same
-case, from their own ancestry. Every session a launch starts has `AGENT_BRIDGE_SESSION` in its
-environment too, which survives a process started detached from its parent
+`agent-bridge-host`'s own commands that change its config or its Home Assistant token, or sign
+it in, refuse in the same case, from their own ancestry: on Windows the snapshot, on Linux
+`/proc`, on macOS one `ps` listing. They refuse as well when that ancestry cannot be read in
+full (fail closed). Every session a launch starts has `AGENT_BRIDGE_SESSION` in its environment
+too, which survives a process started detached from its parent
 ([host-config.md](../host-config.md#approving-a-workspace-at-the-machine)).
+
+The app does not go round this. Asked to stop or restart a host that answers no, it reports the
+refusal and ends nothing (it ends a host only when the host does not answer at all). Its install,
+update and uninstall hooks, which Velopack runs for whoever starts `AgentBridge.exe` with their
+arguments, leave the host, its logon task and the app's registrations alone inside an agent
+session or an ancestry that cannot be read in full, and say so in the app's log.
 
 **What this is not.** Every process here runs as the same user, so this is not a security
 boundary, only a safety rail, like agent-ha-bridge's (an agent token and an instruction not to

@@ -152,6 +152,7 @@ switch (command)
             var rest = new List<string>(arguments);
             var p = rest.IndexOf("--profile");
             if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
+            if (HaCommands.Writes(rest) && Refused("change the host's Home Assistant token")) { return 4; }
             Func<string?>? active = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().Active : null;
             return HaCommands.Run(rest, LoadIdentity().Folder, () => HaCommands.ReadSecret(Console.Error), Console.Out, Console.Error, IsDevBuild(), active);
         }
@@ -180,7 +181,7 @@ Identity LoadIdentity() => Identity.Load(Option("--profile") ?? "default");
 // host's own command line refuses it there, as the pipe does.
 static bool Refused(string what)
 {
-    var inside = KnownAgents.Inside(Environment.GetEnvironmentVariable(Launchers.SessionVariable), ProcessChain.Of(Environment.ProcessId), () => KnownAgents.Running(new SystemProcessInspector()));
+    var inside = AgentAncestry.Inside(Environment.GetEnvironmentVariable(Launchers.SessionVariable), ProcessChain.Read(Environment.ProcessId), () => KnownAgents.Running(new SystemProcessInspector()));
     if (inside is null) { return false; }
     Console.Error.WriteLine($"agent-bridge-host: refused to {what}: this is running {inside}. That is for a person to do, in a terminal of their own or from the Agent Bridge app.");
     return true;

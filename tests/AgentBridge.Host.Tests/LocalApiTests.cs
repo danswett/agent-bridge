@@ -360,7 +360,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     sealed class Callers : ICallerGuard
     {
         public ICallerGuard Current { get; set; } = new FixedCallerGuard(new Caller(CallerKind.App, "the Agent Bridge app"));
-        public Caller Classify(IProtocolChannel channel) => Current.Classify(channel);
+        public Caller Classify(IProtocolChannel channel, bool fresh = false) => Current.Classify(channel, fresh);
     }
 
     [Theory]
