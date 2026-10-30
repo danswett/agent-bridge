@@ -210,7 +210,8 @@ public sealed partial class HaConnector
                 // The host's window began when it gave the token, after the request went; this one
                 // ends no later than the host's, and a question already past it is never put.
                 var until = done.Sent + TimeSpan.FromSeconds(seconds);
-                if (now >= until)
+                // The clock now, not the pass's: the publishes and the read before this take time.
+                if (time.GetUtcNow() >= until)
                 {
                     log($"Home Assistant connector: end of {short8} asked for a second press too late to be given one");
                     Refresh(done.SessionId, p);

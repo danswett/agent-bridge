@@ -460,6 +460,36 @@ public sealed class StopTests : IDisposable
     }
 
     [Fact]
+    public async Task A_window_that_closes_during_the_pass_is_not_offered()
+    {
+        var release = new TaskCompletionSource<StopResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        outcome = _ =>
+        {
+            reached.TrySetResult();
+            return release.Task;
+        };
+        await using var c = await Ready(SessionStatus.Working);
+        c.Observe(ha.Press(SessionEntities.Stop(Node)));
+        await Pass(c);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await Pass(c, 9);
+        var mark = ha.Log.Count;
+
+        // The pass starts inside the window; publishing the session's news takes it past the end.
+        release.SetResult(new StopResult(StopOutcome.Confirm, "still working") { Confirm = "token-1", ConfirmSeconds = 10 });
+        await c.DeliveredAsync();
+        sessions.Set(sessions.Get(A)! with { Activity = sessions.Get(A)!.Activity with { Response = "Slow news" } });
+        ha.PublishFailsFor = (topic, payload) =>
+        {
+            if (topic == HaContract.Topics(Node).ActivityState && payload == "Slow news") { time.Advance(TimeSpan.FromSeconds(2)); }
+            return false;
+        };
+        await Pass(c, 0.5);
+        Assert.DoesNotContain(NotesSince(mark), n => n.Summary == HaStop.ConfirmNote);
+    }
+
+    [Fact]
     public async Task A_notice_that_replaces_the_question_on_the_card_disarms_it()
     {
         Status(SessionStatus.Waiting);
