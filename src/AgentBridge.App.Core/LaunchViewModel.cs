@@ -155,7 +155,7 @@ public sealed class LaunchViewModel : Observable
     // What discovery depends on: the account and the relay's state, whether the machine shown takes
     // sessions from others now (for this one, its loopback's word), and the other machines there are.
     string SourcesKey(Machine m) =>
-        $"{main.Fleet?.Account}|{main.Fleet?.State}|{TakesTransfers(m)}|{string.Join(',', main.AllMachines.Where(x => !x.IsLocal && x != m).Select(x => x.Key).Order(StringComparer.Ordinal))}";
+        $"{main.Fleet?.Account}|{main.Fleet?.State}|{(m.IsLocal ? watchedLoopback : m)?.Host.State}|{TakesTransfers(m)}|{string.Join(',', main.AllMachines.Where(x => !x.IsLocal && x != m).Select(x => x.Key).Order(StringComparer.Ordinal))}";
 
     // Asks again when that has changed since it last asked: a page opened while the relay was
     // still connecting, or this machine's loopback connecting after discovery stopped waiting,
@@ -410,6 +410,10 @@ public sealed class LaunchViewModel : Observable
         ui.Post(() => { run = ++sourcesRun; sourcesBusy = true; key = SourcesKey(m); start.SetResult(); });
         await start.Task;
         IReadOnlyList<TransferSource> got = [];
+        // Only an answer asked with everything up is an answer: one while the relay or the machine
+        // (for this one, its loopback) is down says nothing about what there is, and taking it would
+        // drop a session picked to bring over; it is asked again once they are back.
+        var definitive = false;
         if (main.Fleet is { } f && DeviceOf(m) is { } target)
         {
             if (m.IsLocal)
@@ -424,7 +428,12 @@ public sealed class LaunchViewModel : Observable
                 }
             }
             var takes = new TaskCompletionSource<bool>();
-            ui.Post(() => { key = SourcesKey(m); takes.SetResult(TakesTransfers(m)); });
+            ui.Post(() =>
+            {
+                key = SourcesKey(m);
+                definitive = f.State == FleetState.Connected && (m.IsLocal ? watchedLoopback : m)?.Host.State == LinkState.Connected;
+                takes.SetResult(TakesTransfers(m));
+            });
             if (await takes.Task) { got = await f.TransferSourcesAsync(target, CancellationToken.None); }
         }
         ui.Post(() =>
@@ -434,9 +443,12 @@ public sealed class LaunchViewModel : Observable
             sourcesBusy = false;
             sourcesAsked = key;
             if (load != loads || m != machine) { return; }
-            sources = got;
-            sourcesKnown = true;
-            if (options is not null) { Draw(); }
+            if (definitive)
+            {
+                sources = got;
+                sourcesKnown = true;
+                if (options is not null) { Draw(); }
+            }
             // Something it depends on changed while it was asked: ask again, now.
             Rediscover();
         });

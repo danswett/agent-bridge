@@ -773,6 +773,28 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_session_picked_to_bring_over_stays_picked_through_a_relay_reconnect()
+    {
+        link.Sources.Add(Laptop());
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
+        ui.Post(() => launch.Resume = launch.Resumes.Single(r => r.Value.StartsWith('@')));
+
+        // Down for now, the same account: discovery is asked again, and answers nothing.
+        link.Set(FleetState.Connecting, ("remote-id", "Build server"));
+        await Task.Delay(300);
+        Assert.Equal($"@{LaptopId}/{Brought}", launch.Resume!.Value);
+        link.Set(FleetState.Connected, ("remote-id", "Build server"));
+        await Task.Delay(300);
+
+        Assert.Equal($"@{LaptopId}/{Brought}", launch.Resume!.Value);
+        Assert.StartsWith("This copies", launch.Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Another_account_forgets_the_last_ones_sessions_and_an_answer_from_before_it_is_dropped()
     {
         link.Sources.Add(Laptop());
