@@ -125,7 +125,7 @@ public sealed class LocalServer : IAsyncDisposable
                 _ = RefuseAsync(pipe, refusal, $"process {peer.ProcessId} ({peer.ProcessName ?? "?"})");
                 continue;
             }
-            Serve(pipe, $"local-{peer.ProcessId}", peer.ProcessName ?? "app");
+            Serve(pipe, $"local-{peer.ProcessId}", peer.ProcessName ?? "app", peer);
         }
         await next.DisposeAsync();
     }
@@ -163,13 +163,13 @@ public sealed class LocalServer : IAsyncDisposable
             // The socket is in the user's own 0700 folder, so only the user reaches it.
             var stream = new NetworkStream(client, ownsSocket: true);
             if (Check?.Invoke(new PipePeer(0, null, null, null)) is { } refusal) { _ = RefuseAsync(stream, refusal, "a socket client"); continue; }
-            Serve(stream, $"local-u{Interlocked.Increment(ref unixPeers)}", "app");
+            Serve(stream, $"local-u{Interlocked.Increment(ref unixPeers)}", "app", new PipePeer(0, null, null, null));
         }
     }
 
-    void Serve(Stream stream, string peerId, string name)
+    void Serve(Stream stream, string peerId, string name, PipePeer peer)
     {
-        var channel = new LocalChannel(stream, peerId, name, "local", handler, json);
+        var channel = new LocalChannel(stream, peerId, name, "local", handler, json) { Peer = peer };
         lock (gate) { channels.Add(channel); }
         _ = channel.Closed.ContinueWith(_ => { lock (gate) { channels.Remove(channel); } }, TaskScheduler.Default);
         channel.Start();

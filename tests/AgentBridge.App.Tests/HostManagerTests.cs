@@ -145,6 +145,22 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_host_that_refuses_to_stop_or_restart_is_left_running_and_never_ended()
+    {
+        host.On(HostOps.Stop, _ => throw new InvalidOperationException("refused: this connection is from pid 30, inside a copilot process (pid 20); stopping, restarting, signing in and changing settings are for the person, from the Agent Bridge app"));
+        host.Start();
+
+        var stop = await Assert.ThrowsAsync<HostRefusedException>(() => manager.StopAsync());
+        var restart = await Assert.ThrowsAsync<HostRefusedException>(() => manager.RestartAsync());
+
+        Assert.StartsWith("refused: this connection is from pid 30", stop.Message);
+        Assert.Equal(stop.Message, restart.Message);
+        Assert.Empty(processes.Killed);
+        Assert.Empty(processes.Started);
+        Assert.True(await manager.IsRunningAsync());
+    }
+
+    [Fact]
     public async Task Stopping_a_host_that_goes_kills_nothing()
     {
         host.On(HostOps.Stop, d => { _ = Task.Run(host.StopAsync); return new { stopping = true }; });

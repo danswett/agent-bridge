@@ -6,8 +6,9 @@ using AgentBridge.Host.Delivery.Windows;
 
 namespace AgentBridge.Host.Delivery.Launch;
 
-// What to start: the program, its arguments, and where.
-public sealed record StartSpec(string Executable, IReadOnlyList<string> Arguments, string WorkingDirectory);
+// What to start: the program, its arguments, and where; Environment is added to (or replaces
+// what) the host's own environment the agent inherits.
+public sealed record StartSpec(string Executable, IReadOnlyList<string> Arguments, string WorkingDirectory, IReadOnlyDictionary<string, string>? Environment = null);
 
 // A started process, by id and start time (which tells it from a later one given the same id),
 // or why nothing started.
@@ -69,10 +70,32 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
         var line = WindowsCommandLine.For(spec.Executable, spec.Arguments, out var problem) ?? throw new InvalidOperationException(problem);
         var info = new StartupInfo { Size = Marshal.SizeOf<StartupInfo>(), Flags = StartfUseShowWindow, ShowWindow = hidden ? SwHide : SwShowNormal };
         var command = new StringBuilder(line.CommandLine, line.CommandLine.Length + 1);
-        if (!CreateProcessW(line.Application, command, 0, 0, false, CreateNewConsole | CreateUnicodeEnvironment, 0, spec.WorkingDirectory, ref info, out var process))
+        var environment = spec.Environment is { Count: > 0 } extra ? Marshal.StringToHGlobalUni(EnvironmentBlock(extra)) : 0;
+        try
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error());
+            if (!CreateProcessW(line.Application, command, 0, 0, false, CreateNewConsole | CreateUnicodeEnvironment, environment, spec.WorkingDirectory, ref info, out var started))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            return Finish(started);
         }
+        finally { if (environment != 0) { Marshal.FreeHGlobal(environment); } }
+    }
+
+    // This process's environment with extra over it, as CreateProcess takes one: name=value
+    // strings sorted by name, each ended by a NUL, then one more.
+    internal static string EnvironmentBlock(IReadOnlyDictionary<string, string> extra)
+    {
+        var all = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (System.Collections.DictionaryEntry e in System.Environment.GetEnvironmentVariables()) { all[(string)e.Key] = (string?)e.Value ?? ""; }
+        foreach (var (name, value) in extra) { all[name] = value; }
+        var block = new StringBuilder();
+        foreach (var (name, value) in all) { block.Append(name).Append('=').Append(value).Append('\0'); }
+        return block.Append('\0').ToString();
+    }
+
+    static Started Finish(ProcessInformation process)
+    {
         try
         {
             var startedAt = GetProcessTimes(process.Process, out var created, out _, out _, out _)

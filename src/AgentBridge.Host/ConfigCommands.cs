@@ -37,6 +37,10 @@ public static class ConfigCommands
 
     static readonly string[] AgentKeys = ["path", "model", "effort", "context", "models", "efforts", "contexts", "extraArgs"];
 
+    // Whether these arguments would change the file, rather than only show it.
+    public static bool Writes(IReadOnlyList<string> args) =>
+        (args.ElementAtOrDefault(0), args.ElementAtOrDefault(1)) is ("workspace", "add" or "remove") or ("config", "set" or "unset");
+
     public static int Run(IReadOnlyList<string> args, string folder, TextWriter output, TextWriter error, Func<string, bool>? isSystemDirectory = null)
     {
         var path = Path.Combine(folder, HostSettings.FileName);
