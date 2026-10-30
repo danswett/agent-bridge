@@ -48,6 +48,10 @@ public sealed class LaunchServiceOptions
     public TimeSpan ScreenAfter { get; init; } = TimeSpan.FromSeconds(1);
     public TimeSpan ScreenEvery { get; init; } = TimeSpan.FromSeconds(1);
 
+    // How long a session that registers before its window is ready (Copilot) is given to show
+    // it ready, or ask a startup question, before its launch answers unconfirmed.
+    public TimeSpan ReadyWait { get; init; } = TimeSpan.FromSeconds(20);
+
     // How long a started process that exited is given for its session to show, for a launcher
     // that hands the session on to another process and exits.
     public TimeSpan ExitGrace { get; init; } = TimeSpan.FromSeconds(3);
@@ -94,7 +98,8 @@ public sealed class LaunchServiceOptions
 //     for that session to register: started, with its id.
 //   * A question the agent asks before it registers (whether to trust the folder) is never
 //     answered from here: only a person at the machine answers it. While one waits, other
-//     launches are busy, so a second press is never taken for an answer.
+//     launches are busy, so a second press is never taken for an answer. Copilot registers
+//     before it asks, so its launch is started only once its window shows it ready.
 //   * Never while agent-ha-bridge is active for this user (G5), and never twice for one request
 //     (OutcomeMemory). One start at a time, so worktrees and Codex's binding cannot race.
 public sealed partial class LaunchService : ISessionLauncher
@@ -739,8 +744,11 @@ public sealed partial class LaunchService : ISessionLauncher
         _ = Task.Run(() => FollowAsync(follow));
         var waited = await Task.WhenAny(follow.Decided.Task, Task.Delay(options.RegistrationWait, options.Time));
         if (waited == follow.Decided.Task) { return await follow.Decided.Task; }
-        var unconfirmed = new LaunchResult(LaunchOutcome.Unconfirmed,
-            $"{plan.Launcher.Label} started in {plan.Where} (pid {follow.Started.ProcessId}), but its session had not appeared after {options.RegistrationWait.TotalSeconds:0} s; it may still be starting, so check its window")
+        // A session that registered but whose window is not yet seen ready (Copilot) did appear;
+        // it is the window that is not known.
+        var unconfirmed = new LaunchResult(LaunchOutcome.Unconfirmed, follow.RegisteredAt is not null
+            ? $"{plan.Launcher.Label} started in {plan.Where}, but its window was not seen ready, so whether it is waiting on a question there is not known; check its window"
+            : $"{plan.Launcher.Label} started in {plan.Where} (pid {follow.Started.ProcessId}), but its session had not appeared after {options.RegistrationWait.TotalSeconds:0} s; it may still be starting, so check its window")
         {
             Session = follow.SessionId.Length > 0 ? follow.SessionId : null,
             Launched = launched,
@@ -766,34 +774,66 @@ public sealed partial class LaunchService : ISessionLauncher
                     try { await source.RefreshAsync(); } catch (Exception) { }
                 }
                 var now = options.Time.GetUtcNow();
-                if (Registered(p) is { } id)
+                var registered = Registered(p);
+                if (registered is { } id)
                 {
-                    log($"launch {Short(p.Key)}: {label} in {p.Where} registered as session {Short(id)} after {(now - p.At).TotalSeconds:0.0} s");
-                    Decide(p, new LaunchResult(LaunchOutcome.Started) { Session = id, Launched = p.Launched });
-                    return;
+                    p.RegisteredAt ??= now;
+                    if (!p.Launcher.RegistersBeforeReady || p.Ready)
+                    {
+                        log($"launch {Short(p.Key)}: {label} in {p.Where} registered as session {Short(id)} after {(now - p.At).TotalSeconds:0.0} s");
+                        Decide(p, new LaunchResult(LaunchOutcome.Started) { Session = id, Launched = p.Launched });
+                        return;
+                    }
+                    // Answered once, and followed on: a trust question drawn later still keeps
+                    // other launches busy, and a window that becomes ready still counts.
+                    if (p.Question == StartupQuestion.None && !p.ReadyMissed && now - p.RegisteredAt >= options.ReadyWait)
+                    {
+                        p.ReadyMissed = true;
+                        log($"launch {Short(p.Key)}: {label} in {p.Where} registered as session {Short(id)}, but its window was not seen ready within {options.ReadyWait.TotalSeconds:0} s");
+                        p.Decided.TrySetResult(new LaunchResult(LaunchOutcome.Unconfirmed,
+                            $"{label} started in {p.Where}, but its window was not seen ready, so whether it is waiting on a question there is not known; check its window")
+                        { Session = id, Launched = p.Launched });
+                    }
                 }
-                if (!starter.Running(p.Started))
+                if (!p.HandedOn && !starter.Running(p.Started))
                 {
                     // A launcher that hands the session to another process may exit first: its
                     // session is given a moment to show before the launch counts as failed.
                     await Task.Delay(options.ExitGrace, options.Time);
                     try { await source.RefreshAsync(); } catch (Exception) { }
-                    if (Registered(p) is { } late)
+                    if (Registered(p) is not { } late)
+                    {
+                        log(p.RegisteredAt is null
+                            ? $"launch {Short(p.Key)}: {label} (pid {p.Started.ProcessId}) exited before its session registered"
+                            : $"launch {Short(p.Key)}: {label} in {p.Where} closed before its window was seen ready");
+                        Decide(p, new LaunchResult(LaunchOutcome.Failed, $"{label} in {p.Where} closed before it started; start it at the machine to see why") { Launched = p.Launched });
+                        return;
+                    }
+                    p.RegisteredAt ??= options.Time.GetUtcNow();
+                    if (!p.Launcher.RegistersBeforeReady || p.Ready)
                     {
                         Decide(p, new LaunchResult(LaunchOutcome.Started) { Session = late, Launched = p.Launched });
                         return;
                     }
-                    log($"launch {Short(p.Key)}: {label} (pid {p.Started.ProcessId}) exited before its session registered");
+                    // Handed on before its window was seen ready: the session's own window is
+                    // read from here on, as it would have been.
+                    p.HandedOn = true;
+                }
+                else if (p.HandedOn && registered is null)
+                {
+                    log($"launch {Short(p.Key)}: {label} in {p.Where} closed before its window was seen ready");
                     Decide(p, new LaunchResult(LaunchOutcome.Failed, $"{label} in {p.Where} closed before it started; start it at the machine to see why") { Launched = p.Launched });
                     return;
                 }
                 if (now - p.At >= options.ScreenAfter && now - lastScreen >= options.ScreenEvery)
                 {
                     lastScreen = now;
+                    var window = p.HandedOn && registered is { } handed && source.ProcessOf(handed) is { } owner ? owner.Id : p.Started.ProcessId;
                     ConsoleScreen screen;
-                    try { screen = await injector.ReadScreenAsync(p.Started.ProcessId); }
+                    try { screen = await injector.ReadScreenAsync(window); }
                     catch (Exception) { screen = new ConsoleScreen(null, "unreadable"); }
                     var question = StartupQuestions.Read(screen.Rows);
+                    p.Ready = p.Launcher.RegistersBeforeReady && StartupQuestions.CopilotReady(screen.Rows);
                     if (question != p.Question)
                     {
                         p.Question = question;
@@ -816,7 +856,9 @@ public sealed partial class LaunchService : ISessionLauncher
                 }
                 if (now - p.At >= options.FollowFor)
                 {
-                    log($"launch {Short(p.Key)}: {label} (pid {p.Started.ProcessId}) did not register within {options.FollowFor.TotalMinutes:0} minutes; stopped watching");
+                    log(p.RegisteredAt is null
+                        ? $"launch {Short(p.Key)}: {label} (pid {p.Started.ProcessId}) did not register within {options.FollowFor.TotalMinutes:0} minutes; stopped watching"
+                        : $"launch {Short(p.Key)}: {label} in {p.Where} registered, but its window was not seen ready within {options.FollowFor.TotalMinutes:0} minutes; stopped watching");
                     return;
                 }
                 await Task.Delay(options.PollInterval, options.Time);
@@ -833,7 +875,8 @@ public sealed partial class LaunchService : ISessionLauncher
             {
                 // Only once it has registered: one still starting stays protected, and one that
                 // never did is left locked for a person to look at, as agent-ha-bridge leaves it.
-                if (p.Decided.Task.IsCompletedSuccessfully && p.Decided.Task.Result.Outcome == LaunchOutcome.Started || p.RegisteredLate)
+                // A session seen registered counts, ready or not.
+                if (p.Decided.Task.IsCompletedSuccessfully && p.Decided.Task.Result.Outcome == LaunchOutcome.Started || p.RegisteredLate || p.RegisteredAt is not null)
                 {
                     try { Worktrees.Release(worktree, token); } catch (Exception) { }
                 }
@@ -928,6 +971,13 @@ public sealed partial class LaunchService : ISessionLauncher
         public TaskCompletionSource<LaunchResult> Decided { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public StartupQuestion Question { get; set; }
         public DateTimeOffset? TrustAt { get; set; }
+        // A launcher that registers before its window is ready: whether the last look found it
+        // ready, when its session registered, whether its launch has already answered for a
+        // window never seen ready, and whether its launcher exited, handing the session on.
+        public bool Ready { get; set; }
+        public DateTimeOffset? RegisteredAt { get; set; }
+        public bool ReadyMissed { get; set; }
+        public bool HandedOn { get; set; }
         public bool RegisteredLate { get; set; }
         public string? Bound { get; set; }
     }

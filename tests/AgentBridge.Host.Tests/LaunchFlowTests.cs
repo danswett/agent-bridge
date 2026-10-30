@@ -78,7 +78,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null) => new(source, probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null) => new(source, probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
     {
         CopilotHome = f.CopilotHome,
         ClaudeHome = f.ClaudeHome,
@@ -89,6 +89,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         PollInterval = TimeSpan.FromMilliseconds(25),
         ScreenAfter = TimeSpan.Zero,
         ScreenEvery = TimeSpan.FromMilliseconds(25),
+        ReadyWait = readyWait ?? TimeSpan.FromSeconds(5),
         ExitGrace = TimeSpan.FromMilliseconds(100),
         // The fixture's folders are under temp, which is a system folder to a real launch.
         IsSystemDirectory = _ => false,
@@ -98,8 +99,8 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
     }, attachments: attachments);
 
-    void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null) =>
-        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: Launcher(config, wait, usage, now)).HandleAsync;
+    void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: Launcher(config, wait, usage, now, readyWait: readyWait)).HandleAsync;
 
     async Task<SecureChannel> OpenAsync()
     {
@@ -330,11 +331,108 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         Assert.True(screens.Reads > 0);
 
         // Answered at the machine: the session registers, and launching is open again.
-        screens.Rows = ["> Welcome"];
+        screens.Rows = CopilotReady;
         starter.Register(starter.Specs[0]);
         await WaitAsync(async () => (await RequestAsync(ch, LaunchProtocol.Options, new { })).TryGetProperty("busy", out _) == false);
         starter.Registers = true;
         Assert.Equal("started", (await LaunchAsync(ch, new { workspace = "API" })).Outcome_);
+    }
+
+    [Fact]
+    public async Task A_Copilot_that_registers_and_then_asks_whether_to_trust_its_folder_is_left_for_the_machine_and_other_launches_are_busy()
+    {
+        // Copilot writes its lock before its window is ready, and asks about the folder after.
+        screens.Rows = ["  Current   Sessions   Issues   Pull requests   Gists"];
+        var ch = await OpenAsync();
+        var asking = Task.Run(() => LaunchAsync(ch, new { workspace = "App" }));
+        await WaitAsync(() => Task.FromResult(screens.Reads > 2));
+        screens.Rows = ["Confirm folder trust", app, "Do you trust the files in this folder?", "❯ 1. Yes", "  2. Yes, and remember this folder for future sessions", "  3. No (Esc)"];
+
+        var first = await asking;
+        Assert.Equal("unconfirmed", first.Outcome_);
+        Assert.Contains("is asking whether to trust App. Only a person at the machine can answer that", first.Reason);
+        Assert.Equal(("busy", "Busy: Copilot in App is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes."),
+            Pair(await LaunchAsync(ch, new { workspace = "API" })));
+        Assert.Empty(screens.Typed);
+
+        // Answered at the machine: its window shows it ready, and launching is open again.
+        screens.Rows = CopilotReady;
+        await WaitAsync(async () => (await RequestAsync(ch, LaunchProtocol.Options, new { })).TryGetProperty("busy", out _) == false);
+        Assert.Equal("started", (await LaunchAsync(ch, new { workspace = "API" })).Outcome_);
+    }
+
+    [Fact]
+    public async Task A_Copilot_that_registers_but_whose_window_is_never_seen_ready_is_unconfirmed_and_still_named()
+    {
+        screens.Rows = null;
+        Serve(Config(), readyWait: TimeSpan.FromMilliseconds(300));
+        var ch = await OpenAsync();
+
+        var o = await LaunchAsync(ch, new { workspace = "App" });
+
+        Assert.Equal(("unconfirmed", "Copilot started in App, but its window was not seen ready, so whether it is waiting on a question there is not known; check its window"), Pair(o));
+        Assert.Equal(starter.Specs[0].Arguments[1], o.Session);
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task A_Copilot_that_registers_but_whose_window_is_not_ready_when_the_wait_ends_is_said_to_have_appeared()
+    {
+        screens.Rows = null;
+        Serve(Config(), wait: TimeSpan.FromMilliseconds(400));
+        var ch = await OpenAsync();
+
+        var o = await LaunchAsync(ch, new { workspace = "App" });
+
+        Assert.Equal(("unconfirmed", "Copilot started in App, but its window was not seen ready, so whether it is waiting on a question there is not known; check its window"), Pair(o));
+    }
+
+    [Fact]
+    public async Task A_Copilot_launch_answered_before_its_window_was_seen_ready_is_still_followed_and_unlocks_its_worktree_once_it_ends()
+    {
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "hi\n");
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "one");
+        screens.Rows = null;
+        Serve(Config(c => c with { Workspaces = [new("App", app, true), new("API", api, false)] }), readyWait: TimeSpan.FromMilliseconds(300));
+        var ch = await OpenAsync();
+        Assert.Equal("unconfirmed", (await LaunchAsync(ch, new { workspace = "App" })).Outcome_);
+        var cwd = starter.Specs[0].WorkingDirectory;
+        Assert.True(File.Exists(Path.Combine(Worktrees.AdminFolder(cwd)!, "locked")));
+
+        // A trust question drawn after that is still seen, and turns other launches away.
+        screens.Rows = ["Confirm folder trust", "Do you trust the files in this folder?", "❯ 1. Yes"];
+        await WaitAsync(async () => (await RequestAsync(ch, LaunchProtocol.Options, new { })).TryGetProperty("busy", out _));
+        Assert.Equal("busy", (await LaunchAsync(ch, new { workspace = "API" })).Outcome_);
+
+        // Declined at the machine, it closes: its worktree is unlocked, since it did register.
+        starter.Exit(starter.Pids[0]);
+        f.Processes.Exit(AgentKind.Copilot, starter.Pids[0]);
+        await WaitAsync(() => Task.FromResult(!File.Exists(Path.Combine(Worktrees.AdminFolder(cwd)!, "locked"))));
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task A_Copilot_launcher_that_hands_its_session_on_and_exits_is_not_started_while_the_session_asks_whether_to_trust_its_folder()
+    {
+        starter.ExitsAtOnce = true;
+        starter.HandsOn = true;
+        // Only the session's own window can be read; the launcher's went with it.
+        screens.Unreadable = pid => starter.Pids.Contains(pid);
+        screens.Rows = ["Confirm folder trust", "Do you trust the files in this folder?", "❯ 1. Yes"];
+        var ch = await OpenAsync();
+
+        var first = await LaunchAsync(ch, new { workspace = "App" });
+
+        Assert.Equal("unconfirmed", first.Outcome_);
+        Assert.Contains("is asking whether to trust App", first.Reason);
+        Assert.Equal("busy", (await LaunchAsync(ch, new { workspace = "API" })).Outcome_);
+
+        // Answered at the machine: the session's window shows it ready, and launching is open again.
+        screens.Rows = CopilotReady;
+        await WaitAsync(async () => (await RequestAsync(ch, LaunchProtocol.Options, new { })).TryGetProperty("busy", out _) == false);
+        Assert.Empty(screens.Typed);
     }
 
     [Fact]
@@ -638,11 +736,14 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         public string? Active() => Reason;
     }
 
+    // Copilot's window ready for a prompt, as 1.0.105 draws it: its input box and key footer.
+    static readonly IReadOnlyList<string> CopilotReady = ["╻▄▄▄▄▄▄▄▄", "┃", "╹▀▀▀▀▀▀▀▀", " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"];
+
     // Shows the rows it is given as every session's screen, and records anything typed, which
     // a launch must never do.
     sealed class FakeScreens : IConsoleInjector
     {
-        public volatile IReadOnlyList<string>? Rows;
+        public volatile IReadOnlyList<string>? Rows = CopilotReady;
         public readonly List<int> Typed = [];
         public int Reads;
 
@@ -652,9 +753,13 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
             return Task.FromResult(new InjectionResult(InjectionStatus.Typed, "ok"));
         }
 
+        // A window that cannot be read: one whose process has gone.
+        public Func<int, bool>? Unreadable;
+
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref Reads);
+            if (Unreadable?.Invoke(processId) == true) { throw new IOException($"no console for pid {processId}"); }
             return Task.FromResult(new ConsoleScreen(Rows ?? [], null));
         }
     }
@@ -689,6 +794,8 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         public string? Unavailable_;
         public volatile bool Registers = true;
         public bool ExitsAtOnce;
+        // The launcher hands its session to a process of its own (its pid + 3000) and exits.
+        public bool HandsOn;
         public readonly string CodexId = "66666666-6666-4666-8666-666666666666";
         public readonly List<int> Pids = [];
         readonly HashSet<int> running = [];
@@ -703,7 +810,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         {
             int pid;
             lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } }
-            if (Registers) { Register(spec, pid); }
+            if (Registers) { Register(spec, HandsOn ? pid + 3000 : pid); }
             return new Started(pid, DateTimeOffset.UtcNow);
         }
 

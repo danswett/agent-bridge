@@ -93,7 +93,12 @@ differences, each deliberate:
    not): a new console, the workspace as working directory, the host's environment.
 7. The launch is followed: every 500 ms, a discovery pass (during the first 60 s) and a look
    for its session; its window read every second for a startup question; its process checked.
-   Registered: `started`. Exited first (with 3 s for a launcher that hands over and exits):
+   Registered: `started`, except for Copilot, which registers (its `inuse.<pid>.lock`) before
+   its window is ready and can ask its trust question after that. Its launch is `started` only
+   once its window shows its input box or key footer, and `unconfirmed` if neither shows within
+   20 s. It is still followed after that, so a trust question it draws later still makes other
+   launches `busy`. A launcher that exits, handing the session on, is followed through the
+   session's own window. Exited first (with 3 s for a launcher that hands over and exits):
    `failed`. A trust question: `unconfirmed`, and other launches are `busy` while it shows, up
    to two minutes. Codex's hook review: `unconfirmed`. Nothing in 60 s: `unconfirmed`. It is
    followed for up to 10 minutes in all; its worktree lock is lifted once it registers, and

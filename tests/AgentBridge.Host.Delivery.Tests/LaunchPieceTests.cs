@@ -487,6 +487,18 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Equal(StartupQuestion.None, StartupQuestions.Read(null));
     }
 
+    [Fact]
+    public void Copilot_is_ready_once_its_input_box_or_key_footer_is_drawn_and_no_question_covers_it()
+    {
+        Assert.True(StartupQuestions.CopilotReady(["  Current   Sessions", "╻▄▄▄▄▄▄", "┃", "╹▀▀▀▀▀▀"]));
+        Assert.True(StartupQuestions.CopilotReady([" ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"]));
+        // Before its window is drawn, and while it asks about the folder (1.0.105, seen live).
+        Assert.False(StartupQuestions.CopilotReady(["  Current   Sessions   Issues   Pull requests   Gists"]));
+        Assert.False(StartupQuestions.CopilotReady(["╭─────╮", "│ Confirm folder trust", "│ Do you trust the files in this folder?", "│ ❯ 1. Yes", "│ ↑/↓ to navigate · enter to select · esc to cancel", "╰─────╯"]));
+        Assert.False(StartupQuestions.CopilotReady(["╻▄▄▄", "┃", "╹▀▀▀", "Do you trust the files in this folder?"]));
+        Assert.False(StartupQuestions.CopilotReady(null));
+    }
+
     // ---- config ----
 
     static (LaunchConfig, IReadOnlyList<string>) Config(string json)
