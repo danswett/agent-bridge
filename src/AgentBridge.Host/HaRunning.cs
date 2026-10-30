@@ -17,7 +17,8 @@ public sealed class HaRunning : IAsyncDisposable
 
     public static HaRunning? Start(HostSettings settings, string folder, ISessionSource source, UsageMonitor usage,
         Func<string?>? agentHaBridge, bool devBuild, string version, Action<string> log, ISessionAnswerer? answers = null,
-        Func<HaReply, CancellationToken, Task<AgentBridge.Protocol.ReplyResult>>? reply = null, ISessionStopper? stops = null)
+        Func<HaReply, CancellationToken, Task<AgentBridge.Protocol.ReplyResult>>? reply = null, ISessionStopper? stops = null,
+        AgentBridge.Host.Delivery.Launch.ISessionLauncher? launcher = null)
     {
         foreach (var p in settings.HomeAssistantProblems) { log($"config.json: {p}"); }
         var ha = settings.HomeAssistant;
@@ -58,6 +59,11 @@ public sealed class HaRunning : IAsyncDisposable
             answers is null or UnsupportedPlatformAnswerer ? null : answers.AnswerAsync;
         Func<AgentBridge.Protocol.StopRequest, CancellationToken, Task<AgentBridge.Protocol.StopResult>>? stop =
             stops is null or UnsupportedPlatformStopper ? null : stops.StopAsync;
+        // Launches from the card go through the host's own launcher, as an app's do (its checks,
+        // its one-at-a-time start, its following to registration); whether it offers launching
+        // here is its own Available, asked when the connector starts.
+        var launch = launcher is null ? null : new HaLauncher(() => launcher.Available, launcher.OptionsAsync,
+            (request, ct) => launcher.LaunchAsync(request, "home-assistant", ct));
         var connector = new HaConnector(new HaConnectorOptions
         {
             MachineName = machine,
@@ -67,10 +73,11 @@ public sealed class HaRunning : IAsyncDisposable
             DashboardUrlPath = ha.DashboardUrlPath,
             StateFile = Path.Combine(folder, "ha-connector.json"),
             AgentUserIds = ha.AgentUserIds,
-        }, new HomeAssistantClient(ha.BaseUrl!, token, http), source, agentHaBridge!, () => usage.Current, log, answer: answer, reply: reply, stop: stop);
+        }, new HomeAssistantClient(ha.BaseUrl!, token, http), source, agentHaBridge!, () => usage.Current, log, answer: answer, reply: reply, stop: stop, launch: launch);
         connector.Start();
         log($"the Home Assistant connector is on: {ha.BaseUrl} as agent_bridge_{slug}{(ha.Disposable ? " (disposable)" : "")}; " +
-            (answer is null ? "status only" : "status, answers" + (reply is null ? "" : ", replies") + (stop is null ? "" : ", End session")) + "; no launches yet");
+            (answer is null ? "status only" : "status, answers" + (reply is null ? "" : ", replies") + (stop is null ? "" : ", End session")) +
+            (launch is null ? "" : ", the launch card when the host launches here"));
         return new HaRunning(connector, http, claim);
     }
 

@@ -64,8 +64,8 @@ public static class HaImageId
 // A state as Home Assistant reports it, with the account behind its last change (context.user_id)
 // when there was one: a press from the dashboard carries the person's, one through an agent's
 // token the agent's. LastChanged is when the state itself last changed, on Home Assistant's clock,
-// the clock its press timestamps are on too.
-public sealed record HaState(string EntityId, string State, JsonElement Attributes, string? UserId = null, DateTimeOffset? LastChanged = null);
+// the clock its press timestamps are on too; LastUpdated when its state or attributes last did.
+public sealed record HaState(string EntityId, string State, JsonElement Attributes, string? UserId = null, DateTimeOffset? LastChanged = null, DateTimeOffset? LastUpdated = null);
 
 // One change a watch reported. A removed entity is not a change (Get-BridgeStateTriggerHit).
 public sealed record HaTrigger(string EntityId, HaState State);
@@ -295,11 +295,11 @@ public sealed class HomeAssistantClient : IHomeAssistant
     static HaState? State(JsonElement e) =>
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty("entity_id", out var id) && id.ValueKind == JsonValueKind.String
             ? new HaState(id.GetString()!, e.TryGetProperty("state", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString()! : "",
-                e.TryGetProperty("attributes", out var a) ? a.Clone() : default, UserId(e), LastChanged(e))
+                e.TryGetProperty("attributes", out var a) ? a.Clone() : default, UserId(e), Instant(e, "last_changed"), Instant(e, "last_updated"))
             : null;
 
-    static DateTimeOffset? LastChanged(JsonElement state) =>
-        state.TryGetProperty("last_changed", out var l) && l.ValueKind == JsonValueKind.String
+    static DateTimeOffset? Instant(JsonElement state, string name) =>
+        state.TryGetProperty(name, out var l) && l.ValueKind == JsonValueKind.String
         && DateTimeOffset.TryParse(l.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)
             ? at : null;
 
@@ -346,7 +346,7 @@ public sealed class HomeAssistantClient : IHomeAssistant
         }
         var state = s.GetString()!;
         if (state is "" or "unknown" or "unavailable") { return null; }
-        return new HaTrigger(id.GetString()!, new HaState(id.GetString()!, state, to.TryGetProperty("attributes", out var a) ? a.Clone() : default, UserId(to), LastChanged(to)));
+        return new HaTrigger(id.GetString()!, new HaState(id.GetString()!, state, to.TryGetProperty("attributes", out var a) ? a.Clone() : default, UserId(to), Instant(to, "last_changed"), Instant(to, "last_updated")));
     }
 
     public async Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default)

@@ -41,6 +41,7 @@ public sealed class LiveHomeAssistantTests : IDisposable
     readonly List<AnswerRequest> answered = [];
     readonly List<HaReply> replied = [];
     readonly List<StopRequest> stopped = [];
+    readonly List<LaunchRequest> launched = [];
     readonly List<string> log = [];
 
     public LiveHomeAssistantTests()
@@ -51,7 +52,9 @@ public sealed class LiveHomeAssistantTests : IDisposable
     public void Dispose() => http.Dispose();
 
     // Each test is its own machine, so none sees another's entities.
-    HaConnector Connector(string machine, params string[] agents) => new(new HaConnectorOptions
+    HaConnector Connector(string machine, params string[] agents) => Connector(machine, null, agents);
+
+    HaConnector Connector(string machine, LaunchOptions? launches, params string[] agents) => new(new HaConnectorOptions
     {
         MachineName = machine,
         Version = "0.1.0",
@@ -78,7 +81,15 @@ public sealed class LiveHomeAssistantTests : IDisposable
         }
         sessions.End(r.Id);
         return Task.FromResult(new StopResult(StopOutcome.Ended));
-    });
+    }, launch: launches is null ? null : new HaLauncher(() => true, _ => Task.FromResult(launches), (r, _) =>
+    {
+        lock (launched) { launched.Add(r); }
+        return Task.FromResult(new LaunchResult(LaunchOutcome.Started)
+        {
+            Session = Guid.NewGuid().ToString(),
+            Launched = new LaunchedWith { Agent = r.Agent ?? "copilot", Workspace = r.Workspace ?? "agent-bridge", Permissions = r.Permissions ?? LaunchProtocol.Ask },
+        });
+    }));
 
     static string Session() => Guid.NewGuid().ToString();
 
@@ -338,6 +349,54 @@ public sealed class LiveHomeAssistantTests : IDisposable
             Assert.True(DateTime.UtcNow < deadline, "the image was never deleted from Home Assistant's store");
             await Task.Delay(250);
         }
+    }
+
+    [HomeAssistantFact]
+    public async Task Launch_on_the_card_and_an_agents_request_both_reach_the_hosts_launcher_and_the_request_hears_how_it_went()
+    {
+        var offered = new LaunchOptions
+        {
+            Agents =
+            [
+                new LaunchAgent { Id = "copilot", Label = "Copilot", Kind = AgentKind.Copilot, Models = ["gpt-5.5"] },
+                new LaunchAgent { Id = "claude", Label = "Claude", Kind = AgentKind.Claude },
+            ],
+            Workspaces = [new LaunchWorkspace { Label = "agent-bridge", Path = "/repos/agent-bridge" }, new LaunchWorkspace { Label = "scratch", Path = "/scratch" }],
+            Defaults = new LaunchDefaults { Agent = "copilot", Workspace = "agent-bridge", Permissions = LaunchProtocol.Ask },
+        };
+        await using var c = Connector("CI-LAUNCH", offered);
+        c.Start();
+        var slug = HaContract.MachineSlug("CI-LAUNCH");
+        string Entity(string domain, string key) => HaContract.MachineEntityId(domain, key, slug);
+        // The selectors are driven to the machine's defaults once Home Assistant has made them.
+        await Until(Entity("select", "new_agent"), s => s.State == "Copilot");
+        await Until(Entity("select", "new_workspace"), s => s.State == "agent-bridge");
+        await Until(Entity("text", "new_prompt"), s => s.State == HaDecision.ReplyBlank);
+        await Task.Delay(TimeSpan.FromSeconds(2));
+
+        // A person's launch: what the card shows.
+        await ha.CallServiceAsync("select", "select_option", new JsonObject { ["entity_id"] = Entity("select", "new_workspace"), ["option"] = "scratch" });
+        await ha.CallServiceAsync("text", "set_value", new JsonObject { ["entity_id"] = Entity("text", "new_prompt"), ["value"] = "Hello from CI" });
+        await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = Entity("button", "new_session") });
+        await Until(() => { lock (launched) { return launched.Count == 1; } }, "the card's launch never reached the host");
+        Assert.Equal(("copilot", "scratch", "Hello from CI"), (launched[0].Agent, launched[0].Workspace, launched[0].Prompt));
+        await Until(Entity("text", "new_prompt"), s => s.State == HaDecision.ReplyBlank);
+
+        // An agent's: its request and settings in the prompt payload, then the press.
+        await ha.PublishAsync(HaContract.PromptPayloadTopic(slug), HaContract.Serialize(new JsonObject
+        {
+            ["at"] = DateTimeOffset.UtcNow.ToString("o"),
+            ["text"] = "Fix the build",
+            ["request"] = "ci-launch-0001",
+            ["settings"] = new JsonObject { ["agent"] = "Claude", ["workspace"] = "agent-bridge" },
+        }), true);
+        await Until(Entity("sensor", "new_prompt_payload"), s => s.Attributes.TryGetProperty("request", out var r) && r.GetString() == "ci-launch-0001");
+        await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = Entity("button", "new_session") });
+        await Until(() => { lock (launched) { return launched.Count == 2; } }, "the agent's launch never reached the host");
+        Assert.Equal(("claude", "agent-bridge", "Fix the build"), (launched[1].Agent, launched[1].Workspace, launched[1].Prompt));
+        await Until(Entity("sensor", "new_session_result"), s => s.Attributes.TryGetProperty("recent", out var recent)
+            && recent.GetArrayLength() > 0 && recent[0].GetProperty("request").GetString() == "ci-launch-0001"
+            && recent[0].GetProperty("outcome").GetString() == "started");
     }
 
     // What the reply card does with an image: POST /api/image/upload, which answers with its id.

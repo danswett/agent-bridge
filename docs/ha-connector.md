@@ -12,8 +12,8 @@ and a migrated machine's cards render unchanged.
 
 It is built in stages. **Stage 1 is read-only status; stage 2 adds answering questions from the
 card**, and a read-only shadow that compares the connector with a daemon still running; **stage
-3 adds replies, with images and files, from the card; stage 4 adds End session**. The plan for
-the later stages is below.
+3 adds replies, with images and files, from the card; stage 4 adds End session; stage 5 adds
+Launch, from the card and from an agent's request**. The plan for the later stages is below.
 
 ## What it never does
 
@@ -152,9 +152,10 @@ Per machine:
 | `update.agent_bridge_<slug>_update` | `homeassistant/update/<mnode>/update/config` | `…/update/state` = `installed_version`, `latest_version` (both the host's version), `title`, `release_summary: ""`, `in_progress: false`, `update_percentage: null`; `…/update/attributes` = `stage`, `stage_detail` | at start |
 | `sensor.agent_bridge_<slug>_usage_<agent>` (copilot, claude, codex; the numbered `copilot_2`–`_4` of further Copilot logins are withdrawn, below) | `homeassistant/sensor/<mnode>/usage_<agent>/config` | state = the window closest to running out, or `unknown`; attributes `client`, `label`, `account`, `account_id`, `plan`, `source`, `windows[{key,label,percent,used?,limit?,unit?,resets_at?,elapsed?}]`, `error`, `measured_at`, `machine`, `machine_slug`, `updated` | when a reading changes |
 
-`capabilities` is what lets the writer draw the right rows for this machine. Stage 1 reports
-`newSession`, `profile`, `resume`, `agent`, `tuning`, `permissions`, `resumeShare` false and
-`fleet` empty, so no launch card is drawn for it; `detailed` true only while the machine's
+`capabilities` is what lets the writer draw the right rows for this machine. Without a launcher
+that launches here the connector reports `newSession`, `profile`, `resume`, `agent`, `tuning`,
+`permissions`, `resumeShare` false, `launchRequest` 0 and `fleet` empty, so no launch card is
+drawn for it (stage 5, below, for a machine that launches); `detailed` true only while the machine's
 `input_boolean.agent_bridge_<slug>_detailed_activity` exists (agent-ha-bridge created it), so
 the Detail switch is drawn only when it has something to switch; `dev` true for a development
 build, so the machine row says `(dev)`.
@@ -190,10 +191,10 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
 Everything agent-ha-bridge publishes that the connector would not act on is withdrawn (an empty
 retained payload), so the dashboard never offers a control that silently does nothing:
 
-* per machine, at start: the install and update-check buttons, the launch card's prompt,
-  prompt payload, workspace, profile, agent, model, effort, context, resume and permissions
-  selectors, Launch, the launch result and its outcomes, the transfer request, and their state
-  topics (19 of the 28 machine topics); and the usage sensors of further Copilot logins
+* per machine, at start: the install and update-check buttons and the transfer request with its
+  state topic; when the host cannot launch here, also the launch card's prompt, prompt payload,
+  workspace, profile, agent, model, effort, context, resume and permissions selectors, Launch,
+  the launch result and its outcomes (4, or 19 without a launcher, of the 28 machine topics); and the usage sensors of further Copilot logins
   (`usage_copilot_2`–`_4`, nine topics), which the host does not report, so a reading the daemon
   left is not kept with nothing to refresh it (as `Remove-CopilotMqttUsageSensors` does). Forget
   clears all 46 (`Get-CopilotMqttMachineTopic`: 28 plus three per usage sensor);
@@ -205,7 +206,7 @@ retained payload), so the dashboard never offers a control that silently does no
 
 The generated dashboard draws "Entity not found" for those controls until the stage that serves
 them lands. **The connector is therefore for the disposable rehearsal only; no real machine
-enables it until the stages that serve what it withdraws (5–6) have landed** (see the plan).
+enables it until the stages that serve what it withdraws (phone notifications, and 6) have landed** (see the plan).
 
 ### Stage 2: answering from the card
 
@@ -410,6 +411,62 @@ Where stage 4 knowingly differs from the daemon:
 | Closing the window the bridge opened is the host's launcher's concern, not the connector's | The connector only presses; the host owns its windows |
 | Another notice replacing the question on the card (`Answer sent`, say) withdraws it: the next press asks again | The daemon pins the question back at its next publish, but until then a press would end a session whose card no longer asks |
 
+### Stage 5: Launch
+
+With the host's launcher available here (`ISessionLauncher`, the one `session.launch` and the
+app use), the machine's launch card is served as `Publish-DaemonNewSessionControls` publishes
+it: the prompt box (`text.agent_bridge_<slug>_new_prompt`, 255 characters), the whole-prompt
+sensor on the retained `newsession/promptpayload`, the workspace, profile, agent, resume, model,
+effort, context and permissions selectors, Launch (`newsession/start`) and its result, whose
+attributes are the retained `newsession/outcome`. `Fixtures/ha-launch.json` records the daemon's
+own functions: the configs for a full card and an empty one, the note's 255-character cut, the
+resume labels, the request kinds and their refusal texts, eleven requests resolved against the
+recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the capability flags.
+
+* **The card's choices are the host's**: its approved workspaces, its installed agents, Agency's
+  profiles, the selected agent's models, efforts and context sizes (with `Agent default` first),
+  and the twelve most recent resumable sessions, labelled as the daemon labels them. They are
+  read from the launcher every 30 s and when the agent selector changes; the configs are
+  republished only when what they offer changes. A selector holding nothing usable (`unknown`
+  after a Home Assistant restart, or a value no longer offered) is driven to the machine's
+  default; a choice someone made is never overwritten. `capabilities` then reports
+  `newSession`, `tuning`, `permissions` and `launchRequest: 1`, and `profile`, `resume` and
+  `agent` when there is such a row to draw.
+* **A person's press** launches what the card shows. The prompt is the payload's whole text when
+  it has one, else the box's; a tuning value the selected agent does not offer (left from
+  another agent) is the machine's default, `Agent default` is the agent's own; only the exact
+  `Allow all` allows all. The note says `Starting <agent> in <workspace> (<profile>)...` or
+  `Resuming <label>...`, then goes once the host says the session started, or becomes the
+  host's reason when it did not. A prompt that started a session is cleared from both boxes.
+* **An agent's request** (agent-ha-bridge #227): `{at, text, request, settings}` published to the
+  prompt payload and then a press. Its settings are the only ones used: one left out is the
+  machine's default, never what the card shows; one this machine does not offer is refused in
+  the daemon's words, naming what it does offer. Its outcome (`starting`, then `started`,
+  `refused`, `busy`, `failed` or `unconfirmed`, with the session id and what was launched) is
+  kept with the four before it, newest first, on `new_session_result`'s `recent`, which is what
+  the bridge's MCP `launch_agent_session` reads. A request published after the press waits for
+  its own; one more than 60 s older than the press is skipped, words and all, and the press
+  launches from the card; an id not matching `^[A-Za-z0-9-]{8,64}$` is refused; one already
+  served is never served again; and one that reached the machine more than five minutes after
+  its press is refused rather than started late. An agent's second press within 10 s of the one
+  that took a request launches nothing (the daemon's guard against two presses for one request).
+* **The purple edge**: a session an agent's press launched is `agent`-driven from the moment it
+  appears.
+* **One at a time.** The launch runs beside the passes (the host follows it to registration); a
+  press meanwhile launches nothing, and a request hears `busy`.
+* What the button holds when the connector first reads it is not a press, and the note is
+  cleared after ten minutes, as the daemon clears it.
+
+Where stage 5 knowingly differs from the daemon:
+
+| Difference | Why |
+|---|---|
+| A launched session's folder-trust prompt is never answered from Home Assistant | The host leaves trust to a person at the machine ([host-launch.md](host-launch.md)); the daemon's `trustFolders` is not carried over |
+| The transfer request (`sensor.agent_bridge_<slug>_transfer_request`) stays withdrawn | Sharing a session between machines is not a host feature yet |
+| Refusals the host makes itself (an unapproved workspace, an agent that is not installed) carry the host's reason, not the daemon's, on the card's path | The host's launcher decides what may start; the connector does not second-guess it |
+| Whether the card is served is decided when the connector starts | The host's launcher does not come and go while it runs |
+| The note is not cleared when the launched session registers, only when the host says it started (or after ten minutes) | The host reports registration as `Started`; there is no separate signal to wait for |
+
 ### The shadow: comparing with a running daemon
 
 `agent-bridge-host ha shadow [--json] [--window <seconds>]` runs one connector pass against a
@@ -420,7 +477,7 @@ reads the broker's retained topics for this machine and for every session either
 `asked_at`. It takes one reading of every agent's usage first, as `agent-bridge-host usage`
 does, so the usage sensors are compared too. Each topic is reported `same`, `differs`,
 `agent-ha-bridge only` or `host only`,
-with a note where the difference is by design (launch and transfer controls; the answer and
+with a note where the difference is by design (the launch card, whose choices are the launcher's, which a shadow does not ask for; install, update-check and transfer controls; the answer and
 stop controls when the host cannot use them; usage when no reading was given). It needs `baseUrl` and the stored token but not
 `enabled`, and it ignores G5: it is the one thing that is meant to run while the daemon does,
 for the week of shadow running before a machine's cutover (§10 stage 4). It complements
@@ -532,7 +589,7 @@ against its own `homeAssistant.agentUserIds` to set `driver` (stage 2). Agents d
 migrated machine go on using their own token, unchanged.
 
 **Notifications.** The phone flow (`notify.mobile_app_*` with answer buttons, and
-`mobile_app_notification_action` events back) is stage 5. Until then a migrated machine's
+`mobile_app_notification_action` events back) is stage 5b. Until then a migrated machine's
 questions reach phones through the host's own Web Push, not through Home Assistant.
 
 ## Command handling: the plan for later stages
@@ -550,7 +607,8 @@ does), never by subscribing to the broker.
 | 2 Answers (done) | The full per-session set but stop; arm, read, answer, tell the card, clear; `driver` from `context.user_id`; the read-only shadow; the container CI job (above and below) | `Set-CopilotMqttDecision`, `Publish-CopilotMqttDecisionFields`, `Clear-CopilotMqttDecision`, `daemon-decisions.ps1`, card `answer_consumed_at` |
 | 3 Replies and attachments (done) | The reply card's publish (text, image ids, inline files) and the reply box with Send; images from Home Assistant's image store, deleted after; the files through `AttachmentStore` and `ReplyService`; driver pending until the turn starts (above) | `daemon-replies.ps1`, card reply path |
 | 4 Stop (done) | `button.<node>_stop`, two presses when the session is not idle, the confirm and lapsed notes pinned on the activity line; `StopService`; `ending` (above) | `Invoke-PendingStops`, `Get-DaemonCardSummary`, `CopilotEndSessionConfirmNote` |
-| 5 Launch and notifications | The launch card's controls (`Publish-CopilotMqttNewSession`) from the host's approved workspaces and agents; the 255-character limit lifted through the retained `newsession/promptpayload` (`{at, text, request, settings}`); `new_session_result` with `recent` per request (its attributes, on the retained `newsession/outcome`); `capabilities.newSession`/`launchRequest`; transfer requests. Phone notifications with answer buttons and their actions | `daemon-launch.ps1`, `daemon-decision-notify.ps1` |
+| 5 Launch (done) | The launch card's controls (`Publish-CopilotMqttNewSession`) from the host's approved workspaces and agents; the 255-character limit lifted through the retained `newsession/promptpayload` (`{at, text, request, settings}`); `new_session_result` with `recent` per request (its attributes, on the retained `newsession/outcome`); `capabilities.newSession`/`launchRequest`; the purple edge for a session an agent launched (above). The transfer request stays withdrawn | `daemon-launch.ps1`, `Publish-DaemonNewSessionControls`, `Resolve-DaemonRequestedLaunch` |
+| 5b Phone notifications | `notify.mobile_app_*` with the question's answer buttons, and the `mobile_app_notification_action` events back through `AnswerService`; the response notification when a turn ends | `daemon-decision-notify.ps1`, `Send-BridgeResponseNotification` |
 | 6 Update buttons | `button.agent_bridge_<slug>_check_updates` forces a fresh release check, and `button.agent_bridge_<slug>_install_update` starts the product's own update (the app's Velopack update on Windows), with `stage`/`stage_detail` and `update_percentage` from it, and `latest_version` from this product's release feed — never agent-ha-bridge's (G2) | `Publish-CopilotMqttUpdate`, `daemon-maintenance.ps1` |
 | 7 Upkeep | The Detailed activity helper created when absent (`input_boolean/create`, never recreated); the liveness repair for a sensor Home Assistant has stopped applying, with its attempt limit (#177, #202); forget-machine (the card's X clears this machine's topics from the browser; the connector must not resurrect a machine that was forgotten while it was off) | `Initialize-CopilotVerboseToggle`, `Confirm-DaemonOnlineHeartbeat`, `Get-BridgeMachineForgetTopic` |
 
@@ -589,6 +647,10 @@ Assistant itself rather than a fake:
 * an image uploaded to Home Assistant's image store (`/api/image/upload`, as the card does) and
   a file, sent in one reply-card publish that is not retained, reach the host's reply delivery
   byte for byte, and the image is then deleted from the store;
+* the launch card's selectors reach the machine's defaults; a workspace chosen and words typed
+  through Home Assistant's services and a Launch press reach the host's launcher, and the box is
+  reset to `' '`; an agent's request published to the prompt payload and a press reach it with
+  the request's own settings, and `new_session_result`'s `recent` says it `started`;
 * with no dashboard at all, an ended session is retired, and nothing it published is left
   retained;
 * the shadow, against the daemon's own recorded publications seeded into the broker, reports

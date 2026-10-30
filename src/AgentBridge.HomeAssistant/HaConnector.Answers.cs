@@ -73,14 +73,18 @@ public sealed partial class HaConnector
 
     // Card controls changed: the watch reports them here, numbered in the order they came, and
     // the next pass reads the card.
-    internal void Observe(HaTrigger hit) => hits.Enqueue((Interlocked.Increment(ref hitSeq), hit));
+    internal void Observe(HaTrigger hit)
+    {
+        if (LaunchHit(hit)) { return; }
+        hits.Enqueue((Interlocked.Increment(ref hitSeq), hit));
+    }
 
     // The entities a watch should cover: every published session's controls.
     internal IReadOnlyCollection<string> WatchedEntities()
     {
         lock (gate)
         {
-            return [.. published.Values.SelectMany(p => Controls(p.Node)).Order(StringComparer.Ordinal)];
+            return [.. published.Values.SelectMany(p => Controls(p.Node)).Concat(LaunchWatched()).Order(StringComparer.Ordinal)];
         }
     }
 

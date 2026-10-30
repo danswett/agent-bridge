@@ -37,6 +37,7 @@ $names = [ordered]@{
     DecisionsOutput = 'ha-decisions.json'
     RepliesOutput   = 'ha-replies.json'
     StopsOutput     = 'ha-stops.json'
+    LaunchOutput    = 'ha-launch.json'
 }
 
 $OutDir = [IO.Path]::GetFullPath($OutDir)

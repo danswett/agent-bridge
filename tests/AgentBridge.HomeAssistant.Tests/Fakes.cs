@@ -258,6 +258,8 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         var stateTopic = config["state_topic"]?.GetValue<string>();
         var state = stateTopic is { } st && Retained.TryGetValue(st, out var v) ? v : "unknown";
         DateTimeOffset? changed = stateTopic is not null && changedAt.TryGetValue(stateTopic, out var at0) ? at0 : null;
+        DateTimeOffset? updated = changed;
+        if (config["json_attributes_topic"]?.GetValue<string>() is { } attrTopic && changedAt.TryGetValue(attrTopic, out var at1) && (updated is null || at1 > updated)) { updated = at1; }
         // The one value template the contract uses: the reply payload's stamp.
         if (config["value_template"]?.GetValue<string>() == "{{ value_json.at }}" && state != "unknown")
         {
@@ -267,7 +269,7 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         if (optimistic.TryGetValue(uniqueId, out var o)) { (state, user) = o; }
         var attributes = config["json_attributes_topic"]?.GetValue<string>() is { } at && Retained.TryGetValue(at, out var a) ? JsonNode.Parse(a)!.AsObject() : [];
         if (config["options"] is JsonArray options) { attributes["options"] = options.DeepClone(); }
-        return new HaState(entityId, state, JsonDocument.Parse(attributes.ToJsonString()).RootElement.Clone(), user, changed);
+        return new HaState(entityId, state, JsonDocument.Parse(attributes.ToJsonString()).RootElement.Clone(), user, changed, updated);
     }
 
     public Task<IReadOnlyList<HaRegistryEntry>> ListEntityRegistryAsync(CancellationToken cancellationToken = default)
