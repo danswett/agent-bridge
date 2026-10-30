@@ -146,6 +146,8 @@ function ConvertTo-Fixture {
         $value = $payload | ConvertFrom-Json -AsHashtable -Depth 20 -DateKind String
         if ($value -is [System.Collections.IDictionary] -and $value.Contains('updated')) { $value['updated'] = '<now>' }
         if ($value -is [System.Collections.IDictionary] -and $value.Contains('asked_at')) { $value['asked_at'] = '<now>' }
+        # The heartbeat's time, which is all its attributes topic carries.
+        if ($Publication.topic -like '*/online/attr' -and $value -is [System.Collections.IDictionary] -and $value.Contains('at')) { $value['at'] = '<now>' }
         $json = $true
     }
     [ordered]@{ topic = $Publication.topic; retain = $Publication.retain; qos = $Publication.qos; json = $json; payload = $value }
@@ -525,6 +527,9 @@ Write-Host "wrote $full"
 # are the contract; the typed text is recorded for reference (the host stages files its own way).
 
 Import-SpecFunction 'hooks\daemon-replies.ps1' @('Get-BridgeReplyPayload', 'New-BridgeAttachmentPrompt', 'Send-DaemonCardPayload', 'Send-DaemonReplyBoxText', 'Invoke-DaemonReply')
+# What a failed delivery's card says to do about it (agent-ha-bridge #249): the daemon's own rule,
+# which adds a hint only for a detail it recognises.
+Import-SpecFunction 'hooks\decision-inject.ps1' @('Get-BridgeConsoleFailureHint')
 Import-SpecFunction 'hooks\agent-bridge-daemon.ps1' @('Set-DaemonSessionProperty', 'Set-DaemonDriverPending', 'Update-DaemonDriverPendingStamp', 'Test-DaemonPayloadJustDelivered', 'Test-DaemonDriverPending')
 
 function Get-SpecConfigConstant {

@@ -124,7 +124,9 @@ public static partial class HaContract
 
     // Publish-CopilotMqttMachineOnlineConfig. The beat on its state topic is deliberately not
     // retained: expire_after turns the machine offline when beats stop, and a Home Assistant
-    // restart cannot resurrect a stale "online".
+    // restart cannot resurrect a stale "online". The beat's time rides on its attributes topic,
+    // since a state repeating "online" is not written and last_reported would stand still
+    // (agent-ha-bridge #202).
     public static (string Topic, JsonObject Config) OnlineConfig(string slug, string machineName, int expireAfter = OnlineExpireSeconds) =>
         (DiscoveryTopic("binary_sensor", MachineNode(slug), "online"), new JsonObject
         {
@@ -132,6 +134,7 @@ public static partial class HaContract
             ["unique_id"] = $"agent_bridge_{slug}_online",
             ["object_id"] = $"agent_bridge_{slug}_online",
             ["state_topic"] = $"{MachineTopicRoot(slug)}/online/state",
+            ["json_attributes_topic"] = OnlineAttributesTopic(slug),
             ["device_class"] = "connectivity",
             ["payload_on"] = "online",
             ["payload_off"] = "offline",
@@ -140,6 +143,15 @@ public static partial class HaContract
         });
 
     public static string OnlineStateTopic(string slug) => $"{MachineTopicRoot(slug)}/online/state";
+    public static string OnlineAttributesTopic(string slug) => $"{MachineTopicRoot(slug)}/online/attr";
+
+    // Publish-CopilotMqttMachineHeartbeat: two unretained messages, the state unchanged and the
+    // beat's time beside it.
+    public static IReadOnlyList<HaMessage> Heartbeat(string slug, DateTimeOffset at) =>
+    [
+        new(OnlineStateTopic(slug), "online", false),
+        new(OnlineAttributesTopic(slug), Serialize(new JsonObject { ["at"] = at.ToString("o", System.Globalization.CultureInfo.InvariantCulture) }), false),
+    ];
 
     // Publish-CopilotMqttGlobalStatus: the machine's session list, which is also how every other
     // machine and the dashboard writer learn what this one runs.
@@ -323,7 +335,8 @@ public static partial class HaContract
         ];
     }
 
-    // Get-CopilotMqttMachineTopic: every retained topic of one machine's own entities (25).
+    // Get-CopilotMqttMachineTopic: every topic of one machine's own entities, its usage sensors
+    // included (28 + 3 per usage sensor = 46).
     public static IReadOnlyList<string> MachineTopics(string slug)
     {
         var node = MachineNode(slug);
@@ -332,6 +345,7 @@ public static partial class HaContract
         [
             DiscoveryTopic("update", node, "update"),
             DiscoveryTopic("button", node, "install_update"),
+            DiscoveryTopic("button", node, "check_updates"),
             DiscoveryTopic("text", node, "new_prompt"),
             DiscoveryTopic("sensor", node, "new_prompt_payload"),
             DiscoveryTopic("sensor", node, "transfer_request"),
@@ -350,21 +364,30 @@ public static partial class HaContract
             $"{root}/update/state",
             $"{root}/update/attributes",
             $"{root}/newsession/result",
+            $"{root}/newsession/outcome",
             $"{root}/newsession/promptpayload",
             $"{root}/transfer/request",
             $"{root}/online/state",
+            $"{root}/online/attr",
             $"{root}/global/state",
             $"{root}/global/attr",
+            .. UsageTopics(slug),
         ];
     }
 
     public static readonly IReadOnlyList<string> UsageClients = ["copilot", "claude", "codex"];
 
+    // Get-CopilotMqttUsageSensorKey: one usage sensor per client, and the numbered ones for further
+    // Copilot logins (usage.copilotAccounts, agent-ha-bridge #200).
+    public const int UsageAccountSlots = 3;
+    public static readonly IReadOnlyList<string> UsageSensorKeys =
+        [.. UsageClients, .. Enumerable.Range(2, UsageAccountSlots).Select(i => $"copilot_{i}")];
+
     // Get-CopilotMqttUsageTopics.
     public static IReadOnlyList<string> UsageTopics(string slug, IEnumerable<string>? clients = null)
     {
         var topics = new List<string>();
-        foreach (var client in clients ?? UsageClients)
+        foreach (var client in clients ?? UsageSensorKeys)
         {
             topics.Add(DiscoveryTopic("sensor", MachineNode(slug), $"usage_{client}"));
             topics.Add(UsageStateTopic(slug, client));

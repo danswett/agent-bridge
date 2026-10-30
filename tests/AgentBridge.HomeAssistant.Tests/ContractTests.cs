@@ -56,10 +56,11 @@ public class ContractTests
     [Fact]
     public void Cleanup_topic_lists_match_the_contract_and_its_tripwire_counts()
     {
-        // agent-ha-bridge's test-install-clients.ps1 holds these counts as tripwires: 25 machine
-        // topics, and 17 plus one per field slot for a session.
+        // agent-ha-bridge's test-install-clients.ps1 holds these counts as tripwires: 28 machine
+        // topics plus three per usage sensor, and 17 plus one per field slot for a session.
         Assert.Equal(Contract.Strings("machine.topics"), HaContract.MachineTopics(Slug));
-        Assert.Equal(25, HaContract.MachineTopics(Slug).Count);
+        Assert.Equal(28 + 3 * HaContract.UsageSensorKeys.Count, HaContract.MachineTopics(Slug).Count);
+        Assert.Equal(46, HaContract.MachineTopics(Slug).Count);
         Assert.Equal(Contract.Strings("session.discoveryTopics"), HaContract.SessionDiscoveryTopics(Node));
         Assert.Equal(Contract.Strings("session.stateTopics"), HaContract.SessionStateTopics(Node));
         Assert.Equal(17 + HaContract.MaxFields, HaContract.SessionRemoval(Node).Count);
@@ -100,7 +101,15 @@ public class ContractTests
     {
         var (onlineTopic, online) = HaContract.OnlineConfig(Slug, Machine);
         Contract.Equal(Contract.Publications("onlineConfig"), [new Published(onlineTopic, HaContract.Serialize(online), true)]);
-        Contract.Equal(Contract.Publications("heartbeat"), [new Published(HaContract.OnlineStateTopic(Slug), "online", false)]);
+        // The beat: the state exactly, then its time, which only has to be a time.
+        var beat = Contract.Publications("heartbeat");
+        var ours = HaContract.Heartbeat(Slug, DateTimeOffset.Now).Select(Published.Of).ToList();
+        Assert.Equal(beat.Select(p => (p.Topic, p.Retain)), ours.Select(p => (p.Topic, p.Retain)));
+        Contract.Equal(beat[0], ours[0]);
+        Assert.Equal("<now>", Assert.Single(JsonNode.Parse(beat[1].Payload)!.AsObject(), p => p.Key == "at").Value!.GetValue<string>());
+        var at = Assert.Single(JsonNode.Parse(ours[1].Payload)!.AsObject());
+        Assert.Equal("at", at.Key);
+        Assert.True(DateTimeOffset.TryParse(at.Value!.GetValue<string>(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _));
 
         var update = Contract.Publications("update");
         var (updateTopic, updateConfig) = HaContract.UpdateConfig(Slug, Machine);

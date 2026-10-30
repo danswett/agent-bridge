@@ -145,7 +145,8 @@ public sealed class LiveHomeAssistantTests : IDisposable
             Assert.NotNull(await ha.GetStateAsync(entity));
         }
         var slug = HaContract.MachineSlug("CI-CARD");
-        await Until(HaContract.MachineEntityId("binary_sensor", "online", slug), s => s.State == "on");
+        // The beat's time lands on the sensor's attributes (agent-ha-bridge #202).
+        await Until(HaContract.MachineEntityId("binary_sensor", "online", slug), s => s.State == "on" && s.Attributes.TryGetProperty("at", out _));
         await Until(HaContract.MachineEntityId("sensor", "sessions", slug), s => s.State == "1");
     }
 
