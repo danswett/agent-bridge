@@ -43,6 +43,21 @@ public interface IHomeAssistant
     // Every message the broker holds or delivers on these topic filters within the window, read
     // through Home Assistant's mqtt/subscribe. Read-only: used by the shadow comparison.
     Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default);
+
+    // GET /api/image/serve/<id>/original: an image the reply card uploaded to Home Assistant's
+    // image store, or null when there is none by that id. Refused past maxBytes, without reading
+    // further.
+    Task<byte[]?> DownloadImageAsync(string imageId, long maxBytes, CancellationToken cancellationToken = default);
+
+    // image/delete: the uploaded image is no longer needed (Remove-BridgeHomeAssistantImage).
+    Task DeleteImageAsync(string imageId, CancellationToken cancellationToken = default);
+}
+
+// An id from Home Assistant's image store, as the reply card names it: letters and digits only,
+// so it goes into a URL and a command as itself.
+public static class HaImageId
+{
+    public static bool IsValid(string? id) => id is { Length: > 0 and <= 64 } && id.All(char.IsAsciiLetterOrDigit);
 }
 
 // A state as Home Assistant reports it, with the account behind its last change (context.user_id)
@@ -199,6 +214,32 @@ public sealed class HomeAssistantClient : IHomeAssistant
         }
         // Home Assistant's answer for a path with no dashboard, or one with no saved config.
         catch (HaCommandException e) when (e.Code == "config_not_found") { return HaDashboard.NotFound; }
+    }
+
+    public async Task<byte[]?> DownloadImageAsync(string imageId, long maxBytes, CancellationToken cancellationToken = default)
+    {
+        if (!HaImageId.IsValid(imageId)) { throw new ArgumentException("not an image id", nameof(imageId)); }
+        using var request = Request(HttpMethod.Get, $"api/image/serve/{imageId}/original");
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) { return null; }
+        await EnsureAsync(response, "GET image", cancellationToken);
+        if (response.Content.Headers.ContentLength is { } length && length > maxBytes) { throw new InvalidDataException($"the image is larger than {maxBytes} bytes"); }
+        await using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var copy = new MemoryStream();
+        var buffer = new byte[81920];
+        int read;
+        while ((read = await body.ReadAsync(buffer, cancellationToken)) > 0)
+        {
+            if (copy.Length + read > maxBytes) { throw new InvalidDataException($"the image is larger than {maxBytes} bytes"); }
+            copy.Write(buffer, 0, read);
+        }
+        return copy.ToArray();
+    }
+
+    public async Task DeleteImageAsync(string imageId, CancellationToken cancellationToken = default)
+    {
+        if (!HaImageId.IsValid(imageId)) { throw new ArgumentException("not an image id", nameof(imageId)); }
+        await CommandAsync(new JsonObject { ["type"] = "image/delete", ["image_id"] = imageId }, cancellationToken);
     }
 
     // One WebSocket command: auth_required, auth, auth_ok, then the command and its result.

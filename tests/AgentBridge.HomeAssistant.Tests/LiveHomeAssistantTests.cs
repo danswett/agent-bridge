@@ -39,6 +39,7 @@ public sealed class LiveHomeAssistantTests : IDisposable
     readonly HomeAssistantClient ha;
     readonly FakeSessions sessions = new();
     readonly List<AnswerRequest> answered = [];
+    readonly List<HaReply> replied = [];
     readonly List<string> log = [];
 
     public LiveHomeAssistantTests()
@@ -62,6 +63,10 @@ public sealed class LiveHomeAssistantTests : IDisposable
     {
         lock (answered) { answered.Add(r); }
         return Task.FromResult(new AnswerResult(AnswerOutcome.Delivered));
+    }, reply: (r, _) =>
+    {
+        lock (replied) { replied.Add(r); }
+        return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
     });
 
     static string Session() => Guid.NewGuid().ToString();
@@ -225,6 +230,82 @@ public sealed class LiveHomeAssistantTests : IDisposable
         Assert.Equal(HaShadow.DaemonOnly, report.Differences.Single(d => d.Topic == HaContract.DiscoveryTopic("button", node, "stop")).Verdict);
         var after = await ha.ReadTopicsAsync(filters, TimeSpan.FromSeconds(3));
         Assert.Equal(before.Select(m => (m.Topic, m.Payload)).Order(), after.Select(m => (m.Topic, m.Payload)).Order());
+    }
+
+    [HomeAssistantFact]
+    public async Task The_reply_box_and_send_reach_the_hosts_reply_and_the_box_is_cleared()
+    {
+        var id = Session();
+        var node = HaContract.NodeId(id);
+        Ask(id, null);
+        await using var c = Connector("CI-REPLY");
+        c.Start();
+        await Until(SessionEntities.Submit(node), _ => true);
+        await Until(SessionEntities.Reply(node), _ => true);
+        // The connector reads what the card holds before taking anything from it.
+        await Task.Delay(TimeSpan.FromSeconds(2));
+
+        await ha.CallServiceAsync("text", "set_value", new JsonObject { ["entity_id"] = SessionEntities.Reply(node), ["value"] = "Ship it after the hotfix" });
+        await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = SessionEntities.Submit(node) });
+        await Until(() => { lock (replied) { return replied.Count == 1; } }, "the reply never arrived");
+        Assert.Equal("Ship it after the hotfix", replied[0].Text);
+        Assert.Equal(id, replied[0].SessionId);
+        await Until(SessionEntities.Activity(node), s => s.State == "Reply sent"
+            && s.Attributes.TryGetProperty("sent", out var sent) && sent.GetString() == "Ship it after the hotfix");
+        await Until(SessionEntities.Reply(node), s => s.State == HaDecision.ReplyBlank);
+    }
+
+    [HomeAssistantFact]
+    public async Task A_reply_card_publish_with_an_image_and_a_file_reaches_the_hosts_reply_and_the_image_leaves_the_store()
+    {
+        var id = Session();
+        var node = HaContract.NodeId(id);
+        Ask(id, null);
+        await using var c = Connector("CI-IMAGE");
+        c.Start();
+        await Until(SessionEntities.ReplyPayload(node), _ => true);
+        await Task.Delay(TimeSpan.FromSeconds(2));
+
+        // What the card does: the image into Home Assistant's own store, then one publish naming
+        // it, not retained, with the file inline.
+        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==");
+        var image = await UploadImageAsync(png);
+        Assert.Equal(png, await ha.DownloadImageAsync(image, 1024 * 1024));
+        var notes = "line one\nline two\n"u8.ToArray();
+        await ha.PublishAsync(HaContract.Topics(node).ReplyPayload, HaContract.Serialize(new JsonObject
+        {
+            ["at"] = DateTimeOffset.UtcNow.ToString("o"),
+            ["text"] = "What is this?",
+            ["images"] = new JsonArray(new JsonObject { ["id"] = image, ["name"] = "dot.png", ["content_type"] = "image/png" }),
+            ["files"] = new JsonArray(new JsonObject { ["name"] = "notes.txt", ["content_type"] = "text/plain", ["b64"] = Convert.ToBase64String(notes) }),
+        }), false);
+
+        await Until(() => { lock (replied) { return replied.Count == 1; } }, "the reply never arrived");
+        Assert.Equal("What is this?", replied[0].Text);
+        Assert.Equal(["dot.png", "notes.txt"], replied[0].Files.Select(f => f.Name));
+        Assert.Equal(png, replied[0].Files[0].Bytes);
+        Assert.Equal(notes, replied[0].Files[1].Bytes);
+        await Until(SessionEntities.Activity(node), s => s.State == "Reply sent");
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (await ha.DownloadImageAsync(image, 1024 * 1024) is not null)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the image was never deleted from Home Assistant's store");
+            await Task.Delay(250);
+        }
+    }
+
+    // What the reply card does with an image: POST /api/image/upload, which answers with its id.
+    async Task<string> UploadImageAsync(byte[] png)
+    {
+        using var content = new MultipartFormDataContent();
+        var file = new ByteArrayContent(png);
+        file.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+        content.Add(file, "file", "dot.png");
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(new Uri(LiveHomeAssistant.Url!), "/api/image/upload")) { Content = content };
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", LiveHomeAssistant.Token);
+        using var response = await http.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+        return JsonNode.Parse(await response.Content.ReadAsStringAsync())!["id"]!.GetValue<string>();
     }
 
     // auth/current_user: the account behind the test's token, as Home Assistant records presses.

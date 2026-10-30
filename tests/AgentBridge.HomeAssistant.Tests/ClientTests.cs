@@ -186,6 +186,37 @@ public class ClientTests
     }
 
     [Fact]
+    public async Task An_image_is_fetched_from_the_store_by_id_and_a_missing_or_oversized_one_is_not_taken()
+    {
+        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4 };
+        var handler = new Handler((r, _) => r.RequestUri!.AbsolutePath switch
+        {
+            "/api/image/serve/abc123/original" => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(png) },
+            "/api/image/serve/big/original" => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(new byte[100]) },
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        var client = new HomeAssistantClient(new Uri("http://ha.test:8123"), Token, new HttpClient(handler));
+
+        Assert.Equal(png, await client.DownloadImageAsync("abc123", 1024));
+        Assert.Equal("Bearer", handler.Seen[0].Request.Headers.Authorization!.Scheme);
+        Assert.Null(await client.DownloadImageAsync("gone", 1024));
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.DownloadImageAsync("big", 99));
+        // An id that is not one never reaches a URL.
+        var seen = handler.Seen.Count;
+        await Assert.ThrowsAsync<ArgumentException>(() => client.DownloadImageAsync("../states", 1024));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.DeleteImageAsync("a/b"));
+        Assert.Equal(seen, handler.Seen.Count);
+    }
+
+    [Fact]
+    public async Task An_image_is_deleted_from_the_store_by_its_own_command()
+    {
+        var (client, received, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = null });
+        await client.DeleteImageAsync("abc123");
+        Contract.AssertJson(JsonNode.Parse("""{"id":1,"type":"image/delete","image_id":"abc123"}"""), received[1]);
+    }
+
+    [Fact]
     public async Task A_dashboard_is_read_as_served_and_its_absence_is_an_answer()
     {
         var (found, received, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonObject { ["views"] = new JsonArray() } });

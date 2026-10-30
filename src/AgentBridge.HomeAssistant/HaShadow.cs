@@ -181,6 +181,8 @@ public static partial class HaShadow
 
         public Task CallServiceAsync(string domain, string service, JsonObject data, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task RenameEntityAsync(string entityId, string newEntityId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteImageAsync(string imageId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<byte[]?> DownloadImageAsync(string imageId, long maxBytes, CancellationToken cancellationToken = default) => real.DownloadImageAsync(imageId, maxBytes, cancellationToken);
         public async IAsyncEnumerable<HaTrigger> WatchAsync(IReadOnlyCollection<string> entityIds, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             await Task.CompletedTask;

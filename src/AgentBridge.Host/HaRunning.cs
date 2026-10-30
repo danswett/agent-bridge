@@ -16,7 +16,8 @@ public sealed class HaRunning : IAsyncDisposable
     HaRunning(HaConnector connector, HttpClient http, Mutex claim) { this.connector = connector; this.http = http; this.claim = claim; }
 
     public static HaRunning? Start(HostSettings settings, string folder, ISessionSource source, UsageMonitor usage,
-        Func<string?>? agentHaBridge, bool devBuild, string version, Action<string> log, ISessionAnswerer? answers = null)
+        Func<string?>? agentHaBridge, bool devBuild, string version, Action<string> log, ISessionAnswerer? answers = null,
+        Func<HaReply, CancellationToken, Task<AgentBridge.Protocol.ReplyResult>>? reply = null)
     {
         foreach (var p in settings.HomeAssistantProblems) { log($"config.json: {p}"); }
         var ha = settings.HomeAssistant;
@@ -64,10 +65,10 @@ public sealed class HaRunning : IAsyncDisposable
             DashboardUrlPath = ha.DashboardUrlPath,
             StateFile = Path.Combine(folder, "ha-connector.json"),
             AgentUserIds = ha.AgentUserIds,
-        }, new HomeAssistantClient(ha.BaseUrl!, token, http), source, agentHaBridge!, () => usage.Current, log, answer: answer);
+        }, new HomeAssistantClient(ha.BaseUrl!, token, http), source, agentHaBridge!, () => usage.Current, log, answer: answer, reply: reply);
         connector.Start();
         log($"the Home Assistant connector is on: {ha.BaseUrl} as agent_bridge_{slug}{(ha.Disposable ? " (disposable)" : "")}; " +
-            (answer is null ? "status only" : "status and answers") + ", no replies, launches or stops yet");
+            (answer is null ? "status only" : reply is null ? "status and answers" : "status, answers and replies") + ", no launches or stops yet");
         return new HaRunning(connector, http, claim);
     }
 

@@ -87,7 +87,7 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `homeAssistant.detailedActivity` | `true` | What cards carry when this machine has no Detailed activity switch in Home Assistant |
 | `homeAssistant.machineName` | the computer's | The name the entities are keyed on (`agent_bridge_<slug>`). Only for a rehearsal posing as another machine on a disposable Home Assistant |
 | `homeAssistant.disposable` | `false` | Says `baseUrl` is a disposable Home Assistant. A development build writes to no other |
-| `homeAssistant.agentUserIds` | `[]` | Home Assistant user ids whose presses are an agent's, as agent-ha-bridge's own setting: an answer they send makes the next turn agent-driven (the card's purple edge). A list of strings |
+| `homeAssistant.agentUserIds` | `[]` | Home Assistant user ids whose presses are an agent's, as agent-ha-bridge's own setting: an answer or reply they send makes the next turn agent-driven (the card's purple edge). A list of strings |
 
 How a file that is wrong is read: one that cannot be read or parsed turns both remote
 approval and launching off; a `permissions.remoteApproval` that is not `true` or `false`

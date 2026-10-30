@@ -1,0 +1,389 @@
+{
+  "source": {
+    "repository": "danswett/agent-ha-bridge",
+    "commit": "12cc97aad280d77a3593832f1eac6a5b65e247f8",
+    "dirty": false,
+    "generator": "tools/ha-contract/Export-HaContract.ps1",
+    "note": "Recorded by running agent-ha-bridge's own functions with a recording transport. Regenerate; do not edit by hand."
+  },
+  "sessionId": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20",
+  "machine": "DSWETT-DEV-VM1",
+  "constants": {
+    "replyCommitAttempts": 6,
+    "replyCommitWaitMs": 500,
+    "submitArmSeconds": 600,
+    "driverArmSeconds": 600,
+    "replyBlank": " ",
+    "inlineFileMaxBytes": 262144
+  },
+  "cases": [
+    {
+      "name": "cardText",
+      "path": "card",
+      "handled": true,
+      "notes": [
+        {
+          "summary": "Sending...",
+          "extra": {}
+        },
+        {
+          "summary": "Reply sent",
+          "extra": {
+            "at": "<time>",
+            "sent": "Ship it after the hotfix"
+          }
+        }
+      ],
+      "typed": [
+        "Ship it after the hotfix"
+      ],
+      "deletedImages": [],
+      "calls": [],
+      "entry": {
+        "LastReplyPayloadAt": "2026-10-29T20:00:00.000Z",
+        "Driver": "human",
+        "DriverPending": "True"
+      }
+    },
+    {
+      "name": "cardAttachments",
+      "path": "card",
+      "handled": true,
+      "notes": [
+        {
+          "summary": "Sending...",
+          "extra": {}
+        },
+        {
+          "summary": "Reply sent",
+          "extra": {
+            "at": "<time>",
+            "sent": "What is this?"
+          }
+        }
+      ],
+      "typed": [
+        "@C:\\staged\\0123abcd.png @C:\\staged\\notes.txt What is this?"
+      ],
+      "deletedImages": [
+        "0123abcd"
+      ],
+      "calls": [],
+      "entry": {
+        "LastReplyPayloadAt": "2026-10-29T20:00:00.000Z",
+        "Driver": "human",
+        "DriverPending": "True"
+      }
+    },
+    {
+      "name": "cardAgent",
+      "path": "card",
+      "handled": true,
+      "notes": [
+        {
+          "summary": "Sending...",
+          "extra": {}
+        },
+        {
+          "summary": "Reply sent",
+          "extra": {
+            "at": "<time>",
+            "sent": "Carry on"
+          }
+        }
+      ],
+      "typed": [
+        "Carry on"
+      ],
+      "deletedImages": [],
+      "calls": [],
+      "entry": {
+        "LastReplyPayloadAt": "2026-10-29T20:00:00.000Z",
+        "Driver": "agent",
+        "DriverPending": "True"
+      }
+    },
+    {
+      "name": "cardFailed",
+      "path": "card",
+      "handled": true,
+      "notes": [
+        {
+          "summary": "Sending...",
+          "extra": {}
+        },
+        {
+          "summary": "Reply NOT sent",
+          "extra": {
+            "error": "the console refused the keys",
+            "unsent": "Ship it"
+          }
+        }
+      ],
+      "typed": [
+        "Ship it"
+      ],
+      "deletedImages": [],
+      "calls": [],
+      "entry": {
+        "LastReplyPayloadAt": "2026-10-29T20:00:00.000Z",
+        "Driver": "human",
+        "DriverPending": "False"
+      }
+    },
+    {
+      "name": "cardImageFails",
+      "path": "card",
+      "handled": true,
+      "notes": [
+        {
+          "summary": "Sending...",
+          "extra": {}
+        },
+        {
+          "summary": "Reply NOT sent",
+          "extra": {
+            "error": "An image could not be staged privately; no reply was sent and source images were kept."
+          }
+        }
+      ],
+      "typed": [],
+      "deletedImages": [],
+      "calls": [],
+      "entry": {
+        "LastReplyPayloadAt": "2026-10-29T20:00:00.000Z",
+        "Driver": "human",
+        "DriverPending": "False"
+      }
+    },
+    {
+      "name": "cardIncomplete",
+      "path": "card",
+      "handled": true,
+      "notes": [
+        {
+          "summary": "Reply NOT sent",
+          "extra": {
+            "error": "The attachment metadata is incomplete; no reply was sent."
+          }
+        }
+      ],
+      "typed": [],
+      "deletedImages": [],
+      "calls": [],
+      "entry": {
+        "LastReplyPayloadAt": "2026-10-29T20:00:00.000Z",
+        "Driver": "human",
+        "DriverPending": "False"
+      }
+    },
+    {
+      "name": "cardTagged",
+      "path": "card",
+      "handled": false,
+      "notes": [],
+      "typed": [],
+      "deletedImages": [],
+      "calls": [],
+      "entry": {
+        "LastReplyPayloadAt": "2026-10-29T20:00:00.000Z"
+      }
+    },
+    {
+      "name": "cardBlank",
+      "path": "card",
+      "handled": false,
+      "notes": [],
+      "typed": [],
+      "deletedImages": [],
+      "calls": [],
+      "entry": {}
+    },
+    {
+      "name": "cardRepeat",
+      "path": "card",
+      "handled": false,
+      "notes": [],
+      "typed": [],
+      "deletedImages": [],
+      "calls": [],
+      "entry": {
+        "LastReplyPayloadAt": "2026-10-29T20:00:00.000Z"
+      }
+    },
+    {
+      "name": "boxText",
+      "path": "box",
+      "handled": null,
+      "notes": [
+        {
+          "summary": "Sending...",
+          "extra": {}
+        },
+        {
+          "summary": "Reply sent",
+          "extra": {
+            "at": "<time>",
+            "sent": "Ship it after the hotfix"
+          }
+        }
+      ],
+      "typed": [
+        "Ship it after the hotfix"
+      ],
+      "deletedImages": [],
+      "calls": [
+        {
+          "service": "text.set_value",
+          "entity_id": "text.agent_bridge_6fcbab0c1d2e4f50_reply",
+          "value": " "
+        }
+      ],
+      "entry": {
+        "LastSubmitAt": "2026-10-29T20:00:05.000000+00:00",
+        "PendingSubmitAt": "",
+        "Driver": "human",
+        "DriverPending": "True"
+      }
+    },
+    {
+      "name": "boxFailed",
+      "path": "box",
+      "handled": null,
+      "notes": [
+        {
+          "summary": "Sending...",
+          "extra": {}
+        },
+        {
+          "summary": "Reply NOT sent",
+          "extra": {
+            "error": "the console refused the keys",
+            "unsent": "Ship it"
+          }
+        }
+      ],
+      "typed": [
+        "Ship it"
+      ],
+      "deletedImages": [],
+      "calls": [
+        {
+          "service": "text.set_value",
+          "entity_id": "text.agent_bridge_6fcbab0c1d2e4f50_reply",
+          "value": " "
+        }
+      ],
+      "entry": {
+        "LastSubmitAt": "2026-10-29T20:00:05.000000+00:00",
+        "PendingSubmitAt": "",
+        "Driver": "human",
+        "DriverPending": "False"
+      }
+    },
+    {
+      "name": "boxFollowUpKept",
+      "path": "box",
+      "handled": null,
+      "notes": [
+        {
+          "summary": "Sending...",
+          "extra": {}
+        },
+        {
+          "summary": "Reply sent",
+          "extra": {
+            "at": "<time>",
+            "sent": "Ship it"
+          }
+        }
+      ],
+      "typed": [
+        "Ship it"
+      ],
+      "deletedImages": [],
+      "calls": [],
+      "entry": {
+        "LastSubmitAt": "2026-10-29T20:00:05.000000+00:00",
+        "PendingSubmitAt": "",
+        "Driver": "human",
+        "DriverPending": "True"
+      }
+    },
+    {
+      "name": "boxBlank",
+      "path": "box",
+      "handled": null,
+      "notes": [
+        {
+          "summary": "Waiting for your text",
+          "extra": {
+            "hint": "Press Enter in the box, or tap outside it, and this sends on its own."
+          }
+        }
+      ],
+      "typed": [],
+      "deletedImages": [],
+      "calls": [],
+      "entry": {
+        "PendingSubmitAt": "2026-10-29T20:00:05.000000+00:00",
+        "Driver": "human",
+        "DriverPending": "True"
+      }
+    },
+    {
+      "name": "boxBlankAgent",
+      "path": "box",
+      "handled": null,
+      "notes": [
+        {
+          "summary": "Nothing to send",
+          "extra": {}
+        }
+      ],
+      "typed": [],
+      "deletedImages": [],
+      "calls": [],
+      "entry": {
+        "LastSubmitAt": "2026-10-29T20:00:05.000000+00:00",
+        "PendingSubmitAt": "",
+        "Driver": "agent",
+        "DriverPending": "False"
+      }
+    },
+    {
+      "name": "boxBlankGivenUp",
+      "path": "box",
+      "handled": null,
+      "notes": [
+        {
+          "summary": "Nothing to send",
+          "extra": {
+            "hint": "Type a reply first, then press Send."
+          }
+        }
+      ],
+      "typed": [],
+      "deletedImages": [],
+      "calls": [],
+      "entry": {
+        "LastSubmitAt": "2026-10-29T20:00:05.000000+00:00",
+        "PendingSubmitAt": "",
+        "Driver": "human",
+        "DriverPending": "True"
+      }
+    },
+    {
+      "name": "boxRepeat",
+      "path": "box",
+      "handled": null,
+      "notes": [],
+      "typed": [],
+      "deletedImages": [],
+      "calls": [],
+      "entry": {
+        "LastSubmitAt": "2026-10-29T20:00:05.000000+00:00"
+      }
+    }
+  ]
+}
