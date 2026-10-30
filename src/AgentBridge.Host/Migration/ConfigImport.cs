@@ -254,7 +254,7 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
             File.WriteAllText(System.IO.Path.Combine(check, HostSettings.FileName), text);
             var (settings, problem) = HostSettings.Load(check);
             return (problem is null ? [] : new[] { problem.Replace(check, "config.json", StringComparison.OrdinalIgnoreCase) })
-                .Concat(settings.LaunchProblems).ToList();
+                .Concat(settings.LaunchProblems).Concat(settings.HomeAssistantProblems).ToList();
         }
         finally { Directory.Delete(check, true); }
     }

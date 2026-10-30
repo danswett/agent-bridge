@@ -14,6 +14,7 @@ agent-bridge-host migration status [--profile <name>]
 * `--bridge-home` is the installation to migrate. It defaults to `~\.agent-ha-bridge`.
 * `--hook` is the `agent-bridge-host-hook.exe` to install. It defaults to the one beside the
   host, which is where the app ships it.
+* Any other word is refused before anything runs, so a mistyped `--dry-run` never migrates.
 * Exit codes: 0 done, 1 refused or failed (the report says why), 2 usage or not Windows.
 
 The host serving the profile must be running for `migrate`. The migration proves the hand-over
@@ -40,7 +41,8 @@ with what the rollback did.
      last, at P7. A machine with no `dashboard.publication` is not a writer;
    * the hook program is missing;
    * no host is serving the profile;
-   * the settings to carry over would leave the profile's `config.json` with problems.
+   * the settings to carry over would leave the profile's `config.json` with problems, in
+     launching or in the Home Assistant connector (a `baseUrl` it could not use, say).
 2. **Snapshot.** Writes `migration.json` in the profile's folder (state `migrating`) and a copy
    of every file it will rewrite in `migration-snapshot\` beside it. The profile's folder is
    private to the user. It records each file's SHA-256 before and after, each hook entry it
@@ -152,9 +154,10 @@ publishes the dashboard (G7).
 
 1. Removes `intake.json`.
 2. Restores each file migration rewrote. A file unchanged since the migration is restored
-   **byte for byte** from the snapshot. A file edited since gets back only the entries
-   migration re-pointed, with the later edits kept. A file that cannot be reverted is left, and
-   the rollback reports a problem. The profile's own `config.json` is restored, or removed if
+   **byte for byte** from the snapshot. A file edited since gets back only the command of each
+   entry migration re-pointed (found by the command it now runs), with the later edits kept,
+   a changed timeout included. A hook still running this host's program that cannot be matched,
+   or a file that cannot be reverted, is reported as a problem, and the snapshot is kept. The profile's own `config.json` is restored, or removed if
    migration created it, unless a person has changed it since.
 3. Checks the files recorded by hash, and reports any that changed while migrated (by someone
    else; neither step writes them).

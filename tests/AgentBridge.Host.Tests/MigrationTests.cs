@@ -222,7 +222,7 @@ public sealed class MigrationTests : IAsyncLifetime
         var report = await _f.Migrator().RollbackAsync(dryRun: false);
 
         Assert.True(report.Ok, report.ToString());
-        Assert.Contains("only its 5 re-pointed hook(s) were put back", report.ToString());
+        Assert.Contains("only the command of its 5 re-pointed hook(s) was put back", report.ToString());
         var after = FakeAgentHaBridge.Read(_f.ClaudeSettings);
         Assert.Equal("dark", (string?)after["theme"]);
         var commands = after["hooks"]!.AsObject().SelectMany(e => e.Value!.AsArray()).SelectMany(m => m!["hooks"]!.AsArray()).Select(h => (string)h!["command"]!).ToList();
@@ -430,6 +430,70 @@ public sealed class MigrationTests : IAsyncLifetime
         {
             foreach (var p in new[] { supervisor, daemon, stranger }) { if (!p.HasExited) { p.Kill(); } }
         }
+    }
+
+    [Fact]
+    public async Task A_mistyped_flag_is_refused_before_anything_runs()
+    {
+        var created = 0;
+        Migrator Create(MigrationOptions o) { created++; return _f.Migrator(); }
+        foreach (var args in new[] { new[] { "migrate", "--dryrun" }, ["migrate", "nonsense"], ["migrate", "--bridge-home"], ["migrate", "--hook", "--dry-run"], ["rollback", "--dry"], ["migration", "status", "now"] })
+        {
+            var error = new StringWriter();
+            Assert.Equal(2, await MigrateCommands.RunAsync(args, _f.Profile, new StringWriter(), error, Create));
+            Assert.Contains("usage: agent-bridge-host migrate", error.ToString());
+        }
+        Assert.Equal(0, created);
+        Assert.Empty(_f.Runtime_.Calls);
+    }
+
+    [Fact]
+    public async Task A_migrated_hook_whose_timeout_was_changed_gets_its_command_back_and_keeps_the_timeout()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var claude = FakeAgentHaBridge.Read(_f.ClaudeSettings);
+        claude["hooks"]!["PreToolUse"]![1]!["hooks"]![0]!["timeout"] = 99;
+        File.WriteAllText(_f.ClaudeSettings, claude.ToJsonString(new() { WriteIndented = true }));
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        var ask = FakeAgentHaBridge.Read(_f.ClaudeSettings)["hooks"]!["PreToolUse"]![1]!["hooks"]![0]!;
+        Assert.StartsWith($"\"{_f.GoHook}\" claude ask ", (string)ask["command"]!);
+        Assert.Equal(99, (int)ask["timeout"]!);
+        Assert.False(Registrations.Names(File.ReadAllBytes(_f.ClaudeSettings), _f.InstalledHook));
+    }
+
+    [Fact]
+    public async Task A_migrated_hook_changed_past_recognition_is_reported_and_its_snapshot_kept()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var claude = FakeAgentHaBridge.Read(_f.ClaudeSettings);
+        claude["hooks"]!["Stop"]![0]!["hooks"]![0]!["command"] = $"\"{_f.InstalledHook}\" claude stop --verbose";
+        File.WriteAllText(_f.ClaudeSettings, claude.ToJsonString(new() { WriteIndented = true }));
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("could not be matched to what it replaced", report.ToString());
+        Assert.NotNull(MigrationRecord.Load(_f.Profile).Record);
+        Assert.True(Directory.Exists(MigrationRecord.SnapshotIn(_f.Profile)));
+        // The rest of that file was still put back.
+        var ask = FakeAgentHaBridge.Read(_f.ClaudeSettings)["hooks"]!["PreToolUse"]![1]!["hooks"]![0]!;
+        Assert.StartsWith($"\"{_f.GoHook}\" claude ask ", (string)ask["command"]!);
+    }
+
+    [Fact]
+    public async Task Home_Assistant_settings_the_connector_could_not_use_are_refused()
+    {
+        var config = FakeAgentHaBridge.DefaultConfig();
+        config["homeAssistant"]!["baseUrl"] = "ftp://ha.example";
+        await using var fake = new FakeAgentHaBridge(config);
+
+        var report = await fake.Migrator().MigrateAsync(dryRun: true);
+
+        Assert.False(report.Ok);
+        Assert.Contains("homeAssistant.baseUrl", report.ToString());
     }
 
     [Fact]

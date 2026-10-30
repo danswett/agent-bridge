@@ -18,8 +18,18 @@ public static class MigrateCommands
         var dryRun = args.Contains("--dry-run");
         var verb = args.Count > 0 ? args[0] : "";
         if (verb == "migration" && args.ElementAtOrDefault(1) != "status") { verb = ""; }
-        if (verb is not ("migrate" or "rollback" or "migration"))
+        // Every other word must be one this verb takes: a mistyped --dry-run must never run the
+        // real thing.
+        var problem = verb switch
         {
+            "migrate" => Unknown(args.Skip(1).ToList(), ["--dry-run"], ["--bridge-home", "--hook"]),
+            "rollback" => Unknown(args.Skip(1).ToList(), ["--dry-run"], []),
+            "migration" => Unknown(args.Skip(2).ToList(), [], []),
+            _ => "",
+        };
+        if (problem is not null)
+        {
+            if (problem.Length > 0) { error.WriteLine(problem); }
             error.WriteLine("usage: agent-bridge-host migrate [--dry-run] [--bridge-home <dir>] [--hook <file>] | rollback [--dry-run] | migration status");
             return 2;
         }
@@ -47,5 +57,22 @@ public static class MigrateCommands
         var report = verb == "migrate" ? await migrator.MigrateAsync(dryRun, cancellationToken) : await migrator.RollbackAsync(dryRun, cancellationToken);
         output.WriteLine(report.ToString());
         return report.Ok ? 0 : 1;
+    }
+
+    // Null when every word is a flag or option this verb takes, each option with a value.
+    static string? Unknown(IReadOnlyList<string> rest, string[] flags, string[] options)
+    {
+        for (var i = 0; i < rest.Count; i++)
+        {
+            if (flags.Contains(rest[i])) { continue; }
+            if (options.Contains(rest[i]))
+            {
+                if (i + 1 >= rest.Count || rest[i + 1].StartsWith("--", StringComparison.Ordinal) || string.IsNullOrWhiteSpace(rest[i + 1])) { return $"{rest[i]} needs a value."; }
+                i++;
+                continue;
+            }
+            return $"Unknown argument: {rest[i]}";
+        }
+        return null;
     }
 }

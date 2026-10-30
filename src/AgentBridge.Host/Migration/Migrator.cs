@@ -355,12 +355,22 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             // Edited since the migration: put back only what it changed.
             if (file.Changes.Count > 0 && Registrations.Revert(current, file.Changes) is { Text: { } reverted } revert)
             {
+                // A hook still running this host's program after the revert is one the person
+                // changed past recognition: it is reported, and the snapshot kept for it.
+                var hookProgram = record.Hook?.Path ?? options.HookPath;
+                if (Registrations.Names(Utf8(reverted), hookProgram))
+                {
+                    ok = false;
+                    Say($"* {file.Path}: changed since the migration, and a hook in it still runs {hookProgram} that could not be matched to what it replaced; restore it by hand from {backup}.");
+                    if (!dryRun && revert.Replaced > 0) { WriteText(file.Path, reverted); }
+                    continue;
+                }
                 if (revert.Replaced == 0)
                 {
                     Say($"* {file.Path}: changed since the migration, and none of the hooks it re-pointed are in it any more; left as it is.");
                     continue;
                 }
-                Say($"* {file.Path}: changed since the migration, so only its {revert.Replaced} re-pointed hook(s) were put back; the rest keeps the later changes.");
+                Say($"* {file.Path}: changed since the migration, so only the command of its {revert.Replaced} re-pointed hook(s) was put back; the rest keeps the later changes.");
                 if (!dryRun) { WriteText(file.Path, reverted); }
                 continue;
             }

@@ -162,8 +162,18 @@ public static class Registrations
         return new FilePlan(role, path, true, original, changes.Count == 0 ? null : Encode(root, original), changes, []);
     }
 
-    // Puts each original entry back where its replacement now is, leaving everything else in the
-    // file as it is now: for a file someone has edited since the migration.
+    // What runs, in a hook entry: the fields migration rewrote. Anything else in an entry (its
+    // matcher, timeout, type) is the person's to change and is kept.
+    static readonly string[] CommandFields = ["command", "exec", "args", "powershell", "bash"];
+
+    static string? CommandOf(JsonNode? node) =>
+        node is JsonObject o && CommandFields.Any(o.ContainsKey)
+            ? string.Join("\n", CommandFields.Select(f => o[f]?.ToJsonString() ?? ""))
+            : null;
+
+    // Puts back the command of each entry migration re-pointed, wherever an entry that still runs
+    // its replacement now is, leaving everything else in the file as it is now: for a file
+    // someone has edited since the migration (a timeout changed, a hook of their own added).
     public static (string? Text, int Replaced) Revert(byte[] current, IReadOnlyList<EntryChange> changes)
     {
         JsonNode? root;
@@ -176,18 +186,19 @@ public static class Registrations
             switch (node)
             {
                 case JsonArray array:
-                    for (var i = 0; i < array.Count; i++)
-                    {
-                        var match = changes.FirstOrDefault(c => JsonNode.DeepEquals(c.Replacement, array[i]));
-                        if (match is not null)
-                        {
-                            array[i] = match.Original.DeepClone();
-                            replaced++;
-                        }
-                        else { Walk(array[i]); }
-                    }
+                    foreach (var item in array) { Walk(item); }
                     break;
                 case JsonObject obj:
+                    if (CommandOf(obj) is { } command && changes.FirstOrDefault(c => CommandOf(c.Replacement) == command) is { Original: JsonObject original })
+                    {
+                        foreach (var field in CommandFields)
+                        {
+                            if (original[field] is { } value) { obj[field] = value.DeepClone(); }
+                            else { obj.Remove(field); }
+                        }
+                        replaced++;
+                        break;
+                    }
                     foreach (var (_, child) in obj.ToList()) { Walk(child); }
                     break;
             }
@@ -196,6 +207,26 @@ public static class Registrations
         return (Encode(root, current), replaced);
     }
 
+    // Whether any value in the file still names this program: a hook rollback could not restore.
+    public static bool Names(byte[] file, string program)
+    {
+        try
+        {
+            var found = false;
+            void Walk(JsonNode? node)
+            {
+                switch (node)
+                {
+                    case JsonArray a: foreach (var i in a) { Walk(i); } break;
+                    case JsonObject o: foreach (var (_, c) in o) { Walk(c); } break;
+                    case JsonValue v when v.TryGetValue<string>(out var s) && s.Contains(program, PathCase): found = true; break;
+                }
+            }
+            Walk(JsonNode.Parse(Decode(file), documentOptions: Lenient));
+            return found;
+        }
+        catch (JsonException) { return Decode(file).Contains(program, PathCase); }
+    }
     static string? Text(JsonNode? node) => node is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
 
     internal static string Decode(byte[] bytes) =>
