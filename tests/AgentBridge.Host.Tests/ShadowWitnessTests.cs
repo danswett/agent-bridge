@@ -186,15 +186,15 @@ public sealed class ShadowWitnessTests : IDisposable
 
     // Seen on DEV-VM1 (#40): a question asked at 00:58 and answered at 09:32 stayed on the daemon's
     // card, and so did its waiting: the ask_user had started 7 MiB before its answer, beyond the
-    // 4 MiB the daemon reads to see it answered (agent-ha-bridge#263).
+    // 4 MiB the daemon reads to see it answered (agent-ha-bridge#259, filed as #263).
     [Fact]
     public void A_question_the_daemon_keeps_after_its_answer_is_put_down_to_its_tail_only_when_the_start_was_beyond_it()
     {
         Write(AskUser("ask-1"), Filler((int)TranscriptEvidence.DaemonQuestionTail), Answered("ask-1"));
         var host = Host() with { Status = "working" };
 
-        Assert.Equal("agent-ha-bridge#263", Difference(Asking(), host, ShadowKinds.QuestionMissingOnHost).Known);
-        Assert.Equal("agent-ha-bridge#263", Difference(Asking(), host, ShadowKinds.Status).Known);
+        Assert.Equal("agent-ha-bridge#259", Difference(Asking(), host, ShadowKinds.QuestionMissingOnHost).Known);
+        Assert.Equal("agent-ha-bridge#259", Difference(Asking(), host, ShadowKinds.Status).Known);
         // The daemon's own status is not the host's either: that is the mismatch, and it says so.
         var status = Difference(Asking(status: "idle"), host, ShadowKinds.Status);
         Assert.Null(status.Known);

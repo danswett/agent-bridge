@@ -7,7 +7,7 @@ namespace AgentBridge.Host.Shadow;
 // The evidence for a difference agent-ha-bridge's daemon is known to cause. The first live runs
 // found five daemon bugs (agent-ha-bridge#258 to #262, docs/host-shadow.md); each leaves the
 // daemon's background agents, shells or model different from the host's in a way that has a
-// signature in the session's transcript. A sixth (#263) leaves an answered question on the
+// signature in the session's transcript. A sixth, under #259 (filed as #263, its duplicate), leaves an answered question on the
 // daemon's card, and with it its waiting. A difference is put down to one of them only when the
 // transcript shows that signature for every id it involves and the counts then add up exactly,
 // never because of the field it is in: a difference of the same kind with any other cause stays
@@ -47,7 +47,7 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
                     _ => null,
                 };
             }
-            // The daemon's question is one it should have cleared (#263), but its own status is not
+            // The daemon's question is one it should have cleared (#259), but its own status is not
             // the host's either: that is the disagreement, so it is what the mismatch says.
             if (known is null && d.Kind == ShadowKinds.Status && ids.TryGetValue(d.Session!, out var sid) && daemon.Sessions.TryGetValue(sid, out var dss)
                 && host.Sessions.TryGetValue(sid, out var hss) && dss.Agent == "copilot" && Evidence(sid)?.AnsweredQuestion(dss, hss) is not null)
@@ -445,7 +445,7 @@ public sealed partial class TranscriptEvidence(string path)
     // The daemon still shows a question the host does not (and so its waiting), and that question's
     // ask_user has completed in the transcript, but the daemon could not see it complete: its start
     // lay further back than the tail the daemon reads, by the time the completion was written. The
-    // daemon then never clears the question (#263). The question is the marker's: by its call id
+    // daemon then never clears the question (#259; reported as #263, closed as its duplicate). The question is the marker's: by its call id
     // when it has one, else the ask_user that started as the hook armed it.
     public string? AnsweredQuestion(ShadowSession daemon, ShadowSession host)
     {
@@ -453,7 +453,7 @@ public sealed partial class TranscriptEvidence(string path)
         var ask = q.CallId is { } id
             ? asks.LastOrDefault(a => a.CallId == id)
             : q.AskedAt is { } armed ? asks.Where(a => a.At is { } s && (s - armed).Duration() <= ArmedWithin).MinBy(a => (a.At!.Value - armed).Duration()) : null;
-        return ask is { CompletedThrough: >= 0 } && ask.CompletedThrough - ask.Start > DaemonQuestionTail ? Name([263]) : null;
+        return ask is { CompletedThrough: >= 0 } && ask.CompletedThrough - ask.Start > DaemonQuestionTail ? Name([259]) : null;
     }
 
     // The call a tool.execution_complete event completes, or null when the line is not one.

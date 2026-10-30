@@ -502,13 +502,14 @@ public sealed class ShadowTests : IDisposable
     }
 
     // Publish-CopilotMqttUsage's state for one agent, and the resume select's.
-    static string UsageState(string client, double percent, DateTimeOffset at, string account = Account) => new JsonObject
+    static string UsageState(string client, double percent, DateTimeOffset at, string account = Account, string slug = "fixture") => new JsonObject
     {
-        ["entity_id"] = $"sensor.agent_bridge_fixture_usage_{client}",
+        ["entity_id"] = $"sensor.agent_bridge_{slug}_usage_{client}",
         ["state"] = percent.ToString(System.Globalization.CultureInfo.InvariantCulture),
         ["attributes"] = new JsonObject
         {
             ["client"] = client,
+            ["machine_slug"] = slug,
             ["account"] = account,
             ["account_id"] = "",
             ["windows"] = new JsonArray(new JsonObject { ["key"] = "monthly", ["label"] = "Monthly", ["percent"] = percent }),
@@ -839,6 +840,122 @@ public sealed class ShadowTests : IDisposable
         Assert.DoesNotContain(ShadowCompare.UsageLapsed, current.NotCompared);
         Assert.Contains(current.Differences, d => d.Kind == ShadowKinds.UsagePercent);
         Assert.Equal(["copilot"], current.UsageFresh);
+    }
+
+    // Seen on DEV-VM1 (#40): this machine's daemon stood down for DSWETT-HOME, which read the
+    // account; the account's figure is that machine's sensor, read by its one exact entity.
+    [Fact]
+    public async Task A_daemon_standing_down_is_compared_by_the_reading_of_the_machine_it_names_that_reads_the_account()
+    {
+        var now = f.Time.GetUtcNow();
+        var readerAccount = Account;
+        string? Ha(string entity) => entity switch
+        {
+            "sensor.agent_bridge_fixture_usage_copilot" => UsageState("copilot", 79, now - TimeSpan.FromHours(11)),
+            "select.agent_bridge_fixture_new_resume" => ResumeState("Fix the login page - web", "Agency on OTHER-PC: Shared from there (abcdef12)"),
+            "sensor.agent_bridge_other_pc_usage_copilot" => UsageState("copilot", 41, now - TimeSpan.FromMinutes(1), account: readerAccount, slug: "other_pc"),
+            // Named by the daemon's dashboard writer, and reading the account too, but less lately.
+            "sensor.agent_bridge_writer_pc_usage_copilot" => UsageState("copilot", 30, now - TimeSpan.FromMinutes(10), slug: "writer_pc"),
+            _ => null,
+        };
+        var inner = new FakeHomeAssistant(Ha);
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        Config(c => c["dashboard"] = new JsonObject { ["publication"] = new JsonObject { ["writer"] = "WRITER-PC" } });
+        async Task<ShadowComparison> Compare()
+        {
+            var daemon = new ShadowView { Usage = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage, Resumable = [] };
+            var host = new ShadowView { SeesAgentHaBridge = true, Usage = new Dictionary<string, ShadowUsage> { ["copilot"] = Reading(40, now) }, Resumable = [] };
+            return ShadowCompare.Compare(daemon, host);
+        }
+
+        var compared = await Compare();
+        Assert.True(compared.UsageCompared);
+        Assert.Equal(["copilot"], compared.UsageFresh);
+        Assert.DoesNotContain(compared.Differences, d => d.Kind.StartsWith("usage.", StringComparison.Ordinal));
+        // Only GETs, of this machine's entities and each named machine's usage sensor for that agent.
+        Assert.All(inner.Seen, r => Assert.Equal(HttpMethod.Get, r.Method));
+        Assert.Equal(
+            [.. reader.Entities.Select(e => "/api/states/" + e), .. new[] { "writer_pc", "other_pc" }.SelectMany(m => new[] { "copilot", "copilot_2", "copilot_3", "copilot_4" }.Select(s => $"/api/states/sensor.agent_bridge_{m}_usage_{s}"))],
+            inner.Seen.Select(r => r.Path));
+        // And allowed for that read only.
+        Assert.Empty(reader.ReaderEntities);
+
+        // Another account's reading is not this account's: the other one reading it is.
+        readerAccount = "someone-else";
+        f.Time.Advance(TimeSpan.FromMinutes(1));
+        var other = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!["copilot"];
+        Assert.Equal((30d, false), (other.Windows["monthly"], other.Lapsed));
+        // And with neither, the daemon's own lapsed figure stands.
+        f.Time.Advance(TimeSpan.FromMinutes(15));
+        Assert.True((await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!["copilot"].Lapsed);
+    }
+
+    // Found in review (#94): the lapsed figure here and the reader's took turns in one history, so
+    // an unchanged reader figure never held from one read to the next. And a Copilot login is the
+    // same account however it is cased.
+    [Fact]
+    public async Task The_account_readers_unchanged_figure_holds_across_reads_and_its_login_matches_in_any_case()
+    {
+        var now = f.Time.GetUtcNow();
+        var measured = now;
+        var inner = new FakeHomeAssistant(entity => entity switch
+        {
+            "sensor.agent_bridge_fixture_usage_copilot" => UsageState("copilot", 79, now - TimeSpan.FromHours(11)),
+            "select.agent_bridge_fixture_new_resume" => ResumeState("Agency on OTHER-PC: Shared from there (abcdef12)"),
+            "sensor.agent_bridge_other_pc_usage_copilot" => UsageState("copilot", 41, measured, account: Account.ToUpperInvariant(), slug: "other_pc"),
+            _ => null,
+        });
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        Config();
+        Assert.Equal(41d, (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!["copilot"].Windows["monthly"]);
+        // Republished unchanged four minutes later: it has held since it was first read.
+        f.Time.Advance(TimeSpan.FromMinutes(4));
+        measured = f.Time.GetUtcNow();
+        Assert.Equal(now, (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!["copilot"].HeldSince);
+    }
+
+    // Found in review (#94): a further Copilot login is the reader's on whichever of its Copilot
+    // sensors it carries it, and a reading stamped ahead of now is no current reader.
+    [Fact]
+    public async Task A_further_logins_reader_is_found_on_any_of_its_copilot_sensors_and_a_reading_from_the_future_is_not_one()
+    {
+        var now = f.Time.GetUtcNow();
+        var ahead = now + TimeSpan.FromDays(1);
+        var inner = new FakeHomeAssistant(entity => entity switch
+        {
+            "sensor.agent_bridge_fixture_usage_copilot_2" => UsageState("copilot", 50, now - TimeSpan.FromHours(11), account: "second-login", slug: "fixture"),
+            "select.agent_bridge_fixture_new_resume" => ResumeState("Agency on OTHER-PC: Shared from there (abcdef12)", "Agency on AHEAD-PC: Shared too (12abcdef)"),
+            "sensor.agent_bridge_other_pc_usage_copilot_3" => UsageState("copilot", 52, now - TimeSpan.FromMinutes(1), account: "second-login", slug: "other_pc"),
+            "sensor.agent_bridge_ahead_pc_usage_copilot_2" => UsageState("copilot", 90, ahead, account: "second-login", slug: "ahead_pc"),
+            _ => null,
+        });
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        Config();
+        var second = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!["copilot_2"];
+        Assert.Equal((52d, false, (DateTimeOffset?)null), (second.Windows["monthly"], second.Lapsed, second.ConfirmedAt));
+    }
+
+    [Fact]
+    public async Task A_named_machine_that_cannot_be_read_leaves_the_daemons_lapsed_figure_not_compared_and_the_rest_compared()
+    {
+        var now = f.Time.GetUtcNow();
+        var inner = new FakeHomeAssistant(entity => entity switch
+        {
+            "sensor.agent_bridge_fixture_usage_copilot" => UsageState("copilot", 79, now - TimeSpan.FromHours(11)),
+            "select.agent_bridge_fixture_new_resume" => ResumeState("Agency on OTHER-PC: Shared from there (abcdef12)"),
+            "sensor.agent_bridge_other_pc_usage_copilot" => throw new HttpRequestException("unreachable"),
+            _ => null,
+        });
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        Config();
+        var reading = await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!);
+        Assert.NotNull(reading.Resumable);
+        var compared = ShadowCompare.Compare(
+            new ShadowView { Usage = reading.Usage, Resumable = reading.Resumable },
+            new ShadowView { SeesAgentHaBridge = true, Usage = new Dictionary<string, ShadowUsage> { ["copilot"] = Reading(40, now) }, Resumable = [] });
+        Assert.False(compared.UsageCompared);
+        Assert.Contains(ShadowCompare.UsageLapsed, compared.NotCompared);
+        Assert.True(compared.ResumableCompared);
     }
 
     // Found in review (#73): the daemon republishes an unchanged figure only every half hour, or

@@ -94,6 +94,9 @@ public sealed partial record UsageSettings
             index++;
             var place = $"usage.copilotAccounts entry {index}";
             var login = entry.ValueKind == JsonValueKind.String ? entry.GetString()!.Trim() : "";
+            // An empty string keeps a place unused on purpose, so the logins after it keep theirs:
+            // how a list copied from agent-ha-bridge holds the place of an entry it would skip.
+            if (entry.ValueKind == JsonValueKind.String && login.Length == 0) { continue; }
             if (TokenShaped().IsMatch(login)) { problems.Add($"{place} looks like a token, not a login, so it is not used"); continue; }
             if (!LoginShaped().IsMatch(login)) { problems.Add($"{place} is not a GitHub login"); continue; }
             if (index > AccountSlots) { problems.Add($"{place} is past the {AccountSlots} further logins there are rows for"); continue; }

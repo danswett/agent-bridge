@@ -348,7 +348,7 @@ public static class ShadowCompare
     const double PercentTolerance = 5;
     static readonly TimeSpan ReadingsApart = TimeSpan.FromMinutes(3);
 
-    public const string UsageLapsed = "usage: the daemon is not reading it on this machine (its figure is older than its own pace; another machine may read the account)";
+    public const string UsageLapsed = "usage: no current reading of the account, from this machine's daemon or a machine it names";
 
     static bool Usage(ShadowView daemon, ShadowView host, List<ShadowDifference> diffs, List<string> notCompared, ShadowMemory? memory, List<string> judgedFresh)
     {

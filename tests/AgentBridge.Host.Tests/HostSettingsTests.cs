@@ -212,6 +212,12 @@ public sealed class HostSettingsTests : IDisposable
 
         Assert.Equal(0, Run("config", "set", "usage.publish", "false"));
         Assert.False(HostSettings.Load(folder).Settings.Usage.Publish);
+
+        // An empty place is kept on purpose (as shadow-week.ps1 copies agent-ha-bridge's list), and
+        // written: the login after it keeps its slot.
+        Assert.Equal(0, Run("config", "set", "usage.copilotAccounts", "[\"alt-login\",\"\",\"third\"]"));
+        Assert.Equal([(2, "alt-login"), (4, "third")], HostSettings.Load(folder).Settings.Usage.CopilotAccounts.Select(a => (a.Slot, a.Login)));
+        Assert.Empty(HostSettings.Load(folder).Settings.UsageProblems);
     }
 
     [Fact]

@@ -109,7 +109,8 @@ problem"); a `permissions.remoteApproval`, `push.enabled` or `delivery.readOnly`
 `true` or `false` does too. In `usage`, a `publish` that is not `true` or `false`, or a `usage` that is
 not an object, turns usage off; a pace that is not a number in range keeps its default; and an entry of
 `copilotAccounts` that is not a login, repeats one, or is past the third is left out and keeps its place,
-so the logins after it keep their rows and sensors. Each is said in the log by its place, never repeated:
+so the logins after it keep their rows and sensors. An empty string (`""`) is a place kept unused on
+purpose, and is not a problem: `["", "second-login"]` reports `second-login` second. Each is said in the log by its place, never repeated:
 one shaped like a token is refused. In `launch`, a workspace entry that is wrong (no path, a relative path, an `isolate`
 that is not `true` or `false`) is left out and said in the log, and any other value that is
 wrong turns launching off. In `homeAssistant`, any value that is wrong turns the connector off
