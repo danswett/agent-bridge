@@ -146,14 +146,27 @@ public class ContractTests
     {
         var sessions = Enumerable.Range(0, 5).Select(i => SessionBudget.Fit(Big($"s{i}", new string('x', 20_000)))).ToList();
         var pages = Paging.Pages(sessions).ToList();
+        // The largest hold a host sends: its reason all emoji, each escaped to 12 bytes.
+        var held = new DiscoveryHeld(Limits.KeepStart(string.Concat(Enumerable.Repeat("😀", 400)), DiscoveryHeld.MaxReasonBytes)!, [AgentKind.Copilot, AgentKind.Claude, AgentKind.Codex]);
 
         Assert.True(pages.Count > 1);
         Assert.Equal(sessions.Select(s => s.Id), pages.SelectMany(p => p).Select(s => s.Id));
         foreach (var p in pages)
         {
-            var bytes = ProtocolJson.ByteCount(new { re = int.MaxValue, ok = true, result = new SessionList(p, long.MaxValue, new string('c', 64)) });
+            var bytes = ProtocolJson.ByteCount(new { re = int.MaxValue, ok = true, result = new SessionList(p, long.MaxValue, new string('c', 64), held) });
             Assert.True(bytes <= ProtocolJson.MaxMessageBytes, $"{bytes} bytes");
         }
+    }
+
+    [Fact]
+    public void A_discovery_hold_is_sent_as_its_reason_and_agents_and_left_out_when_there_is_none()
+    {
+        var held = new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
+
+        Assert.Equal("""{"revision":7,"discoveryHeld":{"reason":"an unrecognised copilot process (pid 4120)","agents":["copilot"]}}""",
+            JsonSerializer.Serialize(new SessionsSynced(7, held), ProtocolJson.Options));
+        Assert.Equal("""{"revision":7}""", JsonSerializer.Serialize(new SessionsSynced(7), ProtocolJson.Options));
+        Assert.Equal("{}", JsonSerializer.Serialize(new DiscoveryChanged(), ProtocolJson.Options));
     }
 
     [Fact]

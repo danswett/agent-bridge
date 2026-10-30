@@ -158,6 +158,7 @@ internal sealed class FakeSessions : ISessionSource
 
     public long Revision => revision;
     public event EventHandler<SessionChange>? Changed;
+    public DiscoveryHeld? Held { get; set; }
 
     public void Set(Session s)
     {

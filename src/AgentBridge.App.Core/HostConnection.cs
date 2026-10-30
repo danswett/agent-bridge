@@ -233,7 +233,13 @@ public sealed class HostConnection : IAsyncDisposable
                 ui.Post(() => Sessions.Remove(r.Id));
                 break;
             case Events.SessionsSynced:
-                ui.Post(Sessions.EndSnapshot);
+                {
+                    var held = ev.Data.ValueKind == JsonValueKind.Object ? ev.Data.Deserialize<SessionsSynced>(ProtocolJson.Options)?.DiscoveryHeld : null;
+                    ui.Post(() => Sessions.EndSnapshot(held));
+                    break;
+                }
+            case Events.DiscoveryChanged when ev.Data.Deserialize<DiscoveryChanged>(ProtocolJson.Options) is { } d:
+                ui.Post(() => Sessions.SetHeld(d.DiscoveryHeld));
                 break;
             case UsageProtocol.Update when ev.Data.Deserialize<UsageReport>(ProtocolJson.Options) is { } u:
                 Interlocked.Increment(ref usageEvents);
@@ -270,11 +276,21 @@ public sealed class SessionStore
 
     public IReadOnlyCollection<Session> All => sessions.Values;
     public Session? Get(string id) => sessions.GetValueOrDefault(id);
+    // What holds the host's discovery, while anything does (sessions.synced, discovery.changed).
+    public DiscoveryHeld? Held { get; private set; }
 
     public event Action<Session>? Upserted;
     public event Action<string>? Removed;
     // A snapshot has been read in full: the list is the host's.
     public event Action? Synced;
+    public event Action? HeldChanged;
+
+    public void SetHeld(DiscoveryHeld? held)
+    {
+        if (held?.Reason == Held?.Reason && (held?.Agents ?? []).SequenceEqual(Held?.Agents ?? [])) { return; }
+        Held = held;
+        HeldChanged?.Invoke();
+    }
 
     public void BeginSnapshot() => snapshot = new HashSet<string>(StringComparer.Ordinal);
 
@@ -290,11 +306,14 @@ public sealed class SessionStore
         if (sessions.Remove(id)) { Removed?.Invoke(id); }
     }
 
-    public void EndSnapshot()
+    public void EndSnapshot() => EndSnapshot(null);
+
+    public void EndSnapshot(DiscoveryHeld? held)
     {
         if (snapshot is not { } seen) { return; }
         snapshot = null;
         foreach (var id in sessions.Keys.Where(id => !seen.Contains(id)).ToList()) { Remove(id); }
+        SetHeld(held);
         Synced?.Invoke();
     }
 }

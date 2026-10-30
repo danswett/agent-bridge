@@ -27,6 +27,7 @@ public sealed class MainViewModel : Observable
         host.Sessions.Upserted += OnUpsert;
         host.Sessions.Removed += OnRemoved;
         host.Sessions.Synced += Synced;
+        host.Sessions.HeldChanged += OnHeldChanged;
         host.Changed += OnHostChanged;
         OnHostChanged();
     }
@@ -54,6 +55,19 @@ public sealed class MainViewModel : Observable
     public string? ReadOnlyWhy => host.Status?.AgentHaBridge is { Length: > 0 } ha
         ? $"Answering, replying and ending sessions are off: {ha}. Agent Bridge only watches while agent-ha-bridge runs."
         : null;
+
+    // What holds the host's discovery, as agent-ha-bridge's status line said it: while it holds,
+    // a session that ended stays on its card, and nothing is offered for resume or reclaimed.
+    public string? HeldWhy => Connected && host.Sessions.Held is { } held
+        ? $"Discovery held: {held.Reason}. Sessions stay listed, and resuming them waits, until the host can account for every agent process."
+        : null;
+    public bool IsHeld => HeldWhy is not null;
+
+    void OnHeldChanged()
+    {
+        Raise(nameof(HeldWhy));
+        Raise(nameof(IsHeld));
+    }
 
     // A toast or the tray asked for this session: the window shows it.
     public event Action<SessionCardViewModel>? OpenRequested;
@@ -87,6 +101,7 @@ public sealed class MainViewModel : Observable
         Raise(nameof(HasBanner));
         Raise(nameof(ReadOnlyWhy));
         Raise(nameof(MachineName));
+        OnHeldChanged();
     }
 
     void OnUpsert(Session s)

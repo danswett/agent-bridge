@@ -32,6 +32,13 @@ public sealed class SessionSourceOptions
 
     public bool UseFileSystemWatcher { get; init; } = true;
 
+    // Where discovery says what holds it and what it carried on without. Null: nowhere.
+    public Action<string>? Log { get; init; }
+
+    // Runs between reading a registration and checking it did not change meanwhile, so a test
+    // can change it there. Null outside tests.
+    public Action<string>? AfterRegistrationRead { get; init; }
+
     // The host's permissions.remoteApproval: whether Copilot's permission prompts are offered
     // to other devices to approve or deny. Off, they show as answered only at the machine.
     public bool CopilotRemoteApproval { get; init; } = true;

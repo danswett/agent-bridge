@@ -27,8 +27,17 @@ public interface IProcessInspector
 }
 
 // Known is false when a process that might be this agent could not be identified, or the
-// processes could not be listed at all.
-public sealed record AgentProcessObservation(IReadOnlyList<AgentProcess> Processes, bool Known);
+// processes could not be listed at all: the reclaimer's test, which keeps every worktree on any
+// doubt. Discovery asks two narrower things. Listed is false only when the processes could not
+// be listed at all. Unidentified are the runtimes (node, bun) whose command line could not be
+// read this time, so may or may not be this agent: discovery holds for one only when it was a
+// session's own process, since every other user's node is unreadable too, and holding for
+// those would hold every agent for as long as any of them ran.
+public sealed record AgentProcessObservation(IReadOnlyList<AgentProcess> Processes, bool Known)
+{
+    public bool Listed { get; init; } = true;
+    public IReadOnlyList<AgentProcess> Unidentified { get; init; } = [];
+}
 
 // The real machine, on Windows, macOS and Linux. Only reads: it opens a process for
 // query-limited information and nothing more.
@@ -57,14 +66,16 @@ public sealed class SystemProcessInspector : IProcessInspector
 
         var names = CandidateNames(name);
         var found = new List<AgentProcess>();
+        var unidentified = new List<AgentProcess>();
         var seen = new HashSet<int>();
         var live = new HashSet<(int, long)>();
         var known = true;
+        var listed = true;
         foreach (var candidate in names)
         {
             Process[] processes;
             try { processes = Process.GetProcessesByName(candidate); }
-            catch (Exception e) when (e is InvalidOperationException or Win32Exception or PlatformNotSupportedException) { known = false; continue; }
+            catch (Exception e) when (e is InvalidOperationException or Win32Exception or PlatformNotSupportedException) { known = listed = false; continue; }
             foreach (var process in processes)
             {
                 using (process)
@@ -81,7 +92,12 @@ public sealed class SystemProcessInspector : IProcessInspector
                     // runtime it cannot identify outside Windows. On Windows it never looks at
                     // node at all; every other user's and service's node is listed there too,
                     // and an unreadable one would keep every worktree for ever.
-                    if (candidate is "node" or "bun" && string.IsNullOrWhiteSpace(commandLine) && !OperatingSystem.IsWindows()) { known = false; }
+                    if (candidate is "node" or "bun" && string.IsNullOrWhiteSpace(commandLine))
+                    {
+                        if (!OperatingSystem.IsWindows()) { known = false; }
+                        unidentified.Add(new AgentProcess(id, started, null));
+                        continue;
+                    }
                     if (candidate is "node" or "bun" && !IsAgentScript(agent, name, commandLine)) { continue; }
                     found.Add(new AgentProcess(id, started, commandLine));
                 }
@@ -98,7 +114,7 @@ public sealed class SystemProcessInspector : IProcessInspector
                 _commandLines.Remove(key);
             }
         }
-        return new(found, known);
+        return new(found, known) { Listed = listed, Unidentified = unidentified };
     }
 
     static bool IsRunning(int pid)
@@ -266,7 +282,7 @@ public sealed class SystemProcessInspector : IProcessInspector
 }
 
 // Splitting and joining command lines the way the agents' own option parsers see them.
-public static class CommandLine
+public static partial class CommandLine
 {
     // Whitespace separates arguments; double quotes group, and a backslash escapes a
     // quote. Close enough to CommandLineToArgvW for reading options, which is all this
@@ -296,6 +312,69 @@ public static class CommandLine
 
     public static string Join(IEnumerable<string> arguments) =>
         string.Join(' ', arguments.Select(a => a.Length == 0 || a.Any(char.IsWhiteSpace) || a.Contains('"') ? "\"" + a.Replace("\"", "\\\"") + "\"" : a));
+
+    // An agent CLI embedded in another program and driven over stdio rather than a session:
+    // Microsoft Scout runs `copilot.exe --headless ... --stdio`, which never takes a session id
+    // and never writes a lock, so no session can account for it. agent-ha-bridge's
+    // Test-BridgeAgentEmbeddedProcess, by argument rather than by text: `--headless` counts only
+    // as an argument of its own before any prompt (-p, -i, or after `--`), so a prompt that
+    // mentions it is not taken for the option. That holds when the quotes are escaped inside the
+    // prompt, and on macOS, whose ps does not quote, so a prompt arrives as separate words.
+    // --session-id anywhere settles it as a session: wrongly so only costs a hold.
+    public static bool IsEmbedded(string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
+        var arguments = Split(commandLine);
+        if (arguments.Any(a => a == "--session-id" || a.StartsWith("--session-id=", StringComparison.Ordinal))) { return false; }
+        foreach (var a in arguments.Skip(1))
+        {
+            if (a == "--" || CopilotPromptOptions.Any(o => a == o || a.StartsWith(o + "=", StringComparison.Ordinal))) { return false; }
+            if (a == "--headless" || a.StartsWith("--headless=", StringComparison.Ordinal)) { return true; }
+        }
+        return false;
+    }
+
+    // Copilot's options whose value is a prompt, which may say anything.
+    static readonly string[] CopilotPromptOptions = ["-p", "--prompt", "-i", "--interactive"];
+
+    // Codex's shared app-server daemon, which every Codex client talks to and which is nobody's
+    // session (agent-ha-bridge's Test-BridgeCodexSharedProcess). It is the subcommand, the first
+    // argument after the codex program that is neither an option nor an option's value: matching
+    // the word anywhere took `codex "Explain the app-server protocol"` for the daemon, so a
+    // session starting up was accounted for before it registered. macOS's ps does not quote,
+    // so a prompt's words can arrive as separate arguments; only the first can be the subcommand.
+    // After `--` everything is the prompt, which is how Launchers.Arguments passes it. The
+    // app-server-daemon install folder counts only as the program's own path, not a prompt's.
+    public static bool IsCodexAppServer(string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
+        var arguments = Split(commandLine);
+        if (arguments.Count == 0) { return false; }
+        var program = 0;
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            var name = arguments[i].Replace('\\', '/');
+            if (name[(name.LastIndexOf('/') + 1)..].StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { program = i; break; }
+        }
+        if (InDaemonFolder(arguments[0]) || InDaemonFolder(arguments[program])) { return true; }
+        for (var i = program + 1; i < arguments.Count; i++)
+        {
+            var a = arguments[i];
+            if (a == "--") { return false; }
+            if (!a.StartsWith('-')) { return a == "app-server"; }
+            if (!a.Contains('=') && CodexValueOptions.Contains(a)) { i++; }
+        }
+        return false;
+    }
+
+    static bool InDaemonFolder(string path) => path.Replace('\\', '/').Contains("/app-server-daemon/", StringComparison.OrdinalIgnoreCase);
+
+    // Codex's options that take the next argument as their value, before any subcommand.
+    static readonly HashSet<string> CodexValueOptions = new(StringComparer.Ordinal)
+    {
+        "-c", "--config", "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval",
+        "-C", "--cd", "-i", "--image", "--add-dir", "--enable", "--disable", "--local-provider",
+    };
 
     // The session a Copilot CLI was started in, from `--session-id <id>` or
     // `--session-id=<id>`. Read from the options rather than searched for: a regex over

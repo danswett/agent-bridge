@@ -93,9 +93,10 @@ Request `data`: `{}`. Result:
 ### `sessions.list`
 
 Request `data`: `{}` for the first page, then `{ "cursor": "<next>" }`. Result:
-`{ "sessions": [Session…], "revision": 118, "next": "<cursor>" }`. It lists live
-sessions only, most recently updated first, as many as fit in one message (always at
-least one). `next` is absent on the last page. Each `Session` here **omits
+`{ "sessions": [Session…], "revision": 118, "next": "<cursor>", "discoveryHeld": {…} }`. It
+lists live sessions only, most recently updated first, as many as fit in one message (always
+at least one). `next` is absent on the last page. `discoveryHeld` is present while the host's
+discovery is held ([below](#discovery-held)). Each `Session` here **omits
 `activity.history`**; `session.get` includes it.
 
 `revision` is the host's change counter. It changes whenever any session changes. If it
@@ -112,9 +113,10 @@ Request `data`: `{ "id": "<session id>" }`. Result: the full `Session`, or
 Request `data`: `{}`. Result: `{ "revision": 118, "count": 3 }`. Then the host sends:
 
 1. **The snapshot:** one `session.upsert` for each of the `count` live sessions, then
-   `sessions.synced` with `{ "revision": … }`. On `sessions.synced` a client replaces its
-   list with the sessions it received since subscribing, which drops any it had from
-   before that no longer exist.
+   `sessions.synced` with `{ "revision": …, "discoveryHeld": {…} }`. On `sessions.synced` a
+   client replaces its list with the sessions it received since subscribing, which drops any
+   it had from before that no longer exist, and takes `discoveryHeld` (absent: nothing holds
+   discovery) as the host's hold.
 2. **Live changes, until the channel closes:**
    * `session.upsert`, with a full `Session` (without `activity.history`), whenever
      anything a client shows changes. Hosts coalesce bursts to at most one upsert per
@@ -122,6 +124,8 @@ Request `data`: `{}`. Result: `{ "revision": 118, "count": 3 }`. Then the host s
    * `session.remove`, with `{ "id": "…" }`, when a session ends and is dropped. A session
      a host is ending (`session.stop`) is first upserted with `status: "ending"`, then
      removed once its process has gone.
+   * `discovery.changed`, with `{ "discoveryHeld": {…} }` when the host's discovery becomes
+     held or what holds it changes, and `{}` when it clears. Sent once per change.
 
 A session can change while the snapshot is being sent; its upsert then simply arrives
 again. When a channel closes, the client subscribes again on the new channel.
@@ -132,6 +136,40 @@ a complete snapshot ending in `sessions.synced`, then carries on with live chang
 never runs two subscriptions side by side, so each change arrives once. This is how a
 client recovers from a gap. Live upserts sent before the new response are covered by
 the snapshot.
+
+### Discovery held
+
+```json
+"discoveryHeld": { "reason": "an unrecognised copilot process (pid 4120)", "agents": ["copilot"] }
+```
+
+A host finds sessions by looking at the agents' processes, lock files and registrations. When
+a pass cannot account for everything it looked at, a session missing from it may be one it
+could not see rather than one that ended, so the host **holds** whatever it would decide from
+an absence, and never reads the failed look as "every session ended" (design §6.3 invariant 6;
+agent-ha-bridge's "session discovery uncertain … absence-based work is held"). While an agent
+in `agents` is held:
+
+* its sessions are not removed for being missing, and those the host has go on updating;
+* none of them is offered for resume, a resume is `busy`, and no worktree is reclaimed
+  ([v1-launch.md](v1-launch.md#while-discovery-is-held)).
+
+Sessions of the other agents are removed and resumed as usual. `reason` says what holds it, in
+words for a person, at most 512 bytes; a client shows it as it is ("discovery held: …", as the
+Home Assistant status line did). An agent is held when:
+
+| | `reason` says |
+|---|---|
+| Its processes could not be listed at all | `the copilot processes could not be listed` |
+| The runtime (`node`, `bun`) a live session ran in could not be read this time, by pid and start time; or a Copilot lock or a registration names a runtime that could not be read and was written by it, not by an earlier process with its pid | `a copilot process that could not be read (pid 4120)` |
+| An agent process no session or registration accounts for, for its first 2 minutes. A registration accounts only for the process that wrote it, not a later one given its pid. A session registers within seconds, so one still unaccounted for after that is not a session: the host carries on without it and logs that once. One whose start time cannot be read is never carried on without, since a new session given its pid could not be told from it. Scout's embedded `copilot --headless` and Codex's `app-server` are nobody's session and never hold | `an unrecognised copilot process (pid 4120)` |
+| A registration (Claude, Codex) that cannot be read (its details included), is a link, is not named for its own session, names no process, or changed while it was read | `a claude registration changed while it was read` |
+| Claude Code's own `sessions/<pid>.json` for a running Claude process (of its generation) that cannot be read whole. One that says the run is not interactive (SDK, print mode) accounts for its process as nobody's session | `a claude session file could not be read (pid 4120)` |
+| A session discovery found running whose transcript could not be read when it was first found, until it can | `a claude session that could not be read` |
+| A session, registration or Codex thread-lock folder that is there but cannot be read or listed, or is a link (a thread lock only while a Codex terminal runs). Only the OS saying a folder is not there is absence | `copilot's session folders could not be listed` |
+
+The next complete pass clears the hold with no restart, and removes what has really gone. A hold is said as soon as it begins, and said to clear (or to let an agent go) only once the sessions that pass found are listed, so a client never sees a session neither listed nor held; a pass that does both names the new agent at once and keeps the old one until then. An
+agent that is not installed (no registration folder, and for Claude no `sessions` folder) is never held.
 
 ### `session.answer`
 

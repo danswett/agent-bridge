@@ -137,3 +137,12 @@ test('the machine line says how many sessions are live, the version and that it 
   await expect(status).toHaveText(' · 3 sessions · 0.1.0 (dev)');
 });
 
+test('the machine line says what holds its discovery until it clears, as the HA status line did', async ({ page }) => {
+  await openDemo(page);
+  const status = page.locator('.machine .machine-status');
+  await page.evaluate(() => window.agentBridgeDemo.hold({ reason: 'an unrecognised copilot process (pid 4120)', agents: ['copilot'] }));
+  await expect(status).toHaveText(' · 4 sessions · 0.1.0 (dev) · discovery held: an unrecognised copilot process (pid 4120)');
+  await page.evaluate(() => window.agentBridgeDemo.hold(null));
+  await expect(status).toHaveText(' · 4 sessions · 0.1.0 (dev)');
+});
+

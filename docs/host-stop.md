@@ -73,7 +73,9 @@ The same rules, with these differences, each deliberate:
    then `TerminateProcess` on the handle, and up to 5 s for it to go. Gone: `ended`
    (`forced` if terminated). Still there: `failed`.
 10. A pass of the session source, so the session is removed as soon as it has gone; if it
-    is still there, it shows its own status again.
+    is still there, it shows its own status again. While its agent's discovery is held
+    ([v1-sessions.md](protocol/v1-sessions.md#discovery-held)) it stays, `ending`, until a
+    complete pass removes it: the outcome is already `ended`, read from its own process.
 
 ## The log
 

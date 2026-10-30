@@ -20,6 +20,8 @@ sealed class FakeHost : IAsyncDisposable
     public ConcurrentBag<IProtocolChannel> Channels { get; } = [];
     public List<string> Capabilities { get; } = [AgentBridge.Protocol.Capabilities.SessionsRead, AgentBridge.Protocol.Capabilities.SessionsAnswer, AgentBridge.Protocol.Capabilities.SessionsReply, AgentBridge.Protocol.Capabilities.SessionsAttach, AgentBridge.Protocol.Capabilities.SessionsStop, UsageProtocol.Capability, HostOps.Capability];
     public List<Session> Sessions { get; } = [];
+    // Sent with sessions.synced.
+    public DiscoveryHeld? Held { get; set; }
     public HostStatus Status { get; set; } = StatusOf();
 
     public FakeHost()
@@ -73,7 +75,7 @@ sealed class FakeHost : IAsyncDisposable
             return Task.FromResult<object?>(new ChannelReply(new SubscribeResult(1, snapshot.Count), async c =>
             {
                 foreach (var s in snapshot) { await c.SendEventAsync(Events.SessionUpsert, s); }
-                await c.SendEventAsync(Events.SessionsSynced, new SessionsSynced(1));
+                await c.SendEventAsync(Events.SessionsSynced, new SessionsSynced(1, Held));
             }));
         }
         return Task.FromResult(ops.TryGetValue(op, out var answer) ? answer(data) : null);

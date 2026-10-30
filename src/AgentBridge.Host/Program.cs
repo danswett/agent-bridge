@@ -75,6 +75,7 @@ var options = new SessionSourceOptions
     ClaudeRegistrationRoots = defaults.ClaudeRegistrationRoots,
     CodexRegistrationRoots = defaults.CodexRegistrationRoots,
     CopilotRemoteApproval = settings.RemoteApproval,
+    Log = command == "serve" ? Log : null,
 };
 var pretty = new JsonSerializerOptions(ProtocolJson.Options) { WriteIndented = !Flag("--compact") };
 
@@ -84,7 +85,7 @@ switch (command)
         {
             await using var source = new SessionSource(options);
             await source.RefreshAsync();
-            Console.WriteLine(JsonSerializer.Serialize(new SessionList(source.Snapshot(), source.Revision), pretty));
+            Console.WriteLine(JsonSerializer.Serialize(new SessionList(source.Snapshot(), source.Revision, null, source.Held), pretty));
             return 0;
         }
     case "get" when arguments.Count > 1:

@@ -28,7 +28,8 @@ internal sealed class Fixture : IDisposable
     public string ClaudeRegistrations => Path.Combine(Runtime, "agent-bridge-claude");
     public string CodexRegistrations => Path.Combine(Runtime, "agent-bridge-codex");
 
-    public SessionSourceOptions Options(long tailBytes = 4 * 1024 * 1024, bool watch = false, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true) => new()
+    public SessionSourceOptions Options(long tailBytes = 4 * 1024 * 1024, bool watch = false, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true,
+        Action<string>? log = null, Action<string>? afterRegistrationRead = null) => new()
     {
         CopilotHome = CopilotHome,
         ClaudeHome = ClaudeHome,
@@ -40,10 +41,13 @@ internal sealed class Fixture : IDisposable
         MaxSkimBytes = maxSkim,
         PollInterval = TimeSpan.FromMilliseconds(200),
         CopilotRemoteApproval = remoteApproval,
+        Log = log,
+        AfterRegistrationRead = afterRegistrationRead,
     };
 
-    public SessionSource Source(long tailBytes = 4 * 1024 * 1024, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true) =>
-        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval), Processes, Time);
+    public SessionSource Source(long tailBytes = 4 * 1024 * 1024, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true,
+        Action<string>? log = null, Action<string>? afterRegistrationRead = null) =>
+        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval, log: log, afterRegistrationRead: afterRegistrationRead), Processes, Time);
 
     // session-state/<id>/ with workspace.yaml and, optionally, inuse.<pid>.lock. Returns
     // the events.jsonl path (not created).
@@ -186,6 +190,8 @@ internal sealed class Fixture : IDisposable
 internal sealed class FakeProcesses : IProcessInspector
 {
     readonly Dictionary<AgentKind, List<AgentProcess>> _live = [];
+    readonly Dictionary<AgentKind, List<AgentProcess>> _unidentified = [];
+    readonly HashSet<AgentKind> _unreadable = [];
 
     public void Run(AgentKind agent, int pid, string? commandLine = null, DateTimeOffset? startedAt = null)
     {
@@ -194,9 +200,34 @@ internal sealed class FakeProcesses : IProcessInspector
         list.Add(new AgentProcess(pid, startedAt ?? Fixture.T0.AddHours(-1), commandLine));
     }
 
+    // A process whose start time the OS would not give.
+    public void RunUndated(AgentKind agent, int pid, string? commandLine = null)
+    {
+        Run(agent, pid, commandLine);
+        _live[agent][^1] = new AgentProcess(pid, null, commandLine);
+    }
+
     public void Exit(AgentKind agent, int pid)
     {
         if (_live.TryGetValue(agent, out var list)) { list.RemoveAll(p => p.Id == pid); }
+        if (_unidentified.TryGetValue(agent, out var unread)) { unread.RemoveAll(p => p.Id == pid); }
+    }
+
+    // The agent's processes cannot all be listed: a denied or failed read.
+    public void Unreadable(AgentKind agent, bool unreadable = true)
+    {
+        if (unreadable) { _unreadable.Add(agent); } else { _unreadable.Remove(agent); }
+    }
+
+    // A runtime (node, bun) still running whose command line could not be read this time, so
+    // it is not known to be this agent's.
+    // startedAt makes it another process that reused the pid.
+    public void Unidentify(AgentKind agent, int pid, DateTimeOffset? startedAt = null)
+    {
+        var p = GetAgentProcesses(agent).SingleOrDefault(x => x.Id == pid) ?? _unidentified[agent].Single(x => x.Id == pid);
+        Exit(agent, pid);
+        if (!_unidentified.TryGetValue(agent, out var list)) { _unidentified[agent] = list = []; }
+        list.Add(p with { CommandLine = null, StartedAt = startedAt ?? p.StartedAt });
     }
 
     public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent) => _live.TryGetValue(agent, out var list) ? [.. list] : [];
@@ -209,6 +240,17 @@ internal sealed class FakeProcesses : IProcessInspector
     {
         HolderQueries++;
         return Holders.TryGetValue(path, out var pids) ? pids : [];
+    }
+
+    // An unidentified runtime makes the observation not Known, as the real one does off Windows.
+    public AgentProcessObservation Observe(AgentKind agent)
+    {
+        var unidentified = _unidentified.TryGetValue(agent, out var u) ? u.ToList() : [];
+        return new(GetAgentProcesses(agent), !_unreadable.Contains(agent) && unidentified.Count == 0)
+        {
+            Listed = !_unreadable.Contains(agent),
+            Unidentified = unidentified,
+        };
     }
 }
 

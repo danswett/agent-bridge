@@ -283,8 +283,22 @@ public sealed record Field
 
 public sealed record Option(string Value, string? Label = null);
 
-// One page of sessions.list. Next is absent on the last page.
-public sealed record SessionList(IReadOnlyList<Session> Sessions, long Revision, string? Next = null);
+// One page of sessions.list. Next is absent on the last page. DiscoveryHeld is present while
+// the host's discovery is incomplete (DiscoveryHeld below).
+public sealed record SessionList(IReadOnlyList<Session> Sessions, long Revision, string? Next = null, DiscoveryHeld? DiscoveryHeld = null);
+
+// Why the host's last discovery pass could not account for everything, so it is holding
+// whatever it would decide from a session's absence: removing sessions of those agents,
+// offering or starting resumes of them, and reclaiming worktrees. Agents are the ones held;
+// sessions of the others are removed and resumed as usual. Reason is for a person, in words
+// ("an unrecognised copilot process (pid 4120)"), within MaxReasonBytes.
+public sealed record DiscoveryHeld(string Reason, IReadOnlyList<AgentKind> Agents)
+{
+    public const int MaxReasonBytes = 512;
+}
+
+// discovery.changed: the hold began, changed or ended (DiscoveryHeld absent).
+public sealed record DiscoveryChanged(DiscoveryHeld? DiscoveryHeld = null);
 
 public sealed record ListRequest(string? Cursor = null);
 
@@ -292,7 +306,8 @@ public sealed record ListRequest(string? Cursor = null);
 // then sessions.synced.
 public sealed record SubscribeResult(long Revision, int Count);
 
-public sealed record SessionsSynced(long Revision);
+// DiscoveryHeld: as on sessions.list, as of the end of the snapshot.
+public sealed record SessionsSynced(long Revision, DiscoveryHeld? DiscoveryHeld = null);
 
 public sealed record SessionRemoved(string Id);
 
@@ -346,6 +361,7 @@ public static class Events
     public const string SessionUpsert = "session.upsert";
     public const string SessionRemove = "session.remove";
     public const string SessionsSynced = "sessions.synced";
+    public const string DiscoveryChanged = "discovery.changed";
 }
 
 // Splits sessions into list pages that each fit a message. Every session must already
@@ -355,7 +371,9 @@ public static class Paging
     public static IEnumerable<IReadOnlyList<Session>> Pages(IEnumerable<Session> sessions, int maxBytes = ProtocolJson.MaxMessageBytes)
     {
         // Room for the envelope: {"re":n,"ok":true,"result":{"sessions":[...],"revision":n,"next":"..."}}
-        const int Envelope = 256;
+        // and a discoveryHeld, whose reason is bounded and whose agents are at most three, though
+        // a reason of emoji is escaped to three times its size.
+        const int Envelope = 256 + 3 * DiscoveryHeld.MaxReasonBytes + 128;
         var page = new List<Session>();
         var used = Envelope;
         foreach (var s in sessions)

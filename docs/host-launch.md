@@ -65,6 +65,7 @@ differences, each deliberate:
 | Where the host runs | A logon task, always on the desktop | Wherever it was started. Launching is offered only when the host is unelevated, interactive, in a logon session with a desktop (`WinSta0`); elevated, as a service or over SSH it is not, since the agent would be an administrator's, or on no screen |
 | Worktree marker | `agent-bridge-created` | `agent-bridge-host-created`, so neither product counts or claims the other's trees. Mutex `Local\AgentBridgeHostWorktree_<sha256>`, lock reason `agent-bridge-host-launch:<hex>` |
 | Reclaiming worktrees | Before each isolated launch, by its rules | The same rules, at the same point ([below](#reclaiming-finished-worktrees)), for this host's own marker only, and the same two exempt build outputs. Each tree kept is logged with its reason |
+| Incomplete discovery | Every launch refused while it lasts (`Launch held: waiting on …`) | Only what reads an absence waits: a resume of a held agent's session, or of one not on the list, and a new Codex session are `busy`, saying what holds it; nothing is reclaimed. Other new sessions start ([v1-launch.md](protocol/v1-launch.md#while-discovery-is-held)) |
 | macOS and Linux | tmux | Not offered yet |
 
 ## In order, for every launch
@@ -73,7 +74,8 @@ differences, each deliberate:
    returned for a repeat, which starts nothing.
 2. Platform, agent-ha-bridge (G5), `launch.enabled`, and whether this process can start an
    agent on the desktop (`refused`); `LaunchProtocol.Check` (`refused`).
-3. A trust question waiting (`busy`).
+3. A trust question waiting (`busy`). A resume not on the list while discovery is held
+   (`busy`).
 4. The options as `launch.options` would give them, and the request against them: the
    launcher installed; a resume on the list, its launcher of its kind, its folder still
    approved; otherwise an approved workspace, existing; profile, model, effort and context
@@ -81,7 +83,8 @@ differences, each deliberate:
    naming what is offered).
 5. Attachments, claimed for this launch (`refused` if the agent cannot take them or they are
    not held for this device).
-6. The start turn, one launch at a time. agent-ha-bridge and trust again. An isolated
+6. The start turn, one launch at a time. agent-ha-bridge and trust again; a resume, or a new
+   Codex session, whose agent's discovery is held (`busy`). An isolated
    workspace gets its worktree (below), a resume in one of this host's worktrees reuses it;
    either is locked until the session registers. Attachments are staged. The command line is
    built and checked for length (`refused`). The agent is started (`failed` if Windows will
@@ -155,8 +158,11 @@ the primary checkout.
 Each is logged once per launch as `retained worktree <folder name>: <reason>`, and a removal
 as `removed finished worktree <folder name>`: the folder's name, never a path or a file in it.
 
-**Live sessions.** A strict snapshot, agent-ha-bridge's `Get-BridgeWorktreeUsage`, not session
-discovery: every Copilot, Claude and Codex process (through every way this host recognises
+**Live sessions.** Nothing is reclaimed while session discovery is held
+([v1-sessions.md](protocol/v1-sessions.md#discovery-held)): a session it could not see may be
+working in any of the trees, so the snapshot is unknown (`session discovery is held, waiting
+on …`), asked again before each removal so a hold that begins meanwhile stops it. Then a
+strict snapshot, agent-ha-bridge's `Get-BridgeWorktreeUsage`, not session discovery: every Copilot, Claude and Codex process (through every way this host recognises
 one) must be accounted for by a session with a readable working directory (Copilot's
 `workspace.yaml` for the session its `--session-id` or `inuse.<pid>.lock` names; Claude's and
 Codex's agent-ha-bridge registrations, whose time must fall within the process's life). It is

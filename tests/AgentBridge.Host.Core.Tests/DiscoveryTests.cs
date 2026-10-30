@@ -239,8 +239,12 @@ public class DiscoveryTests
         f.Processes.Holders.Remove(lockFile);
         await source.RefreshAsync();
 
-        Assert.Empty(source.Snapshot());
         Assert.Equal(2, f.Processes.HolderQueries);
+        // Nothing accounts for the newcomer, which holds discovery (#43) until its grace is up.
+        Assert.Equal("an unrecognised codex process (pid 800)", source.Held?.Reason);
+        f.Time.Advance(Unaccounted.Grace);
+        await source.RefreshAsync();
+        Assert.Empty(source.Snapshot());
     }
 
     [Fact]
@@ -353,10 +357,14 @@ public class DiscoveryTests
         await source.RefreshAsync();
         Assert.Single(source.Snapshot());
 
-        // Another terminal comes to hold it too, while the first keeps running.
+        // Another terminal comes to hold it too, while the first keeps running. Neither is bound
+        // now, so both hold discovery (#43) until their grace is up, and then it goes.
         f.Processes.Run(AgentKind.Codex, 801, "codex.exe --no-daemon");
         f.Processes.Holders[lockFile] = [800, 801];
         f.Time.Advance(CodexLockDiscovery.Recheck);
+        await source.RefreshAsync();
+        Assert.NotNull(source.Held);
+        f.Time.Advance(Unaccounted.Grace);
         await source.RefreshAsync();
         Assert.Empty(source.Snapshot());
 
@@ -367,6 +375,9 @@ public class DiscoveryTests
         Assert.Single(source.Snapshot());
         f.Processes.Holders.Remove(lockFile);
         f.Time.Advance(CodexLockDiscovery.Recheck);
+        await source.RefreshAsync();
+        Assert.NotNull(source.Held);
+        f.Time.Advance(Unaccounted.Grace);
         await source.RefreshAsync();
         Assert.Empty(source.Snapshot());
     }
@@ -418,9 +429,13 @@ public class DiscoveryTests
         var s = Assert.Single(source.Snapshot());
         Assert.Equal((A, 800), (s.Id, s.ProcessId!.Value));
 
-        // Two that could each be its own: neither is taken.
+        // Two that could each be its own: neither is taken, and once the terminal's grace for
+        // holding discovery (#43) is up, nor is A kept.
         Fixture.Append(f.CodexTranscript(B), Codex.Event(new { type = "user_message", message = "again" }, 20));
         f.Time.Advance(CodexLockDiscovery.Recheck);
+        await source.RefreshAsync();
+        Assert.Equal("an unrecognised codex process (pid 800)", source.Held?.Reason);
+        f.Time.Advance(Unaccounted.Grace);
         await source.RefreshAsync();
         Assert.Empty(source.Snapshot());
 

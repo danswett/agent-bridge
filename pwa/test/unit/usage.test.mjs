@@ -118,3 +118,9 @@ test('the book keeps each machine latest report and tells listeners', () => {
   assert.equal(book.size, 0);
   assert.equal(heard, 4);
 });
+
+test('a machine whose discovery is held says so on its status line, as agent-ha-bridge did', () => {
+  assert.equal(machineStatus({ sessions: 2, hostVersion: '0.1.0', held: 'an unrecognised copilot process (pid 4120)' }),
+    '2 sessions \u00b7 0.1.0 \u00b7 discovery held: an unrecognised copilot process (pid 4120)');
+  assert.equal(machineStatus({ sessions: 2, hostVersion: '0.1.0', held: null }), '2 sessions \u00b7 0.1.0');
+});

@@ -28,6 +28,7 @@ export const Events = Object.freeze({
   sessionUpsert: 'session.upsert',
   sessionRemove: 'session.remove',
   sessionsSynced: 'sessions.synced',
+  discoveryChanged: 'discovery.changed',
 });
 
 export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', push: 'push' });
@@ -150,6 +151,15 @@ export function readSession(raw) {
     },
     question: readQuestion(s.question),
   };
+}
+
+// What holds the host's discovery ({ reason, agents }), from sessions.synced or
+// discovery.changed; null when nothing does, or when what came is unreadable.
+export function readDiscoveryHeld(raw) {
+  const h = obj(raw);
+  const reason = str(h?.reason);
+  if (!reason) { return null; }
+  return { reason, agents: Array.isArray(h.agents) ? h.agents.filter((a) => typeof a === 'string').map(readAgent) : [] };
 }
 
 export function readHello(raw) {
