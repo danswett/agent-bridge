@@ -33,13 +33,21 @@ public sealed class ShadowCoverage
     public int StatusTransitions { get; set; }
     // Likewise each latest response the two were compared on: one side's changing, or the first.
     public int ResponseChanges { get; set; }
-    // When responses began to be counted: a report from before has activity.response mismatches
-    // and nothing to count them against.
-    public DateTimeOffset? ResponsesSince { get; set; }
+    // When states (statuses and responses) began to be counted this way, and their failures with
+    // them: before it, a status mismatch is counted by its episode against the daemon's changes,
+    // and a response one has nothing to count against.
+    public DateTimeOffset? StatesSince { get; set; }
     // What each session showing on both sides was last compared in, by its hash: a status pair of
-    // tokens and a hash of the two responses' hashes, so a restart of the comparison does not count
-    // a state again. Carried across midnight; a session gone from both sides is dropped.
+    // tokens and a hash of the two responses' hashes, each with when it was first counted, so a
+    // restart of the comparison does not count a state again. Carried across midnight; a session
+    // gone from both sides is dropped.
     public SortedDictionary<string, ShadowShown> Shown { get; set; } = new(StringComparer.Ordinal);
+    // The states a status or activity.response mismatch was about (one that lasted the grace),
+    // each once, by a hash of its session, kind and when it was counted: what those rates count.
+    // An episode is not: one can run on across many states, and a restart of the comparison ends
+    // one while the state it was about goes on. Past the cap, counted by kind in the overflow.
+    public SortedDictionary<string, ShadowFailedState> FailedStates { get; set; } = new(StringComparer.Ordinal);
+    public SortedDictionary<string, int> FailedStatesOverflow { get; set; } = new(StringComparer.Ordinal);
     // Sessions that had background agents or shells at some sample, and the starts and finishes
     // of that work as the daemon listed it.
     public List<string> BackgroundSessions { get; set; } = [];
@@ -79,7 +87,16 @@ public sealed class ShadowFailedQuestion
 public sealed class ShadowShown
 {
     public string? Status { get; set; }
+    public DateTimeOffset? StatusAt { get; set; }
     public string? Response { get; set; }
+    public DateTimeOffset? ResponseAt { get; set; }
+}
+
+public sealed class ShadowFailedState
+{
+    public string Session { get; set; } = "";
+    public string Kind { get; set; } = "";
+    public DateTimeOffset Last { get; set; }
 }
 
 // Turns each compared sample into events, remembering what the previous one showed. One per run;
@@ -136,7 +153,7 @@ internal sealed class ShadowCoverageTracker
     {
         if (!comparison.Compared) { return; }
         c.Since ??= now;
-        c.ResponsesSince ??= now;
+        c.StatesSince ??= now;
         if (first)
         {
             first = false;
@@ -167,7 +184,7 @@ internal sealed class ShadowCoverageTracker
             }
             // The daemon's marker caught half written says nothing either way.
             if (d?.QuestionUnknown != true) { Question(c, hash, d?.Question, h?.Question); }
-            if (d is not null && h is not null) { Shown(c, hash, d, h); }
+            if (d is not null && h is not null) { Shown(c, hash, d, h, now); }
             if (d is not null && lastDaemon?.Sessions.GetValueOrDefault(id) is { } before) { Changes(c, before, d); }
         }
         foreach (var gone in asked.Keys.Where(k => !present.Contains(k)).ToList()) { asked.Remove(gone); }
@@ -231,25 +248,50 @@ internal sealed class ShadowCoverageTracker
     // What a session showing on both sides is being compared in, counted when it is new: a status
     // or a response either side changed to, or the one it has when first seen. A status mismatch
     // or a response one begins only when one of these changes, so each is about an event counted.
-    static void Shown(ShadowCoverage c, string session, ShadowSession d, ShadowSession h)
+    static void Shown(ShadowCoverage c, string session, ShadowSession d, ShadowSession h, DateTimeOffset now)
     {
         if (!c.Shown.TryGetValue(session, out var was))
         {
             if (c.Shown.Count >= MaxSessions) { return; }
             c.Shown[session] = was = new ShadowShown();
         }
-        // A marker caught half written says nothing about the daemon's status this time.
-        if (ShadowCompare.DaemonStatus(d) is { } ds && $"{ShadowHash.Token(ds)}/{ShadowHash.Token(h.Status)}" is var status && status != was.Status)
+        // As the comparison judged it, a marker caught half written included.
+        var status = $"{ShadowHash.Token(ShadowCompare.ComparedDaemonStatus(d, h.Status))}/{ShadowHash.Token(h.Status)}";
+        if (status != was.Status)
         {
             c.StatusTransitions++;
             was.Status = status;
+            was.StatusAt = now;
         }
         // Compared only when both have one, so counted only then.
         if (d.ResponseTail is not null && h.ResponseTail is not null && ShadowHash.Text(d.ResponseTail + "\n" + h.ResponseTail) is var response && response != was.Response)
         {
             c.ResponseChanges++;
             was.Response = response;
+            was.ResponseAt = now;
         }
+    }
+
+    readonly HashSet<string> overflowedStates = new(StringComparer.Ordinal);
+
+    // A status or activity.response mismatch, lasting its grace, on a session: the state it is
+    // being compared in now failed.
+    public void StateFailed(ShadowCoverage c, string session, string kind, DateTimeOffset now)
+    {
+        if (!c.Shown.TryGetValue(session, out var shown)) { return; }
+        var at = kind == ShadowKinds.Status ? shown.StatusAt : shown.ResponseAt;
+        if (at is null) { return; }
+        var key = ShadowHash.Text(session + "\n" + kind + "\n" + at.Value.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture));
+        if (!c.FailedStates.TryGetValue(key, out var failed))
+        {
+            if (c.FailedStates.Count >= MaxFailed)
+            {
+                if (overflowedStates.Add(key)) { c.FailedStatesOverflow[kind] = c.FailedStatesOverflow.GetValueOrDefault(kind) + 1; }
+                return;
+            }
+            c.FailedStates[key] = failed = new ShadowFailedState { Session = session, Kind = kind };
+        }
+        failed.Last = now;
     }
 
     // What changed in one session between two samples, as the daemon published it.
@@ -302,6 +344,9 @@ public static class ShadowCoverageKinds
     // already list the sessions compared, and a machine side going down and coming back is a
     // closed machine.daemon or machine.host disagreement in them.
     public static bool FromEveryReport(string kind) => kind is Sessions or Machine;
+
+    // Counted by the states compared, and their failures by state (ShadowCoverage.FailedStates).
+    public static bool IsState(string kind) => kind is Transitions or Responses;
 }
 
 public static class ShadowStats

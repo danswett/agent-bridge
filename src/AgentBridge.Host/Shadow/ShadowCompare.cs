@@ -262,6 +262,11 @@ public static class ShadowCompare
     public static string? DaemonStatus(ShadowSession d) =>
         d.QuestionUnknown ? null : d.Question is not null ? "waiting" : Comparable(d.Status);
 
+    // The daemon's status as judged against the host's: with its marker half written, whichever of
+    // its own status and waiting the host shows, so that sample is not a disagreement either way.
+    public static string ComparedDaemonStatus(ShadowSession d, string hostStatus) =>
+        DaemonStatus(d) ?? (hostStatus == "waiting" ? "waiting" : Comparable(d.Status));
+
     public static string HostStatus(SessionStatus status) => status switch
     {
         SessionStatus.Working => "working",
@@ -442,12 +447,10 @@ public static class ShadowCompare
         void Pair(string kind, string? a, string? b) => diffs.Add(new(kind, s, $"daemon={ShadowHash.Token(a)} host={ShadowHash.Token(b)}"));
 
         if (d.Agent != h.Agent) { Pair(ShadowKinds.Agent, d.Agent, h.Agent); }
-        var expected = DaemonStatus(d);
-        // A marker caught half written leaves the daemon showing either its own status or waiting.
-        var agrees = expected is null ? h.Status == Comparable(d.Status) || h.Status == "waiting" : expected == h.Status;
+        var expected = ComparedDaemonStatus(d, h.Status);
         // parity §3: a pending permission prompt is beyond parity, so the host's waiting is the
         // daemon's working.
-        if (!agrees && !(h.PermissionPending && h.Status == "waiting" && expected == "working")) { Pair(ShadowKinds.Status, d.Question is not null ? "waiting" : d.Status, h.Status); }
+        if (expected != h.Status && !(h.PermissionPending && h.Status == "waiting" && expected == "working")) { Pair(ShadowKinds.Status, d.Question is not null ? "waiting" : d.Status, h.Status); }
         if (d.Agents != h.Agents) { Pair(ShadowKinds.BackgroundAgents, d.Agents.ToString(), h.Agents.ToString()); }
         if (d.Shells != h.Shells) { Pair(ShadowKinds.BackgroundShells, d.Shells.ToString(), h.Shells.ToString()); }
         if (!string.Equals(d.Model ?? "", h.Model ?? "", StringComparison.Ordinal)) { Pair(ShadowKinds.Model, d.Model, h.Model); }

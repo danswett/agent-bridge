@@ -162,7 +162,7 @@ public sealed class ShadowLedger
                     DaemonStartedAt = carried.DaemonStartedAt,
                     HostStartedAt = carried.HostStartedAt,
                     // A session in the same state after midnight is not a new one to compare.
-                    Shown = new(carried.Shown.ToDictionary(x => x.Key, x => new ShadowShown { Status = x.Value.Status, Response = x.Value.Response }), StringComparer.Ordinal),
+                    Shown = new(carried.Shown.ToDictionary(x => x.Key, x => new ShadowShown { Status = x.Value.Status, StatusAt = x.Value.StatusAt, Response = x.Value.Response, ResponseAt = x.Value.ResponseAt }), StringComparer.Ordinal),
                 };
             }
         }
@@ -223,6 +223,7 @@ public sealed class ShadowLedger
             if (episode.Last - episode.First < GraceFor(d.Kind)) { continue; }
             if (Persist(episode, date) is { } fresh) { made.Add(fresh); }
             if (d.Kind.StartsWith("question.", StringComparison.Ordinal) && d.Session is { } s && day.Coverage is { } c) { coverage.QuestionFailed(c, s, d.Kind, now); }
+            if (d.Kind is ShadowKinds.Status or ShadowKinds.Response && d.Session is { } ss && day.Coverage is { } sc) { coverage.StateFailed(sc, ss, d.Kind, now); }
         }
         Save(day);
         return made;

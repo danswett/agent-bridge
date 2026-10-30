@@ -65,7 +65,7 @@ public sealed record ShadowSummary(
     public static ShadowSummary Build(string folder, DateOnly today, int days, DateTimeOffset? now = null, ShadowGateConfig? config = null)
     {
         config ??= new ShadowGateConfig();
-        DateTimeOffset? first = null, last = null, coverageSince = null, responsesSince = null;
+        DateTimeOffset? first = null, last = null, coverageSince = null, statesSince = null;
         long comparedSeconds = 0;
         var all = new HashSet<string>(StringComparer.Ordinal);
         var agentOf = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -75,6 +75,7 @@ public sealed record ShadowSummary(
         int transitions = 0, responses = 0, starts = 0, finishes = 0, compactions = 0, models = 0, resume = 0, usage = 0, resets = 0;
         var known = new Dictionary<(string Kind, string Cause), (int Samples, HashSet<string> Sessions)>();
         var failedQuestions = new Dictionary<string, ShadowFailedQuestion>(StringComparer.Ordinal);
+        var failedStates = new Dictionary<string, ShadowFailedState>(StringComparer.Ordinal);
         // Mismatches past a day's cap, by kind, from the days whose events they count against.
         var overflowCounted = new Dictionary<string, int>(StringComparer.Ordinal);
         var list = new List<ShadowSummaryDay>();
@@ -104,7 +105,12 @@ public sealed record ShadowSummary(
                 background.UnionWith(c.BackgroundSessions);
                 transitions += c.StatusTransitions;
                 responses += c.ResponseChanges;
-                if (c.ResponsesSince is { } r && (responsesSince is null || r < responsesSince)) { responsesSince = r; }
+                if (c.StatesSince is { } r && (statesSince is null || r < statesSince)) { statesSince = r; }
+                // Carried across midnight, a state failing on both days is one.
+                foreach (var (key, q) in c.FailedStates)
+                {
+                    if (!failedStates.TryGetValue(key, out var was) || q.Last > was.Last) { failedStates[key] = q; }
+                }
                 starts += c.BackgroundStarts;
                 finishes += c.BackgroundFinishes;
                 compactions += c.Compactions;
@@ -133,7 +139,16 @@ public sealed record ShadowSummary(
             }
             foreach (var (kind, n) in day.Overflow)
             {
-                if (ShadowCoverageKinds.Of(kind) is { } of && (day.Coverage is not null || ShadowCoverageKinds.FromEveryReport(of))) { overflowCounted[of] = overflowCounted.GetValueOrDefault(of) + n; }
+                // States are counted by their own failures from when they are counted, and past the
+                // cap of those by their own overflow: a day's mismatch overflow has no time to tell
+                // which side of that it fell on, so it counts against them only on a day before.
+                if (ShadowCoverageKinds.Of(kind) is not { } of || (day.Coverage is null && !ShadowCoverageKinds.FromEveryReport(of))) { continue; }
+                if (ShadowCoverageKinds.IsState(of) && (day.Coverage?.StatesSince is not null || of == ShadowCoverageKinds.Responses)) { continue; }
+                overflowCounted[of] = overflowCounted.GetValueOrDefault(of) + n;
+            }
+            foreach (var (kind, n) in day.Coverage?.FailedStatesOverflow ?? [])
+            {
+                if (ShadowCoverageKinds.Of(kind) is { } of) { overflowCounted[of] = overflowCounted.GetValueOrDefault(of) + n; }
             }
             foreach (var (kind, causes) in day.Known)
             {
@@ -184,7 +199,7 @@ public sealed record ShadowSummary(
         var lines = new List<ShadowCoverageLine>();
         foreach (var kind in ShadowCoverageKinds.All)
         {
-            var since = ShadowCoverageKinds.FromEveryReport(kind) ? first : kind == ShadowCoverageKinds.Responses ? responsesSince : coverageSince;
+            var since = ShadowCoverageKinds.FromEveryReport(kind) ? first : kind == ShadowCoverageKinds.Responses ? statesSince : coverageSince;
             // A mismatch counts against the events counted over the same time.
             var n = counted[kind];
             int m, explained;
@@ -194,6 +209,18 @@ public sealed record ShadowSummary(
                 // questions one mismatch ran on across: explained only if all its kinds are.
                 explained = failedQuestions.Values.Count(q => q.Kinds.All(k => config.Explaining(new ShadowEpisode { Kind = k, Session = q.Session }) is not null));
                 m = failedQuestions.Count - explained;
+            }
+            else if (ShadowCoverageKinds.IsState(kind))
+            {
+                // Each state that failed once, and, from before states were counted, each status
+                // episode against the daemon's changes it was counted against then.
+                var states = failedStates.Values.Where(f => ShadowCoverageKinds.Of(f.Kind) == kind)
+                    .Select(f => new ShadowEpisode { Kind = f.Kind, Session = f.Session, Last = f.Last });
+                var before = episodes.Values.Where(e => e.Kind == ShadowKinds.Status && kind == ShadowCoverageKinds.Transitions
+                    && since is { } s && e.Last >= s && (statesSince is null || e.First < statesSince));
+                var against = states.Concat(before).ToList();
+                explained = against.Count(e => config.Explaining(e) is not null);
+                m = against.Count - explained + overflowCounted.GetValueOrDefault(kind);
             }
             else
             {
