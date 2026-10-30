@@ -31,8 +31,24 @@ public sealed class HostSettingsTests : IDisposable
         var (settings, problem) = With(text);
 
         Assert.False(settings.RemoteApproval);
-        Assert.Contains("remote approval of permission prompts and launching are off", problem);
+        Assert.Contains("remote approval of permission prompts, launching and notifications are off", problem);
         Assert.False(settings.Launch.Enabled);
+        Assert.False(settings.Push);
+    }
+
+    [Theory]
+    [InlineData(null, true, null)]
+    [InlineData("{ \"push\": {} }", true, null)]
+    [InlineData("{ \"push\": { \"enabled\": true } }", true, null)]
+    [InlineData("{ \"push\": { \"enabled\": false } }", false, null)]
+    [InlineData("{ \"push\": { \"enabled\": \"no\" } }", false, "push.enabled is not true or false")]
+    [InlineData("{ \"push\": false }", false, "push is not an object")]
+    public void Notifications_are_on_unless_push_enabled_is_false_and_a_value_that_is_not_true_or_false_turns_them_off(string? text, bool on, string? problem)
+    {
+        var (settings, said) = With(text);
+
+        Assert.Equal(on, settings.Push);
+        if (problem is null) { Assert.Null(said); } else { Assert.Contains(problem, said); }
     }
 
     [Fact]
@@ -114,6 +130,12 @@ public sealed class HostSettingsTests : IDisposable
 
         Assert.Equal(0, Run("config", "unset", "launch.permissions"));
         Assert.Equal("ask", HostSettings.Load(folder).Settings.Launch.Permissions);
+
+        // Notifications are turned off at the machine the same way, and only with true or false.
+        Assert.Equal(1, Run("config", "set", "push.enabled", "no"));
+        Assert.True(HostSettings.Load(folder).Settings.Push);
+        Assert.Equal(0, Run("config", "set", "push.enabled", "false"));
+        Assert.False(HostSettings.Load(folder).Settings.Push);
     }
 
     [Fact]

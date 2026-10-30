@@ -24,6 +24,11 @@ namespace AgentBridge.Host;
 // homeAssistant: the Home Assistant connector (HaSettings, docs/ha-connector.md). Off unless
 // turned on; a file that cannot be read leaves it off.
 //
+// push.enabled: whether this machine sends Web Push notifications to the account's phones (on
+// when absent). Off for a machine that should be seen but never heard from, as the shadow host
+// beside agent-ha-bridge is (docs/host-shadow.md). A value that is not true or false, or a file
+// that cannot be read, turns it off.
+//
 // version: the schema's. A file from a newer schema is not guessed at: both are off.
 public sealed record HostSettings(bool RemoteApproval)
 {
@@ -43,7 +48,9 @@ public sealed record HostSettings(bool RemoteApproval)
 
     public IReadOnlyList<string> HomeAssistantProblems { get; init; } = [];
 
-    static HostSettings Off => Default with { RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false } };
+    public bool Push { get; init; } = true;
+
+    static HostSettings Off => Default with { RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false };
 
     public static (HostSettings Settings, string? Problem) Load(string folder)
     {
@@ -56,7 +63,7 @@ public sealed record HostSettings(bool RemoteApproval)
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return (Off, $"{path} could not be read ({e.Message}); remote approval of permission prompts and launching are off");
+            return (Off, $"{path} could not be read ({e.Message}); remote approval of permission prompts, launching and notifications are off");
         }
         try
         {
@@ -68,7 +75,7 @@ public sealed record HostSettings(bool RemoteApproval)
                 if (version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out var v) || v < 1) { throw new JsonException("version is not a whole number from 1"); }
                 if (v > Version)
                 {
-                    return (Off, $"{path} is version {v}, written by a newer Agent Bridge than this host (version {Version}); remote approval of permission prompts and launching are off until the host is updated");
+                    return (Off, $"{path} is version {v}, written by a newer Agent Bridge than this host (version {Version}); remote approval of permission prompts, launching and notifications are off until the host is updated");
                 }
             }
             var (launch, launchProblems) = LaunchConfig.Read(root.TryGetProperty("launch", out var l) ? l : null);
@@ -80,6 +87,22 @@ public sealed record HostSettings(bool RemoteApproval)
                 HomeAssistant = homeAssistant,
                 HomeAssistantProblems = homeAssistantProblems.Count == 0 ? [] : homeAssistantProblems,
             };
+            if (root.TryGetProperty("push", out var push) && push.ValueKind != JsonValueKind.Null)
+            {
+                if (push.ValueKind != JsonValueKind.Object) { throw new JsonException("push is not an object"); }
+                if (push.TryGetProperty("enabled", out var enabled) && enabled.ValueKind != JsonValueKind.Null)
+                {
+                    settings = settings with
+                    {
+                        Push = enabled.ValueKind switch
+                        {
+                            JsonValueKind.True => true,
+                            JsonValueKind.False => false,
+                            _ => throw new JsonException("push.enabled is not true or false"),
+                        },
+                    };
+                }
+            }
             if (!root.TryGetProperty("permissions", out var permissions)) { return (settings, null); }
             if (permissions.ValueKind != JsonValueKind.Object) { throw new JsonException("permissions is not an object"); }
             if (!permissions.TryGetProperty("remoteApproval", out var remote)) { return (settings, null); }
@@ -92,7 +115,7 @@ public sealed record HostSettings(bool RemoteApproval)
         }
         catch (JsonException e)
         {
-            return (Off, $"{path} is not valid ({e.Message}); remote approval of permission prompts and launching are off");
+            return (Off, $"{path} is not valid ({e.Message}); remote approval of permission prompts, launching and notifications are off");
         }
     }
 

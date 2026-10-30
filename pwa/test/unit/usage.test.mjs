@@ -124,3 +124,8 @@ test('a machine whose discovery is held says so on its status line, as agent-ha-
     '2 sessions \u00b7 0.1.0 \u00b7 discovery held: an unrecognised copilot process (pid 4120)');
   assert.equal(machineStatus({ sessions: 2, hostVersion: '0.1.0', held: null }), '2 sessions \u00b7 0.1.0');
 });
+
+test('a machine that takes nothing from the phone says so on its status line, and why', () => {
+  assert.equal(machineStatus({ sessions: 2, hostVersion: '0.1.0', readOnly: 'agent-ha-bridge is running for this user' }),
+    '2 sessions \u00b7 0.1.0 \u00b7 read-only: agent-ha-bridge is running for this user');
+});

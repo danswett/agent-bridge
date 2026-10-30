@@ -103,7 +103,8 @@ from a checkout of the commit to be compared, in PowerShell 7, not elevated, and
 
 ```powershell
 pwsh build/shadow-week.ps1 -Install -WhatIf   # what it would do
-pwsh build/shadow-week.ps1 -Install
+pwsh build/shadow-week.ps1 -Install           # this machine only
+pwsh build/shadow-week.ps1 -Install -Relay    # and on the phone, read-only
 ```
 
 `-Install`:
@@ -123,7 +124,8 @@ pwsh build/shadow-week.ps1 -Install
 3. Registers two per-user logon tasks, made like the app's (`LogonTaskXml`): the user's
    interactive token, `LeastPrivilege`, hidden, restarted every minute on failure (three
    times), no time limit, not stopped on battery, one instance:
-   * `AgentBridgeShadowHost_shadow_<user hash>`: `agent-bridge-hostw serve --profile shadow --local-only`.
+   * `AgentBridgeShadowHost_shadow_<user hash>`: `agent-bridge-hostw serve --profile shadow --local-only`,
+     or with `-Relay`, `agent-bridge-hostw serve --profile shadow --name "<COMPUTERNAME> (shadow)"`.
    * `AgentBridgeShadowRun_shadow_<user hash>`: `agent-bridge-hostw shadow run --profile shadow
      --interval 15 --grace 60`, a minute after logon so the host is serving by then.
 
@@ -133,9 +135,43 @@ pwsh build/shadow-week.ps1 -Install
 
 **Read-only by construction.** While agent-ha-bridge runs, the host withdraws answering,
 replying, stopping and launching (G5), and `machine.g5` reports it if it ever does not.
-`--local-only` keeps it off the relay. A new profile has no Home Assistant token of its
+Without `-Relay`, `--local-only` keeps it off the relay. A new profile has no Home Assistant token of its
 own, so the host's Home Assistant connector is off (its log says so) and it publishes
 nothing over the daemon's entities. `shadow run` writes only its reports.
+
+### On the phone (`-Relay`)
+
+`-Install -Relay` puts the shadow host on the relay too, so the phone shows it beside the
+others, read-only:
+
+* **Named apart.** It serves as `<COMPUTERNAME> (shadow)` (`--name`), so the machine list
+  tells it from the machine's own host.
+* **No notifications.** The install sets `push.enabled` to `false` in the profile's config
+  ([host-config.md](host-config.md)): agent-ha-bridge already notifies the phone, and two
+  notices for each question would be noise. The host then takes no subscription and sends
+  nothing; `hello` leaves `push` out, so the phone says the machine doesn't send
+  notifications, and a `push.subscribe` sent anyway fails saying so.
+* **Read-only, and saying why.** While agent-ha-bridge runs, `hello` leaves out
+  `sessions.answer`, `sessions.reply`, `sessions.stop` and `sessions.launch` (and transfers),
+  and carries `machine.readOnly`, the reason ([v1-sessions.md](protocol/v1-sessions.md#hello)).
+  The phone shows that reason on the machine's status line and on each question, offers no
+  reply box, End session or Launch, and shows questions read-only. This holds only **while
+  agent-ha-bridge runs**: if its daemon is stopped, the shadow host offers everything an
+  ordinary host does, as G5 intends for a machine that has moved over. Uninstall the shadow
+  host, or re-run `-Install` without `-Relay`, before stopping agent-ha-bridge for good.
+* **Signed in once.** A profile that has never signed in is signed in during the install:
+  `agent-bridge-host sign-in --profile shadow` prints an address and a device code; open it
+  on any device and sign in as the account the phone uses. The relay is `-RelayUrl`, else
+  `AGENT_BRIDGE_RELAY`, else the one the profile used before, else the app's own profile's.
+  To do it by hand, from an ordinary terminal (inside an agent session it is refused, #67):
+
+  ```powershell
+  & "$env:LOCALAPPDATA\AgentBridgeShadow\bin\agent-bridge-host.exe" sign-in --profile shadow --relay <relay url>
+  ```
+
+The comparison does not change: `shadow run` reads the host over its local pipe, never the
+relay, so whether the host is connected to the relay, or signed in at all, does not affect
+it.
 
 **Logoff and reboot.** Both tasks start at every logon of that user, so they come back
 after a reboot or a logoff with no one touching them. While the user is logged off, both
@@ -146,7 +182,7 @@ disconnected remote desktop session is not a logoff: everything keeps running.
 **Checking on it:**
 
 ```powershell
-pwsh build/shadow-week.ps1 -Status            # both tasks' state and last result, then the summary
+pwsh build/shadow-week.ps1 -Status            # both tasks' state, the relay (on or off, signed in, last said), then the summary
 & "$env:LOCALAPPDATA\AgentBridgeShadow\bin\agent-bridge-host.exe" shadow summary --profile shadow
 Get-Content "$env:LOCALAPPDATA\AgentBridge\shadow\shadow\shadow.log" -Tail 20
 ```

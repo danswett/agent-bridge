@@ -113,6 +113,30 @@ public sealed class PushFlowTests : IAsyncLifetime
 
     JsonElement Open(FakePushService.Push p) => JsonDocument.Parse(WebPushCrypto.Decrypt(p.Body, browser, auth)).RootElement.GetProperty("notification");
 
+    // The shadow host beside agent-ha-bridge (docs/host-shadow.md): seen from the phone, never
+    // heard from, since agent-ha-bridge already notifies it.
+    [Fact]
+    public async Task A_machine_with_notifications_off_offers_none_says_so_to_a_phone_that_asks_and_sends_nothing()
+    {
+        host.Hub.Handler = new SessionService(source, new MachineInfo(host.Id, "Test host", "windows", "0.1.0"), answers: new AnsweredAtOnce(this)).HandleAsync;
+        var ch = await OpenAsync();
+
+        var hello = Result(await ch.RequestAsync(Ops.Hello, new { }));
+        Assert.DoesNotContain(Capabilities.Push, hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        var refused = await ch.RequestAsync(Ops.PushSubscribe, new
+        {
+            endpoint = Endpoint(),
+            keys = new { p256dh = B64Url.Encode(browser.Public), auth = B64Url.Encode(auth) },
+            app = "https://danswett.github.io/agent-bridge/app/",
+        });
+        Assert.False(refused.GetProperty("ok").GetBoolean());
+        Assert.Equal(SessionService.NoNotifications, refused.GetProperty("error").GetString());
+        // Turning notifications off on the phone still goes through cleanly.
+        Assert.False(Result(await ch.RequestAsync(Ops.PushUnsubscribe, new { })).GetProperty("removed").GetBoolean());
+        Assert.Empty(Result(await ch.RequestAsync(Ops.PushList, new { })).GetProperty("devices").EnumerateArray());
+        Assert.Equal(0, store.Count);
+    }
+
     [Fact]
     public async Task A_question_reaches_the_phone_encrypted_through_the_relay_and_is_replaced_once_answered_at_the_machine()
     {

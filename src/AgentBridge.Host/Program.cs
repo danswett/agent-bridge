@@ -246,10 +246,13 @@ async Task<int> ServeAsync()
     var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs);
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
-    // app closed. Subscriptions live in the profile's own folder, for this account only.
-    await using var push = new PushNotifier(source, machine,
-        PushStore.Load(Path.Combine(identity.Folder, "push-subscriptions.json"), identity.Account?.AccountId, Log), log: Log);
-    push.Start();
+    // app closed. Subscriptions live in the profile's own folder, for this account only. None at
+    // all when push.enabled is off (the shadow host beside agent-ha-bridge, which already notifies
+    // the phones): no subscription is taken and nothing is sent.
+    await using var push = settings.Push
+        ? new PushNotifier(source, machine, PushStore.Load(Path.Combine(identity.Folder, "push-subscriptions.json"), identity.Account?.AccountId, Log), log: Log)
+        : null;
+    push?.Start();
     // Each agent's allowance, asked at the pace its sessions set, and never more often than
     // the idle pace while agent-ha-bridge is asking the same vendors for this user.
     using var usageHttp = new UsageHttp(TimeSpan.FromSeconds(15));
@@ -270,7 +273,12 @@ async Task<int> ServeAsync()
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log);
     var launcher = Launcher(source, attachments, transfers);
     transfers.Launcher = launcher;
-    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, new UsageService(usageMonitor, Log), launcher, transfers);
+    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, new UsageService(usageMonitor, Log), launcher, transfers)
+    {
+        // What takes answering, replying, ending and launching away while it runs (design G5),
+        // said in hello so a phone shows the machine read-only and why.
+        ReadOnly = haActive ?? (() => null),
+    };
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
     var inspector = new SystemProcessInspector();
@@ -335,7 +343,7 @@ async Task<int> ServeAsync()
         Log($"the local API is off, so apps on this machine cannot reach this host: {e.Message}");
     }
     await using var localLifetime = local;
-    Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {push.Subscribers} device(s) to notify");
+    Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
 
     var backoff = TimeSpan.FromSeconds(1);
     var reconnects = 0;
@@ -368,7 +376,7 @@ async Task<int> ServeAsync()
             };
             hub.Accepted += ch => Log($"channel from {ch.PeerName} ({ch.PeerKind}, {ch.PeerId[..8]})");
             hub.Rejected += (peer, e) => Log($"rejected a frame from {peer[..Math.Min(8, peer.Length)]}: {e.Message}");
-            push.Attach(new RelayPushSender(relay));
+            push?.Attach(new RelayPushSender(relay));
             relayBlobs.Attach(relay);
             transfers.Attach(relay, hub);
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");

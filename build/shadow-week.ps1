@@ -3,11 +3,20 @@
 # and `shadow run` against it, each started by a per-user logon task like the app's. No admin.
 #
 #   pwsh build/shadow-week.ps1 -Install [-WhatIf]   # publish, mirror the workspaces, register and start both
-#   pwsh build/shadow-week.ps1 -Status              # the tasks, and the summary so far
+#   pwsh build/shadow-week.ps1 -Install -Relay      # the same, and the host on the relay, so the phone sees it
+#   pwsh build/shadow-week.ps1 -Status              # the tasks, the relay, and the summary so far
 #   pwsh build/shadow-week.ps1 -Uninstall           # stop and remove both tasks; reports and profile stay
 #
-# Needs the .NET 10 SDK for -Install. Run it from the checkout to be compared; re-running
-# -Install publishes that checkout again and restarts both.
+# Needs the .NET 10 SDK for -Install. Run it from the checkout to be compared, in a terminal of
+# your own: it changes the host's config and may sign in, which agent-bridge-host refuses inside an
+# agent session. Re-running -Install publishes that checkout again and restarts both.
+#
+# -Relay: the host serves the phone too, read-only, as "<computer> (shadow)". It sends no
+# notifications (push.enabled off: agent-ha-bridge already notifies the phone), and while
+# agent-ha-bridge runs it takes no answers, replies, stops or launches (design G5) and tells the
+# phone why. A profile not signed in is signed in first, with a device code printed here, to
+# -RelayUrl, AGENT_BRIDGE_RELAY, the relay the profile used before, or the app's. Without -Relay
+# the host serves this machine only (--local-only), as before.
 #Requires -Version 7
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Status')]
 param(
@@ -19,7 +28,9 @@ param(
     [ValidatePattern('^[a-z0-9][a-z0-9_-]{0,31}$')][string]$HostProfile = 'shadow',
     [string]$Bin = (Join-Path $env:LOCALAPPDATA 'AgentBridgeShadow\bin'),
     [Parameter(ParameterSetName = 'Install')][ValidateRange(5, 3600)][int]$Interval = 15,
-    [Parameter(ParameterSetName = 'Install')][ValidateRange(0, 86400)][int]$Grace = 60
+    [Parameter(ParameterSetName = 'Install')][ValidateRange(0, 86400)][int]$Grace = 60,
+    [Parameter(ParameterSetName = 'Install')][switch]$Relay,
+    [Parameter(ParameterSetName = 'Install')][string]$RelayUrl
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -160,6 +171,42 @@ function Sync-AgentHaBridgeWorkspace {
     }
 }
 
+# The profile's account, or $null when it has not signed in (agent-bridge-host whoami).
+function Get-ShadowAccount {
+    $line = [string](& $exe whoami --profile $HostProfile)
+    if ($LASTEXITCODE) { throw "agent-bridge-host whoami failed: $line" }
+    if ($line -match '\baccount (\S+)' -and $Matches[1] -ne '(not') { return $Matches[1] }
+    $null
+}
+
+# Where to sign in: as asked, else as agent-bridge-host itself would (AGENT_BRIDGE_RELAY, then the
+# profile's last), else the relay the app's own profile signed in to.
+function Get-ShadowRelayUrl {
+    if ($RelayUrl) { return $RelayUrl }
+    if ($env:AGENT_BRIDGE_RELAY) { return $env:AGENT_BRIDGE_RELAY }
+    foreach ($p in $HostProfile, 'default') {
+        $saved = Join-Path $env:LOCALAPPDATA "AgentBridge\$p\relay.txt"
+        if (Test-Path $saved) { $url = (Get-Content -Raw $saved).Trim(); if ($url) { return $url } }
+    }
+    throw 'no relay to sign in to: pass -RelayUrl <url>, or sign the app in first'
+}
+
+# On the relay: no notifications from this profile, and signed in.
+function Set-ShadowRelay {
+    if ($PSCmdlet.ShouldProcess("profile $HostProfile", 'turn notifications off (push.enabled false)')) {
+        & $exe config set push.enabled false --profile $HostProfile
+        if ($LASTEXITCODE) { throw (Get-ConfigRefusal "could not turn notifications off in profile $HostProfile") }
+    }
+    if ($WhatIfPreference) { return }
+    $account = Get-ShadowAccount
+    if ($account) { Write-Output "profile $HostProfile is signed in as $account"; return }
+    $url = Get-ShadowRelayUrl
+    Write-Output "Signing profile $HostProfile in to $url. Open the address below and enter the code, as the account your phone uses:"
+    & $exe sign-in --profile $HostProfile --relay $url
+    if ($LASTEXITCODE -eq 4) { throw 'agent-bridge-host does not sign in from inside an agent session; run -Install -Relay from an ordinary terminal' }
+    if ($LASTEXITCODE) { throw "signing profile $HostProfile in failed" }
+}
+
 if ($Install) {
     if (-not (Test-Path $ahb)) { throw "agent-ha-bridge is not installed for this user ($ahb); there is nothing to compare with" }
     Stop-ShadowProcess
@@ -170,7 +217,14 @@ if ($Install) {
         }
     }
     Sync-AgentHaBridgeWorkspace
-    $serve = New-ShadowTaskXml "Agent Bridge host, profile $HostProfile, read-only beside agent-ha-bridge for the shadow comparison (docs/host-shadow.md)" @('serve', '--profile', $HostProfile, '--local-only') $null
+    $serveArguments = @('serve', '--profile', $HostProfile)
+    if ($Relay) {
+        Set-ShadowRelay
+        # Named apart from the machine's own host, on the phone's machine list.
+        $serveArguments += @('--name', "$env:COMPUTERNAME (shadow)")
+    }
+    else { $serveArguments += '--local-only' }
+    $serve = New-ShadowTaskXml "Agent Bridge host, profile $HostProfile, read-only beside agent-ha-bridge for the shadow comparison (docs/host-shadow.md)" $serveArguments $null
     $run = New-ShadowTaskXml "Agent Bridge shadow comparison with agent-ha-bridge, profile $HostProfile (docs/host-shadow.md)" @('shadow', 'run', '--profile', $HostProfile, '--interval', "$Interval", '--grace', "$Grace") 'PT1M'
     if ($PSCmdlet.ShouldProcess("$hostTask, $runTask", 'register and start the logon tasks')) {
         Register-ScheduledTask -TaskName $hostTask -Xml $serve -Force | Out-Null
@@ -201,5 +255,17 @@ foreach ($name in $hostTask, $runTask) {
     $info = if ($task) { Get-ScheduledTaskInfo -TaskName $name } else { $null }
     if ($task) { Write-Output ('{0}: {1}, last result 0x{2:x}, last run {3}' -f $name, $task.State, $info.LastTaskResult, $info.LastRunTime) }
     else { Write-Output "${name}: not registered" }
+}
+$serving = Get-ScheduledTask -TaskName $hostTask -ErrorAction SilentlyContinue
+if ($serving) {
+    $onRelay = [string]$serving.Actions[0].Arguments -notmatch '--local-only'
+    $account = if (Test-Path $exe) { Get-ShadowAccount } else { $null }
+    Write-Output ('relay: {0}; {1}' -f ($onRelay ? 'on (the phone sees this host)' : 'off (--local-only)'), ($account ? "signed in as $account" : 'not signed in'))
+    # What the host last said about its relay connection.
+    $log = Join-Path $env:LOCALAPPDATA "AgentBridge\$HostProfile\logs\host.log"
+    if ($onRelay -and (Test-Path $log)) {
+        $said = Get-Content $log -Tail 2000 | Select-String -Pattern 'connected as |connection ended|not signed in|refused|relay' | Select-Object -Last 1
+        if ($said) { Write-Output "relay, last logged: $($said.Line)" }
+    }
 }
 if (Test-Path $exe) { & $exe shadow summary --profile $HostProfile }

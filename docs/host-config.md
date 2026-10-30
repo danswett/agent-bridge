@@ -18,6 +18,7 @@ follow.
   "permissions": {
     "remoteApproval": true
   },
+  "push": { "enabled": true },
   "launch": {
     "enabled": true,
     "workspaces": [
@@ -62,6 +63,7 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 |---|---|---|
 | `version` | `1` | The schema. A file with a higher version, written by a newer Agent Bridge, is not guessed at: remote approval and launching are both off until the host is updated |
 | `permissions.remoteApproval` | `true` | Copilot permission prompts may be approved or denied from another device ([host-answers.md](host-answers.md)) |
+| `push.enabled` | `true` | Notifications (Web Push) to the account's phones. `false` sends none and takes no subscription: `hello` leaves `push` out, and `push.subscribe` fails saying the machine doesn't send notifications. For a machine that should be seen but not heard from, as the shadow host beside agent-ha-bridge ([host-shadow.md](host-shadow.md#on-the-phone--relay)) |
 | `launch.enabled` | `true` | Launching from other devices at all. `false` leaves `sessions.launch` out of `hello` |
 | `launch.workspaces` | `[]` | **The approved folders.** A new session starts only in one of these, and a session is resumed only if it ran in one of these folders itself (or in a worktree this host or agent-ha-bridge made for an isolated one), as agent-ha-bridge has it: not in a folder below one. Each is a path, or `{ "path", "label", "isolate" }`. `path` is absolute (`~` is the home folder); `label` defaults to the folder's name, and is what a client names; `isolate: true` starts each new session in a git worktree of its own ([host-launch.md](host-launch.md#isolation)). A folder that does not exist, or a system folder (Windows, Program Files, ProgramData, temp, a drive root), is not offered. At most 64 |
 | `launch.defaultWorkspace` | first | The label a launch gets when it names none |
@@ -89,9 +91,9 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `homeAssistant.disposable` | `false` | Says `baseUrl` is a disposable Home Assistant. A development build writes to no other |
 | `homeAssistant.agentUserIds` | `[]` | Home Assistant user ids whose presses are an agent's, as agent-ha-bridge's own setting: an answer or reply they send makes the next turn agent-driven (the card's purple edge). A list of strings |
 
-How a file that is wrong is read: one that cannot be read or parsed turns both remote
-approval and launching off; a `permissions.remoteApproval` that is not `true` or `false`
-does too. In `launch`, a workspace entry that is wrong (no path, a relative path, an `isolate`
+How a file that is wrong is read: one that cannot be read or parsed turns remote approval,
+launching and notifications off; a `permissions.remoteApproval` or `push.enabled` that is not
+`true` or `false` does too. In `launch`, a workspace entry that is wrong (no path, a relative path, an `isolate`
 that is not `true` or `false`) is left out and said in the log, and any other value that is
 wrong turns launching off. In `homeAssistant`, any value that is wrong turns the connector off
 and is said in the log. A setting someone may have meant as off is never read as on.

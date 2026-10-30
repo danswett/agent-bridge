@@ -91,7 +91,7 @@ export class FleetStatus {
 
   #note(id, machine) {
     if (!id || !machine) { return; }
-    this.#machines.set(id, { hostVersion: machine.hostVersion ?? null, dev: machine.dev === true, sessions: machine.sessions ?? null, at: this.now() });
+    this.#machines.set(id, { hostVersion: machine.hostVersion ?? null, dev: machine.dev === true, sessions: machine.sessions ?? null, readOnly: machine.readOnly ?? null, at: this.now() });
   }
 
   // Looks at every online machine not being viewed that has not been looked at for a minute.

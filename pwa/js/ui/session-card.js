@@ -245,7 +245,7 @@ export class SessionCard {
     const ctx = this.answering();
     const able = q ? answerability(q, ctx?.capabilities ?? [], s.agent) : null;
     const answerable = !!(able?.ok && ctx?.service);
-    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why])) { return; }
+    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null])) { return; }
     const old = this.#panel;
     const sameQuestion = !!(old && q && old.questionId === q.id && answerable && old.answering.hostId === ctx.hostId);
     if (old && !sameQuestion) {
@@ -271,7 +271,7 @@ export class SessionCard {
       });
       view = this.#panel.element;
     } else if (q) {
-      view = renderQuestion(q, { machineName: this.machineName, why: able.why });
+      view = renderQuestion(q, { machineName: this.machineName, why: able.why, readOnly: ctx?.readOnly ?? null });
     }
     // A new question replaces a receipt that has said its last word.
     if (q && this.#receipt?.final) { this.#dropReceipt(); }
