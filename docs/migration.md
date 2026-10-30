@@ -212,8 +212,18 @@ publishes the dashboard (G7).
 
 ## What rollback does
 
-1. Removes `intake.json`.
-2. Restores each file migration rewrote. A file unchanged since the migration is restored
+1. Removes `intake.json`, and restores the profile's own `config.json` (as below), which the
+   host reads only when it restarts.
+2. Restarts the host, which reads both only when it starts: it lets go of the spool, removes
+   its heartbeat, and runs on its restored settings. Rollback then waits (up to the stop
+   timeout) until the spool's claim file, `runtime\agent-bridge-host-intake.lock`, is free. If
+   the host still holds it, the hook registrations are left as migrated (they hand their events
+   to whichever bridge takes the spool), agent-ha-bridge's tasks are re-enabled but not started,
+   the report says so and the record is kept, so the two never take the spool at once; run
+   rollback again once the host has let go. Only then are the registrations put back: a session
+   starting on a restored hook that runs agent-ha-bridge's PowerShell itself would otherwise
+   write registrations and approval markers while the intake still does.
+3. Restores each hook registration file migration rewrote. A file unchanged since the migration is restored
    **byte for byte** from the snapshot. A file edited since gets back only the command of each
    entry migration re-pointed, with the later edits kept, a changed timeout included. Entries
       are matched by the command they now run, within the event they were registered under, and
@@ -227,13 +237,8 @@ publishes the dashboard (G7).
    cannot then be deleted is moved back, and reported): the steps below always run, since with
    `intake.json` gone nothing else would take the hooks' events. An undo that fails anyway keeps
    its report, and the record and snapshot for `rollback`.
-3. Checks the files recorded by hash, and reports any that changed while migrated (by someone
+4. Checks the files recorded by hash, and reports any that changed while migrated (by someone
    else; neither step writes them).
-4. Restarts the host, which reads both only when it starts: it lets go of the spool, removes
-   its heartbeat, and runs on its restored settings. Rollback then waits (up to the stop
-   timeout) until the spool's claim file, `runtime\agent-bridge-host-intake.lock`, is free. If
-   the host still holds it, agent-ha-bridge's tasks are re-enabled but not started, the report
-   says so and the record is kept, so the two never take the spool at once; run rollback again once the host has let go.
 5. Re-enables each task that was enabled before, starts it, and waits until the G5 probe sees
    agent-ha-bridge's daemon running again: that installation's own mutex
    (`AgentBridgeDaemon_<id>`) seen, since a probe that cannot tell, a supervisor or task running

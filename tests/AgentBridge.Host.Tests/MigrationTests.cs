@@ -1172,6 +1172,29 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Hook_registrations_are_put_back_only_once_the_host_has_let_go_of_the_spool()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var claim = Path.Combine(_f.Runtime, HookIntake.ClaimFile);
+        var hostConfig = Path.Combine(_f.Profile, "config.json");
+        var heldAtWrite = new List<string>();
+        DurableFile.BeforeCommit.Value = path =>
+        {
+            if (string.Equals(path, hostConfig, StringComparison.OrdinalIgnoreCase)) { return; }
+            try { using var probe = new FileStream(claim, FileMode.Open, FileAccess.ReadWrite, FileShare.None); }
+            catch (FileNotFoundException) { return; }
+            catch (IOException) { heldAtWrite.Add(path); }
+        };
+        try
+        {
+            Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        }
+        finally { DurableFile.BeforeCommit.Value = null; }
+
+        Assert.Empty(heldAtWrite);
+    }
+
+    [Fact]
     public async Task Agent_ha_bridge_is_not_started_while_the_old_host_still_holds_the_spool()
     {
         Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
@@ -1186,11 +1209,14 @@ public sealed class MigrationTests : IAsyncLifetime
         // But turned back on, so it starts at the next logon whatever happens to this rollback.
         Assert.All(_f.Runtime_.Tasks.Values, t => Assert.True(t.Enabled));
         Assert.NotNull(MigrationRecord.Load(_f.Profile).Record);
+        // And the hook registrations left as migrated: they hand their events to the spool.
+        Assert.True(Registrations.Names(File.ReadAllBytes(_f.ClaudeSettings), _f.InstalledHook));
 
         _f.Host.Linger = false;
         _f.Host.Release();
         Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
         Assert.True(_f.Runtime_.DaemonRunning);
+        Assert.False(Registrations.Names(File.ReadAllBytes(_f.ClaudeSettings), _f.InstalledHook));
     }
 
     [Fact]

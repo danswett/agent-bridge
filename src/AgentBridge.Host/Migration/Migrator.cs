@@ -518,67 +518,76 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         // One file that cannot be put back costs that file, never the rest: whatever happens here,
         // the host is restarted and agent-ha-bridge turned back on below, since with intake.json
         // gone nothing else would take the hooks' events.
-        foreach (var file in record.Files)
+        void Restore(IEnumerable<MigrationRecord.FileRecord> files)
         {
-            var backup = Path.Combine(snapshot, file.Backup);
-            try
+            foreach (var file in files)
             {
-                RestoreLink(file, dryRun, Say);
-                var current = File.Exists(file.Path) ? File.ReadAllBytes(file.Path) : null;
-                var currentHash = current is null ? null : MigrationRecord.Hash(current);
-                if (file.After is null || currentHash == file.Before)
+                var backup = Path.Combine(snapshot, file.Backup);
+                try
                 {
-                    Say($"* {file.Path}: unchanged by the migration.");
-                    continue;
-                }
-                if (currentHash == file.After || current is null)
-                {
-                    Say($"* {file.Path}: restored byte for byte.");
-                    if (!dryRun)
+                    RestoreLink(file, dryRun, Say);
+                    var current = File.Exists(file.Path) ? File.ReadAllBytes(file.Path) : null;
+                    var currentHash = current is null ? null : MigrationRecord.Hash(current);
+                    if (file.After is null || currentHash == file.Before)
                     {
-                        if (file.Existed) { DurableFile.Replace(file.Path, File.ReadAllBytes(backup), currentHash); }
-                        else { DurableFile.Remove(file.Path, currentHash); }
-                    }
-                    continue;
-                }
-                // Edited since the migration: put back only what it changed.
-                if (file.Changes.Count > 0 && Registrations.Revert(current, file.Changes) is { Text: { } reverted } revert)
-                {
-                    // A hook still running this host's program after the revert is one the person
-                    // changed past recognition: it is reported, and the snapshot kept for it.
-                    var hookProgram = record.Hook?.Path ?? options.HookPath(record.InstallationId);
-                    if (Registrations.Names(Utf8(reverted), hookProgram))
-                    {
-                        ok = false;
-                        Say($"* {file.Path}: changed since the migration, and a hook in it still runs {hookProgram} that could not be matched to what it replaced; restore it by hand from {backup}.");
-                        if (!dryRun && revert.Replaced > 0) { DurableFile.Replace(file.Path, Utf8(reverted), currentHash); }
+                        Say($"* {file.Path}: unchanged by the migration.");
                         continue;
                     }
-                    if (revert.Replaced == 0)
+                    if (currentHash == file.After || current is null)
                     {
-                        Say($"* {file.Path}: changed since the migration, and none of the hooks it re-pointed are in it any more; left as it is.");
+                        Say($"* {file.Path}: restored byte for byte.");
+                        if (!dryRun)
+                        {
+                            if (file.Existed) { DurableFile.Replace(file.Path, File.ReadAllBytes(backup), currentHash); }
+                            else { DurableFile.Remove(file.Path, currentHash); }
+                        }
                         continue;
                     }
-                    Say($"* {file.Path}: changed since the migration, so only the command of its {revert.Replaced} re-pointed hook(s) was put back; the rest keeps the later changes.");
-                    if (!dryRun) { DurableFile.Replace(file.Path, Utf8(reverted), currentHash); }
-                    continue;
+                    // Edited since the migration: put back only what it changed.
+                    if (file.Changes.Count > 0 && Registrations.Revert(current, file.Changes) is { Text: { } reverted } revert)
+                    {
+                        // A hook still running this host's program after the revert is one the person
+                        // changed past recognition: it is reported, and the snapshot kept for it.
+                        var hookProgram = record.Hook?.Path ?? options.HookPath(record.InstallationId);
+                        if (Registrations.Names(Utf8(reverted), hookProgram))
+                        {
+                            ok = false;
+                            Say($"* {file.Path}: changed since the migration, and a hook in it still runs {hookProgram} that could not be matched to what it replaced; restore it by hand from {backup}.");
+                            if (!dryRun && revert.Replaced > 0) { DurableFile.Replace(file.Path, Utf8(reverted), currentHash); }
+                            continue;
+                        }
+                        if (revert.Replaced == 0)
+                        {
+                            Say($"* {file.Path}: changed since the migration, and none of the hooks it re-pointed are in it any more; left as it is.");
+                            continue;
+                        }
+                        Say($"* {file.Path}: changed since the migration, so only the command of its {revert.Replaced} re-pointed hook(s) was put back; the rest keeps the later changes.");
+                        if (!dryRun) { DurableFile.Replace(file.Path, Utf8(reverted), currentHash); }
+                        continue;
+                    }
+                    if (file.Role == "host-config")
+                    {
+                        // The host's own settings, changed by a person since: not agent-ha-bridge's to want back.
+                        Say($"* {file.Path}: changed since the migration (this host's own settings), so left as it is.");
+                        continue;
+                    }
+                    ok = false;
+                    Say($"* {file.Path}: changed since the migration and left as it is; the original is in {backup}.");
                 }
-                if (file.Role == "host-config")
+                catch (Exception e) when (e is not OperationCanceledException)
                 {
-                    // The host's own settings, changed by a person since: not agent-ha-bridge's to want back.
-                    Say($"* {file.Path}: changed since the migration (this host's own settings), so left as it is.");
-                    continue;
+                    ok = false;
+                    Say($"* {file.Path}: could not be put back ({e.Message}); the original is in {backup}. Restore it by hand.");
                 }
-                ok = false;
-                Say($"* {file.Path}: changed since the migration and left as it is; the original is in {backup}.");
-            }
-            catch (Exception e) when (e is not OperationCanceledException)
-            {
-                ok = false;
-                Say($"* {file.Path}: could not be put back ({e.Message}); the original is in {backup}. Restore it by hand.");
             }
         }
 
+        // The host's own settings first: it reads them only when it restarts, below. The hook
+        // registrations only once it has let go of the spool: a session starting meanwhile on a
+        // restored hook that runs agent-ha-bridge's PowerShell itself would write registrations
+        // and approval markers while the intake still does.
+        Restore(record.Files.Where(f => f.Role == "host-config"));
+        var registrations = record.Files.Where(f => f.Role != "host-config").ToList();
         foreach (var check in record.Checked)
         {
             try
@@ -609,7 +618,9 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         var tasks = record.Tasks.Where(t => t.Enabled).ToList();
         if (dryRun)
         {
-            Say($"* Daemon: once the host has let go of the hook spool, re-enable {string.Join(" and ", tasks.Select(t => t.Name).DefaultIfEmpty("(no task)"))} and start agent-ha-bridge.");
+            Say("* Hook registrations, once the host has let go of the hook spool:");
+            Restore(registrations);
+            Say($"* Daemon: then re-enable {string.Join(" and ", tasks.Select(t => t.Name).DefaultIfEmpty("(no task)"))} and start agent-ha-bridge.");
             Say("Dry run: nothing was changed.");
             return new(ok, lines);
         }
@@ -626,10 +637,11 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
                 try { runtime.SetEnabled(task.Name, true); }
                 catch (Exception e) when (e is not OperationCanceledException) { Say($"* {task.Name} could not be turned back on ({e.Message}); run agent-ha-bridge configure."); }
             }
-            Say($"* The host still holds the hook spool ({claim}) after {options.StopTimeout.TotalSeconds:0} s, so agent-ha-bridge was re-enabled but not started. Stop the host (or wait for it to restart) and run rollback again.");
+            Say($"* The host still holds the hook spool ({claim}) after {options.StopTimeout.TotalSeconds:0} s, so the hook registrations were left as migrated (they hand their events to whichever bridge takes the spool) and agent-ha-bridge was re-enabled but not started. Stop the host (or wait for it to restart) and run rollback again.");
             Say($"Rolled back with problems (above); the record and snapshot are kept in {options.ProfileFolder}.");
             return new(false, lines);
         }
+        Restore(registrations);
         foreach (var task in tasks)
         {
             try
