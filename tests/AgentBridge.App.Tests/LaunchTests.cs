@@ -618,6 +618,58 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_transfer_to_this_machine_still_on_its_way_when_the_account_changes_is_unconfirmed_not_left_waiting()
+    {
+        var gate = new TaskCompletionSource();
+        link.Sources.Add(Laptop());
+        link.Endpoints["host-id"] = localHost.Endpoint;
+        localHost.Capabilities.Add(TransferProtocol.Capability);
+        localHost.On(LaunchProtocol.Launch, _ => { gate.Task.Wait(FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "here-new" }; });
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered here");
+        ui.Post(() => { launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"); launch.Launch(); });
+        await Wait.UntilAsync(() => localHost.Sent(LaunchProtocol.Launch).Count == 1, "the launch to go");
+
+        link.Switch();
+
+        await Wait.UntilAsync(() => launch.State == "unconfirmed", "the launch to be unconfirmed");
+        Assert.Equal("Not confirmed: the relay connection to this machine's host changed before it said whether the launch started. Check at this machine before launching again.", launch.StatusText);
+        Assert.True(launch.CanLaunch);
+        gate.SetResult();
+    }
+
+    [Fact]
+    public async Task A_session_picked_from_another_machine_stays_picked_when_its_machine_answers_after_the_choices()
+    {
+        link.Sources.Add(Laptop());
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
+        ui.Post(() => launch.Resume = launch.Resumes.Single(r => r.Value.StartsWith('@')));
+        ui.Post(() => launch.SelectedMachine = launch.Machines[0]);
+        await Wait.UntilAsync(() => launch.Workspace?.Value == "here", "this machine's choices");
+        link.HoldSources = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.ShowForm && launch.Workspace?.Value == "there", "the choices, before the other machines answer");
+        Assert.Equal($"@{LaptopId}/{Brought}", launch.Resume!.Value);
+        ui.Post(launch.Launch);
+        Assert.Equal("Not launched: the session picked on another machine is still being looked for; try again in a moment.", launch.Problem);
+        Assert.Empty(remoteHost.Sent(LaunchProtocol.Launch));
+
+        link.HoldSources.SetResult();
+        await Wait.UntilAsync(() => launch.Note.StartsWith("This copies", StringComparison.Ordinal), "the session found");
+        ui.Post(launch.Launch);
+
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        Assert.Equal(Brought, Assert.Single(remoteHost.Sent(LaunchProtocol.Launch)).GetProperty("transfer").GetProperty("session").GetString());
+    }
+
+    [Fact]
     public async Task Try_again_after_a_transfer_the_machine_reports_failed_signs_a_new_command()
     {
         link.Sources.Add(Laptop());

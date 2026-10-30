@@ -68,8 +68,10 @@ public sealed class LaunchViewModel : Observable
     // What stops the form being launched now (no prompt for Codex, too long...): about the form,
     // not the last launch, so it is said apart from that launch's outcome and its Try again.
     string problem = "";
-    // What the account's other machines offer to bring here, for the machine shown.
+    // What the account's other machines offer to bring here, for the machine shown; and whether
+    // they have been asked yet, since a session picked from one before is kept until they answer.
     IReadOnlyList<TransferSource> sources = [];
+    bool sourcesKnown;
     // Where the last launch went: its machine's Deliveries, or for a transfer to this machine, the
     // loopback's; and for a transfer, what it was brought from, to sign again for a new request.
     Machine? lastVia;
@@ -95,7 +97,22 @@ public sealed class LaunchViewModel : Observable
         }
         var now = main.Fleet?.CurrentLoopback;
         if (now == watchedLoopback) { return; }
-        if (watchedLoopback is { } was) { was.Deliveries.Changed -= OnLoopback; }
+        if (watchedLoopback is { } was)
+        {
+            // Dropped (another account): the local machine stays in AllMachines, so its leaving is
+            // never seen there, and a launch through it would wait for ever with Launch disabled.
+            // One whose outcome is in is shown as it ended; one still on its way is unconfirmed.
+            if (lastVia == was && lost is null && last is not null && main.MachineOf(Machine.LocalKey) is { } local)
+            {
+                if (was.Deliveries.Get(Key) is { State: DeliveryState.Done or DeliveryState.Failed } final && final.Request == last.Request) { OnDelivery(local, final, was); }
+                else if (Pending)
+                {
+                    lost = "Not confirmed: the relay connection to this machine's host changed before it said whether the launch started. Check at this machine before launching again.";
+                    Show();
+                }
+            }
+            was.Deliveries.Changed -= OnLoopback;
+        }
         watchedLoopback = now;
         if (now is not null) { now.Deliveries.Changed += OnLoopback; }
     }
@@ -269,6 +286,7 @@ public sealed class LaunchViewModel : Observable
         machine = next;
         options = null;
         sources = [];
+        sourcesKnown = false;
         error = null;
         SetProblem("");
         loads++;
@@ -358,6 +376,7 @@ public sealed class LaunchViewModel : Observable
         {
             if (load != loads || m != machine) { return; }
             sources = got;
+            sourcesKnown = true;
             if (options is not null) { Draw(); }
         });
     }
@@ -419,6 +438,10 @@ public sealed class LaunchViewModel : Observable
             else
             {
                 var away = sources.SelectMany(s => s.Resumable.Select(r => new Choice($"@{s.HostId}/{r.Id}", $"{r.Title} · on {s.MachineName}"))).ToList();
+                // The options can answer before the other machines do: a session picked from one
+                // on an earlier visit stays picked until they have, rather than becoming "New
+                // session" (and launching one).
+                if (!sourcesKnown && resume is { Value: ['@', ..] } waiting && away.All(c => c.Value != waiting.Value)) { away.Add(waiting); }
                 Resumes = [new Choice("", "New session"), .. o.Resumable.Select(r => new Choice(r.Id, $"{r.Title}{(r.Workspace is { Length: > 0 } w ? $" · {w}" : "")}")), .. away];
                 resume = Keep(Resumes, resume, "");
                 var resumed = Resumed;
@@ -454,6 +477,7 @@ public sealed class LaunchViewModel : Observable
                 Note = noAgent ? $"No agent is installed on {Name}: install Copilot, Claude or Codex there."
                     : noWorkspace ? $"No folder on {Name} is approved for launching yet. At the machine, run: {ApproveHint}"
                     : brought is { } b ? $"This copies the session's whole conversation, with its checkpoints and files, from {b.From.MachineName} to {Name}, where it opens as a new session in the workspace picked. It stays on {b.From.MachineName} as it was."
+                    : resume is { Value: ['@', ..] } ? "Looking for that session on the account's other machines…"
                     : resumed is not null ? "A resumed session reopens in its own folder." : "";
             }
         }
@@ -506,6 +530,8 @@ public sealed class LaunchViewModel : Observable
         var launch = Settings();
         var a = AgentOf(launch.Agent);
         var problem = (launch.Agent is null ? "no agent is installed on this machine" : null)
+            // A session from another machine not found (yet) is never launched as a new one.
+            ?? (resume is { Value: ['@', ..] } && launch.Transfer is null ? "the session picked on another machine is still being looked for; try again in a moment" : null)
             ?? (launch.Resume is null && launch.Workspace is null
                 ? o.Workspaces.Count > 0 ? "pick a workspace" : $"no workspace is approved on this machine yet; approve one at the machine ({ApproveHint})"
                 : null)

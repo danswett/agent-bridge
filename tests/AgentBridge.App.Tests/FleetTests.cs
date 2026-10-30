@@ -496,9 +496,14 @@ public sealed class FleetTests : IAsyncLifetime
         // What the account's machines hand on, and the commands signed: (source, session, to).
         public List<TransferSource> Sources { get; } = [];
         public List<(string From, string Session, string To)> Signed { get; } = [];
+        // Holds every answer about sources until it completes: machines slow to answer.
+        public TaskCompletionSource? HoldSources { get; set; }
 
-        public Task<IReadOnlyList<TransferSource>> TransferSourcesAsync(string target, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<TransferSource>>([.. Sources.Where(s => s.HostId != target)]);
+        public async Task<IReadOnlyList<TransferSource>> TransferSourcesAsync(string target, CancellationToken ct)
+        {
+            if (HoldSources is { } hold) { await hold.Task; }
+            return [.. Sources.Where(s => s.HostId != target)];
+        }
 
         public SignedCommand? SignTransfer(TransferSource from, string session, string to)
         {
