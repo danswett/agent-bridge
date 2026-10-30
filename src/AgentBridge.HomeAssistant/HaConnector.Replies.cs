@@ -140,11 +140,13 @@ public sealed partial class HaConnector
         // the card was told ("source images were kept").
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { await DeleteImagesAsync(done.Images, ct); }
         // The reply box is cleared either way, so a failed reply is not sent again by itself; but
-        // only while it still holds what was sent, never words typed since.
+        // only once it is seen still holding what was sent, never words typed since. The daemon
+        // also clears a box it cannot read; here the press is already spent, so a box left as it
+        // is sends nothing again, and a follow-up typed meanwhile is never lost.
         if (done.Box && done.Text is { } sent)
         {
             var box = await ObserveAsync(SessionEntities.Reply(p.Node), ct);
-            if (box.Snapshot is null || box.Value == sent) { await ResetReplyBoxAsync(p.Node, ct); }
+            if (box.Present && box.Value == sent) { await ResetReplyBoxAsync(p.Node, ct); }
             else { log($"Home Assistant connector kept a follow-up reply typed for {short8} while the previous one was delivering"); }
         }
     }

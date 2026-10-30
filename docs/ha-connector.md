@@ -276,8 +276,8 @@ armed, sending the words the moment they arrive, for ten minutes (`SubmitArmSeco
 which it says `Nothing to send` (`Type a reply first, then press Send.`). An agent's press at an
 empty box says `Nothing to send` at once, since an agent's text commits immediately; unless its
 reply-card publish went in within the driver window, when the press is that message's Send and
-its arm is kept. After a reply, sent or not, the box is reset to `' '` if it still holds what
-was sent, never if something was typed meanwhile.
+its arm is kept. After a reply, sent or not, the box is reset to `' '` once it is read still
+holding what was sent, never if something was typed meanwhile or it cannot be read.
 
 **Telling the card**: `Sending...`, then `Reply sent` (`sent`, the first 60 characters, and
 `at`), `Reply unconfirmed - check the terminal`, or `Reply NOT sent` (`error`, and `unsent`
@@ -310,6 +310,7 @@ Where stage 3 knowingly differs from the daemon:
 | A reply of attachments alone shows `(n attachments)` as `sent`, not the typed `@path` line | The connector never learns where the host staged them |
 | A press or publish made while the connector was not running is not sent at start | The daemon keeps what it handled in its state file; the connector cannot know what agent-ha-bridge already sent, so it never replays |
 | Words given while a question is open never become a reply once it goes | The host refuses replies while a question is open, and they belonged to the question |
+| After a box reply, a box that cannot be read is left as it is | The daemon clears it then; here the press is already spent, so nothing is sent again, and clearing blind could delete a follow-up typed meanwhile |
 
 ### The shadow: comparing with a running daemon
 

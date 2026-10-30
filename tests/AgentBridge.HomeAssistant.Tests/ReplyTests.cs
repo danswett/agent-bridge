@@ -323,6 +323,31 @@ public sealed partial class ReplyTests : IDisposable
     }
 
     [Fact]
+    public async Task A_box_that_cannot_be_read_after_a_reply_is_left_as_it_is_and_its_press_is_not_sent_again()
+    {
+        await using var c = await Ready();
+        outcome = _ =>
+        {
+            ha.Type(SessionEntities.Reply(Node), "and then this");
+            ha.GetFailsFor = e => e == SessionEntities.Reply(Node);
+            return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
+        };
+        await Do(c, ha.Type(SessionEntities.Reply(Node), "Ship it"));
+        var services = ha.Services.Count;
+
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Equal("Reply sent", Activity);
+        Assert.Empty(ha.Services.Skip(services));
+
+        ha.GetFailsFor = null;
+        await Pass(c, 20);
+        await c.DeliveredAsync();
+        await Pass(c);
+        Assert.Single(replied);
+        Assert.Equal("and then this", (await ha.GetStateAsync(SessionEntities.Reply(Node)))!.State);
+    }
+
+    [Fact]
     public async Task A_persons_send_at_an_empty_box_waits_for_the_words_and_sends_them_when_they_arrive()
     {
         await using var c = await Ready();
