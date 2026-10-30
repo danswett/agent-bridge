@@ -218,12 +218,15 @@ public sealed class ShadowCoverageTests : IDisposable
         Assert.Equal(2, c.StatusTransitions);
         Assert.Equal(2, c.FailedStates.Count);
 
-        // Past midnight, the cutoff is the day before's.
+        // Past midnight, the cutoff is the day before's, and the state that failed then is not a
+        // new failure today.
         var since = c.StatesSince;
         time.SetUtcNow(new DateTimeOffset(2026, 10, 29, 0, 0, 5, TimeSpan.Zero));
-        Sample("idle", differ: false);
+        Sample("waiting");
         Assert.Equal("2026-10-29", ledger.Today!.Date);
         Assert.Equal(since, ledger.Today.Coverage!.StatesSince);
+        Assert.True(ledger.Today.Coverage.Shown[session].StatusFailed);
+        Assert.Empty(ledger.Today.Coverage.FailedStates);
 
         // Past the cap, the state fails once, whoever asks again.
         var full = new ShadowCoverage();
@@ -233,6 +236,25 @@ public sealed class ShadowCoverageTests : IDisposable
         ShadowCoverageTracker.StateFailed(full, session, ShadowKinds.Status, key, time.GetUtcNow());
         ShadowCoverageTracker.StateFailed(full, session, ShadowKinds.Status, key, time.GetUtcNow());
         Assert.Equal(1, full.FailedStatesOverflow[ShadowKinds.Status]);
+    }
+
+    // Found in review (#82): with a long grace, a response changing every sample went through more
+    // states than an episode kept, and those past it were not counted as failing.
+    [Fact]
+    public void Every_state_a_long_disagreement_went_through_in_its_grace_fails_those_past_what_is_kept_by_identity_included()
+    {
+        Directory.CreateDirectory(reports);
+        var session = ShadowHash.Session(A);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(1500), TimeSpan.FromSeconds(5), time);
+        for (var i = 0; i <= 300; i++)
+        {
+            ledger.Record(new ShadowComparison(true, 1, 1, [new ShadowDifference(ShadowKinds.Response, session, "the end of the latest response differs")], []),
+                View(null, null, null, Session(A, "idle") with { ResponseTail = "d" }), View(null, null, null, Session(A, "idle") with { ResponseTail = "h" + i }));
+            time.Advance(TimeSpan.FromSeconds(5));
+        }
+        var c = ledger.Today!.Coverage!;
+        Assert.Equal(301, c.ResponseChanges);
+        Assert.Equal(301, c.FailedStates.Count + c.FailedStatesOverflow.GetValueOrDefault(ShadowKinds.Response));
     }
 
     [Fact]

@@ -211,7 +211,10 @@ comparing:
   with an armed marker is the daemon's `waiting`, which is what its user sees; a marker
   caught half written matches either. Found live as `status` daemon `working`, host
   `waiting`, for minutes while a session asked a question with background agents running:
-  the host was right.
+  the host was right. It is not a sub-agent precedence question (#84): the daemon's
+  transcript status for Copilot is only `working` or `idle`, its sub-agents' events already
+  left out, so it stays `working` through every `ask_user`, with background agents or without.
+  The host's status logic is unchanged; only how the daemon's view is read.
 * **Long text is bounded differently** (§1). Only the end of a response is compared.
 * **Forms answered at the machine** (§2). Where either side cannot drive a prompt from
   another device (agent-ha-bridge's `terminalOnly`, the host's `answerAtMachine`, or a
@@ -378,7 +381,8 @@ the rate is failed states over states. `statesSince` is carried across midnight 
 `status` overflow, still count against `statusTransitions` as they did; `activity.response`
 ones count nowhere, and a day's overflow from the redeploy on (which has no time to place it)
 counts only through the gate's overflow check. Past a day's cap of 5,000 failed states, the
-rest count in `failedStatesOverflow`, unexplained.
+rest count in `failedStatesOverflow`, unexplained, as do the states past the 256 an episode keeps
+by identity during its grace.
 
 ## The gate
 
