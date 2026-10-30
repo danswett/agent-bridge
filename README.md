@@ -47,6 +47,7 @@ The protocol between them is specified in [docs/protocol](docs/protocol/v1-sessi
 | `src/AgentBridge.HostLauncher` | `agent-bridge-hostw`: starts the host with no console window, for the logon task |
 | `src/AgentBridge.HomeAssistant` | The Home Assistant connector: a migrated machine's sessions, liveness, version and usage on the existing agent-ha-bridge dashboard, in agent-ha-bridge's own per-machine MQTT contract (status only so far; off by default). [docs/ha-connector.md](docs/ha-connector.md); `tools/ha-contract` records the contract fixtures from agent-ha-bridge's source |
 | `tools/AgentBridge.RelaySmoke` | `relay-smoke --relay <url>`: checks a deployed relay from outside, and with its token key connects two devices over a Noise channel |
+| `tools/AgentBridge.Rehearsal` | `agent-bridge-rehearsal`: the automated checks of the migrate-and-rollback rehearsal on a disposable VM. It reads the host's pipe state, the agents' transcripts after a mark, a disposable Home Assistant, and hashes of agent-ha-bridge's install. The runbook is [docs/parity-checklist.md](docs/parity-checklist.md) |
 | `tests/` | `dotnet test AgentBridge.slnx`, on Windows and Linux in CI |
 
 ## Ground rules while this is being built

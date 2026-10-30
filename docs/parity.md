@@ -22,7 +22,7 @@ reason.
 | Status | Meaning |
 |---|---|
 | `Verified` | A test **and** a recorded live run |
-| `Implemented, untested live` | Code and tests, no live run yet. Live runs are tracked by #39 |
+| `Implemented, untested live` | Code and tests, no live run yet. Live runs are tracked by #39 ([parity-checklist.md](parity-checklist.md)) |
 | `Partial` | Some of it; the gap column says what is missing |
 | `Missing` | Not built; an issue is linked |
 | `Intentionally different` | Changed on purpose; the decision is cited |
@@ -388,8 +388,12 @@ agent-ha-bridge's manual checks, `tests/verify-mac-terminal.ps1`,
   hook through PowerShell, and that PowerShell still writes HA.
 - [ ] #38: Migrate and Roll back exist, with the byte-for-byte snapshot and the refusal on
   the publication writer.
-- [ ] #39: the scripted parity checklist exists. It runs on the new host after migrating
-  and on agent-ha-bridge after rolling back.
+- [x] #39: the scripted parity checklist exists: [parity-checklist.md](parity-checklist.md),
+  with `tools/AgentBridge.Rehearsal` for the automated checks. It runs on the new host after
+  migrating and on agent-ha-bridge after rolling back.
+- [ ] A second disposable machine for the publication writer. agent-ha-bridge names its
+  per-machine entities after the computer (`Get-BridgeMachineSlug`), so a writer and a
+  participant cannot share one VM ([parity-checklist.md › What runs where](parity-checklist.md#what-runs-where)).
 - [ ] HA connector (in flight) at least publishes status, pointed at a **disposable** HA
   and Mosquitto, never the live one (G6).
 - [ ] Claude/Codex live (in flight): Claude and Codex answers verified on the VM, so the
