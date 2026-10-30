@@ -18,7 +18,13 @@ agent-bridge-host migration status [--profile <name>]
   name is refused. The profile's folder is only read to look for it; it is never created, so a
   dry run against a name that does not exist leaves nothing behind.
 * Any other word is refused before anything runs, so a mistyped `--dry-run` never migrates.
-* Exit codes: 0 done, 1 refused or failed (the report says why), 2 usage or not Windows.
+* Exit codes: 0 done, 1 refused or failed (the report says why), 2 usage or not Windows, 4
+  run inside an agent session.
+
+`migrate` and `rollback` are for a person, in a terminal of their own (§6.3 invariant 13). Inside
+an agent session, or where their ancestry cannot be read in full, they refuse before reading
+anything; a dry run and `migration status` still work. The host lets its own command line restart
+it, and nothing else the app may (`docs/protocol/local-pipe.md`).
 
 The host serving the profile must be running for `migrate`. The migration proves the hand-over
 by restarting it, and a rollback restarts it too. The Windows app's Settings page does not offer

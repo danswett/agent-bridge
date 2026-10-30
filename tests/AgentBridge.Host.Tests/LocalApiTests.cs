@@ -371,6 +371,23 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(0, Volatile.Read(ref stops));
     }
 
+    [Fact]
+    public async Task The_hosts_own_command_line_may_restart_it_to_migrate_but_manage_nothing_else()
+    {
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.HostCli, "agent-bridge-host's command line (pid 30)"));
+        var ch = await ConnectAsync();
+
+        foreach (var op in new[] { HostOps.Stop, HostOps.Settings, HostOps.SignIn })
+        {
+            var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(op, new { }));
+            Assert.Contains("only the Agent Bridge app beside this host may", refused.Message);
+        }
+        await ch.CallAsync(HostOps.Restart);
+
+        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
+        Assert.Equal(0, Volatile.Read(ref stops));
+    }
+
     // Swapped by a test before it connects; asked afresh for every op.
     sealed class Callers : ICallerGuard
     {

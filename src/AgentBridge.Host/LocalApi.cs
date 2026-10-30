@@ -29,7 +29,8 @@ public static class LocalApi
     {
         if (op.StartsWith("host.", StringComparison.Ordinal))
         {
-            if (!Reads.Contains(op) && callers.Classify(channel, fresh: true) is { Kind: not CallerKind.App } caller)
+            if (!Reads.Contains(op) && callers.Classify(channel, fresh: true) is { Kind: not CallerKind.App } caller
+                && !(caller.Kind == CallerKind.HostCli && op == HostOps.Restart))
             {
                 throw Refuse(op, caller, caller.Kind == CallerKind.Agent
                     ? "stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the Agent Bridge app"

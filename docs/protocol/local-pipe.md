@@ -93,6 +93,7 @@ host also asks *which* process each request comes from, op by op:
 |---|---|---|
 | **Inside an agent session** | The connecting process, or any process it descends from, is a live session's own process (by id and start time, so a reused id does not count), one a launch started, any agent CLI found running (Copilot, Claude, Codex, including under Node or Bun), or an executable named `copilot`, `claude`, `codex` or `agency` | Read: `hello` (offering only `sessions.read` and `usage`), `sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `host.status`, `host.subscribe`. Everything else is refused: `refused: this connection is from pid 4120, inside the copilot session 1a2b3c4d (pid 3112); …` |
 | **The app** | Not inside an agent session, its whole ancestry read, and its executable is `AgentBridge.exe` (the app) in the host's own folder, which is how the app ships | Everything, `host.manage` included |
+| **The host's command line** | Not inside an agent session, its whole ancestry read, and its executable is this host's own (`agent-bridge-host`, as `migrate` and `rollback` run it) | What anything else may, and `host.restart`, which a migration and a rollback need to hand the hook spool over and back ([migration.md](../migration.md)). Nothing else the app may |
 | **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before, `host.status` and `host.subscribe`; not the other management ops (`only the Agent Bridge app beside this host may stop, restart, sign in, change settings or read the relay account`) |
 
 The ancestry is read when the connection is accepted (`GetNamedPipeClientProcessId`, then one
@@ -103,8 +104,8 @@ still counts. It is matched against the agents the host knows: afresh for every 
 so a session found after the app connected counts, and at most every 5 seconds for the sessions
 ops, which an attachment upload sends thousands of in a row. Each refusal is logged.
 
-`agent-bridge-host`'s own commands that change its config or its Home Assistant token, or sign
-it in, refuse in the same case, from their own ancestry: on Windows the snapshot, on Linux
+`agent-bridge-host`'s own commands that change its config or its Home Assistant token, sign it
+in, or migrate the machine or roll it back (not a dry run), refuse in the same case, from their own ancestry: on Windows the snapshot, on Linux
 `/proc`, on macOS one `ps` listing. They refuse as well when that ancestry cannot be read in
 full (fail closed). Every session a launch starts has `AGENT_BRIDGE_SESSION` in its environment
 too, which survives a process started detached from its parent

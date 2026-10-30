@@ -58,6 +58,28 @@ public sealed class CallerGuardTests
     }
 
     [Fact]
+    public void The_hosts_own_program_run_by_a_person_is_its_command_line_and_run_inside_a_session_is_that_session()
+    {
+        const string host = @"C:\Users\me\AppData\Local\AgentBridge\current\agent-bridge-host.exe";
+        var guard = new CallerGuard(() => [], App, hostImage: host);
+
+        Assert.Equal(new Caller(CallerKind.HostCli, "agent-bridge-host's command line (pid 30)"),
+            guard.Classify([P(30, host, 9), P(25, @"C:\Program Files\PowerShell\7\pwsh.exe", 5), P(4, @"C:\Windows\explorer.exe")]));
+        Assert.Equal(CallerKind.Agent, guard.Classify([P(30, host, 9), P(25, @"C:\Program Files\PowerShell\7\pwsh.exe", 5), P(20, @"C:\bin\copilot.exe")]).Kind);
+        Assert.Equal(CallerKind.Other, guard.Classify([P(30, @"C:\Temp\agent-bridge-host.exe"), P(4, @"C:\Windows\explorer.exe")]).Kind);
+        Assert.Equal(CallerKind.Other, guard.Classify(new ProcessAncestry([P(30, host, 9)], Complete: false)).Kind);
+    }
+
+    [Fact]
+    public void Only_a_migrate_or_rollback_that_is_not_a_dry_run_is_refused_inside_a_session()
+    {
+        Assert.True(MigrateCommands.Writes(["migrate"]));
+        Assert.True(MigrateCommands.Writes(["rollback", "--profile", "work"]));
+        Assert.False(MigrateCommands.Writes(["migrate", "--dry-run"]));
+        Assert.False(MigrateCommands.Writes(["migration", "status"]));
+    }
+
+    [Fact]
     public void An_ancestry_read_only_in_part_is_not_the_app_but_an_agent_in_the_part_read_still_counts()
     {
         var partial = new ProcessAncestry([P(10, App, 5)], Complete: false);

@@ -235,6 +235,7 @@ switch (command)
         if (intakeFolder is null) { Console.Error.WriteLine("agent-bridge-host: --profile is not a valid profile name"); return 2; }
         return HookCommands.Status(intakeFolder, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge", "runtime"), Console.Out, DateTimeOffset.Now);
     case "migrate" or "rollback" or "migration":
+        if (MigrateCommands.Writes(arguments) && Refused("migrate this machine or roll it back")) { return 4; }
         {
             using var stop = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
@@ -356,7 +357,8 @@ async Task<int> ServeAsync()
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
     var inspector = new SystemProcessInspector();
-    var callers = new CallerGuard(() => KnownAgents.Of(source, launcher, inspector), OperatingSystem.IsWindows() ? Path.Combine(AppContext.BaseDirectory, CallerGuard.AppExecutable) : null);
+    var callers = new CallerGuard(() => KnownAgents.Of(source, launcher, inspector), OperatingSystem.IsWindows() ? Path.Combine(AppContext.BaseDirectory, CallerGuard.AppExecutable) : null,
+        hostImage: OperatingSystem.IsWindows() ? Environment.ProcessPath : null);
     // On a machine migrated from agent-ha-bridge, the hooks hand their events to this host
     // (docs/host-hooks.md). Its notices are there for the Home Assistant connector to subscribe to.
     await using var intake = StartIntake(haProbe, stop.Token);

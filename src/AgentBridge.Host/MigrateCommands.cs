@@ -10,6 +10,11 @@ public static class MigrateCommands
 {
     // profileRoot is where profiles live (Identity.DefaultRoot); --profile names one. Its folder is
     // only located, never created: a dry run must leave nothing behind, not even a device key.
+    // Whether these arguments change the machine (refused inside an agent session, §6.3
+    // invariant 13): a migrate or rollback that is not a dry run. Status and dry runs only read.
+    public static bool Writes(IReadOnlyList<string> arguments) =>
+        arguments.Count > 0 && arguments[0] is "migrate" or "rollback" && !arguments.Contains("--dry-run");
+
     public static async Task<int> RunAsync(IReadOnlyList<string> arguments, string profileRoot, TextWriter output, TextWriter error, Func<MigrationOptions, Migrator> create, CancellationToken cancellationToken = default)
     {
         const string Usage = "usage: agent-bridge-host migrate [--dry-run] [--bridge-home <dir>] [--hook <file>] | rollback [--dry-run] | migration status   [--profile <name>]";
