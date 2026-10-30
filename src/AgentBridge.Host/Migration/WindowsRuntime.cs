@@ -28,6 +28,12 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
 
     public string? Active() => _probe.Active();
 
+    public int? Running(AgentBridge.Protocol.AgentKind agent)
+    {
+        var observed = new SystemProcessInspector().Observe(agent);
+        return observed.Known ? observed.Processes.Count : null;
+    }
+
     public ScheduledTaskState? Task(string name) => WithTask(name, task => new ScheduledTaskState((bool)Get(task, "Enabled")!, (int)Get(task, "State")! == 4), missing: true);
 
     public void SetEnabled(string name, bool enabled) => WithTask(name, task => { task.GetType().InvokeMember("Enabled", BindingFlags.SetProperty, null, task, [enabled]); return true; });

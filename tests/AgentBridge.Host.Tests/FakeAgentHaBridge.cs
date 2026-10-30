@@ -239,6 +239,11 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
     }
 
     public string? Active() => DaemonRunning ? "agent-ha-bridge is running for this user (AgentBridgeDaemon_" + FakeAgentHaBridge.Id + ")" : null;
+
+    // Each agent's running processes (none unless set); null when they could not all be identified.
+    public Dictionary<AgentBridge.Protocol.AgentKind, int?> Agents { get; } = [];
+
+    public int? Running(AgentBridge.Protocol.AgentKind agent) => Agents.TryGetValue(agent, out var n) ? n : 0;
 }
 
 // The host serving the profile: a restart reads intake.json afresh and runs the real intake,

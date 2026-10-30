@@ -22,6 +22,9 @@ public interface IAgentHaBridgeRuntime
 
     // Design G5's answer: why agent-ha-bridge counts as running for this user, or null.
     string? Active();
+
+    // How many of the agent's processes run now, or null when they could not all be identified.
+    int? Running(AgentBridge.Protocol.AgentKind agent);
 }
 
 // The host serving this profile, as the migration needs it: to read intake.json (or its absence)

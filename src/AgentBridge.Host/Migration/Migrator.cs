@@ -61,6 +61,28 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
 
     // ------------------------------------------------------------------ migrate
 
+    // An agent whose registrations run agent-ha-bridge's PowerShell directly, while any of its
+    // processes runs: re-pointing the file does not reach a session that started before, and it
+    // would go on running those scripts beside the host. Null when there is none.
+    string? StillRunningPowerShell(AgentHaBridgeInstall install, IReadOnlyList<FilePlan> plans)
+    {
+        foreach (var plan in plans)
+        {
+            if (!plan.Changes.Any(c => Registrations.RanPowerShell(install, c))) { continue; }
+            var (kind, name) = plan.Role switch
+            {
+                "copilot" => (AgentBridge.Protocol.AgentKind.Copilot, "Copilot"),
+                "claude" => (AgentBridge.Protocol.AgentKind.Claude, "Claude"),
+                _ => (AgentBridge.Protocol.AgentKind.Codex, "Codex"),
+            };
+            var running = runtime.Running(kind);
+            if (running == 0) { continue; }
+            var state = running is { } n ? $"{n} {name} process{(n == 1 ? " is" : "es are")} running" : $"whether any {name} process is running could not be checked";
+            return $"{name}'s hooks run agent-ha-bridge's PowerShell directly ({plan.Path}), and {state}. A session keeps the hooks it started with, so it would go on writing registrations, approval markers and Home Assistant state beside the host. End {name}'s sessions and migrate again (or let agent-ha-bridge's installer register its native hook first).";
+        }
+        return null;
+    }
+
     public async Task<MigrationReport> MigrateAsync(bool dryRun, CancellationToken cancellationToken = default)
     {
         if (dryRun) { return await MigrateUnlockedAsync(dryRun, cancellationToken); }
@@ -129,6 +151,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
 
         var plans = new[] { Registrations.Copilot(install, options.HookPath), Registrations.Claude(install, options.HookPath), Registrations.Codex(install, options.HookPath) };
         if (plans.FirstOrDefault(p => p.Refusal is not null) is { } blocked) { Say("Refused: " + blocked.Refusal + "."); return new(false, lines); }
+        if (StillRunningPowerShell(install, plans) is { } running) { Say("Refused: " + running); return new(false, lines); }
         var hostConfig = Path.Combine(options.ProfileFolder, HostSettings.FileName);
         var import = ConfigImport.Build(install.Config, File.Exists(hostConfig) ? File.ReadAllText(hostConfig) : null);
         if (import.Problems.Count > 0)

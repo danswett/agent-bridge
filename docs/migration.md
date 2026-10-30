@@ -58,6 +58,14 @@ second snapshot the first's changes as the state to restore; the second is refus
    * the hook program's path has a space and Codex runs agent-ha-bridge's PowerShell hook
      directly: Codex cannot run a path with a space, and that entry would go on writing beside
      the host. (Entries running the Go hook are left: they hand their events to the spool);
+   * an agent's registrations run agent-ha-bridge's PowerShell directly (an older install's
+     `powershell`, `run-hook.cmd` or `pwsh -File` entries) while any of that agent's processes
+     runs, or they cannot all be identified. A session keeps the hooks it started with, so
+     re-pointing the file would not reach it, and those scripts would go on writing
+     registrations, approval markers and Home Assistant state beside the host. End its
+     sessions, or let agent-ha-bridge's installer register its native hook first. Sessions
+     holding the Go hook's entries do not matter: those spool to the host. (After a rollback,
+     a session holding the host's hook spools too, to the daemon, which takes the same spool);
    * no host is serving the profile;
    * the settings to carry over would leave the profile's `config.json` with problems, in
      launching or in the Home Assistant connector (a `baseUrl` it could not use, say).
@@ -122,7 +130,7 @@ tells them apart by folder, as agent-ha-bridge did.
 |---|---|
 | `newSession.enabled` | `launch.enabled` |
 | `newSession.workspaces` (label, path, isolate) | `launch.workspaces` |
-| `newSession.defaultWorkspace` | `launch.defaultWorkspace` |
+| `newSession.defaultWorkspace` (as the label of the workspace it matched, whatever the case, as agent-ha-bridge's `-eq` did; the host matches exactly) | `launch.defaultWorkspace` |
 | `newSession.launcher` | `launch.defaultAgent` |
 | `newSession.profiles`, `defaultProfile` | `launch.profiles`, `launch.defaultProfile` |
 | `newSession.resumeCount` | `launch.resumeCount` (at most 50 here; a larger value is reported) |

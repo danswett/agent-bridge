@@ -159,6 +159,16 @@ public static class Registrations
         return plan;
     }
 
+    // Whether a replaced entry ran agent-ha-bridge's PowerShell itself rather than its Go hook. A
+    // session keeps the hooks it started with, and these write registrations, approval markers and
+    // Home Assistant state on their own; the Go hook's hand their events to the spool the host takes.
+    public static bool RanPowerShell(AgentHaBridgeInstall install, EntryChange change)
+    {
+        if (Text(change.Original["exec"]) is { } exec) { return !string.Equals(exec, install.GoHook, PathCase); }
+        if (Text(change.Original["command"]) is not { } command) { return true; }
+        return !command.StartsWith(install.GoHook + " ", PathCase) && !command.StartsWith($"\"{install.GoHook}\" ", PathCase);
+    }
+
     static string CodexPowerShell(AgentHaBridgeInstall install) => $"pwsh -NoProfile -ExecutionPolicy Bypass -File {install.CodexHookScript}";
 
     static bool CodexRunsPowerShell(AgentHaBridgeInstall install)

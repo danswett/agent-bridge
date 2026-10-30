@@ -88,7 +88,7 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                 Workspaces(ns["workspaces"], launch, imported, kept);
                 foreach (var (from, to) in new[] { ("defaultWorkspace", "defaultWorkspace"), ("launcher", "defaultAgent"), ("defaultProfile", "defaultProfile") })
                 {
-                    if (Str(ns[from]) is { } value) { Put(launch, to, value, $"newSession.{from}", $"launch.{to}"); }
+                    if (Str(ns[from]) is { } value) { Put(launch, to, from == "defaultWorkspace" ? DefaultLabel(launch, value) : value, $"newSession.{from}", $"launch.{to}"); }
                 }
                 if (Strings(ns["profiles"]) is { Count: > 0 } profiles) { Put(launch, "profiles", Array(profiles), "newSession.profiles", "launch.profiles"); }
                 if (Number(ns["resumeCount"]) is { } resume)
@@ -208,23 +208,36 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
         return new ConfigImport(changed ? text : null, imported, kept, notCarried, problems);
     }
 
+    static (string? Path, string? Label) Read(JsonNode? n) => n switch
+    {
+        JsonValue v when v.TryGetValue<string>(out var p) => (p, null),
+        JsonObject o => (Str(o["path"]), Str(o["label"])),
+        _ => (null, null),
+    };
+
+    // The folder and label as LaunchConfig will read them (~, . and .. resolved), so an entry
+    // naming a folder this profile already approves, however written, is never added beside
+    // it with other settings.
+    static string Key(string p) => AgentBridge.Host.Delivery.Launch.Folders.Expand(p) ?? System.IO.Path.TrimEndingDirectorySeparator(p.Trim());
+
+    static string LabelOf(string? label, string path) =>
+        string.IsNullOrWhiteSpace(label) ? AgentBridge.Host.Delivery.Launch.Folders.DefaultLabel(Key(path)) : label.Trim();
+
+    // agent-ha-bridge finds its default workspace with PowerShell's -eq, which ignores case, and
+    // takes the first; the host compares labels exactly. So the default is carried as the label of
+    // the workspace agent-ha-bridge would have chosen, else as written (falling back to the first,
+    // in both).
+    static string DefaultLabel(JsonObject launch, string configured)
+    {
+        var labels = (launch["workspaces"] as JsonArray ?? []).Select(Read).Where(e => e.Path is not null).Select(e => LabelOf(e.Label, e.Path!)).ToList();
+        return labels.FirstOrDefault(l => string.Equals(l, configured, StringComparison.OrdinalIgnoreCase)) ?? configured;
+    }
+
     static void Workspaces(JsonNode? source, JsonObject launch, List<string> imported, List<string> kept)
     {
         if (source is not JsonArray list || list.Count == 0) { return; }
         if (launch["workspaces"] is not null and not JsonArray) { kept.Add("launch.workspaces: this profile's is not a list, so agent-ha-bridge's workspaces were not imported"); return; }
         var target = launch["workspaces"] as JsonArray ?? [];
-        static (string? Path, string? Label) Read(JsonNode? n) => n switch
-        {
-            JsonValue v when v.TryGetValue<string>(out var p) => (p, null),
-            JsonObject o => (Str(o["path"]), Str(o["label"])),
-            _ => (null, null),
-        };
-        // The folder and label as LaunchConfig will read them (~, . and .. resolved), so an entry
-        // naming a folder this profile already approves, however written, is never added beside
-        // it with other settings.
-        static string Key(string p) => AgentBridge.Host.Delivery.Launch.Folders.Expand(p) ?? System.IO.Path.TrimEndingDirectorySeparator(p.Trim());
-        static string LabelOf(string? label, string path) =>
-            string.IsNullOrWhiteSpace(label) ? AgentBridge.Host.Delivery.Launch.Folders.DefaultLabel(Key(path)) : label.Trim();
         var pathCase = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         // Only the profile's own labels are kept from agent-ha-bridge's; two of agent-ha-bridge's
         // sharing one are both imported, and the host tells them apart by folder, as

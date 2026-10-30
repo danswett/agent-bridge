@@ -514,6 +514,33 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Hooks_that_run_agent_ha_bridges_PowerShell_directly_are_not_re_pointed_while_a_session_that_started_with_them_runs()
+    {
+        // An older install: Claude's SessionStart runs the script through run-hook.cmd.
+        var settings = FakeAgentHaBridge.Read(_f.ClaudeSettings);
+        settings["hooks"]!["SessionStart"]![0]!["hooks"]![0]!["command"] = $"\"{Path.Combine(_f.ClaudeHome, "ha-bridge", "run-hook.cmd")}\" \"{Path.Combine(_f.ClaudeHome, "ha-bridge", "register-claude-session.ps1")}\"";
+        File.WriteAllText(_f.ClaudeSettings, settings.ToJsonString(new() { WriteIndented = true }));
+        var listing = _f.Listing();
+        _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Claude] = 1;
+
+        var running = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(running.Ok);
+        Assert.Contains("1 Claude process is running", running.ToString());
+        Assert.Equal(listing, _f.Listing());
+        Assert.Empty(_f.Runtime_.Calls);
+        // Not knowing is no better.
+        _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Claude] = null;
+        Assert.Contains("could not be checked", (await _f.Migrator().MigrateAsync(dryRun: true)).ToString());
+        // Sessions of the agents whose hooks run the Go hook do not matter: theirs spool to the host.
+        _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Claude] = 0;
+        _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Copilot] = 2;
+        _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Codex] = 2;
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+        Assert.True(report.Ok, report.ToString());
+    }
+
+    [Fact]
     public async Task A_workspace_flag_and_numeric_tuning_agent_ha_bridge_reads_are_carried_with_their_meaning()
     {
         var config = FakeAgentHaBridge.DefaultConfig();
@@ -532,6 +559,23 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.True((bool)workspace["isolate"]!);
         Assert.Equal("200000", (string?)launch["agents"]!["codex"]!["context"]);
         Assert.Equal(["200000", "400000"], launch["agents"]!["codex"]!["contexts"]!.AsArray().Select(v => (string)v!));
+    }
+
+    [Fact]
+    public async Task The_default_workspace_agent_ha_bridge_matched_whatever_its_case_stays_the_default()
+    {
+        var config = FakeAgentHaBridge.DefaultConfig();
+        config["newSession"]!["workspaces"] = new JsonArray(
+            new JsonObject { ["path"] = FakeAgentHaBridge.Rooted("repos", "docs"), ["label"] = "Docs" },
+            new JsonObject { ["path"] = FakeAgentHaBridge.Rooted("repos", "app"), ["label"] = "App" });
+        config["newSession"]!["defaultWorkspace"] = "app";
+        await using var f = new FakeAgentHaBridge(config);
+
+        Assert.True((await f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        var launch = JsonNode.Parse(File.ReadAllText(Path.Combine(f.Profile, "config.json")))!["launch"]!;
+        // The host matches labels exactly, and would otherwise fall back to the first, Docs.
+        Assert.Equal("App", (string?)launch["defaultWorkspace"]);
     }
 
     [Fact]
