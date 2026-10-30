@@ -85,7 +85,7 @@ public sealed partial class HaConnector
     // where the cards' controls are (they come with answers).
     bool ServesReplies => reply is not null && ServesAnswers;
 
-    // Every delivery started so far, finished. For tests.
+    // Every delivery and image delete started so far, finished. For tests.
     internal Task DeliveredAsync() => Task.WhenAll(delivering.Keys);
 
     // Deliveries are told to stop and given a moment; one that does not is left to finish on its
@@ -129,7 +129,7 @@ public sealed partial class HaConnector
             Published? p;
             lock (gate) { p = published.TryGetValue(done.SessionId, out var found) ? found : null; }
             if (p is not null) { await ReplyDoneAsync(p, done, now, ct); }
-            else if (done.Result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { await DeleteImagesAsync(done.Images, ct); }
+            else if (done.Result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { DeleteImages(done.Images); }
             // Only once said: a pass that fails part-way says it again rather than not at all.
             replies.TryDequeue(out _);
             underWay.TryRemove(new KeyValuePair<string, long>(done.SessionId, done.Delivery));
@@ -174,7 +174,7 @@ public sealed partial class HaConnector
         }
         // Images go from Home Assistant's store once used; one that reached nothing is kept, as
         // the card was told ("source images were kept").
-        if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { await DeleteImagesAsync(done.Images, ct); }
+        if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { DeleteImages(done.Images); }
         // The reply box is cleared either way, so a failed reply is not sent again by itself; but
         // only once it is seen still holding what was sent, never words typed since. The daemon
         // also clears a box it cannot read; here the press is already spent, so a box left as it
@@ -187,18 +187,30 @@ public sealed partial class HaConnector
         }
     }
 
-    async Task DeleteImagesAsync(IReadOnlyList<string> images, CancellationToken ct)
+    // Used images go from Home Assistant's store beside the passes, as deliveries run: each
+    // delete may take a command's whole timeout, and the passes (the heartbeat among them) must
+    // not wait on them. Best effort, still G5-guarded, and waited for at stop like a delivery.
+    void DeleteImages(IReadOnlyList<string> images)
     {
-        foreach (var id in images)
+        if (images.Count == 0) { return; }
+        var token = replyStop.Token;
+        Track(Task.Run(async () =>
         {
-            try { await ha.DeleteImageAsync(id, ct); }
-            // A command that timed out on its own is a failure like any other, not the host
-            // stopping: left to escape, it would hold every later completion.
-            catch (Exception e) when (!ct.IsCancellationRequested && e is not AgentHaBridgeRunning)
+            foreach (var id in images)
             {
-                log($"Home Assistant connector could not delete image {id}: {Describe(e)}");
+                try { await ha.DeleteImageAsync(id, token); }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
+                catch (AgentHaBridgeRunning) { log($"Home Assistant connector left image {id} in the store: agent-ha-bridge is running"); return; }
+                // A command that timed out on its own is a failure like any other.
+                catch (Exception e) { log($"Home Assistant connector could not delete image {id}: {Describe(e)}"); }
             }
-        }
+        }, CancellationToken.None));
+    }
+
+    void Track(Task task)
+    {
+        delivering[task] = true;
+        task.ContinueWith(t => delivering.TryRemove(t, out _), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
     // What the controls hold now is what was there before: never a reply. One that cannot be read,
@@ -442,8 +454,7 @@ public sealed partial class HaConnector
             catch (Exception e) { outcome = (new ReplyResult(AnswerOutcome.Unconfirmed, $"delivery failed: {e.GetType().Name}"), false); }
             replies.Enqueue(new ReplyDone(number, sessionId, shown, box, text, images, arm, outcome.Result, outcome.Failed));
         }, CancellationToken.None);
-        delivering[task] = true;
-        task.ContinueWith(t => delivering.TryRemove(t, out _), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        Track(task);
     }
 
     static bool Blank(Observation box) => !box.Present || string.IsNullOrWhiteSpace(box.Value);

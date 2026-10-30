@@ -66,13 +66,14 @@ public sealed partial class ReplyTests : IDisposable
     }
 
     // What a person (or an agent) does on the card, the pass that reads it, and, once its
-    // delivery is done, the pass that says what came of it.
+    // delivery is done, the pass that says what came of it (and the image deletes that follow).
     async Task Do(HaConnector c, HaTrigger hit)
     {
         c.Observe(hit);
         await Pass(c);
         await c.DeliveredAsync();
         await Pass(c);
+        await c.DeliveredAsync();
     }
 
     void Idle(int turn = 1, string? message = "go", Question? question = null) =>
@@ -839,6 +840,33 @@ public sealed partial class ReplyTests : IDisposable
         Idle(turn: 2, message: "Stop and check the logs");
         await Pass(c);
         Assert.Equal("human", Detail.GetProperty("driver").GetString());
+    }
+
+    [Fact]
+    public async Task A_slow_image_delete_holds_up_neither_the_pass_nor_the_next_reply()
+    {
+        var slow = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ha.DeleteWaits = slow.Task;
+        var image = ha.Upload([1, 2, 3], "eeee5555");
+        await using var c = await Ready();
+
+        c.Observe(ha.SendFromCard(Node, "one", images: [new JsonObject { ["id"] = image, ["name"] = "a.png" }]));
+        await Pass(c);
+        await c.DeliveredAsync();
+        // The pass that says it went starts the delete and does not wait for it.
+        await Pass(c).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal("Reply sent", Activity);
+
+        c.Observe(ha.SendFromCard(Node, "two"));
+        await Pass(c).WaitAsync(TimeSpan.FromSeconds(30));
+        // (Not DeliveredAsync, which would wait for the delete too.)
+        for (var i = 0; i < 300 && replied.Count < 2; i++) { await Task.Delay(100); }
+        Assert.Equal(["one", "two"], replied.Select(r => r.Text));
+        Assert.Empty(ha.DeletedImages);
+
+        slow.SetResult();
+        await c.DeliveredAsync();
+        Assert.Equal([image], ha.DeletedImages);
     }
 
     [Fact]

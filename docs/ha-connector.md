@@ -268,7 +268,8 @@ limit, within the client's timeout for the whole body); the files are decoded in
 256 KiB each (`Save-BridgeReplyFile`). Any that fails, a timeout included, says the daemon's
 sentence and sends nothing. More than ten attachments (the host's limit for one reply) are refused
 before any is fetched. A reply that went in deletes its images
-from the store (`image/delete`); one that reached nothing keeps them. The publish takes
+from the store (`image/delete`, beside the passes, so a slow delete holds up nothing); one
+that reached nothing keeps them. The publish takes
 precedence over the reply box in the same pass.
 
 **The reply box and Send.** A new Send press sends the box's words. The tap on Send is what

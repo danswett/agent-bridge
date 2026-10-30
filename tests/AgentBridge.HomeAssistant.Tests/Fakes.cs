@@ -195,15 +195,18 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     // A delete that fails, with what it throws (a command timing out on its own, say).
     public Func<string, Exception?>? DeleteFails { get; set; }
 
-    public Task DeleteImageAsync(string imageId, CancellationToken cancellationToken = default)
+    // A delete Home Assistant is slow to answer: it waits for this.
+    public Task? DeleteWaits { get; set; }
+
+    public async Task DeleteImageAsync(string imageId, CancellationToken cancellationToken = default)
     {
+        if (DeleteWaits is { } wait) { await wait.WaitAsync(cancellationToken); }
         if (DeleteFails?.Invoke(imageId) is { } failed) { throw failed; }
         lock (gate)
         {
             Images.Remove(imageId);
             DeletedImages.Add(imageId);
         }
-        return Task.CompletedTask;
     }
 
     // Hands a change to whatever is watching, as Home Assistant's trigger subscription would.
