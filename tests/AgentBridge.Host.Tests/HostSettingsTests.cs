@@ -138,6 +138,13 @@ public sealed class HostSettingsTests : IDisposable
         var ha = HostSettings.Load(folder).Settings.HomeAssistant;
         Assert.True(ha is { Enabled: true, Disposable: true });
         Assert.Equal(new Uri("http://ha.test:8123"), ha.BaseUrl);
+
+        // The accounts whose presses are agents': a list of ids, and nothing else.
+        Assert.Equal(0, Run("config", "set", "homeAssistant.agentUserIds", """["agent-user"]"""));
+        Assert.Equal(["agent-user"], HostSettings.Load(folder).Settings.HomeAssistant.AgentUserIds);
+        Assert.Equal(1, Run("config", "set", "homeAssistant.agentUserIds", "agent-user"));
+        Assert.Equal(0, Run("config", "unset", "homeAssistant.agentUserIds"));
+        Assert.Empty(HostSettings.Load(folder).Settings.HomeAssistant.AgentUserIds);
     }
 
     [Fact]

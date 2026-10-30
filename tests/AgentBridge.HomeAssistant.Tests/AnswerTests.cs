@@ -383,6 +383,142 @@ public sealed class AnswerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_new_approval_whose_selector_still_shows_the_last_tap_is_not_answered_by_it()
+    {
+        static Session Approval(string id) => FakeSessions.Copilot(A, status: SessionStatus.Waiting) with
+        {
+            Agent = AgentKind.Codex,
+            Question = new Question
+            {
+                Id = id, Kind = QuestionKind.Approval, Message = "Codex wants to run git push", AskedAt = FakeSessions.T0,
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
+            },
+        };
+        sessions.Set(Approval("a1"));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        Assert.Single(answered);
+
+        // The next approval arrives, and the selector cannot be set waiting: it still says Approve.
+        ha.ServiceFailsFor = (service, entity) => service == "select.select_option" && entity == SessionEntities.Decision(Node);
+        sessions.Set(Approval("a2"));
+        await Pass(c);
+        Assert.Equal("Approve", State(SessionEntities.Decision(Node)));
+        await Pass(c, 6);
+        await Pass(c, 6);
+        Assert.Single(answered);
+
+        // Once it is seen waiting, a tap answers it.
+        ha.ServiceFailsFor = null;
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), HaDecision.Awaiting));
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        Assert.Equal(2, answered.Count);
+        Assert.Equal("a2", answered[1].Question);
+    }
+
+    [Fact]
+    public async Task Cancel_chosen_twice_is_undone_both_times_so_the_form_can_still_be_sent()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), HaDecision.Cancel));
+        Assert.Equal(HaDecision.Awaiting, State(SessionEntities.Decision(Node)));
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), HaDecision.Cancel));
+        Assert.Equal(HaDecision.Awaiting, State(SessionEntities.Decision(Node)));
+
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Wait for the fix"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Equal("wait", Assert.Single(answered).Fields!["release"].GetString());
+    }
+
+    [Fact]
+    public async Task A_press_whose_sending_note_could_not_be_shown_is_read_again_and_sent()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Wait for the fix"));
+        ha.PublishFailsFor = (topic, payload) => topic == HaContract.Topics(Node).ActivityState && payload == "Sending answer...";
+        c.Observe(ha.Press(SessionEntities.Submit(Node)));
+        await Pass(c);
+        Assert.Empty(answered);
+
+        ha.PublishFailsFor = null;
+        await Pass(c);
+        Assert.Single(answered);
+        Assert.Equal("Answer sent", Activity);
+    }
+
+    [Fact]
+    public async Task Reply_card_words_that_reached_nothing_are_not_reported_as_used()
+    {
+        outcome = _ => new AnswerResult(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");
+        Ask(Form("q1"));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.SendFromCard(Node, "Call it Aurora", "q1"));
+        Assert.Equal("Answer NOT sent", Activity);
+
+        // The session's own activity moves on; the card's draft must not be told to clear.
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with
+        {
+            Question = Form("q1"),
+            Activity = new Activity { Response = "Still waiting", TurnCount = 1, UserMessage = "go" },
+        });
+        await Pass(c);
+        Assert.Equal("Still waiting", Activity);
+        Assert.False(Detail.TryGetProperty("answer_consumed_at", out var consumed) && consumed.ValueKind == JsonValueKind.String);
+    }
+
+    [Fact]
+    public async Task Words_left_in_the_reply_box_from_before_the_question_do_not_fill_its_text_field()
+    {
+        Ask(null);
+        await using var c = Connector();
+        await Pass(c);
+        ha.Type(SessionEntities.Reply(Node), "words for the last question");
+        Ask(Form("q1", Release, new Field { Name = "note", Title = "Note", Type = FieldType.Text }));
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Wait for the fix"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Equal("", Assert.Single(answered).Fields!["note"].GetString());
+    }
+
+    [Fact]
+    public async Task Words_typed_in_the_reply_box_and_sent_answer_a_choice_that_takes_another_answer()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Type(SessionEntities.Reply(Node), "after the hotfix lands"));
+        Assert.Empty(answered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        var request = Assert.Single(answered);
+        Assert.Equal("after the hotfix lands", request.Fields!["release"].GetProperty("other").GetString());
+    }
+
+    [Fact]
+    public async Task Reply_card_words_sent_before_the_form_is_complete_wait_for_a_press_of_send()
+    {
+        Ask(Form("q1", Release, new Field { Name = "note", Title = "Note", Type = FieldType.Text }));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.SendFromCard(Node, "after the hotfix", "q1"));
+        Assert.Equal("Not sent - answer every field", Activity);
+        // Finishing the form does not send the words by itself.
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Wait for the fix"));
+        await Pass(c, 6);
+        Assert.Empty(answered);
+
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        var request = Assert.Single(answered);
+        Assert.Equal("after the hotfix", request.Fields!["note"].GetString());
+        Assert.Equal("wait", request.Fields!["release"].GetString());
+    }
+
+    [Fact]
     public async Task A_send_that_arrived_while_refused_words_were_being_delivered_does_not_send_them_again()
     {
         Ask(Form("q1"));

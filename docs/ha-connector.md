@@ -200,8 +200,13 @@ the watch was reconnecting is late, never lost. A press counts
 only when it changed from the baseline taken at arming, was not already spent, and its
 `context.user_id` is recorded for `driver`. The fields are read from the slots, choice labels
 mapped back to their values (`#n,m` codes for a multi-select), numbers parsed, `Other` taken
-from the reply box; a free-text question is answered from the reply box or a reply-card payload
-whose `decision_id` matches. The answer goes through the host's `ISessionAnswerer`, the same
+from the reply card or from the reply box with Send; a form's text field takes reply-card words,
+or reply-box words typed since the question was shown (never what the box held before it). A
+free-text question is answered from the reply box or a reply-card payload whose `decision_id`
+matches. Reply-card words sent before a form is complete are said (`answer every field`) and
+held: they fill the form later, but only a press of Send submits it. An approval tap counts only
+on a selector that was set waiting for this question, so a tap left over from the last one
+never answers it. The answer goes through the host's `ISessionAnswerer`, the same
 path as the app's, so G5, the delivery gate and the attempt ledger apply unchanged.
 
 **Telling the card**, on the activity line, as `Set-DaemonTransientActivity` does:

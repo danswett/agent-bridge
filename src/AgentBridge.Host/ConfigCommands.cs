@@ -32,7 +32,7 @@ public static class ConfigCommands
         "launch.worktrees.root", "launch.worktrees.limit", "launch.worktrees.idleHours",
         "launch.profiles", "launch.defaultProfile", "launch.resumeCount",
         "homeAssistant.enabled", "homeAssistant.baseUrl", "homeAssistant.dashboardUrlPath", "homeAssistant.detailedActivity",
-        "homeAssistant.machineName", "homeAssistant.disposable",
+        "homeAssistant.machineName", "homeAssistant.disposable", "homeAssistant.agentUserIds",
     ];
 
     static readonly string[] AgentKeys = ["path", "model", "effort", "context", "models", "efforts", "contexts", "extraArgs"];

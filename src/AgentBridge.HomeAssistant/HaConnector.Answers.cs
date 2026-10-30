@@ -40,7 +40,9 @@ public sealed partial class HaConnector
         public int Attempts;
         public long FailedAt;
         public string? FailedBox;
-        public string? FailedStamp;
+        // A reply-card publish whose words may fill the form but cannot submit it by themselves:
+        // it reached nothing, or came while a field was still unanswered.
+        public string? HeldStamp;
         public bool AwaitTap;
         // Said once, not on every hit.
         public string? Told;
@@ -160,10 +162,16 @@ public sealed partial class HaConnector
         }
         var plan = HaDecision.Plan(question, full.Agent);
         var armedSlots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
-        await RunAsync(HaDecision.Arm(plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow()), p.Node, ct);
+        var unset = await RunAsync(HaDecision.Arm(plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow()), p.Node, ct);
         p.ArmedSlots = plan.UsesFieldSlots ? plan.Fields.Count : 0;
         p.Cleared = false;
-        p.Armed = new Armed { Question = question, Plan = plan, PayloadBaseline = payload, SubmitBaseline = submit, ReplyBaseline = reply };
+        p.Armed = new Armed
+        {
+            Question = question, Plan = plan, PayloadBaseline = payload, SubmitBaseline = submit, ReplyBaseline = reply,
+            // A selector that could not be set waiting may still show the last question's tap;
+            // that must not answer this one, so a tap counts only once it is seen waiting.
+            AwaitTap = plan.AnswerOnTap && unset.Contains(SessionEntities.Decision(p.Node)),
+        };
         log($"Home Assistant connector armed {p.Node} for its question{(plan.TerminalOnly ? " (answered at the machine)" : "")}");
     }
 
@@ -198,8 +206,10 @@ public sealed partial class HaConnector
         return -1;
     }
 
-    async Task RunAsync(IReadOnlyList<DecisionStep> steps, string node, CancellationToken ct)
+    // The steps in order; returns the selects Home Assistant would not set.
+    async Task<HashSet<string>> RunAsync(IReadOnlyList<DecisionStep> steps, string node, CancellationToken ct)
     {
+        var unset = new HashSet<string>(StringComparer.Ordinal);
         foreach (var step in steps)
         {
             switch (step)
@@ -212,16 +222,18 @@ public sealed partial class HaConnector
                     await PinNowAsync(Enumerable.Range(1, f.Slots).ToDictionary(i => $"{node}_f{i}", i => SessionEntities.Field(node, i)), time.GetUtcNow(), ct);
                     break;
                 case SelectStep s:
-                    await SelectAsync(s.EntityId, s.Option, ct);
+                    if (!await SelectAsync(s.EntityId, s.Option, ct)) { unset.Add(s.EntityId); }
                     break;
             }
         }
+        return unset;
     }
 
     // Set-CopilotMqttSelectOption: a select only takes an option once Home Assistant has taken
     // the discovery config that offers it, so wait (bounded) for that, then select. A failure is
-    // not fatal, as for the daemon: the card treats a missing value as unanswered.
-    async Task SelectAsync(string entityId, string option, CancellationToken ct)
+    // not fatal, as for the daemon: the card treats a missing value as unanswered. Says whether
+    // Home Assistant took it.
+    async Task<bool> SelectAsync(string entityId, string option, CancellationToken ct)
     {
         for (var attempt = 0; attempt < options.SelectAttempts; attempt++)
         {
@@ -237,10 +249,15 @@ public sealed partial class HaConnector
             catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { }
             await Task.Delay(options.SelectDelay, time, ct);
         }
-        try { await ha.CallServiceAsync("select", "select_option", new JsonObject { ["entity_id"] = entityId, ["option"] = option }, ct); }
+        try
+        {
+            await ha.CallServiceAsync("select", "select_option", new JsonObject { ["entity_id"] = entityId, ["option"] = option }, ct);
+            return true;
+        }
         catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
         {
             log($"Home Assistant connector could not set {entityId} to {option}: {Describe(e)}");
+            return false;
         }
     }
 
@@ -329,26 +346,35 @@ public sealed partial class HaConnector
         if (outcome.Notice is { } notice)
         {
             if (outcome.Spend is { } spent) { armed.SpentPress = spent; }
+            if (outcome.HoldStamp is { } held) { armed.HeldStamp = held; }
+            // A Cancel is undone every time it is chosen, though said only once: left on Cancel,
+            // the selector would hide every later answer.
+            if (outcome.ResetDecision) { await SelectAsync(SessionEntities.Decision(p.Node), HaDecision.Awaiting, ct); }
             var key = notice.Summary + "|" + outcome.NoticeKey;
             if (armed.Told == key) { return; }
             armed.Told = key;
-            if (outcome.ResetDecision) { await SelectAsync(SessionEntities.Decision(p.Node), HaDecision.Awaiting, ct); }
             await TransientAsync(p, notice.Summary, notice.Extra, ct);
             return;
         }
         if (outcome.Request is not { } request || answer is null) { return; }
 
-        // Who sent it: the press carries the account behind it, a publish names its driver.
-        p.ArmDriver(outcome.Driver, now);
+        // Said before anything is marked used: if saying it fails, the next pass reads the same
+        // press again rather than finding it spent with nothing delivered.
+        await TransientAsync(p, "Sending answer...", new JsonObject { ["answer"] = outcome.Shown }, ct);
         armed.UsedPress = outcome.Press ?? armed.UsedPress;
         armed.UsedStamp = outcome.Stamp ?? armed.UsedStamp;
-        if (outcome.Stamp is { } stamp) { p.LastPayloadStamp = stamp; }
-        await TransientAsync(p, "Sending answer...", new JsonObject { ["answer"] = outcome.Shown }, ct);
         AnswerResult result;
         try { result = await answer(request, ct); }
         catch (Exception e) when (e is not OperationCanceledException)
         {
             result = new AnswerResult(AnswerOutcome.Unconfirmed, $"delivery failed: {e.GetType().Name}");
+        }
+        if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
+        {
+            // Who sent it (the press carries the account behind it, a publish names its driver),
+            // and which reply-card words were used, only for an answer that may have arrived.
+            p.ArmDriver(outcome.Driver, now);
+            if (outcome.Stamp is { } stamp) { p.LastPayloadStamp = stamp; }
         }
         switch (result.Outcome)
         {
@@ -384,7 +410,7 @@ public sealed partial class HaConnector
                 if (outcome.Stamp is { } failedStamp)
                 {
                     armed.UsedStamp = null;
-                    armed.FailedStamp = failedStamp;
+                    armed.HeldStamp = failedStamp;
                 }
                 if (outcome.Tap) { armed.AwaitTap = true; }
                 await TransientAsync(p, "Answer NOT sent", new JsonObject
@@ -470,6 +496,8 @@ public sealed partial class HaConnector
         // Words from the reply box, and an approval tap: how a failed one may be given again.
         public bool Box { get; init; }
         public bool Tap { get; init; }
+        // A reply-card publish to hold (HeldStamp) rather than let submit later by itself.
+        public string? HoldStamp { get; init; }
     }
 
     // Read-DaemonDecisionAnswer: what the card holds as the answer, a reason it cannot be sent,
@@ -545,8 +573,10 @@ public sealed partial class HaConnector
                 var text = card?.Text;
                 if (string.IsNullOrWhiteSpace(text))
                 {
+                    // Only words typed since the question was shown: the box may still hold the last
+                    // question's after a restart, a takeover or a reset that did not take.
                     var box = await ObserveAsync(SessionEntities.Reply(node), ct);
-                    text = box.Present && !string.IsNullOrWhiteSpace(box.Value) ? box.Value : "";
+                    text = box.Present && !string.IsNullOrWhiteSpace(box.Value) && Changed(armed.ReplyBaseline, box) ? box.Value : "";
                 }
                 picked.Add(text);
                 if (source.Type == FieldType.Number)
@@ -612,6 +642,16 @@ public sealed partial class HaConnector
         }
         var pressed = Changed(armed.SubmitBaseline, submit) && submit.Value != armed.SpentPress && submit.Value != armed.UsedPress;
         var complete = missing.Count == 0;
+        // A lone choice that takes another answer, typed into the reply box and sent with Send.
+        if (pressed && fields.Count == 1 && !takesText && missing.Count == 1 && !fields[0].MultiSelect && plan.TakesTypedAnswer && card is null)
+        {
+            var typed = await ObserveAsync(SessionEntities.Reply(node), ct);
+            if (typed.Present && !string.IsNullOrWhiteSpace(typed.Value) && Changed(armed.ReplyBaseline, typed))
+            {
+                var typedAnswer = new Dictionary<string, JsonElement> { [fields[0].Source!.Name] = JsonSerializer.SerializeToElement(new { other = typed.Value }) };
+                return Answer(sessionId, armed, typedAnswer, null, typed.Value, null, submit.Value, DriverOf(submit.Snapshot?.UserId));
+            }
+        }
         if (pressed && !complete)
         {
             return new Read
@@ -619,6 +659,18 @@ public sealed partial class HaConnector
                 Notice = new Notice("Not sent - answer every field", new JsonObject { ["waiting_on"] = string.Join(", ", missing) }),
                 NoticeKey = submit.Value,
                 Spend = submit.Value,
+                HoldStamp = takesText && card is { Retry: false } alongside ? alongside.Stamp : null,
+            };
+        }
+        // Words from the reply card for a form not yet complete: said, and held, so finishing the
+        // form later does not send them without a press of Send.
+        if (takesText && card is { Retry: false } early && !complete)
+        {
+            return new Read
+            {
+                Notice = new Notice("Not sent - answer every field", new JsonObject { ["waiting_on"] = string.Join(", ", missing) }),
+                NoticeKey = early.Stamp,
+                HoldStamp = early.Stamp,
             };
         }
         if (card is { Retry: false } words && !takesText)
@@ -666,8 +718,8 @@ public sealed partial class HaConnector
         if (string.IsNullOrWhiteSpace(text)) { return null; }
         // A publish names who sent it, as the daemon reads it (Get-BridgeReplyPayload's Driver).
         var driver = a.TryGetProperty("driver", out var d) && d.ValueKind == JsonValueKind.String && d.GetString() is { Length: > 0 } named ? named : "human";
-        // A publish whose answer reached nothing: its words, which cannot answer by themselves.
-        return (text, current.Value, driver, current.Value == armed.FailedStamp);
+        // A held publish: its words, which cannot answer by themselves.
+        return (text, current.Value, driver, current.Value == armed.HeldStamp);
     }
 
     Read Answer(string sessionId, Armed armed, IReadOnlyDictionary<string, JsonElement>? fields, string? text, string shown, string? stamp, string? press, string driver) => new()
