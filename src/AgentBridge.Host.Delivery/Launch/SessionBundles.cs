@@ -237,8 +237,7 @@ public static class SessionBundles
         string? installed = null;
         try
         {
-            var files = Extract(zip, kind, unpack, maxUnpacked, maxFiles);
-            // Claude's and Codex's one file is the transcript, which also records the folder.
+            var files = Rehome(Extract(zip, kind, unpack, maxUnpacked, maxFiles), unpack, oldId, newId);            // Claude's and Codex's one file is the transcript, which also records the folder.
             var relocate = kind == AgentKind.Copilot ? null : (Func<string, string>)(line => Relocate(kind, line, cwd));
             foreach (var f in files.Where(f => Path.GetExtension(f).ToLowerInvariant() is ".jsonl" or ".yaml" or ".json" or ".md")) { Rename(f, oldId, newId, relocate); }
             switch (kind)
@@ -290,6 +289,27 @@ public static class SessionBundles
         }
     }
 
+    // Files whose names carry the old id get the new one, as the transcript's mentions of them
+    // will: a saved file named for its session would otherwise be referred to by a name it no
+    // longer has.
+    static List<string> Rehome(List<string> files, string unpack, string oldId, string newId)
+    {
+        var root = Path.GetFullPath(unpack);
+        var moved = new List<string>(files.Count);
+        foreach (var file in files)
+        {
+            var relative = Path.GetRelativePath(root, file);
+            if (!relative.Contains(oldId, StringComparison.OrdinalIgnoreCase)) { moved.Add(file); continue; }
+            var to = Path.Combine(root, relative.Replace(oldId, newId, StringComparison.OrdinalIgnoreCase));
+            if (File.Exists(to) || Directory.Exists(to)) { throw new InvalidDataException("the bundle holds a file under both the old and the new session id"); }
+            Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+            File.Move(file, to);
+            moved.Add(to);
+            // A folder named for the old id, now empty, goes too.
+            for (var dir = Path.GetDirectoryName(file); dir is not null && dir.Length > root.Length && !Directory.EnumerateFileSystemEntries(dir).Any(); dir = Path.GetDirectoryName(dir)) { Directory.Delete(dir); }
+        }
+        return moved;
+    }
     // Withdraws what Install put in place.
     static void Remove(string path)
     {

@@ -288,6 +288,21 @@ public sealed class SessionBundleTests : IDisposable
         Assert.DoesNotContain("elsewhere", text);
     }
     [Fact]
+    public void A_saved_file_named_for_its_session_takes_the_new_id_as_the_transcript_does()
+    {
+        var dir = CopilotSession();
+        Directory.CreateDirectory(Path.Combine(dir, "files", Id));
+        File.WriteAllText(Path.Combine(dir, "files", Id, $"{Id}-plan.md"), "the plan");
+        File.AppendAllText(Path.Combine(dir, "events.jsonl"), $"{{\"type\":\"tool\",\"data\":{{\"path\":\"files/{Id}/{Id}-plan.md\"}}}}\n");
+        SessionBundles.Pack(AgentKind.Copilot, source, Id, Zip, long.MaxValue);
+        var events = SessionBundles.Install(Zip, AgentKind.Copilot, Id, NewId, root, target, Unpack, long.MaxValue, Now);
+
+        var session = Path.GetDirectoryName(events)!;
+        Assert.Contains($"files/{NewId}/{NewId}-plan.md", File.ReadAllText(events));
+        Assert.Equal("the plan", File.ReadAllText(Path.Combine(session, "files", NewId, $"{NewId}-plan.md")));
+        Assert.False(Directory.Exists(Path.Combine(session, "files", Id)));
+    }
+    [Fact]
     public void Packing_stops_when_its_deadline_passes_and_leaves_no_bundle()
     {
         CopilotSession();
