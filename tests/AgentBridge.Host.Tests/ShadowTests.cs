@@ -605,7 +605,7 @@ public sealed class ShadowTests : IDisposable
         };
 
         Assert.Empty(ShadowCompare.Compare(Side(40, at), Side(44, at)).Differences);
-        Assert.Empty(ShadowCompare.Compare(Side(40, at), Side(90, at + TimeSpan.FromMinutes(20))).Differences);
-        Assert.Equal(ShadowKinds.UsagePercent, Assert.Single(ShadowCompare.Compare(Side(40, at), Side(46, at + TimeSpan.FromMinutes(10))).Differences).Kind);
+        Assert.Empty(ShadowCompare.Compare(Side(40, at), Side(90, at + TimeSpan.FromMinutes(13))).Differences);
+        Assert.Equal(ShadowKinds.UsagePercent, Assert.Single(ShadowCompare.Compare(Side(40, at), Side(46, at + TimeSpan.FromMinutes(2))).Differences).Kind);
     }
 }

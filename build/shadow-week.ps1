@@ -114,22 +114,36 @@ function Sync-AgentHaBridgeWorkspace {
         }
     }
 
+    # Labelled as agent-ha-bridge labels them (Get-BridgeWorkspaceChoices): the configured
+    # label, else the folder's name; a repeated label gets its path after it, and an entry
+    # still repeated, or with an isolate that is not true or false, is not offered at all.
+    $seen = @{}
+    $paths = @{}
     foreach ($w in @($session['workspaces'])) {
         # A workspace is a folder, or {label, path, isolate}; a folder may start with ~.
         $entry = if ($w -is [string]) { @{ path = $w } } elseif ($w -is [hashtable]) { $w } else { continue }
-        if ($entry['path'] -isnot [string] -or -not $entry['path']) { continue }
-        $folder = $entry['path'] -replace '^~(?=$|[\\/])', $HOME
+        if ($entry['path'] -isnot [string] -or -not $entry['path'].Trim()) { continue }
+        $folder = [string]$entry['path']
+        if ($folder.StartsWith('~')) { $folder = Join-Path $HOME $folder.Substring(1).TrimStart('\', '/') }
+        try { $folder = [IO.Path]::GetFullPath($folder) } catch { continue }
         # agent-ha-bridge offers nothing in a folder that is gone either.
-        if (-not (Test-Path -LiteralPath $folder -PathType Container)) { Write-Warning "$folder does not exist; not approved"; continue }
-        $arguments = @('workspace', 'add', $folder, '--profile', $HostProfile)
-        if ($entry['label'] -is [string] -and $entry['label']) { $arguments += '--label', $entry['label'] }
+        if (-not [IO.Directory]::Exists($folder)) { Write-Warning "$folder does not exist; not approved"; continue }
+        if ($entry.ContainsKey('isolate') -and $entry['isolate'] -isnot [bool]) { Write-Warning "$folder has an isolate that is not true or false; agent-ha-bridge does not offer it"; continue }
+        $label = if ($entry['label'] -is [string] -and $entry['label'].Trim()) { $entry['label'] } else { [IO.Path]::GetFileName($folder.TrimEnd('\', '/')) }
+        if (-not $label) { $label = $folder }
+        if ($seen.ContainsKey($label)) { $label = "$label ($folder)" }
+        if ($seen.ContainsKey($label)) { continue }
+        $seen[$label] = $true
+        # The host approves a folder once; the daemon lists it twice under two labels.
+        if ($paths.ContainsKey($folder.ToLowerInvariant())) { Write-Warning "$folder is listed twice; approved once, as '$($paths[$folder.ToLowerInvariant()])'"; continue }
+        $paths[$folder.ToLowerInvariant()] = $label
+        $arguments = @('workspace', 'add', $folder, '--label', $label, '--profile', $HostProfile)
         if ($entry['isolate'] -eq $true) { $arguments += '--isolate' }
-        if ($PSCmdlet.ShouldProcess($folder, "approve in profile $HostProfile")) {
+        if ($PSCmdlet.ShouldProcess("$folder as '$label'", "approve in profile $HostProfile")) {
             & $exe @arguments
             if ($LASTEXITCODE) { throw "could not approve $folder in profile $HostProfile" }
         }
     }
-
     # Absent there means its default, which is this host's default too.
     $count = $session['resumeCount']
     $arguments = if ($count -is [long] -or $count -is [int]) { @('config', 'set', 'launch.resumeCount', [string][int]$count) } else { @('config', 'unset', 'launch.resumeCount') }

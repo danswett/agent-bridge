@@ -242,9 +242,11 @@ public static class ShadowCompare
     }
 
     // Percent gone may move between two reads; within this it is the same reading, and further
-    // apart in time it is not compared at all.
+    // apart in time it is not compared at all. Close together because the two read on their own
+    // paces (the daemon every two minutes, the host every fifteen while the daemon runs), and a
+    // host reading thirteen minutes old would otherwise be a mismatch for its whole age.
     const double PercentTolerance = 5;
-    static readonly TimeSpan ReadingsApart = TimeSpan.FromMinutes(15);
+    static readonly TimeSpan ReadingsApart = TimeSpan.FromMinutes(3);
 
     static bool Usage(ShadowView daemon, ShadowView host, List<ShadowDifference> diffs, List<string> notCompared)
     {

@@ -321,4 +321,23 @@ public class TailTests
 
         Assert.Null(source.Get(id)!.Activity.Background);
     }
+
+    // The same for the model: a change in the part never read leaves the start's model stale.
+    [Fact]
+    public async Task A_model_the_session_may_have_changed_in_the_part_of_a_transcript_never_read_is_not_kept()
+    {
+        using var f = new Fixture();
+        const string id = "39393939-3939-4393-8393-393939393939";
+        var events = f.CopilotSession(id, 100);
+        Fixture.Append(events, Copilot.Event("session.start", new { sessionId = id, selectedModel = "model-a" }, 0), Copilot.User("go", 1));
+        Fixture.Append(events, [.. Enumerable.Range(0, 40).Select(i => Copilot.Assistant("filler " + new string('f', 300), 2 + i, model: "agent-model", agentId: "agent-1"))]);
+        Fixture.Append(events, Copilot.Event("session.model_change", new { newModel = "model-b" }, 50));
+        Fixture.Append(events, [.. Enumerable.Range(0, 40).Select(i => Copilot.Assistant("filler " + new string('f', 300), 60 + i, model: "agent-model", agentId: "agent-1"))]);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(tailBytes: 4 * 1024, maxSkim: 2 * 1024);
+
+        await source.RefreshAsync();
+
+        Assert.NotEqual("model-a", source.Get(id)!.Model);
+    }
 }

@@ -101,7 +101,7 @@ pwsh build/shadow-week.ps1 -Install
    self-contained, into `%LOCALAPPDATA%\AgentBridgeShadow\bin`. Not the app's folder, and
    nothing on `PATH`.
 2. Makes the profile `shadow` approve exactly agent-ha-bridge's workspaces
-   (`newSession.workspaces`, `~` expanded, with their labels and `isolate`): whatever it
+   (`newSession.workspaces`, `~` expanded, labelled as `Get-BridgeWorkspaceChoices` labels them, a repeated label getting its path after it, with `isolate`): whatever it
    approved before is removed with `workspace remove`, then each is added with
    `workspace add`. `newSession.resumeCount` is copied to `launch.resumeCount` (unset when
    absent). The host offers to resume only sessions in folders it approves, so without this
@@ -176,7 +176,7 @@ minute:
 | `usage.missingOnHost`, `usage.missingOnDaemon` | One side has a reading for an agent (Copilot, Claude, Codex) and the other none. The report names the agent in place of a session |
 | `usage.account` | The account the reading is for differs (compared case-insensitively, never written) |
 | `usage.windows` | The metered windows differ (by key: `monthly`, `five_hour`, …) |
-| `usage.percent` | A window's percent used differs by more than 5 points, between readings taken within 15 minutes of each other (further apart, it is not compared) |
+| `usage.percent` | A window's percent used differs by more than 5 points, between readings taken within 3 minutes of each other (further apart, it is not compared: the host reads every 15 minutes while the daemon runs) |
 | `resumable.count` | The resume lists are of different lengths |
 | `resumable.missingOnHost`, `resumable.missingOnDaemon` | How many of one side's sessions the other does not offer, by label ("summary - folder", as both write it, whitespace collapsed). Each side cuts its list to its own resume count, so when the lengths differ only the shorter list's sessions are looked for in the longer one |
 
