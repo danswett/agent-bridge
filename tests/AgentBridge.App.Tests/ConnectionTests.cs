@@ -348,6 +348,31 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_try_again_whose_files_outlast_the_first_sends_window_sends_nothing_more()
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        host.On(Ops.SessionReply, _ => throw new InvalidOperationException("the host failed after reading it"));
+        var clock = new FakeTimeProvider(Make.T0);
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { GiveUp = TimeSpan.FromMinutes(9) };
+        var slow = false;
+        Task Files(Func<string, object?, TimeSpan?, Task<JsonElement>> call, Action<long, long> progress)
+        {
+            if (slow) { clock.Advance(TimeSpan.FromMinutes(3)); }
+            return Task.CompletedTask;
+        }
+
+        deliveries.Submit("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, before: Files, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Failed, "the failure");
+        clock.Advance(TimeSpan.FromMinutes(8));
+        slow = true;
+        deliveries.Resend("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, Files);
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
+        Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
+        Assert.Single(host.Sent(Ops.SessionReply));
+    }
+
+    [Fact]
     public async Task A_reply_whose_files_never_went_can_be_tried_again_however_long_after()
     {
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");

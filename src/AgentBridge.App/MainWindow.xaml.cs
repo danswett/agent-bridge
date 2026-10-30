@@ -61,7 +61,7 @@ public sealed partial class MainWindow : Window
         SessionsPane.Visibility = Ui.Show(tag == "sessions");
         UsagePane.Visibility = Ui.Show(tag == "usage");
         LaunchPane.Visibility = Ui.Show(tag == "launch");
-        if (tag == "launch") { Launch.Opened(); }
+        if (tag == "launch") { Launch.Opened(); } else { Launch.Closed(); }
         SettingsPane.Visibility = Ui.Show(tag == "settings");
         if (tag == "settings") { SettingsPane.Opened(); }
     }

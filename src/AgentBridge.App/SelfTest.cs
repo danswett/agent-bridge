@@ -125,6 +125,8 @@ static class SelfTest
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".launched.png"));
 
             // Codex on the other machine starts only on a first message: nothing is sent without one.
+            // The new session's card opened on the Sessions page: back to Launch, which fetches its choices.
+            window.ShowPage("launch");
             launch.SelectedMachine = launch.Machines.First(m => m.Value == DemoHost.RemoteId);
             await Until(() => launch.Title.EndsWith(remote.MachineName, StringComparison.Ordinal) && launch.Agents.Any(a => a.Value == "codex"), TimeSpan.FromSeconds(10));
             launch.Agent = launch.Agents.FirstOrDefault(a => a.Value == "codex");

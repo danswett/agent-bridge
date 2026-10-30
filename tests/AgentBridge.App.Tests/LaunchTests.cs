@@ -41,6 +41,7 @@ public sealed class LaunchTests : IAsyncLifetime
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
         main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui) { RetryDelay = TimeSpan.FromMilliseconds(100) }, Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel());
         launch = new LaunchViewModel(main, ui);
+        launch.Opened();
         await Wait.UntilAsync(() => launch.ShowForm, "the machine's choices");
     }
 
@@ -189,7 +190,7 @@ public sealed class LaunchTests : IAsyncLifetime
         ui.Post(launch.Launch);
 
         await Wait.UntilAsync(() => launch.State == "unconfirmed", "unconfirmed");
-        Assert.Equal("Launched, but not confirmed. Check at the machine.", launch.StatusText);
+        Assert.Equal("Not confirmed whether the session started. Check at the machine before launching again.", launch.StatusText);
     }
 
     [Fact]
@@ -205,6 +206,19 @@ public sealed class LaunchTests : IAsyncLifetime
 
         await Wait.UntilAsync(() => launch.State == "started", "started");
         Assert.Equal("Next.", launch.Prompt);
+    }
+
+    [Fact]
+    public async Task The_choices_are_fetched_only_once_the_page_is_opened()
+    {
+        var asked = optionsAsked;
+        var unseen = new LaunchViewModel(main, ui);
+        await Task.Delay(500);
+        Assert.Equal(asked, optionsAsked);
+
+        unseen.Opened();
+        await Wait.UntilAsync(() => unseen.ShowForm, "the machine's choices");
+        Assert.Equal(asked + 1, optionsAsked);
     }
 
     [Fact]
@@ -430,6 +444,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     public async Task Another_machine_offers_its_own_choices_and_a_launch_there_goes_to_its_host_only()
     {
         var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         Assert.Equal(["Test PC (this machine)", "Build server"], launch.Machines.Select(m => m.Label));
         Assert.Equal("here", launch.Workspace!.Value);
@@ -452,6 +467,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         var opened = new List<string>();
         main.OpenRequested += c => opened.Add(c.Id);
         var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
@@ -474,6 +490,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     {
         remoteHost.On(LaunchProtocol.Launch, _ => throw new InvalidOperationException("the launcher could not be found"));
         var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
@@ -496,6 +513,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     public async Task A_machine_that_drops_out_for_a_moment_comes_back_with_what_was_picked_on_it()
     {
         var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
@@ -520,6 +538,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
             Defaults = new LaunchDefaults { Agent = "claude", Workspace = "there", Permissions = LaunchProtocol.Ask },
         });
         var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
@@ -543,6 +562,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         var gate = new TaskCompletionSource();
         remoteHost.On(LaunchProtocol.Launch, _ => { gate.Task.Wait(FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "there-new" }; });
         var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");

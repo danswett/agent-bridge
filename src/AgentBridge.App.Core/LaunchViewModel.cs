@@ -55,6 +55,8 @@ public sealed class LaunchViewModel : Observable
     // What was picked on each machine, by its key: a machine that drops out for a moment, or is
     // left for another and picked again, comes back with the choices still offered as they were.
     readonly Dictionary<string, Picks> picked = new(StringComparer.Ordinal);
+    // Whether the page is on screen: its choices are fetched only then.
+    bool shown;
     sealed record Picks(Choice? Resume, Choice? Agent, Choice? Workspace, Choice? Profile, Choice? Model, Choice? Effort, Choice? Context, Choice? Permissions, bool PermissionsSet, string Scope);
     string prompt = "";
     // What stops the form being launched now (no prompt for Codex, too long...): about the form,
@@ -251,16 +253,21 @@ public sealed class LaunchViewModel : Observable
         Raise(nameof(Title));
         Draw();
         Show();
-        if (machine is not null) { _ = RefreshAsync(); }
+        if (machine is not null && shown) { _ = RefreshAsync(); }
     }
 
     // The page was opened: a workspace approved, an agent installed or a session ended since.
     public void Opened()
     {
+        shown = true;
         if (machine is not null && !loading) { _ = RefreshAsync(); }
     }
 
     // launch.options again.
+    // Left for another page: the choices are fetched again when it is opened, not as machines come
+    // and go meanwhile. launch.options is costly at the host (profiles, resumable folders).
+    public void Closed() => shown = false;
+
     public async Task RefreshAsync()
     {
         var m = machine;
@@ -470,7 +477,7 @@ public sealed class LaunchViewModel : Observable
             Open(m, d);
         }
         // What it offers has changed: a resumed session is no longer resumable, a worktree counts.
-        if (m == machine && outcome is "started" or "unconfirmed") { _ = RefreshAsync(); }
+        if (m == machine && shown && outcome is "started" or "unconfirmed") { _ = RefreshAsync(); }
     }
 
     // An outcome this app does not know may still mean a session started, so it reads as
@@ -516,7 +523,8 @@ public sealed class LaunchViewModel : Observable
         return OutcomeOf(e) switch
         {
             "started" => ($"Session started{how}.", Tone.Ok),
-            "unconfirmed" => ($"Launched{how}, but not confirmed{(e.Reason is { } r ? $": {Sentence(r)}" : ". Check at the machine.")}", Tone.Warn),
+            // Also said here when the launch may never have gone (no reply, a host that restarted).
+            "unconfirmed" => ($"Not confirmed whether the session started{(e.Reason is { } r ? $": {Sentence(r)}" : ".")} Check at the machine before launching again.", Tone.Warn),
             "busy" => ($"Not launched: {Sentence(e.Reason ?? "the machine is busy with another launch")} Try again in a moment.", Tone.Warn),
             "refused" => ($"Not launched: {Sentence(e.Reason ?? "the machine refused it")}", Tone.Bad),
             _ => ($"Couldn't launch{(e.Reason is { } f ? $": {Sentence(f)}" : ". Check at the machine.")}{Again(e, machineName)}", Tone.Bad),

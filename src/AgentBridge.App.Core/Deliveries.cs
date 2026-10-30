@@ -134,6 +134,13 @@ public sealed class Deliveries
                 if (before is not null)
                 {
                     await before((o, d, t) => host.CallAsync(o, d, t), (sent, total) => Update(entry.Key, e => e with { Progress = (sent, total) }));
+                    // Files can take minutes to go: the request goes only while the host still knows it.
+                    // It is written as the call starts, well inside the host's 10 minutes after the 9.
+                    if (fromFirst && time.GetUtcNow() - started > GiveUp)
+                    {
+                        Update(entry.Key, e => e with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = TooOld, Progress = null });
+                        return;
+                    }
                 }
                 // Which host it went to is read with the connection it goes on. An op never replayed
                 // after a restart waits until that host is known, and goes again only to the same one.
