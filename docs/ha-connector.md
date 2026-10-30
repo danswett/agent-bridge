@@ -353,7 +353,10 @@ card keeps while it asks (`Get-DaemonCardSummary`).
   as it is again.
 * Ending can take a while (the session is given time to exit before it is terminated), so it
   runs beside the passes; a press while it does is not a second end, then or afterwards, and
-  a confirmed end is never said to have lapsed however long the host takes.
+  a confirmed end is never said to have lapsed however long the host takes. A press made
+  before the card has said what came of the last one (even one reported only afterwards) never
+  confirms the question it then asks; and while it asks, the button is read every pass, so a
+  second press is seen within the window even with the watch down.
 * What the button holds when the connector first reads it is not a press; a session asking a
   question can be ended like any other.
 

@@ -72,7 +72,9 @@ public sealed partial class HaConnector
     // cards' controls are.
     bool ServesStops => stopper is not null && ServesAnswers;
 
-    // Cards whose End session button has not been read yet, and every card on a sweep.
+    // Cards whose End session button has not been read yet, every card asking for a second press
+    // (each pass, so a press is never read only once the window has closed: the sweep is slower
+    // than the window, and the watch can be down), and every card on a sweep.
     void StopCards(Dictionary<string, List<(long Seq, HaTrigger Hit)>> touched, bool sweep)
     {
         if (!ServesStops) { return; }
@@ -80,7 +82,7 @@ public sealed partial class HaConnector
         {
             foreach (var p in published.Values)
             {
-                if (sweep || !p.Stop.Baselined) { touched.TryAdd(p.Node, []); }
+                if (sweep || !p.Stop.Baselined || p.Stop.Token is not null) { touched.TryAdd(p.Node, []); }
             }
         }
     }
@@ -163,7 +165,15 @@ public sealed partial class HaConnector
                 await PublishEndedAsync(done.Node, done.Name, done.Session, now, ct);
             }
             stopsDone.TryDequeue(out _);
-            if (p is not null) { p.Stop.Busy = false; }
+            if (p is not null)
+            {
+                // Whatever the button holds now was pressed before the card said what came of
+                // this one, even if its report is still on the way: read as a baseline, later
+                // this pass, so it neither confirms the question just put nor retries an end
+                // that failed. Presses made once the card has said so are taken as ever.
+                p.Stop.Busy = false;
+                p.Stop.Baselined = false;
+            }
         }
     }
 

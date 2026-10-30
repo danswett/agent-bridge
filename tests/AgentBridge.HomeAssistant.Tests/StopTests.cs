@@ -380,6 +380,49 @@ public sealed class StopTests : IDisposable
     }
 
     [Fact]
+    public async Task A_press_made_while_the_host_was_still_deciding_does_not_confirm_the_question_it_then_asks()
+    {
+        var release = new TaskCompletionSource<StopResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        outcome = _ =>
+        {
+            reached.TrySetResult();
+            return release.Task;
+        };
+        await using var c = await Ready(SessionStatus.Working);
+        c.Observe(ha.Press(SessionEntities.Stop(Node)));
+        await Pass(c);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // Pressed again before the card asked, and reported only once it has.
+        var early = ha.Press(SessionEntities.Stop(Node));
+        release.SetResult(new StopResult(StopOutcome.Confirm, "still working") { Confirm = "token-1", ConfirmSeconds = 10 });
+        await c.DeliveredAsync();
+        c.Observe(early);
+        await Pass(c, 0.01);
+        await Pass(c);
+        Assert.Single(stopped);
+        Assert.Equal(HaStop.ConfirmNote, Activity);
+
+        outcome = null;
+        await Press(c);
+        Assert.Equal([null, "token-1"], stopped.Select(r => r.Confirm));
+    }
+
+    [Fact]
+    public async Task A_second_press_is_read_within_the_window_even_with_no_report_of_it()
+    {
+        await using var c = await Ready(SessionStatus.Working);
+        await Press(c);
+
+        // The watch is down: nothing reports the press, and the sweep comes every 15 s.
+        ha.Press(SessionEntities.Stop(Node));
+        await Pass(c, 2);
+        await c.DeliveredAsync();
+        Assert.Equal([null, "token-1"], stopped.Select(r => r.Confirm));
+    }
+
+    [Fact]
     public async Task A_confirmed_end_that_outlasts_the_window_is_never_said_to_have_lapsed()
     {
         await using var c = await Ready(SessionStatus.Working);
