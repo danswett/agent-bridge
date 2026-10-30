@@ -29,27 +29,12 @@ public sealed class UsageViewModel : Observable
     {
         var now = time.GetUtcNow();
         Rows.Clear();
-        foreach (var a in Merge(report.Agents).OrderByDescending(a => Headline(a) ?? 0)) { Rows.Add(new UsageRowViewModel(a, now)); }
+        // One row per allowance even from one machine: a further Copilot account listed that is, or
+        // becomes, the signed-in one (usage.copilotAccounts) is one allowance read twice.
+        foreach (var a in UsageMerge.Merge([report]).Agents.OrderByDescending(a => Headline(a) ?? 0)) { Rows.Add(new UsageRowViewModel(a, now)); }
         var figures = Rows.Where(r => r.Headline is not null).Select(r => $"{r.Label} {Math.Round(r.Headline!.Value)}%").ToList();
         Summary = figures.Count > 0 ? string.Join(" · ", figures) : "No usage reported yet";
         Raise(nameof(IsEmpty));
-    }
-
-    // One row per allowance, as the PWA's mergeUsage has it: a further Copilot account listed that
-    // is, or becomes, the signed-in one (usage.copilotAccounts) is one allowance read twice. A
-    // reading outranks a failure however new, then the latest wins, and a failure newer than the
-    // reading lends it its error.
-    public static IReadOnlyList<AgentUsage> Merge(IEnumerable<AgentUsage> agents)
-    {
-        var rows = new List<AgentUsage>();
-        foreach (var group in agents.GroupBy(a => (a.Agent, a.AccountKey is { Length: > 0 } k ? k : (a.Account ?? "").ToLowerInvariant())))
-        {
-            var reading = group.Where(a => a.Windows.Count > 0).MaxBy(a => a.MeasuredAt);
-            var failure = group.Where(a => a.Windows.Count == 0).MaxBy(a => a.MeasuredAt);
-            rows.Add(reading is null ? failure!
-                : failure is { Error: { Length: > 0 } error } && failure.MeasuredAt > reading.MeasuredAt ? reading with { Error = error } : reading);
-        }
-        return rows;
     }
 
     public static double? Headline(AgentUsage a) => a.Windows.Count > 0 ? a.Windows.Max(w => w.Percent) : null;
