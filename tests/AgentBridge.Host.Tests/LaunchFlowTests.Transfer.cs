@@ -301,6 +301,49 @@ public sealed partial class LaunchFlowTests
         Assert.Empty(starter.Specs);
     }
     [Fact]
+    public async Task A_machine_of_the_account_cannot_sign_for_itself_and_take_another_machines_sessions()
+    {
+        await using var away = await AwayAsync();
+        var token = relay.TokenFor(1, "octo");
+        await using var rogue = await relay.ConnectAsync(token, "Rogue host", "host");
+        rogue.Hub.JsonOptions = ProtocolJson.Options;
+        await rogue.Relay.WaitForPeerAsync(p => p.Id == away.Device.Id, Patience);
+        var ch = await rogue.Hub.OpenAsync(away.Device.Id);
+
+        // Straight to the machine the session is on, as a machine would, with nobody pressing.
+        async Task<string> AskAsync(P256KeyPair signer)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var command = SignedCommands.Sign(signer, ch.PeerStatic!, new CommandBody
+            {
+                V = 1,
+                Action = TransferProtocol.Action,
+                Request = Guid.NewGuid().ToString(),
+                Principal = new CommandPrincipal { Kind = "user", Device = Wire.DeviceId(signer.Public) },
+                Target = new CommandTarget { Machine = away.Device.Id, Session = AwayId },
+                To = rogue.Id,
+                IssuedAt = now.ToUnixTimeSeconds(),
+                ExpiresAt = now.AddMinutes(5).ToUnixTimeSeconds(),
+            });
+            var response = await ch.RequestAsync(TransferProtocol.Op, new TransferRequest { Command = command });
+            Assert.False(response.GetProperty("ok").GetBoolean(), response.GetRawText());
+            return response.GetProperty("error").GetString()!;
+        }
+
+        // With its own key: the MAC is good, and names it as the person.
+        Assert.StartsWith("a machine cannot ask for a session on its own say-so", await AskAsync(rogue.Key));
+        // With a key it made, that no device of the account is using.
+        using var made = P256KeyPair.Generate();
+        Assert.StartsWith("the device that signed the command is not connected to the relay now", await AskAsync(made));
+        // With a key connected to the relay, but as a machine.
+        await using var second = await relay.ConnectAsync(token, "Second host", "host", made);
+        await away.Device.Relay.WaitForPeerAsync(p => p.Id == second.Id, Patience);
+        Assert.Equal("the command was signed by a machine, not a person's device", await AskAsync(made));
+
+        Assert.Empty(RelayStore.Stored);
+        Assert.Empty(Left(away.Transfers.Staging));
+    }
+    [Fact]
     public async Task Nothing_moves_from_a_machine_that_does_not_hand_its_sessions_on_or_to_one_that_does_not_take_them()
     {
         await using var away = await AwayAsync(serve: false);

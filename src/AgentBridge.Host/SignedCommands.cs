@@ -13,8 +13,10 @@ namespace AgentBridge.Host;
 //
 // The device keys are ECDH keys (a TPM's, or WebCrypto's non-extractable ones, which cannot
 // sign), so the signature is a MAC under a key from static-static ECDH between the signing
-// device and the machine it is for: only those two can make it. The machine that carries the
-// command to its target cannot change a byte of it, and nor can the relay.
+// device and the machine it is for: only those two can make it. The machine that carries a
+// person's command to its target cannot change a byte of it, and nor can the relay. It proves
+// which key signed, though, not that a person did: any machine can sign with a key of its own,
+// so the source also checks who the signer is (SessionTransfers.Unsigner).
 //
 //   key  = HKDF-SHA256(ikm: ECDH(signer, machine), salt: "agent-bridge command v1",
 //                      info: "<signer device id>|<machine device id>", 32 bytes)

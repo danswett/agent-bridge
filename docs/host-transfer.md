@@ -32,9 +32,11 @@ From `docs/cross-machine-resume.md` there, `hooks/session-launch.ps1`
 
 The same fork under a new id, with the same caps, and these differences:
 
-* **No fleet secret.** The source acts only on a command a device of the account signed for
-  it (design §5.5), once, within minutes, for that session and the machine it goes to. The
-  target carries it but cannot forge or change one.
+* **No fleet secret.** The source acts only on a command signed for it (design §5.5), once,
+  within minutes, for that session and the machine it goes to, by a person's device that is
+  connected to the relay at that moment and is not the machine asking. The target carries a
+  person's command but cannot change it; it can sign one with a key of its own, which the
+  source then refuses ([who may ask](#who-may-ask)).
 * **End to end.** The bundle is sealed for the target alone and goes through the relay's
   blob store ([blobs.md](protocol/blobs.md)); its key travels inside the Noise channel
   between the two hosts. The relay sees two small requests and ciphertext.
@@ -73,8 +75,8 @@ On the **source**, for `session.transfer` from another host's channel:
 
 1. `launch.transfer.serve` on, launching available, connected to a relay with a blob store.
 2. The command is verified ([contract](protocol/v1-transfer.md#the-signed-command)), must
-   name the machine asking as `to`, and is remembered until it expires: a second use is
-   refused.
+   name the machine asking as `to`, must be signed by someone who may ask (below), and is
+   remembered until it expires: a second use is refused.
 3. The session must be on this machine's resume list now: ended, never live or starting,
    in an approved folder. At most two are packed at once.
 4. It is packed read-only into a zip in the private staging folder. Links are never followed.
@@ -87,6 +89,19 @@ On the **source**, for `session.transfer` from another host's channel:
 
 A host that stops part way leaves only its own names in its staging folder (`<hex>.zip`,
 `unpack-<hex>`), and deletes them when it next starts.
+
+## Who may ask
+
+A valid MAC says which key signed a command, and any machine of the account can make a key. So
+the source also refuses a command signed by the machine asking (or by `to`), by a key not in
+its relay presence now, or by one there as a `host`. A person's device (`pwa`, `app`,
+`phone`) that is connected while they wait for the launch passes; a machine acting with nobody
+pressing anything does not (`LaunchFlowTests.A_machine_of_the_account_cannot_sign_for_itself_and_take_another_machines_sessions`).
+
+The kind is the device's own word, given when it connected with the account's sign-in. Until
+the device roster (design §5.4), something holding that sign-in, a compromised machine of the
+account included, can still connect a fresh key as `pwa` and sign with it. The roster closes
+that: a source will then require an approved person's device.
 
 ## Installing a bundle
 

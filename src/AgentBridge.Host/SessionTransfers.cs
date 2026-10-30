@@ -237,7 +237,16 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
         }
         // Only the machine the person chose may receive it: the one asking.
         if (c.To != channel.PeerId) { throw new InvalidOperationException("the command is for another machine to receive the session"); }
-        if (c.Target.Session is not { } id || !Guid.TryParseExact(id, "D", out _)) { throw new InvalidOperationException("the command names no session"); }
+        // The MAC proves only that the key named in the command made it. Any machine of the
+        // account can make a key and sign for itself, so who signed must be someone else: a
+        // person's device, connected to the relay (which checked its key and account) now, as the
+        // one pressing Launch is. Without this a machine could take every session the account's
+        // other machines hand on, with nobody pressing anything.
+        if (Unsigner(l.Relay, c, channel.PeerId) is { } who)
+        {
+            log($"transfer refused from {channel.PeerId[..8]}: {who}");
+            throw new InvalidOperationException(who);
+        }        if (c.Target.Session is not { } id || !Guid.TryParseExact(id, "D", out _)) { throw new InvalidOperationException("the command names no session"); }
         if (!memory.Take(c)) { throw new InvalidOperationException("that command has been carried out already; press again"); }
 
         var (entry, title, refused) = await launcher.TransferableAsync(id);
@@ -296,6 +305,23 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
         }
     }
 
+    // The relay's kinds for a person's device: the PWA, the Windows app, a phone app.
+    static readonly HashSet<string> PersonKinds = new(["pwa", "app", "phone"], StringComparer.Ordinal);
+
+    // Why the device that signed a command may not ask for a transfer, or null when it may.
+    // Presence is the relay's account-scoped, key-proven list; the kind in it is what the device
+    // said it is when it connected (docs/host-transfer.md, "Who may ask").
+    static string? Unsigner(RelayClient relay, CommandBody c, string asking)
+    {
+        if (c.Principal.Device == asking || c.Principal.Device == c.To)
+        {
+            return "a machine cannot ask for a session on its own say-so; the command must be signed by the person's device that pressed Launch";
+        }
+        var signer = relay.Presence.FirstOrDefault(p => p.Id == c.Principal.Device);
+        if (signer is null) { return "the device that signed the command is not connected to the relay now; press Launch again from it"; }
+        if (!PersonKinds.Contains(signer.Kind)) { return "the command was signed by a machine, not a person's device"; }
+        return null;
+    }
     static void Delete(string? path)
     {
         if (path is null) { return; }

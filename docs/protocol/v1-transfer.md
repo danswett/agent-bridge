@@ -95,8 +95,13 @@ mac = HMAC-SHA256(key, body)
 `body` is the command's JSON, UTF-8, sent as those exact bytes (base64url, no padding) so
 neither end has to write JSON the same way. `by` is the signer's public key, uncompressed
 (65 bytes, base64url); a device id is the first 16 bytes of its SHA-256, in hex. The target,
-which carries the command, cannot change a byte of it or make one of its own: it is not the
-machine the key is shared with.
+which carries a person's command, cannot change a byte of it: it is not the machine that key
+is shared with.
+
+**The MAC proves which key signed, not that a person did.** Any machine of the account can
+make a key and sign a command of its own, naming itself. So the source also requires the
+signer to be someone other than the machine asking, and a person's device connected to the
+relay at that moment (below).
 
 ```json
 {
@@ -118,6 +123,10 @@ The source acts on a command only if all of these hold, and says which did not:
 * `v` is 1, `action` is `session.transfer`, `request` is a UUID;
 * `principal.kind` is `user` and `principal.device` is the id of the key that signed it;
 * `target.machine` is the source itself, and `to` is the machine on the channel asking;
+* the signer is neither the machine asking nor `to`, and is in the source's relay presence
+  now, as a person's device (kind `pwa`, `app` or `phone`), not a `host`. The relay
+  admits a device only with the account's sign-in and proof of its key, so presence says the
+  key is a device of the account; the person pressing Launch is connected while they wait;
 * it lasts at most 10 minutes (`expiresAt - issuedAt`), was not issued more than 2 minutes
   in the source's future, and has not expired;
 * its `request` has not been acted on before. The source remembers it until it expires,
@@ -132,8 +141,10 @@ the same command. A test vector keeps the two implementations to one MAC
 (`SignedCommandTests.The_same_bytes_and_keys_give_the_MAC_the_PWA_computes`,
 `pwa/test/unit/transfer.test.mjs`).
 
-Until a device roster exists, any device signed in to the account can sign a command (design
-§5.4). With one, a source will also require the signer to be on it.
+**What this does not stop yet.** A device's kind in presence is what it said when it connected.
+Until a device roster exists (design §5.4), anything holding the account's sign-in, including
+a compromised machine of the account, can connect a new key calling itself `pwa` and sign with
+it. With a roster, a source will require the signer to be an approved person's device.
 
 ## `session.transfer`
 
