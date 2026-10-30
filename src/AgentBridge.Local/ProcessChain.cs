@@ -46,6 +46,7 @@ public static class ProcessChain
     // Walks a table of every process from one to the top. Each step's parent must be in the
     // table and have started no later than its child (a second of slack): one that has gone, or
     // whose id was given to a later process, ends the chain there, which is its natural end.
+    // Stopping at MaxDepth with a parent still to read is not: an agent may be above it.
     internal static ProcessAncestry Walk(int processId, IReadOnlyDictionary<int, Listed> table)
     {
         if (!table.TryGetValue(processId, out var self)) { return ProcessAncestry.Unknown; }
@@ -57,7 +58,8 @@ public static class ProcessChain
             chain.Add(new PeerProcess(entry.Parent, parent.StartedAt, parent.Image));
             (current, entry) = (entry.Parent, parent);
         }
-        return new ProcessAncestry(chain, true);
+        var cut = chain.Count >= MaxDepth && entry.Parent > 0 && entry.Parent != current && table.ContainsKey(entry.Parent);
+        return new ProcessAncestry(chain, !cut);
     }
 
     // A Toolhelp snapshot gives every process's parent and executable name in one read; the
@@ -69,7 +71,8 @@ public static class ProcessChain
         var snapshot = Snapshot();
         if (snapshot is null) { return ProcessAncestry.Unknown; }
         var table = new Dictionary<int, Listed>();
-        // Only the walk's own steps are opened.
+        // Only the walk's own steps are opened, and one beyond, so Walk can tell a chain cut at
+        // MaxDepth from one that ends there.
         var current = processId;
         for (var depth = 0; depth <= MaxDepth && snapshot.TryGetValue(current, out var entry) && !table.ContainsKey(current); depth++)
         {
@@ -148,7 +151,8 @@ public static class ProcessChain
             if (parent == current) { break; }
             (current, childStarted) = (parent, started);
         }
-        return new ProcessAncestry(chain, true);
+        // Cut at MaxDepth with an ancestor still unread (current is it).
+        return new ProcessAncestry(chain, !(chain.Count >= MaxDepth && current > 0));
     }
 
     // macOS has no /proc. ps lists every process, the user's and others', with its parent, start

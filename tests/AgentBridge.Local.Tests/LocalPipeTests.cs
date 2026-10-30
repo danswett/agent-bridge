@@ -354,5 +354,22 @@ public sealed class ProcessAncestryTests
         Assert.True(ProcessChain.Walk(40, table).Complete);
         Assert.Equal(ProcessAncestry.Unknown, ProcessChain.Walk(99, table));
     }
+
+    [Fact]
+    public void A_chain_cut_off_at_the_depth_limit_is_incomplete_but_one_that_ends_there_is_not()
+    {
+        var t = new DateTimeOffset(2026, 10, 29, 10, 0, 0, TimeSpan.Zero);
+        // 1 is the oldest; each started a minute after its parent.
+        static Dictionary<int, ProcessChain.Listed> Line(int length, DateTimeOffset t) =>
+            Enumerable.Range(1, length).ToDictionary(i => i, i => new ProcessChain.Listed(i - 1, t.AddMinutes(i), $"p{i}"));
+
+        var cut = ProcessChain.Walk(40, Line(40, t));
+        Assert.Equal(32, cut.Processes.Count);
+        Assert.False(cut.Complete);
+
+        var whole = ProcessChain.Walk(32, Line(32, t));
+        Assert.Equal(32, whole.Processes.Count);
+        Assert.True(whole.Complete);
+    }
 }
 
