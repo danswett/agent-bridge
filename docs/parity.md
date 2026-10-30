@@ -44,8 +44,7 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 | `In flight (…)` | 13: Claude/Codex live 8, HA connector 5 |
 | **Total** | **147** feature rows in §1–§18 |
 
-Of the 15 §6.3 invariants: 8 `Verified`, 5 `Implemented, untested live`, 1 `Partial`, 1
-`Missing`. Every `Missing` and `Partial` row links an issue labelled
+Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Partial`. Every `Missing` and `Partial` row links an issue labelled
 [`parity`](https://github.com/danswett/agent-bridge/issues?q=label%3Aparity).
 
 ## 1. Session cards
