@@ -11,7 +11,7 @@ public static class HookCommands
 {
     public static int Status(string profileFolder, string defaultRuntime, TextWriter output, DateTimeOffset now)
     {
-        var (state, problem) = IntakeState.Load(profileFolder);
+        var (state, problem) = Directory.Exists(profileFolder) ? IntakeState.Load(profileFolder) : (null, null);
         var runtime = state?.RuntimeRoot ?? defaultRuntime;
         if (state is not null)
         {
