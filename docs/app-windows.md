@@ -56,6 +56,35 @@ phone.
   its own host, not a security boundary
   ([local-pipe.md](protocol/local-pipe.md#who-may-manage-the-host)).
 
+### Other machines: through the relay, as a device of the app's own
+
+The app shows every machine on the account, as the PWA does
+(`pwa/js/fleet.js`): this machine's sessions over its pipe, and each other machine's over a
+Noise channel through the relay, carrying the same v1 ops. Answers, replies (attachments up
+to 256 KiB, an image shrunk to fit), End session, usage and toasts work on another machine's
+cards exactly as on this one's, each going to that card's own host.
+
+* **Its own device, the host's account.** The app connects to the relay with a P-256 key of
+  its own (kind `app`), kept like the host's (in the TPM, or with DPAPI) in
+  `%LOCALAPPDATA%\AgentBridge\app\device-<profile>`. It never uses the host's key, so the
+  relay sees two devices, and the host's own connection is never replaced. For the account it
+  asks this machine's host (`host.relay.account`, [local-pipe.md](protocol/local-pipe.md)),
+  which hands it to the app alone, like every management op, so there is no second sign-in, and
+  the token only ever goes to the relay that issued it. It asks again when the host signs in
+  to another account, and after the relay refuses it.
+* **Which machines.** Every host in the relay's presence for the account, other than this
+  machine's own (its device id is the `machine.id` its hello gives), which the app reaches over
+  its pipe. Each gets a connection that subscribes to sessions and usage and reconnects as the
+  pipe's does. A machine that leaves presence goes, with its cards and toasts; while the app's
+  relay connection is down, every machine stays as it was and reconnects when it is back. The
+  app serves nothing on the relay: it only opens channels, as the PWA does.
+* **Not the app's management.** Another machine's host is never managed from here: `host.*`
+  is the pipe's alone, and a relay channel answers it with `unknown op`.
+* **On screen.** With more than one machine, a picker over the cards shows every machine or one
+  of them, and each card starts with its machine's name. Usage merges every machine's
+  readings into one row per allowance, the freshest reading of each, as the PWA's does. A
+  toast for another machine's question says which machine, and its answer goes there.
+
 ### Starting the host at logon: a scheduled task
 
 Per §3.1 and §3.2, a per-user scheduled task with a logon trigger, `InteractiveToken`
@@ -136,7 +165,7 @@ explicit step.
 
 | Page | What it has | Parity source |
 |---|---|---|
-| Sessions | One card per live session of this machine: status and glow (working, waiting, delegating, ending), title, agent, repository, branch, model, current tool, response (Markdown), reasoning, last message, tool history, background agents and commands, turns, compactions; question forms (single and multi choice, Other, boolean, text, number, Copilot permission Approve once / Deny), reply box (Ctrl+Enter, paste an image, attach files: up to 100 MiB each in chunks over the pipe, `sessions.attach.direct`, or 256 KiB from an older host, which shrinks a larger image to fit), End session with the host's two-press rule; fold per session, persisted, reopened by a new question. While the host's discovery is held, a line over the cards says what holds it ("Discovery held: …", [v1-sessions.md](protocol/v1-sessions.md#discovery-held)) | PWA cards (`pwa/js/ui`), which mirror `agent-bridge-reply-card.js` |
+| Sessions | One card per live session of every machine on the account (this one's over the pipe, the others' through the relay), with a picker for one machine: status and glow (working, waiting, delegating, ending), title, agent, repository, branch, model, current tool, response (Markdown), reasoning, last message, tool history, background agents and commands, turns, compactions; question forms (single and multi choice, Other, boolean, text, number, Copilot permission Approve once / Deny), reply box (Ctrl+Enter, paste an image, attach files: up to 100 MiB each in chunks over the pipe, `sessions.attach.direct`, or 256 KiB from an older host, which shrinks a larger image to fit), End session with the host's two-press rule; fold per session, persisted, reopened by a new question. While the host's discovery is held, a line over the cards says what holds it ("Discovery held: …", [v1-sessions.md](protocol/v1-sessions.md#discovery-held)) | PWA cards (`pwa/js/ui`), which mirror `agent-bridge-reply-card.js` |
 | Usage | Each agent's windows: percent, amber at 75 %, red at 90 %, pace against the window, "resets in" | PWA usage panel |
 | Settings | Host: running, version, profile, pid, start/stop/restart, start at sign-in, log tail; relay: sign in with GitHub (device code shown in the app), machine name, connection state; this machine: approving Copilot permission prompts from other devices (`permissions.remoteApproval`), agent-ha-bridge state; app: show reasoning and tools (the old Detail toggle, kept in the app since every client now gets the full activity), toasts, start the app at sign-in, version and updates | status card, `install.ps1`, `agent-ha-bridge configure` |
 
@@ -162,15 +191,18 @@ another `--profile` and the demo show no toasts and write nothing to the registr
 
 **Demo** (`AgentBridge.exe --demo`): the app with a pretend host of its own, serving the
 protocol's example sessions on a private pipe and answering every op as a cooperative
-host would. For trying the app without agents, for screenshots, and for CI. It never
+host would, and a second pretend host ("Build server") that the app reaches as it would
+another machine through the relay. For trying the app without agents, for screenshots, and for CI. It never
 reaches the real host or its profile.
 
 ## Deferred, explicitly
 
-* **Remote machines through the relay** in the app (multi-machine Sessions and Usage,
-  pairing, the Devices page). Next slice: the app opens Noise channels like the PWA. Large
-  attachments to those will go through the relay's blob store as the PWA's do
-  (`sessions.attach.blob`); the app's own machine needs none, since its pipe takes them.
+* **Large attachments to other machines.** A reply to another machine's session carries
+  files up to 256 KiB (an image is shrunk to fit). Larger ones will go through the relay's
+  blob store as the PWA's do (`sessions.attach.blob`); the app's own machine needs none,
+  since its pipe takes them.
+* **Pairing and a Devices page**: the account's other devices are trusted by signing in to
+  it, as everywhere else for now.
 * **Cancelling a large attachment** part way. The PWA has a Cancel while a file uploads; the
   app sends over the pipe at local speed and has none yet.
 * **Launch** page: waits for the host's launch and resume ops (another slice in flight).
@@ -186,14 +218,17 @@ reaches the real host or its profile.
   `SessionService` with fixture sessions (the same snapshot and ops the relay tests
   check), the management ops, and that the relay never dispatches them.
 * `tests/AgentBridge.App.Tests`: view models (the window's list, cards, forms, reply, End
-  session, usage, settings), toast plans and activation handling, host lifecycle with a
+  session, usage, settings), other machines (`FleetTests`: cards, answers and toasts per
+  machine, the picker, machines coming and going, usage merged; and the app reaching another
+  host through the in-process relay with the host's account), toast plans and activation handling, host lifecycle with a
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
 * CI (`app` job) runs `build/pack-app.ps1`: publishes the app, host, launcher and injector
   into one folder, checks for the app's `.pri` and the executables, packs it with `vpk`
   and uploads `Setup.exe` and the packages as an artifact. It then starts the published
   app with `--self-test`, which runs the demo, finds the cards by automation id, answers a
-  question by invoking its button's automation peer, and saves a picture of each page.
+  question on each machine by invoking its button's automation peer, narrows the list with
+  the machine picker, and saves a picture of each page.
 * Live checks run by the coordinator on a disposable VM (the checklist in the pull
   request).
 

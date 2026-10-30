@@ -7,13 +7,18 @@ namespace AgentBridge.App.Core;
 // has gone, and the toast says so.
 public sealed class ToastResponder
 {
-    readonly Deliveries deliveries;
+    readonly Func<string?, Deliveries?> deliveriesFor;
     readonly IToastSink sink;
-    readonly Action<string?> open;
+    readonly Action<string?, string?> open;
 
     public ToastResponder(Deliveries deliveries, IToastSink sink, Action<string?> open)
+        : this(_ => deliveries, sink, (_, session) => open(session)) { }
+
+    // deliveriesFor(machine): that machine's deliveries (machine null for this one), or null
+    // when it is no longer there. open(machine, session).
+    public ToastResponder(Func<string?, Deliveries?> deliveriesFor, IToastSink sink, Action<string?, string?> open)
     {
-        this.deliveries = deliveries;
+        this.deliveriesFor = deliveriesFor;
         this.sink = sink;
         this.open = open;
     }
@@ -25,15 +30,20 @@ public sealed class ToastResponder
         var action = ToastAction.Parse(arguments);
         if (action.Action != "answer" || action.Session is null || action.Question is null)
         {
-            open(action.Session);
+            open(action.Machine, action.Session);
             return;
         }
         var (answer, problem) = action.Answer(inputs, "00000000-0000-4000-8000-000000000000");
-        var tag = ToastPlanner.OutcomeTag(action.Session);
+        var tag = ToastPlanner.OutcomeTag(action.Session, action.Machine);
         if (answer is null)
         {
             // Nothing to send (an empty box): the card is where to answer.
-            sink.Show(new ToastNotice(tag, ToastXml.Outcome(action.Session, title, $"Not sent: {problem}. Open the session to answer."), Quiet: true));
+            sink.Show(new ToastNotice(tag, ToastXml.Outcome(action.Session, title, $"Not sent: {problem}. Open the session to answer.", action.Machine), Quiet: true));
+            return;
+        }
+        if (deliveriesFor(action.Machine) is not { } deliveries)
+        {
+            sink.Show(new ToastNotice(tag, ToastXml.Outcome(action.Session, title, "Not sent: that machine is not connected to this app now. Open the session to answer.", action.Machine), Quiet: true));
             return;
         }
         var key = $"answer|{action.Session}|{action.Question}";
@@ -51,11 +61,11 @@ public sealed class ToastResponder
             try { result = await done.Task.WaitAsync(OutcomeWait); }
             catch (TimeoutException)
             {
-                sink.Show(new ToastNotice(tag, ToastXml.Outcome(action.Session, title, "Still sending your answer. Open the session to see what became of it."), Quiet: true));
+                sink.Show(new ToastNotice(tag, ToastXml.Outcome(action.Session, title, "Still sending your answer. Open the session to see what became of it.", action.Machine), Quiet: true));
                 return;
             }
             var (text, _) = QuestionViewModel.Describe(result, "");
-            sink.Show(new ToastNotice(tag, ToastXml.Outcome(action.Session, title, text), Quiet: true));
+            sink.Show(new ToastNotice(tag, ToastXml.Outcome(action.Session, title, text, action.Machine), Quiet: true));
         }
         finally { deliveries.Changed -= Watch; }
     }

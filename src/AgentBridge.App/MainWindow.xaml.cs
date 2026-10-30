@@ -61,6 +61,11 @@ public sealed partial class MainWindow : Window
         if (tag == "settings") { SettingsPane.Opened(); }
     }
 
+    void OnMachineChosen(object sender, SelectionChangedEventArgs e)
+    {
+        if (MachinePicker.SelectedItem is MachineChoice choice) { ViewModel.SelectedMachine = choice; }
+    }
+
     // A toast or the tray asked for a session: its card, on screen.
     void Reveal(SessionCardViewModel card)
     {

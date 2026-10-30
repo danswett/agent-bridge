@@ -1,0 +1,307 @@
+using AgentBridge.Local;
+using AgentBridge.Protocol;
+using AgentBridge.Transport;
+
+namespace AgentBridge.App.Core;
+
+// One machine the app shows: this one, over the local pipe, or another of the account's,
+// over a channel through the relay. Everything a card does goes to its own machine's host.
+public sealed class Machine : IAsyncDisposable
+{
+    public const string LocalKey = "local";
+
+    public Machine(string key, HostConnection host, CardContext cards, ToastPlanner? toasts = null)
+    {
+        Key = key;
+        Host = host;
+        Cards = cards;
+        Toasts = toasts;
+    }
+
+    // "local" for this machine; another machine's relay device id.
+    public string Key { get; }
+    public bool IsLocal => Key == LocalKey;
+    public HostConnection Host { get; }
+    public CardContext Cards { get; }
+    public Deliveries Deliveries => Cards.Deliveries;
+    public ToastPlanner? Toasts { get; }
+    // What the relay's presence calls it, until its host says hello.
+    public string? PresenceName { get; set; }
+
+    public string Name => Host.Hello?.Machine.Name ?? PresenceName ?? (IsLocal ? Environment.MachineName : "Another machine");
+
+    public ValueTask DisposeAsync() => IsLocal ? ValueTask.CompletedTask : Host.DisposeAsync();
+}
+
+public enum FleetState { Off, SignedOut, Connecting, Connected, Refused }
+
+// A host the relay says is online for the account.
+public sealed record FleetHost(string Id, string Name);
+
+// The app's way to the account's other machines: the relay's presence, and a channel to any
+// host in it. The relay in the app; a stand-in in tests and the demo.
+public interface IFleetLink : IAsyncDisposable
+{
+    FleetState State { get; }
+    string? Detail { get; }
+    IReadOnlyList<FleetHost> Hosts { get; }
+    // Raised on any thread when the state or the hosts change.
+    event Action? Changed;
+    void Start();
+    // Throws HostNotRunningException when the host cannot be reached now; the caller retries.
+    Task<IClientChannel> OpenAsync(string hostId, CancellationToken ct);
+}
+
+// The account's other machines, kept in step with the relay's presence: a machine for each
+// host online, other than this machine's own (which the app reaches over its pipe), each with
+// a connection that subscribes as the app's own does. A machine whose host leaves goes, with
+// its cards; while the relay connection itself is down, every machine stays as it was and
+// reconnects when it is back.
+public sealed class Fleet : IAsyncDisposable
+{
+    readonly IFleetLink link;
+    readonly MainViewModel main;
+    readonly IUiDispatcher ui;
+    readonly Func<FleetHost, Machine> create;
+    readonly Dictionary<string, Machine> machines = new(StringComparer.Ordinal);
+    bool disposed;
+
+    public Fleet(IFleetLink link, MainViewModel main, IUiDispatcher ui, Func<FleetHost, Machine> create)
+    {
+        this.link = link;
+        this.main = main;
+        this.ui = ui;
+        this.create = create;
+        link.Changed += () => ui.Post(Sync);
+        main.LocalChanged += Sync;
+        main.AttachFleet(this);
+    }
+
+    public FleetState State => link.State;
+    public string? Detail => link.Detail;
+    public int Count => machines.Count;
+
+    // Raised on the UI thread when the link's state changes.
+    public event Action? Changed;
+
+    // What the Sessions page says about the other machines, when there is something to say.
+    // Nothing while this machine's own host is not there: the banner already says so, and the
+    // account comes from it.
+    public string? Note => !main.Connected ? null : link.State switch
+    {
+        FleetState.Off => null,
+        FleetState.SignedOut => "Your other machines appear here once this machine's Bridge Host is signed in to the relay (Settings).",
+        FleetState.Connecting => $"Connecting to your other machines…{(Detail is { Length: > 0 } d ? $" ({d})" : "")}",
+        FleetState.Refused => $"The relay refused this app: {Detail}. Sign this machine's Bridge Host in again in Settings.",
+        _ => null,
+    };
+
+    public void Start() => link.Start();
+
+    // On the UI thread.
+    void Sync()
+    {
+        if (disposed) { return; }
+        Changed?.Invoke();
+        // Without this machine's own id the list could take its host for another machine's.
+        if (main.LocalMachineId is not { } me) { return; }
+        var hosts = link.Hosts.Where(h => h.Id != me).ToDictionary(h => h.Id, StringComparer.Ordinal);
+        foreach (var (id, h) in hosts)
+        {
+            if (machines.TryGetValue(id, out var known)) { known.PresenceName = h.Name; continue; }
+            var m = create(h);
+            m.PresenceName = h.Name;
+            machines[id] = m;
+            main.Add(m);
+            m.Host.Start();
+        }
+        // Gone from presence only counts while the relay connection is up to say so.
+        if (link.State != FleetState.Connected) { return; }
+        foreach (var id in machines.Keys.Where(id => !hosts.ContainsKey(id)).ToList())
+        {
+            machines.Remove(id, out var gone);
+            main.Remove(gone!.Key);
+            _ = gone.DisposeAsync().AsTask();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        disposed = true;
+        foreach (var m in machines.Values) { await m.DisposeAsync(); }
+        machines.Clear();
+        await link.DisposeAsync();
+    }
+}
+
+// The fleet through the relay, as a device of its own (kind "app") on the account this
+// machine's host signed in to: the host hands the app its account (host.relay.account, for the
+// app alone), and the app proves its own key, so it needs no second sign-in and never shares
+// the host's identity. It serves nothing; it only opens channels, as the PWA does.
+public sealed class RelayFleetLink : IFleetLink
+{
+    static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(30);
+
+    readonly Func<CancellationToken, Task<RelayAccount?>> account;
+    readonly P256KeyPair key;
+    readonly string name;
+    readonly Action<string> log;
+    readonly CancellationTokenSource stop = new();
+    readonly SemaphoreSlim poke = new(0);
+    Task loop = Task.CompletedTask;
+    volatile Current? current;
+    volatile StateNow state = new(FleetState.SignedOut, null);
+
+    sealed record Current(RelayClient Relay, ChannelHub Hub);
+    sealed record StateNow(FleetState State, string? Detail);
+
+    public RelayFleetLink(Func<CancellationToken, Task<RelayAccount?>> account, P256KeyPair key, string name, Action<string>? log = null)
+    {
+        this.account = account;
+        this.key = key;
+        this.name = name;
+        this.log = log ?? (_ => { });
+    }
+
+    // How long to wait for a sign-in that has not happened, before asking again.
+    public TimeSpan Recheck { get; init; } = TimeSpan.FromSeconds(30);
+
+    public string DeviceId => Wire.DeviceId(key.Public);
+    public FleetState State => state.State;
+    public string? Detail => state.Detail;
+    public event Action? Changed;
+
+    public IReadOnlyList<FleetHost> Hosts => current is { } c
+        ? [.. c.Relay.Presence.Where(p => p.Kind == "host" && p.Id != c.Relay.DeviceId).Select(p => new FleetHost(p.Id, p.Name))]
+        : [];
+
+    public void Start() => loop = Task.Run(() => RunAsync(stop.Token));
+
+    // Something may have changed what the account is (this machine's host signed in): look
+    // again now rather than at the next recheck.
+    public void Poke() => poke.Release();
+
+    void Set(FleetState s, string? detail)
+    {
+        if (state.State == s && state.Detail == detail) { return; }
+        state = new StateNow(s, detail);
+        Changed?.Invoke();
+    }
+
+    async Task RunAsync(CancellationToken ct)
+    {
+        var backoff = TimeSpan.FromSeconds(1);
+        while (!ct.IsCancellationRequested)
+        {
+            RelayAccount? a;
+            try { a = await account(ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception e)
+            {
+                Set(FleetState.Connecting, e.Message);
+                await WaitAsync(Recheck, ct);
+                continue;
+            }
+            if (a is null || !Uri.TryCreate(a.Relay, UriKind.Absolute, out var relayUri))
+            {
+                Set(FleetState.SignedOut, null);
+                await WaitAsync(Recheck, ct);
+                continue;
+            }
+            try
+            {
+                Set(FleetState.Connecting, null);
+                await using var relay = await RelayClient.ConnectAsync(relayUri, a.Token, key, name, "app", ct);
+                var hub = new ChannelHub(relay, key, name, "app") { JsonOptions = ProtocolJson.Options };
+                relay.PresenceChanged += _ => Changed?.Invoke();
+                current = new Current(relay, hub);
+                Set(FleetState.Connected, $"as {relay.Login}");
+                log($"connected to the relay as {relay.Login} ({Wire.DeviceId(key.Public)[..8]})");
+                backoff = TimeSpan.FromSeconds(1);
+                await relay.Completion.WaitAsync(ct);
+                log($"the relay connection ended: {(int?)relay.CloseStatus} {relay.CloseReason}");
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (RelayRefusedException e) when (e.Code is CloseCodes.AuthFailed or CloseCodes.ProofFailed or CloseCodes.Replaced)
+            {
+                current = null;
+                log($"the relay refused the app: {e.Message}");
+                Set(FleetState.Refused, e.Code == CloseCodes.Replaced ? "this app is connected from somewhere else with the same key" : "the account's sign-in is no longer accepted");
+                await WaitAsync(Recheck, ct);
+                continue;
+            }
+            catch (Exception e) when (e is not OutOfMemoryException)
+            {
+                log($"the relay connection failed: {e.Message}");
+                Set(FleetState.Connecting, e.Message);
+            }
+            current = null;
+            Changed?.Invoke();
+            if (state.State == FleetState.Connected) { Set(FleetState.Connecting, "reconnecting"); }
+            await WaitAsync(backoff, ct);
+            backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, MaxBackoff.Ticks));
+        }
+    }
+
+    async Task WaitAsync(TimeSpan delay, CancellationToken ct)
+    {
+        try { await poke.WaitAsync(delay, ct); }
+        catch (OperationCanceledException) { }
+    }
+
+    public async Task<IClientChannel> OpenAsync(string hostId, CancellationToken ct)
+    {
+        if (current is not { } c) { throw new HostNotRunningException("not connected to the relay"); }
+        if (!c.Relay.Presence.Any(p => p.Id == hostId)) { throw new HostNotRunningException("the machine is offline"); }
+        try
+        {
+            var ch = await c.Hub.OpenAsync(hostId, TimeSpan.FromSeconds(15)).WaitAsync(ct);
+            return new RelayClientChannel(c.Hub, ch);
+        }
+        catch (Exception e) when (e is TimeoutException or IOException or System.Security.Cryptography.CryptographicException or InvalidOperationException)
+        {
+            throw new HostNotRunningException($"the machine did not answer through the relay ({e.Message})", e);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        stop.Cancel();
+        try { await loop; } catch (Exception) { }
+    }
+}
+
+// Every machine's usage as one list (pwa/js/usage.js, mergeUsage): one row per allowance (an
+// agent and its account), carrying the freshest reading any machine has. A reading outranks a
+// failure however new, since a failure is stamped with when the attempt was made; a failure
+// newer than the reading is still the latest word on why nothing fresher exists.
+public static class UsageMerge
+{
+    public static UsageReport Merge(IEnumerable<UsageReport> reports)
+    {
+        var slots = new Dictionary<string, (AgentUsage? Reading, AgentUsage? Failure)>(StringComparer.Ordinal);
+        var order = new List<string>();
+        foreach (var a in reports.SelectMany(r => r.Agents))
+        {
+            var key = $"{a.Agent}\0{a.AccountKey ?? (a.Account ?? "").ToLowerInvariant()}";
+            if (!slots.TryGetValue(key, out var slot)) { order.Add(key); }
+            if (a.Windows.Count > 0)
+            {
+                if (slot.Reading is null || slot.Reading.MeasuredAt < a.MeasuredAt) { slot.Reading = a; }
+            }
+            else if (slot.Failure is null || slot.Failure.MeasuredAt < a.MeasuredAt) { slot.Failure = a; }
+            slots[key] = slot;
+        }
+        var entries = order.Select(k => slots[k]).Select(s => s.Reading is not { } r ? s.Failure!
+            : s.Failure is { Error: { Length: > 0 } why } f && f.MeasuredAt > r.MeasuredAt ? r with { Error = why } : r).ToList();
+        // Two rows of one agent with no account to name either (Claude names none) would look
+        // the same: a few characters of the key keep them apart, only when there is something
+        // to keep apart.
+        var perAgent = entries.GroupBy(e => e.Agent).ToDictionary(g => g.Key, g => g.Count());
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (entries[i] is { Account: null, AccountKey: { Length: >= 4 } k } e && perAgent[e.Agent] > 1) { entries[i] = e with { Account = $"#{k[..4]}" }; }
+        }
+        return new UsageReport(entries);
+    }
+}

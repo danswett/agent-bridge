@@ -11,7 +11,7 @@ namespace AgentBridge.Local;
 // under one lock, seq per channel, any number of requests outstanding, a bounded event
 // buffer that drops the oldest). The host's end serves requests through a handler, exactly
 // as ChannelHub does for the relay; the app's end sends them.
-public sealed class LocalChannel : IProtocolChannel, IAsyncDisposable
+public sealed class LocalChannel : IClientChannel
 {
     readonly Stream stream;
     readonly SemaphoreSlim sendLock = new(1, 1);

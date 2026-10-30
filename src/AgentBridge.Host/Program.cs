@@ -309,6 +309,7 @@ async Task<int> ServeAsync()
         LocalOnly = localOnly,
         Log = HostLog.FilePath,
         Account = () => identity.Account is { } a ? new HostAccount(a.Login, a.AccountId) : null,
+        Credential = () => identity.Account,
         Relay = ServeRelay,
         AgentHaBridge = haProbe is null ? () => null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64),
         SignIn = async (relay, show, ct) =>

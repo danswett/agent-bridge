@@ -19,7 +19,7 @@ namespace AgentBridge.App;
 // card, saves a picture of each page beside the result file, writes what it saw and exits.
 static class SelfTest
 {
-    public static async Task RunAsync(MainWindow window, MainViewModel main, string outFile, DemoHost demo, Action<int> exit)
+    public static async Task RunAsync(MainWindow window, MainViewModel main, string outFile, DemoHost demo, DemoHost remote, Action<int> exit)
     {
         var result = new Dictionary<string, object?>();
         var checks = new List<string>();
@@ -27,13 +27,16 @@ static class SelfTest
         void Check(bool ok, string what) { (ok ? checks : failures).Add(what); }
         try
         {
-            var expected = demo.Count;
+            // This machine's sessions and the other machine's, through the demo's stand-in for the relay.
+            var expected = demo.Count + remote.Count;
             result["expectedCards"] = expected;
             var drawn = await Until(() => Find<SessionCard>(window.RootElement).Count == expected, TimeSpan.FromSeconds(60));
             var cards = Find<SessionCard>(window.RootElement);
             result["drawnCards"] = cards.Count;
-            Check(drawn, $"draws all {expected} demo sessions as cards");
-            Check(main.Waiting == 3, "counts three sessions waiting on you");
+            Check(drawn, $"draws all {expected} demo sessions of both machines as cards");
+            Check(main.Waiting == 4, "counts four sessions waiting on you across both machines");
+            Check(main.ShowMachines && main.Machines.Any(m => m.Label.StartsWith(remote.MachineName, StringComparison.Ordinal)), "offers the other machine in the machine picker");
+            Check(cards.FirstOrDefault(c => c.Card?.Id == "demo-remote-codex")?.Card?.Meta.StartsWith(remote.MachineName, StringComparison.Ordinal) == true, "names the machine on another machine's card");
 
             var approval = cards.FirstOrDefault(c => c.Card?.Id == "demo-approval");
             Check(approval is not null && ById<Button>(approval, "Option:approve") is { IsEnabled: true } && ById<Button>(approval, "Option:deny") is not null,
@@ -57,9 +60,27 @@ static class SelfTest
             }
             else { Check(false, "finds the single-choice question's option button"); }
 
+            // Answer a question on the other machine the same way: it goes to that machine's host.
+            var remoteChoice = cards.FirstOrDefault(c => c.Card?.Id == "demo-remote-claude");
+            if (remoteChoice is not null && ById<Button>(remoteChoice, "Option:device") is { } device)
+            {
+                ((IInvokeProvider)new ButtonAutomationPeer(device).GetPattern(PatternInterface.Invoke)).Invoke();
+                var answered = await Until(() => remoteChoice.Card?.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(20));
+                result["remoteReceipt"] = remoteChoice.Card?.ReceiptText;
+                Check(answered, "answers a question on another machine from its card and shows it was delivered");
+            }
+            else { Check(false, "finds the other machine's question's option button"); }
+
+            // The picker narrows the list to one machine.
+            main.SelectedMachine = main.Machines.First(m => m.Key == DemoHost.RemoteId);
+            var narrowed = await Until(() => Find<SessionCard>(window.RootElement).Count == remote.Count, TimeSpan.FromSeconds(10));
+            Check(narrowed, "shows only the chosen machine's cards");
+            await Picture(window.RootElement, Path.ChangeExtension(outFile, ".remote.png"));
+            main.SelectedMachine = main.Machines[0];
+
             window.ShowPage("usage");
             await Task.Delay(500);
-            Check(main.Usage.Rows.Count == 2, "shows usage for two agents");
+            Check(main.Usage.Rows.Count == 3, "shows usage for three agents across both machines");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".usage.png"));
             window.ShowPage("settings");
             await Task.Delay(500);

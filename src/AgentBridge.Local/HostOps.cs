@@ -18,7 +18,15 @@ public static class HostOps
     public const string Settings = "host.settings";
     public const string Restart = "host.restart";
     public const string Stop = "host.stop";
+    // The account this host signed in to, token included, so the app can reach the account's
+    // other machines through the relay as a device of its own without a second sign-in. For
+    // the app alone, like every management op: never an agent session's to read.
+    public const string RelayAccount = "host.relay.account";
 }
+
+// host.relay.account: the relay that issued the account, and the account. Token is a bearer
+// credential for that relay, as private as the device key.
+public sealed record RelayAccount(string Relay, string Token, string AccountId, string Login);
 
 [UnknownAs(Off)]
 public enum RelayState { Off, SignedOut, Connecting, Connected, Refused }

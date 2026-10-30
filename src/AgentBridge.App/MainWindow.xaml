@@ -63,9 +63,33 @@
 
                 <ScrollViewer x:Name="SessionsPane" Grid.Row="1" AutomationProperties.AutomationId="SessionsPane">
                     <StackPanel MaxWidth="920" Padding="16,12,16,24" Spacing="12">
+                        <ComboBox
+                            x:Name="MachinePicker"
+                            AutomationProperties.AutomationId="MachinePicker"
+                            AutomationProperties.Name="Show sessions from"
+                            Header="Machines"
+                            MinWidth="260"
+                            ItemsSource="{x:Bind ViewModel.Machines}"
+                            SelectedItem="{x:Bind ViewModel.SelectedMachine, Mode=OneWay}"
+                            SelectionChanged="OnMachineChosen"
+                            Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachines), Mode=OneWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="core:MachineChoice">
+                                    <TextBlock Text="{x:Bind Label, Mode=OneWay}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <InfoBar
+                            AutomationProperties.AutomationId="FleetNote"
+                            IsClosable="False"
+                            Severity="Informational"
+                            IsOpen="{x:Bind ViewModel.HasFleetNote, Mode=OneWay}"
+                            Message="{x:Bind ViewModel.FleetNote, Mode=OneWay}" />
                         <TextBlock
                             Style="{StaticResource AbSecondaryText}"
-                            Text="No agent sessions on this machine right now. Start Copilot CLI, Claude Code or Codex and it appears here."
+                            AutomationProperties.AutomationId="EmptyText"
+                            TextWrapping="Wrap"
+                            Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}"
                             Visibility="{x:Bind local:Ui.Show(ViewModel.Empty), Mode=OneWay}" />
                         <ItemsControl x:Name="Cards" ItemsSource="{x:Bind ViewModel.Sessions}" IsTabStop="False" AutomationProperties.AutomationId="Cards">
                             <ItemsControl.ItemsPanel>
