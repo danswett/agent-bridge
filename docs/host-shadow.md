@@ -457,6 +457,13 @@ them on its own two- and three-minute pace and each side asks the vendors separa
 When either side cannot be read, the session-level disagreements open at that moment end;
 the gap is not counted against them.
 
+A count that turns the other way (the daemon's higher, then the host's) is two disagreements,
+each judged against the grace on its own. On DEV-VM1 a shell ended and was started again a
+minute later, with the daemon a pass behind each time. Two opposite lags, each shorter than
+the grace, had run on as one 60 s mismatch. This applies to the kinds compared as two counts
+(`background.*`, `compactions`, `resumable.count`); a count that moves the same way stays one
+disagreement.
+
 ## Coverage
 
 Every compared sample is also turned into **events**, each counted once however many samples

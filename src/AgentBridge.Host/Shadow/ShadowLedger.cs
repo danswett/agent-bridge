@@ -79,7 +79,7 @@ public sealed class ShadowTransient
 // Turns samples into episodes and episodes into the day's report. A disagreement becomes a
 // mismatch only once it has lasted the grace: the daemon publishes on its own loop and the host
 // within a second, so for a moment after every change the two differ by design.
-public sealed class ShadowLedger
+public sealed partial class ShadowLedger
 {
     public const int MaxMismatches = 1000;
     const int MaxDetails = 8;
@@ -110,7 +110,23 @@ public sealed class ShadowLedger
         public List<string> States { get; } = [];
         // Those past the limit kept, which fail with no identity, in the overflow.
         public int StatesDropped { get; set; }
+        // For a count, which side's is higher (Direction).
+        public int? Direction { get; set; }
     }
+
+    // Which side counts more, for a difference of two counts ("daemon=1 host=0"): 1 the daemon's, -1
+    // the host's; null for any other. Seen on DEV-VM1 (#40): a shell ended and was started again a
+    // minute later, the daemon a pass behind each time, so it counted one the host did not and then
+    // none where the host did; two lags in opposite directions, each shorter than the grace, ran on
+    // as one disagreement of 60 s and became a mismatch.
+    // Only for the kinds that are two counts of running things (background work, compactions, the
+    // resume list's length): a question's field count is its shape, wrong whichever way it is.
+    static int? Direction(string kind, string detail) =>
+        kind is ShadowKinds.BackgroundAgents or ShadowKinds.BackgroundShells or ShadowKinds.Compactions or ShadowKinds.ResumableCount
+        && CountPair().Match(detail) is { Success: true } m && long.TryParse(m.Groups[1].Value, out var d) && long.TryParse(m.Groups[2].Value, out var h) ? Math.Sign(d - h) : null;
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"\Adaemon=(\d+) host=(\d+)\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex CountPair();
 
     readonly string folder;
     readonly TimeSpan grace;
@@ -227,7 +243,14 @@ public sealed class ShadowLedger
         var made = new List<ShadowEpisode>();
         foreach (var (key, d) in current)
         {
-            if (!open.TryGetValue(key, out var episode)) { open[key] = episode = new Episode(d.Kind, d.Session, now); }
+            // A count that turns the other way is a new disagreement, judged against the grace afresh.
+            var direction = Direction(d.Kind, d.Detail);
+            if (open.TryGetValue(key, out var was) && was.Direction is { } before && direction is { } after && before != after)
+            {
+                Close(was);
+                open.Remove(key);
+            }
+            if (!open.TryGetValue(key, out var episode)) { open[key] = episode = new Episode(d.Kind, d.Session, now) { Direction = direction }; }
             episode.Last = now;
             episode.Samples++;
             if (episode.Details.Count < MaxDetails && !episode.Details.Contains(d.Detail)) { episode.Details.Add(d.Detail); }

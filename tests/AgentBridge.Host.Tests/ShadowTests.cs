@@ -233,6 +233,44 @@ public sealed class ShadowTests : IDisposable
         Assert.Contains("mismatch: question.options on " + ShadowHash.Session(Id), Assert.Single(log));
     }
 
+    // Seen on DEV-VM1 (#40): a shell ended and started again a minute later, the daemon a pass behind
+    // each time; 1 against 0 and then 0 against 1 ran on as one 60 s disagreement.
+    [Fact]
+    public void A_count_that_turns_the_other_way_is_two_disagreements_each_judged_against_the_grace()
+    {
+        f.Time.SetLocalTimeZone(TimeZoneInfo.Utc);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), f.Time);
+        ShadowDifference Shells(int daemon, int host) => new(ShadowKinds.BackgroundShells, "s1", $"daemon={daemon} host={host}");
+        void Sample(params ShadowDifference[] diffs)
+        {
+            ledger.Record(new ShadowComparison(true, 1, 1, diffs, ["s1"]), new ShadowView(), new ShadowView());
+            f.Time.Advance(TimeSpan.FromSeconds(15));
+        }
+
+        // 45 s the daemon's way, then 45 s the host's: two lags, neither lasting the grace.
+        for (var i = 0; i < 4; i++) { Sample(Shells(1, 0)); }
+        for (var i = 0; i < 4; i++) { Sample(Shells(0, 1)); }
+        Sample();
+        var day = ShadowLedger.Read(reports, "2026-10-28")!;
+        Assert.Empty(day.Mismatches);
+        Assert.Equal((2, 45L), (day.Transient[ShadowKinds.BackgroundShells].Count, day.Transient[ShadowKinds.BackgroundShells].LongestSeconds));
+
+        // The same way throughout, however the counts move, is one disagreement, and lasts it.
+        for (var i = 0; i < 3; i++) { Sample(Shells(2, 0)); }
+        for (var i = 0; i < 3; i++) { Sample(Shells(3, 1)); }
+        Sample();
+        var m = Assert.Single(ShadowLedger.Read(reports, "2026-10-28")!.Mismatches);
+        Assert.Equal(75L, m.Seconds);
+        Assert.Equal(["daemon=2 host=0", "daemon=3 host=1"], m.Details);
+
+        // A question's field count is its shape: wrong either way, it is one disagreement.
+        ShadowDifference Fields(int daemon, int host) => new(ShadowKinds.QuestionFields, "s1", $"daemon={daemon} host={host}");
+        for (var i = 0; i < 4; i++) { Sample(Fields(2, 1)); }
+        for (var i = 0; i < 4; i++) { Sample(Fields(1, 2)); }
+        Sample();
+        Assert.Contains(ShadowLedger.Read(reports, "2026-10-28")!.Mismatches, x => x.Kind == ShadowKinds.QuestionFields && x.Seconds == 105);
+    }
+
     [Fact]
     public void A_disagreement_shorter_than_the_grace_is_timing_skew_and_one_that_lasts_it_is_a_mismatch()
     {
