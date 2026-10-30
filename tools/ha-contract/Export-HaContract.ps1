@@ -146,6 +146,8 @@ function ConvertTo-Fixture {
         $value = $payload | ConvertFrom-Json -AsHashtable -Depth 20 -DateKind String
         if ($value -is [System.Collections.IDictionary] -and $value.Contains('updated')) { $value['updated'] = '<now>' }
         if ($value -is [System.Collections.IDictionary] -and $value.Contains('asked_at')) { $value['asked_at'] = '<now>' }
+        # The heartbeat's time, which is all its attributes topic carries.
+        if ($Publication.topic -like '*/online/attr' -and $value -is [System.Collections.IDictionary] -and $value.Contains('at')) { $value['at'] = '<now>' }
         $json = $true
     }
     [ordered]@{ topic = $Publication.topic; retain = $Publication.retain; qos = $Publication.qos; json = $json; payload = $value }
@@ -160,6 +162,16 @@ function Get-Published {
 
 $machine = 'DSWETT-DEV-VM1'
 $slug = Get-BridgeMachineSlug -MachineName $machine
+# A publisher that takes no machine name (Publish-CopilotMqttUpdate) names its device after the
+# computer it runs on, which made a recording depend on where it was made: on any computer but
+# the fixture's own, the update entity's device came out under that computer's name. The
+# fixture's machine stands in for "this computer", as it does everywhere else here.
+$specMachineDevice = ${function:Get-CopilotMqttMachineDevice}
+function script:Get-CopilotMqttMachineDevice {
+    param([string]$Slug, [string]$MachineName)
+    if (-not $MachineName) { $MachineName = $machine }
+    & $specMachineDevice -Slug $Slug -MachineName $MachineName
+}
 $copilotId = '6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20'
 $claudeId = 'c1a2b3c4-d5e6-4f70-8a91-b2c3d4e5f607'
 $codexId = '019a2b3c-4d5e-7f60-8192-a3b4c5d6e7f8'
@@ -525,6 +537,9 @@ Write-Host "wrote $full"
 # are the contract; the typed text is recorded for reference (the host stages files its own way).
 
 Import-SpecFunction 'hooks\daemon-replies.ps1' @('Get-BridgeReplyPayload', 'New-BridgeAttachmentPrompt', 'Send-DaemonCardPayload', 'Send-DaemonReplyBoxText', 'Invoke-DaemonReply')
+# What a failed delivery's card says to do about it (agent-ha-bridge #249): the daemon's own rule,
+# which adds a hint only for a detail it recognises.
+Import-SpecFunction 'hooks\decision-inject.ps1' @('Get-BridgeConsoleFailureHint')
 Import-SpecFunction 'hooks\agent-bridge-daemon.ps1' @('Set-DaemonSessionProperty', 'Set-DaemonDriverPending', 'Update-DaemonDriverPendingStamp', 'Test-DaemonPayloadJustDelivered', 'Test-DaemonDriverPending')
 
 function Get-SpecConfigConstant {

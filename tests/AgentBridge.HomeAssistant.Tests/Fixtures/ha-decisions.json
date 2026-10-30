@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "danswett/agent-ha-bridge",
-    "commit": "12cc97aad280d77a3593832f1eac6a5b65e247f8",
+    "commit": "42fc551c1c6184797520c18f4b75457ff08a9276",
     "dirty": false,
     "generator": "tools/ha-contract/Export-HaContract.ps1",
     "note": "Recorded by running agent-ha-bridge's own functions with a recording transport. Regenerate; do not edit by hand."

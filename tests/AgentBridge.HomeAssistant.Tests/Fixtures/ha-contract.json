@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "danswett/agent-ha-bridge",
-    "commit": "12cc97aad280d77a3593832f1eac6a5b65e247f8",
+    "commit": "42fc551c1c6184797520c18f4b75457ff08a9276",
     "dirty": false,
     "generator": "tools/ha-contract/Export-HaContract.ps1",
     "note": "Recorded by running agent-ha-bridge's own functions with a recording transport. Regenerate; do not edit by hand."
@@ -99,6 +99,7 @@
     "topics": [
       "homeassistant/update/agent_bridge_dswett_dev_vm1/update/config",
       "homeassistant/button/agent_bridge_dswett_dev_vm1/install_update/config",
+      "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
       "homeassistant/text/agent_bridge_dswett_dev_vm1/new_prompt/config",
       "homeassistant/sensor/agent_bridge_dswett_dev_vm1/new_prompt_payload/config",
       "homeassistant/sensor/agent_bridge_dswett_dev_vm1/transfer_request/config",
@@ -117,11 +118,31 @@
       "copilot/cli/machine/dswett_dev_vm1/update/state",
       "copilot/cli/machine/dswett_dev_vm1/update/attributes",
       "copilot/cli/machine/dswett_dev_vm1/newsession/result",
+      "copilot/cli/machine/dswett_dev_vm1/newsession/outcome",
       "copilot/cli/machine/dswett_dev_vm1/newsession/promptpayload",
       "copilot/cli/machine/dswett_dev_vm1/transfer/request",
       "copilot/cli/machine/dswett_dev_vm1/online/state",
+      "copilot/cli/machine/dswett_dev_vm1/online/attr",
       "copilot/cli/machine/dswett_dev_vm1/global/state",
-      "copilot/cli/machine/dswett_dev_vm1/global/attr"
+      "copilot/cli/machine/dswett_dev_vm1/global/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_claude/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/claude/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/claude/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_codex/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/codex/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/codex/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_2/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_3/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_4/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/attr"
     ],
     "usageTopics": [
       "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot/config",
@@ -132,11 +153,21 @@
       "copilot/cli/machine/dswett_dev_vm1/usage/claude/attr",
       "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_codex/config",
       "copilot/cli/machine/dswett_dev_vm1/usage/codex/state",
-      "copilot/cli/machine/dswett_dev_vm1/usage/codex/attr"
+      "copilot/cli/machine/dswett_dev_vm1/usage/codex/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_2/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_3/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_4/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/attr"
     ],
     "forgetTopics": [
       "homeassistant/update/agent_bridge_dswett_dev_vm1/update/config",
       "homeassistant/button/agent_bridge_dswett_dev_vm1/install_update/config",
+      "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
       "homeassistant/text/agent_bridge_dswett_dev_vm1/new_prompt/config",
       "homeassistant/sensor/agent_bridge_dswett_dev_vm1/new_prompt_payload/config",
       "homeassistant/sensor/agent_bridge_dswett_dev_vm1/transfer_request/config",
@@ -155,11 +186,31 @@
       "copilot/cli/machine/dswett_dev_vm1/update/state",
       "copilot/cli/machine/dswett_dev_vm1/update/attributes",
       "copilot/cli/machine/dswett_dev_vm1/newsession/result",
+      "copilot/cli/machine/dswett_dev_vm1/newsession/outcome",
       "copilot/cli/machine/dswett_dev_vm1/newsession/promptpayload",
       "copilot/cli/machine/dswett_dev_vm1/transfer/request",
       "copilot/cli/machine/dswett_dev_vm1/online/state",
+      "copilot/cli/machine/dswett_dev_vm1/online/attr",
       "copilot/cli/machine/dswett_dev_vm1/global/state",
       "copilot/cli/machine/dswett_dev_vm1/global/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_claude/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/claude/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/claude/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_codex/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/codex/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/codex/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_2/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_3/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/attr",
+      "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_4/config",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/state",
+      "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/attr",
       "homeassistant/select/agent_bridge_6fcbab0c1d2e4f50/decision/config",
       "homeassistant/text/agent_bridge_6fcbab0c1d2e4f50/reply/config",
       "homeassistant/sensor/agent_bridge_6fcbab0c1d2e4f50/replypayload/config",
@@ -1436,6 +1487,7 @@
           },
           "device_class": "connectivity",
           "expire_after": 180,
+          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/online/attr",
           "name": "Online",
           "object_id": "agent_bridge_dswett_dev_vm1_online",
           "payload_off": "offline",
@@ -1452,6 +1504,15 @@
         "qos": 1,
         "json": false,
         "payload": "online"
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/online/attr",
+        "retain": false,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "at": "<now>"
+        }
       }
     ],
     "globalStatus": [
@@ -1767,6 +1828,26 @@
           "object_id": "agent_bridge_dswett_dev_vm1_install_update",
           "unique_id": "agent_bridge_dswett_dev_vm1_install_update"
         }
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/check",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:cloud-refresh",
+          "name": "Check for Bridge Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_check_updates",
+          "unique_id": "agent_bridge_dswett_dev_vm1_check_updates"
+        }
       }
     ],
     "machineRemove": [
@@ -1779,6 +1860,13 @@
       },
       {
         "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/install_update/config",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
         "retain": true,
         "qos": 1,
         "json": false,
@@ -1911,6 +1999,13 @@
         "payload": ""
       },
       {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/newsession/outcome",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
         "topic": "copilot/cli/machine/dswett_dev_vm1/newsession/promptpayload",
         "retain": true,
         "qos": 1,
@@ -1932,6 +2027,13 @@
         "payload": ""
       },
       {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/online/attr",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
         "topic": "copilot/cli/machine/dswett_dev_vm1/global/state",
         "retain": true,
         "qos": 1,
@@ -1940,6 +2042,132 @@
       },
       {
         "topic": "copilot/cli/machine/dswett_dev_vm1/global/attr",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot/config",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot/state",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot/attr",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_claude/config",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/claude/state",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/claude/attr",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_codex/config",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/codex/state",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/codex/attr",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_2/config",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/state",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/attr",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_3/config",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/state",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_3/attr",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_4/config",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/state",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": ""
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/attr",
         "retain": true,
         "qos": 1,
         "json": false,

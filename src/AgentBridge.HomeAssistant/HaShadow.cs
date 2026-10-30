@@ -117,7 +117,11 @@ public static partial class HaShadow
     static string? NotServed(string topic, bool servesAnswers, bool hasUsage)
     {
         if (!hasUsage && (topic.Contains("/usage_", StringComparison.Ordinal) || topic.Contains("/usage/", StringComparison.Ordinal))) { return "usage not compared (no reading was taken)"; }
-        foreach (var part in new[] { "/install_update/", "/new_", "/newsession/", "/transfer", "/transfer_request/" })
+        if (topic.Contains("/usage_copilot_", StringComparison.Ordinal) || topic.Contains("/usage/copilot_", StringComparison.Ordinal))
+        {
+            return "further Copilot logins' usage is not reported by the host";
+        }
+        foreach (var part in new[] { "/install_update/", "/check_updates/", "/new_", "/newsession/", "/transfer", "/transfer_request/" })
         {
             if (topic.Contains(part, StringComparison.Ordinal)) { return "not served yet (a later stage)"; }
         }

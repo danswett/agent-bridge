@@ -392,8 +392,11 @@ public sealed partial class HaConnector : IAsyncDisposable
             HaContract.SessionsConfig(Slug, options.MachineName).Topic,
             HaContract.OnlineConfig(Slug, options.MachineName).Topic,
             HaContract.UpdateStateTopic(Slug), HaContract.UpdateAttributesTopic(Slug), HaContract.OnlineStateTopic(Slug),
-            HaContract.GlobalStateTopic(Slug), HaContract.GlobalAttributesTopic(Slug),
+            HaContract.OnlineAttributesTopic(Slug), HaContract.GlobalStateTopic(Slug), HaContract.GlobalAttributesTopic(Slug),
         };
+        // The agents' own usage sensors are the usage pass's; the numbered ones for further Copilot
+        // logins the host does not report, so they go rather than keep a reading nothing refreshes.
+        served.UnionWith(HaContract.UsageTopics(Slug, HaContract.UsageClients));
         return HaContract.MachineTopics(Slug).Where(t => !served.Contains(t));
     }
 
@@ -689,7 +692,7 @@ public sealed partial class HaConnector : IAsyncDisposable
     {
         if (now < nextBeat) { return; }
         // Deliberately not retained (Publish-CopilotMqttMachineHeartbeat).
-        await ha.PublishAsync(HaContract.OnlineStateTopic(Slug), "online", false, ct);
+        foreach (var beat in HaContract.Heartbeat(Slug, now)) { await ha.PublishAsync(beat.Topic, beat.Payload, beat.Retain, ct); }
         nextBeat = now + HaContract.HeartbeatInterval;
     }
 

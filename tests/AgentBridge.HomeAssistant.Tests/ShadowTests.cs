@@ -83,6 +83,28 @@ public sealed class ShadowTests
     }
 
     [Fact]
+    public async Task The_update_check_launch_outcomes_and_further_logins_usage_are_said_to_be_by_design()
+    {
+        DaemonPublished();
+        var slug = HaContract.MachineSlug(Machine);
+        var node = HaContract.MachineNode(slug);
+        ha.Seed(HaContract.DiscoveryTopic("button", node, "check_updates"), $$"""{"unique_id":"agent_bridge_{{slug}}_check_updates","name":"Check for Bridge Update"}""");
+        ha.Seed($"{HaContract.MachineTopicRoot(slug)}/newsession/outcome", """{"recent":[]}""");
+        ha.Seed(HaContract.DiscoveryTopic("sensor", node, "usage_copilot_2"), $$"""{"unique_id":"agent_bridge_{{slug}}_usage_copilot_2","name":"Copilot usage (other)"}""");
+        ha.Seed(HaContract.UsageStateTopic(slug, "copilot_2"), "12");
+        sessions.Set(FakeSessions.Copilot(A));
+
+        var report = await HaShadow.CompareAsync(ha, sessions, new HaConnectorOptions { MachineName = Machine, Version = "0.1.0", Dev = true }, true,
+            TimeSpan.Zero, () => (new AgentBridge.Protocol.UsageReport(ContractTests.UsageReadings), 1));
+        Assert.Equal("not served yet (a later stage)", report.Differences.Single(d => d.Topic == HaContract.DiscoveryTopic("button", node, "check_updates")).Note);
+        Assert.Equal("not served yet (a later stage)", report.Differences.Single(d => d.Topic.EndsWith("/newsession/outcome", StringComparison.Ordinal)).Note);
+        foreach (var topic in new[] { HaContract.DiscoveryTopic("sensor", node, "usage_copilot_2"), HaContract.UsageStateTopic(slug, "copilot_2") })
+        {
+            Assert.Equal("further Copilot logins' usage is not reported by the host", report.Differences.Single(d => d.Topic == topic).Note);
+        }
+    }
+
+    [Fact]
     public async Task Usage_sensors_are_compared_with_a_reading_and_said_to_be_not_compared_without_one()
     {
         DaemonPublished();

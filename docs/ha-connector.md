@@ -60,7 +60,10 @@ The daemon holds no broker connection, so the contract has no LWT. Liveness is:
 
 * `binary_sensor.agent_bridge_<slug>_online`, declared once per start with
   `expire_after: 180`, retained;
-* an **unretained** `online` on `copilot/cli/machine/<slug>/online/state` every 60 s. Three
+* an **unretained** `online` on `copilot/cli/machine/<slug>/online/state` every 60 s, with the
+  beat's time (`{"at": ...}`, also unretained) on `…/online/attr`, the sensor's attributes
+  topic: a state repeating `online` is not written, so `last_reported` would otherwise stand
+  still on a machine beating perfectly well (agent-ha-bridge #202). Three
   missed beats and the machine reads offline; a Home Assistant restart cannot resurrect a stale
   "online", because nothing retained says it. The config is published before the first beat
   (two seconds before), because a beat that reaches Home Assistant before its config is
@@ -82,6 +85,36 @@ with a recorder that still runs the original target guard, calls them with fixed
 writes what they published. The source commit is in the fixture; regenerating after an
 agent-ha-bridge change shows what moved. Payloads compare as JSON (Home Assistant parses them;
 key order is not part of the contract), numbers by value, `updated` stamps as a placeholder.
+
+### Keeping up with agent-ha-bridge
+
+The fixtures are pinned at agent-ha-bridge **`42fc551`** (`Release 1.33.32`). agent-ha-bridge
+keeps shipping, so `.github/workflows/ha-contract-drift.yml` records the contract again from
+its `main` every day (and on demand) with `tools/ha-contract/Test-HaContractDrift.ps1`, which
+writes the recording outside the repository and compares it with the committed fixtures,
+ignoring only the commit each was recorded from. When something moved it opens, or brings up to
+date, **one issue labelled `parity`** with the diff (a comment only when agent-ha-bridge has
+moved to a new commit since, so it does not add one a day), and the run fails; an exporter that
+can no longer record (a ported function renamed or removed) is reported the same way. When the
+contract matches again the issue is closed. On a pull request that touches the exporter, the
+guard or the fixtures it runs against the pinned commit instead, which proves the committed
+fixtures are exactly what the exporter records there.
+
+It is read-only against agent-ha-bridge: a shallow checkout with no credentials kept, read by
+the exporter's syntax-tree loader and `git rev-parse`/`status`. Recording runs
+agent-ha-bridge's functions, which loading them from the syntax tree does not sandbox, so it is
+a job holding no credential at all; a second job, the only one allowed to write the issue, runs
+only this repository's script on what the first wrote, as data. Every run that may write the
+issue shares one concurrency group, so two can never each open one.
+
+To re-pin, as its own pull request: regenerate from the new commit
+(`pwsh -NoProfile -File tools/ha-contract/Export-HaContract.ps1 -Source <checkout>`), make the
+contract tests pass by implementing what moved (or withdrawing it, with the stage that will serve
+it), update this document, and close the issue by merging. The re-pin to `42fc551` added the
+heartbeat's attributes topic, the update-check button, the launch outcomes topic and the usage
+sensors for further Copilot logins (below); the exporter now also runs the daemon's
+`Get-BridgeConsoleFailureHint` when a reply fails, which adds a hint only for the Windows
+console's refusal of an elevated session, a detail the host never reports.
 
 ### Names
 
@@ -114,10 +147,10 @@ Per machine:
 
 | Entity (pinned id) | Discovery topic | State / attributes | When |
 |---|---|---|---|
-| `binary_sensor.agent_bridge_<slug>_online` | `homeassistant/binary_sensor/<mnode>/online/config` | `…/online/state`, unretained `online` | config at start; beat every 60 s |
+| `binary_sensor.agent_bridge_<slug>_online` | `homeassistant/binary_sensor/<mnode>/online/config` | `…/online/state`, unretained `online`; `…/online/attr`, unretained `{"at"}` | config at start; beat every 60 s |
 | `sensor.agent_bridge_<slug>_sessions` | `homeassistant/sensor/<mnode>/sessions/config` | `…/global/state` = count; `…/global/attr` = `sessions[{name,machine,node,kind}]`, `machine`, `machine_slug`, `capabilities`, `resumable: []`, `discovery_held` (what holds the host's discovery, [v1-sessions.md](protocol/v1-sessions.md#discovery-held), else `""`), `updated` | on a change, and every 300 s |
 | `update.agent_bridge_<slug>_update` | `homeassistant/update/<mnode>/update/config` | `…/update/state` = `installed_version`, `latest_version` (both the host's version), `title`, `release_summary: ""`, `in_progress: false`, `update_percentage: null`; `…/update/attributes` = `stage`, `stage_detail` | at start |
-| `sensor.agent_bridge_<slug>_usage_<agent>` (copilot, claude, codex) | `homeassistant/sensor/<mnode>/usage_<agent>/config` | state = the window closest to running out, or `unknown`; attributes `client`, `label`, `account`, `account_id`, `plan`, `source`, `windows[{key,label,percent,used?,limit?,unit?,resets_at?,elapsed?}]`, `error`, `measured_at`, `machine`, `machine_slug`, `updated` | when a reading changes |
+| `sensor.agent_bridge_<slug>_usage_<agent>` (copilot, claude, codex; the numbered `copilot_2`–`_4` of further Copilot logins are withdrawn, below) | `homeassistant/sensor/<mnode>/usage_<agent>/config` | state = the window closest to running out, or `unknown`; attributes `client`, `label`, `account`, `account_id`, `plan`, `source`, `windows[{key,label,percent,used?,limit?,unit?,resets_at?,elapsed?}]`, `error`, `measured_at`, `machine`, `machine_slug`, `updated` | when a reading changes |
 
 `capabilities` is what lets the writer draw the right rows for this machine. Stage 1 reports
 `newSession`, `profile`, `resume`, `agent`, `tuning`, `permissions`, `resumeShare` false and
@@ -157,9 +190,13 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
 Everything agent-ha-bridge publishes that the connector would not act on is withdrawn (an empty
 retained payload), so the dashboard never offers a control that silently does nothing:
 
-* per machine, at start: the install button, the launch card's prompt, prompt payload,
-  workspace, profile, agent, model, effort, context, resume and permissions selectors, Launch,
-  the launch result and transfer request, and their state topics (17 of the 25 machine topics);
+* per machine, at start: the install and update-check buttons, the launch card's prompt,
+  prompt payload, workspace, profile, agent, model, effort, context, resume and permissions
+  selectors, Launch, the launch result and its outcomes, the transfer request, and their state
+  topics (19 of the 28 machine topics); and the usage sensors of further Copilot logins
+  (`usage_copilot_2`–`_4`, nine topics), which the host does not report, so a reading the daemon
+  left is not kept with nothing to refresh it (as `Remove-CopilotMqttUsageSensors` does). Forget
+  clears all 46 (`Get-CopilotMqttMachineTopic`: 28 plus three per usage sensor);
 * per session, when the connector first publishes it: the two legacy state topics
   `decision/state` and `reply/state`; End session when the host cannot end sessions here (no
   `ISessionStopper`); and, only when the host has no way to answer (no `ISessionAnswerer` on this
@@ -513,8 +550,8 @@ does), never by subscribing to the broker.
 | 2 Answers (done) | The full per-session set but stop; arm, read, answer, tell the card, clear; `driver` from `context.user_id`; the read-only shadow; the container CI job (above and below) | `Set-CopilotMqttDecision`, `Publish-CopilotMqttDecisionFields`, `Clear-CopilotMqttDecision`, `daemon-decisions.ps1`, card `answer_consumed_at` |
 | 3 Replies and attachments (done) | The reply card's publish (text, image ids, inline files) and the reply box with Send; images from Home Assistant's image store, deleted after; the files through `AttachmentStore` and `ReplyService`; driver pending until the turn starts (above) | `daemon-replies.ps1`, card reply path |
 | 4 Stop (done) | `button.<node>_stop`, two presses when the session is not idle, the confirm and lapsed notes pinned on the activity line; `StopService`; `ending` (above) | `Invoke-PendingStops`, `Get-DaemonCardSummary`, `CopilotEndSessionConfirmNote` |
-| 5 Launch and notifications | The launch card's controls (`Publish-CopilotMqttNewSession`) from the host's approved workspaces and agents; the 255-character limit lifted through the retained `newsession/promptpayload` (`{at, text, request, settings}`); `new_session_result` with `recent` per request; `capabilities.newSession`/`launchRequest`; transfer requests. Phone notifications with answer buttons and their actions | `daemon-launch.ps1`, `daemon-decision-notify.ps1` |
-| 6 Update buttons | `button.agent_bridge_<slug>_install_update` starts the product's own update (the app's Velopack update on Windows), with `stage`/`stage_detail` and `update_percentage` from it, and `latest_version` from this product's release feed — never agent-ha-bridge's (G2) | `Publish-CopilotMqttUpdate`, `daemon-maintenance.ps1` |
+| 5 Launch and notifications | The launch card's controls (`Publish-CopilotMqttNewSession`) from the host's approved workspaces and agents; the 255-character limit lifted through the retained `newsession/promptpayload` (`{at, text, request, settings}`); `new_session_result` with `recent` per request (its attributes, on the retained `newsession/outcome`); `capabilities.newSession`/`launchRequest`; transfer requests. Phone notifications with answer buttons and their actions | `daemon-launch.ps1`, `daemon-decision-notify.ps1` |
+| 6 Update buttons | `button.agent_bridge_<slug>_check_updates` forces a fresh release check, and `button.agent_bridge_<slug>_install_update` starts the product's own update (the app's Velopack update on Windows), with `stage`/`stage_detail` and `update_percentage` from it, and `latest_version` from this product's release feed — never agent-ha-bridge's (G2) | `Publish-CopilotMqttUpdate`, `daemon-maintenance.ps1` |
 | 7 Upkeep | The Detailed activity helper created when absent (`input_boolean/create`, never recreated); the liveness repair for a sensor Home Assistant has stopped applying, with its attempt limit (#177, #202); forget-machine (the card's X clears this machine's topics from the browser; the connector must not resurrect a machine that was forgotten while it was off) | `Initialize-CopilotVerboseToggle`, `Confirm-DaemonOnlineHeartbeat`, `Get-BridgeMachineForgetTopic` |
 
 ## Validation: a disposable Home Assistant and Mosquitto

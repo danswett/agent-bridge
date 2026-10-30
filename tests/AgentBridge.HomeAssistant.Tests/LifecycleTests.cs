@@ -370,6 +370,44 @@ public sealed class LifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task Taking_over_withdraws_the_update_check_the_launch_outcomes_and_further_logins_usage_but_not_the_agents_own_usage()
+    {
+        var node = HaContract.MachineNode(Slug);
+        var root = HaContract.MachineTopicRoot(Slug);
+        var device = $"AI Agent Bridge ({Machine})";
+        ha.Seed(HaContract.DiscoveryTopic("button", node, "check_updates"), Config("Check for Bridge Update", $"agent_bridge_{Slug}_check_updates", device));
+        ha.Seed($"{root}/newsession/outcome", """{"recent":[{"request":"r-12345678","outcome":"started"}]}""");
+        foreach (var key in new[] { "copilot", "copilot_2" })
+        {
+            ha.Seed(HaContract.DiscoveryTopic("sensor", node, $"usage_{key}"), Config("Copilot usage", $"agent_bridge_{Slug}_usage_{key}", device));
+            ha.Seed(HaContract.UsageStateTopic(Slug, key), "42");
+            ha.Seed(HaContract.UsageAttributesTopic(Slug, key), "{}");
+        }
+
+        await using var c = Connector();
+        await Run(c, 3);
+
+        Assert.False(ha.Retained.ContainsKey(HaContract.DiscoveryTopic("button", node, "check_updates")));
+        Assert.False(ha.Retained.ContainsKey($"{root}/newsession/outcome"));
+        Assert.DoesNotContain(ha.Retained.Keys, k => k.Contains("copilot_2", StringComparison.Ordinal));
+        Assert.True(ha.Retained.ContainsKey(HaContract.DiscoveryTopic("sensor", node, "usage_copilot")));
+        Assert.Equal("42", ha.Retained[HaContract.UsageStateTopic(Slug, "copilot")]);
+        // The beat's time is never retained, and never cleared as if it were.
+        Assert.DoesNotContain(ha.Log, p => p.Topic == HaContract.OnlineAttributesTopic(Slug) && (p.Retain || p.Payload.Length == 0));
+    }
+
+    [Fact]
+    public async Task The_heartbeat_says_online_and_when()
+    {
+        await using var c = Connector();
+        await Run(c, 3);
+        var beats = ha.Log.Where(p => p.Topic.StartsWith($"{HaContract.MachineTopicRoot(Slug)}/online/", StringComparison.Ordinal)).ToList();
+        Assert.Contains(beats, p => p.Topic == HaContract.OnlineStateTopic(Slug) && p.Payload == "online" && !p.Retain);
+        var at = Assert.Single(beats, p => p.Topic == HaContract.OnlineAttributesTopic(Slug)).Payload;
+        Assert.True(DateTimeOffset.TryParse(System.Text.Json.Nodes.JsonNode.Parse(at)!["at"]!.GetValue<string>(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _));
+    }
+
+    [Fact]
     public async Task The_orphan_sweep_takes_unlisted_sessions_and_leaves_another_machines_alone()
     {
         const string Other = "dswett_home";
