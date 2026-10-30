@@ -61,7 +61,10 @@ static class SelfTest
             else { Check(false, "finds the single-choice question's option button"); }
 
             // Answer a question on the other machine the same way: it goes to that machine's host.
-            var remoteChoice = cards.FirstOrDefault(c => c.Card?.Id == "demo-remote-claude");
+            // Found afresh: the answer above re-sorts the list, which recycles the card elements found
+            // before it, so the earlier list can hold this card's element under another session.
+            SessionCard? remoteChoice = null;
+            await Until(() => (remoteChoice = Find<SessionCard>(window.RootElement).FirstOrDefault(c => c.Card?.Id == "demo-remote-claude" && ById<Button>(c, "Option:device") is not null)) is not null, TimeSpan.FromSeconds(10));
             if (remoteChoice is not null && ById<Button>(remoteChoice, "Option:device") is { } device)
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(device).GetPattern(PatternInterface.Invoke)).Invoke();
