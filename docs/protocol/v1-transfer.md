@@ -77,7 +77,10 @@ reason. A started launch's `launched` says where it came from:
 ```
 
 `resume` is the session's new id here, which `session` also names. A transfer takes longer
-than a launch: a client waits up to twelve minutes for its outcome before resending.
+than a launch: a client waits up to twelve minutes for its outcome before resending, and resends
+for up to 20 minutes from its first send. A host with `sessions.transfer` therefore remembers
+a launch's outcome for at least **25 minutes** after it settles, not 10, so a late resend gets
+the outcome instead of running the launch again (whose spent command the source would refuse).
 
 ## The signed command
 

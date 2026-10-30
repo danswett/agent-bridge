@@ -52,7 +52,11 @@ public sealed class LaunchServiceOptions
     // that hands the session on to another process and exits.
     public TimeSpan ExitGrace { get; init; } = TimeSpan.FromSeconds(3);
 
-    public TimeSpan RememberFor { get; init; } = TimeSpan.FromMinutes(15);
+    // After a launch settles. A client resends a transfer launch for up to 20 minutes from its
+    // first send (pwa/js/launch-service.js), and settling comes after that send, so 25 minutes
+    // means a resend always finds the outcome rather than starting the launch again, which for a
+    // transfer would be refused (its command is spent) and read as not launched.
+    public TimeSpan RememberFor { get; init; } = TimeSpan.FromMinutes(25);
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
 

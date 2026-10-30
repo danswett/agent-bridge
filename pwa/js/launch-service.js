@@ -8,7 +8,9 @@ import { AnswerService } from './answer-service.js';
 const LAUNCH = 'launch';
 // A launch that brings a session from another machine waits up to twelve minutes for its
 // outcome (host-client.js), so it is resent for longer than other ops: past one lost response
-// and its resend, and still within the ten minutes a host remembers an outcome once settled.
+// and its resend. A host taking transfers remembers a launch's outcome for 25 minutes after it
+// settles (docs/protocol/v1-transfer.md), which is after the first send, so no resend in these
+// 20 minutes finds it forgotten and runs the launch again.
 export const TRANSFER_GIVE_UP_MS = 20 * 60000;
 
 export class LaunchService extends AnswerService {
