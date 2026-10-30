@@ -624,6 +624,26 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_default_agent_ha_bridge_told_apart_from_a_label_differing_only_in_case_stays_that_folder()
+    {
+        string[] apps = [FakeAgentHaBridge.Rooted("one", "app"), FakeAgentHaBridge.Rooted("two", "app")];
+        var config = FakeAgentHaBridge.DefaultConfig();
+        config["newSession"]!["workspaces"] = new JsonArray(
+            new JsonObject { ["path"] = apps[0], ["label"] = "App" },
+            new JsonObject { ["path"] = apps[1], ["label"] = "app" });
+        // agent-ha-bridge offered the second as "app (<folder>)": its labels ignore case.
+        config["newSession"]!["defaultWorkspace"] = $"app ({apps[1]})";
+        await using var f = new FakeAgentHaBridge(config);
+
+        Assert.True((await f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        var launch = JsonNode.Parse(File.ReadAllText(Path.Combine(f.Profile, "config.json")))!["launch"]!;
+        // The host's labels are exact, so it offers that folder as plain "app".
+        Assert.Equal("app", (string?)launch["defaultWorkspace"]);
+        Assert.Contains(launch["workspaces"]!.AsArray(), w => (string?)w!["path"] == apps[1] && (string?)w["label"] == "app");
+    }
+
+    [Fact]
     public async Task Lists_agent_ha_bridge_read_from_one_value_are_carried_as_a_list_of_one()
     {
         var config = FakeAgentHaBridge.DefaultConfig();

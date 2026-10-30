@@ -156,7 +156,7 @@ tells them apart by folder, as agent-ha-bridge did.
 |---|---|
 | `newSession.enabled` | `launch.enabled` |
 | `newSession.workspaces` (label, path, isolate; one path or entry as a list of one, as `@(...)` reads it) | `launch.workspaces` |
-| `newSession.defaultWorkspace` (as the label the host offers the folder it chose: agent-ha-bridge's `-eq` ignores case, the host matches exactly, and the profile may already approve that folder under its own label, or as the second of two sharing one, `label (folder)`) | `launch.defaultWorkspace` |
+| `newSession.defaultWorkspace` (as the label the host offers the folder it chose: agent-ha-bridge's `-eq` ignores case, and so does its `label (folder)` for a second label differing only in case; the host matches exactly, and the profile may already approve that folder under its own label, or as the second of two sharing one, `label (folder)`) | `launch.defaultWorkspace` |
 | `newSession.launcher` (trimmed and in lowercase, as `Get-BridgeLauncherKind` reads it; one it does not know is `auto`, as it was there, and reported) | `launch.defaultAgent` |
 | `newSession.profiles` (one string as a list of one, as agent-ha-bridge's `@(...)` reads it), `defaultProfile` (as the listed profile it matched, whatever the case; as written when there is no list, since Agency's own are known only at launch) | `launch.profiles`, `launch.defaultProfile` |
 | `newSession.resumeCount` | `launch.resumeCount` (at most 50 here; a larger value is reported) |
@@ -219,7 +219,8 @@ publishes the dashboard (G7).
    or a file that cannot be reverted, is reported as a problem, and the snapshot is kept. The profile's own `config.json` is restored, or removed if
    migration created it, unless a person has changed it since. Each is re-read just before it
    is written. A file that cannot be put back (a missing snapshot, a read-only file, a sharing
-   violation) is reported and the rest carry on: the steps below always run, since with
+   violation) is reported and the rest carry on (one to be removed that is moved aside but
+   cannot then be deleted is moved back, and reported): the steps below always run, since with
    `intake.json` gone nothing else would take the hooks' events. An undo that fails anyway keeps
    its report, and the record and snapshot for `rollback`.
 3. Checks the files recorded by hash, and reports any that changed while migrated (by someone

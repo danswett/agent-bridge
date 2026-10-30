@@ -119,7 +119,24 @@ public static class DurableFile
             File.Move(displaced, path);
             throw new ChangedMeanwhileException(path);
         }
-        Delete(displaced);
+        // The deletion is the removal: a failure (a read-only file can be renamed but not
+        // deleted) must fail it, so rollback keeps its record, not leave the file beside it.
+        try
+        {
+            BeforeDelete.Value?.Invoke(displaced);
+            File.Delete(displaced);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            var back = !File.Exists(path) && TryMove(displaced, path);
+            throw new IOException($"{path} could not be removed ({e.Message}); {(back ? "it is left as it was" : $"it is in {displaced}")}", e);
+        }
+    }
+
+    static bool TryMove(string from, string to)
+    {
+        try { File.Move(from, to); return true; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
     }
 
     // For tests: runs between the check and the commit, as a save landing there would; and before
@@ -127,6 +144,7 @@ public static class DurableFile
     internal static readonly AsyncLocal<Action<string>?> BeforeCommit = new();
     internal static readonly AsyncLocal<Action<string>?> AfterReplace = new();
     internal static readonly AsyncLocal<Action<string>?> AfterCheck = new();
+    internal static readonly AsyncLocal<Action<string>?> BeforeDelete = new();
 
     static void Check(string path, string? expected)
     {

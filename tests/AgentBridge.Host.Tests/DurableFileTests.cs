@@ -10,6 +10,7 @@ public sealed class DurableFileTests : IDisposable
         DurableFile.BeforeCommit.Value = null;
         DurableFile.AfterReplace.Value = null;
         DurableFile.AfterCheck.Value = null;
+        DurableFile.BeforeDelete.Value = null;
         _held?.Dispose();
         try { Directory.Delete(_root, true); } catch (IOException) { }
     }
@@ -94,6 +95,21 @@ public sealed class DurableFileTests : IDisposable
         DurableFile.BeforeCommit.Value = File.Delete;
         Assert.Throws<DurableFile.ChangedMeanwhileException>(() => DurableFile.Replace(path, "ours"u8.ToArray(), Hash("planned")));
         Assert.Empty(Directory.GetFiles(_root));
+    }
+
+    [Fact]
+    public void A_file_that_cannot_be_deleted_fails_its_removal_and_is_left_as_it_was()
+    {
+        // Only Windows refuses to delete a read-only file it lets be renamed.
+        if (!OperatingSystem.IsWindows()) { return; }
+        var path = File_("planned");
+        DurableFile.BeforeDelete.Value = p => File.SetAttributes(p, FileAttributes.ReadOnly);
+
+        Assert.Throws<IOException>(() => DurableFile.Remove(path, Hash("planned")));
+
+        Assert.Equal(["settings.json"], Directory.GetFiles(_root).Select(Path.GetFileName));
+        Assert.Equal("planned", File.ReadAllText(path));
+        File.SetAttributes(path, FileAttributes.Normal);
     }
 
     [Fact]

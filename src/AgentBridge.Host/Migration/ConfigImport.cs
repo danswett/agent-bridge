@@ -243,14 +243,37 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
     // approve that folder under a label of its own, and then agent-ha-bridge's entry is not
     // imported. Failing that, as the first label matching it whatever the case, else as written
     // (falling back to the first workspace, in both).
-    // Both lists are read as LaunchConfig reads them, labels included: a second entry under a
-    // label already taken is offered as "label (folder)", by agent-ha-bridge and the host alike.
+    // Each list is read by its own program's rules: a second entry under a label already taken is
+    // offered as "label (folder)" by both, but agent-ha-bridge counts a label taken whatever its
+    // case (LegacyChoices) and the host only as written (LaunchConfig).
     static string DefaultLabel(JsonObject launch, JsonNode? source, string configured)
     {
         var host = Parsed(launch["workspaces"]);
-        var chosen = Parsed(source).FirstOrDefault(w => string.Equals(w.Label, configured, StringComparison.OrdinalIgnoreCase));
-        if (chosen is not null && host.FirstOrDefault(w => string.Equals(w.Path, chosen.Path, PathCase)) is { } kept) { return kept.Label; }
+        var chosen = LegacyChoices(source).FirstOrDefault(w => string.Equals(w.Label, configured, StringComparison.OrdinalIgnoreCase));
+        if (chosen.Path is not null && host.FirstOrDefault(w => string.Equals(Key(w.Path), chosen.Path, PathCase)) is { } kept) { return kept.Label; }
         return host.FirstOrDefault(w => string.Equals(w.Label, configured, StringComparison.OrdinalIgnoreCase))?.Label ?? configured;
+    }
+
+    // The workspaces as Get-BridgeWorkspaceChoices offered them: labelled by folder name when
+    // unlabelled, and one whose label is taken already, whatever its case (a PowerShell
+    // hashtable), offered as "label (folder)", or dropped if that is taken too. (It also left
+    // out folders that did not exist when it ran, which is not known here.)
+    static List<(string Label, string Path)> LegacyChoices(JsonNode? source)
+    {
+        var choices = new List<(string Label, string Path)>();
+        if (source is not JsonArray list) { return choices; }
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in list)
+        {
+            var (path, label) = Read(entry is JsonObject o ? Canonical(o) : entry);
+            if (string.IsNullOrWhiteSpace(path)) { continue; }
+            var folder = Key(path);
+            var name = string.IsNullOrWhiteSpace(label) ? LabelOf(null, path) : label;
+            if (seen.Contains(name)) { name = $"{name} ({folder})"; }
+            if (!seen.Add(name)) { continue; }
+            choices.Add((name, folder));
+        }
+        return choices;
     }
 
     static IReadOnlyList<AgentBridge.Host.Delivery.Launch.WorkspaceConfig> Parsed(JsonNode? workspaces)
