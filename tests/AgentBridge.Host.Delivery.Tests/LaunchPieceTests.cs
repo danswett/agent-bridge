@@ -476,13 +476,28 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Equal(("0f3c0000-0000-4000-8000-000000000001", "agency", "Ship it", AgentKind.Copilot), (only.Id, only.Launcher, only.Summary, only.Agent));
     }
 
+    // Codex's folder trust question as it drew it on the test VM (2026-10-30).
+    internal static readonly string[] CodexTrust =
+    [
+        "  Folder access",
+        "  C:\\Users\\me\\agent-tests\\claude-test",
+        "  Note: You're in a subdirectory of a Git project. Trusting will apply to the repository root:",
+        "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings",
+        "› 1. Trust and continue",
+        "  2. Quit",
+        "  enter continue · esc quit",
+    ];
+
     [Fact]
     public void Questions_an_agent_stops_on_before_it_starts_are_told_apart_by_what_it_draws()
     {
         Assert.Equal(StartupQuestion.Trust, StartupQuestions.Read(["╭ Confirm folder trust ─╮", "│ C:\\repos\\app │", "Do you trust the files in this folder?", "❯ 1. Yes"]));
         Assert.Equal(StartupQuestion.Trust, StartupQuestions.Read([" Do you trust the files in this folder?", " ❯ 1. Yes, I trust this folder", "   2. No, exit"]));
         Assert.Equal(StartupQuestion.Trust, StartupQuestions.Read(["Bypass Permissions mode", "❯ 1. No, exit", "  2. Yes, I accept"]));
+        Assert.Equal(StartupQuestion.Trust, StartupQuestions.Read(CodexTrust));
         Assert.Equal(StartupQuestion.HooksReview, StartupQuestions.Read(["Hooks need review"]));
+        // Codex's hook review offers "Trust all and continue", which is not its folder question.
+        Assert.Equal(StartupQuestion.HooksReview, StartupQuestions.Read(["Hooks need review", "› 1. Trust all and continue", "  2. Quit"]));
         Assert.Equal(StartupQuestion.None, StartupQuestions.Read(["> Welcome to Copilot", "Yes, I accept the risk of reading this"]));
         Assert.Equal(StartupQuestion.None, StartupQuestions.Read(null));
     }
