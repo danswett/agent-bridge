@@ -95,7 +95,7 @@ public partial class App : Application
 
         // A machine's cards and toasts, whichever machine it is: everything they do goes to that
         // machine's own host.
-        Machine Build(string key, HostConnection conn, FoldStore folds, Func<string?> readOnlyWhy)
+        Machine Build(string key, HostConnection conn, FoldStore folds, Func<string?> readOnlyWhy, IBlobStore? blobs = null)
         {
             Machine? m = null;
             var cards = new CardContext
@@ -109,6 +109,8 @@ public partial class App : Application
                 ShowDetail = () => prefs.ShowDetail,
                 Host = conn,
                 Shrinker = shrinker,
+                Blobs = blobs,
+                BlobsFor = blobs is null ? null : key,
                 FetchDetail = async id =>
                 {
                     try { return await conn.CallAsync<Session>(Ops.SessionGet, new { id }, TimeSpan.FromSeconds(15)); }
@@ -138,7 +140,7 @@ public partial class App : Application
         // demo's is a second pretend host). Remote folds are not kept across restarts.
         IFleetLink? link = null;
         Machine Remote(FleetHost h) =>
-            Build(h.Id, new HostConnection(ct => link!.OpenAsync(h.Id, ct), ui, AppLog.Write) { RetryDelay = TimeSpan.FromSeconds(options.Demo ? 0.5 : 5) }, new FoldStore(null), () => null);
+            Build(h.Id, new HostConnection(ct => link!.OpenAsync(h.Id, ct), ui, AppLog.Write) { RetryDelay = TimeSpan.FromSeconds(options.Demo ? 0.5 : 5) }, new FoldStore(null), () => null, link!.Blobs);
         if (options.Demo)
         {
             remoteDemo = DemoHost.Start(version, remote: true);

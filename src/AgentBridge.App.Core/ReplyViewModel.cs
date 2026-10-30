@@ -20,6 +20,10 @@ public sealed class ReplyAttachment
     public string SizeText => $"{Words.Size(Size)}{(Resized ? " · made smaller" : "")}";
     // Sent to the host with a reply once: removing it then lets the host go of it too.
     internal bool Offered { get; set; }
+    // Sealed and uploaded to the relay's blob store for the machine, and when: a reply sent again
+    // reuses it while its ticket lasts.
+    internal BlobRef? Blob { get; set; }
+    internal DateTimeOffset BlobAt { get; set; }
 }
 
 // Shrinks an image over the attachment limit (a screenshot, usually) to a JPEG that fits, or
@@ -55,6 +59,7 @@ public sealed class ReplyViewModel : Observable
     Session session;
     bool attach;
     bool large;
+    long blobMax;
     string text = "";
     string? error;
     string statusText = "";
@@ -134,14 +139,21 @@ public sealed class ReplyViewModel : Observable
     public string StatusText { get => statusText; private set => Set(ref statusText, value); }
     public Tone StatusTone { get => statusTone; private set => Set(ref statusTone, value); }
 
-    // The most one attachment can be: what the host takes in chunks over this pipe.
-    public long MaxBytes => large ? AttachmentLimits.DirectBytes : AttachmentLimits.Bytes;
+    // Another machine's way to files over 256 KiB: the relay's blob store, and its device there.
+    public IBlobStore? Blobs { get; init; }
+    public string? BlobsFor { get; init; }
 
-    public void Update(Session next, bool takesFiles, bool takesLarge = false)
+    // The most one attachment can be: what the host takes in chunks over this pipe, or through the
+    // relay's blob store from another machine, else what a channel takes.
+    public long MaxBytes => large ? AttachmentLimits.DirectBytes : blobMax > 0 ? blobMax : AttachmentLimits.Bytes;
+
+    // blobMax: the largest file the machine takes through the relay's blob store now, 0 for none.
+    public void Update(Session next, bool takesFiles, bool takesLarge = false, long blobMax = 0)
     {
         session = next;
         attach = takesFiles;
         large = takesFiles && takesLarge;
+        this.blobMax = takesFiles ? blobMax : 0;
         Refresh();
     }
 
@@ -219,8 +231,10 @@ public sealed class ReplyViewModel : Observable
     public void Remove(ReplyAttachment file)
     {
         if (Pending || !Attachments.Remove(file)) { return; }
-        // The host has it from an earlier reply that did not go: it can let it go now.
+        // The host has it from an earlier reply that did not go: it can let it go now, and a blob
+        // uploaded for it can go from the store.
         if (file.Offered && host is not null) { _ = DiscardAsync(file.Id); }
+        if (file.Blob is { } blob && Blobs is not null) { _ = Blobs.DeleteAsync(blob.Id); }
         Refresh();
     }
 
@@ -270,12 +284,19 @@ public sealed class ReplyViewModel : Observable
 
     // Each file from wherever the host has got to with it, so one already there costs one
     // small request, and a resend after the host restarted sends it again.
-    static async Task UploadAsync(Func<string, object?, TimeSpan?, Task<JsonElement>> call, IReadOnlyList<ReplyAttachment> files, Action<long, long> progress)
+    async Task UploadAsync(Func<string, object?, TimeSpan?, Task<JsonElement>> call, IReadOnlyList<ReplyAttachment> files, Action<long, long> progress)
     {
         var total = files.Sum(f => f.Size);
         long done = 0;
         foreach (var f in files)
         {
+            // Over 256 KiB to a machine whose pipe does not take it: through the blob store.
+            if (f.Size > AttachmentLimits.Bytes && !large)
+            {
+                await ThroughBlobStoreAsync(call, f, n => progress(done + n, total));
+                done += f.Size;
+                continue;
+            }
             var state = Read(await call(Ops.AttachmentStart, new AttachmentStart { Attachment = f.Id, Name = f.Name, Type = f.Type.Length > 0 ? f.Type : null, Size = f.Size, Sha256 = f.Sha256 }, null));
             progress(done + Math.Min(state.Received, f.Size), total);
             while (!state.Complete)
@@ -290,6 +311,44 @@ public sealed class ReplyViewModel : Observable
             done += f.Size;
         }
     }
+
+    // As the PWA's sendThroughBlobStore: sealed and uploaded once (reused while its ticket lasts),
+    // then attachment.start naming it, again until the machine has fetched, opened and checked it.
+    // progress: the first half of the file's size is the upload, the second the machine's fetch.
+    async Task ThroughBlobStoreAsync(Func<string, object?, TimeSpan?, Task<JsonElement>> call, ReplyAttachment f, Action<long> progress)
+    {
+        var half = f.Size / 2;
+        var now = deliveries.Time.GetUtcNow();
+        if (f.Blob is null || now - f.BlobAt > LargeAttachments.TicketReuse)
+        {
+            if (Blobs is not { Max: > 0 } blobs || BlobsFor is null)
+            {
+                throw new Local.HostErrorException($"{f.Name} is over {Words.Size(AttachmentLimits.Bytes)}, and the machine cannot take larger files right now");
+            }
+            f.Blob = await blobs.PutAsync(BlobsFor, f.Name, f.Bytes, n => progress(n * half / f.Size));
+            f.BlobAt = now;
+        }
+        progress(half);
+        var start = new AttachmentStart { Attachment = f.Id, Name = f.Name, Type = f.Type.Length > 0 ? f.Type : null, Size = f.Size, Sha256 = f.Sha256, Blob = f.Blob };
+        while (true)
+        {
+            AttachmentState state;
+            try { state = Read(await call(Ops.AttachmentStart, start, null)); }
+            catch (Local.HostErrorException)
+            {
+                // The machine could not use the blob (gone, cut short, not what was sealed): the next
+                // try uploads it again.
+                f.Blob = null;
+                throw;
+            }
+            progress(half + Math.Min(state.Received, f.Size) * (f.Size - half) / f.Size);
+            if (state.Complete) { return; }
+            await Task.Delay(BlobPoll);
+        }
+    }
+
+    // How often to ask whether the machine has fetched a blob yet.
+    public TimeSpan BlobPoll { get; init; } = TimeSpan.FromMilliseconds(400);
 
     static AttachmentState Read(JsonElement e) => e.Deserialize<AttachmentState>(ProtocolJson.Options) ?? throw new Local.HostErrorException("the machine's answer about the attachment was empty");
 
@@ -307,8 +366,8 @@ public sealed class ReplyViewModel : Observable
             }
             else if (e.Outcome == "unconfirmed")
             {
-                // The host has let them go with the reply: sent again, they are new.
-                foreach (var f in s.Files) { f.Id = Guid.NewGuid().ToString(); f.Offered = false; }
+                // The host has let them go with the reply (and deleted any blob): sent again, they are new.
+                foreach (var f in s.Files) { f.Id = Guid.NewGuid().ToString(); f.Offered = false; f.Blob = null; }
             }
             sent = null;
         }
