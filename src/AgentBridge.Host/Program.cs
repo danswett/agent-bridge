@@ -73,6 +73,7 @@ var (settings, settingsProblem) = command == "serve" || (command == "ha" && argu
     ? HostSettings.Load(LoadIdentity().Folder)
     : command == "usage" && Identity.IsValidProfile(Option("--profile") ?? "default")
         ? HostSettings.Load(Path.Combine(Identity.DefaultRoot, Option("--profile") ?? "default"))
+        // An invalid profile is refused by the usage command itself, before anything is read.
         : (HostSettings.Default, null);
 var options = new SessionSourceOptions
 {
@@ -141,6 +142,13 @@ switch (command)
         }
     case "usage":
         {
+            // A profile is a folder name, never a path, as Identity.Load has it; read as the default
+            // profile instead, a mistyped one would ask vendors with settings nobody wrote.
+            if (!Identity.IsValidProfile(Option("--profile") ?? "default"))
+            {
+                Console.Error.WriteLine($"\"{Option("--profile")}\" is not a profile name: use letters, digits, '-', '_' and '.'");
+                return 2;
+            }
             // One ask of every agent, whatever the pace: what serve would report right now. What it
             // notices goes to stderr: stdout is the report, for whatever parses it.
             Action<string> note = m => Console.Error.WriteLine($"{DateTime.Now:HH:mm:ss} {m}");

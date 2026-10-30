@@ -58,7 +58,8 @@ public sealed class UsageTests
     {
         Agent = AgentKind.Copilot,
         Label = label,
-        Account = "octo",
+        // An account each: the view keeps one row per account, and these are rows apart.
+        Account = label == "GitHub Copilot" ? "octo" : label.ToLowerInvariant(),
         Plan = "pro",
         Source = UsageSource.Api,
         MeasuredAt = measured ?? Now.AddMinutes(-5),
@@ -91,7 +92,7 @@ public sealed class UsageTests
         Assert.Equal("47% ahead of pace", w.PaceText);
         Assert.Equal("276 / 300 requests", w.AmountText);
         Assert.Equal("resets in 17d", w.ResetText);
-        Assert.Equal("octo · pro", vm.Rows[0].Detail);
+        Assert.Equal("high · pro", vm.Rows[0].Detail);
     }
 
     [Fact]
@@ -104,6 +105,18 @@ public sealed class UsageTests
 
         Assert.Equal(["octo · pro", "dswett_microsoft", "monalisa"], vm.Rows.Select(r => r.Detail));
         Assert.Equal([null, null, "No Copilot credential was available for monalisa."], vm.Rows.Select(r => r.Error));
+    }
+
+    [Fact]
+    public void A_further_account_that_is_also_the_signed_in_one_is_one_row_and_a_newer_failure_lends_it_its_error()
+    {
+        var vm = new UsageViewModel(new FakeTimeProvider(Now));
+
+        vm.Update(new UsageReport([Agent("GitHub Copilot", 40, Now.AddHours(-2)),
+            Agent("GitHub Copilot", -1, error: "gh has no token for this account") with { Account = "OCTO", Plan = null, Slot = 2 }]));
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Equal((40d, "octo · pro", "gh has no token for this account"), (row.Headline, row.Detail, row.Error));
     }
 
     [Fact]
