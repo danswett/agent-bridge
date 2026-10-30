@@ -35,9 +35,9 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 
 | Status | Rows |
 |---|---|
-| `Verified` | 47 |
+| `Verified` | 48 |
 | `Implemented, untested live` | 39 |
-| `Partial` | 2 |
+| `Partial` | 1 |
 | `Missing` | 15 |
 | `Intentionally different` | 18 |
 | `N/A` | 12 |
