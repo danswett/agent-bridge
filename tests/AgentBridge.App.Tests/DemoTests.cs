@@ -12,12 +12,15 @@ public sealed class DemoTests
     {
         await using var demo = DemoHost.Start();
         await using var connection = new HostConnection(ct => LocalClient.ConnectAsync(demo.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
-        connection.Start();
         var deliveries = new Deliveries(connection, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(50) };
         var main = new MainViewModel(connection, new CardContext { Deliveries = deliveries, Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel());
+        // Started once the window's model listens, as the app does: it builds cards from the
+        // upserts it hears.
+        connection.Start();
 
-        await Wait.UntilAsync(() => main.Sessions.Count == DemoHost.Examples().Count, "every demo session");
-        Assert.Equal(2, main.Usage.Rows.Count);
+        // The usage rows are refreshed when the link says connected, which can come a moment
+        // after the sessions' upserts: they arrive on the connection's other thread.
+        await Wait.UntilAsync(() => main.Sessions.Count == DemoHost.Examples().Count && main.Usage.Rows.Count == 2, "every demo session and the usage");
         var choice = main.Sessions.Single(c => c.Id == "demo-choice");
         choice.Question!.Choose(choice.Question.Fields[0].Options[0]);
 

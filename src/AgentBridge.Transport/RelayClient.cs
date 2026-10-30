@@ -210,23 +210,34 @@ public sealed class RelayClient : IAsyncDisposable
     // The relay closes a connection that sends more than its limit in a second (4008, 200
     // by default). The spike never came near it; a host sending a subscription's snapshot,
     // one event per session, does. So sends wait rather than burst: at most this many in
-    // any second, under the relay's limit so jitter that bunches frames in transit still
-    // fits. Zero turns pacing off.
+    // any PaceWindow, under the relay's limit. Zero turns pacing off.
     public int MaxFramesPerSecond { get; set; } = 150;
+    // Longer than the relay's second because the relay counts a frame when it reads it, in
+    // fixed one-second windows, not when it was sent. A burst it reads late (its read loop
+    // held up on a busy machine, or the frames held up on the way) lands in the same window
+    // as the next burst, read on time. Pacing to N in every second of the sender's own let
+    // one of the relay's windows hold up to 2N, and busy CI runners were cut off with 4008
+    // mid-burst. The frames the relay reads in one of its windows were sent within that
+    // second plus how much later the earliest of them was read than the latest, so spacing N
+    // over 1.5 s keeps every window to N while that lag stays under half a second.
+    internal static readonly TimeSpan PaceWindow = TimeSpan.FromMilliseconds(1500);
     readonly Queue<long> recentSends = new();
 
     // Called under sendLock, so waiting here holds back every later send, in order.
     async Task PaceAsync(CancellationToken ct)
     {
-        var limit = MaxFramesPerSecond;
-        if (limit <= 0) { return; }
-        while (true)
-        {
-            var now = Environment.TickCount64;
-            while (recentSends.Count > 0 && now - recentSends.Peek() >= 1000) { recentSends.Dequeue(); }
-            if (recentSends.Count < limit) { recentSends.Enqueue(now); return; }
-            await Task.Delay(TimeSpan.FromMilliseconds(1000 - (now - recentSends.Peek()) + 1), ct);
-        }
+        while (Pace(recentSends, Environment.TickCount64, MaxFramesPerSecond) is { } wait) { await Task.Delay(wait, ct); }
+    }
+
+    // How long the next send must wait, given when the latest ones went (oldest first); null
+    // when it may go now, and then it is counted as sent.
+    internal static TimeSpan? Pace(Queue<long> recentSends, long now, int limit)
+    {
+        if (limit <= 0) { return null; }
+        var window = (long)PaceWindow.TotalMilliseconds;
+        while (recentSends.Count > 0 && now - recentSends.Peek() >= window) { recentSends.Dequeue(); }
+        if (recentSends.Count < limit) { recentSends.Enqueue(now); return null; }
+        return TimeSpan.FromMilliseconds(window - (now - recentSends.Peek()) + 1);
     }
 
     // Test use: send raw bytes the relay must refuse.

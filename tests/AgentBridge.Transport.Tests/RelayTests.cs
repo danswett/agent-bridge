@@ -134,6 +134,32 @@ public class RelayTests
         Assert.Equal(CloseCodes.RateLimited, (int?)c.Relay.CloseStatus);
     }
 
+    // The relay counts frames as RelayHub.WithinRate does: in fixed one-second windows of when
+    // it reads them, each starting at the first frame read after the last one ended. A frame is
+    // read in order, at most half a second after it went (a read loop held up on a busy
+    // runner). Paced to a second of the sender's own, a burst read late shared a window with
+    // the next burst, read on time, and was cut off with 4008 (EventTests on CI).
+    [Theory]
+    [InlineData(150, 200)]
+    [InlineData(40, 50)]
+    public void Paced_frames_fit_every_one_of_the_relays_windows_even_when_it_reads_some_of_them_late(int paced, int relayLimit)
+    {
+        var random = new Random(20261030);
+        for (var trial = 0; trial < 200; trial++)
+        {
+            var sent = new Queue<long>();
+            long now = 0, read = 0, windowStart = -1000;
+            var inWindow = 0;
+            for (var frame = 0; frame < paced * 6; frame++)
+            {
+                while (RelayClient.Pace(sent, now, paced) is { } wait) { now += (long)wait.TotalMilliseconds; }
+                read = Math.Max(read, now + random.Next(500));
+                if (read - windowStart >= 1000) { (windowStart, inWindow) = (read, 0); }
+                Assert.True(++inWindow <= relayLimit, $"trial {trial}: {inWindow} frames read in the relay's second from {windowStart} ms");
+            }
+        }
+    }
+
     [Fact]
     public async Task A_second_connection_with_the_same_device_key_replaces_the_first_with_4009()
     {

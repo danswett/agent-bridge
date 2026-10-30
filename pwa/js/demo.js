@@ -10,7 +10,9 @@
 //   host.attachments and host.attachmentLog for the files sent ahead of replies, blobs (the
 //   relay's blob store and storage, in the page) for the large ones,
 //   scriptStops(...outcomes) for the next presses of End session,
-//   scriptLaunches(...outcomes) for the next launches, host.launchOptions for what it offers
+//   scriptLaunches(...outcomes) for the next launches, host.launchOptions for what it offers,
+//   host.holdResponses() and host.releaseResponses() to keep responses back until a test has
+//   looked
 //
 // It answers questions as a host would: the same validation (answers.js mirrors the C#
 // Answers.Check), stale when the session is no longer asking, a request seen before gets
@@ -84,6 +86,8 @@ export class DemoHost {
   stops = new Map();
   stopLog = [];
   #stopScript = [];
+  #responsesHeld = null;
+  #letResponsesGo = null;
   #arms = new Map();
   // session.launch: outcomes by request, and every request as received.
   launches = new Map();
@@ -251,6 +255,17 @@ export class DemoHost {
 
   scriptLaunches(outcomes) { this.#launchScript.push(...outcomes); }
 
+  // Holds every response not yet sent until releaseResponses(), so a state that lasts only
+  // while a request is on its way (Sending…) stays to be looked at however slowly the browser
+  // runs: a test that polled for it inside the answer delay missed it on a busy CI runner.
+  // Not hold(): that is discovery's, below, and a second method of the same name replaced it.
+  holdResponses() { this.#responsesHeld ??= new Promise((resolve) => { this.#letResponsesGo = resolve; }); }
+
+  releaseResponses() { this.#letResponsesGo?.(); this.#responsesHeld = null; this.#letResponsesGo = null; }
+
+  // A response as a host gives one: after the answer delay, and after any hold.
+  #after(decide) { return new Promise((resolve) => setTimeout(resolve, this.answerDelayMs)).then(() => this.#responsesHeld).then(decide); }
+
   #launch(data, reply) {
     this.launchLog.push(clone(data ?? null));
     const request = typeof data?.request === 'string' ? data.request : '';
@@ -258,7 +273,7 @@ export class DemoHost {
     if (known) { known.result.then(reply); return; }
     const step = this.#launchScript.shift() ?? null;
     const scripted = typeof step === 'string' ? { outcome: step } : step;
-    const result = new Promise((resolve) => setTimeout(() => resolve(this.#decideLaunch(data ?? {}, scripted)), this.answerDelayMs));
+    const result = this.#after(() => this.#decideLaunch(data ?? {}, scripted));
     this.launches.set(request, { result });
     result.then((r) => { if (!scripted?.drop) { reply(r); } });
   }
@@ -344,7 +359,7 @@ export class DemoHost {
     if (known) { known.result.then(reply); return; }
     const step = this.#stopScript.shift() ?? null;
     const scripted = typeof step === 'string' ? { outcome: step } : step;
-    const result = new Promise((resolve) => setTimeout(() => resolve(this.#decideStop(data, scripted)), this.answerDelayMs));
+    const result = this.#after(() => this.#decideStop(data, scripted));
     this.stops.set(request, { result });
     result.then((r) => { if (!scripted?.drop) { reply(r); } });
   }
@@ -391,7 +406,7 @@ export class DemoHost {
     if (known) { known.result.then(reply); return; }
     const step = this.#replyScript.shift() ?? 'delivered';
     const scripted = typeof step === 'string' ? { outcome: step } : step;
-    const result = new Promise((resolve) => setTimeout(() => resolve(this.#decideReply(data, scripted)), this.answerDelayMs));
+    const result = this.#after(() => this.#decideReply(data, scripted));
     this.replies.set(request, { result });
     result.then((r) => { if (!scripted.drop) { reply(r); } });
   }
@@ -436,7 +451,7 @@ export class DemoHost {
     if (known) { known.result.then(reply); return; }
     const step = this.#script.shift() ?? 'delivered';
     const scripted = typeof step === 'string' ? { outcome: step } : step;
-    const result = new Promise((resolve) => setTimeout(() => resolve(this.#decide(data, scripted)), this.answerDelayMs));
+    const result = this.#after(() => this.#decide(data, scripted));
     this.answers.set(request, { result });
     // drop: the host did the work, but its response never reached the phone.
     result.then((r) => { if (!scripted.drop) { reply(r); } });

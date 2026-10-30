@@ -27,11 +27,15 @@ public sealed class MainTests : IAsyncLifetime
         host.Sessions.Add(Make.Session("old", response: "Earlier.", updated: Make.T0));
         host.Sessions.Add(Make.Session("asking", question: Make.Choice(), updated: Make.T0.AddMinutes(1)));
         host.Start();
-        connection = host.Connect(ui);
+        // Started last, as App.xaml.cs does: MainViewModel builds its cards from the upserts it
+        // hears, so one constructed after the snapshot arrived had no cards, and a counter
+        // attached late missed sessions.synced ("timed out waiting for the snapshot").
+        connection = host.Connect(ui, start: false);
         connection.Sessions.Synced += () => Interlocked.Increment(ref syncs);
         var deliveries = new Deliveries(connection, ui);
         var planner = new ToastPlanner(new Sink(shown), clock) { Capabilities = () => connection.Capabilities };
         main = new MainViewModel(connection, new CardContext { Deliveries = deliveries, Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), toasts: planner);
+        connection.Start();
         return Task.CompletedTask;
     }
 

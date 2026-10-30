@@ -337,7 +337,11 @@ Security Policy already allows `https://abblobprodwus2.blob.core.windows.net`, s
   socket, 32 devices per account, 30 pushes/min per account, 60 sign-in calls/min and 120
   new sockets/min per client address, 16 KiB request bodies, 10,000 sockets per replica.
   Blobs: 201 MiB stored per blob, 2 GiB per account per rolling 24 hours, 30 puts/min per
-  account (`Relay__Blobs__*`).
+  account (`Relay__Blobs__*`). The frame limit counts frames as the relay reads them, in
+  fixed one-second windows, so a burst it reads late shares a window with the next one;
+  the .NET client (hosts, the Windows app) therefore sends at most 150 frames in any 1.5 s
+  (`RelayClient.PaceWindow`), which stays inside the limit while the relay reads up to half
+  a second behind.
 - **Logs:** JSON to stdout, collected by Log Analytics (30 days, 0.1 GB/day cap). No
   account, device, name, address, token or push endpoint: a socket is a random tag that
   means nothing outside the process. ASP.NET request logs are off.

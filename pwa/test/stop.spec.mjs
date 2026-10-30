@@ -15,6 +15,30 @@ const end = (page, id) => footer(page, id).getByRole('button', { name: 'End sess
 const log = (page) => page.evaluate(() => window.agentBridgeDemo.host.stopLog);
 const script = (page, ...outcomes) => page.evaluate((o) => window.agentBridgeDemo.scriptStops(...o), outcomes);
 
+// Records each way a card is drawn, as it is drawn, for a state too short to poll for:
+// 'ending' lasts only the demo host's answer delay, and expect's polls (100, 250, 500, then
+// 1000 ms apart) can fall either side of it. WebKit on a busy CI runner drew it, and took the
+// card away, between two of them.
+async function recordCard(page, id) {
+  await page.evaluate((id) => {
+    const drawn = window.__drawn = [];
+    const note = () => {
+      const c = document.querySelector(`.session[data-id="${id}"]`);
+      if (!c) { return; }
+      const now = {
+        status: c.dataset.status,
+        text: c.querySelector('.status-text')?.textContent ?? null,
+        endDisabled: c.querySelector('.end-session .end-button')?.disabled ?? null,
+      };
+      const last = drawn.at(-1);
+      if (!last || last.status !== now.status || last.text !== now.text || last.endDisabled !== now.endDisabled) { drawn.push(now); }
+    };
+    note();
+    new MutationObserver(note).observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+  }, id);
+}
+const drawn = (page) => page.evaluate(() => window.__drawn);
+
 async function openDemo(page, query = '') {
   await page.addInitScript(() => {
     window.__cspViolations = [];
@@ -33,11 +57,10 @@ test.describe('on a phone', () => {
 
   test('an idle session ends on one press: it shows as ending, then its card goes', async ({ page }) => {
     await openDemo(page, '&answerDelay=800');
+    await recordCard(page, CODEX);
     await end(page, CODEX).tap();
-    await expect(card(page, CODEX)).toHaveAttribute('data-status', 'ending');
-    await expect(card(page, CODEX).locator('.status-text')).toHaveText('Ending session…');
-    await expect(end(page, CODEX)).toBeDisabled();
     await expect(card(page, CODEX)).toHaveCount(0);
+    expect(await drawn(page)).toContainEqual({ status: 'ending', text: 'Ending session…', endDisabled: true });
     const sent = await log(page);
     expect(sent).toEqual([{ id: CODEX, request: expect.stringMatching(UUID) }]);
   });
