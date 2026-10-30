@@ -74,7 +74,13 @@ public sealed record HostSettings(bool RemoteApproval)
     public const string ReadOnlyReason = "this is a read-only comparison host (delivery.readOnly in its config); answer at the machine";
     public const string ProblemReason = "this host's config.json has a problem, so it takes nothing from other devices; answer at the machine";
 
-    static HostSettings Off => Default with { RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, ReadOnly = true };
+    // Usage too: a file that cannot be read may have said usage.publish false, and asking vendors
+    // anyway would read a setting meant as off as on.
+    static HostSettings Off => Default with
+    {
+        RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, ReadOnly = true,
+        Usage = UsageSettings.Default with { Publish = false },
+    };
 
     public static (HostSettings Settings, string? Problem) Load(string folder)
     {
@@ -87,7 +93,7 @@ public sealed record HostSettings(bool RemoteApproval)
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return (Off, $"{path} could not be read ({e.Message}); remote approval of permission prompts, launching and notifications are off, and the host is read-only");
+            return (Off, $"{path} could not be read ({e.Message}); remote approval of permission prompts, launching, notifications and agent usage are off, and the host is read-only");
         }
         try
         {
@@ -99,7 +105,7 @@ public sealed record HostSettings(bool RemoteApproval)
                 if (version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out var v) || v < 1) { throw new JsonException("version is not a whole number from 1"); }
                 if (v > Version)
                 {
-                    return (Off, $"{path} is version {v}, written by a newer Agent Bridge than this host (version {Version}); remote approval of permission prompts, launching and notifications are off, and the host is read-only, until the host is updated");
+                    return (Off, $"{path} is version {v}, written by a newer Agent Bridge than this host (version {Version}); remote approval of permission prompts, launching, notifications and agent usage are off, and the host is read-only, until the host is updated");
                 }
             }
             var (launch, launchProblems) = LaunchConfig.Read(root.TryGetProperty("launch", out var l) ? l : null);
@@ -158,7 +164,7 @@ public sealed record HostSettings(bool RemoteApproval)
         }
         catch (JsonException e)
         {
-            return (Off, $"{path} is not valid ({e.Message}); remote approval of permission prompts, launching and notifications are off, and the host is read-only");
+            return (Off, $"{path} is not valid ({e.Message}); remote approval of permission prompts, launching, notifications and agent usage are off, and the host is read-only");
         }
     }
 

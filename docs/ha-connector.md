@@ -200,7 +200,9 @@ retained payload), so the dashboard never offers a control that silently does no
   fill, so a reading the daemon or an earlier configuration left is not kept with nothing to refresh
   it (as the daemon's first pass does with `Remove-CopilotMqttUsageSensors`). Taken from the
   configuration rather than the readings, so a login not yet read is not withdrawn and registered
-  again under a new id moments later. Forget
+  again under a new id moments later. With `usage.publish` off every usage sensor goes, the
+  agents' own too: agent-ha-bridge leaves its sensors when told not to publish, but a reading
+  left with nothing to refresh it is exactly what this withdrawal is for. Forget
   clears all 46 (`Get-CopilotMqttMachineTopic`: 28 plus three per usage sensor);
 * per session, when the connector first publishes it: the two legacy state topics
   `decision/state` and `reply/state`; End session when the host cannot end sessions here (no

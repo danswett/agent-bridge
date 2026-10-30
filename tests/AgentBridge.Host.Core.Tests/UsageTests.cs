@@ -308,6 +308,19 @@ public sealed class UsageTests : IDisposable
     }
 
     [Fact]
+    public async Task A_further_accounts_answer_that_does_not_say_whose_it_is_is_not_shown_under_its_name()
+    {
+        commands.Next = new CommandResult(true, false, 0, FurtherToken);
+        http.Respond(200, Quota().Replace($"\"login\":\"{Login}\",", "", StringComparison.Ordinal));
+
+        var usage = await AccountCollector(Credentials()).CollectAsync();
+
+        Assert.Empty(usage!.Windows);
+        Assert.Equal((Further, 2), (usage.Account, usage.Slot));
+        Assert.Equal($"GitHub's answer for {Further} did not say whose allowance it is.", usage.Error);
+    }
+
+    [Fact]
     public async Task A_further_account_gh_holds_no_token_for_keeps_its_row_and_says_why_with_the_spelling_github_last_gave()
     {
         var credentials = Credentials();

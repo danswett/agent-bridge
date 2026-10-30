@@ -98,13 +98,13 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `homeAssistant.machineName` | the computer's | The name the entities are keyed on (`agent_bridge_<slug>`). Only for a rehearsal posing as another machine on a disposable Home Assistant |
 | `homeAssistant.disposable` | `false` | Says `baseUrl` is a disposable Home Assistant. A development build writes to no other |
 | `homeAssistant.agentUserIds` | `[]` | Home Assistant user ids whose presses are an agent's, as agent-ha-bridge's own setting: an answer or reply they send makes the next turn agent-driven (the card's purple edge). A list of strings |
-| `usage.publish` | `true` | Reading the agents' allowances at all ([v1-usage.md](protocol/v1-usage.md)). `false` asks no vendor anything: `hello` leaves `usage` out, and the Home Assistant connector publishes no usage |
+| `usage.publish` | `true` | Reading the agents' allowances at all ([v1-usage.md](protocol/v1-usage.md)). `false` asks no vendor anything: `hello` leaves `usage` out, and the Home Assistant connector withdraws this machine's usage sensors rather than leave their last readings with nothing to refresh them (agent-ha-bridge leaves them) |
 | `usage.intervalSeconds` | `120` | How often an agent's allowance is read while a session of that agent is open here, from 30 to 86400. While agent-ha-bridge runs for this user the host reads only at `idleIntervalSeconds`, since that bridge is already asking |
 | `usage.idleIntervalSeconds` | `900` | How often it is read while none is, from 30 to 86400, and never more often than `intervalSeconds` |
 | `usage.copilotAccounts` | `[]` | Further GitHub logins whose Copilot allowance this machine reports beside the account Copilot is signed in as, as agent-ha-bridge's own setting: up to three, each its own row on the phone and the app, under its login, and on the Home Assistant connector's `usage_copilot_2`, `_3` or `_4` by its place in the list. Each is read with the token `gh` holds for exactly that login (`gh auth token --user <login>`) and nothing else, at the idle pace, one at a time; a reading that answers for another login is refused. So `gh auth login` as that account is all the setup there is. Logins only, never tokens |
 
 How a file that is wrong is read: one that cannot be read or parsed turns remote approval,
-launching and notifications off and makes the host read-only ("this host's config.json has a
+launching, notifications and agent usage off and makes the host read-only ("this host's config.json has a
 problem"); a `permissions.remoteApproval`, `push.enabled` or `delivery.readOnly` that is not
 `true` or `false` does too. In `usage`, a `publish` that is not `true` or `false`, or a `usage` that is
 not an object, turns usage off; a pace that is not a number in range keeps its default; and an entry of

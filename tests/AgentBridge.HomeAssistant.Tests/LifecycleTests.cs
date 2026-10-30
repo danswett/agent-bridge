@@ -25,6 +25,7 @@ public sealed class LifecycleTests : IDisposable
     UsageReport usage = UsageReport.Empty;
     long usageVersion;
     IReadOnlyList<string> accountSensors = [];
+    bool usageOff;
 
     public void Dispose()
     {
@@ -38,7 +39,7 @@ public sealed class LifecycleTests : IDisposable
         Dev = true,
         StateFile = Path.Combine(folder, "ha-connector.json"),
         UsageAccountSensors = accountSensors,
-    }, ha, sessions, () => agentHaBridgeProbe is { } probe ? probe() : agentHaBridge, () => (usage, usageVersion), m => { lock (log) { log.Add(m); } }, time);
+    }, ha, sessions, () => agentHaBridgeProbe is { } probe ? probe() : agentHaBridge, usageOff ? null : () => (usage, usageVersion), m => { lock (log) { log.Add(m); } }, time);
 
     async Task Pass(HaConnector c, double seconds = 0)
     {
@@ -435,6 +436,23 @@ public sealed class LifecycleTests : IDisposable
         // Its entity id forced onto the one the dashboard lists, as the agents' own are.
         await Run(c, 15);
         Assert.Equal($"sensor.agent_bridge_{Slug}_usage_copilot_2", ha.Registry[$"agent_bridge_{Slug}_usage_copilot_2"]);
+    }
+
+    [Fact]
+    public async Task With_usage_turned_off_every_usage_sensor_this_machine_left_is_withdrawn()
+    {
+        var node = HaContract.MachineNode(Slug);
+        foreach (var key in new[] { "copilot", "claude", "copilot_2" })
+        {
+            ha.Seed(HaContract.DiscoveryTopic("sensor", node, $"usage_{key}"), Config("usage", $"agent_bridge_{Slug}_usage_{key}", $"AI Agent Bridge ({Machine})"));
+            ha.Seed(HaContract.UsageStateTopic(Slug, key), "42");
+        }
+        usageOff = true;
+
+        await using var c = Connector();
+        await Run(c, 3);
+
+        Assert.DoesNotContain(ha.Retained.Keys, k => k.Contains("/usage", StringComparison.Ordinal));
     }
 
     [Fact]

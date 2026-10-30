@@ -188,12 +188,18 @@ public sealed class CopilotAccountCollector(UsageOptions options, IUsageHttp htt
             {
                 return Failed($"GitHub returned no premium-interaction quota for {login}.", "GitHub returned no premium-interaction quota for it");
             }
+            // An answer that does not say whose allowance it is is not believed to be this login's:
+            // shown under its name, it could be anybody's.
+            if (read.Account is not { Length: > 0 } answered)
+            {
+                return Failed($"GitHub's answer for {login} did not say whose allowance it is.", "GitHub's answer for it did not say whose allowance it is");
+            }
             // Logins are not case-sensitive, so neither is this.
-            if (read.Account is { Length: > 0 } answered && !string.Equals(answered, login, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(answered, login, StringComparison.OrdinalIgnoreCase))
             {
                 return Failed($"The token gh holds for {login} reads the allowance of {answered} instead.", "the token gh holds for it reads another account's allowance");
             }
-            spelling = read.Account is { Length: > 0 } a ? a : spelling;
+            spelling = answered;
             Plain = null;
             return read with { Account = spelling, Slot = account.Slot };
         }

@@ -454,8 +454,10 @@ public sealed partial class HaConnector : IAsyncDisposable
         }
         // The agents' own usage sensors are the usage pass's, and so are the numbered ones of the
         // further Copilot logins it reports; the other numbered ones go rather than keep a reading
-        // nothing refreshes.
-        served.UnionWith(HaContract.UsageTopics(Slug, [.. HaContract.UsageClients, .. usage is null ? [] : options.UsageAccountSensors]));
+        // nothing refreshes. With no usage at all (usage.publish off) every one goes, for the same
+        // reason: agent-ha-bridge leaves its sensors when told not to publish, but a reading left on
+        // the card with nothing to refresh it is the stale figure this exists to prevent.
+        if (usage is not null) { served.UnionWith(HaContract.UsageTopics(Slug, [.. HaContract.UsageClients, .. options.UsageAccountSensors])); }
         return HaContract.MachineTopics(Slug).Where(t => !served.Contains(t));
     }
 

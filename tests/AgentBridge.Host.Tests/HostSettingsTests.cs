@@ -26,15 +26,18 @@ public sealed class HostSettingsTests : IDisposable
     [InlineData("{ \"permissions\": { \"remoteApproval\": \"no\" } }")]
     [InlineData("{ \"permissions\": false }")]
     [InlineData("not json")]
+    // usage.publish false beside a value that spoils the file: the opt-out must hold.
+    [InlineData("{ \"usage\": { \"publish\": false }, \"push\": { \"enabled\": \"false\" } }")]
     public void A_setting_that_cannot_be_read_as_true_or_false_turns_remote_approval_off_and_says_why(string text)
     {
         var (settings, problem) = With(text);
 
         Assert.False(settings.RemoteApproval);
-        Assert.Contains("remote approval of permission prompts, launching and notifications are off", problem);
+        Assert.Contains("remote approval of permission prompts, launching, notifications and agent usage are off", problem);
         Assert.False(settings.Launch.Enabled);
         Assert.False(settings.Push);
         Assert.True(settings.ReadOnly);
+        Assert.False(settings.Usage.Publish);
     }
 
     [Theory]
