@@ -112,29 +112,4 @@ public static partial class HaContract
     // Set-CopilotMqttNewSessionResult: the note, cut to what a state holds.
     public static string LaunchNote(string text) =>
         text.Length > StateMaxChars ? text[..(StateMaxChars - 3)] + "..." : text;
-
-    // Get-BridgeResumableSessions' labels: the agent named once the list holds more than one kind,
-    // the folder's last part after the summary, cut at 120, a repeat told apart by its id's first
-    // eight characters, and a second repeat left out. In: newest first.
-    public static IReadOnlyList<(string Label, int Index)> ResumeLabels(IReadOnlyList<(string Id, string Kind, string AgentLabel, string? Summary, string? Folder)> sessions)
-    {
-        var prefixed = sessions.Select(s => s.Kind).Distinct(StringComparer.Ordinal).Count() > 1;
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var labels = new List<(string, int)>();
-        for (var i = 0; i < sessions.Count; i++)
-        {
-            var s = sessions[i];
-            var shortId = s.Id[..Math.Min(8, s.Id.Length)];
-            var summary = System.Text.RegularExpressions.Regex.Replace(s.Summary ?? "", @"\s+", " ").Trim();
-            if (string.IsNullOrWhiteSpace(summary)) { summary = $"Session {shortId}"; }
-            if (prefixed) { summary = $"{s.AgentLabel}: {summary}"; }
-            var leaf = string.IsNullOrWhiteSpace(s.Folder) ? "" : s.Folder.TrimEnd('\\', '/').Split('\\', '/')[^1];
-            var label = leaf.Length > 0 ? $"{summary} - {leaf}" : summary;
-            if (label.Length > 120) { label = label[..117] + "..."; }
-            if (seen.Contains(label)) { label = $"{label} ({shortId})"; }
-            if (!seen.Add(label)) { continue; }
-            labels.Add((label, i));
-        }
-        return labels;
-    }
 }

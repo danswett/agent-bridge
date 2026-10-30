@@ -72,8 +72,6 @@ public sealed record HaConnectorOptions
     // How often the launch card's choices are asked of the host's launcher again, and its
     // selectors kept on a usable default (the daemon's reconcile).
     public TimeSpan LaunchRefresh { get; init; } = TimeSpan.FromSeconds(30);
-    // How many resumable sessions the card offers (newSession.resumeCount).
-    public int ResumeCount { get; init; } = 12;
 }
 
 // The Home Assistant connector (docs/ha-connector.md): this machine's sessions, liveness,

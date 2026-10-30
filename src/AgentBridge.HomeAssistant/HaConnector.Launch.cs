@@ -36,6 +36,8 @@ public sealed partial class HaConnector
     bool launchPressBaselined;
     string? launchPressHandled;
     bool launchBusy;
+    // The press whose launch request could not be read, said once.
+    string? launchPayloadUnreadable;
     int launchTouched;
     int launchAgentTouched;
     DateTimeOffset nextLaunchSweep;
@@ -50,7 +52,10 @@ public sealed partial class HaConnector
     // Sessions an agent's press launched, to show as the agent's from the moment they appear.
     readonly Dictionary<string, DateTimeOffset> launchedByAgent = new(StringComparer.Ordinal);
 
-    sealed record LaunchDone(LaunchRequest Request, string? RequestId, string Pressed, bool FromCard, bool HadPrompt, string Driver, JsonObject? Launched, LaunchResult Result);
+    sealed record LaunchDone(LaunchRequest Request, string? RequestId, string Pressed, string Driver, JsonObject? Launched, Consumed? Prompt, LaunchResult Result);
+
+    // What a card launch took its prompt from: the box as it read, and the payload's at stamp.
+    sealed record Consumed(string? Box, string? PayloadAt);
 
     // A launch request read from the prompt payload (Get-DaemonLaunchRequest).
     sealed record PayloadRequest(string Kind, string? Id = null, string Text = "", IReadOnlyDictionary<string, string>? Settings = null, string Problem = "");
@@ -130,15 +135,20 @@ public sealed partial class HaConnector
 
     HaContract.LaunchCard Card(LaunchOptions offered, LaunchAgent? selected)
     {
-        var sessions = offered.Resumable.OrderByDescending(r => r.UpdatedAt ?? DateTimeOffset.MinValue).Take(options.ResumeCount)
-            .Select(r => (r.Id, r.Launcher, AgentLabel(offered, r.Launcher), (string?)r.Title, r.Cwd)).ToList();
-        var labels = HaContract.ResumeLabels(sessions);
-        resumeByLabel = labels.ToDictionary(l => l.Label, l => (sessions[l.Index].Id, sessions[l.Index].Launcher), StringComparer.Ordinal);
+        // The host's list is the daemon's already: newest first, cut to newSession.resumeCount,
+        // and each title the label Get-BridgeResumableSessions gives it (LaunchService), so it
+        // is offered as it is.
+        var resumable = new List<string>();
+        resumeByLabel = new(StringComparer.Ordinal);
+        foreach (var r in offered.Resumable)
+        {
+            if (r.Title.Length > 0 && resumeByLabel.TryAdd(r.Title, (r.Id, r.Launcher))) { resumable.Add(r.Title); }
+        }
         return new HaContract.LaunchCard
         {
             Workspaces = [.. offered.Workspaces.Select(w => w.Label)],
             Profiles = Agency(offered)?.Profiles ?? [],
-            Resumable = [.. labels.Select(l => l.Label)],
+            Resumable = resumable,
             Agents = [.. offered.Agents.Select(a => a.Label)],
             Tuning = new Dictionary<string, IReadOnlyList<string>>
             {
@@ -220,12 +230,25 @@ public sealed partial class HaConnector
             return;
         }
         if (!press.Present || press.Value == launchPressHandled) { return; }
+        // The prompt payload first, and read for certain: unreadable is not "no request", which
+        // would launch an agent's press with the card's settings (Allow all, say, for a request
+        // that asked to be asked). The press waits for the next pass instead.
+        HaState? payload;
+        try { payload = await ha.GetStateAsync(LaunchEntity("sensor", "new_prompt_payload"), ct); }
+        catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
+        {
+            if (launchPayloadUnreadable != press.Value) { log($"Home Assistant connector: a Launch press waits, its launch request unreadable: {Describe(e)}"); }
+            launchPayloadUnreadable = press.Value;
+            Interlocked.Exchange(ref launchTouched, 1);
+            return;
+        }
+        launchPayloadUnreadable = null;
         launchPressHandled = press.Value;
         if (!DateTimeOffset.TryParse(press.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var pressedAt)) { return; }
         var driver = DriverOf(press.Snapshot?.UserId);
         var pressed = Instant(pressedAt);
 
-        var read = await ReadLaunchRequestAsync(pressedAt, ct);
+        var read = ReadLaunchRequest(payload, pressedAt);
         var payloadSkip = false;
         switch (read.Kind)
         {
@@ -259,7 +282,7 @@ public sealed partial class HaConnector
                 log("Home Assistant connector: Launch pressed while a launch is still starting; nothing more launched");
                 return;
             }
-            await LaunchFromCardAsync(pressed, payloadSkip, driver, now, ct);
+            await LaunchFromCardAsync(pressed, payloadSkip ? null : payload, driver, now, ct);
             return;
         }
 
@@ -297,11 +320,11 @@ public sealed partial class HaConnector
             return;
         }
         await LaunchNoteAsync(StartingNote(launched!), ct);
-        Dispatch(request, id, pressed, fromCard: false, hadPrompt: false, driver, launched);
+        Dispatch(request, id, pressed, driver, launched, null);
     }
 
     // A person's press, or an agent's without a request: everything from the card.
-    async Task LaunchFromCardAsync(string pressed, bool payloadSkip, string driver, DateTimeOffset now, CancellationToken ct)
+    async Task LaunchFromCardAsync(string pressed, HaState? payload, string driver, DateTimeOffset now, CancellationToken ct)
     {
         var offered = launchOptions!;
         var agentName = (await StateOrNullAsync(LaunchEntity("select", "new_agent"), ct))?.State;
@@ -340,7 +363,7 @@ public sealed partial class HaConnector
             }
         }
 
-        var prompt = await CardPromptAsync(payloadSkip, ct);
+        var (prompt, box) = await CardPromptAsync(payload, ct);
 
         string? profile = null;
         var profiles = Agency(offered)?.Profiles ?? [];
@@ -385,27 +408,26 @@ public sealed partial class HaConnector
         };
         var launched = Launched(offered, request, resumeLabel);
         await LaunchNoteAsync(StartingNote(launched), ct);
-        Dispatch(request, null, pressed, fromCard: true, hadPrompt: prompt.Length > 0, driver, launched);
+        Dispatch(request, null, pressed, driver, launched, prompt.Length > 0 ? new Consumed(box, PayloadStamp(payload)) : null);
     }
 
-    // Get-DaemonLaunchPrompt: the payload's whole prompt when it has one, else the box's.
-    async Task<string> CardPromptAsync(bool payloadSkip, CancellationToken ct)
+    // Get-DaemonLaunchPrompt: the payload's whole prompt when it has one, else the box's; and
+    // what the box held, so only that is cleared once the launch is done with it.
+    async Task<(string Prompt, string? Box)> CardPromptAsync(HaState? payload, CancellationToken ct)
     {
-        if (!payloadSkip && await StateOrNullAsync(LaunchEntity("sensor", "new_prompt_payload"), ct) is { } payload
-            && !Stale(payload.State) && payload.Attributes is { ValueKind: JsonValueKind.Object } a
+        var typed = (await StateOrNullAsync(LaunchEntity("text", "new_prompt"), ct))?.State;
+        if (payload is not null && !Stale(payload.State) && payload.Attributes is { ValueKind: JsonValueKind.Object } a
             && a.TryGetProperty("text", out var t) && t.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(t.GetString()))
         {
-            return t.GetString()!.Trim();
+            return (t.GetString()!.Trim(), typed);
         }
-        var typed = (await StateOrNullAsync(LaunchEntity("text", "new_prompt"), ct))?.State;
-        return Stale(typed) ? "" : typed!.Trim();
+        return (Stale(typed) ? "" : typed!.Trim(), typed);
     }
 
     // Get-DaemonLaunchRequest: the request and settings riding on the prompt payload, and whether
     // they belong to the press at pressedAt. Both times are Home Assistant's.
-    async Task<PayloadRequest> ReadLaunchRequestAsync(DateTimeOffset pressedAt, CancellationToken ct)
+    PayloadRequest ReadLaunchRequest(HaState? state, DateTimeOffset pressedAt)
     {
-        var state = await StateOrNullAsync(LaunchEntity("sensor", "new_prompt_payload"), ct);
         if (state is null || Stale(state.State) || state.Attributes.ValueKind != JsonValueKind.Object) { return new("none"); }
         var a = state.Attributes;
         var hasId = a.TryGetProperty("request", out var idElement) && idElement.ValueKind != JsonValueKind.Null;
@@ -587,7 +609,7 @@ public sealed partial class HaConnector
     }
 
     // The launch, beside the passes: the host follows it to registration, up to a minute.
-    void Dispatch(LaunchRequest request, string? requestId, string pressed, bool fromCard, bool hadPrompt, string driver, JsonObject? launched)
+    void Dispatch(LaunchRequest request, string? requestId, string pressed, string driver, JsonObject? launched, Consumed? prompt)
     {
         launchBusy = true;
         var cancel = replyStop.Token;
@@ -598,7 +620,7 @@ public sealed partial class HaConnector
             try { result = await launcher!.Launch(request, cancel); }
             catch (OperationCanceledException) when (cancel.IsCancellationRequested) { result = new LaunchResult(LaunchOutcome.Unconfirmed, "the host stopped while the launch was starting; check the machine"); }
             catch (Exception e) { result = new LaunchResult(LaunchOutcome.Failed, $"Launch failed: {e.GetType().Name}"); }
-            launchesDone.Enqueue(new LaunchDone(request, requestId, pressed, fromCard, hadPrompt, driver, launched, result));
+            launchesDone.Enqueue(new LaunchDone(request, requestId, pressed, driver, launched, prompt, result));
         }, CancellationToken.None));
     }
 
@@ -634,7 +656,7 @@ public sealed partial class HaConnector
             }
             // Started: the note goes, as it does once the daemon sees the session register.
             var note = result.Outcome == LaunchOutcome.Started ? "" : result.Reason ?? (outcome == "failed" ? "Launch failed." : "Launch refused.");
-            await LaunchNoteAsync(note, ct);
+            await LaunchNoteAsync(note, ct, strict: true);
             if (done.RequestId is { } id)
             {
                 await OutcomeAsync(id, outcome, note, session: result.Session ?? "", launched: launched, ct: ct);
@@ -643,7 +665,7 @@ public sealed partial class HaConnector
             {
                 // The prompt that started a session is not left to start the next one; an agent's
                 // was taken from the payload already, and the box is a person's.
-                if (done.FromCard && done.HadPrompt) { await ClearPromptsAsync(ct); }
+                if (done.Prompt is { } consumed) { await ClearPromptsAsync(consumed, ct); }
                 // The selectors were re-read on the next refresh: what is resumable has changed.
                 launchOptionsAt = DateTimeOffset.MinValue;
                 if (done.Driver == "agent" && result.Session is { Length: > 0 } session) { ArmLaunchedDriver(session, now); }
@@ -658,7 +680,9 @@ public sealed partial class HaConnector
     {
         lock (gate)
         {
-            if (published.TryGetValue(sessionId, out var p)) { p.ArmDriver("agent", now); return; }
+            // Already published, as a launch that registered before it was reported is: its
+            // activity is published again with the agent as its driver.
+            if (published.TryGetValue(sessionId, out var p)) { p.ArmDriver("agent", now); dirty.Add(sessionId); return; }
             launchedByAgent[sessionId] = now;
         }
     }
@@ -680,9 +704,17 @@ public sealed partial class HaConnector
         if (launchedByAgent.Remove(sessionId, out var at) && now - at < options.DriverArm) { p.ArmDriver("agent", at); }
     }
 
-    // Set-CopilotMqttNewSessionResult.
-    async Task LaunchNoteAsync(string text, CancellationToken ct) =>
-        await ha.PublishAsync(HaContract.LaunchResultTopic(Slug), HaContract.LaunchNote(text), true, ct);
+    // Set-CopilotMqttNewSessionResult. Best effort where a press has been taken already: a note
+    // that could not be shown must not stop the launch it describes, or leave an agent's outcome
+    // at starting. Strict for what a launch came to, which the next pass then tries again.
+    async Task LaunchNoteAsync(string text, CancellationToken ct, bool strict = false)
+    {
+        try { await ha.PublishAsync(HaContract.LaunchResultTopic(Slug), HaContract.LaunchNote(text), true, ct); }
+        catch (Exception e) when (!strict && e is not (OperationCanceledException or AgentHaBridgeRunning))
+        {
+            log($"Home Assistant connector could not show the launch note ({text}): {Describe(e)}");
+        }
+    }
 
     // Set-DaemonLaunchOutcome: the latest few, newest first; never throws, since the launch it
     // describes has happened either way.
@@ -726,13 +758,26 @@ public sealed partial class HaConnector
         catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { log($"Home Assistant connector could not clear the launch prompt payload: {Describe(e)}"); }
     }
 
-    // Clear-DaemonLaunchPrompt: both boxes.
-    async Task ClearPromptsAsync(CancellationToken ct)
+    // Clear-DaemonLaunchPrompt: both boxes, each only while it still holds what the launch took.
+    // The launch is done a while after the press, and a person's next prompt or an agent's next
+    // request written meanwhile is not this launch's to clear.
+    async Task ClearPromptsAsync(Consumed consumed, CancellationToken ct)
     {
-        try { await ha.CallServiceAsync("text", "set_value", new JsonObject { ["entity_id"] = LaunchEntity("text", "new_prompt"), ["value"] = HaDecision.ReplyBlank }, ct); }
-        catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { }
-        await ClearPromptPayloadAsync(ct);
+        var box = LaunchEntity("text", "new_prompt");
+        if (!Stale(consumed.Box) && consumed.Box != HaDecision.ReplyBlank && (await StateOrNullAsync(box, ct))?.State == consumed.Box)
+        {
+            try { await ha.CallServiceAsync("text", "set_value", new JsonObject { ["entity_id"] = box, ["value"] = HaDecision.ReplyBlank }, ct); }
+            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { }
+        }
+        if (consumed.PayloadAt is { } stamp && PayloadStamp(await StateOrNullAsync(LaunchEntity("sensor", "new_prompt_payload"), ct)) == stamp)
+        {
+            await ClearPromptPayloadAsync(ct);
+        }
     }
+
+    // Which publish of the prompt payload a state is: its state is the at the card and agents
+    // stamp each publish with (value_template), and nothing once it is cleared.
+    static string? PayloadStamp(HaState? payload) => payload is null || Stale(payload.State) ? null : payload.State;
 
     // Clear-DaemonStaleNote: a note is what the last press came to; once old, it only sits there.
     async Task ExpireLaunchNoteAsync(CancellationToken ct)

@@ -38,7 +38,7 @@ public sealed class LaunchTests : IDisposable
             new LaunchAgent { Id = "codex", Label = "Codex", Kind = AgentKind.Codex, NeedsPrompt = true },
         ],
         Workspaces = [new LaunchWorkspace { Label = "agent-bridge", Path = @"C:\repos\agent-bridge" }, new LaunchWorkspace { Label = "scratch", Path = @"C:\scratch" }],
-        Resumable = [new ResumableSession { Id = "6f000000-0000-4000-8000-000000000001", Agent = AgentKind.Copilot, Launcher = "copilot", Title = "Fix the relay", Cwd = @"C:\repos\agent-bridge", UpdatedAt = FakeSessions.T0 }],
+        Resumable = [new ResumableSession { Id = "6f000000-0000-4000-8000-000000000001", Agent = AgentKind.Copilot, Launcher = "copilot", Title = "Fix the relay - agent-bridge", Cwd = @"C:\repos\agent-bridge", UpdatedAt = FakeSessions.T0 }],
         Defaults = new LaunchDefaults { Agent = "copilot", Workspace = "agent-bridge", Permissions = LaunchProtocol.Ask },
     };
 
@@ -133,21 +133,6 @@ public sealed class LaunchTests : IDisposable
         Assert.Equal(constants["permissions"]!.AsArray().Select(p => p!.GetValue<string>()), HaContract.PermissionOptions);
         Assert.Equal(constants["noteExpirySeconds"]!.GetValue<int>(), (int)HaContract.LaunchNoteExpiry.TotalSeconds);
         Assert.Equal(Loaded.Value["agents"]!.AsObject().Select(a => a.Value!["label"]!.GetValue<string>()), offered.Agents.Select(a => a.Label));
-    }
-
-    [Theory]
-    [InlineData("oneAgent")]
-    [InlineData("twoAgents")]
-    public void Resumable_sessions_are_labelled_as_the_daemon_labels_them(string name)
-    {
-        var expected = Loaded.Value["resumeLabels"]![name]!.AsArray().Select(e => e!.AsObject()).ToList();
-        var inputs = name == "oneAgent"
-            ? new[] { ("c0000000-0000-4000-8000-000000000001", "claude", "Claude", "Write the   docs", @"C:\repos\agent-bridge\"), ("c0000000-0000-4000-8000-000000000002", "claude", "Claude", "", "/Users/me/scratch"), ("c0000000-0000-4000-8000-000000000003", "claude", "Claude", "No folder", "") }
-            : [("6f000000-0000-4000-8000-000000000001", "copilot", "Copilot", "Fix the relay", @"C:\repos\agent-bridge"), ("6f000000-0000-4000-8000-000000000002", "copilot", "Copilot", "Fix the relay", @"C:\repos\agent-bridge"),
-                ("6f000000-0000-4000-8000-000000000003", "copilot", "Copilot", string.Concat(Enumerable.Repeat("A very long summary ", 8)), @"C:\repos\agent-bridge"), ("c0000000-0000-4000-8000-000000000004", "claude", "Claude", "Write docs", @"C:\scratch")];
-        var labels = HaContract.ResumeLabels([.. inputs.Select(i => (i.Item1, i.Item2, i.Item3, (string?)i.Item4, (string?)i.Item5))]);
-        Assert.Equal(expected.Select(e => e["label"]!.GetValue<string>()), labels.Select(l => l.Label));
-        Assert.Equal(expected.Select(e => e["id"]!.GetValue<string>()), labels.Select(l => inputs[l.Index].Item1));
     }
 
     [Fact]
@@ -395,6 +380,80 @@ public sealed class LaunchTests : IDisposable
         const string late = "Launch refused: the request waited more than 5 minutes for this machine, so it was not started late.";
         Assert.Equal(late, Note);
         Assert.Equal(("refused", late), (Outcome()["outcome"]!.GetValue<string>(), Outcome()["note"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task A_press_whose_launch_request_cannot_be_read_waits_rather_than_launching_from_the_card()
+    {
+        await using var c = await Ready();
+        ha.Choose(Entity("select", "new_permissions"), HaContract.PermissionAllowAll);
+        Payload(new JsonObject { ["request"] = "req-0008-abcd", ["settings"] = new JsonObject { ["permissions"] = HaContract.PermissionAsk } });
+        var payload = Entity("sensor", "new_prompt_payload");
+        ha.GetFailsFor = id => id == payload;
+        await Launch(c, AgentUser);
+        Assert.Empty(launched);
+        ha.GetFailsFor = null;
+        await Pass(c);
+        await c.DeliveredAsync();
+        await Pass(c, 0.01);
+        var r = Assert.Single(launched);
+        Assert.Equal(LaunchProtocol.Ask, r.Permissions);
+        Assert.Equal("req-0008-abcd", Outcome()["request"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_prompt_written_while_a_launch_starts_is_not_cleared_when_that_launch_is_done()
+    {
+        var release = new TaskCompletionSource<LaunchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        answer = _ => release.Task;
+        await using var c = await Ready();
+        ha.Type(Entity("text", "new_prompt"), "first");
+        Payload(new JsonObject { ["text"] = "the whole first prompt" });
+        c.Observe(ha.Press(Entity("button", "new_session")));
+        await Pass(c);
+        for (var i = 0; i < 500 && Volatile.Read(ref launchedCount) == 0; i++) { await Task.Delay(10); }
+        // Meanwhile a person types the next prompt and an agent publishes its request.
+        ha.Type(Entity("text", "new_prompt"), "second");
+        Payload(new JsonObject { ["text"] = "the agent's", ["request"] = "req-0010-abcd" });
+        release.SetResult(new LaunchResult(LaunchOutcome.Started) { Session = "6f000000-0000-4000-8000-0000000000cc" });
+        await c.DeliveredAsync();
+        await Pass(c, 0.01);
+        Assert.Equal("the whole first prompt", launched[0].Prompt);
+        Assert.Equal("second", State("text", "new_prompt"));
+        Assert.Contains("req-0010-abcd", ha.Retained[HaContract.PromptPayloadTopic(Slug)], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_launch_whose_starting_note_cannot_be_shown_still_starts_and_its_request_hears_so()
+    {
+        await using var c = await Ready();
+        ha.PublishFailsFor = (topic, payload) => topic == HaContract.LaunchResultTopic(Slug) && payload.StartsWith("Starting", StringComparison.Ordinal);
+        Payload(new JsonObject { ["request"] = "req-0011-abcd" });
+        await Launch(c, AgentUser);
+        Assert.Single(launched);
+        Assert.Equal("started", Outcome()["outcome"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_session_an_agent_launched_that_appeared_before_its_launch_was_reported_turns_purple()
+    {
+        var release = new TaskCompletionSource<LaunchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        answer = _ => release.Task;
+        await using var c = await Ready();
+        Payload(new JsonObject { ["request"] = "req-0012-abcd" });
+        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+        await Pass(c);
+        for (var i = 0; i < 500 && Volatile.Read(ref launchedCount) == 0; i++) { await Task.Delay(10); }
+        const string id = "6f000000-0000-4000-8000-0000000000dd";
+        sessions.Set(FakeSessions.Copilot(id));
+        await Pass(c);
+        var topic = HaContract.Topics(HaContract.NodeId(id)).ActivityAttributes;
+        Assert.Equal("human", JsonNode.Parse(ha.Retained[topic])!["driver"]!.GetValue<string>());
+        release.SetResult(new LaunchResult(LaunchOutcome.Started) { Session = id });
+        await c.DeliveredAsync();
+        await Pass(c, 0.01);
+        await Pass(c);
+        Assert.Equal("agent", JsonNode.Parse(ha.Retained[topic])!["driver"]!.GetValue<string>());
     }
 
     [Fact]

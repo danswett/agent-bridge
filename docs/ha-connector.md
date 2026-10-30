@@ -420,12 +420,14 @@ sensor on the retained `newsession/promptpayload`, the workspace, profile, agent
 effort, context and permissions selectors, Launch (`newsession/start`) and its result, whose
 attributes are the retained `newsession/outcome`. `Fixtures/ha-launch.json` records the daemon's
 own functions: the configs for a full card and an empty one, the note's 255-character cut, the
-resume labels, the request kinds and their refusal texts, eleven requests resolved against the
+resume labels (which the host's launcher gives its resumable sessions, so the drift guard watches
+them for it), the request kinds and their refusal texts, eleven requests resolved against the
 recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the capability flags.
 
 * **The card's choices are the host's**: its approved workspaces, its installed agents, Agency's
   profiles, the selected agent's models, efforts and context sizes (with `Agent default` first),
-  and the twelve most recent resumable sessions, labelled as the daemon labels them. They are
+  and the host's resumable sessions as its launcher lists them (newest first, cut to
+  `newSession.resumeCount`, each titled as the daemon labels it), offered verbatim. They are
   read from the launcher every 30 s and when the agent selector changes; the configs are
   republished only when what they offer changes. A selector holding nothing usable (`unknown`
   after a Home Assistant restart, or a value no longer offered) is driven to the machine's
@@ -437,7 +439,8 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   another agent) is the machine's default, `Agent default` is the agent's own; only the exact
   `Allow all` allows all. The note says `Starting <agent> in <workspace> (<profile>)...` or
   `Resuming <label>...`, then goes once the host says the session started, or becomes the
-  host's reason when it did not. A prompt that started a session is cleared from both boxes.
+  host's reason when it did not. A prompt that started a session is cleared from each box that
+  still holds it once the host says so; a prompt or request written meanwhile is left alone.
 * **An agent's request** (agent-ha-bridge #227): `{at, text, request, settings}` published to the
   prompt payload and then a press. Its settings are the only ones used: one left out is the
   machine's default, never what the card shows; one this machine does not offer is refused in
@@ -450,12 +453,15 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   served is never served again; and one that reached the machine more than five minutes after
   its press is refused rather than started late. An agent's second press within 10 s of the one
   that took a request launches nothing (the daemon's guard against two presses for one request).
+  A press whose prompt payload cannot be read waits for the next pass rather than launching from
+  the card, since it may carry a request with settings of its own.
 * **The purple edge**: a session an agent's press launched is `agent`-driven from the moment it
   appears.
 * **One at a time.** The launch runs beside the passes (the host follows it to registration); a
   press meanwhile launches nothing, and a request hears `busy`.
 * What the button holds when the connector first reads it is not a press, and the note is
-  cleared after ten minutes, as the daemon clears it.
+  cleared after ten minutes, as the daemon clears it. A note that cannot be shown does not stop
+  the launch it describes.
 
 Where stage 5 knowingly differs from the daemon:
 
