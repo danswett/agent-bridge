@@ -564,6 +564,13 @@ public sealed class MigrationTests : IAsyncLifetime
         var kept = await _f.Migrator(hookFolder: spaced).MigrateAsync(dryRun: true);
         Assert.True(kept.Ok, kept.ToString());
         Assert.Contains("Codex's hooks are left on agent-ha-bridge's", kept.ToString());
+        // But not while a Codex session that may have started before they were written runs: it
+        // may hold the PowerShell hooks they replaced.
+        _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Codex] = 1;
+        Assert.Contains("Codex's hooks (", (await _f.Migrator(hookFolder: spaced).MigrateAsync(dryRun: true)).ToString());
+        _f.Runtime_.AgentsStarted[AgentBridge.Protocol.AgentKind.Codex] = DateTimeOffset.UtcNow.AddMinutes(1);
+        Assert.True((await _f.Migrator(hookFolder: spaced).MigrateAsync(dryRun: true)).Ok);
+        _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Codex] = 0;
         var codex = FakeAgentHaBridge.Read(_f.CodexHooks);
         foreach (var (_, list) in codex["hooks"]!.AsObject()) { list![0]!["hooks"]![0]!["command"] = $"pwsh -NoProfile -ExecutionPolicy Bypass -File {_f.CodexScript}"; }
         File.WriteAllText(_f.CodexHooks, codex.ToJsonString());

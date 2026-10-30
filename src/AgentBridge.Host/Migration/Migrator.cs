@@ -75,7 +75,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
     {
         foreach (var plan in plans)
         {
-            if (plan.Changes.Count == 0) { continue; }
+            if (plan.Changes.Count == 0 && !plan.KeptGoHook) { continue; }
             var direct = plan.Changes.Any(c => Registrations.RanPowerShell(install, c));
             var (kind, name) = plan.Role switch
             {

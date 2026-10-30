@@ -16,6 +16,11 @@ public sealed record FilePlan(string Role, string Path, bool Existed, byte[] Ori
 {
     // Why the migration must not go ahead with this file as it is, or null.
     public string? Refusal { get; init; }
+
+    // agent-ha-bridge's Go hook entries left in place rather than re-pointed (Codex, when this
+    // product's hook path has a space): they spool to the host, but a session started before the
+    // file was last written may hold the PowerShell hooks they replaced, as with re-pointed ones.
+    public bool KeptGoHook { get; init; }
 }
 
 // Finding agent-ha-bridge's own hook entries in each agent's settings, exactly as its installers
@@ -150,7 +155,7 @@ public static class Registrations
                     Refusal = $"Codex runs agent-ha-bridge's PowerShell hook directly ({install.CodexHooksFile}), and cannot run this product's hook from a path with a space ({hook}), so it would go on running beside the host. Install the app where its path has no space, or let agent-ha-bridge register Codex through its native hook, and migrate again",
                 };
             }
-            return plan with { Notes = [.. plan.Notes, $"Codex's hooks are left on agent-ha-bridge's: Codex cannot run a command whose path has a space ({hook}); they spool to the host while it runs and fall back to PowerShell when it does not"] };
+            return plan with { KeptGoHook = true, Notes = [.. plan.Notes, $"Codex's hooks are left on agent-ha-bridge's: Codex cannot run a command whose path has a space ({hook}); they spool to the host while it runs and fall back to PowerShell when it does not"] };
         }
         if (plan.Changes.Count > 0)
         {
