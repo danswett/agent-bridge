@@ -130,6 +130,18 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Machines_still_come_and_go_while_this_machines_host_is_away()
+    {
+        await BothMachinesAsync();
+        await localHost.StopAsync();
+        await Wait.UntilAsync(() => local.State != LinkState.Connected, "this machine's host to go");
+
+        link.Set(FleetState.Connected, ("host-id", "Test PC"));
+
+        await Wait.UntilAsync(() => Card("there") is null, "the other machine's cards to go");
+    }
+
+    [Fact]
     public async Task The_picker_shows_one_machines_cards_and_opening_a_card_it_hides_shows_them_all_again()
     {
         await BothMachinesAsync();

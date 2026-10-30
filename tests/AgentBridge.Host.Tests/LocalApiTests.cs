@@ -31,7 +31,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     readonly List<string> logged = [];
     Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> signIn = (_, _, _) => Task.FromException<SignInResult>(new InvalidOperationException("no relay in these tests"));
     (SignInResult Account, Uri Relay)? saved;
-    SignInResult? credential;
+    RelayAccount? credential;
 
     public LocalApiTests()
     {
@@ -261,7 +261,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         var none = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.RelayAccount));
         Assert.Equal("this host is not signed in to the relay", none.Message);
 
-        credential = new SignInResult("token-1", "acct-1", "octo");
+        credential = new RelayAccount("https://relay.example/", "token-1", "acct-1", "octo");
         var account = await ch.CallAsync<RelayAccount>(HostOps.RelayAccount);
 
         Assert.Equal(new RelayAccount("https://relay.example/", "token-1", "acct-1", "octo"), account);

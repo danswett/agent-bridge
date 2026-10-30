@@ -106,6 +106,25 @@ public sealed class ToastTests
     }
 
     [Fact]
+    public void A_session_that_ends_keeps_its_finished_toast_but_a_machine_that_leaves_takes_them_all()
+    {
+        var p = new ToastPlanner(sink, clock) { Capabilities = () => Caps, MachineName = () => "Build server", WindowActive = () => false, Quiet = () => false, FinishedEnabled = () => true, MachineKey = "remote-id" };
+        foreach (var id in new[] { "s1", "s2" })
+        {
+            p.Upsert(Make.Session(id, status: SessionStatus.Working));
+            p.Upsert(Make.Session(id, response: "Done.", turns: 2));
+        }
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Equal(2, sink.Shown.Count);
+
+        p.Remove("s1");
+        Assert.Empty(sink.Withdrawn);
+        p.Remove("s2", machineGone: true);
+        Assert.Equal([ToastPlanner.Tag("s2", "remote-id")], sink.Withdrawn);
+    }
+
+    [Fact]
     public void Nothing_is_raised_while_the_window_is_in_front_and_toasts_go_quietly_when_windows_says_the_person_is_busy()
     {
         Planner(active: true).Tap(clock, Make.Session(question: Make.Choice()));

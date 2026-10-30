@@ -39,6 +39,7 @@ public sealed class ToastPlanner
         public string? Shown;
         public HashSet<string> Notified = new(StringComparer.Ordinal);
         public string? FinishedKey;
+        public bool FinishedShown;
         public (ToastKind Kind, DateTimeOffset At, string? Question)? Due;
     }
 
@@ -119,10 +120,12 @@ public sealed class ToastPlanner
         else if (t.Due is { Kind: ToastKind.Question } d && s.Question?.Id != d.Question) { t.Due = null; }
     }
 
-    public void Remove(string id)
+    // A session that ended keeps its finished toast: the response is still worth reading. One on a
+    // machine that has left (machineGone) takes every toast with it, since none can be acted on.
+    public void Remove(string id, bool machineGone = false)
     {
         if (!sessions.Remove(id, out var t)) { return; }
-        if (t.Shown is not null) { sink.Withdraw(TagOf(id)); }
+        if (t.Shown is not null || (machineGone && t.FinishedShown)) { sink.Withdraw(TagOf(id)); }
     }
 
     // Called every second or so: raises what is due.
@@ -147,6 +150,7 @@ public sealed class ToastPlanner
                 if (s.Status != SessionStatus.Idle || t.FinishedKey == key) { continue; }
                 t.FinishedKey = key;
                 if (!Enabled() || !FinishedEnabled() || WindowActive()) { continue; }
+                t.FinishedShown = true;
                 sink.Show(new ToastNotice(TagOf(id), ToastXml.Finished(s, MachineName(), MachineKey), Quiet()));
             }
         }

@@ -85,7 +85,9 @@ public sealed class MainViewModel : Observable
     public int Waiting => byId.Values.Count(c => c.Session.Question is not null);
     public string MachineName => host.Hello?.Machine.Name ?? Environment.MachineName;
     // This machine's host's relay device id, once it has said hello: never listed as another machine.
-    public string? LocalMachineId => host.Hello?.Machine.Id;
+    // Kept while the pipe is down: the relay's list of machines goes on changing meanwhile.
+    string? localId;
+    public string? LocalMachineId => localId = host.Hello?.Machine.Id ?? host.Status?.Machine.Id ?? localId;
 
     // A line across the top when something stops the app from doing its job.
     public string? Banner => host.State switch
@@ -180,7 +182,7 @@ public sealed class MainViewModel : Observable
             owner.Remove(card);
             card.Detach();
             Sessions.Remove(card);
-            m.Toasts?.Remove(card.Id);
+            m.Toasts?.Remove(card.Id, machineGone: true);
         }
         unhook.Remove(m, out var undo);
         undo?.Invoke();

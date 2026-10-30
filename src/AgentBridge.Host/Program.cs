@@ -297,6 +297,12 @@ async Task<int> ServeAsync()
     // is never sent to a relay other than the one that gave it.
     Uri? signedInRelay = null;
     Uri? ServeRelay() => signedInRelay ?? RelayUri(identity);
+    // The account with the relay that issued it, replaced whole after each sign-in, so the app
+    // reading it (host.relay.account) never gets a new token with the old relay's address.
+    RelayAccount? credential = null;
+    void PublishCredential() => Volatile.Write(ref credential,
+        identity.Account is { } a && ServeRelay() is { } r ? new RelayAccount(r.ToString(), a.Token, a.AccountId, a.Login) : null);
+    PublishCredential();
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -309,7 +315,7 @@ async Task<int> ServeAsync()
         LocalOnly = localOnly,
         Log = HostLog.FilePath,
         Account = () => identity.Account is { } a ? new HostAccount(a.Login, a.AccountId) : null,
-        Credential = () => identity.Account,
+        Credential = () => Volatile.Read(ref credential),
         Relay = ServeRelay,
         AgentHaBridge = haProbe is null ? () => null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64),
         SignIn = async (relay, show, ct) =>
@@ -322,6 +328,7 @@ async Task<int> ServeAsync()
             identity.Save(result);
             File.WriteAllText(Path.Combine(identity.Folder, "relay.txt"), relay.ToString());
             signedInRelay = relay;
+            PublishCredential();
             // Whatever connection there is belongs to the account before; start over.
             connection?.Cancel();
             wake.Release();
@@ -444,6 +451,7 @@ async Task<int> ServeAsync()
             if (identity.ReloadAccount())
             {
                 signedInRelay = SavedRelay(identity) ?? signedInRelay;
+                PublishCredential();
                 Log($"signed in as {identity.Account!.Login} by another process");
                 return true;
             }
