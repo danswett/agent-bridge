@@ -25,8 +25,21 @@ public sealed class ShadowCoverage
     // many kinds of mismatch it had, by a hash of its session and identity: what the question
     // rate counts, since one mismatch can run on across several questions in a session.
     public SortedDictionary<string, ShadowFailedQuestion> FailedQuestions { get; set; } = new(StringComparer.Ordinal);
-    // A session's status changing (working, idle, waiting, ending) as the daemon published it.
+    // A session's status changing (working, idle, waiting, ending) on either side, once a sample
+    // however many sides changed, and the status each session is in when first compared: each
+    // state the two were compared in, so a status mismatch is always about one (#40). An earlier
+    // release counted the daemon's changes alone, so a disagreement begun by the host's change
+    // alone counted nothing.
     public int StatusTransitions { get; set; }
+    // Likewise each latest response the two were compared on: one side's changing, or the first.
+    public int ResponseChanges { get; set; }
+    // When responses began to be counted: a report from before has activity.response mismatches
+    // and nothing to count them against.
+    public DateTimeOffset? ResponsesSince { get; set; }
+    // What each session showing on both sides was last compared in, by its hash: a status pair of
+    // tokens and a hash of the two responses' hashes, so a restart of the comparison does not count
+    // a state again. Carried across midnight; a session gone from both sides is dropped.
+    public SortedDictionary<string, ShadowShown> Shown { get; set; } = new(StringComparer.Ordinal);
     // Sessions that had background agents or shells at some sample, and the starts and finishes
     // of that work as the daemon listed it.
     public List<string> BackgroundSessions { get; set; } = [];
@@ -61,6 +74,12 @@ public sealed class ShadowFailedQuestion
     public string Session { get; set; } = "";
     public List<string> Kinds { get; set; } = [];
     public DateTimeOffset Last { get; set; }
+}
+
+public sealed class ShadowShown
+{
+    public string? Status { get; set; }
+    public string? Response { get; set; }
 }
 
 // Turns each compared sample into events, remembering what the previous one showed. One per run;
@@ -117,6 +136,7 @@ internal sealed class ShadowCoverageTracker
     {
         if (!comparison.Compared) { return; }
         c.Since ??= now;
+        c.ResponsesSince ??= now;
         if (first)
         {
             first = false;
@@ -147,9 +167,11 @@ internal sealed class ShadowCoverageTracker
             }
             // The daemon's marker caught half written says nothing either way.
             if (d?.QuestionUnknown != true) { Question(c, hash, d?.Question, h?.Question); }
+            if (d is not null && h is not null) { Shown(c, hash, d, h); }
             if (d is not null && lastDaemon?.Sessions.GetValueOrDefault(id) is { } before) { Changes(c, before, d); }
         }
         foreach (var gone in asked.Keys.Where(k => !present.Contains(k)).ToList()) { asked.Remove(gone); }
+        foreach (var gone in c.Shown.Keys.Where(k => !present.Contains(k)).ToList()) { c.Shown.Remove(gone); }
 
         if (comparison.ResumableCompared && daemon.Resumable is { } dr && host.Resumable is { } hr)
         {
@@ -206,10 +228,33 @@ internal sealed class ShadowCoverageTracker
             q.CallId ?? q.AskedAt?.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture) ?? q.MessageHead ?? "";
     }
 
+    // What a session showing on both sides is being compared in, counted when it is new: a status
+    // or a response either side changed to, or the one it has when first seen. A status mismatch
+    // or a response one begins only when one of these changes, so each is about an event counted.
+    static void Shown(ShadowCoverage c, string session, ShadowSession d, ShadowSession h)
+    {
+        if (!c.Shown.TryGetValue(session, out var was))
+        {
+            if (c.Shown.Count >= MaxSessions) { return; }
+            c.Shown[session] = was = new ShadowShown();
+        }
+        // A marker caught half written says nothing about the daemon's status this time.
+        if (ShadowCompare.DaemonStatus(d) is { } ds && $"{ShadowHash.Token(ds)}/{ShadowHash.Token(h.Status)}" is var status && status != was.Status)
+        {
+            c.StatusTransitions++;
+            was.Status = status;
+        }
+        // Compared only when both have one, so counted only then.
+        if (d.ResponseTail is not null && h.ResponseTail is not null && ShadowHash.Text(d.ResponseTail + "\n" + h.ResponseTail) is var response && response != was.Response)
+        {
+            c.ResponseChanges++;
+            was.Response = response;
+        }
+    }
+
     // What changed in one session between two samples, as the daemon published it.
     static void Changes(ShadowCoverage c, ShadowSession before, ShadowSession now)
     {
-        if (ShadowCompare.Comparable(before.Status) != ShadowCompare.Comparable(now.Status)) { c.StatusTransitions++; }
         var (was, isNow) = (before.AgentIds.Concat(before.ShellIds.Select(s => "shell:" + s)).ToHashSet(StringComparer.Ordinal),
             now.AgentIds.Concat(now.ShellIds.Select(s => "shell:" + s)).ToHashSet(StringComparer.Ordinal));
         c.BackgroundStarts += isNow.Count(x => !was.Contains(x));
@@ -225,6 +270,7 @@ public static class ShadowCoverageKinds
     public const string Sessions = "sessions";
     public const string Questions = "questions";
     public const string Transitions = "statusTransitions";
+    public const string Responses = "responses";
     public const string Background = "background";
     public const string Compactions = "compactions";
     public const string Models = "modelChanges";
@@ -233,14 +279,15 @@ public static class ShadowCoverageKinds
     public const string Resets = "usageResets";
     public const string Machine = "machineEvents";
 
-    public static readonly IReadOnlyList<string> All = [Sessions, Questions, Transitions, Background, Compactions, Models, Resume, Usage, Resets, Machine];
+    public static readonly IReadOnlyList<string> All = [Sessions, Questions, Transitions, Responses, Background, Compactions, Models, Resume, Usage, Resets, Machine];
 
     // Which coverage kind a mismatch counts against. Usage resets have no mismatch of their own:
     // one would show as a usage.percent, which counts against the readings.
     public static string? Of(string mismatchKind) => mismatchKind switch
     {
         ShadowKinds.MissingOnHost or ShadowKinds.MissingOnDaemon or ShadowKinds.Agent => Sessions,
-        ShadowKinds.Status or ShadowKinds.Response => Transitions,
+        ShadowKinds.Status => Transitions,
+        ShadowKinds.Response => Responses,
         ShadowKinds.BackgroundAgents or ShadowKinds.BackgroundShells => Background,
         ShadowKinds.Compactions => Compactions,
         ShadowKinds.Model => Models,

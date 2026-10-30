@@ -204,6 +204,14 @@ comparing:
   reads as `waiting`; agent-ha-bridge only mirrors them and stays `working`. Approval
   questions are not compared, and the host's `waiting` on one matches the daemon's
   `working`.
+* **A question waits as the card shows it.** agent-ha-bridge's status for a Copilot session
+  comes from the transcript and stays `working` while `ask_user` waits; no hook publishes
+  `waiting` for it. Both its cards say "waiting for you" whenever the session's decision
+  entity carries a question, which the hook that arms its marker puts there. So a session
+  with an armed marker is the daemon's `waiting`, which is what its user sees; a marker
+  caught half written matches either. Found live as `status` daemon `working`, host
+  `waiting`, for minutes while a session asked a question with background agents running:
+  the host was right.
 * **Long text is bounded differently** (§1). Only the end of a response is compared.
 * **Forms answered at the machine** (§2). Where either side cannot drive a prompt from
   another device (agent-ha-bridge's `terminalOnly`, the host's `answerAtMachine`, or a
@@ -271,6 +279,7 @@ What each bug does:
 | `background.shells` daemon 1, host 0, another session | The quoted "still running" line found earlier (#262). The host is right |
 | `status` daemon `shell`, host `working`, for 0 s | Timing: the host saw a new turn start a sample before the daemon's pass. Never lasted the grace |
 | `activity.response` differing for 91 s on the busy session | Timing: its sub-agents' messages changed the latest response every few seconds, and the daemon, writing on its own pass, kept showing the one the host had shown a sample or two before. Now classified: a response one side is showing that the other showed in the last three minutes is a `timing` known difference; one neither showed is still a mismatch |
+| `status` daemon `working`, host `waiting`, for 60 s and 167 s, after the redeploy | The busy session asking its user a question (`ask_user`) with background agents running. The daemon's state stays `working`, but its cards show "waiting for you" from the armed question, so the host is right; now normalized (above) |
 
 ### Fixed in the host
 
@@ -334,7 +343,8 @@ show it, in the day's `coverage`:
 |---|---|---|
 | `sessions` | A session either side listed, with its agent | `session.*`, `agent` |
 | `questions` | A question either side showed, by identity, of kind `choice`, `multi` or `text`, answered or not. Each side knows it by its own identity (the host by the tool call, the daemon by its hook's clock), so a session's run of questions counts the larger of the two sides' counts, each of the kind the side ahead shows | Each question a `question.*` mismatch was about, once (`failedQuestions`, keyed by the identity it was first known by, which each side's identity for the same question maps to, and across midnight with every kind it had), however many kinds it had and however many questions one mismatch ran on across |
-| `statusTransitions` | A session's status changing (working, idle, waiting, ending) as the daemon published it | `status`, `activity.response` |
+| `statusTransitions` | A state a session showing on both sides is compared in: the status it has when first compared, then each change of status (working, idle, waiting, ending) on either side, once a sample. Kept in `shown` (per session hash, the status pair and a hash of the two response hashes), so neither a restart of the comparison nor midnight counts a state again | `status` |
+| `responses` | Likewise each latest response compared, when both sides have one: the first, then each change on either side. Counted from `responsesSince` | `activity.response` |
 | `background` | A background agent or shell starting or finishing, as the daemon listed it (and `backgroundSessions`, the sessions that had any) | `background.*` |
 | `compactions` | A compaction finishing | `compactions` |
 | `modelChanges` | A session's model changing | `model` |
@@ -358,6 +368,12 @@ hold still counts: the sessions they list (agent `unknown` unless a later report
 a side going down and coming back (a `machine.*` disagreement that ended, counted as
 `sideDownAndBack`, also for the part of the redeploy's day before it), the time compared,
 the first sample and every mismatch. Every other event is counted from the redeploy.
+
+Until the release after 5d5149b, `statusTransitions` counted the daemon's changes alone, and
+`activity.response` mismatches counted against them, so a disagreement begun by the host's
+change alone (its `waiting` on a question against the daemon's unchanged `working`) was a
+mismatch with no event. From that release each state compared counts whichever side
+changed, so every `status` or `activity.response` mismatch begins with an event counted.
 
 ## The gate
 
@@ -437,7 +453,9 @@ when `run` starts is kept beside it as `.unreadable-<time>`, never overwritten.
   "coverage": {
     "since": "…", "sessions": { "s8a666b6daa65": "copilot" }, "questions": { "choice": 14, "text": 3 },
     "failedQuestions": { "4c1d…": { "session": "s8a666b6daa65", "kinds": ["question.options"], "last": "…" } },
-    "statusTransitions": 410, "backgroundSessions": ["s8a666b6daa65"], "backgroundStarts": 61,
+    "statusTransitions": 410, "responseChanges": 380, "responsesSince": "…",
+    "shown": { "s8a666b6daa65": { "status": "working/working", "response": "9b2e…" } },
+    "backgroundSessions": ["s8a666b6daa65"], "backgroundStarts": 61,
     "backgroundFinishes": 58, "compactions": 2, "modelChanges": 0, "resumeSnapshots": 37,
     "usageReadings": 96, "usageResets": 1, "machineEvents": { "observerResumed": 1 },
     "daemonStartedAt": "…", "hostStartedAt": "…"

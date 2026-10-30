@@ -252,6 +252,16 @@ public static class ShadowCompare
         _ => daemonStatus,
     };
 
+    // The status agent-ha-bridge shows for a session, or null when its question marker was caught
+    // half written. Nothing in it publishes waiting for a Copilot question: its status entity stays
+    // working, from the transcript, for as long as ask_user is pending. Both its cards say "waiting
+    // for you" whenever the session's decision entity carries a question, though, and the hook that
+    // arms the marker is what puts one there, so an armed marker is what its user sees as waiting.
+    // Seen live as the host's waiting against the daemon's working for minutes, while a session
+    // asked its user a question with background agents running (#40).
+    public static string? DaemonStatus(ShadowSession d) =>
+        d.QuestionUnknown ? null : d.Question is not null ? "waiting" : Comparable(d.Status);
+
     public static string HostStatus(SessionStatus status) => status switch
     {
         SessionStatus.Working => "working",
@@ -432,10 +442,12 @@ public static class ShadowCompare
         void Pair(string kind, string? a, string? b) => diffs.Add(new(kind, s, $"daemon={ShadowHash.Token(a)} host={ShadowHash.Token(b)}"));
 
         if (d.Agent != h.Agent) { Pair(ShadowKinds.Agent, d.Agent, h.Agent); }
-        var expected = Comparable(d.Status);
+        var expected = DaemonStatus(d);
+        // A marker caught half written leaves the daemon showing either its own status or waiting.
+        var agrees = expected is null ? h.Status == Comparable(d.Status) || h.Status == "waiting" : expected == h.Status;
         // parity §3: a pending permission prompt is beyond parity, so the host's waiting is the
         // daemon's working.
-        if (expected != h.Status && !(h.PermissionPending && h.Status == "waiting" && expected == "working")) { Pair(ShadowKinds.Status, d.Status, h.Status); }
+        if (!agrees && !(h.PermissionPending && h.Status == "waiting" && expected == "working")) { Pair(ShadowKinds.Status, d.Question is not null ? "waiting" : d.Status, h.Status); }
         if (d.Agents != h.Agents) { Pair(ShadowKinds.BackgroundAgents, d.Agents.ToString(), h.Agents.ToString()); }
         if (d.Shells != h.Shells) { Pair(ShadowKinds.BackgroundShells, d.Shells.ToString(), h.Shells.ToString()); }
         if (!string.Equals(d.Model ?? "", h.Model ?? "", StringComparison.Ordinal)) { Pair(ShadowKinds.Model, d.Model, h.Model); }

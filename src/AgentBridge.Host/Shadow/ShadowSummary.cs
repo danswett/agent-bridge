@@ -65,14 +65,14 @@ public sealed record ShadowSummary(
     public static ShadowSummary Build(string folder, DateOnly today, int days, DateTimeOffset? now = null, ShadowGateConfig? config = null)
     {
         config ??= new ShadowGateConfig();
-        DateTimeOffset? first = null, last = null, coverageSince = null;
+        DateTimeOffset? first = null, last = null, coverageSince = null, responsesSince = null;
         long comparedSeconds = 0;
         var all = new HashSet<string>(StringComparer.Ordinal);
         var agentOf = new Dictionary<string, string>(StringComparer.Ordinal);
         var questions = new SortedDictionary<string, int>(StringComparer.Ordinal);
         var machine = new SortedDictionary<string, int>(StringComparer.Ordinal);
         var background = new HashSet<string>(StringComparer.Ordinal);
-        int transitions = 0, starts = 0, finishes = 0, compactions = 0, models = 0, resume = 0, usage = 0, resets = 0;
+        int transitions = 0, responses = 0, starts = 0, finishes = 0, compactions = 0, models = 0, resume = 0, usage = 0, resets = 0;
         var known = new Dictionary<(string Kind, string Cause), (int Samples, HashSet<string> Sessions)>();
         var failedQuestions = new Dictionary<string, ShadowFailedQuestion>(StringComparer.Ordinal);
         // Mismatches past a day's cap, by kind, from the days whose events they count against.
@@ -103,6 +103,8 @@ public sealed record ShadowSummary(
                 foreach (var (kind, n) in c.MachineEvents) { machine[kind] = machine.GetValueOrDefault(kind) + n; }
                 background.UnionWith(c.BackgroundSessions);
                 transitions += c.StatusTransitions;
+                responses += c.ResponseChanges;
+                if (c.ResponsesSince is { } r && (responsesSince is null || r < responsesSince)) { responsesSince = r; }
                 starts += c.BackgroundStarts;
                 finishes += c.BackgroundFinishes;
                 compactions += c.Compactions;
@@ -170,6 +172,7 @@ public sealed record ShadowSummary(
             [ShadowCoverageKinds.Sessions] = all.Count,
             [ShadowCoverageKinds.Questions] = questions.Values.Sum(),
             [ShadowCoverageKinds.Transitions] = transitions,
+            [ShadowCoverageKinds.Responses] = responses,
             [ShadowCoverageKinds.Background] = starts + finishes,
             [ShadowCoverageKinds.Compactions] = compactions,
             [ShadowCoverageKinds.Models] = models,
@@ -181,7 +184,7 @@ public sealed record ShadowSummary(
         var lines = new List<ShadowCoverageLine>();
         foreach (var kind in ShadowCoverageKinds.All)
         {
-            var since = ShadowCoverageKinds.FromEveryReport(kind) ? first : coverageSince;
+            var since = ShadowCoverageKinds.FromEveryReport(kind) ? first : kind == ShadowCoverageKinds.Responses ? responsesSince : coverageSince;
             // A mismatch counts against the events counted over the same time.
             var n = counted[kind];
             int m, explained;

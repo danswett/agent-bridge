@@ -87,8 +87,8 @@ public sealed class ShadowCoverageTests : IDisposable
         var c = ledger.Today!.Coverage!;
         Assert.Equal(new Dictionary<string, string> { [ShadowHash.Session(A)] = "copilot", [ShadowHash.Session(B)] = "claude" }, c.Sessions);
         Assert.Equal(new Dictionary<string, int> { ["choice"] = 1, ["multi"] = 1 }, c.Questions);
-        // waiting, working, waiting.
-        Assert.Equal(2, c.StatusTransitions);
+        // The state each session was first compared in, then A's working and waiting again.
+        Assert.Equal(4, c.StatusTransitions);
         Assert.Equal([ShadowHash.Session(A)], c.BackgroundSessions);
         Assert.Equal((2, 1), (c.BackgroundStarts, c.BackgroundFinishes));
         Assert.Equal((1, 1), (c.Compactions, c.ModelChanges));
@@ -102,6 +102,65 @@ public sealed class ShadowCoverageTests : IDisposable
         Sample(after, View(daemonStart.AddHours(5), null, null), View(hostStart.AddHours(2), null, null));
         Assert.Equal(new Dictionary<string, int> { [ShadowCoverage.DaemonRestart] = 1, [ShadowCoverage.HostRestart] = 1, [ShadowCoverage.ObserverResumed] = 1 },
             ShadowLedger.Read(reports, "2026-10-28")!.Coverage!.MachineEvents);
+    }
+
+    // Found live (#40): the host going to waiting while the daemon stayed working was a status
+    // mismatch with no event counted, since only the daemon's changes were.
+    [Fact]
+    public void Every_state_the_two_sides_are_compared_in_is_counted_once_whichever_side_changed_and_across_a_restart_or_midnight()
+    {
+        time.SetUtcNow(new DateTimeOffset(2026, 10, 28, 23, 58, 0, TimeSpan.Zero));
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+        ShadowSession S(string status, string? response) => Session(A, status) with { ResponseTail = response };
+        void Both(ShadowLedger l, ShadowSession d, ShadowSession h) => Sample(l, View(null, null, null, d), View(null, null, null, h));
+
+        Both(ledger, S("working", "r1"), S("working", "r1"));
+        Both(ledger, S("working", "r1"), S("working", "r1"));
+        // Only the host changes: a new state compared, though the daemon's is unchanged.
+        Both(ledger, S("working", "r1"), S("waiting", "r2"));
+        Both(ledger, S("working", "r1"), S("waiting", "r2"));
+        var c = ledger.Today!.Coverage!;
+        Assert.Equal((2, 2), (c.StatusTransitions, c.ResponseChanges));
+
+        // The comparison restarts: the same states are not counted again.
+        var restarted = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+        Both(restarted, S("working", "r1"), S("waiting", "r2"));
+        Assert.Equal((2, 2), (restarted.Today!.Coverage!.StatusTransitions, restarted.Today.Coverage.ResponseChanges));
+
+        // Past midnight neither are they, and the next change is.
+        time.SetUtcNow(new DateTimeOffset(2026, 10, 29, 0, 0, 5, TimeSpan.Zero));
+        Both(restarted, S("working", "r1"), S("waiting", "r2"));
+        Both(restarted, S("idle", "r3"), S("waiting", "r2"));
+        var next = restarted.Today!.Coverage!;
+        Assert.Equal("2026-10-29", restarted.Today.Date);
+        Assert.Equal((1, 1), (next.StatusTransitions, next.ResponseChanges));
+    }
+
+    [Fact]
+    public void A_response_mismatch_counts_against_responses_compared_and_not_before_they_were_counted()
+    {
+        Directory.CreateDirectory(reports);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+        var session = ShadowHash.Session(A);
+        for (var i = 0; i < 6; i++)
+        {
+            ledger.Record(new ShadowComparison(true, 1, 1, [new ShadowDifference(ShadowKinds.Response, session, "the end of the latest response differs")], []),
+                View(null, null, null, Session(A, "idle") with { ResponseTail = "r1" }), View(null, null, null, Session(A, "idle") with { ResponseTail = "r2" }));
+            time.Advance(TimeSpan.FromSeconds(15));
+        }
+        ledger.Record(new ShadowComparison(true, 1, 1, [], []), View(null, null, null, Session(A, "idle")), View(null, null, null, Session(A, "idle")));
+        var today = DateOnly.FromDateTime(time.GetUtcNow().UtcDateTime);
+
+        var lines = ShadowSummary.Build(reports, today, 1, time.GetUtcNow()).Coverage.ToDictionary(l => l.Kind);
+        Assert.Equal((1, 1), (lines[ShadowCoverageKinds.Responses].Events, lines[ShadowCoverageKinds.Responses].Mismatches));
+        Assert.Equal((1, 0), (lines[ShadowCoverageKinds.Transitions].Events, lines[ShadowCoverageKinds.Transitions].Mismatches));
+
+        // A report written before responses were counted: its mismatch is not set against them.
+        var path = Path.Combine(reports, ShadowLedger.FileName(today.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)));
+        var day = JsonNode.Parse(File.ReadAllText(path))!;
+        day["coverage"]!["responsesSince"] = time.GetUtcNow().AddMinutes(1).ToString("o");
+        File.WriteAllText(path, day.ToJsonString());
+        Assert.Equal(0, ShadowSummary.Build(reports, today, 1, time.GetUtcNow()).Coverage.Single(l => l.Kind == ShadowCoverageKinds.Responses).Mismatches);
     }
 
     [Fact]

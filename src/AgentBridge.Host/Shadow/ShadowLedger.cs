@@ -157,7 +157,13 @@ public sealed class ShadowLedger
             // A restart is seen across midnight and across the comparison's own restart.
             if (before?.Coverage is { } carried && day.Coverage is null)
             {
-                day.Coverage = new ShadowCoverage { DaemonStartedAt = carried.DaemonStartedAt, HostStartedAt = carried.HostStartedAt };
+                day.Coverage = new ShadowCoverage
+                {
+                    DaemonStartedAt = carried.DaemonStartedAt,
+                    HostStartedAt = carried.HostStartedAt,
+                    // A session in the same state after midnight is not a new one to compare.
+                    Shown = new(carried.Shown.ToDictionary(x => x.Key, x => new ShadowShown { Status = x.Value.Status, Response = x.Value.Response }), StringComparer.Ordinal),
+                };
             }
         }
         if (comparison.Compared)

@@ -117,6 +117,66 @@ public sealed class ShadowTests : IDisposable
     }
 
     [Fact]
+    public async Task A_copilot_question_the_daemon_has_armed_is_its_waiting_though_its_state_still_says_working()
+    {
+        // As seen live: agent-ha-bridge's status for a Copilot session comes from the transcript and
+        // stays working through ask_user; its cards show "waiting for you" from the armed question.
+        var schema = new
+        {
+            message = "Which one?",
+            requestedSchema = new
+            {
+                properties = new { pick = new { type = "string", title = "Pick", oneOf = new[] { new { @const = "a", title = "A" }, new { @const = "b", title = "B" } } } },
+                required = new[] { "pick" },
+            },
+        };
+        Fixture.Append(f.CopilotSession(Id, 100), Copilot.User("go", 1), Copilot.TurnStart(2),
+            Copilot.Assistant("asking", 3, tools: ["q1"]), Copilot.ToolStart("q1", "ask_user", schema, 3));
+        f.Processes.Run(AgentKind.Copilot, 100);
+        Daemon(new JsonObject { [Id] = Entry("working", response: "asking") });
+        var marker = Path.Combine(f.CopilotHome, "session-state", Id, "agent-pending-decision.json");
+        File.WriteAllText(marker, new JsonObject
+        {
+            ["decisionId"] = $"copilot_1-{Fixture.T0.AddSeconds(3).ToUnixTimeMilliseconds()}",
+            ["toolCallId"] = "",
+            ["question"] = "Which one?",
+            ["choices"] = new JsonArray("A", "B"),
+            ["fields"] = new JsonArray(new JsonObject { ["Name"] = "pick", ["Options"] = new JsonArray("A", "B"), ["Values"] = new JsonArray("a", "b"), ["IsText"] = false, ["MultiSelect"] = false }),
+            ["armedAt"] = Fixture.T0.AddSeconds(3).ToString("o"),
+        }.ToJsonString());
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        var c = await Runner(InProcess(source)).SampleAsync();
+
+        Assert.True(c.Compared);
+        Assert.Empty(c.Differences);
+        // Without the armed question, the daemon's working is a disagreement with the host's waiting.
+        File.Delete(marker);
+        var unarmed = await Runner(InProcess(source)).SampleAsync();
+        Assert.Contains(unarmed.Differences, d => (d.Kind, d.Detail) == (ShadowKinds.Status, "daemon=working host=waiting"));
+    }
+
+    [Fact]
+    public void An_armed_question_is_the_daemons_waiting_and_a_half_written_marker_judges_neither_way()
+    {
+        var asked = new ShadowQuestion { AskedAt = Fixture.T0, Fields = [] };
+        ShadowView Daemon(string status, ShadowQuestion? question = null, bool unknown = false) =>
+            View(new ShadowSession { Id = "a", Agent = "copilot", Status = status, Question = question, QuestionUnknown = unknown });
+        ShadowView Host(string status, ShadowQuestion? question = null) =>
+            View(new ShadowSession { Id = "a", Agent = "copilot", Status = status, Question = question });
+
+        Assert.Empty(ShadowCompare.Compare(Daemon("working", asked), Host("waiting", asked)).Differences);
+        // The host not yet waiting on a question the daemon has armed is a disagreement about both.
+        var differences = ShadowCompare.Compare(Daemon("idle", asked), Host("working")).Differences;
+        Assert.Contains(differences, d => (d.Kind, d.Detail) == (ShadowKinds.Status, "daemon=waiting host=working"));
+        Assert.Contains(differences, d => d.Kind == ShadowKinds.QuestionMissingOnHost);
+        Assert.Empty(ShadowCompare.Compare(Daemon("working", unknown: true), Host("waiting", asked)).Differences);
+        Assert.Empty(ShadowCompare.Compare(Daemon("working", unknown: true), Host("working")).Differences);
+        Assert.Equal(ShadowKinds.Status, Assert.Single(ShadowCompare.Compare(Daemon("working", unknown: true), Host("idle")).Differences).Kind);
+    }
+
+    [Fact]
     public async Task A_question_is_compared_by_its_fields_kinds_and_options_and_the_report_never_carries_its_words_or_the_session_id()
     {
         var schema = new
