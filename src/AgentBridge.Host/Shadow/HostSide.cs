@@ -132,6 +132,7 @@ public sealed class PipeShadowHost(LocalEndpoint endpoint, TimeProvider? time = 
                 Version = ShadowHash.Token(status.Version),
                 Dev = status.Dev,
                 SeesAgentHaBridge = status.AgentHaBridge is not null,
+                StartedAt = status.StartedAt,
                 Usage = extras.Usage,
                 UsageProblem = extras.UsageProblem,
                 Resumable = extras.Resumable,

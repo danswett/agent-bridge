@@ -1,5 +1,5 @@
-# The week-long shadow comparison with agent-ha-bridge on this machine (docs/host-shadow.md,
-# "Running the week"): this host serving a profile of its own, read-only beside the daemon,
+# The shadow comparison with agent-ha-bridge on this machine (docs/host-shadow.md,
+# "Running it"): this host serving a profile of its own, read-only beside the daemon,
 # and `shadow run` against it, each started by a per-user logon task like the app's. No admin.
 #
 #   pwsh build/shadow-week.ps1 -Install [-WhatIf]   # publish, mirror the workspaces, register and start both

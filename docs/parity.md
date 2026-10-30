@@ -350,9 +350,9 @@ agent-ha-bridge's manual checks, `tests/verify-mac-terminal.ps1`,
 |---|---|---|
 | Trace recorder in agent-ha-bridge (opt-in, off by default, G10) | `Intentionally different` | Not needed for the shadow diff, which reads the daemon's own state file, heartbeat and question markers, so agent-ha-bridge is unchanged ([host-shadow.md](host-shadow.md)). A recorder may still be wanted for replay traces. #40 |
 | Replay harness (recorded traces become xUnit cases named for the PS scenarios) | `Missing` | #40 |
-| Shadow mode (read-only beside the daemon, diffing state) | `Implemented, untested live` | `agent-bridge-host shadow run` and `summary` ([host-shadow.md](host-shadow.md)); `ShadowTests` (18). Compares sessions, status, background work, model, compactions, the response's end, questions and their fields, machine status (daemon up, host up, G5), and usage and the resume list (the daemon's read from Home Assistant: GET of four entities only, with its own token, owner-approved). Five daemon bugs it found are filed (agent-ha-bridge#258 to #262) and documented as known differences. The week on DEV-VM1 has not run yet; `build/shadow-week.ps1` sets it up. #40 |
+| Shadow mode (read-only beside the daemon, diffing state) | `Implemented, untested live` | `agent-bridge-host shadow run` and `summary` ([host-shadow.md](host-shadow.md)); `ShadowTests` (20), `ShadowWitnessTests` (6), `ShadowCoverageTests` (8). Compares sessions, status, background work, model, compactions, the response's end, questions and their fields, machine status (daemon up, host up, G5), and usage and the resume list (the daemon's read from Home Assistant: GET of four entities only, with its own token, owner-approved). Five daemon bugs it found are filed (agent-ha-bridge#258 to #262); a difference whose transcript evidence matches one's signature is tallied as known, with the issue, and is not a mismatch. Coverage is counted in events (sessions, questions, transitions, background work, compactions, model changes, resume snapshots, usage readings, restarts) and `shadow summary --gate` gives the verdict. Running on DEV-VM1 since 2026-10-29 (`build/shadow-week.ps1`). #40 |
 
-**For a week of shadow comparison on DEV-VM1:**
+**For the shadow comparison on DEV-VM1:**
 
 1. `pwsh build/shadow-week.ps1 -Install`: the host serving a profile of its own and `agent-bridge-host shadow run`, each a per-user logon task, beside the daemon
    ([host-shadow.md](host-shadow.md)). It writes a daily report: sessions missing on either
@@ -361,8 +361,12 @@ agent-ha-bridge's manual checks, `tests/verify-mac-terminal.ps1`,
    injects, launches, writes HA or consumes the spool.
 2. #43 (discovery holds) lands first, so a transient read does not read as a session
    ending.
-3. Seven consecutive days whose `shadow summary` verdict is clean, or with each mismatch
-   explained and fixed, before the cutover.
+3. `shadow summary --gate` says `PASS` before the cutover: enough of each kind of event
+   compared (100 questions with a 95% upper bound on their mismatch rate of at most 3%, 30
+   sessions, 500 status transitions, 50 background starts and finishes, 5 compactions, 100
+   resume snapshots, 50 usage readings, a restart seen and recovered), at least 24 hours
+   since the first sample with 8 of them compared, and no unexplained mismatch in the last
+   24 hours ([host-shadow.md › The gate](host-shadow.md#the-gate)). Not a fixed week.
 
 ## Migration readiness
 
@@ -405,7 +409,7 @@ agent-ha-bridge's manual checks, `tests/verify-mac-terminal.ps1`,
 
 - [ ] Everything in (a), with the rehearsal passed **in both directions** and repeated
   from a restored snapshot.
-- [ ] #40: a week of clean shadow diff on DEV-VM1.
+- [ ] #40: `agent-bridge-host shadow summary --gate --profile shadow` reads `PASS` on DEV-VM1.
 - [ ] #43: incomplete discovery holds removal, resume offers and reclaim (invariants 6
   and 10).
 - [ ] #44: a session cannot stop or restart its host through the pipe (invariant 13).

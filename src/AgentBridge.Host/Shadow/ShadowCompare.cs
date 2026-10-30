@@ -32,6 +32,12 @@ public sealed record ShadowSession
     // The daemon's question marker existed but could not be read this time (a hook was writing
     // it). Neither "asked" nor "not asked", so the question is not compared this sample.
     public bool QuestionUnknown { get; init; }
+    // The daemon only, in memory only: the ids behind Agents and Shells (the agents' tool calls,
+    // the shells' ids) and how far into the transcript it has read, so a difference in them can
+    // be checked against its known bugs (ShadowWitness).
+    public IReadOnlyList<string> AgentIds { get; init; } = [];
+    public IReadOnlyList<string> ShellIds { get; init; } = [];
+    public long? Offset { get; init; }
 }
 
 public sealed record ShadowQuestion
@@ -67,6 +73,9 @@ public sealed record ShadowView
     // not read, with why in ResumableProblem.
     public IReadOnlyList<string>? Resumable { get; init; }
     public string? ResumableProblem { get; init; }
+    // When this side's process started, so a restart between two samples is seen: the daemon's
+    // from its runtime/daemon.process.json, the host's from host.status.
+    public DateTimeOffset? StartedAt { get; init; }
     public bool Available => Problem is null;
 }
 
@@ -90,7 +99,14 @@ public sealed record ShadowUsage
 // One disagreement in one sample. Session is a hashed session id, or for a usage kind the agent
 // (copilot, claude, codex); Detail comes from a fixed vocabulary with counts, enum values and
 // model names in it, never anything a person or an agent wrote.
-public sealed record ShadowDifference(string Kind, string? Session, string Detail);
+//
+// Known: set when the evidence matches a known cause, which a report then counts apart from
+// mismatches: an agent-ha-bridge issue ("agent-ha-bridge#261") whose bug signature this
+// difference has, or "timing" when one side is showing what the other showed a moment ago.
+public sealed record ShadowDifference(string Kind, string? Session, string Detail)
+{
+    public string? Known { get; init; }
+}
 
 // UsageCompared and ResumableCompared: whether those could be compared in this sample, and if
 // not, why (NotCompared), so a clean day says how much of it they were looked at.
@@ -99,6 +115,8 @@ public sealed record ShadowComparison(bool Compared, int DaemonSessions, int Hos
     public bool UsageCompared { get; init; }
     public bool ResumableCompared { get; init; }
     public IReadOnlyList<string> NotCompared { get; init; } = [];
+    // The agents whose percentages were judged on a fresh pair of readings in this sample.
+    public IReadOnlyList<string> UsageFresh { get; init; } = [];
 }
 
 public static class ShadowKinds
@@ -132,7 +150,7 @@ public static class ShadowKinds
     public const string ResumableMissingOnDaemon = "resumable.missingOnDaemon";
 
     // What neither side's records can show, so a clean report says nothing about it. Listed in
-    // every report so a week of "clean" is never read as covering them.
+    // every report so a "clean" run is never read as covering them.
     public static readonly IReadOnlyList<string> NotCompared =
     [
         "usage of extra Copilot accounts (usage.copilotAccounts; only usage_copilot, usage_claude and usage_codex are read)",
@@ -215,6 +233,11 @@ public sealed class ShadowMemory
     }
 
     internal Dictionary<string, PercentVerdict> Percent { get; } = new(StringComparer.Ordinal);
+
+    // Each session's latest-response tails as each side showed them over the last few minutes,
+    // newest last, so one side showing what the other showed a moment ago is told from a
+    // difference (ShadowCompare.Lagging).
+    internal Dictionary<string, (List<(DateTimeOffset At, string Tail)> Daemon, List<(DateTimeOffset At, string Tail)> Host)> Responses { get; } = new(StringComparer.Ordinal);
 }
 
 public static class ShadowCompare
@@ -237,7 +260,7 @@ public static class ShadowCompare
         _ => "idle",
     };
 
-    public static ShadowComparison Compare(ShadowView daemon, ShadowView host, ShadowMemory? memory = null)
+    public static ShadowComparison Compare(ShadowView daemon, ShadowView host, ShadowMemory? memory = null, DateTimeOffset? at = null)
     {
         var diffs = new List<ShadowDifference>();
         if (!daemon.Available) { diffs.Add(new(ShadowKinds.MachineDaemon, null, daemon.Problem!)); }
@@ -257,12 +280,41 @@ public static class ShadowCompare
             host.Sessions.TryGetValue(id, out var h);
             if (h is null) { diffs.Add(new(ShadowKinds.MissingOnHost, s, $"daemon {ShadowHash.Token(d!.Agent)} {ShadowHash.Token(d.Status)}")); continue; }
             if (d is null) { diffs.Add(new(ShadowKinds.MissingOnDaemon, s, $"host {ShadowHash.Token(h.Agent)} {ShadowHash.Token(h.Status)}")); continue; }
-            Session(d, h, s, diffs);
+            Session(d, h, s, diffs, memory is null || at is null ? null : Lagging(memory, s, d.ResponseTail, h.ResponseTail, at.Value));
         }
+        if (memory is not null) { foreach (var gone in memory.Responses.Keys.Where(k => !seen.Contains(k)).ToList()) { memory.Responses.Remove(gone); } }
         var notCompared = new List<string>();
-        var usage = Usage(daemon, host, diffs, notCompared, memory);
+        var fresh = new List<string>();
+        var usage = Usage(daemon, host, diffs, notCompared, memory, fresh);
         var resumable = Resumable(daemon, host, diffs, notCompared);
-        return new(true, daemon.Sessions.Count, host.Sessions.Count, diffs, seen) { UsageCompared = usage, ResumableCompared = resumable, NotCompared = notCompared };
+        return new(true, daemon.Sessions.Count, host.Sessions.Count, diffs, seen) { UsageCompared = usage, ResumableCompared = resumable, NotCompared = notCompared, UsageFresh = fresh };
+    }
+
+    // How long a response one side showed is remembered, to recognise the other side catching up
+    // to it. A session whose background agents talk all the time changes its latest response every
+    // few seconds; the daemon writes it on its own pass and the host within a second, so for as
+    // long as the talk goes on the two show different words, each the other's a moment before or
+    // after, and that ran past the grace (#40, seen live).
+    static readonly TimeSpan ResponseMemory = TimeSpan.FromMinutes(3);
+
+    // Whether the two latest responses differ only because one side is showing what the other
+    // showed within the last few minutes. Records this sample's tails either way.
+    static bool Lagging(ShadowMemory memory, string session, string? daemon, string? host, DateTimeOffset at)
+    {
+        if (!memory.Responses.TryGetValue(session, out var seen)) { memory.Responses[session] = seen = ([], []); }
+        // Each entry is when that side last showed it: one shown for an hour was shown a moment ago.
+        static void Note(List<(DateTimeOffset At, string Tail)> list, string? tail, DateTimeOffset at)
+        {
+            if (tail is not null && list.Count > 0 && list[^1].Tail == tail) { list[^1] = (at, tail); }
+            else if (tail is not null) { list.Add((at, tail)); }
+            list.RemoveAll(x => at - x.At > ResponseMemory);
+            if (list.Count > 64) { list.RemoveAt(0); }
+        }
+        Note(seen.Daemon, daemon, at);
+        Note(seen.Host, host, at);
+        if (daemon is null || host is null || daemon == host) { return false; }
+        // One is behind when what it shows is something the other showed and has since moved on from.
+        return seen.Host.Take(seen.Host.Count - 1).Any(x => x.Tail == daemon) || seen.Daemon.Take(seen.Daemon.Count - 1).Any(x => x.Tail == host);
     }
 
     // Percent gone may move between two reads; within this it is the same reading, and further
@@ -274,7 +326,7 @@ public static class ShadowCompare
     const double PercentTolerance = 5;
     static readonly TimeSpan ReadingsApart = TimeSpan.FromMinutes(3);
 
-    static bool Usage(ShadowView daemon, ShadowView host, List<ShadowDifference> diffs, List<string> notCompared, ShadowMemory? memory)
+    static bool Usage(ShadowView daemon, ShadowView host, List<ShadowDifference> diffs, List<string> notCompared, ShadowMemory? memory, List<string> judgedFresh)
     {
         if (daemon.Usage is null) { notCompared.Add("usage: " + (daemon.UsageProblem ?? "the daemon's was not read")); }
         if (host.Usage is null) { notCompared.Add("usage: " + (host.UsageProblem ?? "the host's was not read")); }
@@ -302,6 +354,7 @@ public static class ShadowCompare
             var fresh = sa is { } x && sb is { } y && Apart(x, y) <= ReadingsApart;
             if (fresh)
             {
+                judgedFresh.Add(client);
                 var off = keys.Item1.Intersect(keys.Item2)
                     .Where(k => Math.Abs(a.Windows[k] - b.Windows[k]) > PercentTolerance)
                     .Select(k => $"{ShadowHash.Token(k)} daemon={Math.Round(a.Windows[k])} host={Math.Round(b.Windows[k])}")
@@ -374,7 +427,7 @@ public static class ShadowCompare
         return true;
     }
 
-    static void Session(ShadowSession d, ShadowSession h, string s, List<ShadowDifference> diffs)
+    static void Session(ShadowSession d, ShadowSession h, string s, List<ShadowDifference> diffs, bool? responseLagging = null)
     {
         void Pair(string kind, string? a, string? b) => diffs.Add(new(kind, s, $"daemon={ShadowHash.Token(a)} host={ShadowHash.Token(b)}"));
 
@@ -391,7 +444,7 @@ public static class ShadowCompare
         // either may still hold the last turn's words for a moment.
         if (d.ResponseTail is not null && h.ResponseTail is not null && d.ResponseTail != h.ResponseTail)
         {
-            diffs.Add(new(ShadowKinds.Response, s, "the end of the latest response differs"));
+            diffs.Add(new(ShadowKinds.Response, s, "the end of the latest response differs") { Known = responseLagging == true ? Timing : null });
         }
         if (!d.QuestionUnknown) { Question(d.Question, h.Question, d.Agent, s, diffs); }
     }
@@ -406,11 +459,9 @@ public static class ShadowCompare
         {
             if (dc != hc) { diffs.Add(new(ShadowKinds.QuestionIdentity, s, "the call ids differ")); }
         }
-        // agent-ha-bridge names a Copilot question after its hook's clock, not the call, so the
-        // same question is one asked within two minutes of the host's.
-        else if (d.AskedAt is { } da && h.AskedAt is { } ha && (da - ha).Duration() > TimeSpan.FromMinutes(2))
+        else if (!SameQuestion(d, h))
         {
-            diffs.Add(new(ShadowKinds.QuestionIdentity, s, $"asked {(long)(da - ha).Duration().TotalSeconds} s apart"));
+            diffs.Add(new(ShadowKinds.QuestionIdentity, s, $"asked {(long)(d.AskedAt!.Value - h.AskedAt!.Value).Duration().TotalSeconds} s apart"));
         }
         if (d.AtMachine || h.AtMachine) { return; }
 
@@ -437,6 +488,20 @@ public static class ShadowCompare
         if (types.Count > 0) { diffs.Add(new(ShadowKinds.QuestionFieldType, s, string.Join("; ", types.Take(4)))); }
         if (options.Count > 0) { diffs.Add(new(ShadowKinds.QuestionOptions, s, string.Join("; ", options.Take(4)))); }
     }
+
+    public const string Timing = "timing";
+
+    // Whether two sides' questions are the same one: the same call when both know it (Claude);
+    // otherwise, since agent-ha-bridge names a Copilot question after its hook's clock and not the
+    // call, one asked within two minutes of the other; and the same when nothing tells them apart.
+    public static bool SameQuestion(ShadowQuestion d, ShadowQuestion h) =>
+        d.CallId is { Length: > 0 } dc && h.CallId is { Length: > 0 } hc ? dc == hc
+        : d.AskedAt is not { } da || h.AskedAt is not { } ha || (da - ha).Duration() <= TimeSpan.FromMinutes(2);
+
+    // A question's kind for coverage: a multiple-choice field makes it multi, any other choice
+    // makes it choice, and one with only free text (or nothing to fill in) is text.
+    public static string QuestionKind(ShadowQuestion q) =>
+        q.Fields.Any(f => f.Type == "multi") ? "multi" : q.Fields.Any(f => f.Type == "choice") ? "choice" : "text";
 
     // A question whose only field is free text is the same question as one with none:
     // agent-ha-bridge asks it in its reply box, the host as a text field.
