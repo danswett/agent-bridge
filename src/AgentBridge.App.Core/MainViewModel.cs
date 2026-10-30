@@ -130,11 +130,15 @@ public sealed class MainViewModel : Observable
     internal void AttachFleet(Fleet f)
     {
         fleet = f;
-        f.Changed += () =>
+        void Note()
         {
             Raise(nameof(FleetNote));
             Raise(nameof(HasFleetNote));
-        };
+        }
+        f.Changed += Note;
+        // Now too: a link that starts signed out has no change to announce, and the note it
+        // has would otherwise wait for an unrelated update.
+        Note();
     }
 
     void OnHeldChanged()

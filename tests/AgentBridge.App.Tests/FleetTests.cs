@@ -169,6 +169,22 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_fleets_note_is_shown_as_soon_as_the_fleet_is_attached()
+    {
+        await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
+        var other = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel(clock));
+        var raised = new List<string?>();
+        other.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+        var signedOut = new FakeFleetLink();
+        signedOut.Set(FleetState.SignedOut);
+
+        await using var late = new Fleet(signedOut, other, ui, h => throw new InvalidOperationException("no machines"));
+
+        Assert.Contains(nameof(MainViewModel.FleetNote), raised);
+        Assert.Contains(nameof(MainViewModel.HasFleetNote), raised);
+    }
+
+    [Fact]
     public async Task Machines_still_come_and_go_while_this_machines_host_is_away()
     {
         await BothMachinesAsync();
