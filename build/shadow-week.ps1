@@ -138,15 +138,23 @@ function Get-ConfigRefusal([string]$What) {
 # agent-ha-bridge's approved folders and resume count, into this profile: the resume lists
 # are compared only as far as both approve the same folders. Made to match on every install,
 # so a label, an isolate flag or a workspace changed or removed there since is changed here
-# too; any failure stops the install rather than start a week that cannot agree. Only
-# newSession.workspaces and newSession.resumeCount are read from its config, which also holds
-# its Home Assistant token.
+# too; any failure stops the install rather than start a week that cannot agree. Its further
+# Copilot logins (usage.copilotAccounts) too, when it names any, so both report the same
+# accounts in the same places. Only newSession.workspaces, newSession.resumeCount and
+# usage.copilotAccounts are read from its config, which also holds its Home Assistant token.
 function Sync-AgentHaBridgeWorkspace {
     $config = Join-Path $ahb 'config.json'
     if (-not (Test-Path $config)) { throw "no agent-ha-bridge config at $config, so its workspaces cannot be copied" }
-    # Only newSession is kept; the rest of the file, the token with it, is dropped at once.
-    $session = ([IO.File]::ReadAllText($config) | ConvertFrom-Json -AsHashtable)['newSession']
+    # Only newSession and usage.copilotAccounts are kept; the rest of the file, the token with it,
+    # is dropped at once.
+    $parsed = [IO.File]::ReadAllText($config) | ConvertFrom-Json -AsHashtable
+    $session = $parsed['newSession']
     if ($session -isnot [hashtable]) { $session = @{} }
+    $usage = $parsed['usage']
+    # Comma-wrapped, so a list of one stays a list.
+    $accounts = if ($usage -is [hashtable] -and $usage.ContainsKey('copilotAccounts')) { , $usage['copilotAccounts'] } else { $null }
+    $parsed = $null
+    $usage = $null
 
     # Every workspace the profile has now goes first, so what is added is exactly the daemon's.
     # Not under -WhatIf, when nothing has been published to ask.
@@ -198,6 +206,32 @@ function Sync-AgentHaBridgeWorkspace {
     if ($PSCmdlet.ShouldProcess(($arguments[1..2] -join ' '), "in profile $HostProfile")) {
         Invoke-ShadowHost @arguments --profile $HostProfile
         if ($LASTEXITCODE) { throw (Get-ConfigRefusal "could not set launch.resumeCount in profile $HostProfile") }
+    }
+    Sync-CopilotAccount $accounts
+}
+
+# usage.copilotAccounts as agent-ha-bridge reads it (Get-BridgeCopilotExtraAccounts): a list,
+# or one login alone. Not set there (absent or null), the profile keeps its own, so one set by
+# hand survives a reinstall. Each entry keeps its place, the Nth naming usage_copilot_<N+1>; one
+# that is not a login goes over empty, which keeps its place in the host too, and is never
+# repeated: a token pasted where a login belongs would otherwise reach a second config, and this
+# window.
+function Sync-CopilotAccount($Accounts) {
+    if ($null -eq $Accounts) { return }
+    if ($Accounts -is [System.Collections.IDictionary]) {
+        Write-Warning "agent-ha-bridge's usage.copilotAccounts is not a list of logins; profile $HostProfile keeps its own"
+        return
+    }
+    $logins = [string[]]@(@($Accounts) | ForEach-Object {
+            $login = if ($_ -is [string]) { $_.Trim() } else { '' }
+            if ($login -cmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$' -and $login -cnotmatch '^(?:gh[opusr]_|github_pat_)') { $login } else { '' }
+        })
+    $skipped = @($logins | Where-Object { -not $_ }).Count
+    if ($skipped) { Write-Warning "$skipped of agent-ha-bridge's usage.copilotAccounts are not logins; each keeps its place, unused" }
+    $json = ConvertTo-Json -InputObject $logins -Compress
+    if ($PSCmdlet.ShouldProcess("usage.copilotAccounts ($($logins.Count) entr$(if ($logins.Count -eq 1) { 'y' } else { 'ies' }))", "set in profile $HostProfile, as agent-ha-bridge has it")) {
+        Invoke-ShadowHost config set usage.copilotAccounts $json --profile $HostProfile
+        if ($LASTEXITCODE) { throw (Get-ConfigRefusal "could not set usage.copilotAccounts in profile $HostProfile") }
     }
 }
 

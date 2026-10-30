@@ -62,16 +62,28 @@ own token. Enforced in code (`Shadow/HaReader.cs`), and tested:
 * **The account's reader.** agent-ha-bridge asks the vendor about an account on one machine
   at a time. While that machine's readings are current, the others stand down
   (`Test-BridgeUsageCovered`) and their own sensors keep the last figure they read, hours
-  old. For an agent whose figure here has lapsed (older than the daemon's own pace,
-  `DaemonUsagePace.Lapsed`), the daemon's reading is the account reader's. That is the usage
-  sensor, for that agent, of a machine other than this one, whose current reading is of the
-  same agent (`client`), by that machine (`machine_slug`), for the same account (`account_id`,
-  else `account`, as `Test-BridgeUsageCovered` matches); the latest wins. The machines looked at are only those the
-  daemon itself names: the machines in its resume list's "<agent> on <machine>: …" options
-  (already read), its `dashboard.publication.writer`, and the reader found last, at most
-  eight. Each is read by its one exact entity, `sensor.agent_bridge_<their slug>_usage_<agent>`,
-  which the handler allows for that one request only. Never a listing of states or a
-  pattern. A machine that cannot be read is skipped. With no current reading found, the
+  old. For a sensor whose figure here has lapsed (older than the daemon's own pace,
+  `DaemonUsagePace.Lapsed`), the daemon's reading is the account reader's. That is a usage
+  sensor of a machine other than this one whose current reading is:
+  * of the same agent (`client`);
+  * by that machine (`machine_slug`);
+  * for the same account (`account_id`, else `account`, as `Test-BridgeUsageCovered` matches
+    them; a Copilot login in any case).
+
+  A further Copilot login (`usage_copilot_2` to `_4`) may be on any of that machine's Copilot
+  sensors, so each is looked at. The latest reading wins. A reading stamped more than a poll
+  ahead of now is no current reader. Its figure is not taken as confirmed beyond its
+  measurement, since that machine's pace is its own, but it holds across reads here
+  (`HeldSince`).
+
+  The machines looked at are only those the daemon itself names, at most eight:
+  * the machines in its resume list's "<agent> on <machine>: …" options (already read);
+  * its `dashboard.publication.writer`;
+  * the reader found last.
+
+  Each sensor is read by its one exact entity, `sensor.agent_bridge_<their slug>_usage_<key>`,
+  once a pass, and the handler allows it for that one request only. Never a listing of states
+  or a pattern. A sensor that cannot be read is skipped. With no current reading found, the
   lapsed figure stands and usage is **not compared** (see "Not compared").
 * **The token.** `homeAssistant.baseUrl` and `homeAssistant.token` are read from
   `~/.agent-ha-bridge/config.json` at the moment of each read (so a rotated token is the one
@@ -137,8 +149,14 @@ nothing is left that can fail for want of an input:
    `workspace add`. `newSession.resumeCount` is copied to `launch.resumeCount` (unset when
    absent). The host offers to resume only sessions in folders it approves, so without this
    the resume lists cannot agree; any step failing stops the install. A folder that no
-   longer exists is skipped with a warning. Only those two keys are read from
-   agent-ha-bridge's config. Re-run `-Install` after changing agent-ha-bridge's workspaces.
+   longer exists is skipped with a warning. Its further Copilot logins,
+   `usage.copilotAccounts`, are copied to the profile's `usage.copilotAccounts` when it sets
+   them (a list, or one login alone), each in its place. An entry that is not a login is
+   passed on empty, keeping its place, and is never repeated in the output: a token pasted
+   there would otherwise reach a second config. When agent-ha-bridge does not set it, the
+   profile's own value is left as it is, so one set by hand survives a reinstall. Only those
+   three keys are read from agent-ha-bridge's config. Re-run `-Install` after changing
+   agent-ha-bridge's workspaces or logins.
    Then sets `delivery.readOnly`, and with `-Relay` `push.enabled` and signs in (below). A
    running host reads its config only when it starts, so none of this reaches it until the swap.
 3. Swaps: stops the previous install's tasks and processes (only those running from its own

@@ -875,7 +875,7 @@ public sealed class ShadowTests : IDisposable
         // Only GETs, of this machine's entities and each named machine's usage sensor for that agent.
         Assert.All(inner.Seen, r => Assert.Equal(HttpMethod.Get, r.Method));
         Assert.Equal(
-            [.. reader.Entities.Select(e => "/api/states/" + e), "/api/states/sensor.agent_bridge_writer_pc_usage_copilot", "/api/states/sensor.agent_bridge_other_pc_usage_copilot"],
+            [.. reader.Entities.Select(e => "/api/states/" + e), .. new[] { "writer_pc", "other_pc" }.SelectMany(m => new[] { "copilot", "copilot_2", "copilot_3", "copilot_4" }.Select(s => $"/api/states/sensor.agent_bridge_{m}_usage_{s}"))],
             inner.Seen.Select(r => r.Path));
         // And allowed for that read only.
         Assert.Empty(reader.ReaderEntities);
@@ -912,6 +912,27 @@ public sealed class ShadowTests : IDisposable
         f.Time.Advance(TimeSpan.FromMinutes(4));
         measured = f.Time.GetUtcNow();
         Assert.Equal(now, (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!["copilot"].HeldSince);
+    }
+
+    // Found in review (#94): a further Copilot login is the reader's on whichever of its Copilot
+    // sensors it carries it, and a reading stamped ahead of now is no current reader.
+    [Fact]
+    public async Task A_further_logins_reader_is_found_on_any_of_its_copilot_sensors_and_a_reading_from_the_future_is_not_one()
+    {
+        var now = f.Time.GetUtcNow();
+        var ahead = now + TimeSpan.FromDays(1);
+        var inner = new FakeHomeAssistant(entity => entity switch
+        {
+            "sensor.agent_bridge_fixture_usage_copilot_2" => UsageState("copilot", 50, now - TimeSpan.FromHours(11), account: "second-login", slug: "fixture"),
+            "select.agent_bridge_fixture_new_resume" => ResumeState("Agency on OTHER-PC: Shared from there (abcdef12)", "Agency on AHEAD-PC: Shared too (12abcdef)"),
+            "sensor.agent_bridge_other_pc_usage_copilot_3" => UsageState("copilot", 52, now - TimeSpan.FromMinutes(1), account: "second-login", slug: "other_pc"),
+            "sensor.agent_bridge_ahead_pc_usage_copilot_2" => UsageState("copilot", 90, ahead, account: "second-login", slug: "ahead_pc"),
+            _ => null,
+        });
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        Config();
+        var second = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!["copilot_2"];
+        Assert.Equal((52d, false, (DateTimeOffset?)null), (second.Windows["monthly"], second.Lapsed, second.ConfirmedAt));
     }
 
     [Fact]

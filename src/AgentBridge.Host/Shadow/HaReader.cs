@@ -261,11 +261,17 @@ public sealed class DaemonHaReader : IDisposable
             }
         }
         var lapsed = usage.Where(u => u.Value.Lapsed).Select(u => u.Key).ToList();
-        foreach (var client in lapsed)
+        // Each sensor read once a pass, however many lapsed sensors look at it.
+        var read = new Dictionary<string, JsonElement?>(StringComparer.Ordinal);
+        foreach (var key in lapsed)
         {
-            var own = usage[client];
-            if ((own.AccountKey is { Length: > 0 } ? own.AccountKey : own.Account) is not { Length: > 0 } key) { continue; }
-            var slugs = (lastReader.TryGetValue(client, out var last) ? [last] : Array.Empty<string>())
+            var own = usage[key];
+            if ((own.AccountKey is { Length: > 0 } ? own.AccountKey : own.Account) is not { Length: > 0 } account) { continue; }
+            // The agent the sensor is for: a further Copilot login's (copilot_2 to _4) is Copilot's,
+            // and the reader may carry that login on any of its own Copilot sensors.
+            var client = key.StartsWith("copilot_", StringComparison.Ordinal) ? "copilot" : key;
+            var sensors = client == "copilot" ? HaContract.UsageSensorKeys.Where(k => k == "copilot" || k.StartsWith("copilot_", StringComparison.Ordinal)).ToList() : [key];
+            var slugs = (lastReader.TryGetValue(key, out var last) ? [last] : Array.Empty<string>())
                 .Concat(access.PublicationWriter is { } w ? [w] : [])
                 .Concat(names)
                 .Select(HaContract.MachineSlug)
@@ -277,25 +283,37 @@ public sealed class DaemonHaReader : IDisposable
             string? bestSlug = null;
             foreach (var slug in slugs)
             {
-                var entity = HaContract.MachineEntityId("sensor", $"usage_{client}", slug);
-                readerEntities = new HashSet<string>([entity], StringComparer.Ordinal);
-                JsonElement? state;
-                // One machine that cannot be read is one fewer to choose from, never a reason to
-                // stop comparing the rest.
-                try { state = await GetAsync(access, entity, ct); }
-                catch (Exception e) when (e is Unavailable or HttpRequestException or IOException || e is OperationCanceledException && !ct.IsCancellationRequested) { continue; }
-                finally { readerEntities = new HashSet<string>(StringComparer.Ordinal); }
-                if (state is not { } s || !s.TryGetProperty("attributes", out var attributes) || attributes.ValueKind != JsonValueKind.Object) { continue; }
-                // Its own reading of this agent and this account, as Test-BridgeUsageCovered matches one.
-                if (Str(attributes, "client") != client || Str(attributes, "machine_slug") != slug) { continue; }
-                var u = Usage(s);
-                if (!u.Reading || !SameAccount(client, u.AccountKey is { Length: > 0 } ? u.AccountKey : u.Account, key) || access.UsagePace.Lapsed(u.MeasuredAt, readAt) || u.MeasuredAt is not { } at) { continue; }
-                if (best?.MeasuredAt is { } was && was >= at) { continue; }
-                (best, bestSlug) = (u, slug);
+                foreach (var sensor in sensors)
+                {
+                    var entity = HaContract.MachineEntityId("sensor", $"usage_{sensor}", slug);
+                    if (!read.TryGetValue(entity, out var state))
+                    {
+                        readerEntities = new HashSet<string>([entity], StringComparer.Ordinal);
+                        // One sensor that cannot be read is one fewer to choose from, never a reason
+                        // to stop comparing the rest.
+                        try { state = await GetAsync(access, entity, ct); }
+                        catch (Exception e) when (e is Unavailable or HttpRequestException or IOException || e is OperationCanceledException && !ct.IsCancellationRequested) { state = null; }
+                        finally { readerEntities = new HashSet<string>(StringComparer.Ordinal); }
+                        read[entity] = state;
+                    }
+                    if (state is not { } s || !s.TryGetProperty("attributes", out var attributes) || attributes.ValueKind != JsonValueKind.Object) { continue; }
+                    // Its own reading of this agent and this account, as Test-BridgeUsageCovered matches one.
+                    if (Str(attributes, "client") != client || Str(attributes, "machine_slug") != slug) { continue; }
+                    var u = Usage(s);
+                    if (!u.Reading || !SameAccount(client, u.AccountKey is { Length: > 0 } ? u.AccountKey : u.Account, account) || u.MeasuredAt is not { } at) { continue; }
+                    // Neither old nor ahead of now: a clock running ahead would otherwise outrank a
+                    // current reader, as Test-BridgeUsageCovered refuses one more than a poll ahead.
+                    if (access.UsagePace.Lapsed(at, readAt) || at - readAt > access.UsagePace.Poll) { continue; }
+                    if (best?.MeasuredAt is { } was && was >= at) { continue; }
+                    (best, bestSlug) = (u, slug);
+                }
             }
             if (best is null || bestSlug is null) { continue; }
-            lastReader[client] = bestSlug;
-            usage[client] = Stood(client, best with { ConfirmedAt = access.UsagePace.ConfirmedAt(best.MeasuredAt, readAt) }, readAt);
+            lastReader[key] = bestSlug;
+            // Not confirmed beyond its measurement: how often that machine re-asserts an unchanged
+            // figure is its own configuration, not this one's. What it held across reads here still
+            // counts (Stood).
+            usage[key] = Stood(key, best, readAt);
         }
     }
 

@@ -274,6 +274,33 @@ Write-Output 'The comparison reads the agent-ha-bridge it was installed from'
 $err = Invoke-Install
 Assert ($null -eq $err -and $global:SwTasks[$script:runTask].Xml -match [regex]::Escape("--agent-ha-bridge-home $ahb")) "the run task names it ($err)"
 
+function Set-AhbUsage([string]$Json) {
+    Set-Content (Join-Path $ahb 'config.json') ('{"homeAssistant":{"token":"not-read"},"newSession":{"workspaces":[],"resumeCount":3},"usage":' + $Json + '}')
+}
+
+Reset-World
+Write-Output "agent-ha-bridge's further Copilot logins are copied in their places, and nothing that is not a login"
+Set-AhbUsage '{"copilotAccounts":["alt-login","ghp_notalogin0123456789",5,"third"]}'
+$err = Invoke-Install 3>$null
+Assert ($null -eq $err) "it succeeds ($err)"
+Assert ($global:SwCalls -contains 'host config set usage.copilotAccounts ["alt-login","","","third"] --profile shadowtest') 'each keeps its place, the rest empty'
+Assert (-not ($global:SwCalls -match 'ghp_')) 'the token-shaped entry is passed nowhere'
+
+Reset-World
+Write-Output 'One login alone is a list of one'
+Set-AhbUsage '{"copilotAccounts":"alt-login"}'
+$null = Invoke-Install
+Assert ($global:SwCalls -contains 'host config set usage.copilotAccounts ["alt-login"] --profile shadowtest') 'set as a list'
+
+Reset-World
+Write-Output "Not set in agent-ha-bridge, the profile's own is left alone"
+Set-AhbUsage '{"intervalSeconds":120}'
+$null = Invoke-Install
+Assert (-not ($global:SwCalls -match 'usage\.copilotAccounts')) 'it is not touched'
+Set-AhbUsage '{"copilotAccounts":null}'
+$null = Invoke-Install
+Assert (-not ($global:SwCalls -match 'usage\.copilotAccounts')) 'nor when it is null'
+
 Reset-World -Previous
 Write-Output '-WhatIf changes nothing'
 $err = Invoke-Install @{ Relay = $true; WhatIf = $true }
