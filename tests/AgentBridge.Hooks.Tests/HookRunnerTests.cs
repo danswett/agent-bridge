@@ -38,9 +38,10 @@ public sealed class HookRunnerTests : IDisposable
         File.SetLastWriteTimeUtc(path, _now.UtcDateTime - age);
     }
 
-    HookEnvironment Env(DateTimeOffset? at = null, TimeSpan? drain = null) => new()
+    HookEnvironment Env(DateTimeOffset? at = null, TimeSpan? drain = null, TimeSpan? inputWait = null) => new()
     {
         FallbackDrain = drain ?? TimeSpan.FromSeconds(2),
+        InputWait = inputWait ?? TimeSpan.FromSeconds(5),
         ExecutableDirectory = Bin,
         Now = () => at ?? _now,
         ProcessId = 4242,
@@ -351,6 +352,22 @@ public sealed class HookRunnerTests : IDisposable
         pipe.Close_();
         Assert.Equal(0, run.Result);
         Assert.Equal("{}\n", Encoding.UTF8.GetString(output.ToArray()));
+    }
+
+    [Fact]
+    public void Ask_user_is_let_through_in_bounded_time_when_its_agent_never_closes_stdin()
+    {
+        Heartbeat(TimeSpan.Zero);
+        var pipe = new OpenPipe("{\"toolName\":\"ask_user\"}"u8.ToArray());
+        var (run, output) = Started(pipe, Env(inputWait: TimeSpan.FromMilliseconds(200)), "copilot", "ask_user");
+
+        Assert.True(run.Wait(TimeSpan.FromSeconds(10)), "the hook waited on stdin");
+        pipe.Close_();
+        Assert.Equal(0, run.Result);
+        Assert.Equal("{\"permissionDecision\":\"allow\"}\n", Encoding.UTF8.GetString(output.ToArray()));
+        // Possibly not all of it: never spooled.
+        Assert.Empty(SpoolFiles());
+        Assert.StartsWith("event not finished within", Log().Last().GetProperty("reason").GetString());
     }
 
     [Fact]

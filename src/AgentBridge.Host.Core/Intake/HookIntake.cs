@@ -95,7 +95,7 @@ public sealed class HookIntake : IAsyncDisposable
         _processes = processes;
         _time = time ?? TimeProvider.System;
         _log = log ?? (_ => { });
-        _handlers = new HookHandlers(options.RuntimeRoot, options.ClaudeHome, processes, _time);
+        _handlers = new HookHandlers(options.RuntimeRoot, options.ClaudeHome, processes, _time) { Ours = Ours };
         _spool = SpoolContract.SpoolDirectory(options.RuntimeRoot);
         _codexLog = new HookLogWatch(options.RuntimeRoot, "codex", _time);
         _heartbeat = SpoolContract.HeartbeatPath(options.RuntimeRoot);
@@ -183,7 +183,7 @@ public sealed class HookIntake : IAsyncDisposable
         EnsureWatcher();
         var handled = Consume();
         // Each deletion asks first: the markers are the daemon's once it has started.
-        if (_handlers.WithdrawalsPending && Paused is null) { _handlers.RetryWithdrawals(Ours); }
+        if (_handlers.WithdrawalsPending && Paused is null) { _handlers.RetryWithdrawals(); }
         var now = _time.GetUtcNow();
         if (now - _prunedAt >= _options.PruneInterval)
         {
@@ -401,12 +401,17 @@ public sealed class HookIntake : IAsyncDisposable
                 if (bytes is null) { continue; }
                 spooled = SpoolContract.Parse(bytes, name) ?? throw new InvalidDataException("not a spooled event");
                 var notice = _handlers.Handle(spooled);
+                // Handled, but the daemon started meanwhile: the event is its to handle (again),
+                // and to publish.
+                if (!Ours()) { break; }
                 handled++;
                 Handled++;
                 _attempts.Remove(name);
                 if (!Delete(path)) { _undeleted.Add(name); }
                 Publish(notice);
             }
+            // Not a failure: the intake has stood back, and the event waits for the daemon.
+            catch (HookHandlers.StoodBack) { break; }
             // Whatever went wrong with one event, it costs that event, never the pass.
             catch (Exception e)
             {

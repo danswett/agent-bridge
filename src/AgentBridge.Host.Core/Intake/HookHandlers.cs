@@ -31,6 +31,18 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
     // one took events (HookIntake.ReconcileApprovals), so it arms no marker.
     public DateTimeOffset? ApprovalsSettledBefore { get; set; }
 
+    // Asked again before each write or removal commits: agent-ha-bridge's daemon may start while a
+    // slow event is handled, and from then its registrations, markers and spool are its own (G5).
+    // False (the intake has stood back) throws StoodBack, leaving the event for the daemon.
+    public Func<bool> Ours { get; init; } = () => true;
+
+    internal sealed class StoodBack() : Exception("agent-ha-bridge started while the event was handled");
+
+    void Commit()
+    {
+        if (!Ours()) { throw new StoodBack(); }
+    }
+
     static readonly string[] ClaudeBlocking = ["permission_prompt", "worker_permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input"];
 
     // Throws when the event cannot be handled, so the intake tries it once more.
@@ -245,6 +257,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
 
     void Withdraw(string sessionId, DateTimeOffset upTo)
     {
+        Commit();
         try
         {
             File.Delete(ApprovalPath(sessionId));
@@ -259,8 +272,8 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
 
     // True once none is pending. A marker created after the event that retired its session's
     // last one is a new approval, and stays.
-    // ours is asked before each deletion; false stops the retries (agent-ha-bridge has started).
-    public bool RetryWithdrawals(Func<bool> ours)
+    // Ours is asked before each deletion (Withdraw); false stops the retries (agent-ha-bridge has started).
+    public bool RetryWithdrawals()
     {
         foreach (var (sessionId, upTo) in _withdrawals.ToArray())
         {
@@ -271,8 +284,8 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
                 created = marker is null ? null : Json.Time(marker.RootElement, "Created");
             }
             if (created is { } c && c > upTo) { _withdrawals.TryRemove(sessionId, out _); continue; }
-            if (!ours()) { return false; }
-            Withdraw(sessionId, upTo);
+            try { Withdraw(sessionId, upTo); }
+            catch (StoodBack) { return false; }
         }
         return _withdrawals.IsEmpty;
     }
@@ -322,7 +335,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
 
     // Written whole and renamed into place: discovery reads these every second, and
     // agent-ha-bridge's own reader treats a half-written file as no file.
-    static void WriteJson(string path, Action<Utf8JsonWriter> body)
+    void WriteJson(string path, Action<Utf8JsonWriter> body)
     {
         var directory = Path.GetDirectoryName(path)!;
         Directory.CreateDirectory(directory);
@@ -336,6 +349,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
                 body(writer);
                 writer.WriteEndObject();
             }
+            Commit();
             File.Move(partial, path, overwrite: true);
         }
         finally
@@ -390,12 +404,10 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
     }
 
     // Test-BridgeCodexAppServer: Codex runs it from ~\.codex\packages\app-server-daemon, or as
-    // `codex app-server`.
-    internal static bool IsAppServer(AgentProcess process) =>
-        process.CommandLine is { } line
-        && (line.Contains("\\app-server-daemon\\", StringComparison.OrdinalIgnoreCase)
-            || line.Contains("/app-server-daemon/", StringComparison.Ordinal)
-            || System.Text.RegularExpressions.Regex.IsMatch(line, @"\sapp-server(\s|$)"));
+    // `codex app-server`. Read as discovery reads it, from the subcommand: matching the word
+    // anywhere took `codex "Explain the app-server protocol"` for the daemon, walked past that
+    // window and bound its session, and its approvals, to some other unclaimed window.
+    internal static bool IsAppServer(AgentProcess process) => CommandLine.IsCodexAppServer(process.CommandLine);
 
     // Whether a registration's pid still means the process running under it: one written before
     // that process started names an earlier process whose pid was reused. As discovery allows,

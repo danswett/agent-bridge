@@ -69,7 +69,13 @@ public static class HookRunner
                 drain.Wait(env.FallbackDrain);
                 return 0;
             }
-            var (utf8, whole) = ReadAll(stdin, SpoolContract.MaxEventBytes);
+            // Bounded in time as well as size: an agent sends its event and closes the pipe, but one
+            // that left it open would otherwise hold the agent (ask_user above all, invariant 3) on
+            // a hook waiting for an end that never comes. Stopped at the deadline, the read is left
+            // behind; the process ends without it.
+            var read = Task.Run(() => ReadAll(stdin, SpoolContract.MaxEventBytes));
+            var finished = read.Wait(env.InputWait);
+            var (utf8, whole) = finished ? read.Result : ([], false);
 
             var (runtime, rootProblem) = RuntimeRoot(env.ExecutableDirectory);
             if (runtime is null)
@@ -86,6 +92,7 @@ public static class HookRunner
                 var (alive, why) = SpoolContract.ConsumerState(runtime, env.Now());
                 var trimmed = Trim(utf8);
                 if (!alive) { reason = why; }
+                else if (!finished) { reason = $"event not finished within {env.InputWait.TotalSeconds:0.###}s"; }
                 else if (!whole) { reason = "event too large"; }
                 else if (!SpoolContract.IsJson(trimmed)) { reason = "unusable event"; }
                 else
@@ -193,6 +200,9 @@ public sealed class HookEnvironment
     public string Version { get; init; } = "dev";
     // How long --fallback waits, after replying, for an event still being written to it.
     public TimeSpan FallbackDrain { get; init; } = TimeSpan.FromSeconds(2);
+    // How long the hook waits for the whole event, so an agent that never closes stdin is not
+    // held: an event comes in milliseconds.
+    public TimeSpan InputWait { get; init; } = TimeSpan.FromSeconds(5);
 
     // How long the agent has waited on this process, from when the OS started it.
     static long SinceStart()

@@ -176,13 +176,14 @@ public sealed class IntakeTests : IDisposable
     {
         Spooled("0001", "claude", "register", new { session_id = "a" });
         var second = Spooled("0002", "claude", "register", new { session_id = "b" });
-        // Asked once for the pass, then before each file.
+        // Asked once for the pass, then before each file, before its registration is written and
+        // once it is handled.
         var checks = 0;
         var gated = new HookIntake(new HookIntakeOptions
         {
             RuntimeRoot = _f.Runtime,
             ClaudeHome = _f.ClaudeHome,
-            AgentHaBridgeActive = () => ++checks > 2 ? "the daemon started" : null,
+            AgentHaBridgeActive = () => ++checks > 4 ? "the daemon started" : null,
             UseFileSystemWatcher = false,
         }, _f.Processes, _f.Time, _log.Add);
         _intakes.Add(gated);
@@ -217,13 +218,14 @@ public sealed class IntakeTests : IDisposable
     {
         _f.ClaudeRegistration("dead-old", 31, null);
         Spooled("0001", "copilot", "agent_stop", new { });
-        // The pass, then the file, then the prune: agent-ha-bridge is running by the third.
+        // The pass, then before and after the file, then the prune: agent-ha-bridge is running by
+        // the fourth.
         var checks = 0;
         var intake = new HookIntake(new HookIntakeOptions
         {
             RuntimeRoot = _f.Runtime,
             ClaudeHome = _f.ClaudeHome,
-            AgentHaBridgeActive = () => ++checks > 2 ? "the daemon started" : null,
+            AgentHaBridgeActive = () => ++checks > 3 ? "the daemon started" : null,
             UseFileSystemWatcher = false,
         }, _f.Processes, _f.Time, _log.Add);
         _intakes.Add(intake);
@@ -769,7 +771,8 @@ public sealed class IntakeTests : IDisposable
         Spooled("0001", "copilot", "agent_stop", new { });
         Spooled("0002", "copilot", "agent_stop", new { });
         var heartbeat = SpoolContract.HeartbeatPath(_f.Runtime);
-        // Each file takes half a minute; the heartbeat written before the drain goes away.
+        // Each file takes half a minute; the heartbeat written before the drain goes away. (Asked for
+        // the pass, then before and after each file: the even checks are the ones before.)
         var checks = 0;
         var slow = new HookIntake(new HookIntakeOptions
         {
@@ -777,7 +780,7 @@ public sealed class IntakeTests : IDisposable
             ClaudeHome = _f.ClaudeHome,
             AgentHaBridgeActive = () =>
             {
-                if (++checks > 1)
+                if (++checks % 2 == 0)
                 {
                     _f.Time.Advance(TimeSpan.FromSeconds(30));
                     File.Delete(heartbeat);
@@ -993,6 +996,44 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void An_event_being_handled_when_agent_ha_bridge_starts_writes_nothing_and_is_left_for_it()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        var spooled = Spooled("0001", "codex", "hook", new { session_id = "s", hook_event_name = "SessionStart" }, 60);
+        // The daemon starts while the handler is finding the session's window.
+        _f.Processes.Queried = _ => _agentHaBridge = "the daemon started";
+
+        Assert.Equal(0, intake.Pass());
+
+        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "s.json")));
+        Assert.True(File.Exists(spooled));
+        Assert.Equal("the daemon started", intake.Paused);
+        // Not a failed attempt: when the daemon has gone, the event is handled as if nothing happened.
+        Assert.DoesNotContain(_log, m => m.Contains("0001", StringComparison.Ordinal));
+        _f.Processes.Queried = null;
+        _agentHaBridge = null;
+        intake.Pass();
+        Assert.Equal(60, Registration("agent-bridge-codex", "s").GetProperty("ProcessId").GetInt32());
+        Assert.Equal(0, intake.Dropped);
+    }
+
+    [Fact]
+    public void An_event_handled_just_as_agent_ha_bridge_starts_is_not_deleted_from_under_it()
+    {
+        var intake = Running();
+        var spooled = Spooled("0001", "copilot", "ask_user", new { sessionId = "c", toolName = "ask_user" });
+        // The pass's check and the one before the event pass; the one after handling it finds the daemon.
+        var checks = 0;
+        _probe = () => ++checks > 2 ? "the daemon started" : null;
+
+        Assert.Equal(0, intake.Pass());
+
+        Assert.True(File.Exists(spooled));
+        Assert.Equal("the daemon started", intake.Paused);
+    }
+
+    [Fact]
     public void A_new_approval_is_not_offered_while_the_one_before_it_cannot_be_withdrawn()
     {
         // Only Windows lets a reader refuse a delete.
@@ -1143,6 +1184,16 @@ public sealed class IntakeTests : IDisposable
         Spooled("0001", "codex", "hook", new { session_id = "s", hook_event_name = "SessionStart" }, 10, 20, 50, 60);
         Intake().Pass();
         Assert.Equal(60, Registration("agent-bridge-codex", "s").GetProperty("ProcessId").GetInt32());
+    }
+
+    [Fact]
+    public void A_Codex_window_whose_prompt_mentions_the_app_server_owns_its_own_hooks()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe \"Explain the app-server protocol\"", _base.AddMinutes(-30));
+        _f.Processes.Run(AgentKind.Codex, 70, "codex.exe", _base.AddMinutes(-5));
+        Spooled("0001", "codex", "hook", new { session_id = "mine", hook_event_name = "SessionStart" }, 10, 60);
+        Intake().Pass();
+        Assert.Equal(60, Registration("agent-bridge-codex", "mine").GetProperty("ProcessId").GetInt32());
     }
 
     [Fact]

@@ -232,7 +232,14 @@ internal sealed class FakeProcesses : IProcessInspector
         list.Add(p with { CommandLine = null, StartedAt = startedAt ?? p.StartedAt });
     }
 
-    public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent) => _live.TryGetValue(agent, out var list) ? [.. list] : [];
+    // Called as each list is asked for: something that happens while a handler runs.
+    public Action<AgentKind>? Queried { get; set; }
+
+    public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent)
+    {
+        Queried?.Invoke(agent);
+        return _live.TryGetValue(agent, out var list) ? [.. list] : [];
+    }
 
     // Who has each file open, by full path, and how often the OS was asked.
     public Dictionary<string, int[]> Holders { get; } = new(StringComparer.OrdinalIgnoreCase);

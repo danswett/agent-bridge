@@ -47,7 +47,10 @@ The design's `agent-bridge-host hook --fallback` is this program's own fallback:
 heartbeat it prints the fixed reply and nothing else. `agent-bridge-host-hook --fallback
 <agent> <hook>` does the same unconditionally, for a registration that must never spool. It
 replies before touching stdin, then drains it for up to 2 s, so neither an inherited console nor
-a pipe left open can hold it, and a writer still sending its event is not cut off.
+a pipe left open can hold it, and a writer still sending its event is not cut off. Without
+`--fallback` it waits at most 5 s for the whole event (one arrives in milliseconds), then gives
+the fixed reply without spooling and logs `event not finished within 5s`: an agent that never
+closes stdin cannot hold `ask_user` (invariant 3). agent-ha-bridge's Go hook waits for the end.
 
 ## The spool contract (both bridges)
 
@@ -122,7 +125,8 @@ must be able to see agent-ha-bridge's daemon first. `sessions`, `get`, `watch` a
 the same profile's record (without creating the profile), so they find a migrated
 installation's registrations where `serve` does.
 
-**G5.** Before every pass, and again before every file, the intake asks the same probe that
+**G5.** Before every pass, before every file, before each registration or marker it writes or
+removes, and before deleting a handled file, the intake asks the same probe that
 gates typing (`AgentHaBridgeProbe`, cached for 2 s). While agent-ha-bridge's daemon or
 supervisor runs, or its task is running, or that cannot be checked, the intake stands back
 completely:
@@ -131,8 +135,11 @@ completely:
 * it lists, reads and deletes no spool file;
 * it writes and prunes no registration.
 
-Those all belong to the daemon then, and two consumers would handle each event twice. It
-takes the spool again once the daemon is gone. Every read is of a copy in memory, through a
+Those all belong to the daemon then, and two consumers would handle each event twice. An event
+being handled when the daemon is found commits nothing further and stays in the spool for it,
+and is not counted as a failed attempt. (The probe's 2 s cache, and the moment between a check
+and the write it guards, are the window left: agent-ha-bridge takes no lock the host could
+share.) It takes the spool again once the daemon is gone. Every read is of a copy in memory, through a
 handle that shares delete, so a reader never makes another consumer's delete fail. The shadow
 comparison (#40, `docs/host-shadow.md`) never reads the spool at all. It does read the
 heartbeat as the daemon's, so it is for a machine before it migrates: once migrated the
@@ -268,7 +275,9 @@ exited:
 * **Claude:** the nearest ancestor that is a running `claude` (`Find-BridgeAgentAncestor`).
 * **Codex:** as `Get-CodexOwningProcessId`. Newer Codex runs hooks under a shared
   `codex app-server`, which has no console to type into, so the walk goes past it to the
-  window above. That window is taken only if no other live session has claimed it. Failing
+  window above. The app-server is recognised as discovery recognises it
+  (`CommandLine.IsCodexAppServer`), by its subcommand, so a window whose prompt mentions
+  "app-server" is still a window. That window is taken only if no other live session has claimed it. Failing
   that, the owner is:
   1. the window this session recorded, while it still runs, is still that process and no other
      live session has claimed it;
