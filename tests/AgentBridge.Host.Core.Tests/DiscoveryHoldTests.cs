@@ -360,6 +360,44 @@ public class DiscoveryHoldTests
     }
 
     [Theory]
+    [InlineData("copilot.exe --headless --stdio", true)]
+    [InlineData("node C:/npm/node_modules/@github/copilot/index.js --log-level info --headless --stdio", true)]
+    [InlineData("copilot --headless --stdio --session-id 11111111-1111-4111-8111-111111111111", false)]
+    // macOS's ps does not quote, so a prompt's words arrive as arguments of their own.
+    [InlineData("copilot -i Explain --headless mode", false)]
+    [InlineData("copilot --prompt=Explain --headless", false)]
+    // A prompt with escaped quotes in it is still one argument.
+    [InlineData("copilot -p \"a \\\" --headless \\\" b\"", false)]
+    [InlineData("copilot -- --headless", false)]
+    public void Scouts_embedded_CLI_is_told_by_its_own_headless_argument_not_a_prompts_words(string commandLine, bool embedded)
+    {
+        Assert.Equal(embedded, CommandLine.IsEmbedded(commandLine));
+    }
+
+    [Fact]
+    public async Task A_hold_on_one_agent_is_said_at_once_even_while_another_agents_clears()
+    {
+        using var f = new Fixture();
+        Directory.CreateDirectory(f.CodexRegistrations);
+        f.Processes.Run(AgentKind.Copilot, 200, "copilot");
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Equal([AgentKind.Copilot], source.Held!.Agents);
+        using var subscription = source.Subscribe();
+        Assert.True(subscription.Events.TryRead(out _));
+
+        f.Processes.Exit(AgentKind.Copilot, 200);
+        f.Processes.Run(AgentKind.Codex, 960, "codex");
+        await source.RefreshAsync();
+
+        // Codex is held before the pass lists anything, and Copilot only lets go after.
+        var said = new List<DiscoveryHeld?>();
+        while (subscription.Events.TryRead(out var e)) { if (e.Data is DiscoveryChanged c) { said.Add(c.DiscoveryHeld); } }
+        Assert.Equal([[AgentKind.Copilot, AgentKind.Codex], [AgentKind.Codex]], said.Select(h => h!.Agents.ToArray()));
+        Assert.Equal("an unrecognised codex process (pid 960)", said[0]!.Reason);
+    }
+
+    [Theory]
     [InlineData("codex.exe app-server --listen stdio", true)]
     [InlineData("node C:/npm/node_modules/@openai/codex/bin/codex.js -c model=o3 app-server", true)]
     [InlineData("/usr/local/bin/codex --profile work app-server", true)]

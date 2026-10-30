@@ -246,8 +246,11 @@ public sealed class SessionSource : ISessionSource
             // the sessions this pass found are listed: a session the hold kept unseen (its
             // registration unreadable until now) is otherwise neither listed nor held for a
             // moment, and a resume of it in that moment starts a second CLI on its transcript.
+            // Both at once (Copilot clears as Codex is held) says the new one now, with the old
+            // agents kept until then.
             release = Releases(held);
             if (!release) { SetHeld(held); }
+            else if (held is not null) { SetHeld(Widened(held)); }
         }
         else
         {
@@ -275,6 +278,12 @@ public sealed class SessionSource : ISessionSource
     bool Releases(DiscoveryHeld? next)
     {
         lock (_gate) { return _held is { } now && (next is null || now.Agents.Except(next.Agents).Any()); }
+    }
+
+    // The next hold, still covering every agent the current one does.
+    DiscoveryHeld Widened(DiscoveryHeld next)
+    {
+        lock (_gate) { return next with { Agents = [.. (_held?.Agents ?? []).Union(next.Agents).Order()] }; }
     }
 
     // One agent's part of a discovery pass: what it found, and anything that kept it from

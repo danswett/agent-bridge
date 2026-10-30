@@ -316,14 +316,26 @@ public static partial class CommandLine
     // An agent CLI embedded in another program and driven over stdio rather than a session:
     // Microsoft Scout runs `copilot.exe --headless ... --stdio`, which never takes a session id
     // and never writes a lock, so no session can account for it. agent-ha-bridge's
-    // Test-BridgeAgentEmbeddedProcess: quoted text is removed first, so a prompt that mentions
-    // --headless is not taken for the option, and --session-id settles it as a session.
+    // Test-BridgeAgentEmbeddedProcess, by argument rather than by text: `--headless` counts only
+    // as an argument of its own before any prompt (-p, -i, or after `--`), so a prompt that
+    // mentions it is not taken for the option. That holds when the quotes are escaped inside the
+    // prompt, and on macOS, whose ps does not quote, so a prompt arrives as separate words.
+    // --session-id anywhere settles it as a session: wrongly so only costs a hold.
     public static bool IsEmbedded(string? commandLine)
     {
         if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
-        var options = QuotedText().Replace(commandLine, " ");
-        return HeadlessOption().IsMatch(options) && !SessionIdOption().IsMatch(options);
+        var arguments = Split(commandLine);
+        if (arguments.Any(a => a == "--session-id" || a.StartsWith("--session-id=", StringComparison.Ordinal))) { return false; }
+        foreach (var a in arguments.Skip(1))
+        {
+            if (a == "--" || CopilotPromptOptions.Any(o => a == o || a.StartsWith(o + "=", StringComparison.Ordinal))) { return false; }
+            if (a == "--headless" || a.StartsWith("--headless=", StringComparison.Ordinal)) { return true; }
+        }
+        return false;
     }
+
+    // Copilot's options whose value is a prompt, which may say anything.
+    static readonly string[] CopilotPromptOptions = ["-p", "--prompt", "-i", "--interactive"];
 
     // Codex's shared app-server daemon, which every Codex client talks to and which is nobody's
     // session (agent-ha-bridge's Test-BridgeCodexSharedProcess). It is the subcommand, the first
@@ -363,15 +375,6 @@ public static partial class CommandLine
         "-c", "--config", "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval",
         "-C", "--cd", "-i", "--image", "--add-dir", "--enable", "--disable", "--local-provider",
     };
-
-    [System.Text.RegularExpressions.GeneratedRegex("\"[^\"]*\"")]
-    private static partial System.Text.RegularExpressions.Regex QuotedText();
-
-    [System.Text.RegularExpressions.GeneratedRegex(@"(^|\s)--headless(\s|=|$)")]
-    private static partial System.Text.RegularExpressions.Regex HeadlessOption();
-
-    [System.Text.RegularExpressions.GeneratedRegex(@"(^|\s)--session-id(\s|=)")]
-    private static partial System.Text.RegularExpressions.Regex SessionIdOption();
 
     // The session a Copilot CLI was started in, from `--session-id <id>` or
     // `--session-id=<id>`. Read from the options rather than searched for: a regex over

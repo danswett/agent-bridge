@@ -167,7 +167,7 @@ Home Assistant status line did). An agent is held when:
 | Claude Code's own `sessions/<pid>.json` for a running Claude process (of its generation) that cannot be read whole. One that says the run is not interactive (SDK, print mode) accounts for its process as nobody's session | `a claude session file could not be read (pid 4120)` |
 | A session, registration or Codex thread-lock folder that is there but cannot be read or listed, or is a link (a thread lock only while a Codex terminal runs). Only the OS saying a folder is not there is absence | `copilot's session folders could not be listed` |
 
-The next complete pass clears the hold with no restart, and removes what has really gone. A hold is said as soon as it begins, and said to clear only once the sessions that pass found are listed, so a client never sees a session neither listed nor held. An
+The next complete pass clears the hold with no restart, and removes what has really gone. A hold is said as soon as it begins, and said to clear (or to let an agent go) only once the sessions that pass found are listed, so a client never sees a session neither listed nor held; a pass that does both names the new agent at once and keeps the old one until then. An
 agent that is not installed (no registration folder, and for Claude no `sessions` folder) is never held.
 
 ### `session.answer`
