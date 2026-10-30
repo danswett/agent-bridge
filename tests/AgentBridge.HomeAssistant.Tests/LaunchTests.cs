@@ -24,6 +24,8 @@ public sealed class LaunchTests : IDisposable
     readonly List<LaunchRequest> launched = [];
     Func<LaunchRequest, Task<LaunchResult>>? answer;
     bool available = true;
+    // agent-ha-bridge running for this user, as G5 sees it: the connector pauses while it is.
+    string? daemon;
     int launchedCount;
 
     // What the recording's machine offered: four agents, Copilot's (and Agency's) tuning, Agency's
@@ -55,7 +57,7 @@ public sealed class LaunchTests : IDisposable
         FieldPinDelay = TimeSpan.Zero,
         SelectDelay = TimeSpan.Zero,
         AgentUserIds = [AgentUser],
-    }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } }, time: time,
+    }, ha, sessions, () => daemon, log: m => { lock (log) { log.Add(m); } }, time: time,
         answer: (_, _) => Task.FromResult(new AnswerResult(AnswerOutcome.Delivered)),
         launch: launches ? new HaLauncher(() => available, _ => Task.FromResult(offered), (r, _) =>
         {
@@ -540,6 +542,58 @@ public sealed class LaunchTests : IDisposable
         var r = Assert.Single(launched);
         Assert.Null(r.Prompt);
         Assert.Equal(2, JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Count);
+    }
+
+    [Fact]
+    public async Task Taking_the_machine_back_from_agent_ha_bridge_takes_its_newer_outcomes_with_it()
+    {
+        await using var c = await Ready();
+        Payload(new JsonObject { ["request"] = "req-0019-abcd" });
+        await Launch(c, AgentUser);
+        Assert.Single(launched);
+
+        // agent-ha-bridge has the machine for a while: it serves a request of its own, and its
+        // clear of the payload is lost.
+        daemon = "agent-ha-bridge is running";
+        await Pass(c);
+        ha.Seed(HaContract.LaunchOutcomeTopic(Slug), HaContract.Serialize(new JsonObject
+        {
+            ["recent"] = new JsonArray(new JsonObject { ["request"] = "req-0020-abcd", ["outcome"] = "started", ["session"] = "6f000000-0000-4000-8000-000000000022", ["note"] = "", ["pressed"] = "", ["at"] = "", ["launched"] = null }),
+        }));
+        daemon = null;
+        await Pass(c);
+        await Pass(c, 2);
+        await Pass(c, 6);
+
+        ha.Now = ha.Now.AddSeconds(11);
+        Payload(new JsonObject { ["text"] = "the daemon's request", ["request"] = "req-0020-abcd" });
+        await Launch(c, AgentUser);
+        Assert.Equal(2, launched.Count);
+        Assert.Null(launched[1].Prompt);
+        Assert.Equal(["req-0020-abcd"], JsonNode.Parse(ha.Retained[HaContract.LaunchOutcomeTopic(Slug)])!["recent"]!.AsArray().Select(o => o!["request"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task A_launch_still_starting_across_a_pause_is_not_called_unconfirmed_and_its_outcome_follows()
+    {
+        var release = new TaskCompletionSource<LaunchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        answer = _ => release.Task;
+        await using var c = await Ready();
+        Payload(new JsonObject { ["request"] = "req-0021-abcd" });
+        c.Observe(ha.Press(Entity("button", "new_session"), AgentUser));
+        await Pass(c);
+        for (var i = 0; i < 500 && Volatile.Read(ref launchedCount) == 0; i++) { await Task.Delay(10); }
+        daemon = "agent-ha-bridge is running";
+        await Pass(c);
+        daemon = null;
+        await Pass(c);
+        await Pass(c, 2);
+        await Pass(c, 6);
+        Assert.Equal("starting", Outcome()["outcome"]!.GetValue<string>());
+        release.SetResult(new LaunchResult(LaunchOutcome.Started) { Session = "6f000000-0000-4000-8000-000000000033" });
+        await c.DeliveredAsync();
+        await Pass(c);
+        Assert.Equal("started", Outcome()["outcome"]!.GetValue<string>());
     }
 
     [Fact]

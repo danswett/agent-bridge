@@ -463,9 +463,11 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
 * **One at a time.** The launch runs beside the passes (the host follows it to registration); a
   press meanwhile launches nothing, and a request hears `busy`, even when the launch finished
   before the press was read: the card still said `Starting...` when it was made.
-* **A restart** reads the outcomes back before taking any press: the requests they name are not
-  served again, the history agents read carries on, and one left at `starting` is reported
-  `unconfirmed` rather than launched a second time.
+* **A restart**, or taking the machine back after agent-ha-bridge had it, reads the outcomes back
+  before taking any press: what Home Assistant holds is the newest account, the requests it
+  names are not served again, the history agents read carries on, and one left at `starting`
+  (other than the connector's own launch still under way) is reported `unconfirmed` rather than
+  launched a second time.
 * What the button holds when the connector first reads it is not a press, and the note is
   cleared after ten minutes, as the daemon clears it. A note that cannot be shown does not stop
   the launch it describes.

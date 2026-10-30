@@ -37,6 +37,8 @@ public sealed partial class HaConnector
     string? launchPressHandled;
     bool launchBusy;
     bool launchOutcomesRestored;
+    // The request whose launch is under way, if an agent's.
+    string? launchInFlight;
     // The press whose launch request could not be read, said once.
     string? launchPayloadUnreadable;
     int launchTouched;
@@ -622,6 +624,7 @@ public sealed partial class HaConnector
     void Dispatch(LaunchRequest request, string? requestId, string pressed, string driver, JsonObject? launched, Consumed? prompt)
     {
         launchBusy = true;
+        launchInFlight = requestId;
         var cancel = replyStop.Token;
         log($"Home Assistant connector: launch {request.Request[..8]} handed to the host ({request.Agent ?? "default agent"}{(request.Resume is null ? $" in {request.Workspace ?? "the default workspace"}" : ", resuming")})");
         Track(Task.Run(async () =>
@@ -682,6 +685,7 @@ public sealed partial class HaConnector
             }
             launchesDone.TryDequeue(out _);
             launchBusy = false;
+            launchInFlight = null;
             log($"Home Assistant connector: launch {done.Request.Request[..8]} {outcome}{(result.Session is { } sid ? $" as {sid[..Math.Min(8, sid.Length)]}" : "")}{(note.Length > 0 ? $": {note}" : "")}");
         }
     }
@@ -758,11 +762,13 @@ public sealed partial class HaConnector
         }
     }
 
-    // What the outcomes said before this connector started, taken back before any press is: the
-    // requests they name were served, so a payload that could not be cleared is not served
-    // again, and the history agents read goes on rather than starting over. One left at starting
-    // was cut off by the restart; whether it started is not known, so it is said to be
-    // unconfirmed rather than launched again. False while the record cannot be read.
+    // What the outcomes say when this connector takes the machine (at start, and again after
+    // agent-ha-bridge had it meanwhile), taken back before any press is: the requests they name
+    // were served, so a payload that could not be cleared is not served again, and the history
+    // agents read goes on rather than starting over or being overwritten with an older one. One
+    // left at starting, other than this connector's own launch still under way, was cut off;
+    // whether it started is not known, so it is said to be unconfirmed rather than launched
+    // again. False while the record cannot be read.
     async Task<bool> RestoreOutcomesAsync(CancellationToken ct)
     {
         if (launchOutcomesRestored) { return true; }
@@ -770,16 +776,18 @@ public sealed partial class HaConnector
         try { state = await ha.GetStateAsync(LaunchEntity("sensor", "new_session_result"), ct); }
         catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { return false; }
         launchOutcomesRestored = true;
-        if (launchOutcomes.Count > 0 || state?.Attributes is not { ValueKind: JsonValueKind.Object } a
+        if (state?.Attributes is not { ValueKind: JsonValueKind.Object } a
             || !a.TryGetProperty("recent", out var recent) || recent.ValueKind != JsonValueKind.Array)
         {
             return true;
         }
+        // What Home Assistant holds is the newest account, whoever wrote it.
+        launchOutcomes.Clear();
         var cut = false;
         foreach (var item in recent.EnumerateArray().Take(HaContract.LaunchOutcomesKept))
         {
             if (JsonNode.Parse(item.GetRawText()) is not JsonObject o || o["request"] is not JsonValue r || !r.TryGetValue<string>(out var id)) { continue; }
-            if (o["outcome"] is JsonValue v && v.TryGetValue<string>(out var outcome) && outcome == "starting")
+            if (o["outcome"] is JsonValue v && v.TryGetValue<string>(out var outcome) && outcome == "starting" && id != launchInFlight)
             {
                 o["outcome"] = "unconfirmed";
                 o["note"] = "This machine's bridge restarted while the launch was starting, so whether it started is not known; check the machine.";
