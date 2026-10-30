@@ -341,9 +341,11 @@ exited:
   window it might name is not taken, and the hooks are answered at the app-server.
 
 When no owner is found (no ancestry, Claude or Codex), the registration keeps the pid it already
-records only while that pid is still a running agent of that kind and the same process by that
-rule. Otherwise it records 0: keeping it would refresh `Updated` and so bind the session to
-whatever reused the pid, and answers would be typed into it.
+records, as `Write-ClaudeSessionRegistration` does, unless another agent of that kind now runs
+under it (a process started after the registration, by that rule). Then it records 0: keeping it
+would refresh `Updated` and so bind the session to whatever reused the pid, and answers would be
+typed into it. A pid that has exited is kept, so a late `Stop` still lets discovery see the
+session ended; a process that later reuses it started after that write, so is never bound to it.
 
 ## Notices for the rest of the host
 

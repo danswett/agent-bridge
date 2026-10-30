@@ -961,19 +961,22 @@ public sealed class IntakeTests : IDisposable
     [Fact]
     public void A_pid_reused_by_another_process_is_not_kept_for_a_session_whose_owner_cannot_be_found()
     {
-        // Both recorded at T0: 31 and 61 have since been reused by processes started after it,
-        // 32 and 62 are the processes they were recorded for.
+        // All recorded at T0: 31 and 61 have since been reused by processes started after it,
+        // 32 and 62 are the processes they were recorded for, and 33 and 63 have exited (a late
+        // Stop): kept, so discovery sees the session ended.
         _f.ClaudeRegistration("reused", 31, null);
         _f.ClaudeRegistration("kept", 32, null);
+        _f.ClaudeRegistration("exited", 33, null);
         _f.CodexRegistration("reused", 61, null, updated: Fixture.T0);
         _f.CodexRegistration("kept", 62, null, updated: Fixture.T0);
+        _f.CodexRegistration("exited", 63, null, updated: Fixture.T0);
         _f.Processes.Run(AgentKind.Claude, 31, "claude", Fixture.T0.AddMinutes(30));
         _f.Processes.Run(AgentKind.Claude, 32, "claude", Fixture.T0.AddMinutes(-30));
         _f.Processes.Run(AgentKind.Codex, 61, "codex.exe", Fixture.T0.AddMinutes(30));
         _f.Processes.Run(AgentKind.Codex, 62, "codex.exe", Fixture.T0.AddMinutes(-30));
         var intake = Running();
         // No ancestry to find the owner by.
-        foreach (var id in new[] { "reused", "kept" })
+        foreach (var id in new[] { "reused", "kept", "exited" })
         {
             Spooled($"c-{id}", "claude", "stop", new { session_id = id });
             Spooled($"x-{id}", "codex", "hook", new { session_id = id, hook_event_name = "Stop" });
@@ -985,6 +988,8 @@ public sealed class IntakeTests : IDisposable
         Assert.Equal(32, Registration("agent-bridge-claude", "kept").GetProperty("ProcessId").GetInt32());
         Assert.Equal(0, Registration("agent-bridge-codex", "reused").GetProperty("ProcessId").GetInt32());
         Assert.Equal(62, Registration("agent-bridge-codex", "kept").GetProperty("ProcessId").GetInt32());
+        Assert.Equal(33, Registration("agent-bridge-claude", "exited").GetProperty("ProcessId").GetInt32());
+        Assert.Equal(63, Registration("agent-bridge-codex", "exited").GetProperty("ProcessId").GetInt32());
     }
 
     [Fact]

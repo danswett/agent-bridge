@@ -317,15 +317,18 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         return ms;
     }
 
-    // The pid a registration already records, for an event whose owner could not be found, but
-    // only while that pid is still the process it was recorded for (Bound): refreshing the
-    // registration's time would otherwise bind the session to whatever reused the pid, and
-    // answers would be typed into it. Unknown (0) otherwise.
+    // The pid a registration already records, for an event whose owner could not be found (as
+    // Write-ClaudeSessionRegistration keeps it), unless another of the agent's processes now runs
+    // under it: refreshing the registration's time would then bind the session to whatever reused
+    // the pid (Bound), and answers would be typed into it, so it becomes unknown (0). One that has
+    // exited is kept: that is how discovery sees the session has ended (a late Stop, handled after
+    // it exited, would otherwise leave it showing until stale registrations are cleared), and a
+    // process starting under it later started after this write, so is never bound to it.
     int KeptPid(JsonElement old, AgentKind agent)
     {
         if (Json.Int(old, "ProcessId") is not { } pid || pid <= 0) { return 0; }
         var process = processes.GetAgentProcesses(agent).FirstOrDefault(p => p.Id == pid);
-        return process is not null && Bound(old, process) ? pid : 0;
+        return process is null || Bound(old, process) ? pid : 0;
     }
 
     // An event older than what its session's registration already records, by when the hooks
