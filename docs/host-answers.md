@@ -191,8 +191,13 @@ on the next event however it was answered, and the rollout does not name the app
 a typed approval is always `unconfirmed`, as agent-ha-bridge logs it ("native approval is
 not confirmed"), and the client says to check at the machine.
 
-Claude and Codex sessions are known to this host only through agent-ha-bridge's hook
-registrations, so answering them needs its Claude or Codex adapter installed (with its
+Codex sessions are known to this host only through agent-ha-bridge's hook registrations.
+Claude sessions are found from them too, or else from Claude Code's own
+`~/.claude/sessions/<pid>.json`; but Claude Code 2.1.312 writes an `AskUserQuestion`
+`tool_use` into its transcript only once the question has been answered, so a waiting
+question is seen only through agent-ha-bridge's `PreToolUse` hook (seen live: the question
+on screen, the transcript silent until it was answered at the terminal). Answering them
+therefore needs its Claude or Codex adapter installed (with its
 daemon stopped, or G5 refuses). Its Codex hook writes the approval marker only after
 reaching Home Assistant (`Enter-BridgeAdapterSession`); without that, an approval is seen
 at most in the rollout, and answered at the machine.
