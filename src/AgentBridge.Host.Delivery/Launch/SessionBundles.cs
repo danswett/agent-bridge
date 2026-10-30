@@ -210,8 +210,7 @@ public static class SessionBundles
                 case AgentKind.Claude:
                 {
                     // Any folder name resolves; this one says where the session now runs.
-                    var slug = cwd.Replace(':', '-').Replace('\\', '-').Replace('/', '-').Trim('-');
-                    var dir = Directory.CreateDirectory(Path.Combine(homes.Claude, "projects", slug.Length > 0 ? slug : "bridge-transferred")).FullName;
+                    var dir = Directory.CreateDirectory(Path.Combine(homes.Claude, "projects", ProjectName(cwd))).FullName;
                     var dest = Path.Combine(dir, $"{newId}.jsonl");
                     installed = dest;
                     File.Move(files[0], dest);
@@ -405,14 +404,45 @@ public static class SessionBundles
         return o.ToJsonString(Relaxed);
     }
 
-    // workspace.yaml's cwd: the folder the copy works in here, not the other machine's.
+    // The folder under Claude's projects/ the copy goes in. Any name resolves; this one says
+    // where it now runs, shortened with a hash for a deep folder, since one path component is at
+    // most 255 characters and the whole path is better kept short.
+    static string ProjectName(string cwd)
+    {
+        var slug = cwd.Replace(':', '-').Replace('\\', '-').Replace('/', '-').Trim('-');
+        if (slug.Length == 0) { return "bridge-transferred"; }
+        if (slug.Length <= 100) { return slug; }
+        return $"{slug[..100].TrimEnd('-')}-{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(cwd)))[..16]}";
+    }
+
+    // workspace.yaml's cwd: the folder the copy works in here, not the other machine's. A line at
+    // a time, bounded as transcripts are: the file came from another machine.
     static void SetCopilotCwd(string yaml, string cwd)
     {
         if (!File.Exists(yaml)) { return; }
-        var quoted = "'" + cwd.Replace("'", "''") + "'";
-        var lines = File.ReadAllLines(yaml).Select(l => l.StartsWith("cwd:", StringComparison.Ordinal) ? $"cwd: {quoted}" : l).ToList();
-        if (!lines.Any(l => l.StartsWith("cwd:", StringComparison.Ordinal))) { lines.Add($"cwd: {quoted}"); }
-        File.WriteAllText(yaml, string.Join('\n', lines) + "\n");
+        var entry = "cwd: '" + cwd.Replace("'", "''") + "'";
+        var temp = Path.Combine(Path.GetDirectoryName(yaml)!, $".{Guid.NewGuid():N}.rename");
+        try
+        {
+            using var reader = new StreamReader(yaml, new UTF8Encoding(false));
+            using var writer = new StreamWriter(new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None), new UTF8Encoding(false));
+            var found = false;
+            var buffer = new StringBuilder();
+            string? line;
+            while ((line = ReadLine(reader, buffer)) is not null)
+            {
+                if (line.StartsWith("cwd:", StringComparison.Ordinal)) { (line, found) = (entry, true); }
+                writer.Write(line);
+                writer.Write('\n');
+            }
+            if (!found) { writer.Write(entry); writer.Write('\n'); }
+        }
+        catch
+        {
+            File.Delete(temp);
+            throw;
+        }
+        File.Move(temp, yaml, overwrite: true);
     }
 
     static void MoveTree(string from, string to)

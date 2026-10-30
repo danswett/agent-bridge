@@ -224,6 +224,23 @@ public sealed class SessionBundleTests : IDisposable
     }
 
     [Fact]
+    public void A_Claude_session_opening_in_a_deep_folder_gets_a_project_folder_the_file_system_takes()
+    {
+        var claude = Directory.CreateDirectory(Path.Combine(source.Claude, "projects", "p")).FullName;
+        File.WriteAllText(Path.Combine(claude, $"{Id}.jsonl"), $"{{\"type\":\"user\",\"sessionId\":\"{Id}\"}}\n");
+        SessionBundles.Pack(AgentKind.Claude, source, Id, Zip, long.MaxValue);
+        // Over 255 characters as one component, as a slug of the whole path.
+        string Deep(char last) => Path.Combine([root, .. Enumerable.Repeat(new string('d', 60), 5), new string(last, 60)]);
+
+        var first = SessionBundles.Install(Zip, AgentKind.Claude, Id, NewId, Deep('a'), target, Unpack, long.MaxValue, Now);
+        var second = SessionBundles.Install(Zip, AgentKind.Claude, Id, "22222222-3333-4444-8555-666666666666", Deep('b'), target, Unpack, long.MaxValue, Now);
+
+        var (a, b) = (Path.GetFileName(Path.GetDirectoryName(first))!, Path.GetFileName(Path.GetDirectoryName(second))!);
+        Assert.InRange(a.Length, 1, 120);
+        // Folders that differ only past the cut still get folders of their own.
+        Assert.NotEqual(a, b);
+    }
+    [Fact]
     public void Packing_stops_when_its_deadline_passes_and_leaves_no_bundle()
     {
         CopilotSession();
