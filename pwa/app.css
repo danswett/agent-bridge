@@ -168,9 +168,11 @@ a { color: var(--primary); }
 .sessions:focus { outline: none; }
 .sessions-head { display: flex; align-items: baseline; gap: 8px; }
 .count { color: var(--muted); font-size: .9rem; }
-.session-list { display: grid; gap: 14px; }
+.session-list { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
 
-.session { position: relative; }
+/* A grid item is min-width:auto, so one long unbroken path in a card (a tool summary, a title,
+   a question option) made the card wider than the screen and iOS zoomed the page out. */
+.session { position: relative; min-width: 0; }
 /* The session a notification was about, for a moment after it opens the app. */
 .session.linked .frame { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
 .frame {
@@ -462,6 +464,11 @@ summary {
 .account p { margin: 0; }
 .notify { margin-top: 16px; }
 
-@media (min-width: 900px) {
-  main, .topbar { max-width: 860px; }
+/* Wide windows (a desktop browser) put the sessions side by side instead of one long stack:
+   each column stays at least as wide as a phone, so a card's question form, reply box and
+   buttons keep their phone layout. Rows start at the top so a tall card does not stretch the
+   ones beside it. */
+@media (min-width: 960px) {
+  main, .topbar { max-width: 1680px; }
+  .session-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); align-items: start; }
 }
