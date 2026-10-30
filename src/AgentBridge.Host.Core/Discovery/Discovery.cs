@@ -247,8 +247,17 @@ internal static class ClaudeSessionDiscovery
             : null;
 }
 
+// What was decided about one thread lock, and when: the terminal holding it (Pid, with its
+// start), or no session (Pid 0) given the terminals running then (Terminals).
+internal sealed record CodexLockHolding(DateTime Created, int Pid, DateTimeOffset? Started, DateTimeOffset Checked, string Terminals);
+
 internal static class CodexLockDiscovery
 {
+    // How long a decision about a lock stands before the OS is asked again. A terminal can let
+    // a thread go while it keeps running (another thread taken, the lock left behind), so even
+    // a holder still running is checked again; and a lock no terminal held may be taken later.
+    public static readonly TimeSpan Recheck = TimeSpan.FromSeconds(30);
+
     // Live Codex sessions from Codex's own thread-writer-locks/<thread id>.lock, which the
     // process writing a thread's rollout holds open while it runs (seen with 0.165). Run
     // with --no-daemon, as every launch from this host is, that is the terminal codex.exe
@@ -256,14 +265,20 @@ internal static class CodexLockDiscovery
     // the shared app-server daemon holds it on behalf of any number of terminals, so it
     // names no window, and such a session is left to agent-ha-bridge's hook. Without this, a
     // Codex session launched from a device had no card on a machine without that hook.
+    // A second terminal resuming a thread another holds does not take its lock: it says "This
+    // conversation is open in another app" and waits (0.165, seen live).
     public static IReadOnlyList<DiscoveredSession> Find(
         string codexHome, IReadOnlyList<AgentProcess> processes, Func<string, IReadOnlyList<int>> holders,
-        Dictionary<string, (DateTime Created, int Pid, DateTimeOffset Started)> known, Func<string, string?> findTranscript)
+        Dictionary<string, CodexLockHolding> known, Func<string, string?> findTranscript, DateTimeOffset now)
     {
         var root = Path.Combine(codexHome, "thread-writer-locks");
-        if (processes.Count == 0 || !Directory.Exists(root)) { known.Clear(); return []; }
+        // Only a terminal can hold a session's lock for it. With none running (the daemon and
+        // its helpers, or processes not yet read), nobody is asked about any lock.
+        var terminals = processes.Where(p => IsTerminal(p.CommandLine)).OrderBy(p => p.Id).ToList();
+        if (terminals.Count == 0 || !Directory.Exists(root)) { known.Clear(); return []; }
+        var signature = string.Join(',', terminals.Select(p => $"{p.Id}@{p.StartedAt?.ToUnixTimeMilliseconds()}"));
         var running = processes.ToDictionary(p => p.Id);
-        var live = new List<DiscoveredSession>();
+        var held = new List<(string Id, AgentProcess Process)>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in CopilotDiscovery.SafeEnumerateFiles(root, "*.lock"))
         {
@@ -274,28 +289,54 @@ internal static class CodexLockDiscovery
             try { created = File.GetCreationTimeUtc(file); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
 
-            // The holder of one lock file never changes while it exists, so the OS is asked
-            // once per lock, and again only once the process it named has gone. That process
-            // is its pid *and* start time: a pid reused by a later process would otherwise
-            // inherit the session, and a stop checked against its start time would end it.
-            if (!(known.TryGetValue(file, out var cached) && cached.Created == created
-                && running.TryGetValue(cached.Pid, out var holder) && holder.StartedAt == cached.Started))
+            // A decision stands for Recheck, and only while what it rested on holds: the holder
+            // still the same process (its pid *and* start time, since a pid reused by a later
+            // process would otherwise inherit the session), or, where nobody was taken, the same
+            // terminals running, so a new one, or one whose command line can now be read, is
+            // asked about at once.
+            if (!(known.TryGetValue(file, out var holding) && holding.Created == created && now - holding.Checked < Recheck
+                && (holding.Pid == 0
+                    ? holding.Terminals == signature
+                    : running.TryGetValue(holding.Pid, out var cached) && cached.StartedAt == holding.Started)))
             {
-                known.Remove(file);
-                // A holder whose command line could not be read may be the shared daemon, whose stop
-                // would end every session it serves: it names no session, and is asked about again.
-                var terminals = holders(file).Where(pid => running.TryGetValue(pid, out var p) && IsTerminal(p.CommandLine)).Distinct().ToList();
-                if (terminals.Count != 1) { continue; }
+                holding = new CodexLockHolding(created, Holder(holders(file), running) ?? 0, null, now, signature);
+                if (holding.Pid != 0) { holding = holding with { Started = running[holding.Pid].StartedAt }; }
                 // A holder whose start is unknown cannot be told from a successor, so it is
                 // asked about afresh on every pass rather than remembered.
-                if (running[terminals[0]].StartedAt is { } started) { known[file] = (created, terminals[0], started); }
-                cached = (created, terminals[0], default);
+                if (holding.Pid == 0 || holding.Started is not null) { known[file] = holding; }
+                else { known.Remove(file); }
             }
-            var process = running[cached.Pid];
-            live.Add(new DiscoveredSession(id, AgentKind.Codex, findTranscript(id), null, cached.Pid, ProcessStartedAt: process.StartedAt));
+            if (holding.Pid != 0) { held.Add((id, running[holding.Pid])); }
         }
         foreach (var gone in known.Keys.Where(k => !seen.Contains(k)).ToList()) { known.Remove(gone); }
+
+        // One terminal is one session. A terminal holding several locks may be writing a
+        // sub-agent's thread or touching another thread's rollout, and a launch bound by pid
+        // must not be handed the wrong one: it is a session only through the one lock whose
+        // rollout is its own top-level thread, written since it started; otherwise none.
+        var live = new List<DiscoveredSession>();
+        foreach (var group in held.GroupBy(h => h.Process.Id))
+        {
+            var candidates = group.Select(h => (h.Id, h.Process, Transcript: findTranscript(h.Id))).ToList();
+            if (candidates.Count > 1)
+            {
+                candidates = [.. candidates.Where(c => c.Transcript is { } t && CodexRollout.IsOwnThread(t, c.Id, c.Process.StartedAt))];
+                if (candidates.Count != 1) { continue; }
+            }
+            var (id, process, transcript) = candidates[0];
+            live.Add(new DiscoveredSession(id, AgentKind.Codex, transcript, null, process.Id, ProcessStartedAt: process.StartedAt));
+        }
         return live;
+    }
+
+    // The one process to bind a lock to: every running Codex process holding it counts, so a
+    // lock a terminal shares with the daemon, or with a Codex whose command line could not be
+    // read (which may be the daemon, whose stop would end every session it serves), names
+    // nobody. Exactly one holder, and a terminal.
+    static int? Holder(IReadOnlyList<int> pids, Dictionary<int, AgentProcess> running)
+    {
+        var codex = pids.Where(running.ContainsKey).Distinct().ToList();
+        return codex.Count == 1 && IsTerminal(running[codex[0]].CommandLine) ? codex[0] : null;
     }
 
     // A Codex process known to be a terminal: its command line read, and not an app-server.
@@ -309,6 +350,77 @@ internal static class CodexLockDiscovery
         CommandLine.Split(commandLine).Skip(1).Any(a => a is "app-server" or "mcp-server");
 }
 
+// What a Codex rollout says about whose thread it is.
+internal static class CodexRollout
+{
+    const int MaxHeadBytes = 256 * 1024;
+    const int TailBytes = 64 * 1024;
+
+    // Whether a rollout is a person's own top-level thread, written since `started`: its
+    // session_meta names this thread (id, and session_id where given) as one a user started
+    // (thread_source "user" and a plain source where given; 0.165 writes both, seen live), and
+    // its last event is no older than the process. Anything unread, a sub-agent's thread, or
+    // one only touched by this process, is not. The last event, not the file's write time,
+    // which Windows leaves stale while the writer holds the file open (seen live).
+    public static bool IsOwnThread(string path, string id, DateTimeOffset? started)
+    {
+        if (started is not { } since) { return false; }
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (FirstLine(stream) is not { } head || !TopLevel(head, id)) { return false; }
+            return LastTimestamp(stream) is { } last && last >= since - TimeSpan.FromSeconds(1);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    static bool TopLevel(byte[] line, string id)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var e = doc.RootElement;
+            if (Json.Str(e, "type") != "session_meta" || Json.Obj(e, "payload") is not { } p) { return false; }
+            if (!string.Equals(Json.Str(p, "id"), id, StringComparison.OrdinalIgnoreCase)) { return false; }
+            if (Json.Get(p, "session_id") is { } session && !(session.ValueKind == JsonValueKind.String && string.Equals(session.GetString(), id, StringComparison.OrdinalIgnoreCase))) { return false; }
+            if (Json.Get(p, "thread_source") is { } thread && !(thread.ValueKind == JsonValueKind.String && thread.GetString() == "user")) { return false; }
+            return Json.Get(p, "source") is not { } source || source.ValueKind == JsonValueKind.String;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    static byte[]? FirstLine(FileStream stream)
+    {
+        var buffer = new byte[Math.Min(MaxHeadBytes, stream.Length)];
+        var read = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
+        var end = Array.IndexOf(buffer, (byte)'\n', 0, read);
+        return end < 0 ? null : buffer[..end];
+    }
+
+    static DateTimeOffset? LastTimestamp(FileStream stream)
+    {
+        var start = Math.Max(0, stream.Length - TailBytes);
+        stream.Seek(start, SeekOrigin.Begin);
+        var buffer = new byte[stream.Length - start];
+        var read = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
+        if (read == 0) { return null; }
+        // The last complete line: a trailing one still being written is passed over.
+        var end = Array.LastIndexOf(buffer, (byte)'\n', read - 1);
+        while (end > 0)
+        {
+            var begin = Array.LastIndexOf(buffer, (byte)'\n', end - 1) + 1;
+            if (begin == 0 && start > 0) { return null; }
+            try
+            {
+                using var doc = JsonDocument.Parse(buffer.AsMemory(begin, end - begin));
+                return Json.Time(doc.RootElement, "timestamp");
+            }
+            catch (JsonException) { end = begin - 1; }
+        }
+        return null;
+    }
+}
+
 internal static class RegistrationDiscovery
 {
     // Live Claude or Codex sessions from agent-ha-bridge's hook registrations. A session
@@ -316,7 +428,8 @@ internal static class RegistrationDiscovery
     // it has been quiet (an idle limit retired sessions waiting out a usage cap), and,
     // for Codex, until its SessionEnd marked the registration Ended.
     public static IReadOnlyList<DiscoveredSession> Find(
-        AgentKind agent, IReadOnlyList<string> roots, IReadOnlyList<AgentProcess> processes, Func<string, string?> findTranscript)
+        AgentKind agent, IReadOnlyList<string> roots, IReadOnlyList<AgentProcess> processes, Func<string, string?> findTranscript,
+        ISet<string>? ended = null)
     {
         var running = processes.ToDictionary(p => p.Id);
         var best = new Dictionary<string, Registration>(StringComparer.Ordinal);
@@ -334,12 +447,15 @@ internal static class RegistrationDiscovery
         var live = new List<DiscoveredSession>();
         foreach (var r in best.Values)
         {
-            if (r.Ended || r.ProcessId <= 0 || !running.TryGetValue(r.ProcessId, out var process)) { continue; }
+            if (r.ProcessId <= 0 || !running.TryGetValue(r.ProcessId, out var process)) { continue; }
             // A pid is reused. A registration last written before the process now holding
             // its pid started belongs to a session that is gone, and would otherwise come
             // back, old question and all, for as long as the newcomer runs. A second of
             // slack covers start times the OS rounds.
             if (r.Updated is { } updated && process.StartedAt is { } started && updated < started - TimeSpan.FromSeconds(1)) { continue; }
+            // An ended session whose process still runs is not a session, and other ways of
+            // finding one (a thread lock) are told so rather than bringing it back.
+            if (r.Ended) { ended?.Add(r.SessionId); continue; }
             // Claude creates its transcript at the first message, so a missing file is a
             // live session with nothing to show yet, not a dead one.
             var transcript = string.IsNullOrWhiteSpace(r.TranscriptPath) ? findTranscript(r.SessionId) : r.TranscriptPath;

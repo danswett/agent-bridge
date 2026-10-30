@@ -1,4 +1,5 @@
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Discovery;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Protocol;
 using Xunit;
@@ -303,12 +304,128 @@ public class DiscoveryTests
     {
         using var f = new Fixture();
         f.CodexRegistration(A, 800, f.CodexTranscript(A), status: "ended", ended: true);
-        f.Processes.Run(AgentKind.Codex, 800);
+        f.Processes.Run(AgentKind.Codex, 800, "codex.exe --no-daemon");
+        // Its terminal still holding the thread's lock does not bring it back.
+        f.Processes.Holders[f.CodexLock(A)] = [800];
         await using var source = f.Source();
 
         await source.RefreshAsync();
 
         Assert.Empty(source.Snapshot());
+    }
+
+    [Fact]
+    public async Task A_Codex_lock_a_terminal_shares_with_the_daemon_or_an_unreadable_Codex_names_nobody_until_the_terminal_holds_it_alone()
+    {
+        using var f = new Fixture();
+        var withDaemon = f.CodexLock(A);
+        var withUnknown = f.CodexLock(B);
+        f.Processes.Run(AgentKind.Codex, 800, "codex.exe --no-daemon");
+        f.Processes.Run(AgentKind.Codex, 801, "codex.exe --no-daemon");
+        f.Processes.Run(AgentKind.Codex, 900, "codex.exe app-server --listen unix:// --managed-daemon");
+        f.Processes.Run(AgentKind.Codex, 901, commandLine: null);
+        f.Processes.Holders[withDaemon] = [900, 800];
+        // A process that is not Codex (an indexer, a backup) holding it too is not a rival.
+        f.Processes.Holders[withUnknown] = [801, 901, 4242];
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+        Assert.Empty(source.Snapshot());
+
+        // Nothing was bound, so once each terminal holds its lock alone it is found, on the
+        // next look after Recheck.
+        f.Processes.Holders[withDaemon] = [800];
+        f.Processes.Holders[withUnknown] = [801, 4242];
+        f.Time.Advance(CodexLockDiscovery.Recheck);
+        await source.RefreshAsync();
+
+        Assert.Equal([800, 801], source.Snapshot().Select(s => s.ProcessId!.Value).Order());
+    }
+
+    [Fact]
+    public async Task A_Codex_terminal_that_lets_its_thread_go_or_comes_to_share_it_while_it_runs_is_no_longer_that_session()
+    {
+        using var f = new Fixture();
+        var lockFile = f.CodexLock(A);
+        f.Processes.Run(AgentKind.Codex, 800, "codex.exe --no-daemon");
+        f.Processes.Holders[lockFile] = [800];
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Single(source.Snapshot());
+
+        // Another terminal comes to hold it too, while the first keeps running.
+        f.Processes.Run(AgentKind.Codex, 801, "codex.exe --no-daemon");
+        f.Processes.Holders[lockFile] = [800, 801];
+        f.Time.Advance(CodexLockDiscovery.Recheck);
+        await source.RefreshAsync();
+        Assert.Empty(source.Snapshot());
+
+        // Or nobody does.
+        f.Processes.Holders[lockFile] = [800];
+        f.Time.Advance(CodexLockDiscovery.Recheck);
+        await source.RefreshAsync();
+        Assert.Single(source.Snapshot());
+        f.Processes.Holders.Remove(lockFile);
+        f.Time.Advance(CodexLockDiscovery.Recheck);
+        await source.RefreshAsync();
+        Assert.Empty(source.Snapshot());
+    }
+
+    [Fact]
+    public async Task A_Codex_lock_nobody_holds_is_asked_about_again_only_after_Recheck_or_once_another_terminal_runs()
+    {
+        using var f = new Fixture();
+        var lockFile = f.CodexLock(A);
+        // Only the daemon running: no terminal could hold a session's lock, so none is asked about.
+        f.Processes.Run(AgentKind.Codex, 900, "codex.exe app-server --listen unix:// --managed-daemon");
+        f.Processes.Holders[lockFile] = [900];
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Equal(0, f.Processes.HolderQueries);
+
+        f.Processes.Run(AgentKind.Codex, 800, "codex.exe --no-daemon");
+        await source.RefreshAsync();
+        await source.RefreshAsync();
+        Assert.Equal(1, f.Processes.HolderQueries);
+
+        f.Processes.Run(AgentKind.Codex, 801, "codex.exe --no-daemon");
+        await source.RefreshAsync();
+        Assert.Equal(2, f.Processes.HolderQueries);
+
+        f.Time.Advance(CodexLockDiscovery.Recheck);
+        await source.RefreshAsync();
+        Assert.Equal(3, f.Processes.HolderQueries);
+        Assert.Empty(source.Snapshot());
+    }
+
+    [Fact]
+    public async Task A_Codex_terminal_holding_several_thread_locks_is_the_session_whose_rollout_is_its_own_thread_written_since_it_started()
+    {
+        using var f = new Fixture();
+        const string Sub = "33333333-3333-4333-8333-333333333333";
+        // Its own thread, a sub-agent's, and an old thread whose rollout it only touched.
+        Fixture.Append(f.CodexTranscript(A), Meta(A, A, "user"), Codex.Event(new { type = "user_message", message = "mine" }, 10));
+        Fixture.Append(f.CodexTranscript(Sub), Meta(Sub, A, "subagent"), Codex.Event(new { type = "user_message", message = "delegated" }, 11));
+        Fixture.Append(f.CodexTranscript(B), Meta(B, B, "user"), Codex.Event(new { type = "user_message", message = "long ago" }, -7200));
+        f.Processes.Run(AgentKind.Codex, 800, "codex.exe --no-daemon", Fixture.T0.AddMinutes(-5));
+        f.Processes.Holders[f.CodexLock(A)] = [800];
+        f.Processes.Holders[f.CodexLock(Sub)] = [800];
+        f.Processes.Holders[f.CodexLock(B)] = [800];
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        var s = Assert.Single(source.Snapshot());
+        Assert.Equal((A, 800), (s.Id, s.ProcessId!.Value));
+
+        // Two that could each be its own: neither is taken.
+        Fixture.Append(f.CodexTranscript(B), Codex.Event(new { type = "user_message", message = "again" }, 20));
+        f.Time.Advance(CodexLockDiscovery.Recheck);
+        await source.RefreshAsync();
+        Assert.Empty(source.Snapshot());
+
+        static string Meta(string id, string session, string threadSource) =>
+            Codex.Line("session_meta", new { id, session_id = session, thread_source = threadSource, source = threadSource == "user" ? (object)"cli" : new { subagent = "review" } }, 0);
     }
 
     [Fact]
