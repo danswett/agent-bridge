@@ -9,7 +9,7 @@ reply. Issue #37; design §6.1 `Host.Intake`, §6.3 invariants 3 and 14.
 
 On every other machine nothing here runs: no spool is read, no heartbeat is written and no
 registration is touched (G4, G5). Taking over is the explicit migration of #38
-(`agent-bridge-host migrate`).
+(`agent-bridge-host migrate`, [migration.md](migration.md)).
 
 ## Decision: the host ships its own native hook, speaking agent-ha-bridge's spool contract
 
@@ -39,9 +39,10 @@ consumers**:
 
 An agent reads its hook commands when a session starts. A session running across a migrate or
 a rollback keeps calling the hook it started with, and is still served by whichever bridge is
-running. Rollback restores the registrations byte for byte from the snapshot taken at migrate
-time (#38). The migrate side writes the host's hook into them, with a pointer beside it to the
-installation's runtime folder (below).
+running. Migration re-points agent-ha-bridge's own registrations at this program, installed in
+`%LOCALAPPDATA%\AgentBridge\bin\<installation id>` with a pointer beside it to the installation's runtime folder
+(below). Rollback restores them byte for byte from the snapshot taken at migrate time
+([migration.md](migration.md)).
 
 The design's `agent-bridge-host hook --fallback` is this program's own fallback: with no fresh
 heartbeat it prints the fixed reply and nothing else. `agent-bridge-host-hook --fallback

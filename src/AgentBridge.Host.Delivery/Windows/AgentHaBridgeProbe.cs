@@ -33,7 +33,21 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
     [GeneratedRegex("^(AgentBridgeDaemon|CopilotBridgeDaemon)(_[0-9A-Fa-f]{1,64})?$")]
     private static partial Regex TaskName();
 
-    public string? Active()
+    // Whether that installation's daemon itself was seen running: unlike Active, not knowing is not
+    // a yes here, and nor is its supervisor or task alone (either can run while the daemon fails
+    // to start), nor another installation's daemon. Rollback is done only once it has seen this
+    // installation's back; Active stays user-wide, for G5.
+    public bool Seen(string installationId)
+    {
+        var found = Scan().Found;
+        Probe("AgentBridgeDaemon_" + installationId, found);
+        return DaemonAmong(found, installationId);
+    }
+
+    internal static bool DaemonAmong(IEnumerable<string> found, string installationId) =>
+        found.Contains("AgentBridgeDaemon_" + installationId, StringComparer.OrdinalIgnoreCase);
+
+    (SortedSet<string> Found, bool Known) Scan()
     {
         var found = new SortedSet<string>(StringComparer.Ordinal);
         var listed = NamedMutexes(found);
@@ -46,11 +60,17 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
             Probe("CopilotBridgeSupervisor" + id, found);
             if (running) { found.Add($"task {task} (running)"); }
         }
+        return (found, listed || tasks is not null);
+    }
+
+    public string? Active()
+    {
+        var (found, known) = Scan();
         if (found.Count > 0)
         {
             return $"agent-ha-bridge is running for this user ({string.Join(", ", found)}); answer at the machine or through it";
         }
-        if (!listed && tasks is null)
+        if (!known)
         {
             return "whether agent-ha-bridge is running for this user could not be checked; answer at the machine";
         }

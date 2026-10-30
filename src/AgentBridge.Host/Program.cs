@@ -51,6 +51,10 @@ using AgentBridge.Transport;
 //                                               profile has taken over agent-ha-bridge's hook
 //                                               spool, its heartbeat, and the hooks' timings
 //                                               (docs/host-hooks.md)
+//   agent-bridge-host migrate [--dry-run] | rollback [--dry-run] | migration status
+//                                               move this machine's hooks and settings from
+//                                               agent-ha-bridge to this host, and back
+//                                               (docs/migration.md; Windows)
 //
 // Roots default to the current user's; --copilot-home, --claude-home and --codex-home
 // point elsewhere. Nothing under them is ever written. sign-in, serve and whoami take
@@ -93,9 +97,10 @@ string[] WithIntake(IReadOnlyList<string> roots, string folder) =>
     intakeState is null ? [.. roots] : [.. roots.Prepend(Path.Combine(intakeState.RuntimeRoot, folder)).Distinct(StringComparer.OrdinalIgnoreCase)];
 var options = new SessionSourceOptions
 {
-    CopilotHome = Option("--copilot-home") ?? defaults.CopilotHome,
-    ClaudeHome = Option("--claude-home") ?? defaults.ClaudeHome,
-    CodexHome = Option("--codex-home") ?? defaults.CodexHome,
+    // A migrated installation's agent homes, where its hooks were re-pointed, unless told otherwise.
+    CopilotHome = Option("--copilot-home") ?? intakeState?.Homes?.Copilot ?? defaults.CopilotHome,
+    ClaudeHome = Option("--claude-home") ?? intakeState?.Homes?.Claude ?? defaults.ClaudeHome,
+    CodexHome = Option("--codex-home") ?? intakeState?.Homes?.Codex ?? defaults.CodexHome,
     ClaudeRegistrationRoots = WithIntake(defaults.ClaudeRegistrationRoots, SpoolContract.ClaudeFolder),
     CodexRegistrationRoots = WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder),
     CopilotRemoteApproval = settings.RemoteApproval,
@@ -230,11 +235,20 @@ switch (command)
         // Read only: the profile's folder is looked in, never created, and no identity is loaded.
         if (intakeFolder is null) { Console.Error.WriteLine("agent-bridge-host: --profile is not a valid profile name"); return 2; }
         return HookCommands.Status(intakeFolder, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge", "runtime"), Console.Out, DateTimeOffset.Now);
+    case "migrate" or "rollback" or "migration":
+        if (MigrateCommands.Writes(arguments) && Refused("migrate this machine or roll it back")) { return 4; }
+        {
+            using var stop = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
+            return await MigrateCommands.RunAsync(arguments, Identity.DefaultRoot, Console.Out, Console.Error, o => OperatingSystem.IsWindows()
+                ? new AgentBridge.Host.Migration.Migrator(o, new AgentBridge.Host.Migration.WindowsAgentHaBridgeRuntime(), new AgentBridge.Host.Migration.LocalMigrationHost(o.ProfileFolder), new AgentBridge.Host.Migration.ProcessHookRunner())
+                : throw new PlatformNotSupportedException(), stop.Token);
+        }
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
-        Console.Error.WriteLine("       agent-bridge-host hooks status");
+        Console.Error.WriteLine("       agent-bridge-host hooks status | migrate [--dry-run] [--bridge-home <dir>] [--hook <file>] | rollback [--dry-run] | migration status");
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");
         return command == "help" ? 0 : 2;
 }
@@ -344,9 +358,16 @@ async Task<int> ServeAsync()
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
     var inspector = new SystemProcessInspector();
-    var callers = new CallerGuard(() => KnownAgents.Of(source, launcher, inspector), OperatingSystem.IsWindows() ? Path.Combine(AppContext.BaseDirectory, CallerGuard.AppExecutable) : null);
+    var callers = new CallerGuard(() => KnownAgents.Of(source, launcher, inspector), OperatingSystem.IsWindows() ? Path.Combine(AppContext.BaseDirectory, CallerGuard.AppExecutable) : null,
+        hostImage: OperatingSystem.IsWindows() ? Environment.ProcessPath : null);
     // On a machine migrated from agent-ha-bridge, the hooks hand their events to this host
     // (docs/host-hooks.md). Its notices are there for the Home Assistant connector to subscribe to.
+    // Migrated agents run a copy of the hook beside this host; an app update brings a new one.
+    if (intakeState is not null && OperatingSystem.IsWindows()
+        && AgentBridge.Host.Migration.Migrator.RefreshHook(serveFolder!, Path.Combine(AppContext.BaseDirectory, "agent-bridge-host-hook.exe")) is { } refreshed)
+    {
+        Log(refreshed);
+    }
     await using var intake = StartIntake(haProbe, stop.Token);
     runningIntake = intake;
 

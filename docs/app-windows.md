@@ -170,8 +170,8 @@ agent-ha-bridge's Codex hook; and what only a hook reports is missing (a Claude 
 Claude permission prompts, Codex approvals: [host-answers.md](host-answers.md)). The host
 already refuses to type into any session while agent-ha-bridge is
 active for the user (G5), and offers read-only capabilities then; the app shows the
-reason in a banner over the cards and on the Settings page, and nothing more. Migration is a later,
-explicit step.
+reason in a banner over the cards and on the Settings page, and nothing more. Migration is a
+separate, explicit step ([migration.md](migration.md)).
 
 ## The app
 
@@ -220,7 +220,11 @@ reaches the real host or its profile.
   it, as everywhere else for now.
 * **Cancelling a large attachment** part way. The PWA has a Cancel while a file uploads; the
   app sends over the pipe at local speed and has none yet.
-* Agent hook registration, migration from agent-ha-bridge and rollback (G4, G8).
+* Agent hook registration for a fresh install (#54).
+* **Migrate and Roll back on the Settings page** (WinUI slice 2). Both exist in the host
+  (`agent-bridge-host migrate` / `rollback`, [migration.md](migration.md)); the page needs
+  to show the dry run's report, confirm, and show the result, and it cannot be reached through
+  the relay.
 * Code signing, attestations and publishing releases.
 * Arm64 builds, the first-run wizard's agent detection and winget installs.
 

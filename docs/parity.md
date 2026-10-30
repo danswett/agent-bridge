@@ -36,9 +36,9 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 | Status | Rows |
 |---|---|
 | `Verified` | 49 |
-| `Implemented, untested live` | 40 |
+| `Implemented, untested live` | 41 |
 | `Partial` | 1 |
-| `Missing` | 14 |
+| `Missing` | 13 |
 | `Intentionally different` | 18 |
 | `N/A` | 12 |
 | `In flight (…)` | 13: Claude/Codex live 8, HA connector 5 |
@@ -155,7 +155,7 @@ Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Par
 | `isolate: true`: a detached worktree at a freshly fetched base, marked, locked while starting | All | `New-BridgeSessionWorktree`; `tests/test-worktree-isolation.ps1` | `Verified` | `LaunchPieceTests.An_isolated_launch_gets_a_detached_worktree_at_the_fetched_base_named_by_time_and_marked_as_this_hosts`, `LaunchFlowTests.An_isolated_workspace_starts_each_session_in_a_worktree_of_its_own_and_unlocks_it_once_it_registers`. Live: Progress › Launch | |
 | Fails closed; a cap per repository with no fallback to the primary clone | All | `newSession.worktreeLimit` | `Implemented, untested live` | `LaunchPieceTests.The_cap_counts_only_this_hosts_worktrees_and_refuses_rather_than_falling_back`, `A_folder_outside_git_fails_closed` | The cap has not been hit live (#39) |
 | Reclaim finished worktrees: marked, unlocked, clean, detached, idle; the given repository only | All | `Remove-BridgeFinishedWorktree`; `tests/test-p4-worktree-safety.ps1` | `Implemented, untested live` | `WorktreeReclaimerTests` (#58); held while discovery is: `WorktreeReclaimerTests.Nothing_is_reclaimed_while_session_discovery_is_held_and_finished_trees_go_once_it_is_complete`, `A_hold_that_begins_while_a_worktree_is_being_checked_keeps_it` | #39 |
-| Neither product counts or claims the other's trees | All | Marker `agent-bridge-created` | `Intentionally different` | Marker `agent-bridge-host-created` (`docs/host-launch.md`) | After migration, who reclaims the old trees is decided in #38 |
+| Neither product counts or claims the other's trees | All | Marker `agent-bridge-created` | `Intentionally different` | Marker `agent-bridge-host-created` (`docs/host-launch.md`) | While migrated nobody reclaims the old trees; a rollback resumes agent-ha-bridge's reclaimer, and a machine leaving agent-ha-bridge for good runs its `Remove-BridgeFinishedWorktree` once (`docs/migration.md`) |
 
 ## 8. Agent usage
 
@@ -234,7 +234,7 @@ Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Par
 | `configure`: approved workspaces and launch settings | All | `install.ps1 -Workspace`, `configure` | `Implemented, untested live` | `agent-bridge-host workspace` and `config`: `HostSettingsTests.The_cli_refuses_a_setting_it_does_not_know_or_a_value_serve_could_not_read_and_leaves_the_file_as_it_was` | `workspace add` was used live (Progress › Launch). Other keys need #39 |
 | A config that cannot be read turns the risky features off | All | `bridge-control-policy.ps1` (unreadable is unavailable) | `Implemented, untested live` | `HostSettingsTests.A_setting_that_cannot_be_read_as_true_or_false_turns_remote_approval_off_and_says_why`, `A_config_from_a_newer_schema_is_not_guessed_at` | #39 |
 | Detect agents and install missing ones (winget, npm) | All | `install.ps1`; `tests/test-install-deps.ps1` | `Missing` | Deferred: "first-run wizard's agent detection and winget installs" (`docs/app-windows.md`) | #54 |
-| Migrate an existing agent-ha-bridge install, and roll back | All | — (design G8) | `Missing` | — | #38 |
+| Migrate an existing agent-ha-bridge install, and roll back | All | — (design G8) | `Implemented, untested live` | `agent-bridge-host migrate` / `rollback` (`docs/migration.md`). `MigrationTests`: against a fake installation laid out as its installers lay one out, `Rolling_back_restores_every_file_byte_for_byte_and_starts_agent_ha_bridge_again`, `A_failed_hand_over_rolls_back_on_its_own`, `The_dashboards_publication_writer_is_refused_before_anything_is_touched` | The VM rehearsal (#39). The app's Settings page offers it in WinUI slice 2 |
 | Layout migration from older agent-ha-bridge layouts | All | `tests/test-layout-migration.ps1` | `N/A` | Older agent-ha-bridge layouts are its own concern; migration starts from 1.33.x (#38) | |
 
 ## 15. Agents driving sessions
@@ -375,12 +375,12 @@ agent-ha-bridge's manual checks, `tests/verify-mac-terminal.ps1`,
 | Piece | Migrate | Roll back |
 |---|---|---|
 | **Daemon** | Stop and **disable** (not delete) `AgentBridgeDaemon_<id>` and any `AgentBridgeDevBoxKeepAwake_<id>` | Re-enable both and start the daemon; G5 then puts the host back to read-only |
-| **Hooks** | Agent-ha-bridge's registrations stay; only the Go hook's fallback target moves to the host (#37), whose intake keeps the heartbeat so hooks spool to it | Restore the registrations and fallback byte for byte from the snapshot taken at migrate time |
-| **Instruction blocks** | Left in place (they name agent-ha-bridge's token, which still works through the HA connector) | Restored byte for byte |
-| **Config** | `newSession.*` imported into the profile's `config.json` (#38 has the key map). Keys with no equivalent are reported and stay in the old file. `~/.agent-ha-bridge` is never modified | Nothing to undo: the old file was never written |
+| **Hooks** | agent-ha-bridge's own entries in the Copilot, Claude and Codex hook files are re-pointed at `agent-bridge-host-hook` (`docs/host-hooks.md` has why it is not the Go hook), installed in `%LOCALAPPDATA%\AgentBridge\bin\<installation id>`; the host's intake keeps the heartbeat so hooks spool to it | Restore the files byte for byte from the snapshot taken at migrate time (or, for one edited since, only the re-pointed entries). The installed hook stays, for sessions started while migrated |
+| **Instruction blocks** | Left in place (they name agent-ha-bridge's token, which still authenticates) and recorded by hash | Never written, so nothing to restore; a change made while migrated is reported |
+| **Config** | `newSession.*`, and the HA connector's address, dashboard and attribution settings, imported into the profile's `config.json` (`docs/migration.md` has the key map). Keys with no equivalent are reported and stay in the old file; no secret is copied. `~/.agent-ha-bridge` is never modified but for the Codex plugin's `hooks.json` | The profile's `config.json` is restored (or removed) unless changed since; the old file was never written |
 | **Approved workspaces and profiles** | `newSession.workspaces`, `defaultWorkspace`, `profiles`, `defaultProfile` go to `launch.*` with the same labels, so the phone's choices read the same | — |
-| **Worktrees** | Old trees carry `agent-bridge-created` and are neither counted nor claimed by the host. #38 decides who reclaims them while the daemon is off; the in-flight reclaimer covers the host's own | The daemon's reclaimer resumes on its own trees |
-| **Attachments staging** | The old `install-<id>` staging is left as is; the host stages under its profile (`attachments`, protected) | — |
+| **Worktrees** | Old trees carry `agent-bridge-created` and are neither counted, claimed nor deleted by the host. While migrated nobody reclaims them (they are a fixed set); the reclaimer covers the host's own | The daemon's reclaimer resumes on its own trees. Leaving agent-ha-bridge for good: run its `Remove-BridgeFinishedWorktree` once first |
+| **Attachments staging** | The old `install-<id>` staging is left as is, and its 24 h sweep pauses with the daemon; the host stages under its profile (`attachments`, protected, also 24 h) | The daemon's sweep resumes |
 | **Publication role** | Refused on the configured writer (`dashboard.publication.writer`, G7) and on any machine whose policy cannot be read. The writer, DSWETT-HOME, migrates last, at P7 | — |
 | **Home Assistant** | The in-flight HA connector publishes this machine's entities in agent-ha-bridge's contract (G9). It never touches the dashboard, Lovelace resources or policy | The connector stops; the daemon publishes again |
 | **Dev Box keep-awake** | Needs #47 on a Dev Box; not relevant to the VM or DEV-VM1 | Task re-enabled |
