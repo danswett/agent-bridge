@@ -25,7 +25,7 @@ public sealed class SessionSource : ISessionSource
     readonly Channel<bool> _wake = Channel.CreateBounded<bool>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
     readonly Dictionary<string, (string? Path, DateTimeOffset At)> _transcriptSearch = new(StringComparer.Ordinal);
     // Who holds each Codex thread lock, as the OS last said. Only touched under _pass.
-    readonly Dictionary<string, (DateTime Created, int Pid, DateTimeOffset Started)> _codexLockHolders = new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, CodexLockHolding> _codexLockHolders = new(StringComparer.OrdinalIgnoreCase);
     // Sessions the host is ending, and since when. Under _gate.
     readonly Dictionary<string, DateTimeOffset> _ending = new(StringComparer.Ordinal);
     readonly List<FileSystemWatcher> _watchers = [];
@@ -260,15 +260,18 @@ public sealed class SessionSource : ISessionSource
         if (codexLocks || _options.CodexRegistrationRoots.Any(Directory.Exists))
         {
             var processes = _processes.GetAgentProcesses(AgentKind.Codex);
-            var registered = RegistrationDiscovery.Find(AgentKind.Codex, _options.CodexRegistrationRoots, processes, FindCodexTranscript);
+            var ended = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var registered = RegistrationDiscovery.Find(AgentKind.Codex, _options.CodexRegistrationRoots, processes, FindCodexTranscript, ended);
             foreach (var s in registered) { yield return s; }
             if (codexLocks)
             {
                 // agent-ha-bridge's registration, where there is one, carries what its hooks
-                // saw (status, the approval marker) and wins. One CLI owns one session.
+                // saw (status, the approval marker) and wins, an ended one included. One CLI
+                // owns one session.
                 var ids = registered.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                ids.UnionWith(ended);
                 var pids = registered.Select(s => s.ProcessId).ToHashSet();
-                foreach (var s in CodexLockDiscovery.Find(_options.CodexHome, processes, _processes.FileHolders, _codexLockHolders, FindCodexTranscript))
+                foreach (var s in CodexLockDiscovery.Find(_options.CodexHome, processes, _processes.FileHolders, _codexLockHolders, FindCodexTranscript, _time.GetUtcNow()))
                 {
                     if (!ids.Contains(s.Id) && !pids.Contains(s.ProcessId)) { yield return s; }
                 }
