@@ -376,7 +376,7 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     // The relay's presence as the test says, and channels to the fake hosts on their pipes.
-    sealed class FakeFleetLink : IFleetLink
+    internal sealed class FakeFleetLink : IFleetLink
     {
         public Dictionary<string, LocalEndpoint> Endpoints { get; } = [];
         public FleetState State { get; private set; } = FleetState.Connecting;

@@ -35,10 +35,10 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 
 | Status | Rows |
 |---|---|
-| `Verified` | 48 |
+| `Verified` | 49 |
 | `Implemented, untested live` | 36 |
 | `Partial` | 2 |
-| `Missing` | 19 |
+| `Missing` | 18 |
 | `Intentionally different` | 17 |
 | `N/A` | 12 |
 | `In flight (…)` | 13: Claude/Codex live 8, HA connector 5 |
@@ -146,7 +146,7 @@ Of the 15 §6.3 invariants: 8 `Verified`, 5 `Implemented, untested live`, 1 `Par
 | Folder trust is never answered remotely; a launch meeting it is `busy` | Cl, Cp | Answered on a second press | `Intentionally different` | `LaunchFlowTests.A_folder_trust_question_is_left_for_the_machine_and_other_launches_are_busy_meanwhile`, `A_Copilot_that_registers_and_then_asks_whether_to_trust_its_folder_is_left_for_the_machine_and_other_launches_are_busy` | §6.3 invariant 11. Run live for Copilot and Claude in never-trusted folders (#74) |
 | Codex launched with no prompt | Cx | `newSession.codexStartPrompt` | `Intentionally different` | Refused: `LaunchFlowTests.Codex_is_launched_only_with_a_first_message_and_its_launch_is_bound_to_the_session_it_chose` | `docs/host-launch.md` |
 | A launch's result: started (with the session), refused, failed, busy, unconfirmed | All | Launch result sensor, request ids | `Verified` | `pwa/test/unit/launch.test.mjs`, `LaunchFlowTests.A_resent_launch_gets_the_first_outcome_and_starts_nothing_more`. Live: Progress › Launch | |
-| Launch from the Windows app | All | Launch card | `Missing` | PWA only | #49 |
+| Launch from the Windows app | All | Launch card | `Verified` | The app's Launch page starts or resumes a session on any machine that offers `sessions.launch`, with that machine's choices and the whole prompt (`LaunchTests`, `RemoteLaunchTests`; the self-test launches from it). Live (2026-10-29, #49): on the VM the app launched Copilot in claude-test (unconfirmed while Copilot asked whether to trust the folder, then registered once a person answered), resumed an ended Claude session, and launched Claude on a second host through the relay | #49 |
 | A batch-file agent (`copilot.cmd`) cannot be broken out of by the prompt | All | Quoted for `CommandLineToArgvW` only | `Intentionally different` | `LaunchPieceTests.A_line_too_long_for_cmd_exe_is_refused_rather_than_cut`; `docs/host-launch.md` (CVE-2024-24576 quoting) | Stricter |
 
 ## 7. Worktree isolation

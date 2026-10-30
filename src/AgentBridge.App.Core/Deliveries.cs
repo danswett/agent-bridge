@@ -24,6 +24,8 @@ public sealed record Delivery
     // The host remembers request ids only in memory, so only ops it guards across restarts
     // otherwise (answers: its attempt ledger; End session: its two-press rule) may.
     public bool ReplayAfterRestart { get; init; } = true;
+    // How long one attempt waits for the host's outcome: a launch waits for its session to start.
+    public TimeSpan Timeout { get; init; } = Deliveries.DefaultTimeout;
 }
 
 // Sends answers, replies and stops (session.answer, session.reply, session.stop), each to
@@ -38,6 +40,7 @@ public sealed class Deliveries
     const string NoOutcome = "no outcome came back from the machine in time";
     const string Restarted = "the Bridge Host restarted before saying whether it went";
     const int MaxBusyResends = 5;
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(90);
 
     readonly HostConnection host;
     readonly IUiDispatcher ui;
@@ -68,7 +71,7 @@ public sealed class Deliveries
     // stands, so doing it again sends nothing. before: work on the connection ahead of the op
     // (a reply's files), given a progress callback.
     public Delivery Submit(string key, string op, Func<string, object> data, Func<string, bool> final, object? payload = null,
-        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true)
+        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true, TimeSpan? timeout = null)
     {
         Delivery entry;
         lock (gate)
@@ -78,7 +81,7 @@ public sealed class Deliveries
             {
                 return existing;
             }
-            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart };
+            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout };
         }
         Publish(entry);
         _ = RunAsync(entry, op, data, before, resend: false);
@@ -118,7 +121,7 @@ public sealed class Deliveries
                     await before((o, d, t) => host.CallAsync(o, d, t), (sent, total) => Update(entry.Key, e => e with { Progress = (sent, total) }));
                 }
                 var to = host.HostInstance;
-                var call = host.CallAsync(op, data(entry.Request), TimeSpan.FromSeconds(90));
+                var call = host.CallAsync(op, data(entry.Request), entry.Timeout);
                 sentTo = to;
                 result = await call;
             }

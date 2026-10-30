@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="AgentBridge.App.LaunchView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AgentBridge.App"
+    xmlns:core="using:AgentBridge.App.Core">
+    <!-- Start a session (pwa/js/ui/launch-view.js): on any machine of the account that can, with
+         the choices that machine offers (launch.options), and the whole prompt. -->
+    <UserControl.Resources>
+        <DataTemplate x:Key="ChoiceTemplate" x:DataType="core:Choice">
+            <TextBlock Text="{x:Bind Label}" />
+        </DataTemplate>
+    </UserControl.Resources>
+    <ScrollViewer AutomationProperties.AutomationId="LaunchPane">
+        <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, so a
+             column narrower than its MaxWidth was pushed off the right edge. -->
+        <Grid>
+            <StackPanel MaxWidth="720" Padding="16,12,16,24" Spacing="12">
+                <TextBlock Style="{StaticResource AbSectionTitle}" AutomationProperties.AutomationId="LaunchTitle" Text="{x:Bind ViewModel.Title, Mode=OneWay}" />
+                <ComboBox
+                    x:Name="MachineBox" Tag="machine" Header="Machine" MinWidth="320"
+                    AutomationProperties.AutomationId="LaunchMachine"
+                    ItemTemplate="{StaticResource ChoiceTemplate}"
+                    ItemsSource="{x:Bind ViewModel.Machines, Mode=OneWay}"
+                    SelectedItem="{x:Bind ViewModel.SelectedMachine, Mode=OneWay}"
+                    SelectionChanged="OnPicked"
+                    Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachines), Mode=OneWay}" />
+                <TextBlock
+                    AutomationProperties.AutomationId="LaunchNote"
+                    TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                    Text="{x:Bind ViewModel.Note, Mode=OneWay}"
+                    Foreground="{x:Bind local:LaunchView.NoteBrush(ViewModel.NoteWarns), Mode=OneWay}"
+                    Visibility="{x:Bind local:Ui.Some(ViewModel.Note), Mode=OneWay}" />
+                <InfoBar
+                    AutomationProperties.AutomationId="LaunchBusy"
+                    IsClosable="False" Severity="Warning"
+                    IsOpen="{x:Bind local:LaunchView.Has(ViewModel.Busy), Mode=OneWay}"
+                    Message="{x:Bind ViewModel.Busy, Mode=OneWay}" />
+                <StackPanel Spacing="12" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowForm), Mode=OneWay}">
+                    <ComboBox
+                        Tag="resume" Header="Resume" MinWidth="320" AutomationProperties.AutomationId="LaunchResume"
+                        ItemTemplate="{StaticResource ChoiceTemplate}"
+                        ItemsSource="{x:Bind ViewModel.Resumes, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Resume, Mode=OneWay}"
+                        SelectionChanged="OnPicked" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowResume), Mode=OneWay}" />
+                    <ComboBox
+                        Tag="agent" Header="Agent" MinWidth="320" AutomationProperties.AutomationId="LaunchAgent"
+                        ItemTemplate="{StaticResource ChoiceTemplate}"
+                        ItemsSource="{x:Bind ViewModel.Agents, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Agent, Mode=OneWay}"
+                        SelectionChanged="OnPicked" />
+                    <ComboBox
+                        Tag="workspace" Header="Workspace" MinWidth="320" AutomationProperties.AutomationId="LaunchWorkspace"
+                        ItemTemplate="{StaticResource ChoiceTemplate}"
+                        ItemsSource="{x:Bind ViewModel.Workspaces, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Workspace, Mode=OneWay}"
+                        SelectionChanged="OnPicked" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowWorkspace), Mode=OneWay}" />
+                    <ComboBox
+                        Tag="profile" Header="Profile" MinWidth="320" AutomationProperties.AutomationId="LaunchProfile"
+                        ItemTemplate="{StaticResource ChoiceTemplate}"
+                        ItemsSource="{x:Bind ViewModel.Profiles, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Profile, Mode=OneWay}"
+                        SelectionChanged="OnPicked" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowProfile), Mode=OneWay}" />
+                    <ComboBox
+                        Tag="model" Header="Model" MinWidth="320" AutomationProperties.AutomationId="LaunchModel"
+                        ItemTemplate="{StaticResource ChoiceTemplate}"
+                        ItemsSource="{x:Bind ViewModel.Models, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Model, Mode=OneWay}"
+                        SelectionChanged="OnPicked" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowModel), Mode=OneWay}" />
+                    <ComboBox
+                        Tag="effort" Header="Effort" MinWidth="320" AutomationProperties.AutomationId="LaunchEffort"
+                        ItemTemplate="{StaticResource ChoiceTemplate}"
+                        ItemsSource="{x:Bind ViewModel.Efforts, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Effort, Mode=OneWay}"
+                        SelectionChanged="OnPicked" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowEffort), Mode=OneWay}" />
+                    <ComboBox
+                        Tag="context" Header="Context" MinWidth="320" AutomationProperties.AutomationId="LaunchContext"
+                        ItemTemplate="{StaticResource ChoiceTemplate}"
+                        ItemsSource="{x:Bind ViewModel.Contexts, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Context, Mode=OneWay}"
+                        SelectionChanged="OnPicked" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowContext), Mode=OneWay}" />
+                    <ComboBox
+                        Tag="permissions" Header="Permissions" MinWidth="320" AutomationProperties.AutomationId="LaunchPermissions"
+                        ItemTemplate="{StaticResource ChoiceTemplate}"
+                        ItemsSource="{x:Bind ViewModel.PermissionChoices}" SelectedItem="{x:Bind ViewModel.Permissions, Mode=OneWay}"
+                        SelectionChanged="OnPicked" />
+                    <TextBox
+                        Header="First message"
+                        AutomationProperties.AutomationId="LaunchPrompt"
+                        AcceptsReturn="True" TextWrapping="Wrap" MinHeight="110" MaxHeight="320"
+                        ScrollViewer.VerticalScrollBarVisibility="Auto"
+                        PlaceholderText="{x:Bind ViewModel.PromptPlaceholder, Mode=OneWay}"
+                        Text="{x:Bind ViewModel.Prompt, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock
+                        Style="{StaticResource AbSecondaryText}"
+                        Text="{x:Bind ViewModel.CountText, Mode=OneWay}"
+                        Foreground="{x:Bind local:LaunchView.NoteBrush(ViewModel.CountTooLong), Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Some(ViewModel.CountText), Mode=OneWay}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button
+                            Style="{StaticResource AccentButtonStyle}" Content="Launch"
+                            AutomationProperties.AutomationId="LaunchButton"
+                            IsEnabled="{x:Bind ViewModel.CanLaunch, Mode=OneWay}" Click="OnLaunch" />
+                        <Button
+                            Content="Try again" AutomationProperties.AutomationId="LaunchResend"
+                            Visibility="{x:Bind local:Ui.Show(ViewModel.ShowResend), Mode=OneWay}" Click="OnResend" />
+                        <Button
+                            Content="Open session" AutomationProperties.AutomationId="LaunchOpen"
+                            Visibility="{x:Bind local:Ui.Show(ViewModel.ShowOpen), Mode=OneWay}" Click="OnOpen" />
+                    </StackPanel>
+                </StackPanel>
+                <TextBlock
+                    AutomationProperties.AutomationId="LaunchStatus"
+                    TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                    Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+                    Foreground="{x:Bind local:Ui.ToneBrush(ViewModel.StatusTone), Mode=OneWay}"
+                    Visibility="{x:Bind local:Ui.Some(ViewModel.StatusText), Mode=OneWay}" />
+                <Button
+                    Content="Reload choices" AutomationProperties.AutomationId="LaunchReload"
+                    IsEnabled="{x:Bind ViewModel.CanReload, Mode=OneWay}"
+                    Visibility="{x:Bind local:Ui.Show(ViewModel.ShowReload), Mode=OneWay}" Click="OnReload" />
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</UserControl>

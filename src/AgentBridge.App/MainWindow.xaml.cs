@@ -11,9 +11,10 @@ public sealed partial class MainWindow : Window
 {
     bool active;
 
-    internal MainWindow(MainViewModel viewModel, bool selfTest)
+    internal MainWindow(MainViewModel viewModel, LaunchViewModel launch, bool selfTest)
     {
         ViewModel = viewModel;
+        Launch = launch;
         InitializeComponent();
         Handle = WinRT.Interop.WindowNative.GetWindowHandle(this);
         CurrentHandle = Handle;
@@ -22,12 +23,14 @@ public sealed partial class MainWindow : Window
         AppWindow.Closing += (_, e) => CloseRequested?.Invoke(e);
         Activated += (_, e) => active = e.WindowActivationState != WindowActivationState.Deactivated;
         UsagePane.ViewModel = viewModel.Usage;
+        LaunchPane.ViewModel = launch;
         if (viewModel.Settings is { } s) { SettingsPane.ViewModel = s; }
         Nav.SelectedItem = SessionsItem;
         viewModel.OpenRequested += Reveal;
     }
 
     public MainViewModel ViewModel { get; }
+    public LaunchViewModel Launch { get; }
     public nint Handle { get; }
     // The window file pickers belong to: an unpackaged app must say which.
     internal static nint CurrentHandle { get; private set; }
@@ -57,6 +60,8 @@ public sealed partial class MainWindow : Window
         var tag = (args.SelectedItem as NavigationViewItem)?.Tag as string;
         SessionsPane.Visibility = Ui.Show(tag == "sessions");
         UsagePane.Visibility = Ui.Show(tag == "usage");
+        LaunchPane.Visibility = Ui.Show(tag == "launch");
+        if (tag == "launch") { Launch.Opened(); }
         SettingsPane.Visibility = Ui.Show(tag == "settings");
         if (tag == "settings") { SettingsPane.Opened(); }
     }

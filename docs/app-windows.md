@@ -177,6 +177,7 @@ explicit step.
 | Page | What it has | Parity source |
 |---|---|---|
 | Sessions | One card per live session of every machine on the account (this one's over the pipe, the others' through the relay), with a picker for one machine: status and glow (working, waiting, delegating, ending), title, agent, repository, branch, model, current tool, response (Markdown), reasoning, last message, tool history, background agents and commands, turns, compactions; question forms (single and multi choice, Other, boolean, text, number, Copilot permission Approve once / Deny), reply box (Ctrl+Enter, paste an image, attach files: up to 100 MiB each in chunks over the pipe, `sessions.attach.direct`, or 256 KiB from an older host, which shrinks a larger image to fit), End session with the host's two-press rule; fold per session, persisted, reopened by a new question. While the host's discovery is held, a line over the cards says what holds it ("Discovery held: …", [v1-sessions.md](protocol/v1-sessions.md#discovery-held)) | PWA cards (`pwa/js/ui`), which mirror `agent-bridge-reply-card.js` |
+| Launch | Start or resume a session on any machine on the account that offers it (`sessions.launch`): machine, resume, agent, workspace (a new worktree where the folder is isolated), profile, model, effort, context and permissions as that machine offers them, and a first prompt sent whole. Each press is one launch with its own request id, sent again with the same id after a lost connection, so it starts once; the outcome (started, busy with the reason, refused, unconfirmed) is shown, and the new session's card opens when it arrives. A machine waiting on a folder-trust question says it is busy before anything is pressed. Codex is not launched without a first prompt | PWA launch view (`pwa/js/ui/launch-view.js`), agent-ha-bridge's launch card |
 | Usage | Each agent's windows: percent, amber at 75 %, red at 90 %, pace against the window, "resets in" | PWA usage panel |
 | Settings | Host: running, version, profile, pid, start/stop/restart, start at sign-in, log tail; relay: sign in with GitHub (device code shown in the app), machine name, connection state; this machine: approving Copilot permission prompts from other devices (`permissions.remoteApproval`), agent-ha-bridge state; app: show reasoning and tools (the old Detail toggle, kept in the app since every client now gets the full activity), toasts, start the app at sign-in, version and updates | status card, `install.ps1`, `agent-ha-bridge configure` |
 
@@ -212,11 +213,12 @@ reaches the real host or its profile.
   files up to 256 KiB (an image is shrunk to fit). Larger ones will go through the relay's
   blob store as the PWA's do (`sessions.attach.blob`); the app's own machine needs none,
   since its pipe takes them.
+* **Session transfer** (#70) from the app: the PWA's Move to another machine. It needs the
+  app to sign transfer commands with its device key; the Launch page has none yet.
 * **Pairing and a Devices page**: the account's other devices are trusted by signing in to
   it, as everywhere else for now.
 * **Cancelling a large attachment** part way. The PWA has a Cancel while a file uploads; the
   app sends over the pipe at local speed and has none yet.
-* **Launch** page: waits for the host's launch and resume ops (another slice in flight).
 * Agent hook registration, migration from agent-ha-bridge and rollback (G4, G8).
 * Code signing, attestations and publishing releases.
 * Arm64 builds, the first-run wizard's agent detection and winget installs.
@@ -230,7 +232,10 @@ reaches the real host or its profile.
   check), the management ops, and that the relay never dispatches them.
 * `tests/AgentBridge.App.Tests`: view models (the window's list, cards, forms, reply, End
   session, usage, settings), other machines (`FleetTests`: cards, answers and toasts per
-  machine, the picker, machines coming and going, usage merged; and the app reaching another
+  machine, the picker, machines coming and going, usage merged; `LaunchTests`: the Launch
+  page's choices, every setting and the whole prompt sent, resume, Codex's first prompt,
+  busy, a lost response sent again with the same request, no approved folder, and a launch
+  on another machine; and the app reaching another
   host through the in-process relay with the host's account), toast plans and activation handling, host lifecycle with a
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
@@ -239,7 +244,9 @@ reaches the real host or its profile.
   and uploads `Setup.exe` and the packages as an artifact. It then starts the published
   app with `--self-test`, which runs the demo, finds the cards by automation id, answers a
   question on each machine by invoking its button's automation peer, narrows the list with
-  the machine picker, and saves a picture of each page.
+  the machine picker, launches a session from the Launch page and waits for its card,
+  checks Codex on the other machine is not launched without a prompt, and saves a picture
+  of each page.
 * Live checks run by the coordinator on a disposable VM (the checklist in the pull
   request).
 

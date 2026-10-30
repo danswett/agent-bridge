@@ -122,6 +122,9 @@ public sealed class MainViewModel : Observable
     public string? FleetNote => fleet?.Note;
     public bool HasFleetNote => FleetNote is not null;
 
+    // Raised on the UI thread when a machine comes or goes, or what one offers may have changed.
+    public event Action? MachinesUpdated;
+
     // Raised on the UI thread when this machine's host says hello or goes.
     public event Action? LocalChanged;
     // Another machine gone, by its key, after its cards and toasts.
@@ -210,6 +213,7 @@ public sealed class MainViewModel : Observable
 
     void MachinesChanged()
     {
+        MachinesUpdated?.Invoke();
         Raise(nameof(ShowMachines));
         Raise(nameof(EmptyText));
         RefreshLabels();
@@ -263,6 +267,7 @@ public sealed class MainViewModel : Observable
             foreach (var (c, _) in owner.Where(p => p.Value == m)) { c.CapabilitiesChanged(); }
         }
         if (m.Host.State != LinkState.Connected) { baselined.Remove(m); }
+        MachinesUpdated?.Invoke();
         RefreshLabels();
         Raise(nameof(Connected));
         Raise(nameof(Empty));
