@@ -100,11 +100,14 @@ pwsh build/shadow-week.ps1 -Install
    then publishes `agent-bridge-host` and `agent-bridge-hostw` from the checkout,
    self-contained, into `%LOCALAPPDATA%\AgentBridgeShadow\bin`. Not the app's folder, and
    nothing on `PATH`.
-2. Approves agent-ha-bridge's workspaces (`newSession.workspaces`, `~` expanded, with their
-   labels and `isolate`) in the profile `shadow` with `workspace add`, and copies
-   `newSession.resumeCount` to `launch.resumeCount`. The host offers to resume only sessions
-   in folders it approves, so without this the resume lists cannot agree. Only those two
-   keys are read from agent-ha-bridge's config.
+2. Makes the profile `shadow` approve exactly agent-ha-bridge's workspaces
+   (`newSession.workspaces`, `~` expanded, with their labels and `isolate`): whatever it
+   approved before is removed with `workspace remove`, then each is added with
+   `workspace add`. `newSession.resumeCount` is copied to `launch.resumeCount` (unset when
+   absent). The host offers to resume only sessions in folders it approves, so without this
+   the resume lists cannot agree; any step failing stops the install. A folder that no
+   longer exists is skipped with a warning. Only those two keys are read from
+   agent-ha-bridge's config. Re-run `-Install` after changing agent-ha-bridge's workspaces.
 3. Registers two per-user logon tasks, made like the app's (`LogonTaskXml`): the user's
    interactive token, `LeastPrivilege`, hidden, restarted every minute on failure (three
    times), no time limit, not stopped on battery, one instance:

@@ -113,6 +113,11 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         }
     }
 
+    // A shell the skim saw start may have ended in the bytes the tail never read (a transcript
+    // past the skim budget); counted, it would read as running for as long as its CLI lives.
+    // One started again or still running in the window is counted from there.
+    public override void Skipped() => S.Background.ForgetShells();
+
     protected override bool Apply(JsonElement e, DateTimeOffset? at)
     {
         var before = S.Background.Version;

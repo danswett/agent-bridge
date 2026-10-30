@@ -143,6 +143,13 @@ internal sealed class BackgroundWork
         if (id is not null && _shells.Remove(id)) { Version++; }
     }
 
+    public void ForgetShells()
+    {
+        if (_shells.Count == 0) { return; }
+        _shells.Clear();
+        Version++;
+    }
+
     // The session's CLI shut down: everything it was running went with it.
     public void EndAll()
     {

@@ -106,6 +106,7 @@ public sealed class DaemonHaReader : IDisposable
     sealed class Unavailable(string reason) : Exception(reason);
 
     readonly HttpClient http;
+    readonly TimeSpan patience;
     readonly string resumeEntity;
     readonly IReadOnlyList<(string Client, string Entity)> usageEntities;
 
@@ -115,10 +116,11 @@ public sealed class DaemonHaReader : IDisposable
         usageEntities = [.. HaContract.UsageClients.Select(c => (c, HaContract.MachineEntityId("sensor", $"usage_{c}", Slug)))];
         resumeEntity = HaContract.MachineEntityId("select", "new_resume", Slug);
         Entities = [.. usageEntities.Select(u => u.Entity), resumeEntity];
+        patience = timeout ?? TimeSpan.FromSeconds(10);
         // No redirects: the token is for the address in the config and nowhere else.
         http = new HttpClient(new ReadOnlyHomeAssistantHandler(Entities, transport ?? new SocketsHttpHandler { AllowAutoRedirect = false }))
         {
-            Timeout = timeout ?? TimeSpan.FromSeconds(10),
+            Timeout = Timeout.InfiniteTimeSpan,
         };
     }
 
@@ -148,8 +150,14 @@ public sealed class DaemonHaReader : IDisposable
         }
     }
 
-    async Task<JsonElement?> GetAsync(HomeAssistantAccess access, string entity, CancellationToken ct)
+    async Task<JsonElement?> GetAsync(HomeAssistantAccess access, string entity, CancellationToken outer)
     {
+        // One deadline for the request and its body: HttpClient.Timeout stops at the headers
+        // when the body is streamed, and a Home Assistant that stalled mid-body would then hold
+        // the whole sampling loop.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(outer);
+        deadline.CancelAfter(patience);
+        var ct = deadline.Token;
         using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(access.BaseUrl, "api/states/" + Uri.EscapeDataString(entity)));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.Token);
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);

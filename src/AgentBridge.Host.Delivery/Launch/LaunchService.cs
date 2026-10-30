@@ -303,10 +303,19 @@ public sealed partial class LaunchService : ISessionLauncher
         // until a complete pass (§6.3 invariants 6 and 10).
         if (source.Held is { } held) { candidates = candidates.Where(e => !held.Agents.Contains(e.Agent)); }
         var once = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Approval can ask git (a worktree's top and marker), so each folder is asked once per
+        // pass, and newest first, so the older sessions past the limit are never asked about.
+        var approvals = new Dictionary<string, WorkspaceConfig?>(StringComparer.Ordinal);
+        WorkspaceConfig? ApprovedOnce(string? folder)
+        {
+            if (folder is not { Length: > 0 }) { return null; }
+            if (!approvals.TryGetValue(folder, out var w)) { approvals[folder] = w = Approved(folder); }
+            return w;
+        }
         var eligible = candidates.Where(e => once.Add(e.Id))
-            .Select(e => (Entry: e, Workspace: e.Folder is { Length: > 0 } folder ? Approved(folder) : null))
+            .OrderByDescending(e => e.Updated ?? DateTimeOffset.MinValue)
+            .Select(e => (Entry: e, Workspace: ApprovedOnce(e.Folder)))
             .Where(x => x.Workspace is not null)
-            .OrderByDescending(x => x.Entry.Updated ?? DateTimeOffset.MinValue)
             .Take(KindsAmong)
             .ToList();
         // The live list read after the hold, not the one taken before the awaits above: a session

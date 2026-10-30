@@ -553,6 +553,44 @@ public sealed class ShadowTests : IDisposable
         Assert.DoesNotContain("fixture.invalid", report);
     }
 
+    // Answers the headers, then never finishes the body.
+    sealed class StallingHomeAssistant : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StreamContent(new StallingStream()) });
+
+        sealed class StallingStream : Stream
+        {
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => 0; set => throw new NotSupportedException(); }
+            public override void Flush() { }
+            public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                return 0;
+            }
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
+    }
+
+    [Fact]
+    public async Task A_home_assistant_that_stalls_partway_through_a_state_is_unreachable_once_the_deadline_passes()
+    {
+        Config();
+        using var reader = new DaemonHaReader("FIXTURE", new StallingHomeAssistant(), TimeSpan.FromMilliseconds(200));
+
+        var read = reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!);
+
+        Assert.Same(read, await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(10))));
+        Assert.Equal(("Home Assistant is unreachable", "Home Assistant is unreachable"), ((await read).UsageProblem, (await read).ResumableProblem));
+    }
+
     [Fact]
     public void Usage_percentages_are_compared_only_between_readings_taken_close_together_and_within_five_points()
     {

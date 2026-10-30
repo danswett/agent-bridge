@@ -9,6 +9,8 @@ internal interface ILineSink
     void Reset();
     void Skim(ReadOnlyMemory<byte> line);
     void Parse(ReadOnlyMemory<byte> line);
+    // Bytes between the skimmed part and the window were never read at all.
+    void Skipped() { }
 }
 
 internal enum TailOutcome { Missing, Unreadable, Unchanged, Appended, Restarted }
@@ -96,6 +98,7 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
                 // window and drop the fragment of a line it starts in.
                 position = parseFrom;
                 aligned = IsLineStart(stream, position);
+                sink.Skipped();
             }
         }
         // A trailing line with no newline yet stays unread: the offset stops just past the

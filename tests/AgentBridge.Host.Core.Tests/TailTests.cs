@@ -299,4 +299,26 @@ public class TailTests
         await source.RefreshAsync();
         Assert.Null(source.Get(id)!.Activity.Background);
     }
+
+    // A transcript past the skim budget is read at its start and its end only; a shell that
+    // started in the first part and ended in the part never read is not still running.
+    [Fact]
+    public async Task A_shell_whose_end_may_be_in_the_part_of_a_transcript_never_read_is_not_counted()
+    {
+        using var f = new Fixture();
+        const string id = "38383838-3838-4383-8383-383838383838";
+        var events = f.CopilotSession(id, 100);
+        Fixture.Append(events,
+            Copilot.User("watch CI", 1),
+            Copilot.ToolResult("c1", "<command started in background with shellId: ci-watch>", 2));
+        Fixture.Append(events, [.. Enumerable.Range(0, 40).Select(i => Copilot.Assistant("filler " + new string('f', 300), 3 + i))]);
+        Fixture.Append(events, Copilot.ShellCompleted("ci-watch", 50));
+        Fixture.Append(events, [.. Enumerable.Range(0, 40).Select(i => Copilot.Assistant("filler " + new string('f', 300), 60 + i))]);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(tailBytes: 4 * 1024, maxSkim: 2 * 1024);
+
+        await source.RefreshAsync();
+
+        Assert.Null(source.Get(id)!.Activity.Background);
+    }
 }

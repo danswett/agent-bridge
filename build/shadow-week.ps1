@@ -88,33 +88,55 @@ function Stop-ShadowProcess {
 }
 
 # agent-ha-bridge's approved folders and resume count, into this profile: the resume lists
-# are compared only as far as both approve the same folders. Only newSession.workspaces and
-# newSession.resumeCount are read from its config, which also holds its Home Assistant token.
-function Copy-AgentHaBridgeWorkspace {
+# are compared only as far as both approve the same folders. Made to match on every install,
+# so a label, an isolate flag or a workspace changed or removed there since is changed here
+# too; any failure stops the install rather than start a week that cannot agree. Only
+# newSession.workspaces and newSession.resumeCount are read from its config, which also holds
+# its Home Assistant token.
+function Sync-AgentHaBridgeWorkspace {
     $config = Join-Path $ahb 'config.json'
-    if (-not (Test-Path $config)) { Write-Warning "no agent-ha-bridge config at $config; approve workspaces with: $exe workspace add <folder> --profile $HostProfile"; return }
+    if (-not (Test-Path $config)) { throw "no agent-ha-bridge config at $config, so its workspaces cannot be copied" }
     # Only newSession is kept; the rest of the file, the token with it, is dropped at once.
     $session = ([IO.File]::ReadAllText($config) | ConvertFrom-Json -AsHashtable)['newSession']
-    if ($session -isnot [hashtable]) { return }
+    if ($session -isnot [hashtable]) { $session = @{} }
+
+    # Every workspace the profile has now goes first, so what is added is exactly the daemon's.
+    # Not under -WhatIf, when nothing has been published to ask.
+    $listed = if ($WhatIfPreference) { @() } else { @(& $exe workspace list --profile $HostProfile) }
+    if (-not $WhatIfPreference -and $LASTEXITCODE) { throw "the profile's workspaces could not be listed: $($listed -join ' ')" }
+    foreach ($line in $listed) {
+        $fields = ([string]$line).Split("`t")
+        if ($fields.Count -lt 2) { continue }
+        if ($PSCmdlet.ShouldProcess($fields[1], "remove from profile $HostProfile, to copy agent-ha-bridge's afresh")) {
+            & $exe workspace remove $fields[1] --profile $HostProfile | Out-Null
+            if ($LASTEXITCODE) { throw "could not remove $($fields[1]) from profile $HostProfile" }
+        }
+    }
+
     foreach ($w in @($session['workspaces'])) {
         # A workspace is a folder, or {label, path, isolate}; a folder may start with ~.
         $entry = if ($w -is [string]) { @{ path = $w } } elseif ($w -is [hashtable]) { $w } else { continue }
         if ($entry['path'] -isnot [string] -or -not $entry['path']) { continue }
         $folder = $entry['path'] -replace '^~(?=$|[\\/])', $HOME
+        # agent-ha-bridge offers nothing in a folder that is gone either.
+        if (-not (Test-Path -LiteralPath $folder -PathType Container)) { Write-Warning "$folder does not exist; not approved"; continue }
         $arguments = @('workspace', 'add', $folder, '--profile', $HostProfile)
         if ($entry['label'] -is [string] -and $entry['label']) { $arguments += '--label', $entry['label'] }
         if ($entry['isolate'] -eq $true) { $arguments += '--isolate' }
         if ($PSCmdlet.ShouldProcess($folder, "approve in profile $HostProfile")) {
-            # Already approved is fine; the CLI says so and changes nothing.
             & $exe @arguments
+            if ($LASTEXITCODE) { throw "could not approve $folder in profile $HostProfile" }
         }
     }
-    if ($session['resumeCount'] -is [long] -or $session['resumeCount'] -is [int]) {
-        $count = [int]$session['resumeCount']
-        if ($PSCmdlet.ShouldProcess("launch.resumeCount = $count", "set in profile $HostProfile")) {
-            & $exe config set launch.resumeCount $count --profile $HostProfile
-        }
-    }}
+
+    # Absent there means its default, which is this host's default too.
+    $count = $session['resumeCount']
+    $arguments = if ($count -is [long] -or $count -is [int]) { @('config', 'set', 'launch.resumeCount', [string][int]$count) } else { @('config', 'unset', 'launch.resumeCount') }
+    if ($PSCmdlet.ShouldProcess(($arguments[1..2] -join ' '), "in profile $HostProfile")) {
+        & $exe @arguments --profile $HostProfile
+        if ($LASTEXITCODE) { throw "could not set launch.resumeCount in profile $HostProfile" }
+    }
+}
 
 if ($Install) {
     if (-not (Test-Path $ahb)) { throw "agent-ha-bridge is not installed for this user ($ahb); there is nothing to compare with" }
@@ -125,7 +147,7 @@ if ($Install) {
             if ($LASTEXITCODE) { throw "publishing $project failed" }
         }
     }
-    Copy-AgentHaBridgeWorkspace
+    Sync-AgentHaBridgeWorkspace
     $serve = New-ShadowTaskXml "Agent Bridge host, profile $HostProfile, read-only beside agent-ha-bridge for the shadow comparison (docs/host-shadow.md)" @('serve', '--profile', $HostProfile, '--local-only') $null
     $run = New-ShadowTaskXml "Agent Bridge shadow comparison with agent-ha-bridge, profile $HostProfile (docs/host-shadow.md)" @('shadow', 'run', '--profile', $HostProfile, '--interval', "$Interval", '--grace', "$Grace") 'PT1M'
     if ($PSCmdlet.ShouldProcess("$hostTask, $runTask", 'register and start the logon tasks')) {
