@@ -130,6 +130,17 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task When_another_copy_of_the_app_shows_the_other_machines_this_one_shows_none()
+    {
+        await BothMachinesAsync();
+
+        link.Set(FleetState.Elsewhere);
+
+        await Wait.UntilAsync(() => Card("there") is null, "the other machine's cards to go");
+        Assert.Equal(["here"], main.AllCards.Select(c => c.Id));
+    }
+
+    [Fact]
     public async Task Machines_still_come_and_go_while_this_machines_host_is_away()
     {
         await BothMachinesAsync();
@@ -334,7 +345,7 @@ public sealed class RelayFleetLinkTests
     }
 
     [Fact]
-    public async Task A_relay_connection_that_drops_never_reads_as_connected_with_every_machine_gone()
+    public async Task Another_copy_of_the_app_taking_the_connection_is_left_alone_until_this_machines_host_signs_in_again()
     {
         await using var relay = await TestRelay.StartAsync();
         var token = relay.TokenFor(7, "octo");
@@ -347,11 +358,47 @@ public sealed class RelayFleetLinkTests
         await Wait.UntilAsync(() => link.Hosts.Count == 1, "the other machine", Patience);
         lock (seen) { seen.Clear(); }
 
-        // The same key connecting again: the relay drops the app's connection, and nothing
-        // else changes. Every machine is still there.
+        // The same key connecting again (the app in this person's other Windows session): the
+        // relay drops this one, which must not take the connection back. Two copies doing that
+        // would evict each other every second.
         await using var again = await relay.ConnectAsync(token, "the app again", "app", key);
 
-        await Wait.UntilAsync(() => { lock (seen) { return seen.Any(s => s.Item1 == FleetState.Connecting); } }, "the drop", Patience);
-        lock (seen) { Assert.DoesNotContain((FleetState.Connected, 0), seen); }
+        await Wait.UntilAsync(() => link.State == FleetState.Elsewhere && link.Hosts.Count == 0, "the hand-over", Patience);
+        Assert.Equal(RelayFleetLink.ReplacedNote, link.Detail);
+        await Task.Delay(TimeSpan.FromSeconds(3));
+        Assert.False(again.Relay.Completion.IsCompleted, "this copy took the connection back");
+        lock (seen)
+        {
+            Assert.DoesNotContain((FleetState.Connected, 0), seen);
+            Assert.DoesNotContain(seen, s => s.Item1 is FleetState.Connecting or FleetState.Connected);
+        }
+
+        // Asked to (this machine's host signed in again, or came back): it connects again.
+        link.Poke();
+        await Wait.UntilAsync(() => link.State == FleetState.Connected && link.Hosts.Count == 1, "the reconnection", Patience);
+        await again.Relay.Completion.WaitAsync(Patience);
+    }
+
+    [Fact]
+    public async Task A_copy_of_the_app_without_the_relay_lock_never_connects_and_connects_once_it_has_it()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(7, "octo");
+        await using var host = await relay.ConnectAsync(token, "Build server", "host");
+        var mine = false;
+        var asked = 0;
+        await using var link = new RelayFleetLink(_ => { Interlocked.Increment(ref asked); return Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")); },
+            P256KeyPair.Generate(), "Test PC · Agent Bridge app", claim: () => Volatile.Read(ref mine)) { Recheck = TimeSpan.FromSeconds(30) };
+
+        link.Start();
+        await Wait.UntilAsync(() => link.State == FleetState.Elsewhere, "the lock held elsewhere", Patience);
+        Assert.Equal(RelayFleetLink.ElsewhereNote, link.Detail);
+        await Task.Delay(300);
+        Assert.Equal(0, Volatile.Read(ref asked));
+        Assert.DoesNotContain(host.Relay.Presence, p => p.Id == link.DeviceId);
+
+        Volatile.Write(ref mine, true);
+        link.Poke();
+        await Wait.UntilAsync(() => link.State == FleetState.Connected && link.Hosts.Count == 1, "the connection", Patience);
     }
 }

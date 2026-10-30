@@ -33,7 +33,9 @@ public sealed class Machine : IAsyncDisposable
     public ValueTask DisposeAsync() => IsLocal ? ValueTask.CompletedTask : Host.DisposeAsync();
 }
 
-public enum FleetState { Off, SignedOut, Connecting, Connected, Refused }
+// Elsewhere: this app is open in another of the person's Windows sessions, which holds the
+// relay link (the same device key can be connected once).
+public enum FleetState { Off, SignedOut, Connecting, Connected, Refused, Elsewhere }
 
 // A host the relay says is online for the account.
 public sealed record FleetHost(string Id, string Name);
@@ -93,6 +95,7 @@ public sealed class Fleet : IAsyncDisposable
         FleetState.SignedOut => "Your other machines appear here once this machine's Bridge Host is signed in to the relay (Settings).",
         FleetState.Connecting => $"Connecting to your other machines…{(Detail is { Length: > 0 } d ? $" ({d})" : "")}",
         FleetState.Refused => $"The relay refused this app: {Detail}. Sign this machine's Bridge Host in again in Settings.",
+        FleetState.Elsewhere => Detail,
         _ => null,
     };
 
@@ -115,8 +118,9 @@ public sealed class Fleet : IAsyncDisposable
             main.Add(m);
             m.Host.Start();
         }
-        // Gone from presence only counts while the relay connection is up to say so.
-        if (link.State != FleetState.Connected) { return; }
+        // Gone from presence only counts while the relay connection is up to say so, or when
+        // another copy of the app shows the other machines instead: this one shows none.
+        if (link.State is not (FleetState.Connected or FleetState.Elsewhere)) { return; }
         foreach (var id in machines.Keys.Where(id => !hosts.ContainsKey(id)).ToList())
         {
             machines.Remove(id, out var gone);
@@ -146,6 +150,7 @@ public sealed class RelayFleetLink : IFleetLink
     readonly P256KeyPair key;
     readonly string name;
     readonly Action<string> log;
+    readonly Func<bool> claim;
     readonly CancellationTokenSource stop = new();
     readonly SemaphoreSlim poke = new(0);
     Task loop = Task.CompletedTask;
@@ -155,13 +160,19 @@ public sealed class RelayFleetLink : IFleetLink
     sealed record Current(RelayClient Relay, ChannelHub Hub);
     sealed record StateNow(FleetState State, string? Detail);
 
-    public RelayFleetLink(Func<CancellationToken, Task<RelayAccount?>> account, P256KeyPair key, string name, Action<string>? log = null)
+    // claim: whether this copy of the app may hold the relay link, which one copy per person may
+    // (App.xaml.cs keeps a lock across Windows sessions); asked again at each recheck until it may.
+    public RelayFleetLink(Func<CancellationToken, Task<RelayAccount?>> account, P256KeyPair key, string name, Action<string>? log = null, Func<bool>? claim = null)
     {
         this.account = account;
         this.key = key;
         this.name = name;
         this.log = log ?? (_ => { });
+        this.claim = claim ?? (() => true);
     }
+
+    public const string ElsewhereNote = "Your other machines are shown by this app in another of your Windows sessions. Close it there and they appear here.";
+    public const string ReplacedNote = "Another copy of this app, with this app's key, took over the connection to your other machines. They come back here when this machine's Bridge Host signs in again or restarts, or when this app is opened again.";
 
     // How long to wait for a sign-in that has not happened, before asking again.
     public TimeSpan Recheck { get; init; } = TimeSpan.FromSeconds(30);
@@ -193,6 +204,12 @@ public sealed class RelayFleetLink : IFleetLink
         var backoff = TimeSpan.FromSeconds(1);
         while (!ct.IsCancellationRequested)
         {
+            if (!claim())
+            {
+                Set(FleetState.Elsewhere, ElsewhereNote);
+                await WaitAsync(Recheck, ct);
+                continue;
+            }
             RelayAccount? a;
             try { a = await account(ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
@@ -209,6 +226,7 @@ public sealed class RelayFleetLink : IFleetLink
                 continue;
             }
             var switched = false;
+            var replaced = false;
             try
             {
                 Set(FleetState.Connecting, null);
@@ -220,13 +238,14 @@ public sealed class RelayFleetLink : IFleetLink
                 log($"connected to the relay as {relay.Login} ({Wire.DeviceId(key.Public)[..8]})");
                 backoff = TimeSpan.FromSeconds(1);
                 switched = await HoldAsync(relay, a, ct);
+                replaced = !switched && (int?)relay.CloseStatus == CloseCodes.Replaced;
                 log(switched ? "this machine's host is on another account or relay now: following it" : $"the relay connection ended: {(int?)relay.CloseStatus} {relay.CloseReason}");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
-            catch (RelayRefusedException e) when (e.Code is CloseCodes.AuthFailed or CloseCodes.ProofFailed or CloseCodes.Replaced)
+            catch (RelayRefusedException e) when (e.Code is CloseCodes.AuthFailed or CloseCodes.ProofFailed)
             {
                 log($"the relay refused the app: {e.Message}");
-                Set(FleetState.Refused, e.Code == CloseCodes.Replaced ? "this app is connected from somewhere else with the same key" : "the account's sign-in is no longer accepted");
+                Set(FleetState.Refused, "the account's sign-in is no longer accepted");
                 current = null;
                 Changed?.Invoke();
                 await WaitAsync(Recheck, ct);
@@ -239,10 +258,22 @@ public sealed class RelayFleetLink : IFleetLink
             }
             // Not Connected before the hosts go: an empty list while Connected says every
             // machine left, and Fleet would drop their cards over a relay blip.
-            if (state.State == FleetState.Connected) { Set(FleetState.Connecting, "reconnecting"); }
+            if (replaced) { Set(FleetState.Elsewhere, ReplacedNote); }
+            else if (state.State == FleetState.Connected) { Set(FleetState.Connecting, "reconnecting"); }
             current = null;
             Changed?.Invoke();
             if (switched) { continue; }
+            if (replaced)
+            {
+                // Another copy of the app with this key connected (this person's other Windows
+                // session): reconnecting would take it back, and that copy would do the same, each
+                // evicting the other every second. As the host does, wait to be asked: a poke, when
+                // this machine's host signs in again or comes back.
+                log("another copy of this app took over its relay connection; not reconnecting until this machine's host signs in again or restarts");
+                try { await poke.WaitAsync(ct); }
+                catch (OperationCanceledException) { break; }
+                continue;
+            }
             await WaitAsync(backoff, ct);
             backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, MaxBackoff.Ticks));
         }

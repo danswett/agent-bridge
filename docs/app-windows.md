@@ -72,6 +72,13 @@ cards exactly as on this one's, each going to that card's own host.
   which hands it to the app alone, like every management op, so there is no second sign-in, and
   the token only ever goes to the relay that issued it. It asks again when the host signs in
   to another account, and after the relay refuses it.
+* **One copy per person.** The relay keeps one connection per device key, and the
+  single-instance lock is per Windows session, so the same person signed in twice runs the
+  app twice with one key. Only the copy holding `relay.lock` (in the key's folder, open for
+  the app's lifetime) connects; the other shows no other machines and says where they are, and
+  takes over when the first copy ends. If the relay still replaces the app's connection
+  (`4009`), the app does not reconnect on its own, as the host does not: it waits until this
+  machine's host signs in again or comes back, so two copies never evict each other in a loop.
 * **Which machines.** Every host in the relay's presence for the account, other than this
   machine's own (its device id is the `machine.id` its hello gives), which the app reaches over
   its pipe. Each gets a connection that subscribes to sessions and usage and reconnects as the

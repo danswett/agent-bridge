@@ -219,8 +219,8 @@ public partial class App : Application
     // key can take a moment, so it is not done on the UI thread.
     async Task StartFleetAsync(HostConnection local, IUiDispatcher ui, Func<FleetHost, Machine> remote, Action<IFleetLink> made)
     {
-        P256KeyPair key;
-        try { key = await Task.Run(() => Identity.Load(options.Profile, root: Path.Combine(Paths.AppData, "device")).Key); }
+        Identity identity;
+        try { identity = await Task.Run(() => Identity.Load(options.Profile, root: Path.Combine(Paths.AppData, "device"))); }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
             AppLog.Write($"other machines are off: this app's device key could not be loaded: {e.Message}");
@@ -242,7 +242,7 @@ public partial class App : Application
             }
             Volatile.Write(ref last, now);
             return now;
-        }, key, $"{Environment.MachineName} · Agent Bridge app", AppLog.Write);
+        }, identity.Key, $"{Environment.MachineName} · Agent Bridge app", AppLog.Write, () => ClaimRelay(identity.Folder));
         link.Changed += () => { if (link.State == FleetState.Refused) { Volatile.Write(ref last, null); } };
         ui.Post(() =>
         {
@@ -265,6 +265,32 @@ public partial class App : Application
             fleet = new Fleet(link, main, ui, remote);
             fleet.Start();
         });
+    }
+
+    // One relay link per person, not per Windows session. The single-instance lock is the session's
+    // own (Local\), so the same person signed in twice runs the app twice, both with this key; the
+    // relay keeps one connection per device, and the two would take it from each other every
+    // second. A file in the person's own folder, held open while the app runs, is that lock: other
+    // users cannot hold it (unlike a Global\ name, which anyone can take first), and it is let go
+    // when the app ends, however it ends.
+    FileStream? relayLock;
+
+    bool ClaimRelay(string folder)
+    {
+        if (relayLock is not null) { return true; }
+        try
+        {
+            relayLock = new FileStream(Path.Combine(folder, "relay.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            return true;
+        }
+        // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION: another copy holds it.
+        catch (IOException e) when (e.HResult is unchecked((int)0x80070020) or unchecked((int)0x80070021)) { return false; }
+        // Not one that another copy holds: the lock cannot be had at all, so go without it.
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            AppLog.Write($"the relay lock could not be opened, so it is not kept: {e.Message}");
+            return true;
+        }
     }
 
     // Closing the window keeps the app in the notification area, where its toasts come from.
