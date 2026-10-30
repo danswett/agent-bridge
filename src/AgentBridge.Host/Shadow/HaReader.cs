@@ -228,7 +228,12 @@ public sealed class DaemonHaReader : IDisposable
             {
                 if (await GetAsync(access, entity, ct) is { } state && Usage(state) is var u)
                 {
-                    usage[client] = Stood(client, u with { ConfirmedAt = access.UsagePace.ConfirmedAt(u.MeasuredAt, readAt), Lapsed = access.UsagePace.Lapsed(u.MeasuredAt, readAt) }, readAt);
+                    // A lapsed figure keeps no history: the account reader's, which stands in for it
+                    // (ReadersAsync), keeps it under the same agent, and alternating the two would
+                    // start the reader's afresh at every read.
+                    usage[client] = access.UsagePace.Lapsed(u.MeasuredAt, readAt)
+                        ? u with { Lapsed = true }
+                        : Stood(client, u with { ConfirmedAt = access.UsagePace.ConfirmedAt(u.MeasuredAt, readAt) }, readAt);
                 }
                 else { standing.Remove(client); }
             }
@@ -284,7 +289,7 @@ public sealed class DaemonHaReader : IDisposable
                 // Its own reading of this agent and this account, as Test-BridgeUsageCovered matches one.
                 if (Str(attributes, "client") != client || Str(attributes, "machine_slug") != slug) { continue; }
                 var u = Usage(s);
-                if (!u.Reading || (u.AccountKey is { Length: > 0 } ? u.AccountKey : u.Account) != key || access.UsagePace.Lapsed(u.MeasuredAt, readAt) || u.MeasuredAt is not { } at) { continue; }
+                if (!u.Reading || !SameAccount(client, u.AccountKey is { Length: > 0 } ? u.AccountKey : u.Account, key) || access.UsagePace.Lapsed(u.MeasuredAt, readAt) || u.MeasuredAt is not { } at) { continue; }
                 if (best?.MeasuredAt is { } was && was >= at) { continue; }
                 (best, bestSlug) = (u, slug);
             }
@@ -293,6 +298,10 @@ public sealed class DaemonHaReader : IDisposable
             usage[client] = Stood(client, best with { ConfirmedAt = access.UsagePace.ConfirmedAt(best.MeasuredAt, readAt) }, readAt);
         }
     }
+
+    // A GitHub login is one account however it is cased; the others' keys are compared exactly.
+    static bool SameAccount(string client, string? a, string b) =>
+        string.Equals(a, b, client == "copilot" ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     // The machine a resume option from another machine names ("<agent> on <machine>: …").
     static readonly System.Text.RegularExpressions.Regex RemoteMachine = new(

@@ -890,6 +890,30 @@ public sealed class ShadowTests : IDisposable
         Assert.True((await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!["copilot"].Lapsed);
     }
 
+    // Found in review (#94): the lapsed figure here and the reader's took turns in one history, so
+    // an unchanged reader figure never held from one read to the next. And a Copilot login is the
+    // same account however it is cased.
+    [Fact]
+    public async Task The_account_readers_unchanged_figure_holds_across_reads_and_its_login_matches_in_any_case()
+    {
+        var now = f.Time.GetUtcNow();
+        var measured = now;
+        var inner = new FakeHomeAssistant(entity => entity switch
+        {
+            "sensor.agent_bridge_fixture_usage_copilot" => UsageState("copilot", 79, now - TimeSpan.FromHours(11)),
+            "select.agent_bridge_fixture_new_resume" => ResumeState("Agency on OTHER-PC: Shared from there (abcdef12)"),
+            "sensor.agent_bridge_other_pc_usage_copilot" => UsageState("copilot", 41, measured, account: Account.ToUpperInvariant(), slug: "other_pc"),
+            _ => null,
+        });
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        Config();
+        Assert.Equal(41d, (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!["copilot"].Windows["monthly"]);
+        // Republished unchanged four minutes later: it has held since it was first read.
+        f.Time.Advance(TimeSpan.FromMinutes(4));
+        measured = f.Time.GetUtcNow();
+        Assert.Equal(now, (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!["copilot"].HeldSince);
+    }
+
     [Fact]
     public async Task A_named_machine_that_cannot_be_read_leaves_the_daemons_lapsed_figure_not_compared_and_the_rest_compared()
     {
