@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Protocol;
@@ -313,7 +315,9 @@ internal static class CodexLockDiscovery
         // One terminal is one session. A terminal holding several locks may be writing a
         // sub-agent's thread or touching another thread's rollout, and a launch bound by pid
         // must not be handed the wrong one: it is a session only through the one lock whose
-        // rollout is its own top-level thread, written since it started; otherwise none.
+        // rollout is its own top-level thread, written since it started; otherwise none. Even
+        // a lone lock is not its session when its rollout says it is a sub-agent's (its own
+        // thread's lock may be the one shared, and so named nobody); one not yet written is.
         var live = new List<DiscoveredSession>();
         foreach (var group in held.GroupBy(h => h.Process.Id))
         {
@@ -323,6 +327,7 @@ internal static class CodexLockDiscovery
                 candidates = [.. candidates.Where(c => c.Transcript is { } t && CodexRollout.IsOwnThread(t, c.Id, c.Process.StartedAt))];
                 if (candidates.Count != 1) { continue; }
             }
+            else if (candidates[0].Transcript is { } t && CodexRollout.Thread(t, candidates[0].Id) == CodexThread.Other) { continue; }
             var (id, process, transcript) = candidates[0];
             live.Add(new DiscoveredSession(id, AgentKind.Codex, transcript, null, process.Id, ProcessStartedAt: process.StartedAt));
         }
@@ -339,8 +344,11 @@ internal static class CodexLockDiscovery
         return codex.Count == 1 && IsTerminal(running[codex[0]].CommandLine) ? codex[0] : null;
     }
 
-    // A Codex process known to be a terminal: its command line read, and not an app-server.
-    internal static bool IsTerminal(string? commandLine) => commandLine is { Length: > 0 } && !IsAppServer(commandLine);
+    // A Codex process known to be a terminal a person drives: its command line read, not a
+    // server, and the interactive CLI (no subcommand, a prompt, `resume` or `fork`). `exec`,
+    // `review`, `migrate-rollouts` and the like can hold a thread's lock too, with no screen
+    // to type into.
+    internal static bool IsTerminal(string? commandLine) => commandLine is { Length: > 0 } && !IsAppServer(commandLine) && IsInteractive(commandLine);
 
     // Codex's app-server or MCP server: the daemon, its updater, or one an IDE runs. Never a
     // terminal. Global options may come before the subcommand (`codex -c k=v app-server`), so
@@ -348,79 +356,190 @@ internal static class CodexLockDiscovery
     // a server mistaken for a terminal could be stopped, ending every session it serves.
     internal static bool IsAppServer(string? commandLine) =>
         CommandLine.Split(commandLine).Skip(1).Any(a => a is "app-server" or "mcp-server");
+
+    // Global options that take a value (codex-rs cli/src/main.rs and tui/src/cli.rs), so a value
+    // is never read as the subcommand.
+    static readonly HashSet<string> ValueOptions = new(StringComparer.Ordinal)
+    {
+        "-c", "--config", "--enable", "--disable", "--remote", "--remote-auth-token-env", "-a", "--ask-for-approval",
+        "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-C", "--cd", "-i", "--image", "--add-dir", "--local-provider",
+    };
+
+    // Every subcommand but the interactive ones, with their aliases. The first argument that is
+    // not an option is the subcommand if it names one, else the prompt, as clap reads it; after
+    // `--` everything is the prompt.
+    static readonly HashSet<string> Subcommands = new(StringComparer.Ordinal)
+    {
+        "agents", "tcp-tunnel", "exec", "e", "review", "login", "logout", "mcp", "mcp-server", "plugin", "app-server",
+        "remote-control", "app", "completion", "update", "doctor", "sandbox", "debug", "execpolicy", "apply", "a", "queue",
+        "archive", "delete", "migrate-rollouts", "migrate-nfs-db", "unarchive", "cloud", "cloud-tasks",
+        "responses-api-proxy", "stdio-to-uds", "exec-server", "features", "help",
+    };
+
+    internal static bool IsInteractive(string commandLine)
+    {
+        var args = CommandLine.Split(commandLine).Skip(1).ToList();
+        for (var i = 0; i < args.Count; i++)
+        {
+            var a = args[i];
+            if (a == "--") { return true; }
+            if (a.StartsWith('-'))
+            {
+                if (ValueOptions.Contains(a)) { i++; }
+                continue;
+            }
+            return !Subcommands.Contains(a);
+        }
+        return true;
+    }
 }
+
+internal enum CodexThread { Unknown, TopLevel, Other }
 
 // What a Codex rollout says about whose thread it is.
 internal static class CodexRollout
 {
-    const int MaxHeadBytes = 256 * 1024;
-    const int TailBytes = 64 * 1024;
+    // A session_meta line carries the base instructions, so it can run to tens of KiB.
+    const int MaxHeadBytes = 1024 * 1024;
+    // How far back the last complete record is looked for: a tool result can make one
+    // record megabytes long (Jsonl's limit for one line).
+    const long MaxScanBytes = 32L << 20;
+    const int Chunk = 64 * 1024;
+    static readonly byte[] TimestampPrefix = "{\"timestamp\":\""u8.ToArray();
+
+    // A rollout's session_meta never changes once written, so what it said is kept.
+    static readonly ConcurrentDictionary<string, CodexThread> Known = new(StringComparer.OrdinalIgnoreCase);
 
     // Whether a rollout is a person's own top-level thread, written since `started`: its
-    // session_meta names this thread (id, and session_id where given) as one a user started
-    // (thread_source "user" and a plain source where given; 0.165 writes both, seen live), and
-    // its last event is no older than the process. Anything unread, a sub-agent's thread, or
-    // one only touched by this process, is not. The last event, not the file's write time,
-    // which Windows leaves stale while the writer holds the file open (seen live).
+    // session_meta names this thread as one a user started, and its last event is no older
+    // than the process. The last event, not the file's write time, which Windows leaves stale
+    // while the writer holds the file open (seen live).
     public static bool IsOwnThread(string path, string id, DateTimeOffset? started)
     {
-        if (started is not { } since) { return false; }
+        if (started is not { } since || Thread(path, id) != CodexThread.TopLevel) { return false; }
         try
         {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            if (FirstLine(stream) is not { } head || !TopLevel(head, id)) { return false; }
+            using var stream = Open(path);
             return LastTimestamp(stream) is { } last && last >= since - TimeSpan.FromSeconds(1);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
     }
 
-    static bool TopLevel(byte[] line, string id)
+    // TopLevel: session_meta names this thread (id, and session_id where given) as one a user
+    // started (thread_source "user" and a plain source where given; 0.165 writes both, seen
+    // live). Other: it names anything else, a sub-agent's thread among them. Unknown: no
+    // session_meta can be read yet.
+    public static CodexThread Thread(string path, string id)
+    {
+        if (Known.TryGetValue(path, out var kind)) { return kind; }
+        try
+        {
+            using var stream = Open(path);
+            if (FirstLine(stream) is not { } head) { return CodexThread.Unknown; }
+            kind = Classify(head, id);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return CodexThread.Unknown; }
+        if (kind != CodexThread.Unknown)
+        {
+            if (Known.Count > 4096) { Known.Clear(); }
+            Known[path] = kind;
+        }
+        return kind;
+    }
+
+    static FileStream Open(string path) => new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+
+    static CodexThread Classify(byte[] line, string id)
     {
         try
         {
             using var doc = JsonDocument.Parse(line);
             var e = doc.RootElement;
-            if (Json.Str(e, "type") != "session_meta" || Json.Obj(e, "payload") is not { } p) { return false; }
-            if (!string.Equals(Json.Str(p, "id"), id, StringComparison.OrdinalIgnoreCase)) { return false; }
-            if (Json.Get(p, "session_id") is { } session && !(session.ValueKind == JsonValueKind.String && string.Equals(session.GetString(), id, StringComparison.OrdinalIgnoreCase))) { return false; }
-            if (Json.Get(p, "thread_source") is { } thread && !(thread.ValueKind == JsonValueKind.String && thread.GetString() == "user")) { return false; }
-            return Json.Get(p, "source") is not { } source || source.ValueKind == JsonValueKind.String;
+            if (Json.Str(e, "type") != "session_meta" || Json.Obj(e, "payload") is not { } p) { return CodexThread.Unknown; }
+            if (!string.Equals(Json.Str(p, "id"), id, StringComparison.OrdinalIgnoreCase)) { return CodexThread.Other; }
+            if (Json.Get(p, "session_id") is { } session && !(session.ValueKind == JsonValueKind.String && string.Equals(session.GetString(), id, StringComparison.OrdinalIgnoreCase))) { return CodexThread.Other; }
+            if (Json.Get(p, "thread_source") is { } thread && !(thread.ValueKind == JsonValueKind.String && thread.GetString() == "user")) { return CodexThread.Other; }
+            return Json.Get(p, "source") is not { } source || source.ValueKind == JsonValueKind.String ? CodexThread.TopLevel : CodexThread.Other;
         }
-        catch (JsonException) { return false; }
+        catch (JsonException) { return CodexThread.Unknown; }
     }
 
     static byte[]? FirstLine(FileStream stream)
     {
-        var buffer = new byte[Math.Min(MaxHeadBytes, stream.Length)];
-        var read = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
-        var end = Array.IndexOf(buffer, (byte)'\n', 0, read);
-        return end < 0 ? null : buffer[..end];
-    }
-
-    static DateTimeOffset? LastTimestamp(FileStream stream)
-    {
-        var start = Math.Max(0, stream.Length - TailBytes);
-        stream.Seek(start, SeekOrigin.Begin);
-        var buffer = new byte[stream.Length - start];
-        var read = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
-        if (read == 0) { return null; }
-        // The last complete line: a trailing one still being written is passed over.
-        var end = Array.LastIndexOf(buffer, (byte)'\n', read - 1);
-        while (end > 0)
+        var buffer = new List<byte>(Chunk);
+        var chunk = new byte[Chunk];
+        int read;
+        while (buffer.Count < MaxHeadBytes && (read = stream.Read(chunk, 0, chunk.Length)) > 0)
         {
-            var begin = Array.LastIndexOf(buffer, (byte)'\n', end - 1) + 1;
-            if (begin == 0 && start > 0) { return null; }
-            try
-            {
-                using var doc = JsonDocument.Parse(buffer.AsMemory(begin, end - begin));
-                return Json.Time(doc.RootElement, "timestamp");
-            }
-            catch (JsonException) { end = begin - 1; }
+            var end = Array.IndexOf(chunk, (byte)'\n', 0, read);
+            if (end >= 0) { buffer.AddRange(chunk.AsSpan(0, end)); return [.. buffer]; }
+            buffer.AddRange(chunk.AsSpan(0, read));
         }
         return null;
     }
-}
 
+    // The timestamp of the last complete record, a trailing one still being written passed
+    // over. Codex writes it first in each record, so only a record's head is read; one written
+    // otherwise is parsed whole if it is not too large.
+    internal static DateTimeOffset? LastTimestamp(FileStream stream)
+    {
+        var floor = Math.Max(0, stream.Length - MaxScanBytes);
+        if (PreviousNewline(stream, stream.Length, floor) is not { } end) { return null; }
+        for (var records = 0; records < 8; records++)
+        {
+            var before = PreviousNewline(stream, end, floor);
+            if (before is null && floor > 0) { return null; }
+            var begin = before + 1 ?? 0;
+            if (Timestamp(stream, begin, end) is { } at) { return at; }
+            if (before is not { } next) { return null; }
+            end = next;
+        }
+        return null;
+    }
+
+    // The last '\n' at or after `floor` and before `before`, read backwards a chunk at a time.
+    static long? PreviousNewline(FileStream stream, long before, long floor)
+    {
+        var chunk = new byte[Chunk];
+        for (var position = before; position > floor;)
+        {
+            var count = (int)Math.Min(Chunk, position - floor);
+            position -= count;
+            stream.Seek(position, SeekOrigin.Begin);
+            var read = stream.ReadAtLeast(chunk.AsSpan(0, count), count, throwOnEndOfStream: false);
+            if (read <= 0) { return null; }
+            var at = Array.LastIndexOf(chunk, (byte)'\n', read - 1, read);
+            if (at >= 0) { return position + at; }
+        }
+        return null;
+    }
+
+    static DateTimeOffset? Timestamp(FileStream stream, long begin, long end)
+    {
+        var length = end - begin;
+        if (length <= 0) { return null; }
+        stream.Seek(begin, SeekOrigin.Begin);
+        var head = new byte[Math.Min(length, 512)];
+        var read = stream.ReadAtLeast(head, head.Length, throwOnEndOfStream: false);
+        var span = head.AsSpan(0, read);
+        if (span.StartsWith(TimestampPrefix))
+        {
+            var value = span[TimestampPrefix.Length..];
+            var close = value.IndexOf((byte)'"');
+            return close < 0 ? null : Json.ParseTime(Encoding.UTF8.GetString(value[..close]));
+        }
+        if (length > Chunk * 16) { return null; }
+        var line = new byte[length];
+        stream.Seek(begin, SeekOrigin.Begin);
+        read = stream.ReadAtLeast(line, line.Length, throwOnEndOfStream: false);
+        try
+        {
+            using var doc = JsonDocument.Parse(line.AsMemory(0, read));
+            return Json.Time(doc.RootElement, "timestamp");
+        }
+        catch (JsonException) { return null; }
+    }
+}
 internal static class RegistrationDiscovery
 {
     // Live Claude or Codex sessions from agent-ha-bridge's hook registrations. A session

@@ -429,6 +429,72 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public async Task A_Codex_terminal_holding_only_a_sub_agents_lock_is_not_that_sub_agents_session()
+    {
+        using var f = new Fixture();
+        const string Sub = "33333333-3333-4333-8333-333333333333";
+        Fixture.Append(f.CodexTranscript(A), Codex.Line("session_meta", new { id = A, session_id = A, thread_source = "user", source = "cli" }, 0));
+        Fixture.Append(f.CodexTranscript(Sub), Codex.Line("session_meta", new { id = Sub, session_id = A, thread_source = "subagent", source = new { subagent = "review" } }, 1));
+        f.Processes.Run(AgentKind.Codex, 800, "codex.exe --no-daemon");
+        f.Processes.Run(AgentKind.Codex, 900, "codex.exe app-server --listen unix:// --managed-daemon");
+        // Its own thread's lock is shared, so names nobody; the sub-agent's is its alone.
+        f.Processes.Holders[f.CodexLock(A)] = [800, 900];
+        f.Processes.Holders[f.CodexLock(Sub)] = [800];
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+    }
+
+    [Fact]
+    public async Task A_Codex_rollout_whose_last_record_is_larger_than_one_read_still_tells_when_it_was_written()
+    {
+        using var f = new Fixture();
+        const string Sub = "33333333-3333-4333-8333-333333333333";
+        Fixture.Append(f.CodexTranscript(A), Codex.Line("session_meta", new { id = A, session_id = A, thread_source = "user", source = "cli" }, 0),
+            Codex.Item(new { type = "function_call_output", call_id = "c1", output = new string('x', 300 * 1024) }, 10));
+        Fixture.Append(f.CodexTranscript(Sub), Codex.Line("session_meta", new { id = Sub, session_id = A, thread_source = "subagent", source = new { subagent = "review" } }, 1));
+        f.Processes.Run(AgentKind.Codex, 800, "codex.exe --no-daemon", Fixture.T0.AddMinutes(-5));
+        f.Processes.Holders[f.CodexLock(A)] = [800];
+        f.Processes.Holders[f.CodexLock(Sub)] = [800];
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Equal(A, Assert.Single(source.Snapshot()).Id);
+    }
+
+    [Theory]
+    [InlineData("codex.exe --no-daemon -c model_reasoning_summary=detailed -- \"Launch test: exec this.\"", true)]
+    [InlineData("codex.exe --no-daemon -c model_reasoning_summary=detailed resume 01a1897d-fd4f-7a93-8e0f-e0ed9760aa6e", true)]
+    [InlineData("codex.exe --no-daemon fork --last", true)]
+    [InlineData("codex.exe --no-daemon \"exec the plan\"", true)]
+    [InlineData("codex.exe -m exec", true)]
+    [InlineData("codex.exe", true)]
+    [InlineData("codex.exe --no-daemon exec \"do it\"", false)]
+    [InlineData("codex.exe --no-daemon -c k=v e \"do it\"", false)]
+    [InlineData("codex.exe review --uncommitted", false)]
+    [InlineData("codex.exe migrate-rollouts", false)]
+    [InlineData("codex.exe -c model=example app-server --listen stdio://", false)]
+    [InlineData(null, false)]
+    public void A_Codex_terminal_is_the_interactive_CLI_not_a_headless_run_or_a_server(string? commandLine, bool terminal) =>
+        Assert.Equal(terminal, CodexLockDiscovery.IsTerminal(commandLine));
+
+    [Fact]
+    public async Task A_headless_Codex_run_holding_a_thread_lock_is_not_a_session()
+    {
+        using var f = new Fixture();
+        f.Processes.Run(AgentKind.Codex, 800, "codex.exe --no-daemon exec \"summarise the repo\"");
+        f.Processes.Holders[f.CodexLock(A)] = [800];
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+    }
+
+    [Fact]
     public async Task A_registration_filed_under_another_session_name_is_ignored()
     {
         using var f = new Fixture();
