@@ -23,4 +23,19 @@ public static class StartupQuestions
         if (Has("Hooks need review")) { return StartupQuestion.HooksReview; }
         return StartupQuestion.None;
     }
+
+    // Whether Copilot's window is ready for a prompt: its input box (a row opened by '╻' over
+    // one of '┃') or its key footer ("/ commands"), with no startup question over it. Neither
+    // is drawn while its folder-trust question is (1.0.105, seen live).
+    public static bool CopilotReady(IReadOnlyList<string>? rows)
+    {
+        if (rows is null || Read(rows) != StartupQuestion.None) { return false; }
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i].TrimStart();
+            if (row.Contains(" / commands ", StringComparison.Ordinal)) { return true; }
+            if (row.StartsWith('\u257B') && i + 1 < rows.Count && rows[i + 1].TrimStart().StartsWith('\u2503')) { return true; }
+        }
+        return false;
+    }
 }

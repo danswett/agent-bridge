@@ -20,7 +20,11 @@ public sealed record Launcher(
     bool NeedsPrompt = false,
     bool TakesProfile = false,
     // The opening prompt can mention files as @path, as a reply's attachments are typed.
-    bool TakesAttachments = false);
+    bool TakesAttachments = false,
+    // Its session registers before its window is ready, so a folder-trust question can still
+    // come after (Copilot: inuse.<pid>.lock at 5.3 s, the question at 9.4 s, seen live with
+    // 1.0.105). Its launch is started only once its window shows it ready.
+    bool RegistersBeforeReady = false);
 
 public static class Launchers
 {
@@ -31,8 +35,8 @@ public static class Launchers
 
     public static readonly IReadOnlyList<Launcher> All =
     [
-        new("agency", "Agency", AgentKind.Copilot, "agency", "copilot", TakesProfile: true, TakesAttachments: true),
-        new("copilot", "Copilot", AgentKind.Copilot, "copilot", "copilot", TakesAttachments: true),
+        new("agency", "Agency", AgentKind.Copilot, "agency", "copilot", TakesProfile: true, TakesAttachments: true, RegistersBeforeReady: true),
+        new("copilot", "Copilot", AgentKind.Copilot, "copilot", "copilot", TakesAttachments: true, RegistersBeforeReady: true),
         new("claude", "Claude", AgentKind.Claude, "claude", "claude"),
         new("codex", "Codex", AgentKind.Codex, "codex", "codex", ChoosesOwnSessionId: true, NeedsPrompt: true),
     ];
