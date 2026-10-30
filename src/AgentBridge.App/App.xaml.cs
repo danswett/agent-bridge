@@ -221,7 +221,15 @@ public partial class App : Application
     async Task StartFleetAsync(HostConnection local, IUiDispatcher ui, Func<FleetHost, Machine> remote, Action<IFleetLink> made)
     {
         Identity identity;
-        try { identity = await Task.Run(() => Identity.Load(options.Profile, root: Path.Combine(Paths.AppData, "device"))); }
+        try
+        {
+            // The same person starting the app for the first time in two Windows sessions at once
+            // would create two keys, and the reference file would name only one of them. The
+            // first copy creates it; the other waits, then loads the same one.
+            var root = Path.Combine(Paths.AppData, "device");
+            var folder = Directory.CreateDirectory(Path.Combine(root, options.Profile)).FullName;
+            identity = await UserLock.RunAsync(Path.Combine(folder, "init.lock"), () => Identity.Load(options.Profile, root: root), TimeSpan.FromSeconds(60), AppLog.Write);
+        }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
             AppLog.Write($"other machines are off: this app's device key could not be loaded: {e.Message}");
@@ -260,12 +268,9 @@ public partial class App : Application
         });
     }
 
-    // One relay link per person, not per Windows session. The single-instance lock is the session's
-    // own (Local\), so the same person signed in twice runs the app twice, both with this key; the
-    // relay keeps one connection per device, and the two would take it from each other every
-    // second. A file in the person's own folder, held open while the app runs, is that lock: other
-    // users cannot hold it (unlike a Global\ name, which anyone can take first), and it is let go
-    // when the app ends, however it ends.
+    // One relay link per person, not per Windows session: the same person signed in twice runs the
+    // app twice, both with this key, and the relay keeps one connection per device, so the two
+    // would take it from each other every second. Held while the app runs (UserLock).
     FileStream? relayLock;
 
     bool ClaimRelay(string folder)
@@ -273,11 +278,9 @@ public partial class App : Application
         if (relayLock is not null) { return true; }
         try
         {
-            relayLock = new FileStream(Path.Combine(folder, "relay.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            return true;
+            relayLock = UserLock.TryTake(Path.Combine(folder, "relay.lock"));
+            return relayLock is not null;
         }
-        // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION: another copy holds it.
-        catch (IOException e) when (e.HResult is unchecked((int)0x80070020) or unchecked((int)0x80070021)) { return false; }
         // Not one that another copy holds: the lock cannot be had at all, so go without it.
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {

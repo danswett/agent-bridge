@@ -76,7 +76,8 @@ cards exactly as on this one's, each going to that card's own host.
   single-instance lock is per Windows session, so the same person signed in twice runs the
   app twice with one key. Only the copy holding `relay.lock` (in the key's folder, open for
   the app's lifetime) connects; the other shows no other machines and says where they are, and
-  takes over when the first copy ends. If the relay still replaces the app's connection
+  takes over when the first copy ends. The key is loaded or created under a second, brief lock
+  (`init.lock`), so two first starts at once make one key, not two. If the relay still replaces the app's connection
   (`4009`), the app does not reconnect on its own, as the host does not: it waits until this
   machine's host signs in again or comes back, so two copies never evict each other in a loop.
 * **Which machines.** Every host in the relay's presence for the account, other than this
