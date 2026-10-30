@@ -11,10 +11,11 @@
 # your own: it changes the host's config and may sign in, which agent-bridge-host refuses inside an
 # agent session. Re-running -Install publishes that checkout again and restarts both.
 #
-# -Relay: the host serves the phone too, read-only, as "<computer> (shadow)". It sends no
-# notifications (push.enabled off: agent-ha-bridge already notifies the phone), and while
-# agent-ha-bridge runs it takes no answers, replies, stops or launches (design G5) and tells the
-# phone why. A profile not signed in is signed in first, with a device code printed here, to
+# The profile is made read-only (delivery.readOnly): it takes no answer, reply, stop, launch,
+# approval or transfer from any device, whether or not agent-ha-bridge is running.
+#
+# -Relay: the host serves the phone too, as "<computer> (shadow)", saying it is read-only and why.
+# It sends no notifications (push.enabled off: agent-ha-bridge already notifies the phone). A profile not signed in is signed in first, with a device code printed here, to
 # -RelayUrl, AGENT_BRIDGE_RELAY, the relay the profile used before, or the app's. Without -Relay
 # the host serves this machine only (--local-only), as before.
 #Requires -Version 7
@@ -238,6 +239,12 @@ if ($Install) {
         }
     }
     Sync-AgentHaBridgeWorkspace
+    # Read-only whatever agent-ha-bridge is doing: G5 alone lasts only while its daemon runs, and an
+    # update, a crash or a logoff race restarting it would leave this host acting in the gap.
+    if ($PSCmdlet.ShouldProcess("profile $HostProfile", 'make it read-only (delivery.readOnly true)')) {
+        & $exe config set delivery.readOnly true --profile $HostProfile
+        if ($LASTEXITCODE) { throw (Get-ConfigRefusal "could not make profile $HostProfile read-only") }
+    }
     $serveArguments = @('serve', '--profile', $HostProfile)
     if ($Relay) {
         Set-ShadowRelay

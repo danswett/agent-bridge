@@ -34,6 +34,22 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Contains("remote approval of permission prompts, launching and notifications are off", problem);
         Assert.False(settings.Launch.Enabled);
         Assert.False(settings.Push);
+        Assert.True(settings.ReadOnly);
+    }
+
+    [Theory]
+    [InlineData(null, false, null)]
+    [InlineData("{ \"delivery\": {} }", false, null)]
+    [InlineData("{ \"delivery\": { \"readOnly\": false } }", false, null)]
+    [InlineData("{ \"delivery\": { \"readOnly\": true } }", true, null)]
+    [InlineData("{ \"delivery\": { \"readOnly\": 1 } }", true, "delivery.readOnly is not true or false")]
+    [InlineData("{ \"delivery\": true }", true, "delivery is not an object")]
+    public void A_host_is_read_only_only_when_delivery_read_only_is_true_or_might_have_been_meant(string? text, bool readOnly, string? problem)
+    {
+        var (settings, said) = With(text);
+
+        Assert.Equal(readOnly, settings.ReadOnly);
+        if (problem is null) { Assert.Null(said); } else { Assert.Contains(problem, said); }
     }
 
     [Theory]
@@ -136,6 +152,9 @@ public sealed class HostSettingsTests : IDisposable
         Assert.True(HostSettings.Load(folder).Settings.Push);
         Assert.Equal(0, Run("config", "set", "push.enabled", "false"));
         Assert.False(HostSettings.Load(folder).Settings.Push);
+        Assert.Equal(1, Run("config", "set", "delivery.readOnly", "yes"));
+        Assert.Equal(0, Run("config", "set", "delivery.readOnly", "true"));
+        Assert.True(HostSettings.Load(folder).Settings.ReadOnly);
     }
 
     [Fact]

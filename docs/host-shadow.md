@@ -134,8 +134,12 @@ pwsh build/shadow-week.ps1 -Install -Relay    # and on the phone, read-only
    `AgentBridgeHost_*` (the app's).
 4. Starts both.
 
-**Read-only by construction.** While agent-ha-bridge runs, the host withdraws answering,
-replying, stopping and launching (G5), and `machine.g5` reports it if it ever does not.
+**Read-only by construction.** `-Install` sets `delivery.readOnly` in the profile's config
+([host-config.md](host-config.md)), so the host takes no answer, reply, stop, launch, approval
+or transfer from any device, **whether or not agent-ha-bridge is running**. Its G5 hold alone
+lasted only while the daemon ran: an agent-ha-bridge update, a crash or a logoff race
+restarting it would have left the shadow host acting in the gap. While agent-ha-bridge runs,
+the host also withdraws them for G5, and `machine.g5` reports it if it ever does not.
 Without `-Relay`, `--local-only` keeps it off the relay. A new profile has no Home Assistant token of its
 own, so the host's Home Assistant connector is off (its log says so) and it publishes
 nothing over the daemon's entities. `shadow run` writes only its reports.
@@ -152,14 +156,18 @@ others, read-only:
   notices for each question would be noise. The host then takes no subscription and sends
   nothing; `hello` leaves `push` out, so the phone says the machine doesn't send
   notifications, and a `push.subscribe` sent anyway fails saying so.
-* **Read-only, and saying why.** While agent-ha-bridge runs, `hello` leaves out
-  `sessions.answer`, `sessions.reply`, `sessions.stop` and `sessions.launch` (and transfers),
-  and carries `machine.readOnly`, the reason ([v1-sessions.md](protocol/v1-sessions.md#hello)).
-  The phone shows that reason on the machine's status line and on each question, offers no
-  reply box, End session or Launch, and shows questions read-only. It asks the machine it shows again every minute, so this follows agent-ha-bridge starting or stopping without a reconnect. This holds only **while
-  agent-ha-bridge runs**: if its daemon is stopped, the shadow host offers everything an
-  ordinary host does, as G5 intends for a machine that has moved over. Uninstall the shadow
-  host, or re-run `-Install` without `-Relay`, before stopping agent-ha-bridge for good.
+* **Read-only, and saying why.** `hello` leaves out `sessions.answer`, `sessions.approve`,
+  `sessions.reply`, `sessions.stop`, `sessions.launch` and transfers, and carries
+  `machine.readOnly`, the reason ([v1-sessions.md](protocol/v1-sessions.md#hello)): "this is a
+  read-only comparison host (delivery.readOnly in its config); answer at the machine". Each of
+  those sent anyway is refused with the same words, and nothing is typed, started or ended
+  (`LaunchFlowTests.A_read_only_host_takes_nothing_from_a_phone_with_agent_ha_bridge_not_running_and_says_why`).
+  The phone shows the reason on the machine's status line and on each question, offers no
+  reply box, End session or Launch, and shows questions read-only. Because of `delivery.readOnly`
+  this holds while agent-ha-bridge is stopped or restarting too; only the reason differs (G5's
+  is given when the switch is off). Making the machine an acting host after the cutover means
+  turning the switch off on purpose (`config unset delivery.readOnly`), not just stopping
+  agent-ha-bridge.
 * **Signed in once.** A profile that has never signed in is signed in during the install:
   `agent-bridge-host sign-in --profile shadow` prints an address and a device code; open it
   on any device and sign in as the account the phone uses. The relay is `-RelayUrl`, else

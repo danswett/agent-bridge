@@ -279,7 +279,7 @@ async Task<int> ServeAsync()
         // said in hello so a phone shows the machine read-only and why.
         // Asked afresh, as the delivery services ask it for what hello offers: a cached answer
         // could say read-only beside actions offered, or offer none without saying why.
-        ReadOnly = () => OperatingSystem.IsWindows() ? haProbe?.Active() : null,
+        ReadOnly = () => ReadOnlyReason() ?? (OperatingSystem.IsWindows() ? haProbe?.Active() : null),
     };
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
@@ -456,7 +456,7 @@ LaunchService Launcher(ISessionSource source, AttachmentStore? attachments, Sess
 {
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
-    IAgentHaBridgeProbe probe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : new NoAgentHaBridge();
+    IAgentHaBridgeProbe probe = new ReadOnlyGate(OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : new NoAgentHaBridge(), ReadOnlyReason());
     IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector() : new NoScreens();
     var launcher = new LaunchService(source, probe, injector, starter, new AgentLocator(), new AgencyCatalog(new BatchFileRunner(new CommandRunner())), new LaunchServiceOptions
     {
@@ -502,7 +502,7 @@ static string OsName() =>
         Log("answering, replying and ending sessions from other devices are not supported on this platform yet");
         return (new UnsupportedPlatformAnswerer(), new UnsupportedPlatformReplier(), null, new UnsupportedPlatformStopper());
     }
-    var probe = new AgentHaBridgeProbe();
+    var probe = new ReadOnlyGate(new AgentHaBridgeProbe(), ReadOnlyReason());
     var injector = new WorkerInjector();
     var guard = new TargetGuard();
     var processes = new SystemProcessInspector();
@@ -518,6 +518,11 @@ static string OsName() =>
         attachments,
         new StopService(source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log, gate));
 }
+
+// Why this host takes nothing from other devices whatever agent-ha-bridge does, or null: made
+// read-only in its config (delivery.readOnly), or a config.json it could not read, which might
+// have said so.
+string? ReadOnlyReason() => !settings.ReadOnly ? null : settingsProblem is null ? HostSettings.ReadOnlyReason : HostSettings.ProblemReason;
 
 static string HostVersion()
 {

@@ -24,6 +24,11 @@ namespace AgentBridge.Host;
 // homeAssistant: the Home Assistant connector (HaSettings, docs/ha-connector.md). Off unless
 // turned on; a file that cannot be read leaves it off.
 //
+// delivery.readOnly: a host that only shows sessions, and takes no answer, reply, stop, launch,
+// approval or transfer from another device, whatever agent-ha-bridge is doing (ReadOnlyGate). Off
+// when absent; on for the shadow host (docs/host-shadow.md). A value that is not true or false,
+// or a file that cannot be read, turns it on.
+//
 // push.enabled: whether this machine sends Web Push notifications to the account's phones (on
 // when absent). Off for a machine that should be seen but never heard from, as the shadow host
 // beside agent-ha-bridge is (docs/host-shadow.md). A value that is not true or false, or a file
@@ -50,7 +55,13 @@ public sealed record HostSettings(bool RemoteApproval)
 
     public bool Push { get; init; } = true;
 
-    static HostSettings Off => Default with { RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false };
+    public bool ReadOnly { get; init; }
+
+    // Why a read-only host takes nothing, said to devices; and why one whose file has a problem doesn't.
+    public const string ReadOnlyReason = "this is a read-only comparison host (delivery.readOnly in its config); answer at the machine";
+    public const string ProblemReason = "this host's config.json has a problem, so it takes nothing from other devices; answer at the machine";
+
+    static HostSettings Off => Default with { RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, ReadOnly = true };
 
     public static (HostSettings Settings, string? Problem) Load(string folder)
     {
@@ -63,7 +74,7 @@ public sealed record HostSettings(bool RemoteApproval)
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return (Off, $"{path} could not be read ({e.Message}); remote approval of permission prompts, launching and notifications are off");
+            return (Off, $"{path} could not be read ({e.Message}); remote approval of permission prompts, launching and notifications are off, and the host is read-only");
         }
         try
         {
@@ -75,7 +86,7 @@ public sealed record HostSettings(bool RemoteApproval)
                 if (version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out var v) || v < 1) { throw new JsonException("version is not a whole number from 1"); }
                 if (v > Version)
                 {
-                    return (Off, $"{path} is version {v}, written by a newer Agent Bridge than this host (version {Version}); remote approval of permission prompts, launching and notifications are off until the host is updated");
+                    return (Off, $"{path} is version {v}, written by a newer Agent Bridge than this host (version {Version}); remote approval of permission prompts, launching and notifications are off, and the host is read-only, until the host is updated");
                 }
             }
             var (launch, launchProblems) = LaunchConfig.Read(root.TryGetProperty("launch", out var l) ? l : null);
@@ -87,6 +98,22 @@ public sealed record HostSettings(bool RemoteApproval)
                 HomeAssistant = homeAssistant,
                 HomeAssistantProblems = homeAssistantProblems.Count == 0 ? [] : homeAssistantProblems,
             };
+            if (root.TryGetProperty("delivery", out var delivery) && delivery.ValueKind != JsonValueKind.Null)
+            {
+                if (delivery.ValueKind != JsonValueKind.Object) { throw new JsonException("delivery is not an object"); }
+                if (delivery.TryGetProperty("readOnly", out var readOnly) && readOnly.ValueKind != JsonValueKind.Null)
+                {
+                    settings = settings with
+                    {
+                        ReadOnly = readOnly.ValueKind switch
+                        {
+                            JsonValueKind.True => true,
+                            JsonValueKind.False => false,
+                            _ => throw new JsonException("delivery.readOnly is not true or false"),
+                        },
+                    };
+                }
+            }
             if (root.TryGetProperty("push", out var push) && push.ValueKind != JsonValueKind.Null)
             {
                 if (push.ValueKind != JsonValueKind.Object) { throw new JsonException("push is not an object"); }
@@ -115,7 +142,7 @@ public sealed record HostSettings(bool RemoteApproval)
         }
         catch (JsonException e)
         {
-            return (Off, $"{path} is not valid ({e.Message}); remote approval of permission prompts, launching and notifications are off");
+            return (Off, $"{path} is not valid ({e.Message}); remote approval of permission prompts, launching and notifications are off, and the host is read-only");
         }
     }
 

@@ -27,7 +27,7 @@ public static class ConfigCommands
     // Settable keys, by dotted path. Anything else is refused, so a typo is never written.
     static readonly string[] Keys =
     [
-        "permissions.remoteApproval", "push.enabled",
+        "permissions.remoteApproval", "push.enabled", "delivery.readOnly",
         "launch.enabled", "launch.defaultWorkspace", "launch.defaultAgent", "launch.permissions",
         "launch.worktrees.root", "launch.worktrees.limit", "launch.worktrees.idleHours",
         "launch.profiles", "launch.defaultProfile", "launch.resumeCount",
