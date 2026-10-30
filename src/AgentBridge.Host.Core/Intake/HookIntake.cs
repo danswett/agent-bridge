@@ -72,6 +72,11 @@ public sealed class HookIntake : IAsyncDisposable
     // Whether approvals have been checked against the hooks that ran while nobody took events,
     // since this intake last (re)took the spool. Read by the answer path on its own thread.
     volatile bool _reconciled;
+    // Whether hooks may have run unspooled since this intake last held a fresh heartbeat: it has
+    // just started, stood back, or let the heartbeat go stale. What they did then is known only
+    // from the hook log, whose records are best effort (a full disk loses them too), so every
+    // approval asked before the spool is taken again is withdrawn.
+    bool _gap = true;
     // The cut-off approvals were last settled to, and the hook log it is read from.
     DateTimeOffset? _settled;
     readonly HookLogWatch _codexLog;
@@ -99,7 +104,7 @@ public sealed class HookIntake : IAsyncDisposable
     // markers against the hook log (the first after starting or taking the spool back, or while
     // the log cannot be read), a marker may be one already answered at the terminal, and typing
     // into it would land in whatever the terminal shows now.
-    public string? ApprovalsUnsettled => _reconciled ? null
+    public string? ApprovalsUnsettled => _reconciled && !_handlers.WithdrawalsPending ? null
         : "the host has not yet checked Codex approvals against the hooks that ran while nobody took them; answer at the machine or try again shortly";
 
     // The answer path's gate for Codex approvals on a profile (AnswerOptions.CodexApprovalsUnsettled):
@@ -171,10 +176,15 @@ public sealed class HookIntake : IAsyncDisposable
         }
         // Approvals are settled whether or not the heartbeat could be written: the events about to
         // be handled may be ones a lost hook has already overtaken.
-        Beat();
-        if (!ReconcileApprovals()) { return 0; }
+        var beat = Beat();
+        if (!ReconcileApprovals(beat)) { return 0; }
         EnsureWatcher();
         var handled = Consume();
+        if (_handlers.WithdrawalsPending)
+        {
+            if (_options.AgentHaBridgeActive() is { } started) { StandBack(started); return handled; }
+            _handlers.RetryWithdrawals();
+        }
         var now = _time.GetUtcNow();
         if (now - _prunedAt >= _options.PruneInterval)
         {
@@ -202,6 +212,7 @@ public sealed class HookIntake : IAsyncDisposable
         // The heartbeat is the daemon's now; the watcher would only wake passes that do nothing.
         _heartbeatOwned = false;
         _reconciled = false;
+        _gap = true;
         _claim?.Dispose();
         _claim = null;
         _watcher?.Dispose();
@@ -230,7 +241,10 @@ public sealed class HookIntake : IAsyncDisposable
             Directory.CreateDirectory(_options.RuntimeRoot);
             File.WriteAllText(_heartbeat, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             _heartbeatOwned = true;
-            _beatAt = _time.GetUtcNow();
+            var now = _time.GetUtcNow();
+            // Hooks gave up spooling once the heartbeat was this old.
+            if (_beatAt != default && now - _beatAt >= SpoolContract.HeartbeatMaxAge) { _gap = true; }
+            _beatAt = now;
             return true;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -253,10 +267,11 @@ public sealed class HookIntake : IAsyncDisposable
     // later unspooled run. While the log cannot be read the history is unknown, so no approval
     // is offered at all; nor is one asked before the oldest log kept, once runs may have been
     // rotated out of it unread (HookLogWatch.HistoryFrom). False when agent-ha-bridge started meanwhile.
-    bool ReconcileApprovals()
+    bool ReconcileApprovals(bool beat)
     {
         var known = _codexLog.Refresh();
         var cutoff = known ? Later(_codexLog.Last, _codexLog.HistoryFrom) : _time.GetLocalNow();
+        if (_gap) { cutoff = _time.GetLocalNow(); }
         if (cutoff is not { } unheard || (_reconciled && _settled is { } done && unheard <= done)) { _reconciled = known; return true; }
         _handlers.ApprovalsSettledBefore = unheard;
         // A new cut-off unsettles what an earlier one settled: until its markers are gone, one of
@@ -297,6 +312,8 @@ public sealed class HookIntake : IAsyncDisposable
         {
             _settled = unheard;
             _reconciled = known;
+            // Closed once the heartbeat is fresh again, so hooks spool from here on.
+            if (beat) { _gap = false; }
         }
         return true;
     }

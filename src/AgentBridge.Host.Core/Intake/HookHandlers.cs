@@ -100,8 +100,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         // session must not offer the dead run's approval to be answered into the new process.
         if (eventName is "SessionStart" or "PreToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd")
         {
-            try { File.Delete(ApprovalPath(sessionId)); }
-            catch (DirectoryNotFoundException) { }
+            Withdraw(sessionId, spooled.ReceivedAt ?? time.GetUtcNow());
         }
 
         string status;
@@ -148,19 +147,12 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
 
         string? approvalId = null;
         if (approval && ApprovalsSettledBefore is { } settled && (spooled.ReceivedAt ?? time.GetUtcNow()) <= settled) { approval = false; }
-        if (approval && ArmedBy(sessionId, spooled) is { } armed)
-        {
-            // This very request, handled again (its delete failed and the host restarted, so
-            // nothing newer superseded it): its marker keeps its generation and any answer
-            // already attempted on it, which a new DecisionId would let be typed again.
-            approvalId = armed;
-        }
-        else if (approval)
+        if (approval)
         {
             // agent-ha-bridge's generation: the session's node id and the time, so an answer
             // made for one approval is never typed into the next.
             approvalId = $"{NodeId(sessionId)}-{NextDecisionMs()}";
-            WriteApprovalMarker(sessionId, approvalId, activity, At(spooled), spooled.Name);
+            WriteApprovalMarker(sessionId, approvalId, activity, At(spooled));
         }
         return notice with { OwnerPid = owner > 0 ? owner : null, Status = status, ApprovalId = approvalId };
     }
@@ -225,25 +217,54 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
 
     // As Write-CodexApprovalMarker: the gate an answer is typed through (AnswerService reads it
     // afresh before typing, and agent-ha-bridge's Set-CodexApprovalAttempt claims it).
-    // SpoolEvent is this host's, to know the request again if it is replayed; agent-ha-bridge
-    // keeps properties it does not know when it claims the marker.
-    void WriteApprovalMarker(string sessionId, string decisionId, string question, string at, string spoolEvent) =>
+    void WriteApprovalMarker(string sessionId, string decisionId, string question, string at) =>
         WriteJson(ApprovalPath(sessionId), w =>
         {
             w.WriteString("SessionId", sessionId);
             w.WriteString("DecisionId", decisionId);
             w.WriteString("Question", question);
             w.WriteString("Created", at);
-            w.WriteString("SpoolEvent", spoolEvent);
         });
 
 
-    // The DecisionId of the marker this spooled PermissionRequest armed, if it is still there.
-    // By the spool file's name, which is unique, not its time: two requests can share one.
-    string? ArmedBy(string sessionId, SpoolEvent spooled)
+    // Approval markers a lifecycle event retired but that could not be removed yet (a reader held
+    // one without sharing its deletion), by session, with the time of the latest event that
+    // retired it. Kept apart from the event, which may be dropped after its retries, and retried
+    // every pass (RetryWithdrawals); every Codex answer is refused while any is pending.
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _withdrawals = new(StringComparer.Ordinal);
+
+    public bool WithdrawalsPending => !_withdrawals.IsEmpty;
+
+    void Withdraw(string sessionId, DateTimeOffset upTo)
     {
-        using var marker = ReadJson(ApprovalPath(sessionId));
-        return marker is not null && Json.Str(marker.RootElement, "SpoolEvent") == spooled.Name ? Json.Str(marker.RootElement, "DecisionId") : null;
+        try
+        {
+            File.Delete(ApprovalPath(sessionId));
+            _withdrawals.TryRemove(sessionId, out _);
+        }
+        catch (DirectoryNotFoundException) { }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            _withdrawals.AddOrUpdate(sessionId, upTo, (_, earlier) => earlier > upTo ? earlier : upTo);
+        }
+    }
+
+    // True once none is pending. A marker created after the event that retired its session's
+    // last one is a new approval, and stays.
+    public bool RetryWithdrawals()
+    {
+        foreach (var (sessionId, upTo) in _withdrawals.ToArray())
+        {
+            DateTimeOffset? created;
+            using (var marker = ReadJson(ApprovalPath(sessionId)))
+            {
+                if (marker is null && !File.Exists(ApprovalPath(sessionId))) { _withdrawals.TryRemove(sessionId, out _); continue; }
+                created = marker is null ? null : Json.Time(marker.RootElement, "Created");
+            }
+            if (created is { } c && c > upTo) { _withdrawals.TryRemove(sessionId, out _); continue; }
+            Withdraw(sessionId, upTo);
+        }
+        return _withdrawals.IsEmpty;
     }
 
     // The generation in a DecisionId: the time in ms, as agent-ha-bridge's, but never the same

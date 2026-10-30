@@ -46,8 +46,25 @@ public sealed class IntakeTests : IDisposable
         return intake;
     }
 
+    // When the hooks in a test ran: Fixture.T0, or just after a Running() host took the spool.
+    DateTimeOffset _base = Fixture.T0;
+
+    // A host that has already taken the spool (its first pass found nothing to do), so what is
+    // spooled after this is asked while it runs, not left from before it started: a host taking
+    // the spool withdraws every approval asked before then. Hooks then run up to 50 s later,
+    // inside the heartbeat's 60 s, as they would while the host keeps it fresh.
+    HookIntake Running(bool watch = false)
+    {
+        var intake = Intake(watch);
+        intake.Pass();
+        _f.Time.Advance(TimeSpan.FromSeconds(1));
+        _base = _f.Time.GetUtcNow();
+        _f.Time.Advance(TimeSpan.FromSeconds(50));
+        return intake;
+    }
+
     // A spool file as either bridge's hook writes it, under a name that sorts where given.
-    string Spooled(string name, string agent, string hook, object ev, params int[] ancestors) => SpooledAt(Fixture.T0, name, agent, hook, ev, ancestors);
+    string Spooled(string name, string agent, string hook, object ev, params int[] ancestors) => SpooledAt(_base, name, agent, hook, ev, ancestors);
 
     string SpooledAt(DateTimeOffset receivedAt, string name, string agent, string hook, object ev, params int[] ancestors)
     {
@@ -295,11 +312,9 @@ public sealed class IntakeTests : IDisposable
         Intake().Pass();
 
         DateTimeOffset At(JsonElement e, string field) => DateTimeOffset.Parse(e.GetProperty(field).GetString()!, System.Globalization.CultureInfo.InvariantCulture);
-        Assert.Equal(Fixture.T0, At(Registration("agent-bridge-claude", "s1"), "HookStatusAt"));
-        Assert.Equal(Fixture.T0, At(Registration("agent-bridge-claude", "s1"), "Updated"));
-        Assert.Equal(Fixture.T0, At(Registration("agent-bridge-codex", "x1"), "Updated"));
-        using var marker = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
-        Assert.Equal(Fixture.T0, At(marker.RootElement, "Created"));
+        Assert.Equal(_base, At(Registration("agent-bridge-claude", "s1"), "HookStatusAt"));
+        Assert.Equal(_base, At(Registration("agent-bridge-claude", "s1"), "Updated"));
+        Assert.Equal(_base, At(Registration("agent-bridge-codex", "x1"), "Updated"));
     }
 
     [Fact]
@@ -351,8 +366,8 @@ public sealed class IntakeTests : IDisposable
     public void A_Codex_approval_is_recorded_waiting_with_a_marker_the_answer_path_reads_and_no_Home_Assistant()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
         Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell", tool_input = new { command = "git push" }, cwd = "/work/codex", model = "gpt-5" }, 50, 60);
-        var intake = Intake();
         var heard = intake.Subscribe();
         intake.Pass();
 
@@ -389,8 +404,8 @@ public sealed class IntakeTests : IDisposable
     public async Task An_approval_asked_before_a_Codex_hook_ran_with_nobody_taking_events_is_withdrawn_when_the_host_returns()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var first = Running();
         Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        var first = Intake();
         first.Pass();
         var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
         Assert.True(File.Exists(marker));
@@ -407,19 +422,63 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
-    public void An_approval_asked_after_the_last_unheard_Codex_hook_is_still_pending_when_the_host_returns()
+    public void An_approval_asked_after_the_last_unheard_Codex_hook_is_still_pending()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
         Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        // Before the approval was asked (as its hook recorded), though handled after.
-        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", Fixture.T0.AddSeconds(-5), 3);
-        SpoolContract.Record(_f.Runtime, "claude", "stop", "reply", "no daemon heartbeat", _f.Time.GetLocalNow().AddSeconds(5), 3);
+        // Before the approval was asked (as its hook recorded), though read after; and another
+        // agent's unheard run after it says nothing about Codex.
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "spool not writable", _base.AddSeconds(-0.5), 3);
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "reply", "spool not writable", _base.AddSeconds(5), 3);
         Assert.NotNull(HookStats.LastUnspooled(_f.Runtime, "codex"));
 
-        Intake().Pass();
-        Intake().Pass();
+        intake.Pass();
+        intake.Pass();
 
         Assert.True(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+        Assert.Null(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
+    public async Task Every_approval_asked_before_the_host_takes_the_spool_again_is_withdrawn_whatever_the_hook_log_says()
+    {
+        // A hook that could not spool may not have been able to log either (a full disk), so a
+        // clean log proves nothing about what was answered at the terminal meanwhile.
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var first = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        first.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        Assert.True(File.Exists(marker));
+        await first.DisposeAsync();
+        _intakes.Remove(first);
+
+        var again = Intake();
+        Assert.NotNull(again.ApprovalsUnsettled);
+        again.Pass();
+
+        Assert.False(File.Exists(marker));
+        Assert.Null(again.ApprovalsUnsettled);
+    }
+
+    [Fact]
+    public void A_heartbeat_left_to_go_stale_withdraws_every_approval_asked_before_it_is_fresh_again()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        intake.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        Assert.True(File.Exists(marker));
+
+        // A pass a few seconds late keeps it; one after hooks stopped spooling does not.
+        _f.Time.Advance(TimeSpan.FromSeconds(30));
+        intake.Pass();
+        Assert.True(File.Exists(marker));
+        _f.Time.Advance(SpoolContract.HeartbeatMaxAge);
+        intake.Pass();
+        Assert.False(File.Exists(marker));
     }
 
     [Fact]
@@ -429,7 +488,7 @@ public sealed class IntakeTests : IDisposable
         // heartbeat went stale and the answer at the terminal reached nobody.
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
         Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", Fixture.T0.AddSeconds(5), 3);
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", _base.AddSeconds(5), 3);
         var intake = Intake();
         var heard = intake.Subscribe();
 
@@ -439,10 +498,10 @@ public sealed class IntakeTests : IDisposable
         Assert.True(heard.TryRead(out var n));
         Assert.Null(n.ApprovalId);
 
-        // A request asked after it arms as usual.
+        // A request asked after the host took the spool arms as usual.
         File.WriteAllText(Path.Combine(Spool, "0002.json"), JsonSerializer.Serialize(new
         {
-            v = 1, agent = "codex", hook = "hook", ancestors = new[] { 60 }, receivedAt = Fixture.T0.AddSeconds(30).ToString("o"),
+            v = 1, agent = "codex", hook = "hook", ancestors = new[] { 60 }, receivedAt = _f.Time.GetUtcNow().AddSeconds(1).ToString("o"),
             @event = new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" },
         }));
         Assert.Equal(1, intake.Pass());
@@ -453,9 +512,9 @@ public sealed class IntakeTests : IDisposable
     public void Two_approvals_handled_in_the_same_millisecond_get_different_decision_ids()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
         Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
         Spooled("0002", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "apply_patch" }, 60);
-        var intake = Intake();
         var heard = intake.Subscribe();
 
         Assert.Equal(2, intake.Pass());
@@ -471,10 +530,10 @@ public sealed class IntakeTests : IDisposable
         // A PermissionRequest whose delete failed, handled again after a restart, behind the
         // PreToolUse that settled it.
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
-        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        SpooledAt(Fixture.T0.AddSeconds(10), "0002", "codex", "hook", new { session_id = "x1", hook_event_name = "PreToolUse", tool_name = "shell" }, 60);
+        SpooledAt(_base, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        SpooledAt(_base.AddSeconds(10), "0002", "codex", "hook", new { session_id = "x1", hook_event_name = "PreToolUse", tool_name = "shell" }, 60);
         Intake().Pass();
-        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        SpooledAt(_base, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
 
         Assert.Equal(1, Intake().Pass());
 
@@ -483,49 +542,25 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
-    public void A_pending_approval_handled_again_after_a_restart_keeps_its_generation_and_the_answer_already_tried()
+    public void A_pending_approval_handled_again_after_a_restart_is_withdrawn_and_arms_nothing_so_no_answer_is_typed_twice()
     {
-        // Its delete failed and the host restarted before anything newer for the session.
+        // Its delete failed and the host restarted before anything newer for the session; an
+        // answer had already been tried on it.
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
-        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        Intake().Pass();
+        var first = Running();
+        SpooledAt(_base, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        first.Pass();
         var path = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
-        var marker = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
-        var decision = (string)marker["DecisionId"]!;
-        // agent-ha-bridge's Set-CodexApprovalAttempt claimed it before typing the answer.
-        marker["DeliveryAttempted"] = true;
-        File.WriteAllText(path, marker.ToJsonString());
-        var attempted = File.ReadAllText(path);
-        _f.Time.Advance(TimeSpan.FromSeconds(5));
-        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        Assert.True(File.Exists(path));
+        SpooledAt(_base, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
         var intake = Intake();
         var heard = intake.Subscribe();
 
         Assert.Equal(1, intake.Pass());
 
-        Assert.Equal(attempted, File.ReadAllText(path));
+        Assert.False(File.Exists(path));
         Assert.True(heard.TryRead(out var n));
-        Assert.Equal(decision, n.ApprovalId);
-    }
-
-    [Fact]
-    public void An_approval_asked_before_the_oldest_hook_log_kept_is_withdrawn_when_the_host_starts_again()
-    {
-        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
-        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        SpooledAt(Fixture.T0.AddMinutes(20), "0002", "codex", "hook", new { session_id = "x2", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        Intake().Pass();
-        // While the host was down the log was rotated twice: whatever ran before T0+10m is gone,
-        // and nothing kept says how the first approval ended.
-        var log = SpoolContract.LogPath(_f.Runtime);
-        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0.AddMinutes(10), 3);
-        File.Move(log, log + ".1");
-        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0.AddMinutes(30), 3);
-
-        Intake().Pass();
-
-        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
-        Assert.True(File.Exists(Path.Combine(_f.CodexRegistrations, "x2.approval.json")));
+        Assert.Null(n.ApprovalId);
     }
 
     [Fact]
@@ -534,24 +569,25 @@ public sealed class IntakeTests : IDisposable
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
         var log = SpoolContract.LogPath(_f.Runtime);
         Directory.CreateDirectory(_f.Runtime);
-        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0.AddMinutes(-5), 3);
-        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        var intake = Intake();
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, _base, 3);
+        var intake = Running();
+        SpooledAt(_base, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
         intake.Pass();
         var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        Assert.True(File.Exists(marker));
 
         // The log it was reading becomes .1.
         File.Move(log, log + ".1");
-        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0.AddMinutes(10), 3);
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, _base.AddSeconds(10), 3);
         intake.Pass();
         Assert.True(File.Exists(marker));
 
         // Rotated twice between two passes: the log it was reading is gone unread.
         File.Move(log, log + ".1", overwrite: true);
-        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0.AddMinutes(20), 3);
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, _base.AddSeconds(20), 3);
         File.SetLastWriteTimeUtc(log + ".1", DateTime.UtcNow.AddMinutes(1));
         File.Move(log, log + ".1", overwrite: true);
-        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0.AddMinutes(30), 3);
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, _base.AddSeconds(30), 3);
         intake.Pass();
         Assert.False(File.Exists(marker));
     }
@@ -562,16 +598,16 @@ public sealed class IntakeTests : IDisposable
         // Only Windows enforces share modes.
         if (!OperatingSystem.IsWindows()) { return; }
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
-        SpooledAt(Fixture.T0.AddMinutes(20), "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        Intake().Pass();
+        var intake = Running();
+        SpooledAt(_base.AddSeconds(20), "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        intake.Pass();
         var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
-        Directory.CreateDirectory(_f.Runtime);
-        SpoolContract.Record(_f.Runtime, "codex", "hook", "fallback", "no heartbeat", Fixture.T0.AddMinutes(10), 3);
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "spool not writable", _base.AddSeconds(10), 3);
 
         // agent-ha-bridge's daemon starting, part-way through rewriting the marker.
         using (new FileStream(marker, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete))
         {
-            Intake().Pass();
+            intake.Pass();
         }
 
         // Asked after the unheard run, so it is still pending: read, not given up as unreadable.
@@ -589,7 +625,7 @@ public sealed class IntakeTests : IDisposable
 
         if (!OperatingSystem.IsWindows()) { return; }
         Directory.CreateDirectory(_f.Runtime);
-        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0, 3);
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, _base, 3);
         using (new FileStream(SpoolContract.LogPath(_f.Runtime), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
         {
             intake.Pass();
@@ -605,12 +641,12 @@ public sealed class IntakeTests : IDisposable
         // Only Windows lets a reader refuse a delete.
         if (!OperatingSystem.IsWindows()) { return; }
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
-        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        var intake = Intake();
+        var intake = Running();
+        SpooledAt(_base, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
         intake.Pass();
         Assert.Null(intake.ApprovalsUnsettled);
         var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
-        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "spool not writable", Fixture.T0.AddSeconds(5), 3);
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "spool not writable", _base.AddSeconds(5), 3);
 
         using (new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
         {
@@ -641,14 +677,14 @@ public sealed class IntakeTests : IDisposable
     public void An_approval_whose_answering_hook_failed_to_spool_is_withdrawn_on_the_next_pass()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
         Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        var intake = Intake();
         intake.Pass();
         var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
         Assert.True(File.Exists(marker));
 
         // The heartbeat is fresh, but the PreToolUse could not be spooled.
-        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "spool not writable", Fixture.T0.AddSeconds(5), 3);
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "spool not writable", _base.AddSeconds(5), 3);
         intake.Pass();
 
         Assert.False(File.Exists(marker));
@@ -661,7 +697,7 @@ public sealed class IntakeTests : IDisposable
         if (!OperatingSystem.IsWindows()) { return; }
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
         Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        SpoolContract.Record(_f.Runtime, "codex", "hook", "spool", null, Fixture.T0.AddSeconds(-5), 3);
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "spool", null, _base.AddSeconds(-5), 3);
         var intake = Intake();
 
         using (new FileStream(SpoolContract.LogPath(_f.Runtime), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
@@ -676,10 +712,12 @@ public sealed class IntakeTests : IDisposable
     public void Withdrawing_approvals_stops_at_once_when_agent_ha_bridge_starts()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var first = Running();
         Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        Intake().Pass();
+        first.Pass();
         var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
-        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", Fixture.T0.AddSeconds(5), 3);
+        Assert.True(File.Exists(marker));
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", _base.AddSeconds(5), 3);
         foreach (var i in _intakes) { i.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
         _intakes.Clear();
         // The pass, then the marker: agent-ha-bridge is running by the second.
@@ -759,7 +797,7 @@ public sealed class IntakeTests : IDisposable
         var deep = "{}";
         for (var i = 0; i < 200; i++) { deep = "{\"a\":" + deep + "}"; }
         Directory.CreateDirectory(Spool);
-        File.WriteAllText(Path.Combine(Spool, "0001.json"), "{\"v\":1,\"agent\":\"copilot\",\"hook\":\"agent_stop\",\"ancestors\":[],\"receivedAt\":\"" + Fixture.T0.ToString("o") + "\",\"event\":" + deep + "}");
+        File.WriteAllText(Path.Combine(Spool, "0001.json"), "{\"v\":1,\"agent\":\"copilot\",\"hook\":\"agent_stop\",\"ancestors\":[],\"receivedAt\":\"" + _base.ToString("o") + "\",\"event\":" + deep + "}");
         Assert.True(SpoolContract.IsJson(System.Text.Encoding.UTF8.GetBytes(deep)));
         var intake = Intake();
 
@@ -773,13 +811,13 @@ public sealed class IntakeTests : IDisposable
         _f.Processes.Run(AgentKind.Codex, 50, "codex app-server");
         // 70 is a new process under a reused pid: "mine" recorded it an hour before it started,
         // and "other" has claimed it since.
-        _f.Processes.Run(AgentKind.Codex, 70, "codex.exe", Fixture.T0);
-        _f.Processes.Run(AgentKind.Codex, 80, "codex.exe", Fixture.T0.AddMinutes(-10));
-        _f.CodexRegistration("mine", 70, null, updated: Fixture.T0.AddHours(-1));
-        _f.CodexRegistration("other", 70, null, updated: Fixture.T0.AddMinutes(5));
+        _f.Processes.Run(AgentKind.Codex, 70, "codex.exe", _base);
+        _f.Processes.Run(AgentKind.Codex, 80, "codex.exe", _base.AddMinutes(-10));
+        _f.CodexRegistration("mine", 70, null, updated: _base.AddHours(-1));
+        _f.CodexRegistration("other", 70, null, updated: _base.AddMinutes(5));
         // And a stale claim on 80, from before it started, claims nothing.
-        _f.CodexRegistration("stale", 80, null, updated: Fixture.T0.AddHours(-2));
-        SpooledAt(Fixture.T0.AddMinutes(10), "0001", "codex", "hook", new { session_id = "mine", hook_event_name = "UserPromptSubmit" }, 50);
+        _f.CodexRegistration("stale", 80, null, updated: _base.AddHours(-2));
+        SpooledAt(_base.AddMinutes(10), "0001", "codex", "hook", new { session_id = "mine", hook_event_name = "UserPromptSubmit" }, 50);
 
         Intake().Pass();
 
@@ -790,10 +828,12 @@ public sealed class IntakeTests : IDisposable
     public void Approvals_are_settled_even_while_the_heartbeat_cannot_be_written()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var first = Running();
         Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        Intake().Pass();
+        first.Pass();
         var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
-        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", Fixture.T0.AddSeconds(5), 3);
+        Assert.True(File.Exists(marker));
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", _base.AddSeconds(5), 3);
         foreach (var i in _intakes) { i.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
         _intakes.Clear();
         // Something where the heartbeat should be.
@@ -811,17 +851,46 @@ public sealed class IntakeTests : IDisposable
         // Only Windows lets a reader refuse a delete.
         if (!OperatingSystem.IsWindows()) { return; }
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
         Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        var intake = Intake();
         intake.Pass();
         var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
-        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", Fixture.T0.AddSeconds(5), 3);
+        Assert.True(File.Exists(marker));
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", _base.AddSeconds(5), 3);
 
         using (new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.Read)) { intake.Pass(); }
         Assert.True(File.Exists(marker));
         intake.Pass();
 
         Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public void A_marker_its_next_event_could_not_remove_is_withdrawn_on_a_later_pass_and_blocks_answers_until_then()
+    {
+        // Only Windows lets a reader refuse a delete.
+        if (!OperatingSystem.IsWindows()) { return; }
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        intake.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        SpooledAt(_base.AddSeconds(5), "0002", "codex", "hook", new { session_id = "x1", hook_event_name = "PreToolUse", tool_name = "shell" }, 60);
+
+        // Answered at the terminal; its PreToolUse arrives while a reader holds the marker.
+        using (new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Assert.Equal(1, intake.Pass());
+            Assert.Equal("working", Registration("agent-bridge-codex", "x1").GetProperty("Status").GetString());
+            Assert.True(File.Exists(marker));
+            Assert.NotNull(intake.ApprovalsUnsettled);
+            intake.Pass();
+            Assert.NotNull(intake.ApprovalsUnsettled);
+        }
+        intake.Pass();
+
+        Assert.False(File.Exists(marker));
+        Assert.Null(intake.ApprovalsUnsettled);
     }
 
     [Fact]
@@ -842,14 +911,15 @@ public sealed class IntakeTests : IDisposable
     public void A_resumed_Codex_session_does_not_offer_the_approval_its_previous_run_died_waiting_on()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
         Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        Intake().Pass();
+        intake.Pass();
         Assert.True(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
 
         // That Codex exited without SessionEnd; the same session is resumed in a new one.
         _f.Processes.Run(AgentKind.Codex, 70, "codex.exe");
-        Spooled("0002", "codex", "hook", new { session_id = "x1", hook_event_name = "SessionStart" }, 70);
-        Intake().Pass();
+        SpooledAt(_base.AddSeconds(5), "0002", "codex", "hook", new { session_id = "x1", hook_event_name = "SessionStart" }, 70);
+        intake.Pass();
 
         Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
         Assert.Equal(70, Registration("agent-bridge-codex", "x1").GetProperty("ProcessId").GetInt32());
@@ -891,8 +961,8 @@ public sealed class IntakeTests : IDisposable
     public void A_Codex_window_another_live_session_has_claimed_is_not_taken_from_under_the_shared_app_server()
     {
         _f.Processes.Run(AgentKind.Codex, 50, "codex app-server");
-        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe", Fixture.T0.AddMinutes(-30));
-        _f.Processes.Run(AgentKind.Codex, 70, "codex.exe", Fixture.T0.AddMinutes(-5));
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe", _base.AddMinutes(-30));
+        _f.Processes.Run(AgentKind.Codex, 70, "codex.exe", _base.AddMinutes(-5));
         _f.CodexRegistration("other", 60, null);
         Spooled("0001", "codex", "hook", new { session_id = "mine", hook_event_name = "SessionStart" }, 50, 60);
         Intake().Pass();
@@ -955,15 +1025,19 @@ public sealed class IntakeTests : IDisposable
         _f.CodexRegistration("ended", 60, null, ended: true);
         _f.CodexRegistration("gone", 61, null);
         _f.CodexRegistration("running", 60, null);
-        _f.CodexApprovalMarker("running", "d1");
 
         var intake = new HookIntake(new HookIntakeOptions { RuntimeRoot = _f.Runtime, ClaudeHome = _f.ClaudeHome, UseFileSystemWatcher = false }, _f.Processes, _f.Time);
         _intakes.Add(intake);
         intake.Pass();
+        // An approval asked since the host took the spool.
+        _f.CodexApprovalMarker("running", "d1", created: _f.Time.GetUtcNow().AddSeconds(1));
         // Not before a minute has passed since the host started.
         Assert.Equal(3, Directory.GetFiles(_f.ClaudeRegistrations).Length);
-        _f.Time.Advance(TimeSpan.FromMinutes(2));
-        intake.Pass();
+        for (var i = 0; i < 3; i++)
+        {
+            _f.Time.Advance(TimeSpan.FromSeconds(45));
+            intake.Pass();
+        }
         Assert.Equal(["dead-recent.json", "live.json"], Directory.GetFiles(_f.ClaudeRegistrations).Select(Path.GetFileName).Order());
         Assert.Equal(["running.approval.json", "running.json"], Directory.GetFiles(_f.CodexRegistrations).Select(Path.GetFileName).Order());
 
@@ -997,7 +1071,7 @@ public sealed class IntakeTests : IDisposable
         Assert.Null(state);
         Assert.Contains("hook intake is off", problem);
 
-        var saved = new IntakeState(_f.Runtime, Path.GetDirectoryName(_f.Runtime)!, new string('a', 32), Fixture.T0);
+        var saved = new IntakeState(_f.Runtime, Path.GetDirectoryName(_f.Runtime)!, new string('a', 32), _base);
         saved.Save(profile);
         Assert.Equal(saved, IntakeState.Load(profile).State);
         Assert.True(IntakeState.Delete(profile));

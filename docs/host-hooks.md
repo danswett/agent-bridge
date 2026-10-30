@@ -190,8 +190,7 @@ The files and their shapes are agent-ha-bridge's:
   `WorkingDirectory`, `Updated`, `HookStatus`, `HookStatusAt`;
 * `agent-bridge-codex\<id>.json`: `SessionId`, `ProcessId`, `TranscriptPath`,
   `WorkingDirectory`, `Model`, `Status`, `Activity`, `Ended`, `Updated`;
-* `agent-bridge-codex\<id>.approval.json`: `SessionId`, `DecisionId`, `Question`, `Created`,
-  and `SpoolEvent` (below), which agent-ha-bridge keeps when it claims the marker.
+* `agent-bridge-codex\<id>.approval.json`: `SessionId`, `DecisionId`, `Question`, `Created`.
 
 Three rules carry over from agent-ha-bridge:
 
@@ -208,10 +207,9 @@ is down, and must not then read as newer than what the transcript said since; a 
 must not make an old Claude session look alive. And an event older than its session's
 registration's `Updated` is not applied at all: it can only be a replay (a file whose delete
 failed, handled again after a restart) or a late arrival, and a replayed `PermissionRequest`
-would arm an approval its `PreToolUse` has already settled. A replayed `PermissionRequest` that
-nothing newer has overtaken finds the marker it armed (by `SpoolEvent`, the spool file's unique
-name) and leaves it as it is: the same `DecisionId`, and any answer already attempted on it,
-which a new generation would let be typed again.
+would arm an approval its `PreToolUse` has already settled. One that nothing overtook arms
+nothing either: it is from before the restart, and its marker has been withdrawn (below), so an
+answer already tried on it is never typed again under a new `DecisionId`.
 
 Discovery (`RegistrationDiscovery`) and the answer path (`ApprovalMarkerRead`,
 `AnswerService`) read these unchanged. On a rollback, agent-ha-bridge's daemon reads them too.
@@ -223,27 +221,31 @@ on a migrated machine can then be answered from the phone and the app (`AnswerSe
 
 **Approvals across an outage.** While nobody takes events, a Codex hook gives its fixed reply
 and its event goes nowhere, so the `PreToolUse` or `Stop` that ended an approval answered at the
-terminal may never arrive. When the intake takes the spool again (it starts, agent-ha-bridge
-stops, or the heartbeat can be written again), it withdraws every approval marker asked before
-the last Codex hook run the hook log records as not spooled. One asked after it is still
-pending. A `PermissionRequest` still waiting in the spool from before that run is handled but
-arms no approval, for the same reason. The log is followed every pass (only what it gained), so
-a Codex hook that fails to spool while the heartbeat is fresh settles approvals the same way.
-Only one previous log is kept, so a run rotated out of both while nobody watched (the host down
-through a megabyte or two of hook traffic) is gone: an approval asked before the oldest line
-kept is withdrawn as if such a run came right after it. The running intake knows a rotation it
-followed (the log it was reading is the one now kept as `.1`) from one it missed.
-While the log cannot be read the history is unknown, and no approval is offered at all. This
-happens whether or not the heartbeat could be written, and a cut-off counts as settled only once
-every marker it covers is gone; a marker that could not be deleted is tried again next pass.
-The log is always read through a handle that lets hooks keep appending (`hooks status` too), and
-markers through one that lets a starting daemon replace or delete them. Until a pass has settled
-the markers (after starting, taking the spool back, while the log cannot be read, or after a
-later unheard run until every marker it covers is gone), the answer path refuses Codex approvals
-(`HookIntake.ApprovalsUnsettled`), so an answer cannot reach a marker an outage left behind
-before it is withdrawn. A migrated profile whose `intake.json` cannot be read runs no intake, and
-refuses them all (`HookIntake.AnswerGate`).
-Answering an approval twice could type into whatever the terminal shows now; losing a remote
+terminal may never arrive. The hook log records such runs, but only as best it can: a hook that
+could not spool (a full disk, say) may not have been able to log either. So whenever the intake
+takes the spool again after a gap (it starts, agent-ha-bridge stops, or it let the heartbeat go
+older than the 60 s hooks allow), it withdraws **every** approval marker asked before that moment,
+and a `PermissionRequest` still waiting in the spool from before it is handled but arms no
+approval. Nothing proves such an approval unanswered, so it is answered at the terminal.
+
+While the intake runs, the log is followed every pass (only what it gained), and a Codex hook
+that fails to spool while the heartbeat is fresh withdraws every approval asked before it. Only
+one previous log is kept: the intake knows a rotation it followed (the log it was reading is the
+one now kept as `.1`) from one it missed, and after a missed one treats everything before the
+oldest line kept the same way. While the log cannot be read, no approval is offered at all.
+
+A marker that cannot be deleted (a reader holding it without sharing its deletion), whether a
+cut-off or the session's next event retired it, is remembered and tried again every pass, apart
+from the event, which may be dropped after its retries. A cut-off counts as settled only once
+every marker it covers is gone. The log is always read through a handle that lets hooks keep
+appending (`hooks status` too), and markers through one that lets a starting daemon replace or
+delete them.
+
+Until the markers are settled (after a gap, while the log cannot be read, after a later unheard
+run, or while a withdrawal is pending), the answer path refuses Codex approvals
+(`HookIntake.ApprovalsUnsettled`), so an answer cannot reach a marker that may already have been
+answered. A migrated profile whose `intake.json` cannot be read runs no intake, and refuses them
+all (`HookIntake.AnswerGate`).Answering an approval twice could type into whatever the terminal shows now; losing a remote
 answer only means answering at the terminal.
 
 **The owning process** is found from the recorded ancestry, so the shells in between can have
