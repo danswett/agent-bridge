@@ -531,6 +531,32 @@ public sealed class StopTests : IDisposable
     }
 
     [Fact]
+    public async Task A_notice_only_half_published_over_the_question_still_disarms_it()
+    {
+        Status(SessionStatus.Waiting);
+        var go = new Field { Name = "go", Title = "Go on?", Type = FieldType.Choice, Required = true, Options = [new Option("yes", "Yes"), new Option("no", "No")] };
+        sessions.Set(sessions.Get(A)! with { Question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Go on?", AskedAt = FakeSessions.T0, Fields = [go] } });
+        await using var c = Connector();
+        await Pass(c);
+        await Pass(c);
+        await Press(c);
+
+        // The answer's notice reaches the card; its attributes do not.
+        ha.PublishFailsFor = (topic, payload) => topic == HaContract.Topics(Node).ActivityAttributes && payload.Contains("\"answer\"", StringComparison.Ordinal);
+        c.Observe(ha.Choose(SessionEntities.Field(Node, 1), "Yes"));
+        await Pass(c);
+        c.Observe(ha.Press(SessionEntities.Submit(Node)));
+        await Pass(c);
+        await c.DeliveredAsync();
+        await Pass(c, 0.01);
+        Assert.NotEqual(HaStop.ConfirmNote, Activity);
+
+        ha.PublishFailsFor = null;
+        await Press(c);
+        Assert.Equal([null, null], stopped.Select(r => r.Confirm));
+    }
+
+    [Fact]
     public async Task A_second_press_is_read_within_the_window_even_with_no_report_of_it()
     {
         await using var c = await Ready(SessionStatus.Working);
