@@ -142,3 +142,28 @@ test('what the machine supports is kept from hello, and forgotten when another m
   hosts.forget();
   assert.deepEqual(hosts.capabilities, []);
 });
+
+test('the machine being viewed is asked for its hello again, and a change in what it offers or why it is read-only is heard', async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
+  let said = { protocol: 1, machine: { name: 'a' }, capabilities: ['sessions.read', 'sessions.answer'] };
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => ({ ...fakeClient(ch), hello: async () => said }),
+  });
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  assert.equal(hosts.phase, 'open');
+  let heard = 0;
+  hosts.onChange(() => heard++);
+
+  await hosts.refresh();
+  assert.equal(heard, 0);
+
+  said = { protocol: 1, machine: { name: 'a', readOnly: 'agent-ha-bridge is running for this user' }, capabilities: ['sessions.read'] };
+  await hosts.refresh();
+  assert.equal(heard, 1);
+  assert.equal(hosts.machine.readOnly, 'agent-ha-bridge is running for this user');
+  assert.deepEqual(hosts.capabilities, ['sessions.read']);
+});

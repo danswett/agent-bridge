@@ -98,6 +98,27 @@ test('demo mode shows every session from the worked example, with every field', 
   expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
 });
 
+// The shadow host beside agent-ha-bridge (docs/host-shadow.md), or any machine where it runs
+// (design G5): read-only, saying so and why, with nothing offered that would only be refused.
+test('a machine where agent-ha-bridge runs is shown read-only with its reason, and offers no actions', async ({ page }) => {
+  await openDemo(page, '&ahb=1');
+  const reason = 'agent-ha-bridge is running for this user (AgentBridgeDaemon); answer at the machine or through it';
+  await expect(page.locator('.machine .machine-status')).toHaveText(` · 4 sessions · 0.1.0 (dev) · read-only: ${reason}`);
+  const q = card(page, COPILOT).locator('.question');
+  await expect(q.locator('.read-only-why')).toHaveText(`This machine is read-only from the phone: ${reason}.`);
+  await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
+  await expect(page.locator('form.reply')).toHaveCount(0);
+  await expect(page.locator('.end-session')).toHaveCount(0);
+  await expect(page.locator('#launch')).toBeHidden();
+  expect(await page.evaluate(() => window.agentBridgeDemo.calls)).not.toContain('launch.options');
+
+  // A prompt only the machine could answer anyway says that, and why the machine is read-only.
+  const prompt = (await page.evaluate((id) => window.agentBridgeDemo.host.get(id), COPILOT)).question;
+  await upsert(page, COPILOT, { question: { ...prompt, id: 'q-at-machine', answerAtMachine: true }, updatedAt: later() });
+  await expect(q.locator('.read-only-why')).toHaveText('This prompt can only be answered at the machine on Demo machine.');
+  await expect(q.locator('.read-only-machine')).toHaveText(`This machine is read-only from the phone: ${reason}.`);
+});
+
 test('each status has its glow: working and waiting breathe, idle is calm', async ({ page }) => {
   await openDemo(page);
   const glow = (id) => card(page, id).locator('.glow').evaluate((e) => getComputedStyle(e).animationName);

@@ -167,7 +167,8 @@ export function readHello(raw) {
   const m = obj(h.machine) ?? {};
   return {
     protocol: num(h.protocol),
-    machine: { id: str(m.id), name: str(m.name), os: str(m.os), hostVersion: str(m.hostVersion), dev: m.dev === true, sessions: Number.isSafeInteger(m.sessions) && m.sessions >= 0 ? m.sessions : null },
+    // readOnly: why the machine takes nothing from the phone now (agent-ha-bridge runs there).
+    machine: { id: str(m.id), name: str(m.name), os: str(m.os), hostVersion: str(m.hostVersion), dev: m.dev === true, sessions: Number.isSafeInteger(m.sessions) && m.sessions >= 0 ? m.sessions : null, readOnly: str(m.readOnly) || null },
     capabilities: Array.isArray(h.capabilities) ? h.capabilities.filter((c) => typeof c === 'string') : [],
   };
 }

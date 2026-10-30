@@ -58,7 +58,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     });
 
     void Serve(ISessionAnswerer answers) =>
-        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: answers).HandleAsync;
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: answers) { ReadOnly = () => probe.Reason }.HandleAsync;
 
     static string Ask(string id, int s) => Copilot.ToolStart(id, "ask_user", new
     {
@@ -102,6 +102,21 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         probe.Reason = null;
         Assert.Contains(Capabilities.SessionsAnswer, await CapabilitiesAsync(ch));
+    }
+
+    // A phone shows the machine read-only and why, rather than only leaving the controls out.
+    [Fact]
+    public async Task While_agent_ha_bridge_runs_hello_says_why_the_machine_is_read_only_and_not_once_it_stops()
+    {
+        var ch = await OpenAsync();
+        static JsonElement Machine(JsonElement hello) => hello.GetProperty("result").GetProperty("machine");
+        Assert.False(Machine(await ch.RequestAsync(Ops.Hello, new { })).TryGetProperty("readOnly", out _));
+
+        probe.Reason = "agent-ha-bridge is running for this user (AgentBridgeDaemon); answer at the machine or through it";
+        Assert.Equal(probe.Reason, Machine(await ch.RequestAsync(Ops.Hello, new { })).GetProperty("readOnly").GetString());
+
+        probe.Reason = null;
+        Assert.False(Machine(await ch.RequestAsync(Ops.Hello, new { })).TryGetProperty("readOnly", out _));
     }
 
     [Fact]

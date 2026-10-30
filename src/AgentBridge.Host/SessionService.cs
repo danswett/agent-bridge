@@ -32,6 +32,13 @@ public sealed class SessionService
     readonly SessionTransfers? transfers;
     readonly ConcurrentDictionary<IProtocolChannel, Subscriber> subscribers = new();
 
+    // What a device asking this machine for notifications hears when it sends none.
+    public const string NoNotifications = "this machine doesn't send notifications (push.enabled is off in its config)";
+
+    // Why this machine is read-only for other devices now (agent-ha-bridge running for the user,
+    // design G5), or null: said in hello, beside the capabilities it takes away.
+    public Func<string?>? ReadOnly { get; init; }
+
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
         UsageService? usage = null, ISessionLauncher? launcher = null, SessionTransfers? transfers = null)
@@ -63,7 +70,7 @@ public sealed class SessionService
                 // Computed for each hello, so it says what is true now: agent-ha-bridge
                 // starting for this user takes sessions.answer and sessions.reply away until
                 // it stops.
-                return new HelloResult(1, machine with { Sessions = source.Snapshot().Count }, Offered(channel));
+                return new HelloResult(1, machine with { Sessions = source.Snapshot().Count, ReadOnly = ReadOnly?.Invoke() }, Offered(channel));
             case Ops.SessionAnswer:
                 return await AnswerAsync(channel, data);
             case Ops.SessionReply:
@@ -74,6 +81,14 @@ public sealed class SessionService
                 return await StopAsync(data);
             case Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList when push is not null:
                 return await push.HandleAsync(channel, op, data);
+            // Notifications turned off on this machine (push.enabled), or never set up: a device
+            // that asks anyway hears so, rather than an unknown op it might take for a fault.
+            case Ops.PushSubscribe:
+                throw new InvalidOperationException(NoNotifications);
+            case Ops.PushUnsubscribe:
+                return new PushUnsubscribeResult(false);
+            case Ops.PushList:
+                return new PushListResult([]);
             case LaunchProtocol.Options when launcher is not null:
                 return await launcher.OptionsAsync();
             case LaunchProtocol.Launch when launcher is not null:

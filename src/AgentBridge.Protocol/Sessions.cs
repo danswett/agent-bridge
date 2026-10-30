@@ -188,8 +188,10 @@ public enum FieldType { Choice, Multi, Boolean, Text, Number }
 public enum AnswerOutcome { Delivered, Unconfirmed, Stale, Busy, Refused }
 
 // Dev: built from a working copy rather than released (docs/protocol/v1-usage.md). Sessions:
-// how many were live when hello was answered.
-public sealed record MachineInfo(string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null);
+// how many were live when hello was answered. ReadOnly: why this machine takes no answers,
+// replies, stops or launches from other devices now (agent-ha-bridge running for the user,
+// design G5), for a client to say so rather than only leave the controls out.
+public sealed record MachineInfo(string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null, string? ReadOnly = null);
 
 public sealed record HelloResult(int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
 

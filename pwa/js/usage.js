@@ -149,10 +149,11 @@ export const showsError = (entry, now = Date.now()) => !!entry.error && !(hasRea
 
 // "3 sessions · 0.1.0 (dev)", from hello's machine (and a live count when there is one), and
 // "discovery held: …" while the host's discovery is held, as agent-ha-bridge's status line said.
-export function machineStatus({ sessions = null, hostVersion = null, dev = false, held = null } = {}) {
+export function machineStatus({ sessions = null, hostVersion = null, dev = false, held = null, readOnly = null } = {}) {
   const bits = [];
   if (Number.isInteger(sessions) && sessions >= 0) { bits.push(`${sessions} session${sessions === 1 ? '' : 's'}`); }
   if (hostVersion) { bits.push(`${hostVersion}${dev ? ' (dev)' : ''}`); }
+  if (typeof readOnly === 'string' && readOnly) { bits.push(`read-only: ${readOnly}`); }
   if (typeof held === 'string' && held) { bits.push(`discovery held: ${held}`); }
   return bits.join(' \u00b7 ');
 }

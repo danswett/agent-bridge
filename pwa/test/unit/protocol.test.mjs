@@ -89,4 +89,10 @@ test('hello keeps only string capabilities', () => {
   const h = readHello({ protocol: 1, machine: { name: 'M' }, capabilities: ['sessions.read', 3, null] });
   assert.deepEqual(h.capabilities, ['sessions.read']);
   assert.equal(h.machine.name, 'M');
+  assert.equal(h.machine.readOnly, null);
+});
+
+test('hello carries why a machine is read-only, when it says', () => {
+  assert.equal(readHello({ protocol: 1, machine: { readOnly: 'agent-ha-bridge is running for this user' }, capabilities: [] }).machine.readOnly, 'agent-ha-bridge is running for this user');
+  assert.equal(readHello({ protocol: 1, machine: { readOnly: 7 }, capabilities: [] }).machine.readOnly, null);
 });

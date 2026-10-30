@@ -101,7 +101,7 @@ function shell(q, idBase, answerable) {
 // answer, such as a permission prompt of a kind no host drives), 'approvalOff' (a permission
 // prompt at a machine where approving from the phone is turned off) or 'machine' (the
 // machine takes no answers from the phone).
-export function renderQuestion(q, { machineName, why = 'machine' } = {}) {
+export function renderQuestion(q, { machineName, why = 'machine', readOnly = null } = {}) {
   const idBase = `q${++seq}`;
   const section = shell(q, idBase, false);
   // A prompt answered at the machine shows what it asks, not choices nobody can make here.
@@ -110,6 +110,11 @@ export function renderQuestion(q, { machineName, why = 'machine' } = {}) {
     section.append(h('ol', { class: 'fields' }, q.fields.map((f, k) => readOnlyField(f, `${idBase}-f${k}`))));
   }
   const at = where(machineName);
+  // A prompt only the machine could answer anyway still says why the machine is read-only.
+  if (readOnly && why !== 'machine') {
+    section.append(h('p', { class: 'note warn read-only-machine', role: 'note' },
+      `This machine is read-only from the phone: ${readOnly}${/[.!?]$/.test(readOnly) ? '' : '.'}`));
+  }
   section.append(why === 'truncated'
     ? h('p', { class: 'note warn read-only-why', role: 'note' },
       `Part of this question didn't fit in the message from the machine, so it can't be answered from here. Answer at the machine${at}.`)
@@ -119,8 +124,12 @@ export function renderQuestion(q, { machineName, why = 'machine' } = {}) {
       : why === 'atMachine'
         ? h('p', { class: 'note warn read-only-why', role: 'note' },
           `This prompt can only be answered at the machine${at}.`)
-        : h('p', { class: 'note read-only-why', role: 'note' },
-          `This machine doesn't take answers from the phone yet. Answer at the machine${at}.`));
+        : readOnly
+          // The machine said why (agent-ha-bridge runs there): its words say where to answer.
+          ? h('p', { class: 'note warn read-only-why', role: 'note' },
+            `This machine is read-only from the phone: ${readOnly}${/[.!?]$/.test(readOnly) ? '' : '.'}`)
+          : h('p', { class: 'note read-only-why', role: 'note' },
+            `This machine doesn't take answers from the phone yet. Answer at the machine${at}.`));
   return section;
 }
 

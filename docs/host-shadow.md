@@ -103,7 +103,8 @@ from a checkout of the commit to be compared, in PowerShell 7, not elevated, and
 
 ```powershell
 pwsh build/shadow-week.ps1 -Install -WhatIf   # what it would do
-pwsh build/shadow-week.ps1 -Install
+pwsh build/shadow-week.ps1 -Install           # this machine only
+pwsh build/shadow-week.ps1 -Install -Relay    # and on the phone, read-only
 ```
 
 `-Install`:
@@ -123,7 +124,9 @@ pwsh build/shadow-week.ps1 -Install
 3. Registers two per-user logon tasks, made like the app's (`LogonTaskXml`): the user's
    interactive token, `LeastPrivilege`, hidden, restarted every minute on failure (three
    times), no time limit, not stopped on battery, one instance:
-   * `AgentBridgeShadowHost_shadow_<user hash>`: `agent-bridge-hostw serve --profile shadow --local-only`.
+   * `AgentBridgeShadowHost_shadow_<user hash>`: `agent-bridge-hostw serve --profile shadow --local-only`,
+     or with `-Relay`, `agent-bridge-hostw serve --profile shadow --name "<COMPUTERNAME> (shadow)"
+     --relay <the relay its account came from>`.
    * `AgentBridgeShadowRun_shadow_<user hash>`: `agent-bridge-hostw shadow run --profile shadow
      --interval 15 --grace 60`, a minute after logon so the host is serving by then.
 
@@ -131,11 +134,57 @@ pwsh build/shadow-week.ps1 -Install
    `AgentBridgeHost_*` (the app's).
 4. Starts both.
 
-**Read-only by construction.** While agent-ha-bridge runs, the host withdraws answering,
-replying, stopping and launching (G5), and `machine.g5` reports it if it ever does not.
-`--local-only` keeps it off the relay. A new profile has no Home Assistant token of its
+**Read-only by construction.** `-Install` sets `delivery.readOnly` in the profile's config
+([host-config.md](host-config.md)), so the host takes no answer, reply, stop, launch, approval
+or transfer from any device, **whether or not agent-ha-bridge is running**. Its G5 hold alone
+lasted only while the daemon ran: an agent-ha-bridge update, a crash or a logoff race
+restarting it would have left the shadow host acting in the gap. While agent-ha-bridge runs,
+the host also withdraws them for G5, and `machine.g5` reports it if it ever does not.
+Without `-Relay`, `--local-only` keeps it off the relay. A new profile has no Home Assistant token of its
 own, so the host's Home Assistant connector is off (its log says so) and it publishes
 nothing over the daemon's entities. `shadow run` writes only its reports.
+
+### On the phone (`-Relay`)
+
+`-Install -Relay` puts the shadow host on the relay too, so the phone shows it beside the
+others, read-only:
+
+* **Named apart.** It serves as `<COMPUTERNAME> (shadow)` (`--name`), so the machine list
+  tells it from the machine's own host.
+* **No notifications.** The install sets `push.enabled` to `false` in the profile's config
+  ([host-config.md](host-config.md)): agent-ha-bridge already notifies the phone, and two
+  notices for each question would be noise. The host then takes no subscription and sends
+  nothing; `hello` leaves `push` out, so the phone says the machine doesn't send
+  notifications, and a `push.subscribe` sent anyway fails saying so.
+* **Read-only, and saying why.** `hello` leaves out `sessions.answer`, `sessions.approve`,
+  `sessions.reply`, `sessions.stop`, `sessions.launch` and transfers, and carries
+  `machine.readOnly`, the reason ([v1-sessions.md](protocol/v1-sessions.md#hello)): "this is a
+  read-only comparison host (delivery.readOnly in its config); answer at the machine". Each of
+  those sent anyway is refused with the same words, and nothing is typed, started or ended
+  (`LaunchFlowTests.A_read_only_host_takes_nothing_from_a_phone_with_agent_ha_bridge_not_running_and_says_why`).
+  The phone shows the reason on the machine's status line and on each question, offers no
+  reply box, End session or Launch, and shows questions read-only. Because of `delivery.readOnly`
+  this holds while agent-ha-bridge is stopped or restarting too; only the reason differs (G5's
+  is given when the switch is off). Making the machine an acting host after the cutover means
+  turning the switch off on purpose (`config unset delivery.readOnly`), not just stopping
+  agent-ha-bridge.
+* **Signed in once.** A profile that has never signed in is signed in during the install:
+  `agent-bridge-host sign-in --profile shadow` prints an address and a device code; open it
+  on any device and sign in as the account the phone uses. The relay is `-RelayUrl`, else
+  `AGENT_BRIDGE_RELAY`, else the one the profile used before, else the app's own profile's.
+  The task names the relay that issued the profile's account (`--relay`), so the host never
+  sends that account's token to another relay, `AGENT_BRIDGE_RELAY` included. A profile already
+  signed in keeps its relay; a different `-RelayUrl` stops the install until it is signed in
+  again there.
+  To do it by hand, from an ordinary terminal (inside an agent session it is refused, #67):
+
+  ```powershell
+  & "$env:LOCALAPPDATA\AgentBridgeShadow\bin\agent-bridge-host.exe" sign-in --profile shadow --relay <relay url>
+  ```
+
+The comparison does not change: `shadow run` reads the host over its local pipe, never the
+relay, so whether the host is connected to the relay, or signed in at all, does not affect
+it.
 
 **Logoff and reboot.** Both tasks start at every logon of that user, so they come back
 after a reboot or a logoff with no one touching them. While the user is logged off, both
@@ -146,7 +195,7 @@ disconnected remote desktop session is not a logoff: everything keeps running.
 **Checking on it:**
 
 ```powershell
-pwsh build/shadow-week.ps1 -Status            # both tasks' state and last result, then the summary
+pwsh build/shadow-week.ps1 -Status            # both tasks' state, the relay (on or off, signed in, last said), then the summary
 & "$env:LOCALAPPDATA\AgentBridgeShadow\bin\agent-bridge-host.exe" shadow summary --profile shadow
 Get-Content "$env:LOCALAPPDATA\AgentBridge\shadow\shadow\shadow.log" -Tail 20
 ```

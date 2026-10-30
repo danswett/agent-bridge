@@ -174,18 +174,21 @@ async function startDemo() {
   $('demo-banner').hidden = false;
   setPill('Demo', 'warn');
   const fixture = await (await fetch('fixtures/sessions-list.json', { cache: 'no-store' })).json();
+  // ?ahb=1: a machine where agent-ha-bridge runs, so it takes nothing from the phone and says why.
+  const ahb = params.get('ahb') === '1';
   const host = new DemoHost(fixture, {
+    readOnly: ahb ? 'agent-ha-bridge is running for this user (AgentBridgeDaemon); answer at the machine or through it' : null,
     answerDelayMs: Number(params.get('answerDelay') ?? 700),
-    answering: params.get('answer') !== '0',
-    replying: params.get('reply') !== '0' && params.get('answer') !== '0',
+    answering: params.get('answer') !== '0' && !ahb,
+    replying: params.get('reply') !== '0' && params.get('answer') !== '0' && !ahb,
     attaching: params.get('attach') !== '0',
     // ?blobs=0: a host that takes no files through the blob store, as before it existed.
     large: params.get('blobs') !== '0',
-    stopping: params.get('stop') !== '0' && params.get('answer') !== '0',
+    stopping: params.get('stop') !== '0' && params.get('answer') !== '0' && !ahb,
   approving: params.get('approve') !== '0',
     stopWindowMs: Number(params.get('stopWindow')) || 10000,
     usage: params.get('usage') !== '0',
-    launching: params.get('launch') !== '0' && params.get('answer') !== '0',
+    launching: params.get('launch') !== '0' && params.get('answer') !== '0' && !ahb,
     // ?transfer=0: a host from before sessions came from other machines.
     transferring: params.get('transfer') !== '0',
   });
@@ -208,7 +211,7 @@ async function startDemo() {
   const stops = new StopService({ current, retryMs });
   const launches = new LaunchService({ current, retryMs });
   const largeAttachments = () => largeLimit(hello.capabilities, blobStore.max);
-  answering = () => ({ service: answers, replies, stops, hostId: hello.machine.id, capabilities: hello.capabilities, largeAttachments });
+  answering = () => ({ service: answers, replies, stops, hostId: hello.machine.id, capabilities: hello.capabilities, readOnly: hello.machine.readOnly, largeAttachments });
   $('machines').hidden = false;
   const drawMachine = () => renderMachines($('machine-list'), {
     presence: [{ id: hello.machine.id, name: hello.machine.name, kind: 'host' }],
@@ -327,7 +330,7 @@ function begin(account) {
   const launches = new LaunchService({ current });
   const launchPanel = new LaunchPanel($('launch'), { service: launches, jump: showSession });
   const largeAttachments = () => largeLimit(hosts.capabilities, connection.relay?.blobs?.max ?? 0);
-  answering = () => (hosts.targetId ? { service: answers, replies, stops, hostId: hosts.targetId, capabilities: hosts.capabilities, largeAttachments } : null);
+  answering = () => (hosts.targetId ? { service: answers, replies, stops, hostId: hosts.targetId, capabilities: hosts.capabilities, readOnly: hosts.machine?.readOnly ?? null, largeAttachments } : null);
   let shownCapabilities = '';
 
   // ---- notifications ----
@@ -447,7 +450,7 @@ function begin(account) {
 
   hosts.onChange(() => {
     currentClient = hosts.client;
-    const caps = `${hosts.targetId}:${hosts.capabilities.join(' ')}`;
+    const caps = `${hosts.targetId}:${hosts.capabilities.join(' ')}:${hosts.machine?.readOnly ?? ''}`;
     if (caps !== shownCapabilities) { shownCapabilities = caps; view.refreshQuestions(); }
     if (hosts.phase === 'open') { answers.ready(); replies.ready(); stops.ready(); launches.ready(); }
     registerHere();
