@@ -78,6 +78,10 @@ public sealed record ShadowUsage
     public string? AccountKey { get; init; }
     public IReadOnlyDictionary<string, double> Windows { get; init; } = new Dictionary<string, double>();
     public DateTimeOffset? MeasuredAt { get; init; }
+    // The daemon's only: until when its figure is known still to have held, which can be well
+    // after MeasuredAt because it republishes an unchanged figure only now and then
+    // (DaemonUsagePace). Null when no later than MeasuredAt.
+    public DateTimeOffset? ConfirmedAt { get; init; }
 }
 
 // One disagreement in one sample. Session is a hashed session id, or for a usage kind the agent
@@ -261,7 +265,9 @@ public static class ShadowCompare
     // Percent gone may move between two reads; within this it is the same reading, and further
     // apart in time it is not compared at all. Close together because the two read on their own
     // paces (the daemon every two minutes, the host every fifteen while the daemon runs), and a
-    // host reading thirteen minutes old would otherwise be a mismatch for its whole age.
+    // host reading thirteen minutes old would otherwise be a mismatch for its whole age. The
+    // daemon's figure is as of any moment from its measurement to its confirmation (ConfirmedAt),
+    // since it leaves an unchanged one unpublished for up to half an hour.
     const double PercentTolerance = 5;
     static readonly TimeSpan ReadingsApart = TimeSpan.FromMinutes(3);
 
@@ -289,7 +295,8 @@ public static class ShadowCompare
                 diffs.Add(new(ShadowKinds.UsageWindows, name, $"daemon={string.Join(',', keys.Item1.Select(ShadowHash.Token))} host={string.Join(',', keys.Item2.Select(ShadowHash.Token))}"));
             }
             string? detail = null;
-            var fresh = a.MeasuredAt is { } ma && b.MeasuredAt is { } mb && (ma - mb).Duration() <= ReadingsApart;
+            var (sa, sb) = (Held(a), Held(b));
+            var fresh = sa is { } x && sb is { } y && Apart(x, y) <= ReadingsApart;
             if (fresh)
             {
                 var off = keys.Item1.Intersect(keys.Item2)
@@ -307,7 +314,7 @@ public static class ShadowCompare
             // two pairs in a row show one, and the verdict standing until a fresh pair agrees.
             judged.Add(client);
             if (!memory.Percent.TryGetValue(client, out var verdict)) { memory.Percent[client] = verdict = new(); }
-            if (fresh && (a.MeasuredAt!.Value, b.MeasuredAt!.Value) is var pair && verdict.Pair != pair)
+            if (fresh && (sa!.Value.To, sb!.Value.To) is var pair && verdict.Pair != pair)
             {
                 if (detail is null)
                 {
@@ -329,6 +336,13 @@ public static class ShadowCompare
         // An agent no longer read on both sides starts afresh when it is.
         if (memory is not null) { foreach (var gone in memory.Percent.Keys.Where(k => !judged.Contains(k)).ToList()) { memory.Percent.Remove(gone); } }
         return true;
+
+        // When a side's figure is known to have held: from its measurement to its confirmation.
+        static (DateTimeOffset From, DateTimeOffset To)? Held(ShadowUsage u) =>
+            u.MeasuredAt is { } m ? (m, u.ConfirmedAt is { } c && c > m ? c : m) : null;
+
+        static TimeSpan Apart((DateTimeOffset From, DateTimeOffset To) x, (DateTimeOffset From, DateTimeOffset To) y) =>
+            x.From > y.To ? x.From - y.To : y.From > x.To ? y.From - x.To : TimeSpan.Zero;
 
         // Empty on either side is not a disagreement: some agents name no account.
         static bool Differs(string? x, string? y) =>

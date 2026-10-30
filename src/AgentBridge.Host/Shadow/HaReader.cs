@@ -18,7 +18,30 @@ public sealed class HomeAssistantAccess(Uri baseUrl, string token)
 {
     public Uri BaseUrl { get; } = baseUrl;
     internal string Token { get; } = token;
+    // How the daemon paces what it publishes there, from the same config.
+    public DaemonUsagePace UsagePace { get; init; } = DaemonUsagePace.Default;
     public override string ToString() => $"Home Assistant at {BaseUrl.Host}";
+}
+
+// How long agent-ha-bridge's daemon can leave a usage sensor as it is (Sync-DaemonUsage). It asks
+// the vendor at most Poll apart (usage.idleIntervalSeconds while no session of that agent is
+// open, which is the slower) and publishes a change at once, but an unchanged figure only once
+// Reassert has passed: half an hour with no dashboard.publication, two intervals with one. So a
+// sensor whose measured_at is old still says what the daemon found at its last poll, and that
+// poll was no more than Poll ago; measured_at alone made a reading look stale for half an hour
+// at a time, and a host reading every fifteen minutes might never land beside it (#40). Past
+// Reassert and a Poll, the daemon has stopped confirming it (another machine reads the account,
+// or the vendor is failing), and only measured_at counts.
+public sealed record DaemonUsagePace(TimeSpan Poll, TimeSpan Reassert)
+{
+    public static DaemonUsagePace Default { get; } = new(TimeSpan.FromSeconds(900), TimeSpan.FromSeconds(1800));
+
+    static readonly TimeSpan Slack = TimeSpan.FromMinutes(1);
+
+    // The latest moment the figure is known to have held, read at readAt; null when that is no
+    // later than measuredAt itself.
+    public DateTimeOffset? ConfirmedAt(DateTimeOffset? measuredAt, DateTimeOffset readAt) =>
+        measuredAt is { } m && readAt - m <= Reassert + Poll + Slack && readAt - Poll - Slack is var c && c > m ? c : null;
 }
 
 public static class AgentHaBridgeConfig
@@ -46,10 +69,32 @@ public static class AgentHaBridgeConfig
                 return (null, "agent-ha-bridge's config holds no usable Home Assistant address");
             }
             baseUrl = new Uri(baseUrl.GetLeftPart(UriPartial.Authority) + "/");
-            return (new HomeAssistantAccess(baseUrl, token.Trim()), null);
+            return (new HomeAssistantAccess(baseUrl, token.Trim()) { UsagePace = Pace(doc.RootElement) }, null);
         }
         // The parser's message can quote the file, and the file holds the token.
         catch (JsonException) { return (null, "agent-ha-bridge's config is not valid JSON"); }
+    }
+
+    // usage.intervalSeconds and usage.idleIntervalSeconds as Get-BridgeUsageSetting reads them (a
+    // number, or text that is one), the idle pace never quicker than the busy one; and whether a
+    // dashboard.publication is configured, which shortens the daemon's re-assert to two intervals.
+    static DaemonUsagePace Pace(JsonElement root)
+    {
+        var usage = root.TryGetProperty("usage", out var u) && u.ValueKind == JsonValueKind.Object ? u : default;
+        var interval = Seconds(usage, "intervalSeconds", 120);
+        var idle = Math.Max(interval, Seconds(usage, "idleIntervalSeconds", 900));
+        var published = root.TryGetProperty("dashboard", out var d) && d.ValueKind == JsonValueKind.Object
+            && d.TryGetProperty("publication", out var p) && p.ValueKind != JsonValueKind.Null;
+        return new(TimeSpan.FromSeconds(idle), TimeSpan.FromSeconds(published ? interval * 2 : 1800));
+
+        static double Seconds(JsonElement section, string name, double fallback)
+        {
+            if (section.ValueKind != JsonValueKind.Object || !section.TryGetProperty(name, out var v)) { return fallback; }
+            var x = v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var n) ? n
+                : v.ValueKind == JsonValueKind.String && double.TryParse(v.GetString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var s) ? s
+                : double.NaN;
+            return double.IsFinite(x) && x > 0 ? x : fallback;
+        }
     }
 }
 
@@ -111,12 +156,14 @@ public sealed class DaemonHaReader : IDisposable
     sealed class Unavailable(string reason) : Exception(reason);
 
     readonly HttpClient http;
+    readonly TimeProvider clock;
     readonly TimeSpan patience;
     readonly string resumeEntity;
     readonly IReadOnlyList<(string Client, string Entity)> usageEntities;
 
-    public DaemonHaReader(string machineName, HttpMessageHandler? transport = null, TimeSpan? timeout = null)
+    public DaemonHaReader(string machineName, HttpMessageHandler? transport = null, TimeSpan? timeout = null, TimeProvider? time = null)
     {
+        clock = time ?? TimeProvider.System;
         Slug = HaContract.MachineSlug(machineName);
         usageEntities = [.. HaContract.UsageClients.Select(c => (c, HaContract.MachineEntityId("sensor", $"usage_{c}", Slug)))];
         resumeEntity = HaContract.MachineEntityId("select", "new_resume", Slug);
@@ -138,10 +185,14 @@ public sealed class DaemonHaReader : IDisposable
     {
         try
         {
+            var readAt = clock.GetUtcNow();
             var usage = new Dictionary<string, ShadowUsage>(StringComparer.Ordinal);
             foreach (var (client, entity) in usageEntities)
             {
-                if (await GetAsync(access, entity, ct) is { } state) { usage[client] = Usage(state); }
+                if (await GetAsync(access, entity, ct) is { } state && Usage(state) is var u)
+                {
+                    usage[client] = u with { ConfirmedAt = access.UsagePace.ConfirmedAt(u.MeasuredAt, readAt) };
+                }
             }
             var resume = await GetAsync(access, resumeEntity, ct);
             return resume is not { } r

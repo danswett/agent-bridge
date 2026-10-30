@@ -205,6 +205,25 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         Assert.Equal(["Claude: Plan the release - api", "Copilot: Fix the flaky test - app"], Titles(await RequestAsync(ch, LaunchProtocol.Options, new { })).Order());
     }
 
+    // Found by the shadow comparison (#40): agent-ha-bridge tells repeated labels apart before it
+    // leaves out the running sessions, ignoring case, so an older namesake of a running session
+    // carries its id there even though the running one is not offered.
+    [Fact]
+    public async Task A_resumable_session_named_like_a_newer_or_running_one_carries_its_id_as_agent_ha_bridge_labels_it()
+    {
+        Resumable("11111111-1111-4111-8111-111111111111", app, "Fix the login page", DateTimeOffset.UtcNow.AddDays(-1));
+        Resumable("22222222-2222-4222-8222-222222222222", app, "FIX THE LOGIN PAGE", DateTimeOffset.UtcNow.AddDays(-2));
+        // Running, and the newest: its own record names it as the others are named.
+        Live("33333333-3333-4333-8333-333333333333", 900);
+        Resumable("33333333-3333-4333-8333-333333333333", app, "Fix the login page");
+        var ch = await OpenAsync();
+
+        var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
+
+        Assert.Equal(["Fix the login page - app (11111111)", "FIX THE LOGIN PAGE - app (22222222)"],
+            options.GetProperty("resumable").EnumerateArray().Select(r => r.GetProperty("title").GetString()));
+    }
+
     [Fact]
     public async Task A_new_session_starts_in_its_workspace_with_the_whole_prompt_and_the_answer_names_the_session_it_became()
     {
@@ -568,10 +587,11 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         Assert.DoesNotContain(options.GetProperty("resumable").EnumerateArray(), r => r.GetProperty("id").GetString() == Id);
     }
 
-    void Resumable(string id, string cwd, string summary)
+    void Resumable(string id, string cwd, string summary, DateTimeOffset? updated = null)
     {
         var dir = Directory.CreateDirectory(Path.Combine(f.CopilotHome, "session-state", id)).FullName;
-        File.WriteAllText(Path.Combine(dir, "workspace.yaml"), $"id: {id}\ncwd: '{cwd}'\nsummary: {summary}\n");
+        File.WriteAllText(Path.Combine(dir, "workspace.yaml"), $"id: {id}\ncwd: '{cwd}'\nsummary: {summary}\n"
+            + (updated is { } u ? $"updated_at: {u.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}\n" : ""));
     }
 
     // A Claude session as its own store keeps it: a project folder's transcript, named by its

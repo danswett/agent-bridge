@@ -176,7 +176,7 @@ minute:
 | `usage.missingOnHost`, `usage.missingOnDaemon` | One side has a reading for an agent (Copilot, Claude, Codex) and the other none. The report names the agent in place of a session |
 | `usage.account` | The account the reading is for differs (compared case-insensitively, never written) |
 | `usage.windows` | The metered windows differ (by key: `monthly`, `five_hour`, …) |
-| `usage.percent` | A window's percent used differs by more than 5 points. Judged only on a pair of fresh readings, taken within 3 minutes of each other: the host reads every 15 minutes while the daemon runs and the daemon every 2, so this is now and then. `run` counts it once two such pairs in a row disagree, the second with both sides having read again since the first, and keeps it until a fresh pair agrees, so a lasting difference outlasts the grace and a rise one side has not read yet never counts. `once` reports a single fresh pair |
+| `usage.percent` | A window's percent used differs by more than 5 points. Judged only on a pair of fresh readings, within 3 minutes of each other: the host reads every 15 minutes while the daemon runs, so this is now and then. The daemon publishes a change at its next poll but an unchanged figure only every half hour (every two intervals with a `dashboard.publication`), so its figure counts as holding from its `measured_at` until its last poll could have been: the read less `usage.idleIntervalSeconds` and a minute, while `measured_at` is recent enough for the daemon still to be republishing it. `run` counts it once two such pairs in a row disagree, the second with both sides having read again since the first, and keeps it until a fresh pair agrees, so a lasting difference outlasts the grace and a rise one side has not read yet never counts. `once` reports a single fresh pair |
 | `resumable.count` | The resume lists are of different lengths |
 | `resumable.missingOnHost`, `resumable.missingOnDaemon` | How many of one side's sessions the other does not offer, by label ("summary - folder", as both write it, whitespace collapsed). Each side cuts its list to its own resume count, so when the lengths differ only the shorter list's sessions are looked for in the longer one |
 
@@ -229,7 +229,7 @@ mismatch of these kinds on the pattern below is explained rather than a host bug
 
 ### Fixed in the host
 
-The same runs found three host bugs, all fixed:
+The same runs, and review, found four host bugs, all fixed:
 
 * **No model on a busy session** (`TailTests`). The host read a session's model only from
   the last 4 MiB of the transcript, so a session whose background agents filled that tail
@@ -248,6 +248,11 @@ The same runs found three host bugs, all fixed:
   ran in an approved folder itself, or in a worktree the bridge made for an isolated one
   (`Test-BridgeWorkspacePathApproved`); the host now does the same, agent-ha-bridge's worktrees
   included (host-config.md).
+* **A repeated label named differently** (`LaunchFlowTests`). agent-ha-bridge tells repeated
+  labels apart (ignoring case, the repeat taking its id's first eight characters) over that
+  same list, running sessions included, and only then leaves the running ones out. The host
+  did it after, so an older namesake of a running session had a plain label here and a
+  suffixed one there. It now does it in the same order.
 
 ### Not compared
 

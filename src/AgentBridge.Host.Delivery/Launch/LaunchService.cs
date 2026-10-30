@@ -325,18 +325,27 @@ public sealed partial class LaunchService : ISessionLauncher
         // And any a launch has started an agent on that has not registered yet.
         lock (pendingGate) { excluded.UnionWith(launchedOn.Where(x => starter.Running(x.Value)).Select(x => x.Key)); }
         var offered = new List<Offered>();
-        var labels = new HashSet<string>(StringComparer.Ordinal);
         // The agent is named once the sessions that could be offered are of more than one kind:
         // agent-ha-bridge decides it over its cached list (the newest 200 in approved folders,
         // live ones still in it). Decided over every session found instead, one Claude session
         // in a folder nobody approved put "Agency: " on every label of a Copilot-only list.
         var prefixed = eligible.Select(x => x.Entry.Agent).Distinct().Count() > 1;
-        foreach (var (e, workspace) in eligible.Where(x => !excluded.Contains(x.Entry.Id)))
+        // Labels are told apart over that same list, live ones included and ignoring case, as
+        // agent-ha-bridge's Get-BridgeResumableSessions does: a repeat gets its id's first eight
+        // characters, and one that still repeats is not offered. Told apart over what is left
+        // after the live ones, an older namesake of a running session kept a plain label here
+        // and a suffixed one there (#40).
+        var labels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (e, workspace) in eligible)
         {
             if (offered.Count >= Config.ResumeCount) { break; }
             var title = Title(e, prefixed);
-            if (!labels.Add(title)) { title = Limits.KeepStart($"{title} ({e.Id[..8]})", LaunchProtocol.MaxLabel * 2)!; labels.Add(title); }
-            offered.Add(new Offered(e, title, workspace!.Label));
+            if (!labels.Add(title))
+            {
+                title = Limits.KeepStart($"{title} ({e.Id[..Math.Min(8, e.Id.Length)]})", LaunchProtocol.MaxLabel * 2)!;
+                if (!labels.Add(title)) { continue; }
+            }
+            if (!excluded.Contains(e.Id)) { offered.Add(new Offered(e, title, workspace!.Label)); }
         }
         return offered;
     }

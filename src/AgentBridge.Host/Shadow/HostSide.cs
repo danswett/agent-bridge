@@ -107,6 +107,15 @@ public sealed class PipeShadowHost(LocalEndpoint endpoint, TimeProvider? time = 
         {
             await using var channel = await LocalClient.ConnectAsync(endpoint, TimeSpan.FromSeconds(3), ct);
             var hello = await channel.HelloAsync(ct);
+            // Usage and the resume list first: launch.options can take up to a minute, and the
+            // sessions read after it would be that much older than the daemon's files read
+            // next, so a busy session's activity would differ by however long it took.
+            var now = clock.GetUtcNow();
+            if (asked is not { } at || now - at >= every)
+            {
+                extras = await ExtrasAsync(channel, hello.Capabilities.Contains(UsageProtocol.Capability), ct);
+                asked = now;
+            }
             var status = await channel.CallAsync<HostStatus>(HostOps.Status, timeout: Patience, ct: ct);
             var sessions = new List<Session>();
             string? cursor = null;
@@ -116,12 +125,6 @@ public sealed class PipeShadowHost(LocalEndpoint endpoint, TimeProvider? time = 
                 sessions.AddRange(list.Sessions);
                 cursor = list.Next;
                 if (cursor is null) { break; }
-            }
-            var now = clock.GetUtcNow();
-            if (asked is not { } at || now - at >= every)
-            {
-                extras = await ExtrasAsync(channel, hello.Capabilities.Contains(UsageProtocol.Capability), ct);
-                asked = now;
             }
             return new()
             {
