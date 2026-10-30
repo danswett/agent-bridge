@@ -65,6 +65,7 @@ export class LaunchPanel {
   #options = null;
   // Sessions the account's other machines offer: [{ hostId, machineName, key, resumable }].
   #remote = [];
+  #asking = null;
   #loading = null;
   #error = null;
   #unwatch = null;
@@ -146,6 +147,7 @@ export class LaunchPanel {
     this.#target = target;
     this.#options = null;
     this.#remote = [];
+    this.#asking = null;
     this.#error = null;
     this.#loading = null;
     // Another machine's choices: nothing picked on the last one carries over but the prompt.
@@ -168,12 +170,18 @@ export class LaunchPanel {
     const target = this.#target;
     if (!target) { return Promise.resolve(); }
     this.#error = null;
-    // The other machines' sessions come with the options, or not at all: one asleep is skipped.
-    const remotes = target.transfers ? target.transfers.remotes().catch(() => []) : Promise.resolve([]);
-    const loading = this.#loading = Promise.all([target.load(), remotes]).then(([o, remote]) => {
+    // The other machines' sessions are added when they arrive: asking each takes a handshake,
+    // and one that is slow to answer must not hold up this machine's own choices.
+    if (target.transfers) {
+      const asking = this.#asking = target.transfers.remotes().catch(() => []).then((remote) => {
+        if (this.#asking !== asking || this.#target !== target) { return; }
+        this.#remote = remote;
+        this.#draw();
+      });
+    }
+    const loading = this.#loading = target.load().then((o) => {
       if (this.#loading !== loading) { return; }
       this.#options = o;
-      this.#remote = remote;
     }, (e) => {
       if (this.#loading !== loading) { return; }
       this.#error = e?.reason ?? e?.message ?? String(e);

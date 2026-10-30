@@ -180,6 +180,16 @@ test.describe('bringing a session from another machine', () => {
     await expect(card).toContainText('Draft the transfer docs');
   });
 
+  test("a machine slow to say what it offers does not hold up this one's choices", async ({ page }) => {
+    await openDemo(page);
+    await page.evaluate(() => { window.agentBridgeDemo.host.remoteDelayMs = 2500; });
+    await openPanel(page);
+    await expect(field(page, 'resume').locator('option')).toHaveText(['New session', 'Fix the flaky relay test · agent-bridge']);
+    await field(page, 'resume').selectOption(RESUMABLE);
+    // They join the list when they come, and what was picked stays picked.
+    await expect(field(page, 'resume').locator('option')).toHaveCount(4, { timeout: 10000 });
+    await expect(field(page, 'resume')).toHaveValue(RESUMABLE);
+  });
   test('a resend after a lost response carries the same signed command', async ({ page }) => {
     await openDemo(page, '&timeout=1000&retry=200');
     await openPanel(page);

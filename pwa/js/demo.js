@@ -92,6 +92,8 @@ export class DemoHost {
   launchOptions = demoLaunchOptions();
   // The other machine's sessions, as it offers them for a transfer.
   remote = { hostId: 'demo-studio', machineName: 'Studio PC', resumable: demoRemoteResumable() };
+  // How long Studio PC takes to say what it offers, for a test of a slow machine.
+  remoteDelayMs = 0;
 
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
   // replying: false, one that can't reply; attaching: false, one that takes no files; large:
@@ -569,7 +571,10 @@ export async function demoTransfers(host, targetId) {
   const studio = await P256KeyPair.generate();
   const deviceId = await deviceIdOf(me.public);
   return {
-    remotes: async () => [{ hostId: host.remote.hostId, machineName: host.remote.machineName, key: studio.public, resumable: host.remote.resumable.map(({ bytes, ...r }) => r) }],
+    remotes: async () => {
+      await new Promise((r) => { setTimeout(r, host.remoteDelayMs); });
+      return [{ hostId: host.remote.hostId, machineName: host.remote.machineName, key: studio.public, resumable: host.remote.resumable.map(({ bytes, ...r }) => r) }];
+    },
     sign: (remote, session) => signTransfer({ key: me, deviceId, machinePublic: remote.key, session, to: targetId }),
   };
 }
