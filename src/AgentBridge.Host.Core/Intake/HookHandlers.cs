@@ -321,7 +321,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             if (!running.TryGetValue(id, out var process)) { continue; }
             if (!IsAppServer(process))
             {
-                if (fallback == 0 || !CodexClaimed(id, sessionId)) { return id; }
+                if (fallback == 0 || !CodexClaimed(id, sessionId, running)) { return id; }
                 break;
             }
             if (fallback == 0) { fallback = id; }
@@ -330,9 +330,13 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         var windows = running.Values.Where(p => !IsAppServer(p)).ToList();
         using (var mine = ReadJson(CodexPath(sessionId)))
         {
-            if (mine is not null && Json.Int(mine.RootElement, "ProcessId") is { } recorded && recorded > 0 && windows.Any(w => w.Id == recorded)) { return recorded; }
+            if (mine is not null && Json.Int(mine.RootElement, "ProcessId") is { } recorded && recorded > 0
+                && windows.FirstOrDefault(w => w.Id == recorded) is { } window && Bound(mine.RootElement, window) && !CodexClaimed(recorded, sessionId, running))
+            {
+                return recorded;
+            }
         }
-        var free = windows.Where(w => !CodexClaimed(w.Id, sessionId)).OrderByDescending(w => w.StartedAt ?? DateTimeOffset.MinValue).FirstOrDefault();
+        var free = windows.Where(w => !CodexClaimed(w.Id, sessionId, running)).OrderByDescending(w => w.StartedAt ?? DateTimeOffset.MinValue).FirstOrDefault();
         return free?.Id ?? fallback;
     }
 
@@ -344,7 +348,13 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             || line.Contains("/app-server-daemon/", StringComparison.Ordinal)
             || System.Text.RegularExpressions.Regex.IsMatch(line, @"\sapp-server(\s|$)"));
 
-    bool CodexClaimed(int pid, string sessionId)
+    // Whether a registration's pid still means the process running under it: one written before
+    // that process started names an earlier process whose pid was reused. As discovery allows,
+    // a second of clock slack.
+    static bool Bound(JsonElement registration, AgentProcess process) =>
+        process.StartedAt is not { } started || Json.Time(registration, "Updated") is not { } updated || updated >= started - TimeSpan.FromSeconds(1);
+
+    bool CodexClaimed(int pid, string sessionId, IReadOnlyDictionary<int, AgentProcess> running)
     {
         var own = RegistrationDiscovery.SafeKey(sessionId) + ".json";
         foreach (var file in SafeFiles(CodexRoot))
@@ -354,7 +364,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             using var doc = ReadJson(file);
             if (doc is null || doc.RootElement.ValueKind != JsonValueKind.Object) { continue; }
             if (Json.Bool(doc.RootElement, "Ended") == true) { continue; }
-            if (Json.Int(doc.RootElement, "ProcessId") == pid) { return true; }
+            if (Json.Int(doc.RootElement, "ProcessId") == pid && (!running.TryGetValue(pid, out var process) || Bound(doc.RootElement, process))) { return true; }
         }
         return false;
     }

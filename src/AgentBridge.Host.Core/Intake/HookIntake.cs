@@ -153,7 +153,10 @@ public sealed class HookIntake : IAsyncDisposable
             if (_paused is not null) { _log($"the host takes the hook spool again (was: {_paused})"); }
             _paused = null;
         }
-        if (Beat() && !ReconcileApprovals()) { return 0; }
+        // Approvals are settled whether or not the heartbeat could be written: the events about to
+        // be handled may be ones a lost hook has already overtaken.
+        Beat();
+        if (!ReconcileApprovals()) { return 0; }
         EnsureWatcher();
         var handled = Consume();
         var now = _time.GetUtcNow();
@@ -239,11 +242,11 @@ public sealed class HookIntake : IAsyncDisposable
         var cutoff = known ? _codexLog.Last : _time.GetLocalNow();
         if (cutoff is not { } unheard || (_reconciled && _settled is { } done && unheard <= done)) { _reconciled = known; return true; }
         _handlers.ApprovalsSettledBefore = unheard;
-        _settled = unheard;
-        _reconciled = known;
+        // Settled only once every marker it covers is gone; otherwise the next pass tries again.
+        var complete = true;
         string[] markers;
         try { markers = Directory.Exists(_handlers.CodexRoot) ? Directory.GetFiles(_handlers.CodexRoot, "*.approval.json") : []; }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return true; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { markers = []; complete = false; }
         foreach (var marker in markers)
         {
             DateTimeOffset? created = null;
@@ -264,7 +267,16 @@ public sealed class HookIntake : IAsyncDisposable
                 File.Delete(marker);
                 _log($"withdrew Codex approval {Path.GetFileName(marker)}: a Codex hook ran at {unheard:o} with nobody taking events, so it may have been answered at the terminal");
             }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                complete = false;
+                _log($"could not withdraw Codex approval {Path.GetFileName(marker)} ({e.Message}); trying again next pass");
+            }
+        }
+        if (complete)
+        {
+            _settled = unheard;
+            _reconciled = known;
         }
         return true;
     }

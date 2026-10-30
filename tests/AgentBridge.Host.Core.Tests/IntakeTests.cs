@@ -613,6 +613,77 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_Codex_window_bound_before_its_pid_was_reused_or_claimed_by_a_live_session_is_not_taken()
+    {
+        _f.Processes.Run(AgentKind.Codex, 50, "codex app-server");
+        // 70 is a new process under a reused pid: "mine" recorded it an hour before it started,
+        // and "other" has claimed it since.
+        _f.Processes.Run(AgentKind.Codex, 70, "codex.exe", Fixture.T0);
+        _f.Processes.Run(AgentKind.Codex, 80, "codex.exe", Fixture.T0.AddMinutes(-10));
+        _f.CodexRegistration("mine", 70, null, updated: Fixture.T0.AddHours(-1));
+        _f.CodexRegistration("other", 70, null, updated: Fixture.T0.AddMinutes(5));
+        // And a stale claim on 80, from before it started, claims nothing.
+        _f.CodexRegistration("stale", 80, null, updated: Fixture.T0.AddHours(-2));
+        SpooledAt(Fixture.T0.AddMinutes(10), "0001", "codex", "hook", new { session_id = "mine", hook_event_name = "UserPromptSubmit" }, 50);
+
+        Intake().Pass();
+
+        Assert.Equal(80, Registration("agent-bridge-codex", "mine").GetProperty("ProcessId").GetInt32());
+    }
+
+    [Fact]
+    public void Approvals_are_settled_even_while_the_heartbeat_cannot_be_written()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        Intake().Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", Fixture.T0.AddSeconds(5), 3);
+        foreach (var i in _intakes) { i.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        _intakes.Clear();
+        // Something where the heartbeat should be.
+        File.Delete(SpoolContract.HeartbeatPath(_f.Runtime));
+        Directory.CreateDirectory(SpoolContract.HeartbeatPath(_f.Runtime));
+
+        Intake(alongside: true).Pass();
+
+        Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public void An_approval_that_could_not_be_withdrawn_is_withdrawn_on_a_later_pass()
+    {
+        // Only Windows lets a reader refuse a delete.
+        if (!OperatingSystem.IsWindows()) { return; }
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        var intake = Intake();
+        intake.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", Fixture.T0.AddSeconds(5), 3);
+
+        using (new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.Read)) { intake.Pass(); }
+        Assert.True(File.Exists(marker));
+        intake.Pass();
+
+        Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public void Hook_health_is_read_without_ever_refusing_a_hook_appending_to_the_log()
+    {
+        // Only Windows enforces the sharing a reader asks for.
+        if (!OperatingSystem.IsWindows()) { return; }
+        Directory.CreateDirectory(_f.Runtime);
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", _f.Time.GetLocalNow(), 3);
+        // A hook part-way through appending its line, sharing as the hooks do.
+        using var hook = new FileStream(SpoolContract.LogPath(_f.Runtime), FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+
+        Assert.Equal(1, HookStats.Read(_f.Runtime, _f.Time.GetLocalNow(), TimeSpan.FromHours(1)).Total);
+        Assert.NotNull(HookStats.LastUnspooled(_f.Runtime, "codex"));
+    }
+
+    [Fact]
     public void A_resumed_Codex_session_does_not_offer_the_approval_its_previous_run_died_waiting_on()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
@@ -741,11 +812,15 @@ public sealed class IntakeTests : IDisposable
         Assert.Equal(["dead-recent.json", "live.json"], Directory.GetFiles(_f.ClaudeRegistrations).Select(Path.GetFileName).Order());
         Assert.Equal(["running.approval.json", "running.json"], Directory.GetFiles(_f.CodexRegistrations).Select(Path.GetFileName).Order());
 
+        // A host that cannot see every process (the first has stopped, so this one takes the spool).
+        intake.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _intakes.Remove(intake);
         var blind = new HookIntake(new HookIntakeOptions { RuntimeRoot = _f.Runtime, ClaudeHome = _f.ClaudeHome, UseFileSystemWatcher = false }, new Blind(), _f.Time);
         _intakes.Add(blind);
         _f.ClaudeRegistration("dead-old", 31, null);
         _f.Time.Advance(TimeSpan.FromMinutes(2));
         blind.Pass();
+        Assert.Null(blind.Paused);
         Assert.True(File.Exists(Path.Combine(_f.ClaudeRegistrations, "dead-old.json")));
     }
 

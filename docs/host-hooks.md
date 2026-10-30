@@ -225,7 +225,10 @@ the last Codex hook run the hook log records as not spooled. One asked after it 
 pending. A `PermissionRequest` still waiting in the spool from before that run is handled but
 arms no approval, for the same reason. The log is followed every pass (only what it gained), so
 a Codex hook that fails to spool while the heartbeat is fresh settles approvals the same way.
-While the log cannot be read the history is unknown, and no approval is offered at all.
+While the log cannot be read the history is unknown, and no approval is offered at all. This
+happens whether or not the heartbeat could be written, and a cut-off counts as settled only once
+every marker it covers is gone; a marker that could not be deleted is tried again next pass.
+The log is always read through a handle that lets hooks keep appending (`hooks status` too).
 Answering an approval twice could type into whatever the terminal shows now; losing a remote
 answer only means answering at the terminal.
 
@@ -237,9 +240,14 @@ exited:
   `codex app-server`, which has no console to type into, so the walk goes past it to the
   window above. That window is taken only if no other live session has claimed it. Failing
   that, the owner is:
-  1. the window this session recorded, while it still runs;
+  1. the window this session recorded, while it still runs, is still that process and no other
+     live session has claimed it;
   2. then the newest unclaimed window;
   3. then the app-server.
+
+  A registration written more than a second before the process under its pid started names an
+  earlier process whose pid was reused: it neither binds that window to its session nor claims
+  it from another (discovery's own rule).
 
 ## Notices for the rest of the host
 

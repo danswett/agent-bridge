@@ -24,7 +24,7 @@ public sealed record HookStats(
         foreach (var path in new[] { log + ".1", log })
         {
             IEnumerable<string> lines;
-            try { lines = File.Exists(path) ? File.ReadAllLines(path) : []; }
+            try { lines = File.Exists(path) ? SharedLines(path) : []; }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
             foreach (var line in lines)
             {
@@ -64,7 +64,7 @@ public sealed record HookStats(
         foreach (var path in new[] { log + ".1", log })
         {
             IEnumerable<string> lines;
-            try { lines = File.Exists(path) ? File.ReadAllLines(path) : []; }
+            try { lines = File.Exists(path) ? SharedLines(path) : []; }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
             foreach (var line in lines)
             {
@@ -82,8 +82,17 @@ public sealed record HookStats(
         return last;
     }
 
-    static string FoldReason(string? reason)
+    // Read through a handle that shares writing and deleting: a hook appending its line, or
+    // rotating the log, must never fail because this host was reading it (on Windows,
+    // File.ReadAllLines would refuse them).
+    internal static string[] SharedLines(string path)
     {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd().Split('\n');
+    }
+
+    static string FoldReason(string? reason)    {
         if (string.IsNullOrWhiteSpace(reason)) { return "(none)"; }
         var head = reason.Split(':')[0];
         return System.Text.RegularExpressions.Regex.Replace(head, @"\d+", "N").Trim();
