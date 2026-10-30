@@ -243,7 +243,8 @@ terminal may never arrive. The hook log records such runs, but only as best it c
 could not spool (a full disk, say) may not have been able to log either. So whenever the intake
 takes the spool again after a gap (it starts, agent-ha-bridge stops, the heartbeat has gone
 older than the 60 s hooks allow, renewed or not, or a Codex event, or one it could not read,
-failed, from its first failure rather than only once dropped after its retries), it withdraws **every** approval marker asked before that moment,
+failed, from its first failure rather than only once dropped after its retries, or the spool
+could not be listed, for as long as it cannot), it withdraws **every** approval marker asked before that moment,
 and a `PermissionRequest` still waiting in the spool from before it is handled but arms no
 approval. Nothing proves such an approval unanswered, so it is answered at the terminal.
 

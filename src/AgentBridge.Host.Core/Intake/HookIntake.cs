@@ -312,6 +312,7 @@ public sealed class HookIntake : IAsyncDisposable
     }
 
     bool _noRoom;
+    bool _spoolUnlisted;
     DateTimeOffset? _clock;
     // The clock moved back since the last complete sweep: the next withdraws every marker, whatever
     // its time (one asked a second before the step back would look asked after it).
@@ -460,10 +461,20 @@ public sealed class HookIntake : IAsyncDisposable
         string[] files;
         try
         {
-            if (!Directory.Exists(_spool)) { return 0; }
+            // Listed, not Directory.Exists first: that is false too when the folder cannot be read.
             files = Directory.GetFiles(_spool, "*.json").Where(f => f.EndsWith(".json", StringComparison.Ordinal)).ToArray();
+            _spoolUnlisted = false;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return 0; }
+        catch (DirectoryNotFoundException) { return 0; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Whatever waits in it is unseen, the PreToolUse that answered an approval at the
+            // terminal among them: a gap for as long as it lasts.
+            if (!_spoolUnlisted) { _log($"could not list the hook spool ({e.Message}); no Codex approval is answered until it can be"); }
+            _spoolUnlisted = true;
+            Gap();
+            return 0;
+        }
         if (files.Length == 0) { return 0; }
         Array.Sort(files, StringComparer.Ordinal);
 

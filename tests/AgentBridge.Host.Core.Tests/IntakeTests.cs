@@ -1629,6 +1629,23 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_spool_that_cannot_be_listed_refuses_answers_while_it_lasts()
+    {
+        var intake = Running();
+        Assert.Null(intake.ApprovalsUnsettled);
+        // Something there that cannot be listed (Directory.Exists says false).
+        if (Directory.Exists(Spool)) { Directory.Delete(Spool, recursive: true); }
+        File.WriteAllText(Spool, "");
+
+        intake.Pass();
+
+        Assert.NotNull(intake.ApprovalsUnsettled);
+        Assert.Contains(_log, l => l.StartsWith("could not list the hook spool", StringComparison.Ordinal));
+        intake.Pass();
+        Assert.NotNull(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
     public void A_codex_event_that_fails_once_refuses_answers_until_the_markers_are_settled()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
