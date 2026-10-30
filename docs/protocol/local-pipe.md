@@ -128,6 +128,17 @@ stopped. Sessions acting as an agent rather than as the person (design §5.5) ar
 On macOS and Linux the host cannot trace a socket client yet, so nothing there manages the
 host, and there is no app there to do it.
 
+**The one exception: the host's own command line may restart it.** `agent-bridge-host migrate`
+and `rollback` must restart the host to hand agent-ha-bridge's hook spool over and back
+([migration.md](../migration.md)), and they are run by a person, from a terminal of their own.
+So a caller that is this host's own executable, beside it, with its whole ancestry read and no
+agent in it, may call `host.restart` and nothing else the app may. It is the same rail as the
+app's: the same ancestry check refuses it inside an agent session, and the commands themselves
+refuse first, with exit 4, before reading anything. A copy of the program elsewhere, or one whose
+ancestry is read only in part, is anything else of the user's. An agent that starts the program
+detached from itself gets past this as it could past the app's check; restarting is the only
+thing it gains.
+
 ## Management ops
 
 Local only: a relay channel answers each of these with `unknown op`. All but `host.status`
