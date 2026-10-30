@@ -33,13 +33,19 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
     [GeneratedRegex("^(AgentBridgeDaemon|CopilotBridgeDaemon)(_[0-9A-Fa-f]{1,64})?$")]
     private static partial Regex TaskName();
 
-    // Whether agent-ha-bridge's daemon itself was seen running: unlike Active, not knowing is not
+    // Whether that installation's daemon itself was seen running: unlike Active, not knowing is not
     // a yes here, and nor is its supervisor or task alone (either can run while the daemon fails
-    // to start). Rollback is done only once it has seen the daemon back.
-    public bool Seen() => DaemonAmong(Scan().Found);
+    // to start), nor another installation's daemon. Rollback is done only once it has seen this
+    // installation's back; Active stays user-wide, for G5.
+    public bool Seen(string installationId)
+    {
+        var found = Scan().Found;
+        Probe("AgentBridgeDaemon_" + installationId, found);
+        return DaemonAmong(found, installationId);
+    }
 
-    internal static bool DaemonAmong(IEnumerable<string> found) =>
-        found.Any(n => n.StartsWith("AgentBridgeDaemon", StringComparison.Ordinal) || n.StartsWith("CopilotBridgeDaemon", StringComparison.Ordinal));
+    internal static bool DaemonAmong(IEnumerable<string> found, string installationId) =>
+        found.Contains("AgentBridgeDaemon_" + installationId, StringComparer.OrdinalIgnoreCase);
 
     (SortedSet<string> Found, bool Known) Scan()
     {

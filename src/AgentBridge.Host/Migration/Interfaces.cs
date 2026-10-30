@@ -24,8 +24,9 @@ public interface IAgentHaBridgeRuntime
     // able to tell counts as running.
     string? Active();
 
-    // Whether agent-ha-bridge was seen running: not being able to tell is no.
-    bool Seen();
+    // Whether that installation's own daemon was seen running: not being able to tell is no, and
+    // another installation's daemon is not this one back.
+    bool Seen(string installationId);
 
     // How many of the agent's processes run now, or null when they could not all be identified.
     int? Running(AgentBridge.Protocol.AgentKind agent);

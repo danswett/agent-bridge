@@ -256,7 +256,10 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
     public string? Active() => DaemonRunning ? "agent-ha-bridge is running for this user (AgentBridgeDaemon_" + fake.InstallationId + ")"
         : Unknown ? "whether agent-ha-bridge is running for this user could not be checked; answer at the machine" : null;
 
-    public bool Seen() => DaemonRunning;
+    // Another installation's daemon, running whatever this one does.
+    public string? OtherDaemon { get; set; }
+
+    public bool Seen(string installationId) => (DaemonRunning && installationId == fake.InstallationId) || installationId == OtherDaemon;
 
     // Each agent's running processes (none unless set); null when they could not all be identified.
     public Dictionary<AgentBridge.Protocol.AgentKind, int?> Agents { get; } = [];

@@ -648,7 +648,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         {
             // Seen, not merely uncheckable: a probe that cannot tell would otherwise pass for a daemon
             // back, and the record and snapshot be deleted with nothing running.
-            if (await UntilAsync(runtime.Seen, options.StopTimeout, cancellationToken)) { Say($"* Re-enabled {string.Join(" and ", tasks.Select(t => t.Name))}; agent-ha-bridge is running again."); }
+            if (await UntilAsync(() => runtime.Seen(record.InstallationId), options.StopTimeout, cancellationToken)) { Say($"* Re-enabled {string.Join(" and ", tasks.Select(t => t.Name))}; agent-ha-bridge is running again."); }
             else
             {
                 ok = false;

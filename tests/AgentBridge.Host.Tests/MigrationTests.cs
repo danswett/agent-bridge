@@ -915,6 +915,20 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Another_installation_s_daemon_running_does_not_count_as_this_one_back()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        _f.Runtime_.StartsNothing = true;
+        _f.Runtime_.OtherDaemon = "fedcba9876543210fedcba9876543210";
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("was not seen running", report.ToString());
+        Assert.NotNull(MigrationRecord.Load(_f.Profile).Record);
+    }
+
+    [Fact]
     public async Task A_rollback_is_not_done_until_agent_ha_bridge_is_seen_running_not_merely_when_it_cannot_be_checked()
     {
         Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);

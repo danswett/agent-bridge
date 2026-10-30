@@ -235,9 +235,10 @@ publishes the dashboard (G7).
    the host still holds it, agent-ha-bridge's tasks are re-enabled but not started, the report
    says so and the record is kept, so the two never take the spool at once; run rollback again once the host has let go.
 5. Re-enables each task that was enabled before, starts it, and waits until the G5 probe sees
-   agent-ha-bridge's daemon running again: its own mutex seen, since a probe that cannot tell,
-   or a supervisor or task running while the daemon fails to start, would otherwise pass for
-   it, and the record and snapshot would go with nothing running. A task that was disabled before stays disabled.
+   agent-ha-bridge's daemon running again: that installation's own mutex
+   (`AgentBridgeDaemon_<id>`) seen, since a probe that cannot tell, a supervisor or task running
+   while the daemon fails to start, or another installation's daemon would otherwise pass for it,
+   and the record and snapshot would go with nothing running. A task that was disabled before stays disabled.
 6. Deletes `migration.json` and the snapshot. If anything above went wrong they are kept, and
    the report says what to do. A migration cut short (`migration status` says "part-way") is
    rolled back the same way.
