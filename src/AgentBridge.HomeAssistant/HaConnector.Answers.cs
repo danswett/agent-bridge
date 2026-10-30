@@ -33,10 +33,15 @@ public sealed partial class HaConnector
         public string? UsedStamp;
         // An answer reached, or may have reached, the terminal: never typed again.
         public bool Settled;
-        // Answers that reached nothing. Each new attempt is a request of its own, and words in
-        // the reply box that failed are sent again only on a fresh press, never by a sweep.
+        // Answers that reached nothing. Each new attempt is a request of its own, and nothing that
+        // failed is sent again by itself: words in the reply box or from the reply card go again
+        // only with a Send (or box) hit the watch reported after the failure (FailedAt, in hit
+        // sequence), and a tap only once the selector has been seen waiting again.
         public int Attempts;
+        public long FailedAt;
         public string? FailedBox;
+        public string? FailedStamp;
+        public bool AwaitTap;
         // Said once, not on every hit.
         public string? Told;
     }
@@ -49,12 +54,14 @@ public sealed partial class HaConnector
         public bool Present => Kind == "present";
     }
 
-    readonly ConcurrentQueue<HaTrigger> hits = new();
+    readonly ConcurrentQueue<(long Seq, HaTrigger Hit)> hits = new();
+    long hitSeq;
     long watchVersion;
     DateTimeOffset nextSweep;
 
-    // Card controls changed: the watch reports them here, and the next pass reads the card.
-    internal void Observe(HaTrigger hit) => hits.Enqueue(hit);
+    // Card controls changed: the watch reports them here, numbered in the order they came, and
+    // the next pass reads the card.
+    internal void Observe(HaTrigger hit) => hits.Enqueue((Interlocked.Increment(ref hitSeq), hit));
 
     // The entities a watch should cover: every published session's answer controls.
     internal IReadOnlyCollection<string> WatchedEntities()
@@ -258,10 +265,14 @@ public sealed partial class HaConnector
     async Task AnswersAsync(DateTimeOffset now, CancellationToken ct)
     {
         if (!ServesAnswers) { hits.Clear(); return; }
-        var touched = new Dictionary<string, HaTrigger?>(StringComparer.Ordinal);
-        while (hits.TryDequeue(out var hit))
+        var touched = new Dictionary<string, List<(long Seq, HaTrigger Hit)>>(StringComparer.Ordinal);
+        while (hits.TryDequeue(out var item))
         {
-            if (NodeOf(hit.EntityId) is { } node) { touched[node] = hit; }
+            if (NodeOf(item.Hit.EntityId) is { } node)
+            {
+                if (!touched.TryGetValue(node, out var list)) { touched[node] = list = []; }
+                list.Add(item);
+            }
         }
         if (now >= nextSweep)
         {
@@ -270,21 +281,21 @@ public sealed partial class HaConnector
             {
                 foreach (var p in published.Values)
                 {
-                    if (p.Armed is { Settled: false, Plan.TerminalOnly: false }) { touched.TryAdd(p.Node, null); }
+                    if (p.Armed is { Settled: false, Plan.TerminalOnly: false }) { touched.TryAdd(p.Node, []); }
                 }
             }
         }
-        foreach (var (node, hit) in touched)
+        foreach (var (node, seen) in touched)
         {
             (string Id, Published P)? entry;
             lock (gate) { entry = published.Where(x => x.Value.Node == node).Select(x => ((string, Published)?)(x.Key, x.Value)).FirstOrDefault(); }
             if (entry is not { } e) { continue; }
-            try { await CardAsync(e.Id, e.P, hit, now, ct); }
+            try { await CardAsync(e.Id, e.P, seen, now, ct); }
             catch
             {
-                // Read again on the next pass.
-                if (hit is not null) { hits.Enqueue(hit); }
-                else { nextSweep = now; }
+                // Read again on the next pass, with the numbers they came with.
+                foreach (var item in seen) { hits.Enqueue(item); }
+                if (seen.Count == 0) { nextSweep = now; }
                 throw;
             }
         }
@@ -302,17 +313,18 @@ public sealed partial class HaConnector
         return f > 0 && int.TryParse(name[(f + 2)..], NumberStyles.None, CultureInfo.InvariantCulture, out _) ? name[..f] : null;
     }
 
-    // What one session's card now says, and what to do about it. hit is the change the watch
-    // reported, or null when the card is read by the sweep.
-    async Task CardAsync(string sessionId, Published p, HaTrigger? hit, DateTimeOffset now, CancellationToken ct)
+    // What one session's card now says, and what to do about it. seen is what the watch reported
+    // for it since the last pass, empty when the card is read by the sweep.
+    async Task CardAsync(string sessionId, Published p, IReadOnlyList<(long Seq, HaTrigger Hit)> seen, DateTimeOffset now, CancellationToken ct)
     {
         var armed = p.Armed;
         if (armed is null || armed.Plan.TerminalOnly || armed.Settled)
         {
-            if (hit is not null) { await UnservedAsync(p, hit, ct); }
+            if (seen.Count > 0) { await UnservedAsync(p, seen[^1].Hit, ct); }
             return;
         }
-        var outcome = await ReadAnswerAsync(sessionId, p, armed, hit, ct);
+        var since = seen.Where(h => h.Seq > armed.FailedAt).Select(h => h.Hit).ToList();
+        var outcome = await ReadAnswerAsync(sessionId, p, armed, since, ct);
         if (outcome is null) { return; }
         if (outcome.Notice is { } notice)
         {
@@ -361,13 +373,20 @@ public sealed partial class HaConnector
             default:
                 // Nothing reached the terminal, so the question is answerable again: by a new
                 // press, publish or tap (the one that failed stays used, so it is never retried
-                // on its own), or by the same words in the reply box on a fresh press.
+                // on its own), or for words already given, by a press of Send after this.
                 armed.Attempts++;
+                armed.FailedAt = Interlocked.Read(ref hitSeq);
                 if (outcome.Box)
                 {
                     armed.UsedPress = null;
                     armed.FailedBox = outcome.Press;
                 }
+                if (outcome.Stamp is { } failedStamp)
+                {
+                    armed.UsedStamp = null;
+                    armed.FailedStamp = failedStamp;
+                }
+                if (outcome.Tap) { armed.AwaitTap = true; }
                 await TransientAsync(p, "Answer NOT sent", new JsonObject
                 {
                     ["error"] = result.Reason ?? result.Outcome.ToString(),
@@ -455,10 +474,13 @@ public sealed partial class HaConnector
 
     // Read-DaemonDecisionAnswer: what the card holds as the answer, a reason it cannot be sent,
     // or nothing yet.
-    async Task<Read?> ReadAnswerAsync(string sessionId, Published p, Armed armed, HaTrigger? hit, CancellationToken ct)
+    async Task<Read?> ReadAnswerAsync(string sessionId, Published p, Armed armed, IReadOnlyList<HaTrigger> since, CancellationToken ct)
     {
         var plan = armed.Plan;
         var node = p.Node;
+        // A press of Send (or of the box) the watch reported after the last failure: what lets
+        // words that failed be given again.
+        var fresh = since.Any(h => h.EntityId == SessionEntities.Submit(node) || h.EntityId == SessionEntities.Reply(node));
         var decision = await ha.GetStateAsync(SessionEntities.Decision(node), ct);
         if (decision?.State == HaDecision.Cancel)
         {
@@ -476,22 +498,29 @@ public sealed partial class HaConnector
         {
             // The tap is the answer: Approve or Deny.
             var tapped = decision?.State;
+            if (armed.AwaitTap)
+            {
+                // After a refused tap, only a tap made once the selector is waiting again counts:
+                // seen waiting now, or reported waiting since (a quick second tap).
+                if (tapped != HaDecision.Awaiting && !since.Any(h => h.EntityId == SessionEntities.Decision(node) && h.State.State == HaDecision.Awaiting)) { return null; }
+                armed.AwaitTap = false;
+                armed.UsedPress = null;
+            }
             if (tapped is not ("Approve" or "Deny")) { return null; }
-            // One tap, however often it is read: a second tap of the same option is a new change.
-            var tap = $"tap:{tapped}@{decision!.LastChanged ?? "#" + armed.Attempts}";
+            // One tap, however often it is read.
+            var tap = "tap:" + tapped;
             if (tap == armed.UsedPress) { return null; }
             var field = armed.Question.Fields.FirstOrDefault()?.Name ?? "decision";
             var value = tapped == "Approve" ? "approve" : "deny";
-            return Answer(sessionId, armed, new Dictionary<string, JsonElement> { [field] = JsonSerializer.SerializeToElement(value) }, null, tapped, null, tap, DriverOf(decision.UserId)) with { Tap = true };
+            return Answer(sessionId, armed, new Dictionary<string, JsonElement> { [field] = JsonSerializer.SerializeToElement(value) }, null, tapped, null, tap, DriverOf(decision!.UserId)) with { Tap = true };
         }
 
         if (!plan.UsesFieldSlots)
         {
-            // A freeform question: words from the reply card, or the reply box.
-            if (card is { } c) { return Answer(sessionId, armed, null, c.Text, c.Text, c.Stamp, null, c.Driver); }
+            // A freeform question: words from the reply card, or the reply box. Words that
+            // failed go again only on a press after the failure.
+            if (card is { } c) { return c.Retry && !fresh ? null : Answer(sessionId, armed, null, c.Text, c.Text, c.Stamp, null, c.Driver); }
             var box = await ObserveAsync(SessionEntities.Reply(node), ct);
-            // Words that failed once go again only on a fresh press of Send or of the box itself.
-            var fresh = hit is not null && (hit.EntityId == SessionEntities.Submit(node) || hit.EntityId == SessionEntities.Reply(node));
             if (box.Present && !string.IsNullOrWhiteSpace(box.Value) && Changed(armed.ReplyBaseline, box) && box.Value != armed.UsedPress
                 && (box.Value != armed.FailedBox || fresh))
             {
@@ -556,7 +585,7 @@ public sealed partial class HaConnector
         }
 
         // A lone choice answered in words, through the prompt's own "Other" entry.
-        if (fields.Count == 1 && !takesText && missing.Count == 1 && !fields[0].MultiSelect && card is { } other)
+        if (fields.Count == 1 && !takesText && missing.Count == 1 && !fields[0].MultiSelect && card is { } other && (!other.Retry || fresh))
         {
             if (!plan.TakesTypedAnswer)
             {
@@ -592,7 +621,7 @@ public sealed partial class HaConnector
                 Spend = submit.Value,
             };
         }
-        if (card is { } words && !takesText)
+        if (card is { Retry: false } words && !takesText)
         {
             return new Read
             {
@@ -600,8 +629,9 @@ public sealed partial class HaConnector
                 NoticeKey = words.Stamp,
             };
         }
-        // Send on the reply card submits a complete form too: its publish is the press.
-        var cardSubmits = takesText && card is not null;
+        // Send on the reply card submits a complete form too: its publish is the press. Words from
+        // a publish that failed still fill the form, but only a new press of Send submits them.
+        var cardSubmits = takesText && card is { Retry: false };
         if (!(pressed || cardSubmits) || !complete) { return null; }
         if (problem is not null)
         {
@@ -613,12 +643,12 @@ public sealed partial class HaConnector
             };
         }
         var driver = pressed ? DriverOf(submit.Snapshot?.UserId) : card!.Value.Driver;
-        return Answer(sessionId, armed, values, null, string.Join(" + ", picked), cardSubmits ? card!.Value.Stamp : null, pressed ? submit.Value : null, driver);
+        return Answer(sessionId, armed, values, null, string.Join(" + ", picked), takesText && card is { } used ? used.Stamp : null, pressed ? submit.Value : null, driver);
     }
 
     // What the reply card published for the armed question, if anything new
     // (Read-DaemonDecisionCardText): words only, tagged for this question or not at all.
-    async Task<(string Text, string Stamp, string Driver)?> CardTextAsync(string node, Armed armed, CancellationToken ct)
+    async Task<(string Text, string Stamp, string Driver, bool Retry)?> CardTextAsync(string node, Armed armed, CancellationToken ct)
     {
         if (armed.PayloadBaseline.Kind == "unknown") { return null; }
         var current = await ObserveAsync(SessionEntities.ReplyPayload(node), ct);
@@ -636,7 +666,8 @@ public sealed partial class HaConnector
         if (string.IsNullOrWhiteSpace(text)) { return null; }
         // A publish names who sent it, as the daemon reads it (Get-BridgeReplyPayload's Driver).
         var driver = a.TryGetProperty("driver", out var d) && d.ValueKind == JsonValueKind.String && d.GetString() is { Length: > 0 } named ? named : "human";
-        return (text, current.Value, driver);
+        // A publish whose answer reached nothing: its words, which cannot answer by themselves.
+        return (text, current.Value, driver, current.Value == armed.FailedStamp);
     }
 
     Read Answer(string sessionId, Armed armed, IReadOnlyDictionary<string, JsonElement>? fields, string? text, string shown, string? stamp, string? press, string driver) => new()

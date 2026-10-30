@@ -209,9 +209,10 @@ path as the app's, so G5, the delivery gate and the attempt ledger apply unchang
 reply card uses to clear its draft, and the reply box reset to `' '`), `Answer unconfirmed -
 check the terminal`, or `Answer NOT sent` with a hint. After `NOT sent` the attempt that failed
 is never retried on its own: a new Send press, a new reply-card publish, a new tap (the
-selector goes back to `Awaiting answer...` so the same option can be chosen again; a tap is
-known by the selector's `last_changed`), or for words in the reply box a press of Send, answers
-again, each as a request of its own so the host does not answer it from the earlier refusal.
+selector goes back to `Awaiting answer...`, and a tap counts again only once it has been seen
+waiting), or for words already given (in the reply box, or from the reply card into a form) a
+press of Send made after the failure, answers again, each as a request of its own so the host
+does not answer it from the earlier refusal.
 `Not sent - answer every field` (with `waiting_on`), `Not sent - this question takes options`
 and `Not sent - no Send button on this session` say what was wrong with the press itself; such
 a press is spent. A question that ends is cleared (selector `Idle`, attributes `{}`, the slots

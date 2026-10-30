@@ -344,13 +344,92 @@ public sealed class AnswerTests : IDisposable
         Assert.Equal(HaDecision.Awaiting, State(SessionEntities.Decision(Node)));
         await Pass(c, 6);
         Assert.Single(answered);
-
-        outcome = _ => new AnswerResult(AnswerOutcome.Delivered);
         await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
         Assert.Equal(2, answered.Count);
-        // A new tap is a new request, not the refusal the host remembers for the first.
-        Assert.NotEqual(answered[0].Request, answered[1].Request);
+
+        // Tapped again before the card was read waiting: the watch saw it wait, so it counts.
+        c.Observe(new HaTrigger(SessionEntities.Decision(Node), (await ha.GetStateAsync(SessionEntities.Decision(Node)))!));
+        outcome = _ => new AnswerResult(AnswerOutcome.Delivered);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        Assert.Equal(3, answered.Count);
+        // Each tap is a new request, not the refusal the host remembers for the one before.
+        Assert.Equal(3, answered.Select(a => a.Request).Distinct().Count());
         Assert.Equal("Answer sent", Activity);
+    }
+
+    [Fact]
+    public async Task A_refused_tap_the_selector_could_not_be_reset_from_is_not_sent_again_by_itself()
+    {
+        outcome = _ => new AnswerResult(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with
+        {
+            Agent = AgentKind.Codex,
+            Question = new Question
+            {
+                Id = "a1", Kind = QuestionKind.Approval, Message = "Codex wants to run git push", AskedAt = FakeSessions.T0,
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
+            },
+        });
+        await using var c = Connector();
+        await Pass(c);
+        ha.ServiceFailsFor = (service, entity) => service == "select.select_option" && entity == SessionEntities.Decision(Node);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        Assert.Equal("Answer NOT sent", Activity);
+        // Still showing Approve: read again and again, it is the same refused tap.
+        Assert.Equal("Approve", State(SessionEntities.Decision(Node)));
+        await Pass(c, 6);
+        await Pass(c, 6);
+        Assert.Single(answered);
+    }
+
+    [Fact]
+    public async Task A_send_that_arrived_while_refused_words_were_being_delivered_does_not_send_them_again()
+    {
+        Ask(Form("q1"));
+        await using var c = Connector();
+        // Typing then Send: the box's change and the press arrive a moment apart, and the press
+        // lands while the box's words are being delivered.
+        outcome = _ =>
+        {
+            c.Observe(ha.Press(SessionEntities.Submit(Node)));
+            return new AnswerResult(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");
+        };
+        await Pass(c);
+        await Do(c, ha.Type(SessionEntities.Reply(Node), "Call it Aurora"));
+        Assert.Equal("Answer NOT sent", Activity);
+        outcome = _ => new AnswerResult(AnswerOutcome.Delivered);
+        await Pass(c);
+        await Pass(c, 6);
+        Assert.Single(answered);
+
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Equal(2, answered.Count);
+        Assert.Equal("Answer sent", Activity);
+    }
+
+    [Fact]
+    public async Task A_form_whose_words_came_from_the_reply_card_keeps_them_for_a_send_after_a_refusal()
+    {
+        var note = new Field { Name = "note", Title = "Note", Type = FieldType.Text };
+        outcome = _ => new AnswerResult(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");
+        Ask(Form("q1", Release, note));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Wait for the fix"));
+        await Do(c, ha.SendFromCard(Node, "after the hotfix", "q1"));
+        Assert.Equal("after the hotfix", Assert.Single(answered).Fields!["note"].GetString());
+        Assert.Equal("Answer NOT sent", Activity);
+        // The card's words do not submit themselves again.
+        await Pass(c, 6);
+        Assert.Single(answered);
+
+        outcome = _ => new AnswerResult(AnswerOutcome.Delivered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Equal(2, answered.Count);
+        Assert.Equal("after the hotfix", answered[1].Fields!["note"].GetString());
+        Assert.Equal("wait", answered[1].Fields!["release"].GetString());
+        // The reply card is told its words were used, so it clears its draft.
+        Assert.Equal(State(SessionEntities.ReplyPayload(Node)), Detail.GetProperty("answer_consumed_at").GetString());
     }
 
     [Fact]

@@ -26,6 +26,8 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     public Exception? DashboardFails { get; set; }
     public Exception? PublishFails { get; set; }
     public Func<string, string, bool>? PublishFailsFor { get; set; }
+    // A service call (domain.service, entity) Home Assistant fails.
+    public Func<string, string, bool>? ServiceFailsFor { get; set; }
     public int RegistryLists { get; private set; }
 
     public Task PublishAsync(string topic, string payload, bool retain, CancellationToken cancellationToken = default)
@@ -82,11 +84,10 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
 
     // States Home Assistant keeps for optimistic MQTT entities (selects, buttons, text with no
     // state topic), by unique_id so a rename keeps them.
-    readonly Dictionary<string, (string State, string? UserId, string Changed)> optimistic = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (string State, string? UserId)> optimistic = new(StringComparer.Ordinal);
     public List<(string Service, string EntityId, string Value, string? UserId)> Services { get; } = [];
     // The account the connector's token belongs to, as Home Assistant records it.
     public string TokenUser { get; set; } = "token-user";
-    int changes;
     readonly System.Threading.Channels.Channel<HaTrigger> triggers = System.Threading.Channels.Channel.CreateUnbounded<HaTrigger>();
     public List<IReadOnlyCollection<string>> Watches { get; } = [];
 
@@ -94,6 +95,7 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     {
         if (ServiceTarget.Check(data) is { } refused) { throw new InvalidOperationException(refused); }
         var entityId = data["entity_id"]!.GetValue<string>();
+        if (ServiceFailsFor?.Invoke($"{domain}.{service}", entityId) == true) { throw new HttpRequestException($"{domain}.{service}: Home Assistant answered 500 Internal Server Error"); }
         var value = data["option"]?.GetValue<string>() ?? data["value"]?.GetValue<string>() ?? "";
         lock (gate) { Services.Add(($"{domain}.{service}", entityId, value, TokenUser)); }
         Apply($"{domain}.{service}", entityId, value, TokenUser);
@@ -117,9 +119,7 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
                     Now = Now.AddSeconds(1);
                     break;
             }
-            // last_changed moves only when the state does, as Home Assistant's does.
-            var changed = optimistic.TryGetValue(uniqueId, out var before) && before.State == value ? before.Changed : $"changed-{++changes}";
-            optimistic[uniqueId] = (value, userId, changed);
+            optimistic[uniqueId] = (value, userId);
             return new HaTrigger(entityId, Derived(entityId)!);
         }
     }
@@ -204,11 +204,10 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
             state = JsonNode.Parse(state)?["at"]?.GetValue<string>() ?? "unknown";
         }
         string? user = null;
-        string? changedAt = null;
-        if (optimistic.TryGetValue(uniqueId, out var o)) { (state, user, changedAt) = o; }
+        if (optimistic.TryGetValue(uniqueId, out var o)) { (state, user) = o; }
         var attributes = config["json_attributes_topic"]?.GetValue<string>() is { } at && Retained.TryGetValue(at, out var a) ? JsonNode.Parse(a)!.AsObject() : [];
         if (config["options"] is JsonArray options) { attributes["options"] = options.DeepClone(); }
-        return new HaState(entityId, state, JsonDocument.Parse(attributes.ToJsonString()).RootElement.Clone(), user, changedAt);
+        return new HaState(entityId, state, JsonDocument.Parse(attributes.ToJsonString()).RootElement.Clone(), user);
     }
 
     public Task<IReadOnlyList<HaRegistryEntry>> ListEntityRegistryAsync(CancellationToken cancellationToken = default)
