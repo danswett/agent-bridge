@@ -34,12 +34,17 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
     static readonly string[] AllLaunchers = ["agency", "copilot", "claude", "codex"];
     static readonly string[] Secrets = ["homeAssistant.token", "homeAssistant.agentToken", "updates.token", "newSession.transferSecret"];
 
-    static readonly HashSet<string> MappedNewSession =
-    [
+    // agent-ha-bridge's file is read with property names in any case (AgentHaBridgeInstall), as
+    // PowerShell reads it, so each section's own names are matched the same way: an exact match
+    // would report a NewSession section both imported and not carried.
+    static readonly HashSet<string> MappedNewSession = new(StringComparer.OrdinalIgnoreCase)
+    {
         "enabled", "workspaces", "defaultWorkspace", "launcher", "profiles", "defaultProfile", "resumeCount", "allowAllTools",
         "model", "effort", "context", "models", "efforts", "contexts", "extraArgs",
         "copilotPath", "agencyPath", "claudePath", "codexPath", "worktreeRoot", "worktreeLimit", "worktreeIdleHours",
-    ];
+    };
+    static bool Named(string key, params string[] names) => names.Any(n => string.Equals(n, key, StringComparison.OrdinalIgnoreCase));
+    static bool Secret(string key) => Secrets.Contains(key, StringComparer.OrdinalIgnoreCase);
 
     public static ConfigImport Build(JsonObject ahb, string? hostText)
     {
@@ -160,7 +165,7 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                 }
                 foreach (var (key, _) in ns.Where(p => !MappedNewSession.Contains(p.Key)))
                 {
-                    notCarried.Add(Secrets.Contains($"newSession.{key}") ? $"newSession.{key} (a secret: never copied)" : $"newSession.{key}");
+                    notCarried.Add(Secret($"newSession.{key}") ? $"newSession.{key} (a secret: never copied)" : $"newSession.{key}");
                 }
                 // An empty agents section adds nothing to read.
                 if (launch["agents"] is JsonObject agents)
@@ -192,19 +197,19 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
             }
             if (ha is not null)
             {
-                foreach (var (key, _) in ha.Where(p => p.Key is not ("baseUrl" or "agentUserIds" or "agentTokenEnvVar")))
+                foreach (var (key, _) in ha.Where(p => !Named(p.Key, "baseUrl", "agentUserIds", "agentTokenEnvVar")))
                 {
-                    notCarried.Add(Secrets.Contains($"homeAssistant.{key}") ? $"homeAssistant.{key} (a secret: never copied; give the connector its own with agent-bridge-host ha token set)" : $"homeAssistant.{key}");
+                    notCarried.Add(Secret($"homeAssistant.{key}") ? $"homeAssistant.{key} (a secret: never copied; give the connector its own with agent-bridge-host ha token set)" : $"homeAssistant.{key}");
                 }
             }
             if (ahb["dashboard"] is JsonObject dashboard)
             {
-                foreach (var (key, _) in dashboard.Where(p => p.Key != "urlPath"))
+                foreach (var (key, _) in dashboard.Where(p => !Named(p.Key, "urlPath")))
                 {
-                    notCarried.Add(key == "publication" ? "dashboard.publication (this host never publishes the dashboard, G7)" : $"dashboard.{key}");
+                    notCarried.Add(Named(key, "publication") ? "dashboard.publication (this host never publishes the dashboard, G7)" : $"dashboard.{key}");
                 }
             }
-            foreach (var (key, value) in ahb.Where(p => p.Key is not ("newSession" or "homeAssistant" or "dashboard" or "detailedActivity")))
+            foreach (var (key, value) in ahb.Where(p => !Named(p.Key, "newSession", "homeAssistant", "dashboard", "detailedActivity")))
             {
                 notCarried.Add(value is JsonObject ? $"{key}.*" : key);
             }

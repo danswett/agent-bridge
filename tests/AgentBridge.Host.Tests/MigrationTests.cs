@@ -1269,6 +1269,28 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Settings_written_in_another_case_are_reported_imported_and_never_also_not_carried()
+    {
+        // As AgentHaBridgeInstall reads agent-ha-bridge's file, and PowerShell reads it.
+        var ahb = (JsonObject)JsonNode.Parse("""
+            {"NewSession":{"Launcher":"claude","CodexStartPrompt":"go"},
+             "HomeAssistant":{"BaseUrl":"http://ha:8123","Token":"t"},
+             "Dashboard":{"UrlPath":"agents","Publication":{"writer":"x"}},
+             "DetailedActivity":true}
+            """, new JsonNodeOptions { PropertyNameCaseInsensitive = true })!;
+
+        var import = ConfigImport.Build(ahb, null);
+
+        Assert.Contains("newSession.launcher -> launch.defaultAgent", import.Imported);
+        Assert.Contains("homeAssistant.baseUrl -> homeAssistant.baseUrl", import.Imported);
+        Assert.Contains("dashboard.urlPath -> homeAssistant.dashboardUrlPath", import.Imported);
+        Assert.Equal(3, import.NotCarried.Count);
+        Assert.Contains("newSession.CodexStartPrompt", import.NotCarried);
+        Assert.Contains(import.NotCarried, n => n.StartsWith("homeAssistant.Token (a secret", StringComparison.Ordinal));
+        Assert.Contains(import.NotCarried, n => n.StartsWith("dashboard.publication (this host never publishes", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task The_cli_runs_status_and_a_dry_run_and_refuses_unknown_words()
     {
         var output = new StringWriter();
