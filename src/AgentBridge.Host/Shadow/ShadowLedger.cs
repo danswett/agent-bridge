@@ -234,8 +234,14 @@ public sealed class ShadowLedger
             var state = d.Kind is ShadowKinds.Status or ShadowKinds.Response && d.Session is { } ds && day.Coverage is { } dc ? ShadowCoverageTracker.StateKey(dc, ds, d.Kind) : null;
             if (state is not null && !episode.States.Contains(state))
             {
-                if (episode.States.Count < MaxPendingStates) { episode.States.Add(state); }
-                else { episode.StatesDropped++; }
+                // The oldest makes way, never the current: that is the one later samples repeat,
+                // and the one StateFailed marks in shown.
+                if (episode.States.Count >= MaxPendingStates)
+                {
+                    episode.States.RemoveAt(0);
+                    episode.StatesDropped++;
+                }
+                episode.States.Add(state);
             }
             if (episode.Last - episode.First < GraceFor(d.Kind)) { continue; }
             if (Persist(episode, date) is { } fresh) { made.Add(fresh); }

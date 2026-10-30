@@ -246,15 +246,18 @@ public sealed class ShadowCoverageTests : IDisposable
         Directory.CreateDirectory(reports);
         var session = ShadowHash.Session(A);
         var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(1500), TimeSpan.FromSeconds(5), time);
-        for (var i = 0; i <= 300; i++)
+        // A new response every sample, 257 of them, more than are kept by identity; then the last
+        // goes on unchanged past the grace: the same state, counted once.
+        for (var i = 0; i <= 305; i++)
         {
             ledger.Record(new ShadowComparison(true, 1, 1, [new ShadowDifference(ShadowKinds.Response, session, "the end of the latest response differs")], []),
-                View(null, null, null, Session(A, "idle") with { ResponseTail = "d" }), View(null, null, null, Session(A, "idle") with { ResponseTail = "h" + i }));
+                View(null, null, null, Session(A, "idle") with { ResponseTail = "d" }), View(null, null, null, Session(A, "idle") with { ResponseTail = "h" + Math.Min(i, 256) }));
             time.Advance(TimeSpan.FromSeconds(5));
         }
         var c = ledger.Today!.Coverage!;
-        Assert.Equal(301, c.ResponseChanges);
-        Assert.Equal(301, c.FailedStates.Count + c.FailedStatesOverflow.GetValueOrDefault(ShadowKinds.Response));
+        Assert.Equal(257, c.ResponseChanges);
+        Assert.Equal(257, c.FailedStates.Count + c.FailedStatesOverflow.GetValueOrDefault(ShadowKinds.Response));
+        Assert.True(c.Shown[session].ResponseFailed);
     }
 
     [Fact]
