@@ -134,15 +134,15 @@ tells them apart by folder, as agent-ha-bridge did.
 |---|---|
 | `newSession.enabled` | `launch.enabled` |
 | `newSession.workspaces` (label, path, isolate) | `launch.workspaces` |
-| `newSession.defaultWorkspace` (as the label the host gives the folder it chose: agent-ha-bridge's `-eq` ignores case, the host matches exactly, and the profile may already approve that folder under its own label) | `launch.defaultWorkspace` |
+| `newSession.defaultWorkspace` (as the label the host offers the folder it chose: agent-ha-bridge's `-eq` ignores case, the host matches exactly, and the profile may already approve that folder under its own label, or as the second of two sharing one, `label (folder)`) | `launch.defaultWorkspace` |
 | `newSession.launcher` | `launch.defaultAgent` |
-| `newSession.profiles`, `defaultProfile` (as the listed profile it matched, whatever the case; as written when there is no list, since Agency's own are known only at launch) | `launch.profiles`, `launch.defaultProfile` |
+| `newSession.profiles` (one string as a list of one, as agent-ha-bridge's `@(...)` reads it), `defaultProfile` (as the listed profile it matched, whatever the case; as written when there is no list, since Agency's own are known only at launch) | `launch.profiles`, `launch.defaultProfile` |
 | `newSession.resumeCount` | `launch.resumeCount` (at most 50 here; a larger value is reported) |
 | `newSession.allowAllTools` | `launch.permissions` (`allowAll` or `ask`) |
 | `newSession.model` (text: every agent's, as agent-ha-bridge falls back to it; object: per agent) | `launch.agents.<agent>.model` |
 | `newSession.effort.<agent>`, `context.<agent>` | `launch.agents.<agent>.effort`, `context` |
 | `newSession.models`, `efforts`, `contexts` `.<agent>` (numbers as their text, as agent-ha-bridge passes them) | `launch.agents.<agent>.models`, `efforts`, `contexts` |
-| `newSession.extraArgs` | `launch.agents.<each agent>.extraArgs` (agent-ha-bridge added them to every launcher) |
+| `newSession.extraArgs` (one string as a list of one) | `launch.agents.<each agent>.extraArgs` (agent-ha-bridge added them to every launcher) |
 | `newSession.<agent>Path` | `launch.agents.<agent>.path` |
 | `newSession.worktreeRoot`, `worktreeLimit`, `worktreeIdleHours` | `launch.worktrees.root`, `limit`, `idleHours` |
 | `homeAssistant.baseUrl` | `homeAssistant.baseUrl` |

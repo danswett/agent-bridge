@@ -606,6 +606,39 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_default_workspace_keeps_the_label_the_host_tells_a_second_folder_of_the_same_name_by()
+    {
+        string[] apps = [FakeAgentHaBridge.Rooted("one", "app"), FakeAgentHaBridge.Rooted("two", "app")];
+        var config = FakeAgentHaBridge.DefaultConfig();
+        config["newSession"]!["workspaces"] = new JsonArray(apps[1]);
+        config["newSession"]!["defaultWorkspace"] = "app";
+        await using var f = new FakeAgentHaBridge(config);
+        Directory.CreateDirectory(f.Profile);
+        var hostConfig = Path.Combine(f.Profile, "config.json");
+        File.WriteAllText(hostConfig, new JsonObject { ["version"] = 1, ["launch"] = new JsonObject { ["workspaces"] = new JsonArray(apps[0], apps[1]) } }.ToJsonString());
+
+        Assert.True((await f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        // The host offers the second as "app (<folder>)"; plain "app" is the first.
+        Assert.Equal($"app ({apps[1]})", (string?)JsonNode.Parse(File.ReadAllText(hostConfig))!["launch"]!["defaultWorkspace"]);
+    }
+
+    [Fact]
+    public async Task Extra_arguments_and_profiles_agent_ha_bridge_read_as_one_string_are_carried_as_a_list_of_one()
+    {
+        var config = FakeAgentHaBridge.DefaultConfig();
+        config["newSession"]!["extraArgs"] = "--banner";
+        config["newSession"]!["profiles"] = "work";
+        await using var f = new FakeAgentHaBridge(config);
+
+        Assert.True((await f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        var launch = JsonNode.Parse(File.ReadAllText(Path.Combine(f.Profile, "config.json")))!["launch"]!;
+        Assert.Equal(["work"], launch["profiles"]!.AsArray().Select(v => (string)v!));
+        Assert.Equal(["--banner"], launch["agents"]!["copilot"]!["extraArgs"]!.AsArray().Select(v => (string)v!));
+    }
+
+    [Fact]
     public async Task The_default_profile_agent_ha_bridge_matched_whatever_its_case_stays_the_default()
     {
         var config = FakeAgentHaBridge.DefaultConfig();

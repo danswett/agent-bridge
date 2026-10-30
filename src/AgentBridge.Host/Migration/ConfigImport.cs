@@ -232,15 +232,22 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
     // approve that folder under a label of its own, and then agent-ha-bridge's entry is not
     // imported. Failing that, as the first label matching it whatever the case, else as written
     // (falling back to the first workspace, in both).
+    // Both lists are read as LaunchConfig reads them, labels included: a second entry under a
+    // label already taken is offered as "label (folder)", by agent-ha-bridge and the host alike.
     static string DefaultLabel(JsonObject launch, JsonNode? source, string configured)
     {
-        var entries = (launch["workspaces"] as JsonArray ?? []).Select(Read).Where(e => e.Path is not null).ToList();
-        var chosen = (source as JsonArray ?? []).Select(Read).FirstOrDefault(e => e.Path is not null && string.Equals(LabelOf(e.Label, e.Path), configured, StringComparison.OrdinalIgnoreCase));
-        if (chosen.Path is { } folder && entries.FirstOrDefault(e => string.Equals(Key(e.Path!), Key(folder), PathCase)) is { Path: { } path } kept)
-        {
-            return LabelOf(kept.Label, path);
-        }
-        return entries.Select(e => LabelOf(e.Label, e.Path!)).FirstOrDefault(l => string.Equals(l, configured, StringComparison.OrdinalIgnoreCase)) ?? configured;
+        var host = Parsed(launch["workspaces"]);
+        var chosen = Parsed(source).FirstOrDefault(w => string.Equals(w.Label, configured, StringComparison.OrdinalIgnoreCase));
+        if (chosen is not null && host.FirstOrDefault(w => string.Equals(w.Path, chosen.Path, PathCase)) is { } kept) { return kept.Label; }
+        return host.FirstOrDefault(w => string.Equals(w.Label, configured, StringComparison.OrdinalIgnoreCase))?.Label ?? configured;
+    }
+
+    static IReadOnlyList<AgentBridge.Host.Delivery.Launch.WorkspaceConfig> Parsed(JsonNode? workspaces)
+    {
+        if (workspaces is not JsonArray list) { return []; }
+        var canonical = new JsonArray(list.Select(n => n is JsonObject o ? (JsonNode)Canonical(o) : n?.DeepClone()).ToArray());
+        using var doc = JsonDocument.Parse(new JsonObject { ["workspaces"] = canonical }.ToJsonString());
+        return AgentBridge.Host.Delivery.Launch.LaunchConfig.Read(doc.RootElement).Config.Workspaces;
     }
 
     // The same for the Agency profile (Get-BridgeDefaultAgencyProfile's -eq), against the profiles
@@ -327,7 +334,8 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
 
     static double? Number(JsonNode? n) => n is JsonValue v && v.TryGetValue<double>(out var d) ? d : null;
 
-    static List<string>? Strings(JsonNode? n) => n is JsonArray a ? a.Select(Str).OfType<string>().ToList() : null;
+    // agent-ha-bridge reads its lists through @(...), so one string is a list of one.
+    static List<string>? Strings(JsonNode? n) => n is JsonArray a ? a.Select(Str).OfType<string>().ToList() : Str(n) is { } one ? [one] : null;
 
     static JsonArray Array(IEnumerable<string> values) => new(values.Select(v => (JsonNode)v).ToArray());
 }
