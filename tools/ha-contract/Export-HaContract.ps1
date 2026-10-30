@@ -33,7 +33,9 @@ param(
     # Replies: how the daemon reads the reply card's payload and the reply box, and what it says.
     [string]$RepliesOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-replies.json'),
     # Stops: End session's two presses, what the card says and what the status shows.
-    [string]$StopsOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-stops.json')
+    [string]$StopsOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-stops.json'),
+    # Launch: the launch card, an agent's launch request, its refusals and outcomes.
+    [string]$LaunchOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-launch.json')
 )
 
 Set-StrictMode -Version Latest
@@ -172,6 +174,14 @@ function script:Get-CopilotMqttMachineDevice {
     if (-not $MachineName) { $MachineName = $machine }
     & $specMachineDevice -Slug $Slug -MachineName $MachineName
 }
+# The same for whatever asks this computer's slug without naming it (the launch outcomes' topic,
+# through Get-CopilotMqttMachineTopicRoot): the fixture's machine, not the recorder's.
+$specMachineSlug = ${function:Get-BridgeMachineSlug}
+function script:Get-BridgeMachineSlug {
+    param([string]$MachineName)
+    if (-not $PSBoundParameters.ContainsKey('MachineName')) { $MachineName = $machine }
+    & $specMachineSlug -MachineName $MachineName
+}
 $copilotId = '6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20'
 $claudeId = 'c1a2b3c4-d5e6-4f70-8a91-b2c3d4e5f607'
 $codexId = '019a2b3c-4d5e-7f60-8192-a3b4c5d6e7f8'
@@ -257,7 +267,7 @@ $cards = [ordered]@{
 # The capability flags a machine publishes (hooks/daemon-sessions.ps1, Get-DaemonLaunchCapabilities),
 # as a host that serves no launch controls, no Detailed activity switch and no fleet reports them.
 $readOnlyCapabilities = [ordered]@{
-    newSession = $false; profile = $false; resume = $false; agent = $false; tuning = $false; permissions = $false
+    newSession = $false; profile = $false; resume = $false; agent = $false; tuning = $false; permissions = $false; launchRequest = 0
     detailed = $false; resumeShare = $false; dev = $true; fleet = ''
 }
 $descriptors = @(
@@ -746,4 +756,215 @@ $stops = [ordered]@{
 }
 $full = [IO.Path]::GetFullPath($StopsOutput)
 [IO.File]::WriteAllText($full, ((ConvertTo-Stable $stops) | ConvertTo-Json -Depth 30) + "`n", [Text.UTF8Encoding]::new($false))
+Write-Host "wrote $full"
+
+# ---- Launch ----------------------------------------------------------------------------------
+# The launch card (Publish-CopilotMqttNewSession) and what a press of Launch does with it: the
+# labels its selectors offer, the resumable list's labels (Get-BridgeResumableSessions), an
+# agent's launch request read from the prompt payload (Get-DaemonLaunchRequest) and refused when
+# its settings name something this machine does not offer (Resolve-DaemonRequestedLaunch), the
+# outcome an agent reads (Set-DaemonLaunchOutcome), and the capability flags a machine serving
+# the card reports (Get-DaemonLaunchCapabilities). Folders, profiles, the agents installed and
+# the readers of each agent's sessions are stand-ins; nothing is started.
+
+Import-SpecFunction 'hooks\decision-bridge-common.ps1' @('Get-BridgePermissionOptions', 'Get-BridgePermissionLabel', 'Test-BridgePermissionAllowsAll',
+    'Get-BridgeTuningAxes', 'Get-BridgeTuningAxisLabel', 'Get-BridgeTuningAxisIcon')
+Import-SpecAssignment 'hooks\decision-bridge-common.ps1' @('BridgeTuningDefaultOption', 'BridgePermissionAskOption', 'BridgePermissionAllowOption')
+Import-SpecFunction 'hooks\session-launch.ps1' @('Get-BridgeLauncher', 'Get-BridgeLauncherLabel', 'Resolve-BridgeLauncher', 'Get-BridgeResumableSessions')
+Import-SpecFunction 'hooks\daemon-launch.ps1' @('ConvertTo-DaemonInstant', 'Get-DaemonLaunchMember', 'Get-DaemonLaunchRequest', 'Format-DaemonInstant',
+    'Set-DaemonLaunchOutcome', 'Resolve-DaemonRequestedLaunch', 'Get-DaemonResumeLauncher')
+Import-SpecFunction 'hooks\daemon-sessions.ps1' @('Get-DaemonLaunchCapabilities')
+
+function Get-SpecLiteral {
+    # A top-level $script: assignment whose value is a literal table: evaluated only when nothing
+    # in it calls out (no command, no method call), so a table that does work is refused.
+    param([string]$Path, [string]$Name)
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Source $Path), [ref]$null, [ref]$null)
+    $found = @($ast.EndBlock.Statements | Where-Object {
+        $_ -is [System.Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq "`$script:$Name" })
+    if ($found.Count -ne 1) { throw "$Path assigns `$script:$Name $($found.Count) times" }
+    $calls = @($found[0].Right.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] -or $a -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true))
+    if ($calls.Count -gt 0) { throw "$Path assigns `$script:$Name something that calls out: $($calls[0].Extent.Text)" }
+    [scriptblock]::Create($found[0].Right.Extent.Text).InvokeReturnAsIs()
+}
+$script:BridgeTuningAxes = Get-SpecLiteral 'hooks\decision-bridge-common.ps1' 'BridgeTuningAxes'
+
+# The agents' labels and the order their sessions are read in, from the launcher table itself
+# (session-launch.ps1). The table holds the readers too, which run commands, so only these two
+# constants are taken from each entry.
+$launcherAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Source 'hooks\session-launch.ps1'), [ref]$null, [ref]$null)
+$launcherTable = @($launcherAst.EndBlock.Statements | Where-Object {
+    $_ -is [System.Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq '$script:BridgeLaunchers' })
+if ($launcherTable.Count -ne 1) { throw "session-launch.ps1 assigns `$script:BridgeLaunchers $($launcherTable.Count) times" }
+$outer = $launcherTable[0].Right.Find({ param($a) $a -is [System.Management.Automation.Language.HashtableAst] }, $true)
+$script:BridgeLaunchers = [ordered]@{}
+foreach ($pair in $outer.KeyValuePairs) {
+    $kind = $pair.Item1.Extent.Text.Trim("'", '"')
+    $inner = $pair.Item2.Find({ param($a) $a -is [System.Management.Automation.Language.HashtableAst] }, $true)
+    $entry = @{}
+    foreach ($slot in @('Label', 'Kind', 'ResumeOrder', 'NeedsFirstMessage')) {
+        $value = @($inner.KeyValuePairs | Where-Object { $_.Item1.Extent.Text -eq $slot })
+        if ($value.Count -eq 1) {
+            $text = $value[0].Item2.Extent.Text
+            if ($text -notmatch "^('[^']*'|\d+|\`$true|\`$false)$") { throw "`$script:BridgeLaunchers.$kind.$slot is not a constant: $text" }
+            $entry[$slot] = [scriptblock]::Create($text).InvokeReturnAsIs()
+        }
+    }
+    $script:BridgeLaunchers[$kind] = $entry
+}
+
+$script:LaunchSettings = @{ 'newSession.enabled' = $true; 'newSession.resumeCount' = 12; 'newSession.allowAllTools' = $false; 'updates.installedFromSource' = $true }
+$script:Installed = @('agency', 'copilot', 'claude', 'codex')
+$script:Profiles = @('default', 'work')
+function script:Get-BridgeSetting { param([string]$Name, $Default) if ($script:LaunchSettings.ContainsKey($Name)) { $script:LaunchSettings[$Name] } else { $Default } }
+function script:Get-BridgeAvailableLaunchers { @($script:Installed) }
+function script:Get-BridgeAgencyProfiles { @($script:Profiles) }
+function script:Test-DaemonSharingEnabled { param([string]$Name) $false }
+function script:Write-DaemonLog { param([string]$Message) }
+
+# The card's controls, published for a machine with two workspaces, Agency's two profiles, two
+# resumable sessions, four agents, and Copilot's tuning lists; then for a machine with nothing
+# configured, where each selector still has to offer something.
+$launchWorkspaces = @([pscustomobject]@{ Label = 'agent-bridge'; Path = 'C:\repos\agent-bridge' }, [pscustomobject]@{ Label = 'scratch'; Path = 'C:\scratch' })
+$launchResumable = @([pscustomobject]@{ Label = 'Fix the relay - agent-bridge'; SessionId = 'a1b2c3d4-0000-4000-8000-000000000001' },
+    [pscustomobject]@{ Label = 'Claude: Write docs - scratch'; SessionId = 'a1b2c3d4-0000-4000-8000-000000000002' })
+$launchAgents = @('Agency', 'Copilot', 'Claude', 'Codex')
+$launchTuning = @{
+    model = @('Agent default', 'gpt-5.5', 'claude-sonnet-5')
+    effort = @('Agent default', 'low', 'medium', 'high')
+    context = @('Agent default')
+}
+$controls = Get-Published { Publish-CopilotMqttNewSession -Workspaces $launchWorkspaces -Profiles $script:Profiles -Resumable $launchResumable -Agents $launchAgents -Tuning $launchTuning -Slug $slug -Headers $headers }
+$emptyControls = Get-Published { Publish-CopilotMqttNewSession -Workspaces @() -Profiles @() -Resumable @() -Agents @() -Tuning @{} -Slug $slug -Headers $headers }
+$longNote = 'Launch failed: ' + ('x' * 300)
+$result = Get-Published { Set-CopilotMqttNewSessionResult -Text $longNote -Slug $slug -Headers $headers }
+$clearPrompt = Get-Published { Clear-CopilotMqttNewSessionPrompt -Slug $slug -Headers $headers }
+
+# The resumable list's labels: one agent's sessions, then two agents' (each label then names its
+# agent), a blank summary, a repeated one and a long one.
+$script:ResumeEntries = @{}
+foreach ($kind in @($script:BridgeLaunchers.Keys)) {
+    $script:BridgeLaunchers[$kind]['Resumable'] = [scriptblock]::Create("param(`$Limit, `$Found) @(`$script:ResumeEntries['$kind'])")
+}
+function New-ResumeEntry([string]$Id, [string]$Launcher, [string]$Summary, [string]$Folder, [int]$Minutes) {
+    [pscustomobject]@{ SessionId = $Id; Launcher = $Launcher; Summary = $Summary; Folder = $Folder; Updated = [DateTimeOffset]::Parse('2026-10-29T20:00:00Z').AddMinutes(-$Minutes) }
+}
+function Get-ResumeLabels([hashtable]$Entries) {
+    $script:ResumeEntries = $Entries
+    foreach ($kind in @($script:BridgeLaunchers.Keys)) { if (-not $script:ResumeEntries.ContainsKey($kind)) { $script:ResumeEntries[$kind] = @() } }
+    @(Get-BridgeResumableSessions | ForEach-Object { [ordered]@{ id = [string]$_.SessionId; launcher = [string]$_.Launcher; label = [string]$_.Label } })
+}
+$resumeCases = [ordered]@{
+    oneAgent = Get-ResumeLabels @{
+        claude = @((New-ResumeEntry 'c0000000-0000-4000-8000-000000000001' 'claude' 'Write the   docs' 'C:\repos\agent-bridge\' 5),
+            (New-ResumeEntry 'c0000000-0000-4000-8000-000000000002' 'claude' '' '/Users/me/scratch' 10),
+            (New-ResumeEntry 'c0000000-0000-4000-8000-000000000003' 'claude' 'No folder' '' 15))
+    }
+    twoAgents = Get-ResumeLabels @{
+        copilot = @((New-ResumeEntry '6f000000-0000-4000-8000-000000000001' 'copilot' 'Fix the relay' 'C:\repos\agent-bridge' 1),
+            (New-ResumeEntry '6f000000-0000-4000-8000-000000000002' 'copilot' 'Fix the relay' 'C:\repos\agent-bridge' 2),
+            (New-ResumeEntry '6f000000-0000-4000-8000-000000000003' 'copilot' ('A very long summary ' * 8) 'C:\repos\agent-bridge' 3))
+        claude = @((New-ResumeEntry 'c0000000-0000-4000-8000-000000000004' 'claude' 'Write docs' 'C:\scratch' 4))
+    }
+}
+
+# An agent's launch request, as Get-DaemonLaunchRequest reads it from the prompt payload sensor
+# for a press at 20:00:30: every kind it can be, and each way its settings are refused.
+$launchPress = [DateTimeOffset]::Parse('2026-10-29T20:00:30.000+00:00')
+$script:DaemonEntity = @{ NewPromptPayload = "sensor.agent_bridge_${slug}_new_prompt_payload" }
+$script:DaemonLaunchRequestsHandled = @('handled-0001')
+function Read-LaunchRequest([string]$Stamp, $Attributes, [string]$Updated = '2026-10-29T20:00:29.500+00:00') {
+    $script:States = @{ $script:DaemonEntity.NewPromptPayload = [pscustomobject]@{ state = $Stamp; attributes = $Attributes; last_updated = $Updated } }
+    $read = Get-DaemonLaunchRequest -Headers $headers -PressedAt $launchPress
+    $out = [ordered]@{ kind = $read.Kind }
+    if ($null -ne $read.Request) {
+        $settings = [ordered]@{}
+        foreach ($k in @($read.Request.Settings.Keys | Sort-Object)) { $settings[$k] = $read.Request.Settings[$k] }
+        $out['request'] = [ordered]@{ id = $read.Request.Id; text = $read.Request.Text; settings = $settings; problem = $read.Request.Problem }
+    }
+    $out
+}
+$at = '2026-10-29T20:00:29.400Z'
+$requestCases = [ordered]@{
+    person = Read-LaunchRequest $at ([pscustomobject]@{ at = $at; text = 'Fix the build' })
+    fresh = Read-LaunchRequest $at ([pscustomobject]@{ at = $at; text = '  Fix the build  '; request = 'req-0001-abcd'; settings = [pscustomobject]@{ agent = 'Claude'; workspace = ' scratch '; model = ''; effort = $null } })
+    emptied = Read-LaunchRequest 'unknown' ([pscustomobject]@{ request = 'req-0002-abcd' })
+    newer = Read-LaunchRequest $at ([pscustomobject]@{ request = 'req-0003-abcd' }) '2026-10-29T20:00:31.000+00:00'
+    stale = Read-LaunchRequest $at ([pscustomobject]@{ request = 'req-0004-abcd' }) '2026-10-29T19:59:00.000+00:00'
+    malformed = Read-LaunchRequest $at ([pscustomobject]@{ request = 'bad id!' })
+    short = Read-LaunchRequest $at ([pscustomobject]@{ request = 'abc' })
+    handled = Read-LaunchRequest $at ([pscustomobject]@{ request = 'handled-0001' })
+    unknownSetting = Read-LaunchRequest $at ([pscustomobject]@{ request = 'req-0005-abcd'; settings = [pscustomobject]@{ colour = 'blue' } })
+    notText = Read-LaunchRequest $at ([pscustomobject]@{ request = 'req-0006-abcd'; settings = [pscustomobject]@{ model = 5 } })
+    notObject = Read-LaunchRequest $at ([pscustomobject]@{ request = 'req-0007-abcd'; settings = 'agent=Claude' })
+    settingsOnly = Read-LaunchRequest $at ([pscustomobject]@{ settings = [pscustomobject]@{ agent = 'Codex' } })
+}
+
+# What a request's settings are refused for, and the note the card (and the outcome) carries.
+$script:DefaultWorkspace = 'agent-bridge'
+function script:Get-BridgeDefaultWorkspaceLabel { $script:DefaultWorkspace }
+function script:Resolve-BridgeWorkspacePath { param([string]$Label) (@($launchWorkspaces | Where-Object Label -EQ $Label) | Select-Object -First 1 | ForEach-Object Path) }
+function script:Get-BridgeDefaultAgencyProfile { 'default' }
+function script:Resolve-BridgeAgencyProfile { param([string]$Name) if ($script:Profiles -contains $Name) { $Name } else { $null } }
+function script:Get-BridgeTuningOptions { param([string]$Launcher, [string]$Axis) if ($Launcher -in @('copilot', 'agency')) { @($launchTuning[$Axis]) } else { @('Agent default') } }
+function script:Get-BridgeDefaultTuning { param([string]$Launcher, [string]$Axis) '' }
+function script:Resolve-BridgeTuningValue { param([string]$Launcher, [string]$Axis, [string]$Value) $Value }
+function script:Complete-DaemonResumeChoice { param($Session, [string]$Label, $Workspaces, $Launchers, $Headers) [pscustomobject]@{ Session = $Session; Label = $Label; Launcher = (Get-DaemonResumeLauncher -Entry $Session) } }
+function script:Get-DaemonOpeningPrompt { param([string]$Launcher, [string]$Prompt) $Prompt }
+$launchControls = [pscustomobject]@{
+    Workspaces = $launchWorkspaces; Launcher = 'copilot'; Launchers = $script:Installed; Agents = $launchAgents; Profiles = $script:Profiles
+    Resumable = @([pscustomobject]@{ Label = 'Fix the relay - agent-bridge'; SessionId = '6f000000-0000-4000-8000-000000000001'; Launcher = 'copilot' })
+}
+function Resolve-Requested([hashtable]$Settings) {
+    $script:Recorded.Clear()
+    $script:DaemonLaunchRequest = [pscustomobject]@{ Id = 'req-0100-abcd'; Text = 'go'; Settings = $Settings; Problem = '' }
+    $resolved = Resolve-DaemonRequestedLaunch -Controls $launchControls -Headers $headers
+    $script:DaemonLaunchRequest = $null
+    $note = @($script:Recorded | Where-Object { $_.topic -like '*/newsession/result' } | ForEach-Object { $_.payload }) | Select-Object -Last 1
+    [ordered]@{ settings = $Settings; refused = ($null -eq $resolved); note = [string]$note }
+}
+$refusalCases = [ordered]@{
+    unknownAgent = Resolve-Requested @{ agent = 'Gemini' }
+    resumeAndWorkspace = Resolve-Requested @{ resume = 'Fix the relay - agent-bridge'; workspace = 'scratch' }
+    unknownResume = Resolve-Requested @{ resume = 'Nothing like it' }
+    resumeOtherAgent = Resolve-Requested @{ resume = 'Fix the relay - agent-bridge'; agent = 'Claude' }
+    unknownWorkspace = Resolve-Requested @{ workspace = 'elsewhere' }
+    unknownProfile = Resolve-Requested @{ agent = 'Agency'; profile = 'play' }
+    profileNotAgency = Resolve-Requested @{ agent = 'Claude'; profile = 'work' }
+    unknownModel = Resolve-Requested @{ model = 'gpt-1' }
+    noEffort = Resolve-Requested @{ agent = 'Claude'; effort = 'high' }
+    unknownPermissions = Resolve-Requested @{ permissions = 'allow all' }
+    accepted = Resolve-Requested @{ agent = 'Copilot'; workspace = 'scratch'; model = 'gpt-5.5'; effort = 'Agent default'; permissions = 'Allow all' }
+}
+
+# The outcome an agent reads: a request started, then refused, each recorded newest first.
+$script:DaemonLaunchOutcomes = @()
+$outcome = Get-Published {
+    Set-DaemonLaunchOutcome -Request 'req-0001-abcd' -Outcome 'starting' -Note 'Received; checking its settings before launching.' -Pressed '2026-10-29T20:00:30.0000000Z' -Headers $headers
+    Set-DaemonLaunchOutcome -Request 'req-0001-abcd' -Outcome 'started' -Session '6f000000-0000-4000-8000-0000000000aa' -Headers $headers -Launched ([pscustomobject][ordered]@{
+        agent = 'Copilot'; workspace = 'scratch'; resume = ''; profile = ''; model = 'gpt-5.5'; effort = ''; context = ''; permissions = 'Allow all'; resumed = $false })
+}
+foreach ($p in $outcome) { foreach ($r in @($p.payload.recent)) { $r['at'] = '<now>' } }
+
+$launch = [ordered]@{
+    source = $fixture.source
+    machine = $machine; slug = $slug
+    constants = [ordered]@{
+        newSessionOption = $script:CopilotMqttNewSessionOption; tuningDefault = $script:BridgeTuningDefaultOption
+        permissions = @(Get-BridgePermissionOptions); allowAll = (Get-BridgePermissionLabel -AllowAllTools $true); ask = (Get-BridgePermissionLabel -AllowAllTools $false)
+        noteExpirySeconds = (Get-SpecConfigConstant 'hooks\agent-bridge-daemon.ps1' @('NoteExpirySeconds')).NoteExpirySeconds
+        replyBlank = $script:DaemonConfig['ReplyBlankValue']
+    }
+    agents = [ordered]@{}
+    controls = $controls; emptyControls = $emptyControls; result = $result; clearPrompt = $clearPrompt; outcome = $outcome
+    resumeLabels = $resumeCases
+    requests = $requestCases
+    refusals = $refusalCases
+    capabilities = (Get-DaemonLaunchCapabilities)
+}
+foreach ($kind in @($script:BridgeLaunchers.Keys)) {
+    $launch.agents[$kind] = [ordered]@{ label = (Get-BridgeLauncherLabel -Launcher $kind); needsFirstMessage = [bool](Get-BridgeLauncher -Launcher $kind).NeedsFirstMessage }
+}
+$full = [IO.Path]::GetFullPath($LaunchOutput)
+[IO.File]::WriteAllText($full, ((ConvertTo-Stable $launch) | ConvertTo-Json -Depth 30) + "`n", [Text.UTF8Encoding]::new($false))
 Write-Host "wrote $full"

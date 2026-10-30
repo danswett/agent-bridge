@@ -121,7 +121,12 @@ public static partial class HaShadow
         {
             return "further Copilot logins' usage is not reported by the host";
         }
-        foreach (var part in new[] { "/install_update/", "/check_updates/", "/new_", "/newsession/", "/transfer", "/transfer_request/" })
+        // The card's choices are the launcher's, which a shadow does not ask for.
+        if (topic.Contains("/new_", StringComparison.Ordinal) || topic.Contains("/newsession/", StringComparison.Ordinal))
+        {
+            return "launch card not compared (the shadow takes no launch options)";
+        }
+        foreach (var part in new[] { "/install_update/", "/check_updates/", "/transfer", "/transfer_request/" })
         {
             if (topic.Contains(part, StringComparison.Ordinal)) { return "not served yet (a later stage)"; }
         }

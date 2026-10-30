@@ -69,6 +69,9 @@ public sealed record HaConnectorOptions
     public TimeSpan StopLapseRetry { get; init; } = TimeSpan.FromSeconds(2);
     // How long stopping waits for a reply being delivered.
     public TimeSpan ReplyStopWait { get; init; } = TimeSpan.FromSeconds(10);
+    // How often the launch card's choices are asked of the host's launcher again, and its
+    // selectors kept on a usable default (the daemon's reconcile).
+    public TimeSpan LaunchRefresh { get; init; } = TimeSpan.FromSeconds(30);
 }
 
 // The Home Assistant connector (docs/ha-connector.md): this machine's sessions, liveness,
@@ -76,7 +79,8 @@ public sealed record HaConnectorOptions
 // agent-ha-bridge's own per-machine contract (HaContract), so a machine moved off the
 // PowerShell daemon keeps its cards; and, given the host's answer, reply and stop delivery, the
 // answers, replies and End session presses given on those cards (HaConnector.Answers.cs,
-// HaConnector.Replies.cs, HaConnector.Stops.cs).
+// HaConnector.Replies.cs, HaConnector.Stops.cs), and, given its launcher, the launch card
+// (HaConnector.Launch.cs).
 //
 // What it never does, and why:
 //   * write the shared card, dashboard or publication policy. The writer is configured and fenced
@@ -86,8 +90,8 @@ public sealed record HaConnectorOptions
 //   * run while agent-ha-bridge runs for this user (design G5). Two publishers of one machine's
 //     entities would fight over every retained topic. Checked before every write, so the
 //     daemon starting part-way through a pass stops the rest of it;
-//   * launch or update: later stages. Until they land, entities only those would
-//     serve are withdrawn rather than left as controls nothing acts on.
+//   * update, or bring a session over from another machine: later stages. Until they land,
+//     entities only those would serve are withdrawn rather than left as controls nothing acts on.
 public sealed partial class HaConnector : IAsyncDisposable
 {
     readonly HaConnectorOptions options;
@@ -160,12 +164,43 @@ public sealed partial class HaConnector : IAsyncDisposable
             DriverPendingAt = now;
         }
 
+        // An agent's launch: its opening turn, the prompt it launched with, is the agent's, and
+        // the arm is for that turn alone. The opening turn may be here already (the session
+        // registered before its launch was reported), so it is looked for as well as waited for;
+        // the turn after it is whoever's it is. Without a prompt there is no opening turn, and
+        // the arm waits for the first, as a press's does.
+        string? openingPrompt;
+        bool openingResumed;
+
+        public void ArmLaunch(DateTimeOffset at, string? prompt, bool resumed)
+        {
+            ArmDriver("agent", at);
+            openingPrompt = prompt is { Length: > 0 } ? Collapse(prompt) : null;
+            openingResumed = resumed;
+        }
+
+        // The current turn, seen: when it is the launch's opening turn, the arm is spent on it.
+        public void TurnSeen(Activity activity)
+        {
+            if (openingPrompt is not { } opening) { return; }
+            var message = activity.UserMessage is { } m ? Collapse(m) : "";
+            var head = opening[..Math.Min(80, opening.Length)];
+            if (message.StartsWith(head, StringComparison.Ordinal) || (!openingResumed && activity.TurnCount >= 1))
+            {
+                DriverPendingAt = null;
+                openingPrompt = null;
+            }
+        }
+
+        static string Collapse(string text) => System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+
         // A new turn: the press that armed it drives it, or nobody did and the person at the
         // machine is.
         public void TurnStarted(DateTimeOffset now, TimeSpan arm)
         {
             if (DriverPendingAt is not { } at || now - at >= arm) { Driver = "human"; }
             DriverPendingAt = null;
+            openingPrompt = null;
         }
         // Which of the reply and the reasoning changed last. The host keeps the previous turn's
         // reply when a new turn starts, so "no reply yet" cannot say the newest line is a thought.
@@ -201,9 +236,11 @@ public sealed partial class HaConnector : IAsyncDisposable
         Func<(UsageReport Report, long Version)>? usage = null, Action<string>? log = null, TimeProvider? time = null,
         Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer = null,
         Func<HaReply, CancellationToken, Task<ReplyResult>>? reply = null,
-        Func<StopRequest, CancellationToken, Task<StopResult>>? stop = null)
+        Func<StopRequest, CancellationToken, Task<StopResult>>? stop = null,
+        HaLauncher? launch = null)
     {
         this.options = options;
+        launcher = launch;
         this.answer = answer;
         this.reply = reply;
         stopper = stop;
@@ -283,6 +320,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             }
             await Step("sessions", () => SessionsAsync(now, cancellationToken));
             await Step("answers", () => AnswersAsync(now, cancellationToken));
+            await Step("launch", () => LaunchAsync(now, cancellationToken));
             await Step("global", () => GlobalAsync(now, cancellationToken));
             await Step("heartbeat", () => HeartbeatAsync(now, cancellationToken));
             await Step("usage", () => UsageAsync(now, cancellationToken));
@@ -335,9 +373,15 @@ public sealed partial class HaConnector : IAsyncDisposable
 
         await DetailedAsync(ct);
 
-        // agent-ha-bridge's launch card, transfer and install controls for this machine. This
-        // host serves none of them yet, so they are withdrawn rather than left for a press that
-        // nothing would act on; agent-ha-bridge publishes them again if it takes the machine back.
+        // agent-ha-bridge's transfer and install controls for this machine, and its launch card
+        // when the host cannot launch here: withdrawn rather than left for a press that nothing
+        // would act on; agent-ha-bridge publishes them again if it takes the machine back.
+        launchServing = launcher?.Available() == true;
+        launchOptions = null;
+        launchSignature = null;
+        launchDefaultsPending = null;
+        launchPressBaselined = false;
+        launchOutcomesRestored = false;
         foreach (var topic in Unserved()) { await ha.PublishAsync(topic, "", true, ct); }
 
         var (updateTopic, updateConfig) = HaContract.UpdateConfig(Slug, options.MachineName);
@@ -394,6 +438,13 @@ public sealed partial class HaConnector : IAsyncDisposable
             HaContract.UpdateStateTopic(Slug), HaContract.UpdateAttributesTopic(Slug), HaContract.OnlineStateTopic(Slug),
             HaContract.OnlineAttributesTopic(Slug), HaContract.GlobalStateTopic(Slug), HaContract.GlobalAttributesTopic(Slug),
         };
+        // The launch card, when it is served (the transfer request is a later stage). Its note,
+        // outcomes and prompt payload are left as they are: the payload is the card's.
+        if (launchServing)
+        {
+            served.UnionWith(HaContract.LaunchConfigs(Slug, options.MachineName, new HaContract.LaunchCard()).Select(c => c.Topic));
+            served.UnionWith([HaContract.LaunchResultTopic(Slug), HaContract.LaunchOutcomeTopic(Slug), HaContract.PromptPayloadTopic(Slug)]);
+        }
         // The agents' own usage sensors are the usage pass's; the numbered ones for further Copilot
         // logins the host does not report, so they go rather than keep a reading nothing refreshes.
         served.UnionWith(HaContract.UsageTopics(Slug, HaContract.UsageClients));
@@ -570,6 +621,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 starting.Remove(s.Id);
                 published[s.Id] = p;
                 retiring.Remove(node);
+                ApplyLaunchedDriver(s.Id, p, now);
             }
             SaveLedger();
             WatchSetChanged();
@@ -585,6 +637,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         // A new turn (a new message from the person or an agent) decides who drives it.
         var turn = $"{full.Activity.TurnCount}\n{full.Activity.UserMessage}";
         if (p.TurnKey is not null && p.TurnKey != turn) { p.TurnStarted(now, options.DriverArm); }
+        else { p.TurnSeen(full.Activity); }
         p.TurnKey = turn;
 
         var status = HaPayloads.Status(s);
@@ -675,7 +728,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             descriptors = [.. published.Values.OrderBy(p => p.Node, StringComparer.Ordinal)
                 .Select(p => new HaPayloads.Descriptor(p.Name, options.MachineName, p.Node, p.Kind))];
         }
-        var capabilities = HaPayloads.Capabilities(helperExists, options.Dev);
+        var capabilities = HaPayloads.Capabilities(helperExists, options.Dev, LaunchCapabilities());
         var attributes = HaPayloads.GlobalAttributes(descriptors, options.MachineName, Slug, capabilities, now, source.Held?.Reason ?? "");
         var signature = Signature(attributes);
         if (signature == globalSignature && now - globalAt < HaContract.GlobalReassert) { return; }

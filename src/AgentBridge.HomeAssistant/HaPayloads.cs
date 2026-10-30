@@ -194,18 +194,24 @@ public static class HaPayloads
     static string? FirstLine(string? text) =>
         string.IsNullOrWhiteSpace(text) ? null : text.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0);
 
+    // What the launch card serves, for its capability flags: whether there is a card, and its
+    // profile (Agency with profiles), resume (any agent) and agent (more than one) rows.
+    public sealed record LaunchRows(bool Profile, bool Resume, bool Agent);
+
     // The capability flags a machine's session list carries (Get-DaemonLaunchCapabilities). A
-    // peer rendering the shared dashboard draws only the rows a machine says it serves: this
-    // host serves no launch card yet, and the Detailed activity switch only when the helper is
-    // there to draw.
-    public static JsonObject Capabilities(bool detailed, bool dev) => new()
+    // peer rendering the shared dashboard draws only the rows a machine says it serves: the launch
+    // card's when the host launches here, and the Detailed activity switch only when the helper is
+    // there to draw. launchRequest says an agent's launch request (#227) is read: a number, so the
+    // contract can change shape without an older reader taking it for the same thing.
+    public static JsonObject Capabilities(bool detailed, bool dev, LaunchRows? launch = null) => new()
     {
-        ["newSession"] = false,
-        ["profile"] = false,
-        ["resume"] = false,
-        ["agent"] = false,
-        ["tuning"] = false,
-        ["permissions"] = false,
+        ["newSession"] = launch is not null,
+        ["profile"] = launch?.Profile == true,
+        ["resume"] = launch?.Resume == true,
+        ["agent"] = launch?.Agent == true,
+        ["tuning"] = launch is not null,
+        ["permissions"] = launch is not null,
+        ["launchRequest"] = launch is not null ? 1 : 0,
         ["detailed"] = detailed,
         ["resumeShare"] = false,
         ["dev"] = dev,

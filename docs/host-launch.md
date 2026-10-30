@@ -2,7 +2,9 @@
 
 `session.launch` and `launch.options` ([contract](protocol/v1-launch.md)) start or resume an
 agent session from another device, the way agent-ha-bridge's launch card does. A session from
-another machine is a launch too: [host-transfer.md](host-transfer.md). The settings
+another machine is a launch too: [host-transfer.md](host-transfer.md). So is a press of Launch on
+agent-ha-bridge's card for a migrated machine: the Home Assistant connector hands it to the same
+launcher, as the peer `home-assistant` ([ha-connector.md](ha-connector.md#stage-5-launch)). The settings
 they draw on are the profile's `config.json` ([host-config.md](host-config.md)). The code is
 `src/AgentBridge.Host.Delivery/Launch/`.
 
