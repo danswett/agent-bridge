@@ -28,19 +28,23 @@ public sealed class RelayClientChannel(ChannelHub hub, SecureChannel channel) : 
     public Exception? CloseReason => channel.CloseReason;
     public ChannelReader<ChannelEvent> Events => channel.Events;
 
-    // A frame that fails to decrypt ends the channel, and is a lost connection to whoever holds
-    // it: the pipe's callers recover from IOException, and would otherwise stop for good.
+    // A channel that ends under a call (a frame that fails to decrypt, a handshake repeated on an
+    // open channel) is a lost connection to whoever holds it: the pipe's callers recover from
+    // IOException, and would otherwise stop for good. Anything else, with the channel still open,
+    // is left as it is.
     public async Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
     {
         try { return await channel.RequestAsync(op, data, timeout, ct); }
-        catch (CryptographicException e) { throw new IOException($"the channel to {channel.PeerName} failed: {e.Message}", e); }
+        catch (Exception e) when (Ended(e)) { throw new IOException($"the channel to {channel.PeerName} failed: {e.Message}", e); }
     }
 
     public async Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default)
     {
         try { return await channel.SendEventAsync(name, data, ct); }
-        catch (CryptographicException e) { throw new IOException($"the channel to {channel.PeerName} failed: {e.Message}", e); }
+        catch (Exception e) when (Ended(e)) { throw new IOException($"the channel to {channel.PeerName} failed: {e.Message}", e); }
     }
+
+    bool Ended(Exception e) => e is CryptographicException || (e is InvalidOperationException && !channel.IsOpen);
 
     public async ValueTask DisposeAsync()
     {

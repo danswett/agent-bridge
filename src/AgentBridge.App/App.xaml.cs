@@ -226,24 +226,39 @@ public partial class App : Application
             AppLog.Write($"other machines are off: this app's device key could not be loaded: {e.Message}");
             return;
         }
+        // The account last read, for reconnecting to the relay while this machine's host is away:
+        // the other machines need not wait for it. Dropped when the relay refuses it, and read
+        // again whenever the host is back.
+        RelayAccount? last = null;
         var link = new RelayFleetLink(async ct =>
         {
+            if (local.State != LinkState.Connected && Volatile.Read(ref last) is { } kept) { return kept; }
             await local.WhenConnectedAsync(ct);
-            if (!local.Can(HostOps.Capability)) { return null; }
-            try { return await local.CallAsync<RelayAccount>(HostOps.RelayAccount, ct: ct); }
-            catch (HostErrorException) { return null; }
+            RelayAccount? now = null;
+            if (local.Can(HostOps.Capability))
+            {
+                try { now = await local.CallAsync<RelayAccount>(HostOps.RelayAccount, ct: ct); }
+                catch (HostErrorException) { }
+            }
+            Volatile.Write(ref last, now);
+            return now;
         }, key, $"{Environment.MachineName} · Agent Bridge app", AppLog.Write);
+        link.Changed += () => { if (link.State == FleetState.Refused) { Volatile.Write(ref last, null); } };
         ui.Post(() =>
         {
             if (quitting || main is null) { _ = link.DisposeAsync().AsTask(); return; }
             made(link);
             // A sign-in (or a different account) on this machine's host: the app follows it now.
             // The relay too: the same account signed in through another relay moves the app with it.
+            // And the host coming back: what it says now is checked against the account in use.
             var account = (local.Status?.Account?.AccountId, local.Status?.Relay.Url);
+            var up = local.State == LinkState.Connected;
             local.Changed += () =>
             {
                 var now = (local.Status?.Account?.AccountId, local.Status?.Relay.Url);
-                if (now == account) { return; }
+                var back = !up && local.State == LinkState.Connected;
+                up = local.State == LinkState.Connected;
+                if (now == account && !back) { return; }
                 account = now;
                 link.Poke();
             };

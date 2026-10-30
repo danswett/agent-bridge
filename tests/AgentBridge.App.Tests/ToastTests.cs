@@ -106,7 +106,7 @@ public sealed class ToastTests
     }
 
     [Fact]
-    public void A_session_that_ends_keeps_its_finished_toast_but_a_machine_that_leaves_takes_them_all()
+    public void A_session_that_ends_keeps_its_finished_toast_until_its_machine_leaves()
     {
         var p = new ToastPlanner(sink, clock) { Capabilities = () => Caps, MachineName = () => "Build server", WindowActive = () => false, Quiet = () => false, FinishedEnabled = () => true, MachineKey = "remote-id" };
         foreach (var id in new[] { "s1", "s2" })
@@ -114,14 +114,15 @@ public sealed class ToastTests
             p.Upsert(Make.Session(id, status: SessionStatus.Working));
             p.Upsert(Make.Session(id, response: "Done.", turns: 2));
         }
+        p.Upsert(Make.Session("s3", question: Make.Choice("q1")));
         clock.Advance(TimeSpan.FromSeconds(3));
         p.Tick();
-        Assert.Equal(2, sink.Shown.Count);
+        Assert.Equal(3, sink.Shown.Count);
 
         p.Remove("s1");
         Assert.Empty(sink.Withdrawn);
-        p.Remove("s2", machineGone: true);
-        Assert.Equal([ToastPlanner.Tag("s2", "remote-id")], sink.Withdrawn);
+        p.MachineGone();
+        Assert.Equal(new[] { "s1", "s2", "s3" }.Select(s => ToastPlanner.Tag(s, "remote-id")).Order(), sink.Withdrawn.Order());
     }
 
     [Fact]

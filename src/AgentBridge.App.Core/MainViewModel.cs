@@ -182,8 +182,8 @@ public sealed class MainViewModel : Observable
             owner.Remove(card);
             card.Detach();
             Sessions.Remove(card);
-            m.Toasts?.Remove(card.Id, machineGone: true);
         }
+        m.Toasts?.MachineGone();
         unhook.Remove(m, out var undo);
         undo?.Invoke();
         machines.Remove(m);

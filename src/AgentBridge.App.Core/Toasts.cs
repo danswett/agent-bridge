@@ -32,6 +32,8 @@ public sealed class ToastPlanner
     readonly IToastSink sink;
     readonly TimeProvider time;
     readonly Dictionary<string, Tracked> sessions = new(StringComparer.Ordinal);
+    // Sessions with a finished toast up, kept past their end, for MachineGone.
+    readonly HashSet<string> finished = new(StringComparer.Ordinal);
 
     sealed class Tracked
     {
@@ -39,7 +41,6 @@ public sealed class ToastPlanner
         public string? Shown;
         public HashSet<string> Notified = new(StringComparer.Ordinal);
         public string? FinishedKey;
-        public bool FinishedShown;
         public (ToastKind Kind, DateTimeOffset At, string? Question)? Due;
     }
 
@@ -120,12 +121,21 @@ public sealed class ToastPlanner
         else if (t.Due is { Kind: ToastKind.Question } d && s.Question?.Id != d.Question) { t.Due = null; }
     }
 
-    // A session that ended keeps its finished toast: the response is still worth reading. One on a
-    // machine that has left (machineGone) takes every toast with it, since none can be acted on.
-    public void Remove(string id, bool machineGone = false)
+    // A session that ended keeps its finished toast: the response is still worth reading.
+    public void Remove(string id)
     {
         if (!sessions.Remove(id, out var t)) { return; }
-        if (t.Shown is not null || (machineGone && t.FinishedShown)) { sink.Withdraw(TagOf(id)); }
+        if (t.Shown is not null) { sink.Withdraw(TagOf(id)); }
+    }
+
+    // The machine left: every toast it raised goes, finished ones too (even of sessions that ended
+    // before), since none of them can be acted on now.
+    public void MachineGone()
+    {
+        foreach (var (id, t) in sessions) { if (t.Shown is not null) { finished.Add(id); } }
+        foreach (var id in finished) { sink.Withdraw(TagOf(id)); }
+        finished.Clear();
+        sessions.Clear();
     }
 
     // Called every second or so: raises what is due.
@@ -150,7 +160,7 @@ public sealed class ToastPlanner
                 if (s.Status != SessionStatus.Idle || t.FinishedKey == key) { continue; }
                 t.FinishedKey = key;
                 if (!Enabled() || !FinishedEnabled() || WindowActive()) { continue; }
-                t.FinishedShown = true;
+                finished.Add(id);
                 sink.Show(new ToastNotice(TagOf(id), ToastXml.Finished(s, MachineName(), MachineKey), Quiet()));
             }
         }
