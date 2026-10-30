@@ -737,6 +737,49 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Sessions_to_bring_here_are_found_once_the_relay_connects_after_the_page_opened()
+    {
+        link.Sources.Add(Laptop());
+        link.Endpoints["host-id"] = localHost.Endpoint;
+        localHost.Capabilities.Add(TransferProtocol.Capability);
+        link.Switch();
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.ShowForm, "this machine's choices");
+        Assert.DoesNotContain(launch.Resumes, r => r.Value.StartsWith('@'));
+
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered once connected");
+    }
+
+    [Fact]
+    public async Task Another_account_forgets_the_last_ones_sessions_and_an_answer_from_before_it_is_dropped()
+    {
+        link.Sources.Add(Laptop());
+        link.Endpoints["host-id"] = localHost.Endpoint;
+        localHost.Capabilities.Add(TransferProtocol.Capability);
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered here");
+        ui.Post(() => launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"));
+        // A reload whose answer about the last account's machines is still on its way.
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        link.HoldSources = hold;
+        _ = launch.RefreshAsync();
+        await Task.Delay(300);
+
+        link.Switch();
+
+        await Wait.UntilAsync(() => !launch.Resumes.Any(r => r.Value.StartsWith('@')), "the last account's sessions to go");
+        Assert.Equal("", launch.Resume?.Value ?? "");
+        link.HoldSources = null;
+        hold.SetResult();
+        await Task.Delay(300);
+        Assert.DoesNotContain(launch.Resumes, r => r.Value.StartsWith('@'));
+    }
+    [Fact]
     public async Task A_machine_that_leaves_with_a_launch_on_its_way_says_the_launch_is_not_confirmed()
     {
         var gate = new TaskCompletionSource();

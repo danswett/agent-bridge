@@ -72,6 +72,12 @@ public sealed class LaunchViewModel : Observable
     // they have been asked yet, since a session picked from one before is kept until they answer.
     IReadOnlyList<TransferSource> sources = [];
     bool sourcesKnown;
+    // Discovery's bookkeeping: each run is numbered and only the latest one's answer is taken (an
+    // answer from before an account switch never is); what it asked with (SourcesKey); and whether
+    // one is on its way, so a change meanwhile asks again once it is back rather than twice at once.
+    int sourcesRun;
+    string? sourcesAsked;
+    bool sourcesBusy;
     // Where the last launch went: its machine's Deliveries, or for a transfer to this machine, the
     // loopback's; and for a transfer, what it was brought from, to sign again for a new request.
     Machine? lastVia;
@@ -93,7 +99,8 @@ public sealed class LaunchViewModel : Observable
         if (main.Fleet is { } f && f != watchedFleet)
         {
             watchedFleet = f;
-            f.LoopbackChanged += () => ui.Post(() => { WatchLoopback(); if (machine?.IsLocal == true) { Draw(); } });
+            f.LoopbackChanged += () => ui.Post(() => { WatchLoopback(); if (machine?.IsLocal == true) { Draw(); } Rediscover(); });
+            f.AccountChanged += () => ui.Post(OnAccountChanged);
         }
         var now = main.Fleet?.CurrentLoopback;
         if (now == watchedLoopback) { return; }
@@ -122,6 +129,38 @@ public sealed class LaunchViewModel : Observable
     void OnLoopback(Delivery d)
     {
         if (main.MachineOf(Machine.LocalKey) is { } local) { OnDelivery(local, d, watchedLoopback); }
+    }
+
+    // Another account: its machines are not the last one's, so nothing learnt from those (their
+    // names, their sessions) is offered or kept picked, and an answer still on its way is dropped.
+    void OnAccountChanged()
+    {
+        sources = [];
+        sourcesKnown = false;
+        sourcesRun++;
+        sourcesBusy = false;
+        sourcesAsked = null;
+        if (resume is { Value: ['@', ..] }) { resume = null; }
+        foreach (var (key, p) in picked.ToList())
+        {
+            if (p.Resume is { Value: ['@', ..] }) { picked[key] = p with { Resume = null }; }
+        }
+        Draw();
+        Rediscover();
+    }
+
+    // What discovery depends on: the account, whether the machine shown takes sessions from others
+    // now (for this one, its loopback's word), and the other machines there are.
+    string SourcesKey(Machine m) =>
+        $"{main.Fleet?.Account}|{TakesTransfers(m)}|{string.Join(',', main.AllMachines.Where(x => !x.IsLocal && x != m).Select(x => x.Key).Order(StringComparer.Ordinal))}";
+
+    // Asks again when that has changed since it last asked: a page opened while the relay was
+    // still connecting, or this machine's loopback connecting after discovery stopped waiting,
+    // would otherwise go on offering nothing until reloaded.
+    void Rediscover()
+    {
+        if (!shown || machine is not { } m || sourcesBusy || SourcesKey(m) == sourcesAsked) { return; }
+        _ = SourcesAsync(m, loads);
     }
 
     // The machines that can launch now, this one first.
@@ -265,6 +304,7 @@ public sealed class LaunchViewModel : Observable
         if (list.SequenceEqual(Machines))
         {
             Show();
+            Rediscover();
             return;
         }
         Machines = list;
@@ -279,6 +319,7 @@ public sealed class LaunchViewModel : Observable
         Raise(nameof(SelectedMachine));
         Raise(nameof(Title));
         Show();
+        Rediscover();
     }
 
     void Target(Machine? next)
@@ -292,6 +333,7 @@ public sealed class LaunchViewModel : Observable
         options = null;
         sources = [];
         sourcesKnown = false;
+        sourcesAsked = null;
         error = null;
         SetProblem("");
         loads++;
@@ -359,6 +401,11 @@ public sealed class LaunchViewModel : Observable
 
     async Task SourcesAsync(Machine m, int load)
     {
+        var run = 0;
+        string? key = null;
+        var start = new TaskCompletionSource();
+        ui.Post(() => { run = ++sourcesRun; sourcesBusy = true; key = SourcesKey(m); start.SetResult(); });
+        await start.Task;
         IReadOnlyList<TransferSource> got = [];
         if (main.Fleet is { } f && DeviceOf(m) is { } target)
         {
@@ -374,15 +421,21 @@ public sealed class LaunchViewModel : Observable
                 }
             }
             var takes = new TaskCompletionSource<bool>();
-            ui.Post(() => takes.SetResult(TakesTransfers(m)));
+            ui.Post(() => { key = SourcesKey(m); takes.SetResult(TakesTransfers(m)); });
             if (await takes.Task) { got = await f.TransferSourcesAsync(target, CancellationToken.None); }
         }
         ui.Post(() =>
         {
+            // A later run, or another account since, has the say.
+            if (run != sourcesRun) { return; }
+            sourcesBusy = false;
+            sourcesAsked = key;
             if (load != loads || m != machine) { return; }
             sources = got;
             sourcesKnown = true;
             if (options is not null) { Draw(); }
+            // Something it depends on changed while it was asked: ask again, now.
+            Rediscover();
         });
     }
 

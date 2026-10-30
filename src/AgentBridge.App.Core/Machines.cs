@@ -96,6 +96,11 @@ public sealed class Fleet : IAsyncDisposable
     // Raised on the UI thread when the link's state changes.
     public event Action? Changed;
 
+    // Raised on the UI thread when the machines come from another account (or relay): what was
+    // learnt from the last one's machines (sessions to bring over) is not this one's.
+    public event Action? AccountChanged;
+    public int Account => account;
+
     // What the Sessions page says about the other machines, when there is something to say.
     // Nothing while this machine's own host is not there: the banner already says so, and the
     // account comes from it.
@@ -181,7 +186,7 @@ public sealed class Fleet : IAsyncDisposable
         // another copy of the app shows them instead.
         var switched = now != account;
         account = now;
-        if (switched) { DropLoopback(); }
+        if (switched) { DropLoopback(); AccountChanged?.Invoke(); }
         if (state == FleetState.Connecting && !switched) { return; }
         foreach (var id in machines.Keys.Where(id => !hosts.ContainsKey(id)).ToList())
         {
