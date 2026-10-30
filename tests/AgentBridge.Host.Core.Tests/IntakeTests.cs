@@ -38,13 +38,16 @@ public sealed class IntakeTests : IDisposable
         {
             RuntimeRoot = _f.Runtime,
             ClaudeHome = _f.ClaudeHome,
-            AgentHaBridgeActive = () => _agentHaBridge,
+            AgentHaBridgeActive = () => _probe is { } probe ? probe() : _agentHaBridge,
             UseFileSystemWatcher = watch,
             PruneInterval = TimeSpan.FromDays(1),
         }, _f.Processes, _f.Time, m => { lock (_log) { _log.Add(m); } });
         _intakes.Add(intake);
         return intake;
     }
+
+    // Asked instead of _agentHaBridge when set, for a test that needs the answer to change mid-pass.
+    Func<string?>? _probe;
 
     // When the hooks in a test ran: Fixture.T0, or just after a Running() host took the spool.
     DateTimeOffset _base = Fixture.T0;
@@ -891,6 +894,191 @@ public sealed class IntakeTests : IDisposable
 
         Assert.False(File.Exists(marker));
         Assert.Null(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
+    public void A_cut_off_a_sweep_could_not_finish_is_kept_when_the_log_becomes_readable_again()
+    {
+        // Only Windows lets a reader refuse a read or a delete.
+        if (!OperatingSystem.IsWindows()) { return; }
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, _base, 3);
+        intake.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+
+        using (new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            using (new FileStream(SpoolContract.LogPath(_f.Runtime), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                intake.Pass();
+            }
+            // The log says nothing unheard happened; the withdrawal asked for while it could not
+            // be read still stands.
+            intake.Pass();
+            Assert.True(File.Exists(marker));
+            Assert.NotNull(intake.ApprovalsUnsettled);
+        }
+        intake.Pass();
+
+        Assert.False(File.Exists(marker));
+        Assert.Null(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
+    public void A_heartbeat_that_cannot_be_renewed_past_the_hooks_60_s_still_withdraws_approvals()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        intake.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+
+        using (new FileStream(SpoolContract.HeartbeatPath(_f.Runtime), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            _f.Time.Advance(SpoolContract.HeartbeatMaxAge);
+            intake.Pass();
+        }
+
+        Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public void A_Codex_event_dropped_after_its_retries_withdraws_every_approval_it_may_have_retired()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        intake.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        File.WriteAllText(Path.Combine(Spool, "0002.json"), "{ not an event");
+
+        intake.Pass();
+        Assert.True(File.Exists(marker));
+        intake.Pass();
+        Assert.NotNull(intake.ApprovalsUnsettled);
+        intake.Pass();
+
+        Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public void Retried_withdrawals_stop_at_the_next_marker_once_agent_ha_bridge_starts()
+    {
+        // Only Windows lets a reader refuse a delete.
+        if (!OperatingSystem.IsWindows()) { return; }
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        Spooled("0002", "codex", "hook", new { session_id = "x2", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        intake.Pass();
+        string[] markers = [Path.Combine(_f.CodexRegistrations, "x1.approval.json"), Path.Combine(_f.CodexRegistrations, "x2.approval.json")];
+        SpooledAt(_base.AddSeconds(1), "0003", "codex", "hook", new { session_id = "x1", hook_event_name = "PreToolUse", tool_name = "shell" }, 60);
+        SpooledAt(_base.AddSeconds(2), "0004", "codex", "hook", new { session_id = "x2", hook_event_name = "PreToolUse", tool_name = "shell" }, 60);
+        using (new FileStream(markers[0], FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (new FileStream(markers[1], FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            intake.Pass();
+        }
+        // Agent-ha-bridge starts between the two retries.
+        var checks = 0;
+        _probe = () => ++checks > 2 ? "the daemon started" : null;
+
+        intake.Pass();
+
+        Assert.Equal(1, markers.Count(File.Exists));
+        Assert.Equal("the daemon started", intake.Paused);
+    }
+
+    [Fact]
+    public void A_new_approval_is_not_offered_while_the_one_before_it_cannot_be_withdrawn()
+    {
+        // Only Windows lets a reader refuse a delete.
+        if (!OperatingSystem.IsWindows()) { return; }
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        intake.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        var first = File.ReadAllText(marker);
+        SpooledAt(_base.AddSeconds(5), "0002", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "apply_patch" }, 60);
+        var heard = intake.Subscribe();
+
+        using (new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Assert.Equal(1, intake.Pass());
+            Assert.True(heard.TryRead(out var n));
+            Assert.Null(n.ApprovalId);
+            Assert.NotNull(intake.ApprovalsUnsettled);
+        }
+        intake.Pass();
+
+        // The old one is gone and nothing replaced it: that prompt is answered at the terminal.
+        Assert.False(File.Exists(marker));
+        Assert.Null(intake.ApprovalsUnsettled);
+        Assert.NotEqual("", first);
+    }
+
+    [Fact]
+    public void A_host_stopping_part_way_through_a_backlog_leaves_the_rest_for_the_next_one()
+    {
+        Spooled("0001", "claude", "register", new { session_id = "s1", hook_event_name = "SessionStart" });
+        var rest = Spooled("0002", "claude", "register", new { session_id = "s2", hook_event_name = "SessionStart" });
+        using var stop = new CancellationTokenSource();
+        var checks = 0;
+        // The pass's own check, then the first file's: the host is told to stop there.
+        _probe = () => { if (++checks == 2) { stop.Cancel(); } return null; };
+        var intake = Intake();
+
+        intake.Start(stop.Token);
+        Assert.True(stop.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(10)));
+        intake.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _intakes.Remove(intake);
+
+        Assert.Equal(1, intake.Handled);
+        Assert.True(File.Exists(rest));
+    }
+
+    [Fact]
+    public void An_event_the_Go_hook_spooled_HTML_escaped_past_16_MiB_is_still_handled()
+    {
+        // json.Marshal writes each < as \u003c, after the hook's 16 MiB check.
+        Directory.CreateDirectory(Spool);
+        var escaped = string.Concat(Enumerable.Repeat("\\u003c", 3 << 20));
+        var body = "{\"v\":1,\"agent\":\"claude\",\"hook\":\"register\",\"ancestors\":[],\"receivedAt\":\"" + _base.ToString("o")
+            + "\",\"event\":{\"session_id\":\"s1\",\"hook_event_name\":\"SessionStart\",\"prompt\":\"" + escaped + "\"}}";
+        File.WriteAllText(Path.Combine(Spool, "0001.json"), body);
+        Assert.True(new FileInfo(Path.Combine(Spool, "0001.json")).Length > SpoolContract.MaxEventBytes + 64 * 1024);
+
+        Assert.Equal(1, Intake().Pass());
+
+        Assert.Equal("s1", Registration("agent-bridge-claude", "s1").GetProperty("SessionId").GetString());
+    }
+
+    [Fact]
+    public void A_live_runtime_whose_command_line_could_not_be_read_keeps_its_registrations()
+    {
+        _f.CodexRegistration("unread", 61, null);
+        _f.ClaudeRegistration("unread", 31, null);
+        File.SetLastWriteTimeUtc(Path.Combine(_f.ClaudeRegistrations, "unread.json"), DateTime.UtcNow.AddDays(-1));
+        _f.Time.Advance(TimeSpan.FromHours(5));
+        // On Windows the list is complete with such a process in it.
+        var intake = new HookIntake(new HookIntakeOptions { RuntimeRoot = _f.Runtime, ClaudeHome = _f.ClaudeHome, UseFileSystemWatcher = false, PruneInterval = TimeSpan.Zero }, new Unread(), _f.Time);
+        _intakes.Add(intake);
+
+        intake.Pass();
+
+        Assert.True(File.Exists(Path.Combine(_f.CodexRegistrations, "unread.json")));
+        Assert.True(File.Exists(Path.Combine(_f.ClaudeRegistrations, "unread.json")));
+    }
+
+    sealed class Unread : AgentBridge.Host.Core.Processes.IProcessInspector
+    {
+        public IReadOnlyList<AgentBridge.Host.Core.Processes.AgentProcess> GetAgentProcesses(AgentKind agent) => [];
+        public AgentBridge.Host.Core.Processes.AgentProcessObservation Observe(AgentKind agent) =>
+            new([], true) { Unidentified = [new AgentBridge.Host.Core.Processes.AgentProcess(agent == AgentKind.Codex ? 61 : 31, null, null)] };
     }
 
     [Fact]

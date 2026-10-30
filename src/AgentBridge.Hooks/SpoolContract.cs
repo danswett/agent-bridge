@@ -144,8 +144,20 @@ public static class SpoolContract
     {
         var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
         if (!OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
-        using var stream = new FileStream(path, options);
-        stream.Write(bytes);
+        var stream = new FileStream(path, options);
+        try
+        {
+            stream.Write(bytes);
+            stream.Dispose();
+        }
+        catch
+        {
+            // Created here, so removed here: the intake never reads a .tmp, and a hook failing
+            // on a full disk again and again must not keep every event it could not finish.
+            try { stream.Dispose(); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            try { File.Delete(path); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
     }
 
     // Appends one run's outcome to the hook log, keeping one previous log once it reaches a

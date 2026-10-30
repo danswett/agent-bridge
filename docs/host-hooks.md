@@ -45,7 +45,9 @@ installation's runtime folder (below).
 
 The design's `agent-bridge-host hook --fallback` is this program's own fallback: with no fresh
 heartbeat it prints the fixed reply and nothing else. `agent-bridge-host-hook --fallback
-<agent> <hook>` does the same unconditionally, for a registration that must never spool.
+<agent> <hook>` does the same unconditionally, for a registration that must never spool. It
+replies before touching stdin, then drains it for up to 2 s, so neither an inherited console nor
+a pipe left open can hold it, and a writer still sending its event is not cut off.
 
 ## The spool contract (both bridges)
 
@@ -61,7 +63,10 @@ holds every name; it is tested against files the Go hook writes and the daemon r
 
 `<name>` is the time in Unix nanoseconds (20 digits), the hook's pid and 8 random hex digits.
 Names sort in the order the events happened, which is the order they are handled. Events are
-at most 16 MB and 512 levels deep, and the ancestry at most 12 processes.
+at most 16 MB and 512 levels deep, and the ancestry at most 12 processes. This product's hook
+stops reading at 16 MB, even with the pipe still open, and gives such an event the fixed reply.
+The Go hook checks its 16 MB before `json.Marshal` escapes `<`, `>` and `&` as six bytes each, so
+the intake accepts a spool file of up to six times that.
 
 ## The hook: `agent-bridge-host-hook`
 
@@ -153,7 +158,8 @@ refuses a second profile for an installation that one already has.
    An event handled whose file could not be deleted (a reader that would not share the
    delete) is only deleted again on later passes, never handled again, for the same reason.
    The heartbeat is touched again every 10 s while a long backlog drains, so hooks keep
-   spooling meanwhile.
+   spooling meanwhile. A host stopping ends the drain at the next file and leaves the rest for
+   the next host, rather than outlasting the replacement's wait for the profile's lock.
 4. Prune now and then (below), unless agent-ha-bridge started during the pass. Pruning, and
    withdrawing approvals (below), check for agent-ha-bridge again before each delete.
 
@@ -168,7 +174,8 @@ second. It deletes:
 * a Codex registration that is ended, or whose process has gone, or that has no process and
   is over 4 hours old.
 
-It prunes only when the process list is complete.
+It prunes only when the process list is complete. A runtime (node, bun) whose command line
+could not be read counts as live: it may be the session's.
 
 **Stopping.** On a clean stop the host removes the heartbeat if it is still its own. Hooks then
 give their fixed reply at once, rather than spooling to nobody until it goes stale.
@@ -223,8 +230,9 @@ on a migrated machine can then be answered from the phone and the app (`AnswerSe
 and its event goes nowhere, so the `PreToolUse` or `Stop` that ended an approval answered at the
 terminal may never arrive. The hook log records such runs, but only as best it can: a hook that
 could not spool (a full disk, say) may not have been able to log either. So whenever the intake
-takes the spool again after a gap (it starts, agent-ha-bridge stops, or it let the heartbeat go
-older than the 60 s hooks allow), it withdraws **every** approval marker asked before that moment,
+takes the spool again after a gap (it starts, agent-ha-bridge stops, the heartbeat has gone
+older than the 60 s hooks allow, renewed or not, or a Codex event, or one it could not read, was
+dropped after its retries), it withdraws **every** approval marker asked before that moment,
 and a `PermissionRequest` still waiting in the spool from before it is handled but arms no
 approval. Nothing proves such an approval unanswered, so it is answered at the terminal.
 
@@ -236,8 +244,12 @@ oldest line kept the same way. While the log cannot be read, no approval is offe
 
 A marker that cannot be deleted (a reader holding it without sharing its deletion), whether a
 cut-off or the session's next event retired it, is remembered and tried again every pass, apart
-from the event, which may be dropped after its retries. A cut-off counts as settled only once
-every marker it covers is gone. The log is always read through a handle that lets hooks keep
+from the event, which may be dropped after its retries; each retry asks first whether
+agent-ha-bridge has started. A new `PermissionRequest` first withdraws its session's previous
+marker, and arms nothing if that cannot be done yet: writing over a marker a reader holds fails,
+and the old one would be answerable for the new prompt. A cut-off counts as settled only once
+every marker it covers is gone, and the highest asked for is kept until then, so a later pass
+with a lower one (the log readable again, say) never lets an unfinished sweep be forgotten. The log is always read through a handle that lets hooks keep
 appending (`hooks status` too), and markers through one that lets a starting daemon replace or
 delete them.
 
@@ -245,7 +257,9 @@ Until the markers are settled (after a gap, while the log cannot be read, after 
 run, or while a withdrawal is pending), the answer path refuses Codex approvals
 (`HookIntake.ApprovalsUnsettled`), so an answer cannot reach a marker that may already have been
 answered. A migrated profile whose `intake.json` cannot be read runs no intake, and refuses them
-all (`HookIntake.AnswerGate`).Answering an approval twice could type into whatever the terminal shows now; losing a remote
+all (`HookIntake.AnswerGate`).
+
+Answering an approval twice could type into whatever the terminal shows now; losing a remote
 answer only means answering at the terminal.
 
 **The owning process** is found from the recorded ancestry, so the shells in between can have

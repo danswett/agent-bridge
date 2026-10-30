@@ -77,8 +77,10 @@ public sealed class HookIntake : IAsyncDisposable
     // from the hook log, whose records are best effort (a full disk loses them too), so every
     // approval asked before the spool is taken again is withdrawn.
     bool _gap = true;
-    // The cut-off approvals were last settled to, and the hook log it is read from.
+    // The cut-off approvals were last settled to, the highest one asked for since and not yet
+    // settled, and the hook log they are read from.
     DateTimeOffset? _settled;
+    DateTimeOffset? _pending;
     readonly HookLogWatch _codexLog;
     DateTimeOffset _beatAt;
     // Held while this intake takes the spool, so a second host (another profile migrated from
@@ -180,11 +182,8 @@ public sealed class HookIntake : IAsyncDisposable
         if (!ReconcileApprovals(beat)) { return 0; }
         EnsureWatcher();
         var handled = Consume();
-        if (_handlers.WithdrawalsPending)
-        {
-            if (_options.AgentHaBridgeActive() is { } started) { StandBack(started); return handled; }
-            _handlers.RetryWithdrawals();
-        }
+        // Each deletion asks first: the markers are the daemon's once it has started.
+        if (_handlers.WithdrawalsPending && Paused is null) { _handlers.RetryWithdrawals(Ours); }
         var now = _time.GetUtcNow();
         if (now - _prunedAt >= _options.PruneInterval)
         {
@@ -236,14 +235,15 @@ public sealed class HookIntake : IAsyncDisposable
     // whose it is, and lets this host take back only its own when it stops.
     bool Beat()
     {
+        var now = _time.GetUtcNow();
+        // Hooks gave up spooling once the heartbeat was this old, whether or not it can be renewed
+        // now (and mid-drain too): no Codex answer until the next pass has settled the markers.
+        if (_beatAt != default && now - _beatAt >= SpoolContract.HeartbeatMaxAge) { Gap(); }
         try
         {
             Directory.CreateDirectory(_options.RuntimeRoot);
             File.WriteAllText(_heartbeat, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             _heartbeatOwned = true;
-            var now = _time.GetUtcNow();
-            // Hooks gave up spooling once the heartbeat was this old.
-            if (_beatAt != default && now - _beatAt >= SpoolContract.HeartbeatMaxAge) { _gap = true; }
             _beatAt = now;
             return true;
         }
@@ -253,6 +253,14 @@ public sealed class HookIntake : IAsyncDisposable
             _reconciled = false;
             return false;
         }
+    }
+
+    // Hooks may have run unspooled, or an event may have been lost: every approval asked before
+    // the next pass is withdrawn, and none is answered until then.
+    void Gap()
+    {
+        _gap = true;
+        _reconciled = false;
     }
 
     // A Codex hook that ran while nobody took events gave its fixed reply and went nowhere, so
@@ -272,7 +280,10 @@ public sealed class HookIntake : IAsyncDisposable
         var known = _codexLog.Refresh();
         var cutoff = known ? Later(_codexLog.Last, _codexLog.HistoryFrom) : _time.GetLocalNow();
         if (_gap) { cutoff = _time.GetLocalNow(); }
-        if (cutoff is not { } unheard || (_reconciled && _settled is { } done && unheard <= done)) { _reconciled = known; return true; }
+        // Held until settled: a later pass with a lower cut-off (the log readable again, say)
+        // never lets a sweep that could not finish be forgotten.
+        if (cutoff is { } wanted && (_settled is not { } done || wanted > done)) { _pending = Later(_pending, wanted); }
+        if (_pending is not { } unheard) { _reconciled = known; return true; }
         _handlers.ApprovalsSettledBefore = unheard;
         // A new cut-off unsettles what an earlier one settled: until its markers are gone, one of
         // them may have been answered at the terminal, so no Codex approval is answered meanwhile.
@@ -311,6 +322,7 @@ public sealed class HookIntake : IAsyncDisposable
         if (complete)
         {
             _settled = unheard;
+            _pending = null;
             _reconciled = known;
             // Closed once the heartbeat is fresh again, so hooks spool from here on.
             if (beat) { _gap = false; }
@@ -362,6 +374,9 @@ public sealed class HookIntake : IAsyncDisposable
         var handled = 0;
         foreach (var path in files)
         {
+            // A host stopping leaves the rest for the next one rather than outlasting its wait
+            // for the profile's lock.
+            if (_stop?.IsCancellationRequested == true) { break; }
             // agent-ha-bridge may have started part-way through: from here the files are its.
             if (_options.AgentHaBridgeActive() is { } active)
             {
@@ -379,11 +394,12 @@ public sealed class HookIntake : IAsyncDisposable
                 if (Delete(path)) { _undeleted.Remove(name); }
                 continue;
             }
+            SpoolEvent? spooled = null;
             try
             {
                 var bytes = ReadCopy(path);
                 if (bytes is null) { continue; }
-                var spooled = SpoolContract.Parse(bytes, name) ?? throw new InvalidDataException("not a spooled event");
+                spooled = SpoolContract.Parse(bytes, name) ?? throw new InvalidDataException("not a spooled event");
                 var notice = _handlers.Handle(spooled);
                 handled++;
                 Handled++;
@@ -400,6 +416,9 @@ public sealed class HookIntake : IAsyncDisposable
                     _log($"dropped spooled hook {name} after {attempts} attempts: {e.Message}");
                     _attempts.Remove(name);
                     Dropped++;
+                    // It may have been the Codex event that retired an approval: as good as a hook
+                    // that never spooled.
+                    if (spooled is null || spooled.Agent == "codex") { Gap(); }
                     if (!Delete(path)) { _undeleted.Add(name); }
                 }
                 else
@@ -421,6 +440,10 @@ public sealed class HookIntake : IAsyncDisposable
         return handled;
     }
 
+    // agent-ha-bridge's Go hook checks its 16 MiB before json.Marshal, which escapes <, > and &
+    // (and U+2028/2029) as six bytes each, so an event it accepted can spool at up to six times that.
+    internal const long MaxSpoolFileBytes = 6L * SpoolContract.MaxEventBytes + 64 * 1024;
+
     // The file's bytes, read through a handle that shares delete, so whoever deletes it is
     // never refused because this host was reading (the shadow-read rule of G5). Null when it
     // has already gone.
@@ -429,7 +452,7 @@ public sealed class HookIntake : IAsyncDisposable
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            if (stream.Length > SpoolContract.MaxEventBytes + 64 * 1024) { throw new InvalidDataException("larger than any hook writes"); }
+            if (stream.Length > MaxSpoolFileBytes) { throw new InvalidDataException("larger than any hook writes"); }
             var bytes = new byte[stream.Length];
             stream.ReadExactly(bytes);
             return bytes;
@@ -464,7 +487,8 @@ public sealed class HookIntake : IAsyncDisposable
         var claude = _processes.Observe(AgentKind.Claude);
         if (claude.Known)
         {
-            var live = claude.Processes.Select(p => p.Id).ToHashSet();
+            // A runtime whose command line could not be read may be the session's: not ended.
+            var live = claude.Processes.Concat(claude.Unidentified).Select(p => p.Id).ToHashSet();
             foreach (var file in HookHandlers.SafeFiles(_handlers.ClaudeRoot))
             {
                 using var doc = Read(file);
@@ -482,7 +506,7 @@ public sealed class HookIntake : IAsyncDisposable
         var codex = _processes.Observe(AgentKind.Codex);
         if (codex.Known)
         {
-            var live = codex.Processes.Select(p => p.Id).ToHashSet();
+            var live = codex.Processes.Concat(codex.Unidentified).Select(p => p.Id).ToHashSet();
             foreach (var file in HookHandlers.SafeFiles(_handlers.CodexRoot))
             {
                 if (file.EndsWith(".approval.json", StringComparison.OrdinalIgnoreCase)) { continue; }

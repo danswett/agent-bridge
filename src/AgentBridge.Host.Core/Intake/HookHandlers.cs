@@ -149,6 +149,14 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         if (approval && ApprovalsSettledBefore is { } settled && (spooled.ReceivedAt ?? time.GetUtcNow()) <= settled) { approval = false; }
         if (approval)
         {
+            // The previous generation goes first, and the new one is written only once it has:
+            // writing over a marker a reader holds fails, and the old one would stay answerable
+            // for the new prompt; a retry that removed it later could also remove the new one.
+            Withdraw(sessionId, spooled.ReceivedAt ?? time.GetUtcNow());
+            if (_withdrawals.ContainsKey(sessionId)) { approval = false; }
+        }
+        if (approval)
+        {
             // agent-ha-bridge's generation: the session's node id and the time, so an answer
             // made for one approval is never typed into the next.
             approvalId = $"{NodeId(sessionId)}-{NextDecisionMs()}";
@@ -251,7 +259,8 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
 
     // True once none is pending. A marker created after the event that retired its session's
     // last one is a new approval, and stays.
-    public bool RetryWithdrawals()
+    // ours is asked before each deletion; false stops the retries (agent-ha-bridge has started).
+    public bool RetryWithdrawals(Func<bool> ours)
     {
         foreach (var (sessionId, upTo) in _withdrawals.ToArray())
         {
@@ -262,6 +271,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
                 created = marker is null ? null : Json.Time(marker.RootElement, "Created");
             }
             if (created is { } c && c > upTo) { _withdrawals.TryRemove(sessionId, out _); continue; }
+            if (!ours()) { return false; }
             Withdraw(sessionId, upTo);
         }
         return _withdrawals.IsEmpty;

@@ -59,12 +59,17 @@ public static class HookRunner
             reply = SpoolContract.Reply(agent, hook);
             if (reply is null) { return 0; }
 
-            var utf8 = ReadAll(stdin, SpoolContract.MaxEventBytes);
             if (forced)
             {
+                // The reply needs nothing from the event, so it goes before stdin is touched: an
+                // inherited console, or a pipe left open, must not hold it. What was sent is then
+                // drained for a moment, so a writer still writing is not cut off mid-event.
                 Reply();
+                var drain = Task.Run(() => ReadAll(stdin, SpoolContract.MaxEventBytes));
+                drain.Wait(env.FallbackDrain);
                 return 0;
             }
+            var (utf8, whole) = ReadAll(stdin, SpoolContract.MaxEventBytes);
 
             var (runtime, rootProblem) = RuntimeRoot(env.ExecutableDirectory);
             if (runtime is null)
@@ -81,6 +86,7 @@ public static class HookRunner
                 var (alive, why) = SpoolContract.ConsumerState(runtime, env.Now());
                 var trimmed = Trim(utf8);
                 if (!alive) { reason = why; }
+                else if (!whole) { reason = "event too large"; }
                 else if (!SpoolContract.IsJson(trimmed)) { reason = "unusable event"; }
                 else
                 {
@@ -146,22 +152,25 @@ public static class HookRunner
         return buffer.WrittenSpan.ToArray();
     }
 
-    static byte[] ReadAll(Stream stdin, int max)
+    // Up to max bytes of stdin, and whether that was all of it. The budget is checked before
+    // each read and bounds it, so a writer that keeps the pipe open once max bytes have come
+    // cannot hold the hook waiting for one more; an event that fills it is not taken.
+    static (byte[] Bytes, bool Whole) ReadAll(Stream stdin, int max)
     {
         try
         {
             using var copy = new MemoryStream();
             var buffer = new byte[64 * 1024];
-            int read;
-            while ((read = stdin.Read(buffer, 0, buffer.Length)) > 0)
+            while (true)
             {
                 var room = max - (int)copy.Length;
-                if (room <= 0) { break; }
-                copy.Write(buffer, 0, Math.Min(read, room));
+                if (room <= 0) { return (copy.ToArray(), false); }
+                var read = stdin.Read(buffer, 0, Math.Min(buffer.Length, room));
+                if (read <= 0) { return (copy.ToArray(), true); }
+                copy.Write(buffer, 0, read);
             }
-            return copy.ToArray();
         }
-        catch (Exception e) when (e is IOException or ObjectDisposedException or NotSupportedException) { return []; }
+        catch (Exception e) when (e is IOException or ObjectDisposedException or NotSupportedException) { return ([], true); }
     }
 
     static ReadOnlySpan<byte> Trim(byte[] bytes)
@@ -182,6 +191,8 @@ public sealed class HookEnvironment
     public Func<IReadOnlyList<int>> Ancestors { get; init; } = () => Ancestry.OfParent();
     public Func<long> ElapsedMs { get; init; } = SinceStart;
     public string Version { get; init; } = "dev";
+    // How long --fallback waits, after replying, for an event still being written to it.
+    public TimeSpan FallbackDrain { get; init; } = TimeSpan.FromSeconds(2);
 
     // How long the agent has waited on this process, from when the OS started it.
     static long SinceStart()

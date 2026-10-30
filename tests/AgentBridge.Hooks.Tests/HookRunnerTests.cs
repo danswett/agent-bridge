@@ -38,8 +38,9 @@ public sealed class HookRunnerTests : IDisposable
         File.SetLastWriteTimeUtc(path, _now.UtcDateTime - age);
     }
 
-    HookEnvironment Env(DateTimeOffset? at = null) => new()
+    HookEnvironment Env(DateTimeOffset? at = null, TimeSpan? drain = null) => new()
     {
+        FallbackDrain = drain ?? TimeSpan.FromSeconds(2),
         ExecutableDirectory = Bin,
         Now = () => at ?? _now,
         ProcessId = 4242,
@@ -303,5 +304,68 @@ public sealed class HookRunnerTests : IDisposable
         }
 
         Assert.Equal(["{\"at\":\"earlier\"}", "{\"agent\":\"codex\",\"path\":\"fallback\"}", "{\"agent\":\"claude\",\"path\":\"spool\"}"], File.ReadAllLines(log));
+    }
+    // Stdin as an agent's pipe that has sent what it will and never closes: a read past the
+    // data waits until the test ends it.
+    sealed class OpenPipe(byte[] data) : Stream, IDisposable
+    {
+        int _at;
+        readonly ManualResetEventSlim _closed = new();
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (_at < data.Length)
+            {
+                var n = Math.Min(count, data.Length - _at);
+                Array.Copy(data, _at, buffer, offset, n);
+                _at += n;
+                return n;
+            }
+            _closed.Wait(TimeSpan.FromSeconds(30));
+            return 0;
+        }
+        public void Close_() => _closed.Set();
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    static (Task<int> Run, MemoryStream Output) Started(Stream stdin, HookEnvironment env, params string[] args)
+    {
+        var output = new MemoryStream();
+        return (Task.Run(() => HookRunner.Run(args, stdin, output, env)), output);
+    }
+
+    [Fact]
+    public void The_fallback_replies_at_once_even_when_stdin_never_closes()
+    {
+        var pipe = new OpenPipe("{\"toolName\":\"ask_user\"}"u8.ToArray());
+        var (run, output) = Started(pipe, Env(drain: TimeSpan.FromMilliseconds(100)), "--fallback", "copilot", "agent_stop");
+
+        Assert.True(run.Wait(TimeSpan.FromSeconds(10)), "the fallback waited on stdin");
+        pipe.Close_();
+        Assert.Equal(0, run.Result);
+        Assert.Equal("{}\n", Encoding.UTF8.GetString(output.ToArray()));
+    }
+
+    [Fact]
+    public void An_event_that_fills_the_budget_gets_the_fixed_reply_without_waiting_for_more()
+    {
+        Heartbeat(TimeSpan.Zero);
+        var full = new byte[SpoolContract.MaxEventBytes];
+        Array.Fill(full, (byte)' ');
+        var pipe = new OpenPipe(full);
+        var (run, output) = Started(pipe, Env(), "copilot", "agent_stop");
+
+        Assert.True(run.Wait(TimeSpan.FromSeconds(10)), "the hook waited for more than its budget");
+        pipe.Close_();
+        Assert.Equal("{}\n", Encoding.UTF8.GetString(output.ToArray()));
+        Assert.Empty(SpoolFiles());
+        Assert.Equal("event too large", Log().Last().GetProperty("reason").GetString());
     }
 }
