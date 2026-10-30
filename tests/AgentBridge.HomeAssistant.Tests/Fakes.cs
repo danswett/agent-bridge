@@ -26,10 +26,17 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     public Exception? DashboardFails { get; set; }
     public Exception? PublishFails { get; set; }
     public Func<string, string, bool>? PublishFailsFor { get; set; }
+    // A service call (domain.service, entity) Home Assistant fails.
+    public Func<string, string, bool>? ServiceFailsFor { get; set; }
+    // Something that happens on the card just before a topic is published.
+    public Action<string>? BeforePublish { get; set; }
+    // An entity whose state Home Assistant fails to return.
+    public Func<string, bool>? GetFailsFor { get; set; }
     public int RegistryLists { get; private set; }
 
     public Task PublishAsync(string topic, string payload, bool retain, CancellationToken cancellationToken = default)
     {
+        BeforePublish?.Invoke(topic);
         if (PublishFails is { } e) { throw e; }
         if (PublishFailsFor?.Invoke(topic, payload) == true) { throw new HttpRequestException("Connection reset"); }
         lock (gate)
@@ -44,7 +51,7 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
             {
                 if (payload.Length == 0)
                 {
-                    if (discovered.Remove(topic, out var gone)) { Registry.Remove(gone); }
+                    if (discovered.Remove(topic, out var gone)) { Registry.Remove(gone); optimistic.Remove(gone); }
                 }
                 else
                 {
@@ -77,7 +84,105 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
 
     public Task<HaState?> GetStateAsync(string entityId, CancellationToken cancellationToken = default)
     {
+        if (GetFailsFor?.Invoke(entityId) == true) { throw new HttpRequestException($"{entityId}: Home Assistant answered 502 Bad Gateway"); }
         lock (gate) { return Task.FromResult(States.TryGetValue(entityId, out var s) ? s : Derived(entityId)); }
+    }
+
+    // States Home Assistant keeps for optimistic MQTT entities (selects, buttons, text with no
+    // state topic), by unique_id so a rename keeps them.
+    readonly Dictionary<string, (string State, string? UserId)> optimistic = new(StringComparer.Ordinal);
+    public List<(string Service, string EntityId, string Value, string? UserId)> Services { get; } = [];
+    // The account the connector's token belongs to, as Home Assistant records it.
+    public string TokenUser { get; set; } = "token-user";
+    readonly System.Threading.Channels.Channel<HaTrigger> triggers = System.Threading.Channels.Channel.CreateUnbounded<HaTrigger>();
+    public List<IReadOnlyCollection<string>> Watches { get; } = [];
+
+    public Task CallServiceAsync(string domain, string service, JsonObject data, CancellationToken cancellationToken = default)
+    {
+        if (ServiceTarget.Check(data) is { } refused) { throw new InvalidOperationException(refused); }
+        var entityId = data["entity_id"]!.GetValue<string>();
+        if (ServiceFailsFor?.Invoke($"{domain}.{service}", entityId) == true) { throw new HttpRequestException($"{domain}.{service}: Home Assistant answered 500 Internal Server Error"); }
+        var value = data["option"]?.GetValue<string>() ?? data["value"]?.GetValue<string>() ?? "";
+        lock (gate) { Services.Add(($"{domain}.{service}", entityId, value, TokenUser)); }
+        Apply($"{domain}.{service}", entityId, value, TokenUser);
+        return Task.CompletedTask;
+    }
+
+    HaTrigger Apply(string service, string entityId, string value, string? userId)
+    {
+        lock (gate)
+        {
+            var uniqueId = Registry.FirstOrDefault(p => p.Value == entityId).Key
+                ?? throw new HttpRequestException($"{service}: Home Assistant answered 400 Bad Request (no entity {entityId})");
+            switch (service)
+            {
+                case "select.select_option":
+                    var options = Config(uniqueId)["options"]!.AsArray().Select(o => o!.GetValue<string>());
+                    if (!options.Contains(value)) { throw new HttpRequestException($"Option '{value}' is not valid for entity {entityId}"); }
+                    break;
+                case "button.press":
+                    value = Now.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+                    Now = Now.AddSeconds(1);
+                    break;
+            }
+            optimistic[uniqueId] = (value, userId);
+            return new HaTrigger(entityId, Derived(entityId)!);
+        }
+    }
+
+    JsonObject Config(string uniqueId) => JsonNode.Parse(Retained[discovered.First(p => p.Value == uniqueId).Key])!.AsObject();
+
+    // The clock a button press is stamped with.
+    public DateTimeOffset Now { get; set; } = new(2026, 10, 29, 20, 0, 0, TimeSpan.Zero);
+
+    // What a person (or an agent) does on the card, and the change Home Assistant reports for it.
+    public HaTrigger Press(string entityId, string? userId = "person") => Apply("button.press", entityId, "", userId);
+    public HaTrigger Choose(string entityId, string option, string? userId = "person") => Apply("select.select_option", entityId, option, userId);
+    public HaTrigger Type(string entityId, string text, string? userId = "person") => Apply("text.set_value", entityId, text, userId);
+
+    // The reply card's Send: a retained publish to the session's reply-payload topic.
+    public HaTrigger SendFromCard(string node, string text, string? decisionId = null, string? driver = null, string? at = null)
+    {
+        var payload = new JsonObject { ["at"] = at ?? $"{Now:O}", ["text"] = text };
+        if (decisionId is not null) { payload["decision_id"] = decisionId; }
+        if (driver is not null) { payload["driver"] = driver; }
+        Now = Now.AddSeconds(1);
+        PublishAsync(HaContract.Topics(node).ReplyPayload, HaContract.Serialize(payload), true).GetAwaiter().GetResult();
+        var entityId = SessionEntities.ReplyPayload(node);
+        lock (gate) { return new HaTrigger(entityId, Derived(entityId)!); }
+    }
+
+    public async IAsyncEnumerable<HaTrigger> WatchAsync(IReadOnlyCollection<string> entityIds, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        lock (gate) { Watches.Add(entityIds); }
+        await foreach (var t in triggers.Reader.ReadAllAsync(cancellationToken))
+        {
+            if (entityIds.Contains(t.EntityId)) { yield return t; }
+        }
+    }
+
+    // Hands a change to whatever is watching, as Home Assistant's trigger subscription would.
+    public void Trigger(HaTrigger trigger) => triggers.Writer.TryWrite(trigger);
+
+    public Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default)
+    {
+        lock (gate)
+        {
+            return Task.FromResult<IReadOnlyList<HaMessage>>([.. Retained.Where(r => filters.Any(f => Matches(f, r.Key))).Select(r => new HaMessage(r.Key, r.Value, true))]);
+        }
+    }
+
+    // MQTT topic filter matching: + is one level, # the rest.
+    static bool Matches(string filter, string topic)
+    {
+        var f = filter.Split('/');
+        var t = topic.Split('/');
+        for (var i = 0; i < f.Length; i++)
+        {
+            if (f[i] == "#") { return true; }
+            if (i >= t.Length || (f[i] != "+" && f[i] != t[i])) { return false; }
+        }
+        return f.Length == t.Length;
     }
 
     public Task<IReadOnlyList<HaState>> GetStatesAsync(CancellationToken cancellationToken = default)
@@ -91,7 +196,7 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     }
 
     // An MQTT entity's state as Home Assistant would show it: from the retained state and
-    // attribute topics its discovery config names.
+    // attribute topics its discovery config names, or what an optimistic one was last set to.
     HaState? Derived(string entityId)
     {
         var uniqueId = Registry.FirstOrDefault(p => p.Value == entityId).Key;
@@ -99,8 +204,16 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         var topic = discovered.First(p => p.Value == uniqueId).Key;
         var config = JsonNode.Parse(Retained[topic])!.AsObject();
         var state = config["state_topic"]?.GetValue<string>() is { } st && Retained.TryGetValue(st, out var v) ? v : "unknown";
-        var attributes = config["json_attributes_topic"]?.GetValue<string>() is { } at && Retained.TryGetValue(at, out var a) ? a : "{}";
-        return new HaState(entityId, state, JsonDocument.Parse(attributes).RootElement.Clone());
+        // The one value template the contract uses: the reply payload's stamp.
+        if (config["value_template"]?.GetValue<string>() == "{{ value_json.at }}" && state != "unknown")
+        {
+            state = JsonNode.Parse(state)?["at"]?.GetValue<string>() ?? "unknown";
+        }
+        string? user = null;
+        if (optimistic.TryGetValue(uniqueId, out var o)) { (state, user) = o; }
+        var attributes = config["json_attributes_topic"]?.GetValue<string>() is { } at && Retained.TryGetValue(at, out var a) ? JsonNode.Parse(a)!.AsObject() : [];
+        if (config["options"] is JsonArray options) { attributes["options"] = options.DeepClone(); }
+        return new HaState(entityId, state, JsonDocument.Parse(attributes.ToJsonString()).RootElement.Clone(), user);
     }
 
     public Task<IReadOnlyList<HaRegistryEntry>> ListEntityRegistryAsync(CancellationToken cancellationToken = default)
@@ -162,13 +275,13 @@ internal sealed class FakeSessions : ISessionSource
 
     public void Set(Session s)
     {
-        sessions[s.Id] = s;
+        lock (sessions) { sessions[s.Id] = s; }
         Changed?.Invoke(this, new SessionChange(SessionChangeKind.Upserted, s.Id, s.WithoutHistory(), ++revision));
     }
 
     public void End(string id)
     {
-        sessions.Remove(id);
+        lock (sessions) { sessions.Remove(id); }
         Changed?.Invoke(this, new SessionChange(SessionChangeKind.Removed, id, null, ++revision));
     }
 
@@ -177,13 +290,14 @@ internal sealed class FakeSessions : ISessionSource
 
     public IReadOnlyList<Session> Snapshot()
     {
-        IReadOnlyList<Session> snapshot = [.. sessions.Values.OrderByDescending(s => s.UpdatedAt).Select(s => s.WithoutHistory())];
+        IReadOnlyList<Session> snapshot;
+        lock (sessions) { snapshot = [.. sessions.Values.OrderByDescending(s => s.UpdatedAt).Select(s => s.WithoutHistory())]; }
         var after = AfterSnapshot;
         AfterSnapshot = null;
         after?.Invoke();
         return snapshot;
     }
-    public Session? Get(string id) => sessions.TryGetValue(id, out var s) ? s : null;
+    public Session? Get(string id) { lock (sessions) { return sessions.TryGetValue(id, out var s) ? s : null; } }
     public SessionList List(string? cursor = null) => new(Snapshot(), revision);
     public SessionSubscription Subscribe() => throw new NotSupportedException();
     public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;

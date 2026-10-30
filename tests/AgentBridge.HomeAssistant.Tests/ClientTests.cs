@@ -202,6 +202,47 @@ public class ClientTests
     }
 
     [Fact]
+    public async Task A_retained_message_arriving_while_a_later_filter_is_subscribed_is_still_read()
+    {
+        var client = new HomeAssistantClient(new Uri("https://ha.test"), Token, new HttpClient(new Handler((_, _) => new HttpResponseMessage(HttpStatusCode.OK))), (uri, ct) =>
+        {
+            var (c, s) = Pipe.Pair();
+            var server = WebSocket.CreateFromStream(s, new WebSocketCreationOptions { IsServer = true });
+            _ = Task.Run(async () =>
+            {
+                await Send(server, new JsonObject { ["type"] = "auth_required" });
+                await Receive(server);
+                await Send(server, new JsonObject { ["type"] = "auth_ok" });
+                var first = await Receive(server);
+                await Send(server, new JsonObject { ["id"] = first["id"]!.GetValue<int>(), ["type"] = "result", ["success"] = true });
+                var second = await Receive(server);
+                // The first filter's retained message, before the second subscription's result.
+                await Send(server, new JsonObject
+                {
+                    ["id"] = first["id"]!.GetValue<int>(), ["type"] = "event",
+                    ["event"] = new JsonObject { ["topic"] = "copilot/cli/a/status/state", ["payload"] = "idle", ["retain"] = true },
+                });
+                await Send(server, new JsonObject { ["id"] = second["id"]!.GetValue<int>(), ["type"] = "result", ["success"] = true });
+            });
+            return Task.FromResult(WebSocket.CreateFromStream(c, new WebSocketCreationOptions { IsServer = false }));
+        });
+
+        var read = await client.ReadTopicsAsync(["copilot/cli/a/#", "copilot/cli/b/#"], TimeSpan.FromMilliseconds(300));
+
+        Assert.Equal(new HaMessage("copilot/cli/a/status/state", "idle", true), Assert.Single(read));
+    }
+
+    static Task Send(WebSocket ws, JsonObject message) =>
+        ws.SendAsync(Encoding.UTF8.GetBytes(message.ToJsonString()), WebSocketMessageType.Text, true, CancellationToken.None);
+
+    static async Task<JsonObject> Receive(WebSocket ws)
+    {
+        var buffer = new byte[64 * 1024];
+        var r = await ws.ReceiveAsync(buffer, CancellationToken.None);
+        return JsonNode.Parse(buffer.AsSpan(0, r.Count))!.AsObject();
+    }
+
+    [Fact]
     public async Task A_refused_token_fails_the_command()
     {
         var (client, _, _) = Server(_ => new JsonObject { ["success"] = true }, accept: "some-other-token");

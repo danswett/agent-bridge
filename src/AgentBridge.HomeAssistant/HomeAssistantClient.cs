@@ -30,9 +30,28 @@ public interface IHomeAssistant
 
     // lovelace/config for one dashboard: its JSON as served, or NotFound when there is none.
     Task<HaDashboard> ReadDashboardAsync(string urlPath, CancellationToken cancellationToken = default);
+
+    // One service call naming at most one entity (ServiceTarget): select.select_option and
+    // text.set_value on a session's own controls.
+    Task CallServiceAsync(string domain, string service, JsonObject data, CancellationToken cancellationToken = default);
+
+    // A server-side state trigger on exactly these entities (subscribe_trigger), as the daemon's
+    // Wait-CopilotHaStateChange: one message per change, nothing for the rest of the house.
+    // Ends when the connection does; the caller watches again.
+    IAsyncEnumerable<HaTrigger> WatchAsync(IReadOnlyCollection<string> entityIds, CancellationToken cancellationToken = default);
+
+    // Every message the broker holds or delivers on these topic filters within the window, read
+    // through Home Assistant's mqtt/subscribe. Read-only: used by the shadow comparison.
+    Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default);
 }
 
-public sealed record HaState(string EntityId, string State, JsonElement Attributes);
+// A state as Home Assistant reports it, with the account behind its last change (context.user_id)
+// when there was one: a press from the dashboard carries the person's, one through an agent's
+// token the agent's.
+public sealed record HaState(string EntityId, string State, JsonElement Attributes, string? UserId = null);
+
+// One change a watch reported. A removed entity is not a change (Get-BridgeStateTriggerHit).
+public sealed record HaTrigger(string EntityId, HaState State);
 
 public sealed record HaRegistryEntry(string EntityId, string? UniqueId);
 
@@ -222,44 +241,175 @@ public sealed class HomeAssistantClient : IHomeAssistant
     static HaState? State(JsonElement e) =>
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty("entity_id", out var id) && id.ValueKind == JsonValueKind.String
             ? new HaState(id.GetString()!, e.TryGetProperty("state", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString()! : "",
-                e.TryGetProperty("attributes", out var a) ? a.Clone() : default)
+                e.TryGetProperty("attributes", out var a) ? a.Clone() : default, UserId(e))
             : null;
+
+    // Get-BridgeStateUserId: context.user_id, read step by step because any of it may be absent.
+    static string? UserId(JsonElement state) =>
+        state.TryGetProperty("context", out var c) && c.ValueKind == JsonValueKind.Object
+        && c.TryGetProperty("user_id", out var u) && u.ValueKind == JsonValueKind.String && u.GetString() is { Length: > 0 } user
+            ? user : null;
+
+
+    public async IAsyncEnumerable<HaTrigger> WatchAsync(IReadOnlyCollection<string> entityIds, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (entityIds.Count == 0) { yield break; }
+        using var ws = await OpenAsync(cancellationToken);
+        try
+        {
+            await HaWebSocket.SubscribeAsync(ws, new JsonObject
+            {
+                ["type"] = "subscribe_trigger",
+                ["trigger"] = new JsonObject { ["platform"] = "state", ["entity_id"] = new JsonArray([.. entityIds.Select(e => (JsonNode)e)]) },
+            }, cancellationToken);
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                using var message = await HaWebSocket.ReceiveAsync(ws, cancellationToken);
+                if (Hit(message.RootElement) is { } hit) { yield return hit; }
+            }
+        }
+        finally { await CloseAsync(ws); }
+    }
+
+    // Get-BridgeStateTriggerHit: the change one subscribe_trigger message describes, or null. An
+    // entity being removed arrives as a hit with no to_state, and is never a press.
+    internal static HaTrigger? Hit(JsonElement message)
+    {
+        if (!message.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String || type.GetString() != "event") { return null; }
+        if (!message.TryGetProperty("event", out var e) || e.ValueKind != JsonValueKind.Object
+            || !e.TryGetProperty("variables", out var v) || v.ValueKind != JsonValueKind.Object
+            || !v.TryGetProperty("trigger", out var t) || t.ValueKind != JsonValueKind.Object
+            || !t.TryGetProperty("entity_id", out var id) || id.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(id.GetString())
+            || !t.TryGetProperty("to_state", out var to) || to.ValueKind != JsonValueKind.Object
+            || !to.TryGetProperty("state", out var s) || s.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+        var state = s.GetString()!;
+        if (state is "" or "unknown" or "unavailable") { return null; }
+        return new HaTrigger(id.GetString()!, new HaState(id.GetString()!, state, to.TryGetProperty("attributes", out var a) ? a.Clone() : default, UserId(to)));
+    }
+
+    public async Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default)
+    {
+        var messages = new List<HaMessage>();
+        if (filters.Count == 0) { return messages; }
+        // A retained message for an early filter can arrive while a later one is still being
+        // subscribed; it is collected there too, or the shadow would call the topic missing.
+        void Collect(JsonElement root)
+        {
+            if (root.TryGetProperty("type", out var type) && type.GetString() == "event"
+                && root.TryGetProperty("event", out var e) && e.ValueKind == JsonValueKind.Object
+                && e.TryGetProperty("topic", out var topic) && topic.ValueKind == JsonValueKind.String)
+            {
+                var payload = e.TryGetProperty("payload", out var p) ? p.ValueKind == JsonValueKind.String ? p.GetString()! : p.GetRawText() : "";
+                var retain = e.TryGetProperty("retain", out var r) && r.ValueKind == JsonValueKind.True;
+                messages.Add(new HaMessage(topic.GetString()!, payload, retain));
+            }
+        }
+        using var ws = await OpenAsync(cancellationToken);
+        try
+        {
+            for (var i = 0; i < filters.Count; i++)
+            {
+                await HaWebSocket.SubscribeAsync(ws, new JsonObject { ["type"] = "mqtt/subscribe", ["topic"] = filters[i] }, cancellationToken, id: i + 1, other: Collect);
+            }
+            using var until = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            until.CancelAfter(window);
+            while (true)
+            {
+                JsonDocument message;
+                try { message = await HaWebSocket.ReceiveAsync(ws, until.Token); }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { break; }
+                using (message) { Collect(message.RootElement); }
+            }
+        }
+        finally { await CloseAsync(ws); }
+        return messages;
+    }
+
+    async Task<WebSocket> OpenAsync(CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        var ws = await connect(WebSocketUri, timeout.Token);
+        try
+        {
+            await HaWebSocket.AuthenticateAsync(ws, token, timeout.Token);
+            return ws;
+        }
+        catch
+        {
+            ws.Dispose();
+            throw;
+        }
+    }
+
+    static async Task CloseAsync(WebSocket ws)
+    {
+        if (ws.State != WebSocketState.Open) { return; }
+        try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "done", CancellationToken.None); }
+        catch (Exception e) when (e is WebSocketException or IOException or OperationCanceledException) { }
+    }
 }
 
-// Home Assistant's WebSocket API, one command per connection.
+// Home Assistant's WebSocket API: one command per connection, or one long subscription.
 internal static class HaWebSocket
 {
     const int MaxMessageBytes = 64 * 1024 * 1024;
 
-    public static async Task<JsonElement> RunAsync(WebSocket ws, string token, JsonObject command, CancellationToken cancellationToken)
+    public static async Task AuthenticateAsync(WebSocket ws, string token, CancellationToken cancellationToken)
     {
         using (var hello = await ReceiveAsync(ws, cancellationToken))
         {
             if (Type(hello) != "auth_required") { throw new InvalidDataException($"Home Assistant opened with {Type(hello)} instead of auth_required"); }
         }
         await SendAsync(ws, new JsonObject { ["type"] = "auth", ["access_token"] = token }, cancellationToken);
-        using (var auth = await ReceiveAsync(ws, cancellationToken))
+        using var auth = await ReceiveAsync(ws, cancellationToken);
+        // auth_invalid's message is Home Assistant's and names no secret, but it is not
+        // repeated: "the token was refused" is what the log needs.
+        if (Type(auth) != "auth_ok") { throw new HaCommandException("auth", Type(auth) ?? "unknown", "Home Assistant refused the token"); }
+    }
+
+    // Sends a subscription and waits for Home Assistant to accept it. Anything else that arrives
+    // meanwhile (an earlier subscription's events) goes to other, not away.
+    public static async Task SubscribeAsync(WebSocket ws, JsonObject command, CancellationToken cancellationToken, int id = 1, Action<JsonElement>? other = null)
+    {
+        command["id"] = id;
+        var type = command["type"]?.GetValue<string>() ?? "?";
+        await SendAsync(ws, command, cancellationToken);
+        while (true)
         {
-            // auth_invalid's message is Home Assistant's and names no secret, but it is not
-            // repeated: "the token was refused" is what the log needs.
-            if (Type(auth) != "auth_ok") { throw new HaCommandException("auth", Type(auth) ?? "unknown", "Home Assistant refused the token"); }
+            using var message = await ReceiveAsync(ws, cancellationToken);
+            if (Result(message.RootElement, id, type) is not null) { return; }
+            other?.Invoke(message.RootElement);
         }
+    }
+
+    public static async Task<JsonElement> RunAsync(WebSocket ws, string token, JsonObject command, CancellationToken cancellationToken)
+    {
+        await AuthenticateAsync(ws, token, cancellationToken);
         command["id"] = 1;
         var type = command["type"]?.GetValue<string>() ?? "?";
         await SendAsync(ws, command, cancellationToken);
         while (true)
         {
             using var message = await ReceiveAsync(ws, cancellationToken);
-            var root = message.RootElement;
-            if (Type(message) != "result" || !root.TryGetProperty("id", out var id) || id.GetInt32() != 1) { continue; }
-            if (root.TryGetProperty("success", out var ok) && ok.ValueKind == JsonValueKind.True)
-            {
-                return root.TryGetProperty("result", out var result) ? result.Clone() : default;
-            }
-            var code = root.TryGetProperty("error", out var error) && error.TryGetProperty("code", out var c) ? c.ToString() : "unknown";
-            var text = root.TryGetProperty("error", out var error2) && error2.TryGetProperty("message", out var m) ? m.ToString() : "";
-            throw new HaCommandException(type, code, text);
+            if (Result(message.RootElement, 1, type) is { } result) { return result.ValueKind == JsonValueKind.Undefined ? default : result.Clone(); }
         }
+    }
+
+    // The result for command id, null for any other message; a failure throws.
+    static JsonElement? Result(JsonElement root, int id, string type)
+    {
+        if (!root.TryGetProperty("type", out var t) || t.GetString() != "result" || !root.TryGetProperty("id", out var i) || i.GetInt32() != id) { return null; }
+        if (root.TryGetProperty("success", out var ok) && ok.ValueKind == JsonValueKind.True)
+        {
+            return root.TryGetProperty("result", out var result) ? result : default(JsonElement);
+        }
+        var code = root.TryGetProperty("error", out var error) && error.TryGetProperty("code", out var c) ? c.ToString() : "unknown";
+        var text = root.TryGetProperty("error", out var error2) && error2.TryGetProperty("message", out var m) ? m.ToString() : "";
+        throw new HaCommandException(type, code, text);
     }
 
     static string? Type(JsonDocument d) => d.RootElement.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
@@ -267,7 +417,7 @@ internal static class HaWebSocket
     static Task SendAsync(WebSocket ws, JsonObject message, CancellationToken cancellationToken) =>
         ws.SendAsync(Encoding.UTF8.GetBytes(HaContract.Serialize(message)), WebSocketMessageType.Text, true, cancellationToken);
 
-    static async Task<JsonDocument> ReceiveAsync(WebSocket ws, CancellationToken cancellationToken)
+    internal static async Task<JsonDocument> ReceiveAsync(WebSocket ws, CancellationToken cancellationToken)
     {
         var buffer = new byte[16 * 1024];
         using var stream = new MemoryStream();

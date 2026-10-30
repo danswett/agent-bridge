@@ -62,6 +62,7 @@ internal static class Contract
         // Through text, so a node built in code compares like one parsed from a payload.
         var copy = node is null ? null : JsonNode.Parse(node.ToJsonString());
         if (copy is JsonObject o && o.ContainsKey("updated")) { o["updated"] = "<now>"; }
+        if (copy is JsonObject q && q.ContainsKey("asked_at")) { q["asked_at"] = "<now>"; }
         return copy;
     }
 

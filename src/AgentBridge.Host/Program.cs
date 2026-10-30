@@ -38,7 +38,7 @@ using AgentBridge.Transport;
 //                                               other devices, approved here at the machine
 //   agent-bridge-host config show|set|unset     the rest of the profile's config.json
 //                                               (docs/host-config.md, docs/host-launch.md)
-//   agent-bridge-host ha status|token set|token clear
+//   agent-bridge-host ha status|token set|token clear|shadow [--json] [--window <seconds>]
 //                                               the Home Assistant connector (docs/ha-connector.md):
 //                                               whether serve would run it, and its token, which is
 //                                               read from standard input and kept protected
@@ -65,8 +65,10 @@ string? Option(string name)
 bool Flag(string name) => arguments.Contains(name);
 
 var defaults = SessionSourceOptions.ForCurrentUser();
-// serve reads what it may do on this machine from the profile's config.json (HostSettings).
-var (settings, settingsProblem) = command == "serve" ? HostSettings.Load(LoadIdentity().Folder) : (HostSettings.Default, null);
+// serve reads what it may do on this machine from the profile's config.json (HostSettings), and
+// so does ha shadow, which must see the sessions as serve would (permissions.remoteApproval).
+var (settings, settingsProblem) = command == "serve" || (command == "ha" && arguments.ElementAtOrDefault(1) == "shadow")
+    ? HostSettings.Load(LoadIdentity().Folder) : (HostSettings.Default, null);
 var options = new SessionSourceOptions
 {
     CopilotHome = Option("--copilot-home") ?? defaults.CopilotHome,
@@ -148,6 +150,19 @@ switch (command)
         }
     case "serve":
         return await ServeAsync();
+    case "ha" when arguments.ElementAtOrDefault(1) == "shadow":
+        {
+            await using var source = new SessionSource(options);
+            await source.RefreshAsync();
+            // One reading of every agent's usage, as the usage command takes it, so the usage
+            // sensors are compared too.
+            using var http = new UsageHttp(TimeSpan.FromSeconds(15));
+            var usageOptions = UsageOptions.For(options);
+            Action<string> note = m => Console.Error.WriteLine($"{DateTime.Now:HH:mm:ss} {m}");
+            await using var monitor = new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: note), source, usageOptions, log: note);
+            await monitor.PassAsync();
+            return await HaCommands.ShadowAsync(LoadIdentity().Folder, source, Flag("--json"), Option("--window"), HostVersion(), IsDevBuild(), null, Console.Out, Console.Error, usage: () => monitor.Current);
+        }
     case "ha":
         {
             var rest = new List<string>(arguments);
@@ -170,7 +185,7 @@ switch (command)
         }
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
-        Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear");
+        Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");
         return command == "help" ? 0 : 2;
@@ -247,7 +262,7 @@ async Task<int> ServeAsync()
     // agent-ha-bridge's writer generates. Off unless config.json turns it on, and paused while
     // agent-ha-bridge runs for this user (looked at every few seconds, as the app's view of it is).
     Func<string?>? haActive = haProbe is null ? null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64);
-    await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log);
+    await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers);
     var launcher = Launcher(source, attachments);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, new UsageService(usageMonitor, Log), launcher);
     // Who is on the other end of the pipe: the app beside this host, or something inside an
