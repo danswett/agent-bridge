@@ -41,6 +41,9 @@ public sealed class MigrationRecord
         public required string Backup { get; init; }
         public string? Before { get; init; }
         public string? After { get; set; }
+        // How the file was linked when migrated (DurableFile.Link): "symlink:<target>" or
+        // "hardlink"; null for a plain file. Writes went through it, and a rollback puts it back.
+        public string? Link { get; init; }
         public List<EntryChange> Changes { get; init; } = [];
     }
 
@@ -78,6 +81,7 @@ public sealed class MigrationRecord
                 ["backup"] = f.Backup,
                 ["before"] = f.Before,
                 ["after"] = f.After,
+                ["link"] = f.Link,
                 ["changes"] = new JsonArray(f.Changes.Select(c => (JsonNode)new JsonObject
                 {
                     ["agent"] = c.Agent,
@@ -90,9 +94,7 @@ public sealed class MigrationRecord
             ["hook"] = Hook is null ? null : new JsonObject { ["path"] = Hook.Path, ["pointer"] = Hook.Pointer, ["created"] = Hook.Created, ["pointerCreated"] = Hook.PointerCreated },
         };
         var path = PathIn(profileFolder);
-        var partial = path + ".tmp";
-        File.WriteAllText(partial, o.ToJsonString(Pretty) + Environment.NewLine);
-        File.Move(partial, path, overwrite: true);
+        DurableFile.Write(path, new System.Text.UTF8Encoding(false).GetBytes(o.ToJsonString(Pretty) + Environment.NewLine));
     }
 
     public static (MigrationRecord? Record, string? Problem) Load(string profileFolder)
@@ -120,6 +122,7 @@ public sealed class MigrationRecord
                     Backup = S(f["backup"]),
                     Before = (string?)f["before"],
                     After = (string?)f["after"],
+                    Link = (string?)f["link"],
                     Changes = [.. (f["changes"] as JsonArray ?? []).OfType<JsonObject>().Select(c => new EntryChange(S(c["agent"]), S(c["event"]), c["original"]!.DeepClone(), c["replacement"]!.DeepClone()))],
                 })],
                 Checked = [.. (o["checked"] as JsonArray ?? []).OfType<JsonObject>().Select(c => new CheckedFile(S(c["path"]), (string?)c["hash"]))],

@@ -66,8 +66,8 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
         var path = Path.Combine(profileFolder, FileName);
         var partial = path + ".tmp";
         using (var stream = File.Create(partial))
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
         {
+            using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true });
             writer.WriteStartObject();
             writer.WriteNumber("version", Version);
             writer.WriteString("runtimeRoot", RuntimeRoot);
@@ -83,6 +83,9 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
                 writer.WriteEndObject();
             }
             writer.WriteEndObject();
+            writer.Flush();
+            // On the disk before it is renamed into place: a power cut never leaves it zero-filled.
+            stream.Flush(flushToDisk: true);
         }
         File.Move(partial, path, overwrite: true);
     }

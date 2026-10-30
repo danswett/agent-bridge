@@ -229,10 +229,14 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
         if (name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal)) { DaemonRunning = true; }
     }
 
+    // Runs as the daemon is stopped: after the snapshot, before any settings file is written.
+    public Action? OnStop { get; set; }
+
     public void Stop(AgentHaBridgeInstall install)
     {
         Assert.Equal(fake.BridgeHome, install.BridgeHome);
         Calls.Add("stop");
+        OnStop?.Invoke();
         if (Stubborn) { return; }
         DaemonRunning = false;
         foreach (var name in Tasks.Keys.ToList()) { Tasks[name] = (Tasks[name].Enabled, false); }

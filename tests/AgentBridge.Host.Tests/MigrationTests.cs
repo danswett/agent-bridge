@@ -662,6 +662,130 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_settings_file_an_agent_writes_during_the_migration_is_never_overwritten_and_the_migration_is_undone()
+    {
+        var copilot = File.ReadAllBytes(_f.CopilotHooks);
+        string? written = null;
+        // A Claude session already on its native hook runs /model while the daemon is being stopped.
+        _f.Runtime_.OnStop = () =>
+        {
+            var settings = FakeAgentHaBridge.Read(_f.ClaudeSettings);
+            settings["model"] = "opus";
+            File.WriteAllText(_f.ClaudeSettings, written = settings.ToJsonString(new() { WriteIndented = true }));
+        };
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("changed while it was being rewritten", report.ToString());
+        Assert.Equal(written, File.ReadAllText(_f.ClaudeSettings));
+        // Known never to have been written, rather than found changed since.
+        Assert.Contains($"{_f.ClaudeSettings}: unchanged by the migration", report.ToString());
+        // What was written before it is put back, and agent-ha-bridge runs again.
+        Assert.Equal(copilot, File.ReadAllBytes(_f.CopilotHooks));
+        Assert.True(_f.Runtime_.DaemonRunning);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+    }
+
+    [Fact]
+    public async Task A_profile_config_written_during_the_migration_is_never_overwritten()
+    {
+        var hostConfig = Path.Combine(_f.Profile, "config.json");
+        const string mine = "{\"version\":1,\"launch\":{\"enabled\":false}}";
+        _f.Runtime_.OnStop = () => File.WriteAllText(hostConfig, mine);
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Equal(mine, File.ReadAllText(hostConfig));
+        Assert.True(_f.Runtime_.DaemonRunning);
+    }
+
+    [Fact]
+    public async Task A_settings_file_that_is_a_symbolic_link_is_written_through_and_stays_a_link_both_ways()
+    {
+        var target = Path.Combine(_f.Home, "dotfiles", "claude-settings.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.Move(_f.ClaudeSettings, target);
+        try { File.CreateSymbolicLink(_f.ClaudeSettings, target); }
+        // Windows lets only an administrator, or developer mode, make one.
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; }
+        var original = File.ReadAllBytes(target);
+
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        Assert.NotNull(new FileInfo(_f.ClaudeSettings).LinkTarget);
+        Assert.Contains("agent-bridge-host-hook", File.ReadAllText(target));
+        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        Assert.NotNull(new FileInfo(_f.ClaudeSettings).LinkTarget);
+        Assert.Equal(original, File.ReadAllBytes(target));
+
+        // And a link something else replaced with a copy of what was migrated is made again.
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var migrated = File.ReadAllBytes(target);
+        File.Delete(_f.ClaudeSettings);
+        File.WriteAllBytes(_f.ClaudeSettings, migrated);
+        var back = await _f.Migrator().RollbackAsync(dryRun: false);
+        Assert.True(back.Ok, back.ToString());
+        Assert.Equal(target, new FileInfo(_f.ClaudeSettings).LinkTarget);
+        Assert.Equal(original, File.ReadAllBytes(target));
+    }
+
+    [Fact]
+    public async Task A_settings_file_with_another_hard_link_is_rewritten_in_place_so_every_name_sees_it()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var other = Path.Combine(_f.Home, "dotfiles", "settings-hard.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(other)!);
+        Assert.True(CreateHardLink(other, _f.ClaudeSettings, IntPtr.Zero));
+        var original = File.ReadAllBytes(other);
+
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        Assert.Equal(File.ReadAllBytes(_f.ClaudeSettings), File.ReadAllBytes(other));
+        Assert.Contains("agent-bridge-host-hook", File.ReadAllText(other));
+
+        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        Assert.Equal(original, File.ReadAllBytes(other));
+        Assert.Equal(original, File.ReadAllBytes(_f.ClaudeSettings));
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    static extern bool CreateHardLink(string link, string existing, IntPtr security);
+
+    [Fact]
+    public async Task A_file_that_cannot_be_put_back_never_stops_a_rollback_turning_agent_ha_bridge_back_on()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var copilot = Path.Combine(MigrationRecord.SnapshotIn(_f.Profile), "copilot.bak");
+        var claudeBefore = File.ReadAllBytes(Path.Combine(MigrationRecord.SnapshotIn(_f.Profile), "claude.bak"));
+        File.Delete(copilot);
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains($"{_f.CopilotHooks}: could not be put back", report.ToString());
+        Assert.Equal(claudeBefore, File.ReadAllBytes(_f.ClaudeSettings));
+        Assert.True(_f.Runtime_.DaemonRunning);
+        Assert.All(_f.Runtime_.Tasks.Values, t => Assert.True(t.Enabled));
+        // Kept for the file it could not put back.
+        Assert.NotNull(MigrationRecord.Load(_f.Profile).Record);
+    }
+
+    [Fact]
+    public async Task An_undo_that_cannot_put_a_file_back_still_reports_and_turns_agent_ha_bridge_back_on()
+    {
+        _f.Runtime_.OnStop = () => File.Delete(Path.Combine(MigrationRecord.SnapshotIn(_f.Profile), "copilot.bak"));
+        _f.Host.RefuseRestart = "the app is closed";
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("Migration failed", report.ToString());
+        Assert.Contains("could not be put back", report.ToString());
+        Assert.True(_f.Runtime_.DaemonRunning);
+    }
+
+    [Fact]
     public async Task Rolling_back_with_nothing_migrated_says_so()
     {
         var report = await _f.Migrator().RollbackAsync(dryRun: false);
@@ -810,6 +934,8 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.False(report.Ok);
         Assert.Contains("still holds the hook spool", report.ToString());
         Assert.False(_f.Runtime_.DaemonRunning);
+        // But turned back on, so it starts at the next logon whatever happens to this rollback.
+        Assert.All(_f.Runtime_.Tasks.Values, t => Assert.True(t.Enabled));
         Assert.NotNull(MigrationRecord.Load(_f.Profile).Record);
 
         _f.Host.Linger = false;

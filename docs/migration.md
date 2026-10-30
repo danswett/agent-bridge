@@ -75,7 +75,8 @@ second snapshot the first's changes as the state to restore; the second is refus
    private to the user. It records each file's SHA-256 before and after, each hook entry it
    re-points, and whether each task was enabled. agent-ha-bridge's `config.json`,
    `installation.json` and instruction files are recorded **by hash only**: the config can hold
-   secrets and is never copied.
+   secrets and is never copied. A snapshot that cannot be written refuses the migration, with
+   nothing changed and nothing left behind.
 3. **Daemon.** A task the scheduler cannot read (access denied, say) refuses the migration; only
    a task that does not exist is left out. Disables (never deletes) `AgentBridgeDaemon_<id>` and
    `AgentBridgeDevBoxKeepAwake_<id>`, then stops the supervisor, the daemon and the keep-awake.
@@ -89,7 +90,11 @@ second snapshot the first's changes as the state to restore; the second is refus
    the app's folder, and a registration must never point at nothing.
 5. **Registrations.** Re-points agent-ha-bridge's own hook entries and nothing else (below).
    Each file's hash after is recorded before the file is written, so a migration cut short
-   between the two still rolls back what it wrote.
+   between the two still rolls back what it wrote. Each file is re-read immediately before it
+   is written and must still be what the change was planned from (the same goes for the
+   profile's `config.json`): an agent already on its native hook keeps running and may write its
+   settings (`/model`, `/permissions`) meanwhile. If one has, the migration is undone and that
+   file is left as the agent wrote it.
 6. **Settings.** Carries agent-ha-bridge's settings into the profile's `config.json` (below).
 7. **Hand-over.** Writes `intake.json` (the runtime folder, and the agents' homes the
    installation recorded, whose hooks were re-pointed: the host reads sessions from those unless
@@ -113,8 +118,14 @@ other field (matcher, timeout, type) stays.
 | Claude | `~\.claude\settings.json` | `"<go hook>" claude <name> "<script>"`, or `"<ha-bridge>\run-hook.cmd" "<script>"` | `"<hook>" claude <name>` (`ask`, `notification`, `stop`, `register`) |
 | Codex | `<bridgeHome>\codex-bridge\plugins\agent-ha-bridge\hooks.json` | `<go hook> codex hook <script>`, or `pwsh -NoProfile -ExecutionPolicy Bypass -File <script>` | `<hook> codex hook` |
 
-Files are written whole and renamed into place, with a two-space indent and any byte order
-mark the file had. Codex asks for its hooks to be trusted again once, since their command
+Files are written whole, flushed to the disk and renamed into place (snapshots, `migration.json`,
+`intake.json` and `hook.json` too), so a power cut leaves either the old file or the new one,
+never a zero-filled one. A plain file is replaced keeping its ACL and attributes. A symbolic link
+(a dotfiles checkout, say) is written through to its target and stays a link, as
+agent-ha-bridge's `Set-Content` wrote it; a file with another hard link is rewritten in place, so
+every name sees it. Either way the link is recorded, and rollback writes through it the same
+way (making it a link again if something replaced it with a copy of what migration wrote).
+JSON keeps a two-space indent and any byte order mark the file had. Codex asks for its hooks to be trusted again once, since their command
 changed, and again after a rollback. Its trust lives in `~\.codex\config.toml`, which neither
 step touches. Codex cannot quote a command, so if the hook's path has a space Codex's entries
 are left on agent-ha-bridge's Go hook, which spools to the host just the same
@@ -195,14 +206,18 @@ publishes the dashboard (G7).
       (Claude's `run-hook.cmd` form and its Go form both become `claude register`) each get their
       own original back. A hook still running this host's program that cannot be matched,
    or a file that cannot be reverted, is reported as a problem, and the snapshot is kept. The profile's own `config.json` is restored, or removed if
-   migration created it, unless a person has changed it since.
+   migration created it, unless a person has changed it since. Each is re-read just before it
+   is written. A file that cannot be put back (a missing snapshot, a read-only file, a sharing
+   violation) is reported and the rest carry on: the steps below always run, since with
+   `intake.json` gone nothing else would take the hooks' events. An undo that fails anyway keeps
+   its report, and the record and snapshot for `rollback`.
 3. Checks the files recorded by hash, and reports any that changed while migrated (by someone
    else; neither step writes them).
 4. Restarts the host, which reads both only when it starts: it lets go of the spool, removes
    its heartbeat, and runs on its restored settings. Rollback then waits (up to the stop
    timeout) until the spool's claim file, `runtime\agent-bridge-host-intake.lock`, is free. If
-   the host still holds it, agent-ha-bridge is not started, the report says so and the record
-   is kept, so the two never take the spool at once; run rollback again once the host has let go.
+   the host still holds it, agent-ha-bridge's tasks are re-enabled but not started, the report
+   says so and the record is kept, so the two never take the spool at once; run rollback again once the host has let go.
 5. Re-enables each task that was enabled before, starts it, and waits until the G5 probe sees
    agent-ha-bridge running again. A task that was disabled before stays disabled.
 6. Deletes `migration.json` and the snapshot. If anything above went wrong they are kept, and

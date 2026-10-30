@@ -153,7 +153,10 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         if (plans.FirstOrDefault(p => p.Refusal is not null) is { } blocked) { Say("Refused: " + blocked.Refusal + "."); return new(false, lines); }
         if (StillRunningPowerShell(install, plans) is { } running) { Say("Refused: " + running); return new(false, lines); }
         var hostConfig = Path.Combine(options.ProfileFolder, HostSettings.FileName);
-        var import = ConfigImport.Build(install.Config, File.Exists(hostConfig) ? File.ReadAllText(hostConfig) : null);
+        // Read once: these bytes are what the import is built from, what is snapshotted, and what
+        // the file must still be when it is written.
+        var hostBytes = File.Exists(hostConfig) ? File.ReadAllBytes(hostConfig) : null;
+        var import = ConfigImport.Build(install.Config, hostBytes is null ? null : Decode(hostBytes));
         if (import.Problems.Count > 0)
         {
             Say("Refused: the settings carried over would leave this profile's config.json with problems: " + string.Join("; ", import.Problems));
@@ -171,25 +174,35 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         // Snapshot, recorded before anything changes.
         var record = new MigrationRecord { InstallationId = install.Id, BridgeHome = install.BridgeHome, StartedAt = _time.GetUtcNow() };
         var snapshot = MigrationRecord.SnapshotIn(options.ProfileFolder);
-        Directory.CreateDirectory(snapshot);
-        foreach (var plan in plans.Where(p => p.NewText is not null))
+        try
         {
-            var backup = $"{plan.Role}.bak";
-            File.WriteAllBytes(Path.Combine(snapshot, backup), plan.Original);
-            record.Files.Add(new MigrationRecord.FileRecord { Role = plan.Role, Path = plan.Path, Existed = true, Backup = backup, Before = MigrationRecord.Hash(plan.Original), Changes = [.. plan.Changes] });
+            Directory.CreateDirectory(snapshot);
+            foreach (var plan in plans.Where(p => p.NewText is not null))
+            {
+                var backup = $"{plan.Role}.bak";
+                DurableFile.Write(Path.Combine(snapshot, backup), plan.Original);
+                record.Files.Add(new MigrationRecord.FileRecord { Role = plan.Role, Path = plan.Path, Existed = true, Backup = backup, Before = MigrationRecord.Hash(plan.Original), Link = DurableFile.Link(plan.Path), Changes = [.. plan.Changes] });
+            }
+            if (import.Text is not null)
+            {
+                if (hostBytes is not null) { DurableFile.Write(Path.Combine(snapshot, "config.bak"), hostBytes); }
+                record.Files.Add(new MigrationRecord.FileRecord { Role = "host-config", Path = hostConfig, Existed = hostBytes is not null, Backup = "config.bak", Before = hostBytes is null ? null : MigrationRecord.Hash(hostBytes), Link = DurableFile.Link(hostConfig) });
+            }
+            foreach (var path in Checked(install)) { record.Checked.Add(new(path, MigrationRecord.Hash(path))); }
+            foreach (var name in new[] { install.TaskName, install.DevBoxTaskName })
+            {
+                if (runtime.Task(name) is { } task) { record.Tasks.Add(new(name, task.Enabled)); }
+            }
+            record.Save(options.ProfileFolder);
         }
-        if (import.Text is not null)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            var existed = File.Exists(hostConfig);
-            if (existed) { File.Copy(hostConfig, Path.Combine(snapshot, "config.bak"), overwrite: true); }
-            record.Files.Add(new MigrationRecord.FileRecord { Role = "host-config", Path = hostConfig, Existed = existed, Backup = "config.bak", Before = MigrationRecord.Hash(hostConfig) });
+            // Nothing has changed yet, so nothing is left behind to roll back.
+            try { File.Delete(MigrationRecord.PathIn(options.ProfileFolder)); Directory.Delete(snapshot, recursive: true); }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
+            Say($"Refused: the snapshot a rollback needs could not be written ({e.Message}); nothing was changed.");
+            return new(false, lines);
         }
-        foreach (var path in Checked(install)) { record.Checked.Add(new(path, MigrationRecord.Hash(path))); }
-        foreach (var name in new[] { install.TaskName, install.DevBoxTaskName })
-        {
-            if (runtime.Task(name) is { } task) { record.Tasks.Add(new(name, task.Enabled)); }
-        }
-        record.Save(options.ProfileFolder);
 
         try
         {
@@ -208,19 +221,23 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             // Each file's hash after is recorded before it is written: a migration cut short
             // between the two still rolls back what it wrote (a file still as it was before is
             // left alone).
-            foreach (var plan in plans.Where(p => p.NewText is not null))
+            // Each is written only if it is still what it was planned from (an agent already on its
+            // new hook may have written its settings meanwhile); otherwise the migration is undone,
+            // and the change it found is left as it is.
+            var writes = plans.Where(p => p.NewText is not null).Select(p => (Role: p.Role, Path: p.Path, Bytes: Utf8(p.NewText!))).ToList();
+            if (import.Text is not null) { writes.Add(("host-config", hostConfig, Utf8(import.Text))); }
+            foreach (var (role, path, bytes) in writes)
             {
-                var bytes = Utf8(plan.NewText!);
-                record.Files.Single(f => f.Role == plan.Role).After = MigrationRecord.Hash(bytes);
+                var file = record.Files.Single(f => f.Role == role);
+                file.After = MigrationRecord.Hash(bytes);
                 record.Save(options.ProfileFolder);
-                WriteBytes(plan.Path, bytes);
-            }
-            if (import.Text is not null)
-            {
-                var bytes = Utf8(import.Text);
-                record.Files.Single(f => f.Role == "host-config").After = MigrationRecord.Hash(bytes);
-                record.Save(options.ProfileFolder);
-                WriteBytes(hostConfig, bytes);
+                try { DurableFile.Replace(path, bytes, file.Before); }
+                catch (DurableFile.ChangedMeanwhileException changed)
+                {
+                    file.After = null;
+                    record.Save(options.ProfileFolder);
+                    return await Undo(record, changed.Message, lines, cancellationToken);
+                }
             }
             new IntakeState(install.RuntimeRoot, install.BridgeHome, install.Id, _time.GetUtcNow()) { Homes = new(install.CopilotHome, install.ClaudeHome, install.CodexHome) }.Save(options.ProfileFolder);
             record.Save(options.ProfileFolder);
@@ -286,7 +303,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             try { File.Delete(options.HookPath + ".old"); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
         var pointerCreated = !File.Exists(options.PointerPath);
-        File.WriteAllBytes(options.PointerPath, HookRunner.Pointer(install.RuntimeRoot));
+        DurableFile.Write(options.PointerPath, HookRunner.Pointer(install.RuntimeRoot));
         var (exit, version) = hook.Run(options.HookPath, ["--version"], "");
         if (exit != 0 || string.IsNullOrWhiteSpace(version)) { throw new IOException($"the hook at {options.HookPath} did not run (blocked by antivirus?)"); }
         return new(options.HookPath, options.PointerPath, created, pointerCreated);
@@ -362,8 +379,16 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
     async Task<MigrationReport> Undo(MigrationRecord record, string why, List<string> lines, CancellationToken cancellationToken)
     {
         lines.Add($"Migration failed: {why}. Rolling back.");
-        var back = await RollbackAsync(record, dryRun: false, cancellationToken);
-        lines.AddRange(back.Lines.Select(l => "  " + l));
+        try
+        {
+            var back = await RollbackAsync(record, dryRun: false, cancellationToken);
+            lines.AddRange(back.Lines.Select(l => "  " + l));
+        }
+        // The report is the only account of what happened: it is never lost to the undo failing.
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            lines.Add($"  The rollback failed part-way ({e.GetType().Name}: {e.Message}); the record and snapshot are kept in {options.ProfileFolder}. Run agent-bridge-host rollback.");
+        }
         return new(false, lines);
     }
 
@@ -397,70 +422,105 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         // The spool is handed back before the daemon starts; the host lets go of it when it
         // restarts below, once its config.json is restored too, since it reads both only then.
         if (dryRun) { Say($"* Hook spool: remove {IntakeState.FileName} and restart the host, which then stops taking it and reads its restored settings."); }
-        else { IntakeState.Delete(options.ProfileFolder); }
+        else
+        {
+            try { IntakeState.Delete(options.ProfileFolder); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                ok = false;
+                Say($"* {Path.Combine(options.ProfileFolder, IntakeState.FileName)} could not be removed ({e.Message}); the host stands back on its own once the daemon runs (G5). Delete it by hand.");
+            }
+        }
 
+        // One file that cannot be put back costs that file, never the rest: whatever happens here,
+        // the host is restarted and agent-ha-bridge turned back on below, since with intake.json
+        // gone nothing else would take the hooks' events.
         foreach (var file in record.Files)
         {
             var backup = Path.Combine(snapshot, file.Backup);
-            var current = File.Exists(file.Path) ? File.ReadAllBytes(file.Path) : null;
-            var currentHash = current is null ? null : MigrationRecord.Hash(current);
-            if (file.After is null || currentHash == file.Before)
+            try
             {
-                Say($"* {file.Path}: unchanged by the migration.");
-                continue;
-            }
-            if (currentHash == file.After || current is null)
-            {
-                Say($"* {file.Path}: restored byte for byte.");
-                if (!dryRun)
+                RestoreLink(file, dryRun, Say);
+                var current = File.Exists(file.Path) ? File.ReadAllBytes(file.Path) : null;
+                var currentHash = current is null ? null : MigrationRecord.Hash(current);
+                if (file.After is null || currentHash == file.Before)
                 {
-                    if (file.Existed) { WriteBytes(file.Path, File.ReadAllBytes(backup)); }
-                    else { File.Delete(file.Path); }
-                }
-                continue;
-            }
-            // Edited since the migration: put back only what it changed.
-            if (file.Changes.Count > 0 && Registrations.Revert(current, file.Changes) is { Text: { } reverted } revert)
-            {
-                // A hook still running this host's program after the revert is one the person
-                // changed past recognition: it is reported, and the snapshot kept for it.
-                var hookProgram = record.Hook?.Path ?? options.HookPath;
-                if (Registrations.Names(Utf8(reverted), hookProgram))
-                {
-                    ok = false;
-                    Say($"* {file.Path}: changed since the migration, and a hook in it still runs {hookProgram} that could not be matched to what it replaced; restore it by hand from {backup}.");
-                    if (!dryRun && revert.Replaced > 0) { WriteText(file.Path, reverted); }
+                    Say($"* {file.Path}: unchanged by the migration.");
                     continue;
                 }
-                if (revert.Replaced == 0)
+                if (currentHash == file.After || current is null)
                 {
-                    Say($"* {file.Path}: changed since the migration, and none of the hooks it re-pointed are in it any more; left as it is.");
+                    Say($"* {file.Path}: restored byte for byte.");
+                    if (!dryRun)
+                    {
+                        if (file.Existed) { DurableFile.Replace(file.Path, File.ReadAllBytes(backup), currentHash); }
+                        else { DurableFile.Remove(file.Path, currentHash); }
+                    }
                     continue;
                 }
-                Say($"* {file.Path}: changed since the migration, so only the command of its {revert.Replaced} re-pointed hook(s) was put back; the rest keeps the later changes.");
-                if (!dryRun) { WriteText(file.Path, reverted); }
-                continue;
+                // Edited since the migration: put back only what it changed.
+                if (file.Changes.Count > 0 && Registrations.Revert(current, file.Changes) is { Text: { } reverted } revert)
+                {
+                    // A hook still running this host's program after the revert is one the person
+                    // changed past recognition: it is reported, and the snapshot kept for it.
+                    var hookProgram = record.Hook?.Path ?? options.HookPath;
+                    if (Registrations.Names(Utf8(reverted), hookProgram))
+                    {
+                        ok = false;
+                        Say($"* {file.Path}: changed since the migration, and a hook in it still runs {hookProgram} that could not be matched to what it replaced; restore it by hand from {backup}.");
+                        if (!dryRun && revert.Replaced > 0) { DurableFile.Replace(file.Path, Utf8(reverted), currentHash); }
+                        continue;
+                    }
+                    if (revert.Replaced == 0)
+                    {
+                        Say($"* {file.Path}: changed since the migration, and none of the hooks it re-pointed are in it any more; left as it is.");
+                        continue;
+                    }
+                    Say($"* {file.Path}: changed since the migration, so only the command of its {revert.Replaced} re-pointed hook(s) was put back; the rest keeps the later changes.");
+                    if (!dryRun) { DurableFile.Replace(file.Path, Utf8(reverted), currentHash); }
+                    continue;
+                }
+                if (file.Role == "host-config")
+                {
+                    // The host's own settings, changed by a person since: not agent-ha-bridge's to want back.
+                    Say($"* {file.Path}: changed since the migration (this host's own settings), so left as it is.");
+                    continue;
+                }
+                ok = false;
+                Say($"* {file.Path}: changed since the migration and left as it is; the original is in {backup}.");
             }
-            if (file.Role == "host-config")
+            catch (Exception e) when (e is not OperationCanceledException)
             {
-                // The host's own settings, changed by a person since: not agent-ha-bridge's to want back.
-                Say($"* {file.Path}: changed since the migration (this host's own settings), so left as it is.");
-                continue;
+                ok = false;
+                Say($"* {file.Path}: could not be put back ({e.Message}); the original is in {backup}. Restore it by hand.");
             }
-            ok = false;
-            Say($"* {file.Path}: changed since the migration and left as it is; the original is in {backup}.");
         }
 
         foreach (var check in record.Checked)
         {
-            if (MigrationRecord.Hash(check.Path) != check.Hash) { Say($"* {check.Path}: changed while migrated (not by the migration); left as it is."); }
+            try
+            {
+                if (MigrationRecord.Hash(check.Path) != check.Hash) { Say($"* {check.Path}: changed while migrated (not by the migration); left as it is."); }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Say($"* {check.Path}: could not be read ({e.Message})."); }
         }
 
-        if (!dryRun && await host.RunningAsync(cancellationToken))
+        if (!dryRun)
         {
-            Say(await host.RestartAsync(cancellationToken) is { } why
-                ? $"* The host could not be restarted ({why}); it stands back on its own once the daemon runs (G5), and reads its restored settings when it next starts."
-                : "* The host restarted without the hook spool, on its restored settings.");
+            try
+            {
+                if (await host.RunningAsync(cancellationToken))
+                {
+                    Say(await host.RestartAsync(cancellationToken) is { } why
+                        ? $"* The host could not be restarted ({why}); it stands back on its own once the daemon runs (G5), and reads its restored settings when it next starts."
+                        : "* The host restarted without the hook spool, on its restored settings.");
+                }
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                ok = false;
+                Say($"* The host could not be restarted ({e.Message}); it stands back on its own once the daemon runs (G5).");
+            }
         }
 
         var tasks = record.Tasks.Where(t => t.Enabled).ToList();
@@ -476,7 +536,14 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         var claim = Path.Combine(record.BridgeHome, "runtime", HookIntake.ClaimFile);
         if (!await UntilAsync(() => ClaimFree(claim), options.StopTimeout, cancellationToken))
         {
-            Say($"* The host still holds the hook spool ({claim}) after {options.StopTimeout.TotalSeconds:0} s, so agent-ha-bridge was not started. Stop the host (or wait for it to restart) and run rollback again.");
+            // Turned back on, so agent-ha-bridge starts at the next logon whatever happens next; not
+            // started now, while the host may still be taking the same events.
+            foreach (var task in tasks)
+            {
+                try { runtime.SetEnabled(task.Name, true); }
+                catch (Exception e) when (e is not OperationCanceledException) { Say($"* {task.Name} could not be turned back on ({e.Message}); run agent-ha-bridge configure."); }
+            }
+            Say($"* The host still holds the hook spool ({claim}) after {options.StopTimeout.TotalSeconds:0} s, so agent-ha-bridge was re-enabled but not started. Stop the host (or wait for it to restart) and run rollback again.");
             Say($"Rolled back with problems (above); the record and snapshot are kept in {options.ProfileFolder}.");
             return new(false, lines);
         }
@@ -510,8 +577,12 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         }
         if (ok)
         {
-            File.Delete(MigrationRecord.PathIn(options.ProfileFolder));
-            try { Directory.Delete(snapshot, recursive: true); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            try
+            {
+                File.Delete(MigrationRecord.PathIn(options.ProfileFolder));
+                Directory.Delete(snapshot, recursive: true);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Say($"* The migration record or snapshot in {options.ProfileFolder} could not be removed ({e.Message}); delete them by hand."); }
             Say("Rolled back.");
         }
         else { Say($"Rolled back with problems (above); the record and snapshot are kept in {options.ProfileFolder}."); }
@@ -585,15 +656,28 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
     }
 
     // Replaced in one step, so an agent starting never reads half a settings file.
-    static void WriteText(string path, string text) => WriteBytes(path, Utf8(text));
+    // A file that was a symbolic link when migrated, and is now a plain file holding exactly what
+    // the migration wrote through it (something replaced the link with a copy): the link is made
+    // again, so the restore below goes through to its target as before.
+    static void RestoreLink(MigrationRecord.FileRecord file, bool dryRun, Action<string> say)
+    {
+        if (file.Link is not { } link || !link.StartsWith("symlink:", StringComparison.Ordinal)) { return; }
+        var info = new FileInfo(file.Path);
+        if (!info.Exists || info.LinkTarget is not null || file.After is null || MigrationRecord.Hash(file.Path) != file.After) { return; }
+        var target = link["symlink:".Length..];
+        say($"* {file.Path}: a symbolic link to {target} again, as it was when migrated.");
+        if (dryRun) { return; }
+        File.Delete(file.Path);
+        File.CreateSymbolicLink(file.Path, target);
+    }
+
+    // As File.ReadAllText reads it (a byte order mark names the encoding).
+    static string Decode(byte[] bytes)
+    {
+        using var reader = new StreamReader(new MemoryStream(bytes), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
 
     static byte[] Utf8(string text) => new UTF8Encoding(false).GetBytes(text);
 
-    static void WriteBytes(string path, byte[] bytes)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var partial = $"{path}.{Guid.NewGuid():N}.tmp";
-        File.WriteAllBytes(partial, bytes);
-        File.Move(partial, path, overwrite: true);
-    }
 }
