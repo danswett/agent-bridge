@@ -233,6 +233,7 @@ Where stage 2 knowingly differs from the daemon:
 | Difference | Why |
 |---|---|
 | A question the host cannot answer from a card (`AnswerAtMachine`, or a question the host had to truncate) is armed with `**This one has to be answered in the terminal** - <why>` appended and is never read | The host already knows these cannot be delivered; the daemon learns it later |
+| A question longer than the card's 6000 characters (with any hint) is answered in the terminal, never on the card; the note is kept within the limit | The daemon cuts it and still takes an answer, so an approval could authorise text nobody could read |
 | An empty multi-select answer is allowed only for Copilot | The host's `Field` carries no `minItems`; Copilot's own forms allow it |
 | `takes_typed_answer` only for a lone choice that allows another answer | The daemon also offers it for yes/no, which the host's question model cannot take |
 | Claude forms use field slots, never the selector's choices | Claude's questions always arrive as forms here |

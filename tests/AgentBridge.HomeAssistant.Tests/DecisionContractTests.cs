@@ -192,6 +192,33 @@ public sealed class DecisionContractTests
     }
 
     [Fact]
+    public void A_question_too_long_to_show_in_full_is_answered_in_the_terminal_never_on_the_card()
+    {
+        var command = "git push --force " + new string('x', HaDecision.QuestionMaxChars);
+        var approval = new Question
+        {
+            Id = "q", Kind = QuestionKind.Approval, Message = "Codex wants to run:\n\n" + command, AskedAt = DateTimeOffset.UnixEpoch,
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
+        };
+        var plan = HaDecision.Plan(approval, AgentKind.Codex);
+        Assert.True(plan.TerminalOnly);
+        Assert.False(plan.AnswerOnTap);
+        Assert.Empty(plan.Choices);
+        // The card cuts the question, never the note saying where to answer it.
+        Assert.True(plan.Question.Length <= HaDecision.QuestionMaxChars, $"{plan.Question.Length}");
+        Assert.EndsWith(HaDecision.TerminalNote("it was too long to show here in full, so it is answered where it can be read."), plan.Question, StringComparison.Ordinal);
+        Assert.Contains(HaDecision.TruncatedNote, plan.Question, StringComparison.Ordinal);
+
+        // A form made too long by its hint, too.
+        var form = approval with
+        {
+            Kind = QuestionKind.Form, Message = new string('y', HaDecision.QuestionMaxChars - 10),
+            Fields = [new Field { Name = "a", Type = FieldType.Choice, Options = [new Option("go"), new Option("stop")] }, new Field { Name = "b", Type = FieldType.Text }],
+        };
+        Assert.True(HaDecision.Plan(form, AgentKind.Copilot).TerminalOnly);
+    }
+
+    [Fact]
     public void The_mixed_form_hint_is_the_hooks()
     {
         Assert.Equal(Root["mixedHint"]!.GetValue<string>(), HaDecision.MixedFormHint("Anything else?"));

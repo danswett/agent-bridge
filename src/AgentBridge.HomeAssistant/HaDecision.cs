@@ -75,10 +75,11 @@ public static partial class HaDecision
     {
         if (question.AnswerAtMachine == true || question.Truncated == true)
         {
-            return Terminal(question, question.Truncated == true
-                ? "it was too long to show here in full, so it is answered where it can be read."
-                : "this prompt can only be answered at the machine.");
+            return Terminal(question, question.Truncated == true ? TooLong : "this prompt can only be answered at the machine.");
         }
+        // A question the card would have to cut is never answered from it: an approval, above all,
+        // must not authorise what nobody could read. (agent-ha-bridge cuts it and takes the answer.)
+        if (question.Message.Length > QuestionMaxChars) { return Terminal(question, TooLong); }
         if (question.Kind == QuestionKind.Approval)
         {
             // A Codex approval: its own tap is the answer (Publish-DaemonSessionDecision).
@@ -102,6 +103,7 @@ public static partial class HaDecision
         // and a form mixing dropdowns with a free-text field says which control takes the words.
         IReadOnlyList<string> choices = fields.Count == 1 ? fields[0].Options : [];
         if (fields.Count > 1 && fields.FirstOrDefault(f => f.IsText) is { } text) { message += "\n\n" + MixedFormHint(text.Label); }
+        if (message.Length > QuestionMaxChars) { return Terminal(question, TooLong); }
         // Test-DecisionTakesTypedAnswer, and only where the host can deliver words: a lone choice
         // whose prompt offers "Other".
         var typed = TakesTypedAnswer(fields, choices, false)
@@ -109,8 +111,20 @@ public static partial class HaDecision
         return new DecisionPlan(question.Id, message, choices, fields, false, false, typed);
     }
 
-    static DecisionPlan Terminal(Question question, string why) =>
-        new(question.Id, question.Message + TerminalNote(why), [], [], false, TerminalOnly: true, TakesTypedAnswer: false);
+    const string TooLong = "it was too long to show here in full, so it is answered where it can be read.";
+
+    // Shown with nothing to answer, and the note saying why kept inside the card's limit: a long
+    // question is cut before the note, never the note itself.
+    static DecisionPlan Terminal(Question question, string why)
+    {
+        var note = TerminalNote(why);
+        var body = question.Message;
+        if (body.Length + note.Length > QuestionMaxChars)
+        {
+            body = body[..(QuestionMaxChars - note.Length - TruncatedNote.Length)].TrimEnd() + TruncatedNote;
+        }
+        return new(question.Id, body + note, [], [], false, TerminalOnly: true, TakesTypedAnswer: false);
+    }
 
     // Get-DecisionSchemaFields, from the host's field.
     public static DecisionField Capture(Field field, AgentKind agent)
