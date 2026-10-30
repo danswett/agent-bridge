@@ -173,11 +173,8 @@ public static class SpoolContract
                 if (info.Exists && info.Length >= LogMaxBytes) { File.Move(log, log + ".1", overwrite: true); }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
-            var options = new FileStreamOptions { Mode = FileMode.Append, Access = FileAccess.Write, Share = FileShare.ReadWrite | FileShare.Delete };
-            if (!OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
-            using var stream = new FileStream(log, options);
-            stream.Write(buffer.WrittenSpan);
-            stream.WriteByte((byte)'\n');
+            buffer.Write("\n"u8);
+            AtomicAppend.Write(log, buffer.WrittenSpan);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
     }

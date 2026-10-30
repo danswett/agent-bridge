@@ -148,12 +148,19 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
 
         string? approvalId = null;
         if (approval && ApprovalsSettledBefore is { } settled && (spooled.ReceivedAt ?? time.GetUtcNow()) <= settled) { approval = false; }
-        if (approval)
+        if (approval && ArmedBy(sessionId, spooled) is { } armed)
+        {
+            // This very request, handled again (its delete failed and the host restarted, so
+            // nothing newer superseded it): its marker keeps its generation and any answer
+            // already attempted on it, which a new DecisionId would let be typed again.
+            approvalId = armed;
+        }
+        else if (approval)
         {
             // agent-ha-bridge's generation: the session's node id and the time, so an answer
             // made for one approval is never typed into the next.
             approvalId = $"{NodeId(sessionId)}-{NextDecisionMs()}";
-            WriteApprovalMarker(sessionId, approvalId, activity, At(spooled));
+            WriteApprovalMarker(sessionId, approvalId, activity, At(spooled), spooled.Name);
         }
         return notice with { OwnerPid = owner > 0 ? owner : null, Status = status, ApprovalId = approvalId };
     }
@@ -218,15 +225,26 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
 
     // As Write-CodexApprovalMarker: the gate an answer is typed through (AnswerService reads it
     // afresh before typing, and agent-ha-bridge's Set-CodexApprovalAttempt claims it).
-    void WriteApprovalMarker(string sessionId, string decisionId, string question, string at) =>
+    // SpoolEvent is this host's, to know the request again if it is replayed; agent-ha-bridge
+    // keeps properties it does not know when it claims the marker.
+    void WriteApprovalMarker(string sessionId, string decisionId, string question, string at, string spoolEvent) =>
         WriteJson(ApprovalPath(sessionId), w =>
         {
             w.WriteString("SessionId", sessionId);
             w.WriteString("DecisionId", decisionId);
             w.WriteString("Question", question);
             w.WriteString("Created", at);
+            w.WriteString("SpoolEvent", spoolEvent);
         });
 
+
+    // The DecisionId of the marker this spooled PermissionRequest armed, if it is still there.
+    // By the spool file's name, which is unique, not its time: two requests can share one.
+    string? ArmedBy(string sessionId, SpoolEvent spooled)
+    {
+        using var marker = ReadJson(ApprovalPath(sessionId));
+        return marker is not null && Json.Str(marker.RootElement, "SpoolEvent") == spooled.Name ? Json.Str(marker.RootElement, "DecisionId") : null;
+    }
 
     // The generation in a DecisionId: the time in ms, as agent-ha-bridge's, but never the same
     // twice. Two approvals handled in one millisecond would otherwise share one, and an answer
@@ -260,7 +278,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         return (spooled.ReceivedAt is { } received && received < now ? received.ToOffset(now.Offset) : now).ToString("o");
     }
 
-    static JsonDocument? ReadJson(string path)
+    internal static JsonDocument? ReadJson(string path)
     {
         try
         {

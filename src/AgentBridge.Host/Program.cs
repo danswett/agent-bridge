@@ -291,7 +291,12 @@ async Task<int> ServeAsync()
     await source.StartAsync(stop.Token);
     // Files over 256 KiB come from the relay's blob store, through whichever connection is up.
     using var relayBlobs = new RelayBlobs();
-    var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs);
+    // Set once the hook intake starts; until then, and until it has settled the markers, a Codex
+    // approval on a migrated machine is not answered.
+    HookIntake? runningIntake = null;
+    Func<string?>? codexUnsettled = intakeState is null ? null
+        : () => runningIntake is { } i ? i.ApprovalsUnsettled : "the host is still starting its hook intake; try again shortly";
+    var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled);
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
     // app closed. Subscriptions live in the profile's own folder, for this account only. None at
@@ -342,6 +347,7 @@ async Task<int> ServeAsync()
     // On a machine migrated from agent-ha-bridge, the hooks hand their events to this host
     // (docs/host-hooks.md). Its notices are there for the Home Assistant connector to subscribe to.
     await using var intake = StartIntake(haProbe, stop.Token);
+    runningIntake = intake;
 
     // The desktop app's way in (docs/protocol/local-pipe.md): the same sessions ops, and the
     // host's management, which only the pipe reaches. It runs whether or not this profile has
@@ -594,7 +600,7 @@ static string OsName() =>
 // session at once. Files sent with replies are staged in the profile's own folder, private
 // to this user (docs/host-replies.md), and the prompts already
 // answered are recorded there too, so none is typed into twice.
-(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging, string attempts, IBlobSource blobs)
+(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging, string attempts, IBlobSource blobs, Func<string?>? codexUnsettled)
 {
     if (!OperatingSystem.IsWindows())
     {
@@ -612,7 +618,7 @@ static string OsName() =>
     Log($"approving Copilot permission prompts from other devices is {(settings.RemoteApproval ? "on" : "off")} (permissions.remoteApproval)");
     var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log, blobs: blobs);
     return (
-        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval }, Log, gate),
+        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled }, Log, gate),
         new ReplyService(source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome }, Log, gate, attachments),
         attachments,
         new StopService(source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log, gate));

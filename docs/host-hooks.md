@@ -57,7 +57,7 @@ holds every name; it is tested against files the Go hook writes and the daemon r
 |---|---|---|
 | `agent-bridge-daemon.heartbeat` | The consumer: the daemon each pass, the host's intake every 2 s | A hook spools only while this is younger than 60 s (`Test-BridgeDaemonAlive`). The daemon writes its pid; the host writes its own, so it can remove only its own when it stops |
 | `agent-bridge-spool\<name>.json` | Either hook | `{ "v": 1, "agent", "hook", "ancestors": [pids, nearest first], "receivedAt", "event": <stdin verbatim> }`, written as `<name>.json.tmp` and renamed so no reader sees half of one |
-| `agent-bridge-hook.log` (+ `.1`) | Either hook | One JSON line per run: `{ at, agent, hook, path, reason?, ms }`. `path` is `spool`, `fallback` (the Go hook ran its PowerShell) or `reply` (the fixed reply alone). Rotated at 1 MB, keeping one previous file |
+| `agent-bridge-hook.log` (+ `.1`) | Either hook | One JSON line per run: `{ at, agent, hook, path, reason?, ms }`. `path` is `spool`, `fallback` (the Go hook ran its PowerShell) or `reply` (the fixed reply alone). Rotated at 1 MB, keeping one previous file. This product's hook appends each line in one write through an append-only handle (`FILE_APPEND_DATA`, as the Go hook's `O_APPEND`), so two hooks finishing together never overwrite each other's line on Windows |
 
 `<name>` is the time in Unix nanoseconds (20 digits), the hook's pid and 8 random hex digits.
 Names sort in the order the events happened, which is the order they are handled. Events are
@@ -190,7 +190,8 @@ The files and their shapes are agent-ha-bridge's:
   `WorkingDirectory`, `Updated`, `HookStatus`, `HookStatusAt`;
 * `agent-bridge-codex\<id>.json`: `SessionId`, `ProcessId`, `TranscriptPath`,
   `WorkingDirectory`, `Model`, `Status`, `Activity`, `Ended`, `Updated`;
-* `agent-bridge-codex\<id>.approval.json`: `SessionId`, `DecisionId`, `Question`, `Created`.
+* `agent-bridge-codex\<id>.approval.json`: `SessionId`, `DecisionId`, `Question`, `Created`,
+  and `SpoolEvent` (below), which agent-ha-bridge keeps when it claims the marker.
 
 Three rules carry over from agent-ha-bridge:
 
@@ -207,7 +208,10 @@ is down, and must not then read as newer than what the transcript said since; a 
 must not make an old Claude session look alive. And an event older than its session's
 registration's `Updated` is not applied at all: it can only be a replay (a file whose delete
 failed, handled again after a restart) or a late arrival, and a replayed `PermissionRequest`
-would arm an approval its `PreToolUse` has already settled.
+would arm an approval its `PreToolUse` has already settled. A replayed `PermissionRequest` that
+nothing newer has overtaken finds the marker it armed (by `SpoolEvent`, the spool file's unique
+name) and leaves it as it is: the same `DecisionId`, and any answer already attempted on it,
+which a new generation would let be typed again.
 
 Discovery (`RegistrationDiscovery`) and the answer path (`ApprovalMarkerRead`,
 `AnswerService`) read these unchanged. On a rollback, agent-ha-bridge's daemon reads them too.
@@ -225,10 +229,18 @@ the last Codex hook run the hook log records as not spooled. One asked after it 
 pending. A `PermissionRequest` still waiting in the spool from before that run is handled but
 arms no approval, for the same reason. The log is followed every pass (only what it gained), so
 a Codex hook that fails to spool while the heartbeat is fresh settles approvals the same way.
+Only one previous log is kept, so a run rotated out of both while nobody watched (the host down
+through a megabyte or two of hook traffic) is gone: an approval asked before the oldest line
+kept is withdrawn as if such a run came right after it. The running intake knows a rotation it
+followed (the log it was reading is the one now kept as `.1`) from one it missed.
 While the log cannot be read the history is unknown, and no approval is offered at all. This
 happens whether or not the heartbeat could be written, and a cut-off counts as settled only once
 every marker it covers is gone; a marker that could not be deleted is tried again next pass.
-The log is always read through a handle that lets hooks keep appending (`hooks status` too).
+The log is always read through a handle that lets hooks keep appending (`hooks status` too), and
+markers through one that lets a starting daemon replace or delete them. Until a pass has settled
+the markers (after starting, taking the spool back, or while the log cannot be read), the answer
+path refuses Codex approvals (`HookIntake.ApprovalsUnsettled`), so an answer cannot reach a
+marker an outage left behind before it is withdrawn.
 Answering an approval twice could type into whatever the terminal shows now; losing a remote
 answer only means answering at the terminal.
 

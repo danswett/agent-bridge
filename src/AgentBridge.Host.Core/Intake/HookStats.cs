@@ -120,13 +120,22 @@ public sealed record HookStats(
 // The latest run of one agent's hook that was not spooled, kept up to date by reading only what
 // the log gained since the last look (it is read every pass), and the whole of it again when it
 // has been rotated.
-public sealed class HookLogWatch(string runtimeRoot, string agent)
+public sealed class HookLogWatch(string runtimeRoot, string agent, TimeProvider? time = null)
 {
     readonly string _log = SpoolContract.LogPath(runtimeRoot);
     long _offset = -1;
     DateTime _rotated;
+    // The first line of the log this watch is reading, to know it again once rotated to .1.
+    string? _head;
 
     public DateTimeOffset? Last { get; private set; }
+
+    // Since when the retained logs are known to hold every run, or null for since they began.
+    // Only one previous log is kept, so runs rotated out of both while nobody watched (the host
+    // was down through a megabyte or two of hook traffic) are gone, and an unspooled run among
+    // them may have answered an approval. Anything asked before this is treated as if such a
+    // run came right after it.
+    public DateTimeOffset? HistoryFrom { get; private set; }
 
     // False when the log could not be read: what happened since the last look is unknown.
     public bool Refresh()
@@ -138,14 +147,48 @@ public sealed class HookLogWatch(string runtimeRoot, string agent)
             var length = File.Exists(_log) ? new FileInfo(_log).Length : 0;
             if (_offset < 0 || rotated != _rotated || length < _offset)
             {
+                var oldHead = File.Exists(old) ? FirstLine(old) : null;
+                // Unbroken only if the log this watch was reading is the one now kept as .1 (or,
+                // at the first look, if nothing was ever rotated out).
+                var unbroken = _offset < 0 ? !File.Exists(old) : rotated != _rotated && _head is not null && oldHead == _head;
+                if (!unbroken)
+                {
+                    var from = File.Exists(old)
+                        ? Time(oldHead) ?? File.GetLastWriteTimeUtc(old)
+                        : Time(File.Exists(_log) ? FirstLine(_log) : null) ?? (time ?? TimeProvider.System).GetUtcNow();
+                    if (HistoryFrom is null || from > HistoryFrom) { HistoryFrom = from; }
+                }
                 if (File.Exists(old)) { Scan(old, 0); }
                 _rotated = rotated;
                 _offset = 0;
+                _head = null;
             }
-            if (File.Exists(_log)) { _offset = Scan(_log, _offset); }
+            if (File.Exists(_log))
+            {
+                _offset = Scan(_log, _offset);
+                if (_head is null && _offset > 0) { _head = FirstLine(_log); }
+            }
             return true;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    static string? FirstLine(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadLine();
+    }
+
+    static DateTimeOffset? Time(string? line)
+    {
+        if (string.IsNullOrWhiteSpace(line)) { return null; }
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            return Json.Str(doc.RootElement, "at") is { } text && DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at) ? at : null;
+        }
+        catch (JsonException) { return null; }
     }
 
     // Reads whole lines from the offset; returns where the next look starts.

@@ -288,4 +288,20 @@ public sealed class HookRunnerTests : IDisposable
         using var parent = System.Diagnostics.Process.GetProcessById(chain[0]);
         Assert.False(parent.HasExited);
     }
+    [Fact]
+    public void Two_hooks_that_open_the_log_at_the_same_end_both_keep_their_record()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var log = SpoolContract.LogPath(Runtime);
+        File.WriteAllText(log, "{\"at\":\"earlier\"}\n");
+
+        using (var first = AtomicAppend.Open(log))
+        using (var second = AtomicAppend.Open(log))
+        {
+            Assert.True(first.Append("{\"agent\":\"codex\",\"path\":\"fallback\"}\n"u8));
+            Assert.True(second.Append("{\"agent\":\"claude\",\"path\":\"spool\"}\n"u8));
+        }
+
+        Assert.Equal(["{\"at\":\"earlier\"}", "{\"agent\":\"codex\",\"path\":\"fallback\"}", "{\"agent\":\"claude\",\"path\":\"spool\"}"], File.ReadAllLines(log));
+    }
 }

@@ -70,8 +70,8 @@ public sealed class HookIntake : IAsyncDisposable
     string? _paused;
     bool _heartbeatOwned;
     // Whether approvals have been checked against the hooks that ran while nobody took events,
-    // since this intake last (re)took the spool.
-    bool _reconciled;
+    // since this intake last (re)took the spool. Read by the answer path on its own thread.
+    volatile bool _reconciled;
     // The cut-off approvals were last settled to, and the hook log it is read from.
     DateTimeOffset? _settled;
     readonly HookLogWatch _codexLog;
@@ -90,10 +90,17 @@ public sealed class HookIntake : IAsyncDisposable
         _log = log ?? (_ => { });
         _handlers = new HookHandlers(options.RuntimeRoot, options.ClaudeHome, processes, _time);
         _spool = SpoolContract.SpoolDirectory(options.RuntimeRoot);
-        _codexLog = new HookLogWatch(options.RuntimeRoot, "codex");
+        _codexLog = new HookLogWatch(options.RuntimeRoot, "codex", _time);
         _heartbeat = SpoolContract.HeartbeatPath(options.RuntimeRoot);
         _prunedAt = _time.GetUtcNow();
     }
+
+    // Why a Codex approval must not be answered now, or null. Until a pass has settled the
+    // markers against the hook log (the first after starting or taking the spool back, or while
+    // the log cannot be read), a marker may be one already answered at the terminal, and typing
+    // into it would land in whatever the terminal shows now.
+    public string? ApprovalsUnsettled => _reconciled ? null
+        : "the host has not yet checked Codex approvals against the hooks that ran while nobody took them; answer at the machine or try again shortly";
 
     // Why the intake is standing back now (agent-ha-bridge is running), or null.
     public string? Paused { get { lock (_gate) { return _paused; } } }
@@ -235,11 +242,12 @@ public sealed class HookIntake : IAsyncDisposable
     // outage: it is handled, but arms no approval. It is checked every pass, since a hook can
     // also fail to spool while the heartbeat is fresh, and settles again whenever the log shows a
     // later unspooled run. While the log cannot be read the history is unknown, so no approval
-    // is offered at all. False when agent-ha-bridge started meanwhile.
+    // is offered at all; nor is one asked before the oldest log kept, once runs may have been
+    // rotated out of it unread (HookLogWatch.HistoryFrom). False when agent-ha-bridge started meanwhile.
     bool ReconcileApprovals()
     {
         var known = _codexLog.Refresh();
-        var cutoff = known ? _codexLog.Last : _time.GetLocalNow();
+        var cutoff = known ? Later(_codexLog.Last, _codexLog.HistoryFrom) : _time.GetLocalNow();
         if (cutoff is not { } unheard || (_reconciled && _settled is { } done && unheard <= done)) { _reconciled = known; return true; }
         _handlers.ApprovalsSettledBefore = unheard;
         // Settled only once every marker it covers is gone; otherwise the next pass tries again.
@@ -249,13 +257,13 @@ public sealed class HookIntake : IAsyncDisposable
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { markers = []; complete = false; }
         foreach (var marker in markers)
         {
+            // Read sharing write and delete: a daemon starting meanwhile must be able to replace or
+            // remove the marker (File.ReadAllBytes would refuse it), and is then caught below.
             DateTimeOffset? created = null;
-            try
+            using (var doc = HookHandlers.ReadJson(marker))
             {
-                using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(marker));
-                if (Json.Str(doc.RootElement, "Created") is { } text && DateTimeOffset.TryParse(text, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var at)) { created = at; }
+                if (doc is not null && Json.Time(doc.RootElement, "Created") is { } at) { created = at; }
             }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { }
             if (created is { } c && c > unheard) { continue; }
             if (_options.AgentHaBridgeActive() is { } active)
             {
@@ -265,7 +273,7 @@ public sealed class HookIntake : IAsyncDisposable
             try
             {
                 File.Delete(marker);
-                _log($"withdrew Codex approval {Path.GetFileName(marker)}: a Codex hook ran at {unheard:o} with nobody taking events, so it may have been answered at the terminal");
+                _log($"withdrew Codex approval {Path.GetFileName(marker)}: a Codex hook may have run at {unheard:o} with nobody taking events (or before the oldest hook log kept), so it may have been answered at the terminal");
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
@@ -280,6 +288,8 @@ public sealed class HookIntake : IAsyncDisposable
         }
         return true;
     }
+
+    static DateTimeOffset? Later(DateTimeOffset? a, DateTimeOffset? b) => a is null ? b : b is null || a >= b ? a : b;
 
     void EnsureWatcher()
     {
@@ -495,7 +505,7 @@ public sealed class HookIntake : IAsyncDisposable
         {
             try
             {
-                if (File.Exists(_heartbeat) && File.ReadAllText(_heartbeat).Trim() == Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)) { File.Delete(_heartbeat); }
+                if (File.Exists(_heartbeat) && string.Join("", HookStats.SharedLines(_heartbeat)).Trim() == Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)) { File.Delete(_heartbeat); }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }

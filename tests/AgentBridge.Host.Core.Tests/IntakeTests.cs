@@ -483,6 +483,123 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_pending_approval_handled_again_after_a_restart_keeps_its_generation_and_the_answer_already_tried()
+    {
+        // Its delete failed and the host restarted before anything newer for the session.
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        Intake().Pass();
+        var path = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        var marker = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        var decision = (string)marker["DecisionId"]!;
+        // agent-ha-bridge's Set-CodexApprovalAttempt claimed it before typing the answer.
+        marker["DeliveryAttempted"] = true;
+        File.WriteAllText(path, marker.ToJsonString());
+        var attempted = File.ReadAllText(path);
+        _f.Time.Advance(TimeSpan.FromSeconds(5));
+        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        var intake = Intake();
+        var heard = intake.Subscribe();
+
+        Assert.Equal(1, intake.Pass());
+
+        Assert.Equal(attempted, File.ReadAllText(path));
+        Assert.True(heard.TryRead(out var n));
+        Assert.Equal(decision, n.ApprovalId);
+    }
+
+    [Fact]
+    public void An_approval_asked_before_the_oldest_hook_log_kept_is_withdrawn_when_the_host_starts_again()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        SpooledAt(Fixture.T0.AddMinutes(20), "0002", "codex", "hook", new { session_id = "x2", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        Intake().Pass();
+        // While the host was down the log was rotated twice: whatever ran before T0+10m is gone,
+        // and nothing kept says how the first approval ended.
+        var log = SpoolContract.LogPath(_f.Runtime);
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0.AddMinutes(10), 3);
+        File.Move(log, log + ".1");
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0.AddMinutes(30), 3);
+
+        Intake().Pass();
+
+        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+        Assert.True(File.Exists(Path.Combine(_f.CodexRegistrations, "x2.approval.json")));
+    }
+
+    [Fact]
+    public void A_rotation_the_running_host_saw_withdraws_nothing_but_one_it_missed_does()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var log = SpoolContract.LogPath(_f.Runtime);
+        Directory.CreateDirectory(_f.Runtime);
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0.AddMinutes(-5), 3);
+        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        var intake = Intake();
+        intake.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+
+        // The log it was reading becomes .1.
+        File.Move(log, log + ".1");
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0.AddMinutes(10), 3);
+        intake.Pass();
+        Assert.True(File.Exists(marker));
+
+        // Rotated twice between two passes: the log it was reading is gone unread.
+        File.Move(log, log + ".1", overwrite: true);
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0.AddMinutes(20), 3);
+        File.SetLastWriteTimeUtc(log + ".1", DateTime.UtcNow.AddMinutes(1));
+        File.Move(log, log + ".1", overwrite: true);
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0.AddMinutes(30), 3);
+        intake.Pass();
+        Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public void Settling_approvals_reads_a_marker_another_process_is_rewriting_without_locking_it_out()
+    {
+        // Only Windows enforces share modes.
+        if (!OperatingSystem.IsWindows()) { return; }
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        SpooledAt(Fixture.T0.AddMinutes(20), "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        Intake().Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        Directory.CreateDirectory(_f.Runtime);
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "fallback", "no heartbeat", Fixture.T0.AddMinutes(10), 3);
+
+        // agent-ha-bridge's daemon starting, part-way through rewriting the marker.
+        using (new FileStream(marker, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete))
+        {
+            Intake().Pass();
+        }
+
+        // Asked after the unheard run, so it is still pending: read, not given up as unreadable.
+        Assert.True(File.Exists(marker));
+    }
+
+    [Fact]
+    public void Codex_approvals_are_not_answerable_until_a_pass_has_settled_them_against_a_readable_hook_log()
+    {
+        var intake = Intake();
+        Assert.NotNull(intake.ApprovalsUnsettled);
+
+        intake.Pass();
+        Assert.Null(intake.ApprovalsUnsettled);
+
+        if (!OperatingSystem.IsWindows()) { return; }
+        Directory.CreateDirectory(_f.Runtime);
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, Fixture.T0, 3);
+        using (new FileStream(SpoolContract.LogPath(_f.Runtime), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            intake.Pass();
+            Assert.NotNull(intake.ApprovalsUnsettled);
+        }
+        intake.Pass();
+        Assert.Null(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
     public void An_approval_whose_answering_hook_failed_to_spool_is_withdrawn_on_the_next_pass()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
