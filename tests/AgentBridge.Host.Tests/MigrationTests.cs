@@ -329,6 +329,9 @@ public sealed class MigrationTests : IAsyncLifetime
     [InlineData("a file without existed")]
     [InlineData("a file without its changes")]
     [InlineData("a task without enabled")]
+    [InlineData("a file without after")]
+    [InlineData("a file without before")]
+    [InlineData("a record without hook")]
     public async Task A_record_missing_what_it_was_written_with_refuses_the_rollback_and_keeps_its_snapshot(string damage)
     {
         Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
@@ -342,6 +345,9 @@ public sealed class MigrationTests : IAsyncLifetime
             case "a file that is not an object": files[0] = 1; break;
             case "a file without existed": files[0]!.AsObject().Remove("existed"); break;
             case "a file without its changes": files[0]!.AsObject().Remove("changes"); break;
+            case "a file without after": files[0]!.AsObject().Remove("after"); break;
+            case "a file without before": files[0]!.AsObject().Remove("before"); break;
+            case "a record without hook": record.Remove("hook"); break;
             default: record["tasks"]![0]!.AsObject().Remove("enabled"); break;
         }
         File.WriteAllText(path, record.ToJsonString());
@@ -385,6 +391,30 @@ public sealed class MigrationTests : IAsyncLifetime
 
         Assert.False(report.Ok);
         Assert.Contains("the installed hook did not spool its event", report.ToString());
+        Assert.Equal(before, _f.Listing());
+        Assert.True(_f.Runtime_.DaemonRunning);
+    }
+
+    [Fact]
+    public async Task A_sessions_own_agent_stop_spooled_meanwhile_does_not_prove_a_hand_over_the_check_itself_never_spooled()
+    {
+        var before = _f.Listing();
+        // The check's run only replies; a Copilot session ending at the same moment spools its
+        // agent_stop through the same hook, and the host takes it.
+        _f.Hook.Unspooled = true;
+        var others = 0;
+        _f.Hook.Alongside = hook =>
+        {
+            if (_f.Hook.Runs[^1] != "copilot agent_stop") { return; }
+            others++;
+            Assert.Equal(0, InProcessHook.RunAs(hook, ["copilot", "agent_stop"], "{\"sessionId\":\"s1\"}", 7).Exit);
+        };
+
+        var report = await _f.Migrator(verify: TimeSpan.FromSeconds(2)).MigrateAsync(dryRun: false);
+
+        Assert.Equal(1, others);
+        Assert.False(report.Ok);
+        Assert.Contains("the installed hook did not spool its event (no spool file from its run", report.ToString());
         Assert.Equal(before, _f.Listing());
         Assert.True(_f.Runtime_.DaemonRunning);
     }
@@ -900,6 +930,45 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.True(back.Ok, back.ToString());
         Assert.Equal(target, new FileInfo(_f.ClaudeSettings).LinkTarget);
         Assert.Equal(original, File.ReadAllBytes(target));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_link_made_again_on_rollback_never_leaves_the_file_missing_nor_loses_a_save_made_meanwhile(bool savedMeanwhile)
+    {
+        var before = _f.Listing();
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        // Migrated through a link something has since replaced with a copy.
+        var path = MigrationRecord.PathIn(_f.Profile);
+        var record = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        var claude = record["files"]!.AsArray().Single(f => (string?)f!["path"] == _f.ClaudeSettings)!.AsObject();
+        claude["link"] = "symlink:" + Path.Combine(_f.Home, "dotfiles", "claude-settings.json");
+        File.WriteAllText(path, record.ToJsonString());
+        var saved = FakeAgentHaBridge.Read(_f.ClaudeSettings);
+        saved["model"] = "saved meanwhile";
+        Migrator.MakeLink = savedMeanwhile
+            ? (link, _) => { File.WriteAllText(link, "a link"); return new FileInfo(link); }
+            : (_, _) => throw new UnauthorizedAccessException("a symbolic link needs developer mode");
+        Migrator.BeforeLinkSwap = savedMeanwhile ? p => File.WriteAllText(p, saved.ToJsonString()) : null;
+        MigrationReport report;
+        try { report = await _f.Migrator().RollbackAsync(dryRun: false); }
+        finally { Migrator.MakeLink = File.CreateSymbolicLink; Migrator.BeforeLinkSwap = null; }
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(_f.ClaudeSettings)!, "*agent-bridge-*"));
+        if (savedMeanwhile)
+        {
+            Assert.Contains("changed while its link", report.ToString());
+            var after = FakeAgentHaBridge.Read(_f.ClaudeSettings);
+            Assert.Equal("saved meanwhile", (string?)after["model"]);
+            Assert.DoesNotContain("agent-bridge-host-hook", after.ToJsonString());
+        }
+        else
+        {
+            Assert.Contains("could not be made a symbolic link", report.ToString());
+            Assert.Equal(before, _f.Listing());
+        }
     }
 
     [Fact]

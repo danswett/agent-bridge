@@ -114,13 +114,17 @@ public sealed class MigrationRecord
                 (n as JsonArray ?? throw new JsonException($"{name} is missing or not a list"))
                 .Select(e => e as JsonObject ?? throw new JsonException($"an entry in {name} is not an object"));
             JsonNode Node(JsonNode? n) => n?.DeepClone() ?? throw new JsonException("a field is missing");
+            // Null is a value of its own (a file not yet written, or absent before), so present
+            // as null and missing are told apart: an after missing would read as never written.
+            JsonNode? Present(JsonObject parent, string name) => parent.TryGetPropertyValue(name, out var v) ? v : throw new JsonException($"{name} is missing");
+            string? N(JsonObject parent, string name) => (string?)Present(parent, name);
             var record = new MigrationRecord
             {
                 State = S(o["state"]),
                 InstallationId = S(o["installationId"]),
                 BridgeHome = S(o["bridgeHome"]),
                 StartedAt = DateTimeOffset.Parse(S(o["startedAt"]), System.Globalization.CultureInfo.InvariantCulture),
-                MigratedAt = o["migratedAt"] is { } m ? DateTimeOffset.Parse((string)m!, System.Globalization.CultureInfo.InvariantCulture) : null,
+                MigratedAt = Present(o, "migratedAt") is { } m ? DateTimeOffset.Parse((string)m!, System.Globalization.CultureInfo.InvariantCulture) : null,
                 Tasks = [.. Objects(o["tasks"], "tasks").Select(t => new TaskRecord(S(t["name"]), B(t["enabled"])))],
                 Files = [.. Objects(o["files"], "files").Select(f => new FileRecord
                 {
@@ -128,13 +132,13 @@ public sealed class MigrationRecord
                     Path = S(f["path"]),
                     Existed = B(f["existed"]),
                     Backup = S(f["backup"]),
-                    Before = (string?)f["before"],
-                    After = (string?)f["after"],
-                    Link = (string?)f["link"],
+                    Before = N(f, "before"),
+                    After = N(f, "after"),
+                    Link = N(f, "link"),
                     Changes = [.. Objects(f["changes"], "changes").Select(c => new EntryChange(S(c["agent"]), S(c["event"]), Node(c["original"]), Node(c["replacement"])))],
                 })],
-                Checked = [.. Objects(o["checked"], "checked").Select(c => new CheckedFile(S(c["path"]), (string?)c["hash"]))],
-                Hook = o["hook"] switch
+                Checked = [.. Objects(o["checked"], "checked").Select(c => new CheckedFile(S(c["path"]), N(c, "hash")))],
+                Hook = Present(o, "hook") switch
                 {
                     null => null,
                     JsonObject h => new HookRecord(S(h["path"]), S(h["pointer"]), B(h["created"]), B(h["pointerCreated"])),

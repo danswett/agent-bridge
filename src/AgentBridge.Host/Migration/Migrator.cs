@@ -326,7 +326,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         if (created || MigrationRecord.Hash(hookPath) != MigrationRecord.Hash(options.HookSource)) { CopyHook(options.HookSource, hookPath); }
         var pointerCreated = !File.Exists(pointerPath);
         DurableFile.Write(pointerPath, HookRunner.Pointer(install.RuntimeRoot));
-        var (exit, version) = hook.Run(hookPath, ["--version"], "");
+        var (exit, version, _) = hook.Run(hookPath, ["--version"], "");
         if (exit != 0 || string.IsNullOrWhiteSpace(version)) { throw new IOException($"the hook at {hookPath} did not run (blocked by antivirus?)"); }
         return new(hookPath, pointerPath, created, pointerCreated);
     }
@@ -422,57 +422,55 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         if (!fresh) { return $"the host did not start taking the hook spool within {options.VerifyTimeout.TotalSeconds:0} s (no fresh heartbeat in {install.RuntimeRoot})"; }
 
         // An agent_stop that names no session: Copilot's are only passed on to subscribers, so the
-        // check records nothing anywhere.
-        var ran = _time.GetUtcNow().AddMilliseconds(-50);
-        var (exit, reply) = hook.Run(options.HookPath(install.Id), ["copilot", "agent_stop"], "{\"agentBridgeMigrationCheck\":true}");
-        if (exit != 0 || reply != "{}\n") { return $"the installed hook replied {reply.Trim()} (exit {exit}) instead of Copilot's fixed reply"; }
-        // The fixed reply is also what a hook gives when it could not spool, so the reply proves
-        // nothing: the hook's own log line says where this run went.
-        if (!SpooledSince(install.RuntimeRoot, ran))
-        {
-            return $"the installed hook did not spool its event (its log in {install.RuntimeRoot} records no spooled run since the check began; can it write to {SpoolContract.SpoolFolder}?)";
-        }
-        // Taken: no event as old as this one is still waiting (later ones are other sessions').
-        var cutoff = SpoolContract.UnixNanoseconds(_time.GetUtcNow());
+        // check records nothing anywhere. The fixed reply is also what a hook gives when it could
+        // not spool, so the reply proves nothing; nor does the hook log, or the spool draining,
+        // since a session's own agent_stop meanwhile looks the same. The proof is this run's own
+        // spool file, named by its pid and time, appearing and then being taken.
         var spool = SpoolContract.SpoolDirectory(install.RuntimeRoot);
-        var taken = await UntilAsync(() => !Waiting(spool, cutoff), options.VerifyTimeout, cancellationToken);
-        return taken ? null : $"the host did not take the hook's event from {spool} within {options.VerifyTimeout.TotalSeconds:0} s";
-    }
-
-    static bool SpooledSince(string runtimeRoot, DateTimeOffset since)
-    {
-        var log = SpoolContract.LogPath(runtimeRoot);
-        foreach (var path in new[] { log, log + ".1" })
-        {
-            string[] lines;
-            // Sharing write and delete: a hook appending (or rotating the log) while this reads
-            // must never lose its line.
-            try { lines = File.Exists(path) ? HookStats.SharedLines(path) : []; }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
-            foreach (var line in lines)
-            {
-                try
-                {
-                    var o = JsonNode.Parse(line) as JsonObject;
-                    if (o is null || (string?)o["agent"] != "copilot" || (string?)o["hook"] != "agent_stop" || (string?)o["path"] != "spool") { continue; }
-                    if (DateTimeOffset.TryParse((string?)o["at"], System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var at) && at >= since) { return true; }
-                }
-                catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException) { }
-            }
-        }
-        return false;
-    }
-
-    // Whether an event spooled at or before the cutoff (Unix ns, the start of its name) is waiting.
-    static bool Waiting(string spool, long cutoff)
-    {
+        var named = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var missed = false;
+        FileSystemWatcher watcher;
         try
         {
-            if (!Directory.Exists(spool)) { return false; }
-            return Directory.EnumerateFiles(spool, "*.json").Select(Path.GetFileName)
-                .Any(n => n!.EndsWith(".json", StringComparison.Ordinal) && (n.Length < 20 || !long.TryParse(n.AsSpan(0, 20), out var at) || at <= cutoff));
+            watcher = new FileSystemWatcher(spool) { IncludeSubdirectories = false, InternalBufferSize = 64 * 1024 };
+            watcher.Created += (_, e) => named.Enqueue(e.Name ?? "");
+            watcher.Renamed += (_, e) => named.Enqueue(e.Name ?? "");
+            watcher.Error += (_, _) => missed = true;
+            watcher.EnableRaisingEvents = true;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return true; }
+        catch (Exception e) when (e is ArgumentException or IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return $"the installed hook did not spool its event ({spool} cannot be watched: {e.Message}; is it a folder the hook can write to?)";
+        }
+        using (watcher)
+        {
+            var ran = SpoolContract.UnixNanoseconds(_time.GetUtcNow().AddMilliseconds(-50));
+            var (exit, reply, pid) = hook.Run(options.HookPath(install.Id), ["copilot", "agent_stop"], "{\"agentBridgeMigrationCheck\":true}");
+            if (exit != 0 || reply != "{}\n") { return $"the installed hook replied {reply.Trim()} (exit {exit}) instead of Copilot's fixed reply"; }
+            string? mine = null;
+            await UntilAsync(() => (mine = named.FirstOrDefault(n => Probe(n, pid, ran))) is not null || missed, options.VerifyTimeout, cancellationToken);
+            if (mine is null)
+            {
+                return missed
+                    ? $"whether the installed hook spooled its event could not be told (watching {spool} overflowed); migrate again"
+                    : $"the installed hook did not spool its event (no spool file from its run, pid {pid}, appeared in {spool}; can it write to {SpoolContract.SpoolFolder}?)";
+            }
+            var path = Path.Combine(spool, mine);
+            var taken = await UntilAsync(() => !File.Exists(path), options.VerifyTimeout, cancellationToken);
+            return taken ? null : $"the host did not take the hook's event ({path}) within {options.VerifyTimeout.TotalSeconds:0} s";
+        }
+    }
+
+    // A spool file written by the hook run with this pid, at or after the check began:
+    // SpoolContract.FileName, "<20-digit Unix ns>-<pid>-<hex>.json". The pid alone could be an
+    // earlier process's, reused; one running now is the probe.
+    static bool Probe(string name, int pid, long since)
+    {
+        if (!name.EndsWith(".json", StringComparison.Ordinal) || name.Length < 22 || name[20] != '-') { return false; }
+        if (!long.TryParse(name.AsSpan(0, 20), out var at) || at < since) { return false; }
+        var rest = name.AsSpan(21);
+        var dash = rest.IndexOf('-');
+        return dash > 0 && int.TryParse(rest[..dash], out var written) && written == pid;
     }
 
     async Task<MigrationReport> Undo(MigrationRecord record, string why, List<string> lines, CancellationToken cancellationToken)
@@ -772,19 +770,64 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         }
     }
 
+    // Seams for tests: making the link (Windows lets only an administrator, or developer mode,
+    // make one), and the moment before the copy is moved aside.
+    internal static Func<string, string, FileSystemInfo> MakeLink { get; set; } = File.CreateSymbolicLink;
+    internal static Action<string>? BeforeLinkSwap { get; set; }
+
     // A file that was a symbolic link when migrated, and is now a plain file holding exactly what
     // the migration wrote through it (something replaced the link with a copy): the link is made
     // again, so the restore below goes through to its target as before.
+    //
+    // The link is made beside it first, so a link that cannot be made leaves the file as it is
+    // (restored below as a plain file). The copy is then moved aside and checked again: an agent
+    // saving after the check above keeps its save, and the file is never missing for longer than
+    // the two renames; the copy is deleted only once the link is in its place.
     static void RestoreLink(MigrationRecord.FileRecord file, bool dryRun, Action<string> say)
     {
         if (file.Link is not { } link || !link.StartsWith("symlink:", StringComparison.Ordinal)) { return; }
         var info = new FileInfo(file.Path);
         if (!info.Exists || info.LinkTarget is not null || file.After is null || MigrationRecord.Hash(file.Path) != file.After) { return; }
         var target = link["symlink:".Length..];
-        say($"* {file.Path}: a symbolic link to {target} again, as it was when migrated.");
-        if (dryRun) { return; }
-        File.Delete(file.Path);
-        File.CreateSymbolicLink(file.Path, target);
+        if (dryRun) { say($"* {file.Path}: a symbolic link to {target} again, as it was when migrated."); return; }
+        var folder = Path.GetDirectoryName(file.Path)!;
+        var tag = $"{Path.GetFileName(file.Path)}.agent-bridge-{Guid.NewGuid():N}";
+        var staged = Path.Combine(folder, $".{tag}.link");
+        var displaced = Path.Combine(folder, $".{tag}.copy");
+        try { MakeLink(staged, target); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            say($"* {file.Path}: could not be made a symbolic link to {target} again ({e.Message}); restored as a plain file.");
+            return;
+        }
+        try
+        {
+            BeforeLinkSwap?.Invoke(file.Path);
+            File.Move(file.Path, displaced);
+            if (MigrationRecord.Hash(displaced) != file.After)
+            {
+                File.Move(displaced, file.Path);
+                say($"* {file.Path}: changed while its link to {target} was being made again, so it is left a plain file with that change.");
+                return;
+            }
+            File.Move(staged, file.Path);
+            File.Delete(displaced);
+            say($"* {file.Path}: a symbolic link to {target} again, as it was when migrated.");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Put back unless something new took its place meanwhile; the copy holds only what
+            // the migration wrote, which the snapshot records.
+            if (File.Exists(displaced))
+            {
+                if (!File.Exists(file.Path)) { File.Move(displaced, file.Path); } else { File.Delete(displaced); }
+            }
+            say($"* {file.Path}: could not be made a symbolic link to {target} again ({e.Message}); restored as a plain file.");
+        }
+        finally
+        {
+            try { File.Delete(staged); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
     }
 
     // As File.ReadAllText reads it (a byte order mark names the encoding).

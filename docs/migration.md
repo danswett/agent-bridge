@@ -120,8 +120,10 @@ second snapshot the first's changes as the state to restore; the second is refus
    started with `--copilot-home`, `--claude-home` or `--codex-home`, since the host the app
    starts may not share the `COPILOT_HOME` agent-ha-bridge was installed under), restarts the host, waits for its heartbeat in the
    runtime folder, and runs the installed hook as Copilot would (`copilot agent_stop`). The
-   hook gives the same fixed reply whether or not it could spool, so the proof is its own log
-   line saying the run was spooled. It then waits until no event that old is left in the spool.
+   hook gives the same fixed reply whether or not it could spool, and a Copilot session's own
+   `agent_stop` at the same moment would leave the same log line and drain the same way, so
+   the proof is that run's own spool file (named by its pid and time) appearing in the spool,
+   watched as the check runs, and then being taken.
    Only then is the state `migrated`.
 
 ### The registrations
@@ -142,7 +144,9 @@ Files are written whole, flushed to the disk and renamed into place (snapshots, 
 never a zero-filled one. A plain file is replaced keeping its ACL and attributes. A symbolic link
 (a dotfiles checkout, say) is written through to its target and stays a link, as
 agent-ha-bridge's `Set-Content` wrote it. The link is recorded, and rollback writes through it the
-same way (making it a link again if something replaced it with a copy of what migration wrote).
+same way (making it a link again if something replaced it with a copy of what migration wrote:
+the link is made beside it first and swapped in only if the copy is still unchanged, so a link
+Windows will not let it make, or a save made meanwhile, leaves the file in place).
 A file with another hard link is refused in preflight: a rename would leave its other names on
 the old contents, and rewriting in place could leave every name truncated if cut short.
 JSON keeps a two-space indent and any byte order mark the file had. Codex asks for its hooks to be trusted again once, since their command
@@ -218,7 +222,8 @@ publishes the dashboard (G7).
 ## What rollback does
 
 Rollback first reads `migration.json` whole: a field or list it was written with that is
-missing, or a list entry that is not an object, refuses the rollback and keeps the record and
+missing (including one written as null, such as a hash, which means something of its own), or a
+list entry that is not an object, refuses the rollback and keeps the record and
 snapshot to roll back by hand, rather than skipping a file or a task and deleting the copies.
 
 1. Removes `intake.json`, and restores the profile's own `config.json` (as below), which the

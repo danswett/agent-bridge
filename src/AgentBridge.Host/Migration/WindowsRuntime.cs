@@ -212,7 +212,7 @@ public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
 // The hook, run as an agent runs it: no shell, stdin closed after the event.
 public sealed class ProcessHookRunner : IHookRunner
 {
-    public (int Exit, string Stdout) Run(string executable, IReadOnlyList<string> arguments, string stdin)
+    public (int Exit, string Stdout, int Pid) Run(string executable, IReadOnlyList<string> arguments, string stdin)
     {
         var start = new ProcessStartInfo(executable) { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
         foreach (var a in arguments) { start.ArgumentList.Add(a); }
@@ -226,6 +226,6 @@ public sealed class ProcessHookRunner : IHookRunner
             process.Kill();
             throw new IOException($"{executable} did not finish within 10 s");
         }
-        return (process.ExitCode, output.GetAwaiter().GetResult());
+        return (process.ExitCode, output.GetAwaiter().GetResult(), process.Id);
     }
 }

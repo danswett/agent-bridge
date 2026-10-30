@@ -43,8 +43,9 @@ public interface IMigrationHost
     Task<string?> RestartAsync(CancellationToken cancellationToken);
 }
 
-// Runs the installed hook as an agent would.
+// Runs the installed hook as an agent would; Pid is the process it ran as, which names the spool
+// file it writes.
 public interface IHookRunner
 {
-    (int Exit, string Stdout) Run(string executable, IReadOnlyList<string> arguments, string stdin);
+    (int Exit, string Stdout, int Pid) Run(string executable, IReadOnlyList<string> arguments, string stdin);
 }

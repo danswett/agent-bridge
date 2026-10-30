@@ -340,14 +340,26 @@ sealed class FakeHost(FakeAgentHaBridge fake) : IMigrationHost, IAsyncDisposable
 sealed class InProcessHook : IHookRunner
 {
     public List<string> Runs { get; } = [];
+    // Each run as a process of its own, so its spool file is named by a pid of its own.
+    int _pid = 40000;
+    // Runs given the fixed reply alone (--fallback): nothing is spooled.
+    public bool Unspooled { get; set; }
+    // Runs with each, before it: another session's hook, say.
+    public Action<string>? Alongside { get; set; }
 
-    public (int Exit, string Stdout) Run(string executable, IReadOnlyList<string> arguments, string stdin)
+    public (int Exit, string Stdout, int Pid) Run(string executable, IReadOnlyList<string> arguments, string stdin)
     {
         Assert.True(File.Exists(executable), $"{executable} was not installed");
         Runs.Add(string.Join(' ', arguments));
+        Alongside?.Invoke(executable);
+        return RunAs(executable, Unspooled && arguments.Count > 1 ? [.. arguments, "--fallback"] : arguments, stdin, ++_pid);
+    }
+
+    public static (int Exit, string Stdout, int Pid) RunAs(string executable, IReadOnlyList<string> arguments, string stdin, int pid)
+    {
         using var input = new MemoryStream(Encoding.UTF8.GetBytes(stdin));
         using var output = new MemoryStream();
-        var exit = HookRunner.Run(arguments, input, output, new HookEnvironment { ExecutableDirectory = Path.GetDirectoryName(executable), Ancestors = () => [], Version = "test" });
-        return (exit, Encoding.UTF8.GetString(output.ToArray()));
+        var exit = HookRunner.Run(arguments, input, output, new HookEnvironment { ExecutableDirectory = Path.GetDirectoryName(executable), Ancestors = () => [], Version = "test", ProcessId = pid });
+        return (exit, Encoding.UTF8.GetString(output.ToArray()), pid);
     }
 }
