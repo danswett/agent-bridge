@@ -102,7 +102,7 @@ public sealed class ToastPlanner
         t.Last = s;
         if (t.Shown is { } shown && s.Question?.Id != shown)
         {
-            sink.Withdraw(Tag(s.Id));
+            sink.Withdraw(TagOf(s.Id));
             t.Shown = null;
         }
         if (s.Question is { } q && !t.Notified.Contains(q.Id))

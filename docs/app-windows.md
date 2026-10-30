@@ -66,7 +66,7 @@ cards exactly as on this one's, each going to that card's own host.
 
 * **Its own device, the host's account.** The app connects to the relay with a P-256 key of
   its own (kind `app`), kept like the host's (in the TPM, or with DPAPI) in
-  `%LOCALAPPDATA%\AgentBridge\app\device-<profile>`. It never uses the host's key, so the
+  `%LOCALAPPDATA%\AgentBridge\app\device\<profile>`. It never uses the host's key, so the
   relay sees two devices, and the host's own connection is never replaced. For the account it
   asks this machine's host (`host.relay.account`, [local-pipe.md](protocol/local-pipe.md)),
   which hands it to the app alone, like every management op, so there is no second sign-in, and

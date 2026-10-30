@@ -168,7 +168,7 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Contains("machine=remote-id", toast.Xml);
 
         var sink = new Sink(shown);
-        var responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (_, _) => { });
+        var responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (_, _) => { }) { MachineWait = TimeSpan.FromSeconds(3) };
         var button = System.Text.RegularExpressions.Regex.Match(toast.Xml, "arguments=\"([^\"]*value=sqlite[^\"]*)\"").Groups[1].Value.Replace("&amp;", "&");
         await responder.HandleAsync(button, new Dictionary<string, string>());
 
@@ -176,10 +176,20 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Empty(localHost.Sent(Ops.SessionAnswer));
         Assert.Equal(ToastPlanner.OutcomeTag("there", "remote-id"), shown.Last().Tag);
 
+        // A click that started the app comes before the relay lists the machine: the answer
+        // waits for it rather than being dropped.
+        link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        await Wait.UntilAsync(() => Card("there") is null, "the machine to go");
+        var early = responder.HandleAsync(button, new Dictionary<string, string>());
+        await Task.Delay(300);
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        await early;
+        Assert.Equal(2, remoteHost.Sent(Ops.SessionAnswer).Count);
+
         // A machine gone since the toast went up: nothing is sent anywhere.
         await responder.HandleAsync(button.Replace("remote-id", "gone-id"), new Dictionary<string, string>());
         Assert.Contains("that machine is not connected", shown.Last().Xml);
-        Assert.Single(remoteHost.Sent(Ops.SessionAnswer));
+        Assert.Equal(2, remoteHost.Sent(Ops.SessionAnswer).Count);
     }
 
     [Fact]
@@ -284,5 +294,52 @@ public sealed class RelayFleetLinkTests
         link.Poke();
         await Wait.UntilAsync(() => link.State == FleetState.Refused, "the refusal", Patience);
         Assert.Equal("the account's sign-in is no longer accepted", link.Detail);
+    }
+
+    [Fact]
+    public async Task Signing_this_machines_host_in_to_another_account_moves_a_connected_app_to_it()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var seven = relay.TokenFor(7, "octo");
+        var eight = relay.TokenFor(8, "other");
+        await using var host7 = await relay.ConnectAsync(seven, "Seven's PC", "host");
+        await using var host8 = await relay.ConnectAsync(eight, "Eight's PC", "host");
+        var account = new RelayAccount(relay.Url.ToString(), seven, "7", "octo");
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(account), P256KeyPair.Generate(), "Test PC · Agent Bridge app");
+        link.Start();
+        await Wait.UntilAsync(() => link.Hosts.Any(h => h.Id == host7.Id), "account 7's machine", Patience);
+
+        // A poke that changes nothing keeps the connection.
+        link.Poke();
+        await Task.Delay(300);
+        Assert.Equal(FleetState.Connected, link.State);
+
+        account = new RelayAccount(relay.Url.ToString(), eight, "8", "other");
+        link.Poke();
+
+        await Wait.UntilAsync(() => link.State == FleetState.Connected && link.Hosts.Any(h => h.Id == host8.Id), "account 8's machine", Patience);
+        Assert.DoesNotContain(link.Hosts, h => h.Id == host7.Id);
+    }
+
+    [Fact]
+    public async Task A_relay_connection_that_drops_never_reads_as_connected_with_every_machine_gone()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(7, "octo");
+        await using var host = await relay.ConnectAsync(token, "Build server", "host");
+        var key = P256KeyPair.Generate();
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), key, "Test PC · Agent Bridge app");
+        var seen = new List<(FleetState, int)>();
+        link.Changed += () => { lock (seen) { seen.Add((link.State, link.Hosts.Count)); } };
+        link.Start();
+        await Wait.UntilAsync(() => link.Hosts.Count == 1, "the other machine", Patience);
+        lock (seen) { seen.Clear(); }
+
+        // The same key connecting again: the relay drops the app's connection, and nothing
+        // else changes. Every machine is still there.
+        await using var again = await relay.ConnectAsync(token, "the app again", "app", key);
+
+        await Wait.UntilAsync(() => { lock (seen) { return seen.Any(s => s.Item1 == FleetState.Connecting); } }, "the drop", Patience);
+        lock (seen) { Assert.DoesNotContain((FleetState.Connected, 0), seen); }
     }
 }

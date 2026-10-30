@@ -208,6 +208,7 @@ public sealed class RelayFleetLink : IFleetLink
                 await WaitAsync(Recheck, ct);
                 continue;
             }
+            var switched = false;
             try
             {
                 Set(FleetState.Connecting, null);
@@ -218,15 +219,16 @@ public sealed class RelayFleetLink : IFleetLink
                 Set(FleetState.Connected, $"as {relay.Login}");
                 log($"connected to the relay as {relay.Login} ({Wire.DeviceId(key.Public)[..8]})");
                 backoff = TimeSpan.FromSeconds(1);
-                await relay.Completion.WaitAsync(ct);
-                log($"the relay connection ended: {(int?)relay.CloseStatus} {relay.CloseReason}");
+                switched = await HoldAsync(relay, a, ct);
+                log(switched ? "this machine's host is on another account or relay now: following it" : $"the relay connection ended: {(int?)relay.CloseStatus} {relay.CloseReason}");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (RelayRefusedException e) when (e.Code is CloseCodes.AuthFailed or CloseCodes.ProofFailed or CloseCodes.Replaced)
             {
-                current = null;
                 log($"the relay refused the app: {e.Message}");
                 Set(FleetState.Refused, e.Code == CloseCodes.Replaced ? "this app is connected from somewhere else with the same key" : "the account's sign-in is no longer accepted");
+                current = null;
+                Changed?.Invoke();
                 await WaitAsync(Recheck, ct);
                 continue;
             }
@@ -235,11 +237,45 @@ public sealed class RelayFleetLink : IFleetLink
                 log($"the relay connection failed: {e.Message}");
                 Set(FleetState.Connecting, e.Message);
             }
+            // Not Connected before the hosts go: an empty list while Connected says every
+            // machine left, and Fleet would drop their cards over a relay blip.
+            if (state.State == FleetState.Connected) { Set(FleetState.Connecting, "reconnecting"); }
             current = null;
             Changed?.Invoke();
-            if (state.State == FleetState.Connected) { Set(FleetState.Connecting, "reconnecting"); }
+            if (switched) { continue; }
             await WaitAsync(backoff, ct);
             backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, MaxBackoff.Ticks));
+        }
+    }
+
+    // While connected, until the relay connection ends (false) or this machine's host is signed
+    // in to another account or relay (true). A poke is only a hint that it may be: the account
+    // is read again and compared.
+    async Task<bool> HoldAsync(RelayClient relay, RelayAccount now, CancellationToken ct)
+    {
+        while (true)
+        {
+            using var wake = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var poked = poke.WaitAsync(wake.Token);
+            var first = await Task.WhenAny(relay.Completion, poked);
+            if (first != poked)
+            {
+                // Cancel the losing wait, so it cannot take a later poke meant for the next one.
+                wake.Cancel();
+                try { await poked; } catch (OperationCanceledException) { }
+                return false;
+            }
+            ct.ThrowIfCancellationRequested();
+            RelayAccount? then;
+            try { then = await account(ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception e) when (e is not OutOfMemoryException)
+            {
+                // Not knowing is not a change: keep the connection that works.
+                log($"could not read this machine's account again: {e.Message}");
+                continue;
+            }
+            if (then is null || then.Relay != now.Relay || then.AccountId != now.AccountId) { return true; }
         }
     }
 
@@ -258,7 +294,7 @@ public sealed class RelayFleetLink : IFleetLink
             var ch = await c.Hub.OpenAsync(hostId, TimeSpan.FromSeconds(15)).WaitAsync(ct);
             return new RelayClientChannel(c.Hub, ch);
         }
-        catch (Exception e) when (e is TimeoutException or IOException or System.Security.Cryptography.CryptographicException or InvalidOperationException)
+        catch (Exception e) when (e is TimeoutException or IOException or System.Net.WebSockets.WebSocketException or System.Security.Cryptography.CryptographicException or InvalidOperationException)
         {
             throw new HostNotRunningException($"the machine did not answer through the relay ({e.Message})", e);
         }

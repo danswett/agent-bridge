@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading.Channels;
 
@@ -27,10 +28,19 @@ public sealed class RelayClientChannel(ChannelHub hub, SecureChannel channel) : 
     public Exception? CloseReason => channel.CloseReason;
     public ChannelReader<ChannelEvent> Events => channel.Events;
 
-    public Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
-        channel.RequestAsync(op, data, timeout, ct);
+    // A frame that fails to decrypt ends the channel, and is a lost connection to whoever holds
+    // it: the pipe's callers recover from IOException, and would otherwise stop for good.
+    public async Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        try { return await channel.RequestAsync(op, data, timeout, ct); }
+        catch (CryptographicException e) { throw new IOException($"the channel to {channel.PeerName} failed: {e.Message}", e); }
+    }
 
-    public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => channel.SendEventAsync(name, data, ct);
+    public async Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default)
+    {
+        try { return await channel.SendEventAsync(name, data, ct); }
+        catch (CryptographicException e) { throw new IOException($"the channel to {channel.PeerName} failed: {e.Message}", e); }
+    }
 
     public async ValueTask DisposeAsync()
     {

@@ -92,6 +92,20 @@ public sealed class ToastTests
     }
 
     [Fact]
+    public void Another_machines_question_answered_there_withdraws_the_toast_it_raised()
+    {
+        var p = new ToastPlanner(sink, clock) { Capabilities = () => Caps, MachineName = () => "Build server", WindowActive = () => false, Quiet = () => false, MachineKey = "remote-id" };
+        p.Upsert(Make.Session(question: Make.Choice("q1")));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        p.Upsert(Make.Session());
+
+        var tag = ToastPlanner.Tag("s1", "remote-id");
+        Assert.Equal(tag, Assert.Single(sink.Shown).Tag);
+        Assert.Equal([tag], sink.Withdrawn);
+    }
+
+    [Fact]
     public void Nothing_is_raised_while_the_window_is_in_front_and_toasts_go_quietly_when_windows_says_the_person_is_busy()
     {
         Planner(active: true).Tap(clock, Make.Session(question: Make.Choice()));

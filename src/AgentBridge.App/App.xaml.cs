@@ -220,7 +220,7 @@ public partial class App : Application
     async Task StartFleetAsync(HostConnection local, IUiDispatcher ui, Func<FleetHost, Machine> remote, Action<IFleetLink> made)
     {
         P256KeyPair key;
-        try { key = await Task.Run(() => Identity.Load($"device-{options.Profile}", root: Paths.AppData).Key); }
+        try { key = await Task.Run(() => Identity.Load(options.Profile, root: Path.Combine(Paths.AppData, "device")).Key); }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
             AppLog.Write($"other machines are off: this app's device key could not be loaded: {e.Message}");
@@ -238,10 +238,11 @@ public partial class App : Application
             if (quitting || main is null) { _ = link.DisposeAsync().AsTask(); return; }
             made(link);
             // A sign-in (or a different account) on this machine's host: the app follows it now.
-            var account = local.Status?.Account?.AccountId;
+            // The relay too: the same account signed in through another relay moves the app with it.
+            var account = (local.Status?.Account?.AccountId, local.Status?.Relay.Url);
             local.Changed += () =>
             {
-                var now = local.Status?.Account?.AccountId;
+                var now = (local.Status?.Account?.AccountId, local.Status?.Relay.Url);
                 if (now == account) { return; }
                 account = now;
                 link.Poke();
