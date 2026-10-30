@@ -321,7 +321,7 @@ public sealed class ShadowTests : IDisposable
             var view = new PipeShadowHost(LocalEndpoint.For(profile));
             Assert.Equal("the host is not running for this profile", (await view.ObserveAsync()).Problem);
 
-            await using (LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(new SessionService(source, machine), control, new FixedCallerGuard(new Caller(CallerKind.Other, "the shadow comparison"))))) // reading needs no management
+            await using (LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(new SessionService(source, machine), control, new FixedCallerGuard(new Caller(CallerKind.Agent, "the shadow comparison, run from inside an agent session"))))) // the strictest caller short of the app: reading is all the comparison asks
             {
                 var seen = await view.ObserveAsync();
 

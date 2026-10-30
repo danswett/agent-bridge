@@ -87,6 +87,13 @@ function Stop-ShadowProcess {
     }
 }
 
+# Why a config change failed. Exit 4 is agent-bridge-host refusing to change its own config from
+# inside an agent session (#44, design §6.3 invariant 13), which only a person at an ordinary
+# terminal can get past.
+function Get-ConfigRefusal([string]$What) {
+    if ($LASTEXITCODE -eq 4) { return "$What`: agent-bridge-host does not change its config from inside an agent session; run -Install from an ordinary terminal" }
+    $What
+}
 # agent-ha-bridge's approved folders and resume count, into this profile: the resume lists
 # are compared only as far as both approve the same folders. Made to match on every install,
 # so a label, an isolate flag or a workspace changed or removed there since is changed here
@@ -110,7 +117,7 @@ function Sync-AgentHaBridgeWorkspace {
         # By label: a workspace whose folder is gone is listed with a note after its path.
         if ($PSCmdlet.ShouldProcess($fields[0], "remove from profile $HostProfile, to copy agent-ha-bridge's afresh")) {
             & $exe workspace remove $fields[0] --profile $HostProfile | Out-Null
-            if ($LASTEXITCODE) { throw "could not remove '$($fields[0])' from profile $HostProfile" }
+            if ($LASTEXITCODE) { throw (Get-ConfigRefusal "could not remove '$($fields[0])' from profile $HostProfile") }
         }
     }
 
@@ -141,7 +148,7 @@ function Sync-AgentHaBridgeWorkspace {
         if ($entry['isolate'] -eq $true) { $arguments += '--isolate' }
         if ($PSCmdlet.ShouldProcess("$folder as '$label'", "approve in profile $HostProfile")) {
             & $exe @arguments
-            if ($LASTEXITCODE) { throw "could not approve $folder in profile $HostProfile" }
+            if ($LASTEXITCODE) { throw (Get-ConfigRefusal "could not approve $folder in profile $HostProfile") }
         }
     }
     # Absent there means its default, which is this host's default too.
@@ -149,7 +156,7 @@ function Sync-AgentHaBridgeWorkspace {
     $arguments = if ($count -is [long] -or $count -is [int]) { @('config', 'set', 'launch.resumeCount', [string][int]$count) } else { @('config', 'unset', 'launch.resumeCount') }
     if ($PSCmdlet.ShouldProcess(($arguments[1..2] -join ' '), "in profile $HostProfile")) {
         & $exe @arguments --profile $HostProfile
-        if ($LASTEXITCODE) { throw "could not set launch.resumeCount in profile $HostProfile" }
+        if ($LASTEXITCODE) { throw (Get-ConfigRefusal "could not set launch.resumeCount in profile $HostProfile") }
     }
 }
 

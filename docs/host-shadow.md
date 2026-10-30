@@ -87,7 +87,7 @@ agent-bridge-host shadow summary [--days 7] [--json]
 ## Running the week
 
 On the machine being cut over (DSWETT-DEV-VM1 first), as the user agent-ha-bridge runs for,
-from a checkout of the commit to be compared, in PowerShell 7, not elevated:
+from a checkout of the commit to be compared, in PowerShell 7, not elevated, and from an ordinary terminal: inside an agent session agent-bridge-host refuses to change its own config (#44), and the install stops saying so:
 
 ```powershell
 pwsh build/shadow-week.ps1 -Install -WhatIf   # what it would do
