@@ -1313,6 +1313,30 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_log_record_that_cannot_be_read_is_taken_for_an_unheard_run()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        intake.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        Assert.True(File.Exists(marker));
+        _f.Time.Advance(TimeSpan.FromSeconds(1));
+        // An append cut short, then another run's line after it.
+        File.AppendAllText(SpoolContract.LogPath(_f.Runtime), "{\"at\":\"2026-10-30T12:00:00\",\"agent\":\"codex\",\"pa\n");
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "spool", null, _f.Time.GetLocalNow(), 1);
+
+        intake.Pass();
+
+        Assert.False(File.Exists(marker));
+        // Once: the next pass does not withdraw a later approval for it.
+        _f.Time.Advance(TimeSpan.FromSeconds(1));
+        SpooledAt(_f.Time.GetLocalNow(), "0002", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        intake.Pass();
+        Assert.True(File.Exists(marker));
+    }
+
+    [Fact]
     public void Answers_stop_once_the_heartbeat_is_older_than_hooks_allow_even_before_the_next_pass()
     {
         var intake = Running();
@@ -1623,6 +1647,22 @@ public sealed class IntakeTests : IDisposable
         Spooled("0001", "codex", "hook", new { session_id = "s", hook_event_name = "SessionStart" }, 10, 20, 50, 60);
         Intake().Pass();
         Assert.Equal(60, Registration("agent-bridge-codex", "s").GetProperty("ProcessId").GetInt32());
+    }
+
+    [Fact]
+    public void A_claim_that_cannot_be_read_keeps_the_window_from_another_session()
+    {
+        _f.Processes.Run(AgentKind.Codex, 50, "codex app-server");
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe", _base.AddMinutes(-30));
+        // Another session's registration, which may name 60, but cannot be read.
+        Directory.CreateDirectory(_f.CodexRegistrations);
+        File.WriteAllText(Path.Combine(_f.CodexRegistrations, "other.json"), "{ half written");
+        Spooled("0001", "codex", "hook", new { session_id = "mine", hook_event_name = "SessionStart" }, 50, 60);
+
+        Intake().Pass();
+
+        // The app-server, which nothing can be typed into, rather than a window that may be another's.
+        Assert.Equal(50, Registration("agent-bridge-codex", "mine").GetProperty("ProcessId").GetInt32());
     }
 
     [Fact]

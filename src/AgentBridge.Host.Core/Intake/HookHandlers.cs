@@ -450,15 +450,24 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
     static bool Bound(JsonElement registration, AgentProcess process) =>
         process.StartedAt is not { } started || Json.Time(registration, "Updated") is not { } updated || updated >= started - TimeSpan.FromSeconds(1);
 
+    // True too where it cannot be told: a registration that cannot be read, or a folder that
+    // cannot be listed, may hold the claim, and binding this session to a window another session
+    // owns would type this one's answers there. The app-server, which has no console to type
+    // into, owns the hooks meanwhile.
     bool CodexClaimed(int pid, string sessionId, IReadOnlyDictionary<int, AgentProcess> running)
     {
         var own = RegistrationDiscovery.SafeKey(sessionId) + ".json";
-        foreach (var file in SafeFiles(CodexRoot))
+        string[] files;
+        try { files = Directory.GetFiles(CodexRoot, "*.json"); }
+        catch (DirectoryNotFoundException) when (!File.Exists(CodexRoot)) { return false; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return true; }
+        foreach (var file in files.Where(f => f.EndsWith(".json", StringComparison.OrdinalIgnoreCase)))
         {
             var name = Path.GetFileName(file);
             if (name.Equals(own, StringComparison.OrdinalIgnoreCase) || name.EndsWith(".approval.json", StringComparison.OrdinalIgnoreCase)) { continue; }
             using var doc = ReadJson(file);
-            if (doc is null || doc.RootElement.ValueKind != JsonValueKind.Object) { continue; }
+            if (doc is null) { if (File.Exists(file)) { return true; } continue; }
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) { return true; }
             if (Json.Bool(doc.RootElement, "Ended") == true) { continue; }
             if (Json.Int(doc.RootElement, "ProcessId") == pid && (!running.TryGetValue(pid, out var process) || Bound(doc.RootElement, process))) { return true; }
         }

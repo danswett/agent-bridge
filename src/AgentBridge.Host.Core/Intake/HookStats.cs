@@ -274,7 +274,15 @@ public sealed class HookLogWatch(string runtimeRoot, string agent, TimeProvider?
                 if (Json.Str(e, "agent") != agent || Json.Str(e, "path") is null or "spool") { continue; }
                 if (Json.Str(e, "at") is { } text && DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at) && (Last is null || at > Last)) { Last = at; }
             }
-            catch (JsonException) { }
+            // A record that cannot be read (an append cut short, then another run's after it) may
+            // have been an unspooled run of this agent's, at some time up to now: taken as one, now.
+            // The sweep that follows withdraws every approval asked before it, once; failing the
+            // read instead would refuse every answer until the log next rotated.
+            catch (JsonException)
+            {
+                var now = (time ?? TimeProvider.System).GetUtcNow();
+                if (Last is null || now > Last) { Last = now; }
+            }
         }
         return offset + end + 1;
     }

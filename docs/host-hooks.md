@@ -243,7 +243,8 @@ on a migrated machine can then be answered from the phone and the app (`AnswerSe
 **Approvals across an outage.** While nobody takes events, a Codex hook gives its fixed reply
 and its event goes nowhere, so the `PreToolUse` or `Stop` that ended an approval answered at the
 terminal may never arrive. The hook log records such runs, but only as best it can: a hook that
-could not spool (a full disk, say) may not have been able to log either. So whenever the intake
+could not spool (a full disk, say) may not have been able to log either, and a log record that
+cannot be read (an append cut short) is taken for an unspooled run at the moment it is read. So whenever the intake
 takes the spool again after a gap (it starts, agent-ha-bridge stops, the heartbeat has gone
 older than the 60 s hooks allow, renewed or not, or a Codex event, or one it could not read,
 failed, from its first failure rather than only once dropped after its retries, or the spool
@@ -335,7 +336,9 @@ exited:
 
   A registration written more than a second before the process under its pid started names an
   earlier process whose pid was reused: it neither binds that window to its session nor claims
-  it from another (discovery's own rule).
+  it from another (discovery's own rule). A claim that cannot be read (a registration that is
+  there but unreadable or not valid JSON, or a folder that cannot be listed) counts as held: the
+  window it might name is not taken, and the hooks are answered at the app-server.
 
 When no owner is found (no ancestry, Claude or Codex), the registration keeps the pid it already
 records only while that pid is still a running agent of that kind and the same process by that
