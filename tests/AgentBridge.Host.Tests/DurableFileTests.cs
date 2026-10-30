@@ -53,6 +53,21 @@ public sealed class DurableFileTests : IDisposable
     }
 
     [Fact]
+    public void A_second_save_landing_while_the_first_is_put_back_is_kept_too()
+    {
+        var path = File_("planned");
+        DurableFile.BeforeCommit.Value = p => File.WriteAllText(p, "first");
+        DurableFile.AfterReplace.Value = p => File.WriteAllText(p, "second");
+
+        var e = Assert.Throws<IOException>(() => DurableFile.Replace(path, "ours"u8.ToArray(), Hash("planned")));
+
+        Assert.Equal("first", File.ReadAllText(path));
+        var kept = Assert.Single(Directory.GetFiles(_root, "*.newer"));
+        Assert.Equal("second", File.ReadAllText(kept));
+        Assert.Contains(kept, e.Message);
+    }
+
+    [Fact]
     public void A_file_created_after_the_check_is_kept_and_the_write_refused()
     {
         var path = Path.Combine(_root, "settings.json");

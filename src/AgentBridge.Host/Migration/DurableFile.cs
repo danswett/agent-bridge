@@ -61,6 +61,7 @@ public static class DurableFile
         }
         var partial = Path.Combine(directory, $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.tmp");
         var displaced = Path.Combine(directory, $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.old");
+        string? ours = Path.Combine(directory, $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.newer");
         // Deleted only once known to be what was planned from: otherwise it may be the only copy
         // of a save that landed meanwhile.
         var planned = false;
@@ -75,10 +76,18 @@ public static class DurableFile
             if (!planned)
             {
                 AfterReplace.Value?.Invoke(target);
-                try { File.Replace(displaced, target, destinationBackupFileName: null, ignoreMetadataErrors: true); }
+                // What it puts back over is kept aside too, and must be this write: a second save
+                // landing meanwhile is kept, not lost under the first.
+                try { File.Replace(displaced, target, ours, ignoreMetadataErrors: true); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
                     throw new IOException($"{path} changed while it was being rewritten, and the save that landed could not be put back ({e.Message}); it is in {displaced}", e);
+                }
+                if (MigrationRecord.Hash(ours) != MigrationRecord.Hash(bytes))
+                {
+                    var newer = ours;
+                    ours = null;
+                    throw new IOException($"{path} was saved twice while it was being rewritten: the first save is back in place, and the second is in {newer}");
                 }
                 throw new ChangedMeanwhileException(path);
             }
@@ -87,6 +96,7 @@ public static class DurableFile
         {
             Delete(partial);
             if (planned) { Delete(displaced); }
+            if (ours is not null) { Delete(ours); }
         }
     }
 

@@ -99,7 +99,8 @@ second snapshot the first's changes as the state to restore; the second is refus
    settings (`/model`, `/permissions`) meanwhile. If one has, the migration is undone and that
    file is left as the agent wrote it. A save landing between that check and the rename is
    caught too: the file replaced is kept aside and checked, and put back if it was not what was
-   planned from (and if it cannot be put back, it stays beside the file, the error naming it).
+   planned from (and if it cannot be put back, it stays beside the file, the error naming it; a
+   second save landing while the first is put back is kept beside it the same way).
    A file that was absent is created only if it still is.
 6. **Settings.** Carries agent-ha-bridge's settings into the profile's `config.json` (below).
 7. **Hand-over.** Writes `intake.json` (the runtime folder, and the agents' homes the
@@ -226,8 +227,9 @@ publishes the dashboard (G7).
    the host still holds it, agent-ha-bridge's tasks are re-enabled but not started, the report
    says so and the record is kept, so the two never take the spool at once; run rollback again once the host has let go.
 5. Re-enables each task that was enabled before, starts it, and waits until the G5 probe sees
-   agent-ha-bridge running again: actually seen, since a probe that cannot tell would otherwise
-   pass for it, and the record and snapshot would go with nothing running. A task that was disabled before stays disabled.
+   agent-ha-bridge's daemon running again: its own mutex seen, since a probe that cannot tell,
+   or a supervisor or task running while the daemon fails to start, would otherwise pass for
+   it, and the record and snapshot would go with nothing running. A task that was disabled before stays disabled.
 6. Deletes `migration.json` and the snapshot. If anything above went wrong they are kept, and
    the report says what to do. A migration cut short (`migration status` says "part-way") is
    rolled back the same way.
