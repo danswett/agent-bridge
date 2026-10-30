@@ -72,7 +72,11 @@ public static class HookRunner
                     SpoolContract.Record(root, agent, hook, "reply", "--fallback", env.Now(), env.ElapsedMs());
                 }
                 var drain = Task.Run(() => ReadAll(stdin, SpoolContract.MaxEventBytes));
-                drain.Wait(env.FallbackDrain);
+                if (drain.Wait(env.FallbackDrain) && agent == "codex" && drain.Result.Whole
+                    && RuntimeRoot(env.ExecutableDirectory).Root is { } runtimeRoot && SpoolContract.CodexSessionId(Trim(drain.Result.Bytes)) is { } session)
+                {
+                    SpoolContract.WithdrawCodexApproval(runtimeRoot, session);
+                }
                 return 0;
             }
             // Bounded in time as well as size: an agent sends its event and closes the pipe, but one
@@ -93,10 +97,12 @@ public static class HookRunner
 
             var path = "reply";
             string? reason = null;
+            string? codexSession = null;
             try
             {
                 var (alive, why) = SpoolContract.ConsumerState(runtime, env.Now());
                 var trimmed = Trim(utf8);
+                if (agent == "codex" && finished && whole) { codexSession = SpoolContract.CodexSessionId(trimmed); }
                 if (!alive) { reason = why; }
                 else if (!finished) { reason = $"event not finished within {env.InputWait.TotalSeconds:0.###}s"; }
                 else if (!whole) { reason = "event too large"; }
@@ -116,6 +122,10 @@ public static class HookRunner
             }
             finally
             {
+                // A Codex event nobody will hear may be the one that settled an approval at the
+                // terminal; on a full disk even the log line saying so can be lost. So its marker
+                // goes now, before Codex moves on to a prompt the phone could otherwise answer.
+                if (path != "spool" && codexSession is not null) { SpoolContract.WithdrawCodexApproval(runtime, codexSession); }
                 Reply();
                 SpoolContract.Record(runtime, agent, hook, path, reason ?? rootProblem, env.Now(), env.ElapsedMs());
             }

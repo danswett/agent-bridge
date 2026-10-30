@@ -88,6 +88,39 @@ public static class SpoolContract
     // RFC 3339 with the offset, as Go's time.RFC3339Nano writes a local time.
     public static string Stamp(DateTimeOffset at) => at.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz", CultureInfo.InvariantCulture);
 
+    // A session id as a file name, as agent-ha-bridge's Get-CopilotSafeSessionKey makes it (and discovery reads it).
+    public static string SafeKey(string sessionId)
+    {
+        var clean = new string(sessionId.Where(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-').ToArray()).TrimStart('.');
+        if (string.IsNullOrWhiteSpace(clean)) { return "unknown"; }
+        return clean.Length > 96 ? clean[..96] : clean;
+    }
+
+    // <runtime>\agent-bridge-codex\<session>.approval.json, the marker an answer is typed through.
+    public static string ApprovalMarkerPath(string runtimeRoot, string sessionId) =>
+        Path.Combine(runtimeRoot, CodexFolder, SafeKey(sessionId) + ".approval.json");
+
+    // The session_id a Codex event names, or null.
+    public static string? CodexSessionId(ReadOnlySpan<byte> utf8)
+    {
+        try
+        {
+            var reader = new Utf8JsonReader(utf8);
+            using var doc = JsonDocument.ParseValue(ref reader);
+            return doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("session_id", out var id)
+                && id.ValueKind == JsonValueKind.String && id.GetString() is { Length: > 0 } s ? s : null;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    // Removes the session's approval marker, as agent-ha-bridge's PowerShell hook did whenever the
+    // event did not reach its daemon. Best effort; a delete needs no free space.
+    public static void WithdrawCodexApproval(string runtimeRoot, string sessionId)
+    {
+        try { File.Delete(ApprovalMarkerPath(runtimeRoot, sessionId)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
+    }
+
     // Whether the bytes are one JSON value, as Go's json.Valid: an event the hook could not
     // parse would be ignored by the PowerShell hook too, so it is not handed on.
     public static bool IsJson(ReadOnlySpan<byte> utf8)

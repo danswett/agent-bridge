@@ -835,10 +835,5 @@ internal static class RegistrationDiscovery
     }
 
     // agent-ha-bridge's file-safe session key: so a hostile id cannot escape the folder.
-    internal static string SafeKey(string sessionId)
-    {
-        var clean = new string(sessionId.Where(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-').ToArray()).TrimStart('.');
-        if (string.IsNullOrWhiteSpace(clean)) { return "unknown"; }
-        return clean.Length > 96 ? clean[..96] : clean;
-    }
+    internal static string SafeKey(string sessionId) => AgentBridge.Hooks.SpoolContract.SafeKey(sessionId);
 }

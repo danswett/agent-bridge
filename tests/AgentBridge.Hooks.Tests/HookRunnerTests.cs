@@ -140,6 +140,33 @@ public sealed class HookRunnerTests : IDisposable
     }
 
     [Fact]
+    public void A_Codex_event_nobody_will_hear_withdraws_its_sessions_approval_marker()
+    {
+        string Marker(string id)
+        {
+            var path = SpoolContract.ApprovalMarkerPath(Runtime, id);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "{}");
+            return path;
+        }
+        var other = Marker("x2");
+        // No heartbeat: the event goes nowhere, so whatever it settled at the terminal is unknown.
+        var unheard = Marker("x1");
+        Invoke("{\"session_id\":\"x1\",\"hook_event_name\":\"PreToolUse\"}", "codex", "hook");
+        Assert.False(File.Exists(unheard));
+        Assert.True(File.Exists(other));
+        // Nor through the fixed-reply registration.
+        var forced = Marker("x1");
+        Invoke("{\"session_id\":\"x1\",\"hook_event_name\":\"Stop\"}", Env(drain: TimeSpan.FromSeconds(5)), "--fallback", "codex", "hook");
+        Assert.False(File.Exists(forced));
+        // Spooled, it is the host's to settle.
+        Heartbeat(TimeSpan.Zero);
+        var heard = Marker("x1");
+        Invoke("{\"session_id\":\"x1\",\"hook_event_name\":\"PreToolUse\"}", "codex", "hook");
+        Assert.True(File.Exists(heard));
+    }
+
+    [Fact]
     public void The_fallback_target_prints_the_fixed_reply_and_never_spools_even_with_the_host_up()
     {
         Heartbeat(TimeSpan.Zero);

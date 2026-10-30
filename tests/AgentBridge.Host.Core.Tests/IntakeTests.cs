@@ -41,6 +41,7 @@ public sealed class IntakeTests : IDisposable
             AgentHaBridgeActive = () => _probe is { } probe ? probe() : _agentHaBridge,
             UseFileSystemWatcher = watch,
             PruneInterval = TimeSpan.FromDays(1),
+            SpaceProbe = root => _noRoom ?? HookIntake.ProbeSpace(root),
         }, _f.Processes, _f.Time, m => { lock (_log) { _log.Add(m); } });
         _intakes.Add(intake);
         return intake;
@@ -48,6 +49,9 @@ public sealed class IntakeTests : IDisposable
 
     // Asked instead of _agentHaBridge when set, for a test that needs the answer to change mid-pass.
     Func<string?>? _probe;
+
+    // Why an event would not fit in the runtime folder (a full disk), or null to ask the disk.
+    string? _noRoom;
 
     // When the hooks in a test ran: Fixture.T0, or just after a Running() host took the spool.
     DateTimeOffset _base = Fixture.T0;
@@ -875,6 +879,48 @@ public sealed class IntakeTests : IDisposable
         Intake(alongside: true).Pass();
 
         Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public void With_no_room_for_an_event_the_host_stops_beating_withdraws_approvals_and_answers_none_until_there_is()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        intake.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        var heartbeat = SpoolContract.HeartbeatPath(_f.Runtime);
+        Assert.True(File.Exists(marker));
+        Assert.Null(intake.ApprovalsUnsettled);
+        // The heartbeat's few bytes would still be written; an event, or its log line, would not.
+        _noRoom = "There is not enough space on the disk.";
+        _f.Time.Advance(TimeSpan.FromSeconds(2));
+
+        intake.Pass();
+
+        Assert.False(File.Exists(heartbeat));
+        Assert.False(File.Exists(marker));
+        Assert.NotNull(intake.ApprovalsUnsettled);
+        _noRoom = null;
+        _f.Time.Advance(TimeSpan.FromSeconds(2));
+        intake.Pass();
+        Assert.True(File.Exists(heartbeat));
+        Assert.Null(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
+    public void A_pass_whose_heartbeat_could_not_be_written_leaves_Codex_approvals_unanswerable()
+    {
+        var intake = Running();
+        Assert.Null(intake.ApprovalsUnsettled);
+        // Something where the heartbeat should be, well inside the minute hooks allow it.
+        File.Delete(SpoolContract.HeartbeatPath(_f.Runtime));
+        Directory.CreateDirectory(SpoolContract.HeartbeatPath(_f.Runtime));
+        _f.Time.Advance(TimeSpan.FromSeconds(2));
+
+        intake.Pass();
+
+        Assert.NotNull(intake.ApprovalsUnsettled);
     }
 
     [Fact]

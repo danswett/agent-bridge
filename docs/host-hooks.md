@@ -247,6 +247,16 @@ dropped after its retries), it withdraws **every** approval marker asked before 
 and a `PermissionRequest` still waiting in the spool from before it is handled but arms no
 approval. Nothing proves such an approval unanswered, so it is answered at the terminal.
 
+The hook does not rely on the log alone. A Codex run it could not spool (no fresh heartbeat, a
+failed write, `--fallback`) deletes that session's marker itself before replying, as
+agent-ha-bridge's PowerShell hook removed it whenever an event did not reach the daemon; a
+delete needs no free space. And a full disk is a gap of its own: the heartbeat's few bytes fit in
+the file's own MFT record, so it can stay fresh while events, and the log lines that would say
+they were lost, fail. Before each heartbeat the intake allocates (and gives back) a realistic
+event's worth of space (1 MiB) in the runtime folder. While that fails it removes its own
+heartbeat, so hooks give their fixed reply at once, withdraws every approval, and answers none.
+A pass whose heartbeat could not be written never counts approvals as settled.
+
 While the intake runs, the log is followed every pass (only what it gained), and a Codex hook
 that fails to spool while the heartbeat is fresh withdraws every approval asked before it. Only
 one previous log is kept: the intake knows a rotation it followed (the log it was reading is the

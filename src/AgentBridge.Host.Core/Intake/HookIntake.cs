@@ -32,6 +32,11 @@ public sealed class HookIntakeOptions
     public TimeSpan StaleAfter { get; init; } = TimeSpan.FromMinutes(240);
 
     public bool UseFileSystemWatcher { get; init; } = true;
+
+    // Whether an event the size hooks spool would fit in the runtime folder: null when it does,
+    // else why not. The heartbeat alone proves nothing on a full disk (its few bytes live in the
+    // file's own MFT record), while events, and the log lines that would say they were lost, fail.
+    public Func<string, string?> SpaceProbe { get; init; } = HookIntake.ProbeSpace;
 }
 
 // Host.Intake (design §6.1): on a machine migrated from agent-ha-bridge, the host takes over
@@ -258,6 +263,19 @@ public sealed class HookIntake : IAsyncDisposable
         // Hooks gave up spooling once the heartbeat was this old, whether or not it can be renewed
         // now (and mid-drain too): no Codex answer until the next pass has settled the markers.
         if (_beatAt != default && now - _beatAt >= SpoolContract.HeartbeatMaxAge) { Gap(); }
+        // No room for an event: a Codex PreToolUse answering an approval at the terminal could be
+        // lost together with the log line that would have said so, and its marker offered again
+        // for whatever Codex asks next. So it is a gap for as long as it lasts, and hooks are told
+        // at once (no heartbeat) rather than spooling into a full disk until it goes stale.
+        if (_options.SpaceProbe(_options.RuntimeRoot) is { } full)
+        {
+            if (!_noRoom) { _log($"no room for hook events in {_options.RuntimeRoot} ({full}); hooks give their fixed reply, and no Codex approval is answered, until there is"); }
+            _noRoom = true;
+            Gap();
+            DropHeartbeat();
+            return false;
+        }
+        _noRoom = false;
         try
         {
             Directory.CreateDirectory(_options.RuntimeRoot);
@@ -272,6 +290,35 @@ public sealed class HookIntake : IAsyncDisposable
             _reconciled = false;
             return false;
         }
+    }
+
+    bool _noRoom;
+
+    // A realistic event's worth of space, allocated (not written) and given back at once.
+    internal const long SpaceProbeBytes = 1024 * 1024;
+
+    public static string? ProbeSpace(string runtimeRoot)
+    {
+        try
+        {
+            Directory.CreateDirectory(runtimeRoot);
+            var probe = Path.Combine(runtimeRoot, $".space-probe-{Environment.ProcessId}.tmp");
+            using var stream = new FileStream(probe, FileMode.Create, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose);
+            stream.SetLength(SpaceProbeBytes);
+            return null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return e.Message; }
+    }
+
+    // Only this host's own: a daemon that has taken over keeps its.
+    void DropHeartbeat()
+    {
+        if (!_heartbeatOwned) { return; }
+        try
+        {
+            if (File.Exists(_heartbeat) && string.Join("", HookStats.SharedLines(_heartbeat)).Trim() == Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)) { File.Delete(_heartbeat); }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
     // Hooks may have run unspooled, or an event may have been lost: every approval asked before
@@ -302,7 +349,8 @@ public sealed class HookIntake : IAsyncDisposable
         // Held until settled: a later pass with a lower cut-off (the log readable again, say)
         // never lets a sweep that could not finish be forgotten.
         if (cutoff is { } wanted && (_settled is not { } done || wanted > done)) { _pending = Later(_pending, wanted); }
-        if (_pending is not { } unheard) { _reconciled = known; return true; }
+        // Never settled by a pass whose heartbeat failed (Beat unsettles; this must not undo it).
+        if (_pending is not { } unheard) { _reconciled = known && beat; return true; }
         _handlers.ApprovalsSettledBefore = unheard;
         // A new cut-off unsettles what an earlier one settled: until its markers are gone, one of
         // them may have been answered at the terminal, so no Codex approval is answered meanwhile.
@@ -342,7 +390,7 @@ public sealed class HookIntake : IAsyncDisposable
         {
             _settled = unheard;
             _pending = null;
-            _reconciled = known;
+            _reconciled = known && beat;
             // Closed once the heartbeat is fresh again, so hooks spool from here on.
             if (beat) { _gap = false; }
         }
@@ -580,16 +628,8 @@ public sealed class HookIntake : IAsyncDisposable
             _stop.Dispose();
         }
         _watcher?.Dispose();
-        // A heartbeat left behind would have hooks spool to nobody for up to a minute. Only
-        // this host's own: a daemon that has taken over keeps its.
-        if (_heartbeatOwned)
-        {
-            try
-            {
-                if (File.Exists(_heartbeat) && string.Join("", HookStats.SharedLines(_heartbeat)).Trim() == Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)) { File.Delete(_heartbeat); }
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
-        }
+        // A heartbeat left behind would have hooks spool to nobody for up to a minute.
+        DropHeartbeat();
         lock (_gate)
         {
             foreach (var s in _subscribers) { s.Writer.TryComplete(); }
