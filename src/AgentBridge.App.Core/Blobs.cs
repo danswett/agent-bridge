@@ -46,28 +46,38 @@ public static class LargeAttachments
 }
 
 // The blob store through the app's relay connection, whichever connection is current.
-public sealed class RelayBlobStore(Func<RelayClient?> relay) : IBlobStore
+public sealed class RelayBlobStore(Func<RelayClient?> relay, HttpClient? http = null) : IBlobStore
 {
-    readonly HttpClient http = BlobHttp.CreateClient();
+    readonly HttpClient http = http ?? BlobHttp.CreateClient();
+
+    // How long one upload may take: storage that takes the connection and then stalls would
+    // otherwise hold the reply pending for good, out of reach of its give-up. The host allows a
+    // fetch as long (SessionTransfers.FetchWait); 100 MiB at 1 Mbit/s is about 14 minutes.
+    public TimeSpan UploadFor { get; init; } = TimeSpan.FromMinutes(20);
 
     public long Max => relay()?.BlobMaxBytes ?? 0;
 
     public async Task<BlobRef> PutAsync(string to, string name, byte[] file, Action<long> uploaded)
     {
         var r = relay() ?? throw new IOException("not connected to the relay");
+        using var limit = new CancellationTokenSource(UploadFor);
         try
         {
-            var slot = await r.BlobPutAsync(to, BlobFormat.StoredSize(file.Length));
+            var slot = await r.BlobPutAsync(to, BlobFormat.StoredSize(file.Length), limit.Token);
             var url = BlobHttp.Resolve(r.Relay, slot.Url) ?? throw new HostErrorException("the relay gave an upload address that is not Azure storage");
             var id = BlobFormat.IdOf(slot.Blob) ?? throw new HostErrorException("the relay gave a blob that cannot be sealed for");
             var key = BlobFormat.NewKey();
             // Off the UI thread, which a reply is sent from: up to 100 MiB to encrypt.
             var stored = await Task.Run(() => BlobFormat.Seal(file, key, id));
             var counted = new CountingStream(new MemoryStream(stored), n => uploaded(Math.Min(file.Length, n * file.Length / stored.Length)));
-            await BlobHttp.UploadAsync(http, url, counted, stored.Length);
+            await BlobHttp.UploadAsync(http, url, counted, stored.Length, limit.Token);
             return new BlobRef { Id = slot.Blob, Key = BlobFormat.Base64Url(key) };
         }
         catch (BlobRefusedException e) { throw new HostErrorException(LargeAttachments.Refusal(e.Reason, name)); }
+        catch (OperationCanceledException) when (limit.IsCancellationRequested)
+        {
+            throw new IOException($"the upload of {name} took over {UploadFor.TotalMinutes:0} minutes");
+        }
         // A status is storage refusing it, which trying again will not change; none is a dropped
         // connection, which it may.
         catch (HttpRequestException e) when (e.StatusCode is not null) { throw new HostErrorException($"couldn't upload {name}: {e.Message}"); }

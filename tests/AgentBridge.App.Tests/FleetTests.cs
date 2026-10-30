@@ -558,6 +558,30 @@ public sealed class RelayFleetLinkTests
     }
 
     [Fact]
+    public async Task An_upload_that_storage_stalls_gives_up_in_time_as_one_to_try_again()
+    {
+        await using var relay = await TestRelay.StartAsync(o => o.Blobs.Backend = "local");
+        var token = relay.TokenFor(7, "octo");
+        await using var host = await relay.ConnectAsync(token, "Build server", "host");
+        await using var app = await relay.ConnectAsync(token, "Test PC · Agent Bridge app", "app");
+        var blobs = new RelayBlobStore(() => app.Relay, new HttpClient(new Stalls())) { UploadFor = TimeSpan.FromMilliseconds(300) };
+
+        var e = await Assert.ThrowsAsync<IOException>(() => blobs.PutAsync(host.Id, "photo.png", new byte[400_000], _ => { }));
+
+        Assert.Equal("the upload of photo.png took over 0 minutes", e.Message);
+    }
+
+    // Storage that takes the request and never answers.
+    sealed class Stalls : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new InvalidOperationException("unreachable");
+        }
+    }
+
+    [Fact]
     public async Task A_host_whose_introduction_is_malformed_is_offline_for_now_not_the_end_of_trying()
     {
         await using var relay = await TestRelay.StartAsync();

@@ -145,7 +145,7 @@ public sealed class ReplyViewModel : Observable
 
     // The most one attachment can be: what the host takes in chunks over this pipe, or through the
     // relay's blob store from another machine, else what a channel takes.
-    public long MaxBytes => large ? AttachmentLimits.DirectBytes : blobMax > 0 ? blobMax : AttachmentLimits.Bytes;
+    public long MaxBytes => large ? AttachmentLimits.DirectBytes : Math.Max(blobMax, AttachmentLimits.Bytes);
 
     // blobMax: the largest file the machine takes through the relay's blob store now, 0 for none.
     public void Update(Session next, bool takesFiles, bool takesLarge = false, long blobMax = 0)
@@ -321,7 +321,9 @@ public sealed class ReplyViewModel : Observable
         var now = deliveries.Time.GetUtcNow();
         if (f.Blob is null || now - f.BlobAt > LargeAttachments.TicketReuse)
         {
-            if (Blobs is not { Max: > 0 } blobs || BlobsFor is null)
+            // A relay that is down for now reads as no blob store: PutAsync says that, and the reply
+            // waits for it, rather than failing here.
+            if (Blobs is not { } blobs || BlobsFor is null)
             {
                 throw new Local.HostErrorException($"{f.Name} is over {Words.Size(AttachmentLimits.Bytes)}, and the machine cannot take larger files right now");
             }

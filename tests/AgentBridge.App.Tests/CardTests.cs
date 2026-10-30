@@ -253,13 +253,18 @@ public sealed class CardTests : IAsyncLifetime
     // The relay's blob store as a test stands it in: what was put, for whom, and what was deleted.
     sealed class FakeBlobs : IBlobStore
     {
-        public long Max { get; set; } = 210_763_776;
+        long max = 210_763_776;
+        // A relay that is down has no blob store to speak of: RelayBlobStore.Max reads 0.
+        public long Max { get => Down > 0 ? 0 : max; set => max = value; }
         public List<(string To, string Name, int Size)> Puts { get; } = [];
         public List<string> Deleted { get; } = [];
         public Exception? Refuse { get; set; }
+        // Uploads that find the relay down for now, before one gets through.
+        public int Down { get; set; }
 
         public Task<BlobRef> PutAsync(string to, string name, byte[] file, Action<long> uploaded)
         {
+            if (Down > 0) { Down--; return Task.FromException<BlobRef>(new IOException("not connected to the relay")); }
             if (Refuse is { } e) { return Task.FromException<BlobRef>(e); }
             lock (Puts) { Puts.Add((to, name, file.Length)); }
             uploaded(file.Length);
@@ -326,6 +331,33 @@ public sealed class CardTests : IAsyncLifetime
         // Taken out of the reply: the blob it left in the store goes too.
         r.Remove(Assert.Single(r.Attachments));
         Assert.Equal(["ticket-2"], blobs.Deleted);
+    }
+
+    [Fact]
+    public async Task A_large_file_waits_for_a_relay_that_is_down_for_now_rather_than_failing()
+    {
+        host.On(Ops.AttachmentStart, _ => new AttachmentState(400_000, true));
+        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Delivered));
+        var blobs = new FakeBlobs { Down = 1 };
+        var r = RemoteReply(blobs);
+        await r.AddAsync("report.pdf", "application/pdf", new byte[400_000]);
+        var failed = false;
+        deliveries.Changed += d => failed |= d.State == DeliveryState.Failed;
+
+        r.Send();
+
+        await Wait.UntilAsync(() => r.StatusText == "Delivered. The session has your reply.", "delivered");
+        Assert.False(failed);
+        Assert.Single(blobs.Puts);
+    }
+
+    [Fact]
+    public void A_relay_whose_blob_store_takes_less_than_the_channel_leaves_the_channel_s_limit()
+    {
+        var r = RemoteReply(new FakeBlobs());
+        r.Update(Make.Session(), takesFiles: true, blobMax: 100_000);
+
+        Assert.Equal(AttachmentLimits.Bytes, r.MaxBytes);
     }
 
     [Fact]
