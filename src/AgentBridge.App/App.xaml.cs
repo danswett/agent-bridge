@@ -225,10 +225,14 @@ public partial class App : Application
         {
             // The same person starting the app for the first time in two Windows sessions at once
             // would create two keys, and the reference file would name only one of them. The
-            // first copy creates it; the other waits, then loads the same one.
+            // first copy creates it; the other waits, then loads the same one. Off the UI thread: a
+            // TPM can take a moment, and the window and this machine's connection need not wait.
             var root = Path.Combine(Paths.AppData, "device");
-            var folder = Directory.CreateDirectory(Path.Combine(root, options.Profile)).FullName;
-            identity = await UserLock.RunAsync(Path.Combine(folder, "init.lock"), () => Identity.Load(options.Profile, root: root), TimeSpan.FromSeconds(60), AppLog.Write);
+            identity = await Task.Run(() =>
+            {
+                var folder = Directory.CreateDirectory(Path.Combine(root, options.Profile)).FullName;
+                return UserLock.RunAsync(Path.Combine(folder, "init.lock"), () => Identity.Load(options.Profile, root: root), TimeSpan.FromSeconds(60), AppLog.Write);
+            });
         }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
