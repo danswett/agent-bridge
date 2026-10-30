@@ -235,12 +235,15 @@ public sealed partial class TranscriptEvidence(string path)
     void Line(ReadOnlySpan<byte> bytes, long at)
     {
         // An ask_user's completion names only its call, so while one waits each completion is looked
-        // at for it, without parsing.
+        // at for it: by bytes first, then parsed to be sure it is that call's and not one quoting it.
         if (waiting > 0 && bytes.IndexOf("\"tool.execution_complete\""u8) >= 0)
         {
-            foreach (var ask in asks)
+            Ask? matched = null;
+            foreach (var ask in asks) { if (ask.CompletedThrough < 0 && bytes.IndexOf(ask.Quoted) >= 0) { matched = ask; break; } }
+            if (matched is not null && CompletedCall(bytes) is { } call && asks.FirstOrDefault(a => a.CompletedThrough < 0 && a.CallId == call) is { } done)
             {
-                if (ask.CompletedThrough < 0 && bytes.IndexOf(ask.Quoted) >= 0) { ask.CompletedThrough = at + bytes.Length + 1; waiting--; }
+                done.CompletedThrough = at + bytes.Length + 1;
+                waiting--;
             }
         }
         var wanted = false;
@@ -451,6 +454,18 @@ public sealed partial class TranscriptEvidence(string path)
             ? asks.LastOrDefault(a => a.CallId == id)
             : q.AskedAt is { } armed ? asks.Where(a => a.At is { } s && (s - armed).Duration() <= ArmedWithin).MinBy(a => (a.At!.Value - armed).Duration()) : null;
         return ask is { CompletedThrough: >= 0 } && ask.CompletedThrough - ask.Start > DaemonQuestionTail ? Name([263]) : null;
+    }
+
+    // The call a tool.execution_complete event completes, or null when the line is not one.
+    static string? CompletedCall(ReadOnlySpan<byte> bytes)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(bytes.ToArray());
+            var e = doc.RootElement;
+            return Str(e, "type") == "tool.execution_complete" && e.TryGetProperty("data", out var d) ? Str(d, "toolCallId") : null;
+        }
+        catch (JsonException) { return null; }
     }
 
     static string Name(SortedSet<int> issues) => string.Join(", ", issues.Select(ShadowWitness.Issue));

@@ -124,10 +124,11 @@ public sealed record ShadowSummary(
                 {
                     if (!failedQuestions.TryGetValue(key, out var was))
                     {
-                        failedQuestions[key] = new ShadowFailedQuestion { Session = q.Session, Kinds = [.. q.Kinds], Last = q.Last };
+                        failedQuestions[key] = new ShadowFailedQuestion { Session = q.Session, Kinds = [.. q.Kinds], Last = q.Last, KindLast = q.Kinds.ToDictionary(k => k, q.LastOf, StringComparer.Ordinal) };
                         continue;
                     }
                     foreach (var k in q.Kinds.Where(k => !was.Kinds.Contains(k))) { was.Kinds.Add(k); }
+                    foreach (var k in q.Kinds) { if (!was.KindLast.TryGetValue(k, out var at) || q.LastOf(k) > at) { was.KindLast[k] = q.LastOf(k); } }
                     if (q.Last > was.Last) { was.Last = q.Last; }
                 }
             }
@@ -207,7 +208,7 @@ public sealed record ShadowSummary(
             {
                 // Each failed question once, whatever kinds of mismatch it had and however many
                 // questions one mismatch ran on across: explained only if all its kinds are.
-                explained = failedQuestions.Values.Count(q => q.Kinds.All(k => config.Explaining(new ShadowEpisode { Kind = k, Session = q.Session, Last = q.Last }) is not null));
+                explained = failedQuestions.Values.Count(q => q.Kinds.All(k => config.Explaining(new ShadowEpisode { Kind = k, Session = q.Session, Last = q.LastOf(k) }) is not null));
                 m = failedQuestions.Count - explained;
             }
             else if (ShadowCoverageKinds.IsState(kind))

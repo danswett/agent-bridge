@@ -207,8 +207,10 @@ public sealed class ShadowWitnessTests : IDisposable
     public void A_question_answered_within_the_daemons_tail_or_not_answered_at_all_stays_a_mismatch()
     {
         var host = Host() with { Status = "working" };
-        // Still waiting in the transcript: the host missing it is the host's problem.
-        Write(AskUser("ask-1"), Filler((int)TranscriptEvidence.DaemonQuestionTail));
+        // Still waiting in the transcript: the host missing it is the host's problem. Another
+        // call's completion that happens to quote its id is not its answer.
+        Write(AskUser("ask-1"), Filler((int)TranscriptEvidence.DaemonQuestionTail),
+            JsonSerializer.Serialize(new { type = "tool.execution_complete", data = new { toolCallId = "other-call", success = true, result = new { content = "done", about = "ask-1" } } }));
         Assert.Null(Difference(Asking(), host, ShadowKinds.QuestionMissingOnHost).Known);
 
         // Answered with its start still within the tail: the daemon can see it, and is only behind.

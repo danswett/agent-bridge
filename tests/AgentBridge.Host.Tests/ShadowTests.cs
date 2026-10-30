@@ -818,6 +818,12 @@ public sealed class ShadowTests : IDisposable
         Assert.Contains(ShadowCompare.UsageLapsed, lapsed.NotCompared);
         Assert.DoesNotContain(lapsed.Differences, d => d.Kind.StartsWith("usage.", StringComparison.Ordinal));
         Assert.Empty(lapsed.UsageFresh);
+        // Nor is it a reading the host is missing.
+        var daemonOnly = ShadowCompare.Compare(
+            new ShadowView { Usage = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage, Resumable = [] },
+            new ShadowView { SeesAgentHaBridge = true, Usage = new Dictionary<string, ShadowUsage>(), Resumable = [] });
+        Assert.False(daemonOnly.UsageCompared);
+        Assert.DoesNotContain(daemonOnly.Differences, d => d.Kind.StartsWith("usage.", StringComparison.Ordinal));
 
         // Within its pace (half an hour and a poll), the same figures are compared, and differ.
         measured = now - TimeSpan.FromMinutes(1);

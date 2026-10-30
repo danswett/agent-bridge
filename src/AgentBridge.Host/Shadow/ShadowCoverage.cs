@@ -82,6 +82,11 @@ public sealed class ShadowFailedQuestion
     public string Session { get; set; } = "";
     public List<string> Kinds { get; set; } = [];
     public DateTimeOffset Last { get; set; }
+    // When each kind last failed, for an explanation bounded in time (ShadowExplanation.Through).
+    // Absent in reports from before it: Last stands in for every kind.
+    public Dictionary<string, DateTimeOffset> KindLast { get; set; } = new(StringComparer.Ordinal);
+
+    public DateTimeOffset LastOf(string kind) => KindLast.TryGetValue(kind, out var at) ? at : Last;
 }
 
 public sealed class ShadowShown
@@ -138,6 +143,7 @@ internal sealed class ShadowCoverageTracker
         }
         if (!failed.Kinds.Contains(kind)) { failed.Kinds.Add(kind); }
         failed.Last = now;
+        failed.KindLast[kind] = now;
     }
 
     // What a report from before coverage, or the part of a day before coverage began, says about

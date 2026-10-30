@@ -401,6 +401,43 @@ public sealed class ShadowCoverageTests : IDisposable
         Assert.Equal(ShadowGate.NotYet, Verdict().Outcome);
     }
 
+    // Found in review (#91): a question failing in two ways is explained kind by kind, each through
+    // when that kind last failed, not when the question last failed in any way.
+    [Fact]
+    public void A_question_failing_in_two_ways_is_explained_by_each_kind_through_when_that_kind_last_failed()
+    {
+        Directory.CreateDirectory(reports);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+        var session = ShadowHash.Session(A);
+        var q = Asked("q-1", time.GetUtcNow(), new ShadowField("choice", 2, "h"));
+        void Samples(int n, params ShadowDifference[] diffs)
+        {
+            for (var i = 0; i < n; i++)
+            {
+                ledger.Record(new ShadowComparison(true, 1, 1, diffs, []), View(null, null, null, Session(A, "waiting", question: q)), View(null, null, null, Session(A, "waiting", question: q)));
+                time.Advance(TimeSpan.FromSeconds(15));
+            }
+        }
+        ShadowDifference options = new(ShadowKinds.QuestionOptions, session, "field 1: daemon=2 host=3"), type = new(ShadowKinds.QuestionFieldType, session, "field 1: daemon=choice host=multi");
+        Samples(6, options, type);
+        var optionsEnded = time.GetUtcNow();
+        Samples(6, type);
+        Sample(ledger, View(null, null, null, Session(A, "working")), View(null, null, null, Session(A, "working")));
+        void Config(DateTimeOffset optionsThrough) => Gate(new
+        {
+            questions = 1, questionsMaxRate = 0.5, sessions = 0, statusTransitions = 0, background = 0, compactions = 0, resumeSnapshots = 0, usageReadings = 0, machineEvents = 0, hours = 0, comparedHours = 0, cleanHours = 0,
+            explained = new object[] { new { kind = ShadowKinds.QuestionOptions, session, through = optionsThrough }, new { kind = ShadowKinds.QuestionFieldType, session, through = time.GetUtcNow() } },
+        });
+
+        // Each kind explained through its own end: the question no longer counts as failed, and one
+        // question is too few to say more.
+        Config(optionsEnded);
+        Assert.Equal(ShadowGate.NotYet, Verdict().Outcome);
+        // The options' explanation ending before the options did: it still counts.
+        Config(optionsEnded - TimeSpan.FromMinutes(2));
+        Assert.Equal(ShadowGate.Fail, Verdict().Outcome);
+    }
+
     // Found in review (#77): a question one side stops showing is the same question, and a question
     // failing across midnight keeps the kinds it had before it.
     [Fact]

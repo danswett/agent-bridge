@@ -365,14 +365,16 @@ public static class ShadowCompare
             var name = ShadowHash.Token(client);
             if (a?.Reading != true && b?.Reading != true) { continue; }
             readings = true;
-            if (b?.Reading != true) { diffs.Add(new(ShadowKinds.UsageMissingOnHost, name, "the daemon has a reading and the host none")); compared = true; continue; }
-            if (a?.Reading != true) { diffs.Add(new(ShadowKinds.UsageMissingOnDaemon, name, "the host has a reading and the daemon none")); compared = true; continue; }
-            if (a.Lapsed)
+            // Before either side's missing reading: a lapsed figure says nothing about now, whatever
+            // the host has.
+            if (a is { Reading: true, Lapsed: true })
             {
                 if (!notCompared.Contains(UsageLapsed)) { notCompared.Add(UsageLapsed); }
                 continue;
             }
             compared = true;
+            if (b?.Reading != true) { diffs.Add(new(ShadowKinds.UsageMissingOnHost, name, "the daemon has a reading and the host none")); continue; }
+            if (a?.Reading != true) { diffs.Add(new(ShadowKinds.UsageMissingOnDaemon, name, "the host has a reading and the daemon none")); continue; }
             if (Differs(a.Account, b.Account) || Differs(a.AccountKey, b.AccountKey))
             {
                 diffs.Add(new(ShadowKinds.UsageAccount, name, "the account differs"));
