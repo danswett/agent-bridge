@@ -346,6 +346,9 @@ under it (a process started after the registration, by that rule). Then it recor
 would refresh `Updated` and so bind the session to whatever reused the pid, and answers would be
 typed into it. A pid that has exited is kept, so a late `Stop` still lets discovery see the
 session ended; a process that later reuses it started after that write, so is never bound to it.
+Exited means absent from a complete listing: a runtime (node, bun) whose command line could not be
+read is judged by its start time like any other, and when the processes cannot be listed at all
+the pid is not kept.
 
 ## Notices for the rest of the host
 

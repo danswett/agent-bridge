@@ -993,6 +993,26 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_pid_under_a_process_that_cannot_be_identified_or_listed_is_not_kept_as_if_it_had_exited()
+    {
+        // 31 now runs a node started after the registration whose command line cannot be read;
+        // the Codex processes cannot be listed at all.
+        _f.ClaudeRegistration("unread", 31, null);
+        _f.Processes.Run(AgentKind.Claude, 31, "node", Fixture.T0.AddMinutes(30));
+        _f.Processes.Unidentify(AgentKind.Claude, 31);
+        _f.CodexRegistration("unlisted", 61, null, updated: Fixture.T0);
+        var intake = Running();
+        _f.Processes.Unreadable(AgentKind.Codex);
+        Spooled("c-unread", "claude", "stop", new { session_id = "unread" });
+        Spooled("x-unlisted", "codex", "hook", new { session_id = "unlisted", hook_event_name = "Stop" });
+
+        intake.Pass();
+
+        Assert.Equal(0, Registration("agent-bridge-claude", "unread").GetProperty("ProcessId").GetInt32());
+        Assert.Equal(0, Registration("agent-bridge-codex", "unlisted").GetProperty("ProcessId").GetInt32());
+    }
+
+    [Fact]
     public void A_queued_approval_asked_by_a_clock_since_wound_back_arms_nothing()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");

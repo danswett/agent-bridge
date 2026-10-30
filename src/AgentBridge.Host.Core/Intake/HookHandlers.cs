@@ -323,11 +323,16 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
     // the pid (Bound), and answers would be typed into it, so it becomes unknown (0). One that has
     // exited is kept: that is how discovery sees the session has ended (a late Stop, handled after
     // it exited, would otherwise leave it showing until stale registrations are cleared), and a
-    // process starting under it later started after this write, so is never bound to it.
+    // process starting under it later started after this write, so is never bound to it. Exited
+    // means absent from a complete listing: a runtime (node, bun) whose command line could not be
+    // read is judged by when it started, as one identified would be, and when the processes could
+    // not be listed at all nothing is known, so the pid is not kept.
     int KeptPid(JsonElement old, AgentKind agent)
     {
         if (Json.Int(old, "ProcessId") is not { } pid || pid <= 0) { return 0; }
-        var process = processes.GetAgentProcesses(agent).FirstOrDefault(p => p.Id == pid);
+        var seen = processes.Observe(agent);
+        if (!seen.Listed) { return 0; }
+        var process = seen.Processes.FirstOrDefault(p => p.Id == pid) ?? seen.Unidentified.FirstOrDefault(p => p.Id == pid);
         return process is null || Bound(old, process) ? pid : 0;
     }
 
