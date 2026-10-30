@@ -917,8 +917,8 @@ public sealed class IntakeTests : IDisposable
         _intakes.Add(intake);
         intake.Pass();
         clock.Now += TimeSpan.FromSeconds(1);
+        // Asked in the second the clock then steps back from: dated after the time it steps back to.
         SpooledAt(clock.Now, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
-        clock.Now += TimeSpan.FromSeconds(1);
         intake.Pass();
         var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
         Assert.True(File.Exists(marker));
@@ -954,6 +954,118 @@ public sealed class IntakeTests : IDisposable
 
         intake.Pass();
 
+        Assert.True(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+        Assert.Null(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
+    public void A_pid_reused_by_another_process_is_not_kept_for_a_session_whose_owner_cannot_be_found()
+    {
+        // Both recorded at T0: 31 and 61 have since been reused by processes started after it,
+        // 32 and 62 are the processes they were recorded for.
+        _f.ClaudeRegistration("reused", 31, null);
+        _f.ClaudeRegistration("kept", 32, null);
+        _f.CodexRegistration("reused", 61, null, updated: Fixture.T0);
+        _f.CodexRegistration("kept", 62, null, updated: Fixture.T0);
+        _f.Processes.Run(AgentKind.Claude, 31, "claude", Fixture.T0.AddMinutes(30));
+        _f.Processes.Run(AgentKind.Claude, 32, "claude", Fixture.T0.AddMinutes(-30));
+        _f.Processes.Run(AgentKind.Codex, 61, "codex.exe", Fixture.T0.AddMinutes(30));
+        _f.Processes.Run(AgentKind.Codex, 62, "codex.exe", Fixture.T0.AddMinutes(-30));
+        var intake = Running();
+        // No ancestry to find the owner by.
+        foreach (var id in new[] { "reused", "kept" })
+        {
+            Spooled($"c-{id}", "claude", "stop", new { session_id = id });
+            Spooled($"x-{id}", "codex", "hook", new { session_id = id, hook_event_name = "Stop" });
+        }
+
+        intake.Pass();
+
+        Assert.Equal(0, Registration("agent-bridge-claude", "reused").GetProperty("ProcessId").GetInt32());
+        Assert.Equal(32, Registration("agent-bridge-claude", "kept").GetProperty("ProcessId").GetInt32());
+        Assert.Equal(0, Registration("agent-bridge-codex", "reused").GetProperty("ProcessId").GetInt32());
+        Assert.Equal(62, Registration("agent-bridge-codex", "kept").GetProperty("ProcessId").GetInt32());
+    }
+
+    [Fact]
+    public void A_queued_approval_asked_by_a_clock_since_wound_back_arms_nothing()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        // Spooled before the clock went back ten minutes, and the host restarted.
+        SpooledAt(_f.Time.GetUtcNow().AddMinutes(10), "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+
+        Intake().Pass();
+
+        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+    }
+
+    [Fact]
+    public void A_step_back_of_a_second_still_withdraws_every_approval()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var clock = new ManualClock(_f.Time.GetUtcNow());
+        var intake = new HookIntake(new HookIntakeOptions { RuntimeRoot = _f.Runtime, ClaudeHome = _f.ClaudeHome, UseFileSystemWatcher = false, PruneInterval = TimeSpan.FromDays(1) }, _f.Processes, clock, _log.Add);
+        _intakes.Add(intake);
+        intake.Pass();
+        clock.Now += TimeSpan.FromSeconds(1);
+        // Asked in the second the clock then steps back from: dated after the time it steps back to.
+        SpooledAt(clock.Now, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        intake.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        Assert.True(File.Exists(marker));
+
+        clock.Now -= TimeSpan.FromSeconds(1);
+        intake.Pass();
+
+        Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public void An_event_that_retires_an_approval_withdraws_it_even_when_it_looks_older_than_the_registration()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        var now = _f.Time.GetUtcNow();
+        // Recorded a second ahead of the PreToolUse that answered it at the terminal (a step back the
+        // host did not see).
+        _f.CodexRegistration("x1", 60, null, status: "waiting", updated: now.AddSeconds(1));
+        _f.CodexApprovalMarker("x1", "d1", created: now.AddSeconds(1));
+        SpooledAt(now, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PreToolUse", tool_name = "shell" }, 60);
+
+        intake.Pass();
+
+        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+    }
+
+    [Fact]
+    public void A_session_registered_before_the_clock_was_wound_back_goes_on_updating_while_replays_stay_out()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var clock = new ManualClock(_f.Time.GetUtcNow());
+        var intake = new HookIntake(new HookIntakeOptions { RuntimeRoot = _f.Runtime, ClaudeHome = _f.ClaudeHome, UseFileSystemWatcher = false, PruneInterval = TimeSpan.FromDays(1) }, _f.Processes, clock, _log.Add);
+        _intakes.Add(intake);
+        intake.Pass();
+        clock.Now += TimeSpan.FromSeconds(1);
+        var before = clock.Now;
+        SpooledAt(before, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "SessionStart" }, 60);
+        clock.Now += TimeSpan.FromSeconds(1);
+        intake.Pass();
+        clock.Now -= TimeSpan.FromMinutes(10);
+        intake.Pass();
+        // One that waited in the spool from before the change, older than the registration: a replay.
+        SpooledAt(before.AddSeconds(-30), "0002", "codex", "hook", new { session_id = "x1", hook_event_name = "Stop", last_assistant_message = "replayed" }, 60);
+        clock.Now += TimeSpan.FromSeconds(1);
+        intake.Pass();
+        Assert.Equal("idle", Registration("agent-bridge-codex", "x1").GetProperty("Status").GetString());
+        Assert.Equal("Session started", Registration("agent-bridge-codex", "x1").GetProperty("Activity").GetString());
+
+        SpooledAt(clock.Now, "0003", "codex", "hook", new { session_id = "x1", hook_event_name = "UserPromptSubmit", prompt = "go" }, 60);
+        clock.Now += TimeSpan.FromSeconds(1);
+        SpooledAt(clock.Now, "0004", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        clock.Now += TimeSpan.FromSeconds(1);
+        intake.Pass();
+
+        Assert.Equal("waiting", Registration("agent-bridge-codex", "x1").GetProperty("Status").GetString());
         Assert.True(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
         Assert.Null(intake.ApprovalsUnsettled);
     }

@@ -265,10 +265,13 @@ public sealed class HookIntake : IAsyncDisposable
         // it should update and be passed over as a replay, leaving an approval it settled
         // answerable. Every approval is withdrawn (ReconcileApprovals withdraws markers dated
         // ahead of now too) and none answered until that is done.
-        if (_clock is { } seen && now < seen - ClockSlack)
+        // However little: a step back of a second can still put an event before the registration
+        // it should update.
+        if (_clock is { } seen && now < seen)
         {
             _log($"the clock moved back ({seen:o} to {now:o}); withdrawing every Codex approval");
             Gap();
+            _rewound = true;
             // Cut-offs read from the clock ahead would hold back the sweep this one asks for, and then
             // every approval after it.
             _settled = null;
@@ -310,9 +313,12 @@ public sealed class HookIntake : IAsyncDisposable
 
     bool _noRoom;
     DateTimeOffset? _clock;
+    // The clock moved back since the last complete sweep: the next withdraws every marker, whatever
+    // its time (one asked a second before the step back would look asked after it).
+    bool _rewound;
 
-    // How far behind what it last read the clock may seem before it has moved back, and how far
-    // ahead of now a marker's time may be before it was written under a clock since moved back.
+    // How far ahead of now a time may be before it was read from a clock since wound back (a
+    // marker, a registration, a queued event), when the step itself was not seen (a restart).
     internal static readonly TimeSpan ClockSlack = TimeSpan.FromSeconds(5);
 
     // A realistic event's worth of space, allocated (not written) and given back at once.
@@ -391,7 +397,7 @@ public sealed class HookIntake : IAsyncDisposable
                 if (doc is not null && Json.Time(doc.RootElement, "Created") is { } at) { created = at; }
             }
             // Asked since the cut-off, unless dated ahead of now: written before the clock moved back.
-            if (created is { } c && c > unheard && c <= _time.GetUtcNow() + ClockSlack) { continue; }
+            if (!_rewound && created is { } c && c > unheard && c <= _time.GetUtcNow() + ClockSlack) { continue; }
             if (_options.AgentHaBridgeActive() is { } active)
             {
                 StandBack(active);
@@ -412,6 +418,7 @@ public sealed class HookIntake : IAsyncDisposable
         {
             _settled = unheard;
             _pending = null;
+            _rewound = false;
             _reconciled = known && beat;
             // Closed once the heartbeat is fresh again, so hooks spool from here on.
             if (beat) { _gap = false; }

@@ -106,15 +106,20 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
     {
         var e = spooled.Event;
         if (notice.SessionId is not { } sessionId) { return notice; }
-        if (Superseded(CodexPath(sessionId), spooled)) { return notice; }
         var eventName = notice.EventName ?? "";
         // A later lifecycle event retires the prompt, whichever input answered it. SessionStart
         // too: a Codex that died waiting for an approval never sent SessionEnd, and its resumed
         // session must not offer the dead run's approval to be answered into the new process.
-        if (eventName is "SessionStart" or "PreToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd")
+        var retires = eventName is "SessionStart" or "PreToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd";
+        if (Superseded(CodexPath(sessionId), spooled))
         {
-            Withdraw(sessionId, spooled.ReceivedAt ?? time.GetUtcNow());
+            // Still retires it: a clock wound back, by however little, can make the event that
+            // answered an approval at the terminal look older than the registration. Withdrawing
+            // one still pending (a true replay) costs only answering it at the machine.
+            if (retires) { Withdraw(sessionId, spooled.ReceivedAt ?? time.GetUtcNow()); }
+            return notice;
         }
+        if (retires) { Withdraw(sessionId, spooled.ReceivedAt ?? time.GetUtcNow()); }
 
         string status;
         var activity = "";
@@ -160,6 +165,10 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
 
         string? approvalId = null;
         if (approval && ApprovalsSettledBefore is { } settled && (spooled.ReceivedAt ?? time.GetUtcNow()) <= settled) { approval = false; }
+        // Asked by a clock since wound back (it waited in the spool across the change): when it
+        // was asked, and so whether it has been answered since, is unknown, and the marker's time
+        // (clamped to now) would hide that from the sweep.
+        if (approval && spooled.ReceivedAt is { } askedAt && askedAt > time.GetUtcNow() + HookIntake.ClockSlack) { approval = false; }
         if (approval)
         {
             // The previous generation goes first, and the new one is written only once it has:
@@ -193,7 +202,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         var path = ClaudePath(sessionId);
         using var existing = ReadJson(path);
         var old = existing?.RootElement;
-        if (pid <= 0 && old is { } o && Json.Int(o, "ProcessId") is { } kept) { pid = kept; }
+        if (pid <= 0 && old is { } o) { pid = KeptPid(o, AgentKind.Claude); }
         string hookStatus = "", hookStatusAt = "";
         if (!string.IsNullOrEmpty(status)) { (hookStatus, hookStatusAt) = (status, at); }
         else if (old is { } p && p.TryGetProperty("HookStatus", out _))
@@ -221,7 +230,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         var old = existing?.RootElement;
         string Keep(string? value, string field) =>
             !string.IsNullOrWhiteSpace(value) ? value : old is { } o && o.TryGetProperty(field, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
-        if (pid <= 0 && old is { } p && Json.Int(p, "ProcessId") is { } kept) { pid = kept; }
+        if (pid <= 0 && old is { } p) { pid = KeptPid(p, AgentKind.Codex); }
         WriteJson(path, w =>
         {
             w.WriteString("SessionId", sessionId);
@@ -303,15 +312,33 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         return ms;
     }
 
+    // The pid a registration already records, for an event whose owner could not be found, but
+    // only while that pid is still the process it was recorded for (Bound): refreshing the
+    // registration's time would otherwise bind the session to whatever reused the pid, and
+    // answers would be typed into it. Unknown (0) otherwise.
+    int KeptPid(JsonElement old, AgentKind agent)
+    {
+        if (Json.Int(old, "ProcessId") is not { } pid || pid <= 0) { return 0; }
+        var process = processes.GetAgentProcesses(agent).FirstOrDefault(p => p.Id == pid);
+        return process is not null && Bound(old, process) ? pid : 0;
+    }
+
     // An event older than what its session's registration already records, by when the hooks
     // ran: a replay (a spooled file whose delete failed, handled again after a restart) or one
     // that arrived late. Applying it would roll the session back, and a replayed
     // PermissionRequest would arm an approval its PreToolUse has already settled.
-    static bool Superseded(string registration, SpoolEvent spooled)
+    //
+    // Except against a registration dated ahead of now, written before the clock was wound back:
+    // an event timed by the clock as it is now is not older than that, only timed differently,
+    // and holding it back would freeze the session until the clock caught up. An event timed by
+    // the clock before the change (one that waited in the spool) is still compared.
+    bool Superseded(string registration, SpoolEvent spooled)
     {
         if (spooled.ReceivedAt is not { } received) { return false; }
         using var existing = ReadJson(registration);
-        return existing is not null && Json.Time(existing.RootElement, "Updated") is { } updated && received < updated;
+        if (existing is null || Json.Time(existing.RootElement, "Updated") is not { } updated || received >= updated) { return false; }
+        var horizon = time.GetUtcNow() + HookIntake.ClockSlack;
+        return !(updated > horizon && received <= horizon);
     }
 
     // When the hook ran, not when the event was handled: an event that waited in the spool (the

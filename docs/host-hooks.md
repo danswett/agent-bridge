@@ -259,9 +259,19 @@ A pass whose heartbeat could not be written never counts approvals as settled.
 
 The wall clock moving back (a correction, a restored VM) is a gap too: an event timed by it can
 look older than the registration it should update and be passed over as a replay, leaving the
-approval it settled answerable. The intake withdraws every approval when it reads a time more
-than 5 s behind the last it read, and a marker dated more than 5 s ahead of now is withdrawn by
-any sweep (one written before the clock moved back, even across a restart).
+approval it settled answerable. The intake withdraws every approval, whatever its time, when it
+reads a time behind the last it read, however little, and a marker dated more than 5 s ahead of
+now is withdrawn by any sweep (one written before the clock moved back, even across a restart).
+A `PermissionRequest` timed more than 5 s ahead of now (one that waited in the spool across the
+change) arms nothing, since its marker's time would be clamped to now and hide it from the sweep.
+An event that would retire an approval (`SessionStart`, `PreToolUse`, `UserPromptSubmit`,
+`Stop`, `SessionEnd`) withdraws its session's marker even when it looks older than the
+registration and is otherwise not applied.
+
+A registration dated more than 5 s ahead of now was written before the clock moved back. An event
+timed by the clock as it is now is applied to it, not held back as a replay until the clock
+catches up; one timed by the clock before the change (more than 5 s ahead, or older than the
+registration as before) is still compared, and passed over.
 
 While the intake runs, the log is followed every pass (only what it gained), and a Codex hook
 that fails to spool while the heartbeat is fresh withdraws every approval asked before it. Only
@@ -309,6 +319,11 @@ exited:
   A registration written more than a second before the process under its pid started names an
   earlier process whose pid was reused: it neither binds that window to its session nor claims
   it from another (discovery's own rule).
+
+When no owner is found (no ancestry, Claude or Codex), the registration keeps the pid it already
+records only while that pid is still a running agent of that kind and the same process by that
+rule. Otherwise it records 0: keeping it would refresh `Updated` and so bind the session to
+whatever reused the pid, and answers would be typed into it.
 
 ## Notices for the rest of the host
 
