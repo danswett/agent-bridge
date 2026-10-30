@@ -43,8 +43,7 @@ second snapshot the first's changes as the state to restore; the second is refus
    * the profile already has an `intake.json` with no migration record;
    * another profile is migrated, or part-way through a migration, from this installation or any
      other. Two hosts would handle every event twice (the intake also refuses to share a spool,
-     see `docs/host-hooks.md`), and the hook this product installs has one `hook.json`, so a
-     second installation's migration would send the first's hooks into the second's spool. A
+     see `docs/host-hooks.md`), and the host takes one installation's hooks at a time. A
      profile whose `intake.json` or `migration.json` cannot be read counts: it may hold a
      migration not yet rolled back, whose disabled tasks would be snapshotted as the originals;
    * `installation.json` is missing, is not schema 1 with a 32-hex id, belongs to another path,
@@ -87,17 +86,21 @@ second snapshot the first's changes as the state to restore; the second is refus
    `-File <bridgeHome>\hooks\agent-bridge-<role>.ps1`, honouring the receipt in
    `runtime\<role>.process.json` when it names the process. The supervisor goes first, so it
    cannot restart the daemon. It then waits until the G5 probe sees agent-ha-bridge gone.
-4. **Hook.** Copies `agent-bridge-host-hook.exe` to `%LOCALAPPDATA%\AgentBridge\bin`, with a
-   `hook.json` pointing at the installation's runtime folder, and runs it once (`--version`)
-   to prove it starts. It goes in a folder of the product's own because an app update replaces
-   the app's folder, and a registration must never point at nothing.
+4. **Hook.** Copies `agent-bridge-host-hook.exe` to
+   `%LOCALAPPDATA%\AgentBridge\bin\<installation id>`, with a `hook.json` pointing at the
+   installation's runtime folder, and runs it once (`--version`) to prove it starts. It goes in a
+   folder of the product's own because an app update replaces the app's folder, and a
+   registration must never point at nothing. One folder per installation, because rollback keeps
+   the hook and its pointer for sessions still running it: a later migration of another
+   installation then gets a folder of its own, and never sends those sessions' events into its
+   spool.
 5. **Registrations.** Re-points agent-ha-bridge's own hook entries and nothing else (below).
    Each file's hash after is recorded before the file is written, so a migration cut short
    between the two still rolls back what it wrote. Each file is re-read immediately before it
    is written and must still be what the change was planned from (the same goes for the
    profile's `config.json`): an agent already on its native hook keeps running and may write its
    settings (`/model`, `/permissions`) meanwhile. If one has, the migration is undone and that
-   file is left as the agent wrote it. A save landing between that check and the rename is
+   file is left as the agent wrote it (one deleted meanwhile stays deleted). A save landing between that check and the rename is
    caught too: the file replaced is kept aside and checked, and put back if it was not what was
    planned from (and if it cannot be put back, it stays beside the file, the error naming it; a
    second save landing while the first is put back is kept beside it the same way).
@@ -154,7 +157,7 @@ tells them apart by folder, as agent-ha-bridge did.
 | `newSession.enabled` | `launch.enabled` |
 | `newSession.workspaces` (label, path, isolate; one path or entry as a list of one, as `@(...)` reads it) | `launch.workspaces` |
 | `newSession.defaultWorkspace` (as the label the host offers the folder it chose: agent-ha-bridge's `-eq` ignores case, the host matches exactly, and the profile may already approve that folder under its own label, or as the second of two sharing one, `label (folder)`) | `launch.defaultWorkspace` |
-| `newSession.launcher` | `launch.defaultAgent` |
+| `newSession.launcher` (trimmed and in lowercase, as `Get-BridgeLauncherKind` reads it; one it does not know is `auto`, as it was there, and reported) | `launch.defaultAgent` |
 | `newSession.profiles` (one string as a list of one, as agent-ha-bridge's `@(...)` reads it), `defaultProfile` (as the listed profile it matched, whatever the case; as written when there is no list, since Agency's own are known only at launch) | `launch.profiles`, `launch.defaultProfile` |
 | `newSession.resumeCount` | `launch.resumeCount` (at most 50 here; a larger value is reported) |
 | `newSession.allowAllTools` | `launch.permissions` (`allowAll` or `ask`) |
@@ -234,19 +237,23 @@ publishes the dashboard (G7).
    the report says what to do. A migration cut short (`migration status` says "part-way") is
    rolled back the same way.
 
-Rollback keeps `%LOCALAPPDATA%\AgentBridge\bin\agent-bridge-host-hook.exe` and its
-`hook.json`. A session started while migrated still calls that hook until it exits, and it
-spools to agent-ha-bridge's daemon just as the Go hook does (`docs/host-hooks.md`). A later
-migration replaces it.
+Rollback keeps `%LOCALAPPDATA%\AgentBridge\bin\<installation id>\agent-bridge-host-hook.exe`
+and its `hook.json`. A session started while migrated still calls that hook until it exits, and
+it spools to agent-ha-bridge's daemon just as the Go hook does (`docs/host-hooks.md`). A later
+migration of the same installation replaces it; another installation's goes in a folder of its
+own, so this pointer is never changed under those sessions.
 
 ## While migrated
 
 * Do not run agent-ha-bridge's installer or its update (the update button does nothing while
   the daemon is stopped). It would add its hooks back beside the re-pointed ones, and every
   event would be spooled twice. Roll back first.
-* The host brings the hook migrated agents run (the copy in `%LOCALAPPDATA%\AgentBridge\bin`)
-  up to the one beside it whenever it starts, so an app update's hook reaches them; `hook.json`
-  is left as it is, and a hook still running finishes on the old copy.
+* The host brings the hook migrated agents run (the copy in
+  `%LOCALAPPDATA%\AgentBridge\bin\<installation id>`) up to the one beside it whenever it starts,
+  so an app update's hook reaches them; `hook.json` is left as it is, and a hook still running
+  finishes on the old copy. A new copy that cannot be moved into place puts the previous one
+  back, and a replacement cut short (a crash between the two moves) is put back the next time
+  the host starts, before it takes the spool, even with no hook beside it to update from.
 * `agent-bridge-host migration status` shows the installation, since when, and whether each
   re-pointed file is still as migrated. `agent-bridge-host hooks status` shows the spool.
 * Sessions the host launches do not get agent-ha-bridge's agent token in their environment

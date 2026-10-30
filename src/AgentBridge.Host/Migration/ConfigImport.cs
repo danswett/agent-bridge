@@ -88,10 +88,19 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                 // Get-BridgeWorkspaceChoices reads them through @(...): one path or entry is a list of one.
                 var legacyWorkspaces = ns["workspaces"] is JsonArray or null ? ns["workspaces"] : new JsonArray(ns["workspaces"]!.DeepClone());
                 Workspaces(legacyWorkspaces, launch, imported, kept);
-                foreach (var (from, to) in new[] { ("defaultWorkspace", "defaultWorkspace"), ("launcher", "defaultAgent"), ("defaultProfile", "defaultProfile") })
+                if (Str(ns["defaultWorkspace"]) is { } workspace) { Put(launch, "defaultWorkspace", DefaultLabel(launch, legacyWorkspaces, workspace), "newSession.defaultWorkspace", "launch.defaultWorkspace"); }
+                // As Get-BridgeLauncherKind reads it: trimmed, any case, and one it does not know
+                // (or that is not installed) is auto. Copied as written, "Claude" would fail the
+                // profile's config.
+                if (Str(ns["launcher"]) is { } written)
                 {
-                    if (from == "defaultProfile") { continue; }
-                    if (Str(ns[from]) is { } value) { Put(launch, to, from == "defaultWorkspace" ? DefaultLabel(launch, legacyWorkspaces, value) : value, $"newSession.{from}", $"launch.{to}"); }
+                    var launcher = written.Trim().ToLowerInvariant();
+                    if (launcher != "auto" && !AgentBridge.Protocol.LaunchProtocol.Agents.Contains(launcher))
+                    {
+                        kept.Add($"launch.defaultAgent: agent-ha-bridge's newSession.launcher '{written}' is not a launcher it knows, so it picked one itself; so does this host (auto)");
+                        launcher = "auto";
+                    }
+                    Put(launch, "defaultAgent", launcher, "newSession.launcher", "launch.defaultAgent");
                 }
                 if (Strings(ns["profiles"]) is { Count: > 0 } profiles) { Put(launch, "profiles", Array(profiles), "newSession.profiles", "launch.profiles"); }
                 // After the profiles, which it is matched against.

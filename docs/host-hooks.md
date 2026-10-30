@@ -40,7 +40,7 @@ consumers**:
 An agent reads its hook commands when a session starts. A session running across a migrate or
 a rollback keeps calling the hook it started with, and is still served by whichever bridge is
 running. Migration re-points agent-ha-bridge's own registrations at this program, installed in
-`%LOCALAPPDATA%\AgentBridge\bin` with a pointer beside it to the installation's runtime folder
+`%LOCALAPPDATA%\AgentBridge\bin\<installation id>` with a pointer beside it to the installation's runtime folder
 (below). Rollback restores them byte for byte from the snapshot taken at migrate time
 ([migration.md](migration.md)).
 

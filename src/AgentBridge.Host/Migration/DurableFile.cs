@@ -38,6 +38,7 @@ public static class DurableFile
     public static void Replace(string path, byte[] bytes, string? expected)
     {
         Check(path, expected);
+        AfterCheck.Value?.Invoke(path);
         var target = Target(path);
         // A rename would leave the other names on the old contents, and rewriting in place could
         // leave every name truncated if cut short. Migrate refuses such a file in preflight; one
@@ -46,6 +47,8 @@ public static class DurableFile
         var directory = Path.GetDirectoryName(target)!;
         if (!File.Exists(target))
         {
+            // Deleted since the check: writing it would undo that deletion, and report success.
+            if (expected is not null) { throw new ChangedMeanwhileException(path); }
             Directory.CreateDirectory(directory);
             var staged = Path.Combine(directory, $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.tmp");
             try
@@ -71,7 +74,8 @@ public static class DurableFile
             BeforeCommit.Value?.Invoke(target);
             // What this replaces is kept aside and checked: a save that landed after the check
             // above is put back, rather than lost under this write.
-            File.Replace(partial, target, displaced, ignoreMetadataErrors: true);
+            try { File.Replace(partial, target, displaced, ignoreMetadataErrors: true); }
+            catch (FileNotFoundException) when (!File.Exists(target)) { throw new ChangedMeanwhileException(path); }
             planned = MigrationRecord.Hash(displaced) == expected;
             if (!planned)
             {
@@ -122,6 +126,7 @@ public static class DurableFile
     // a save found displaced is put back, as a reader holding the file would.
     internal static readonly AsyncLocal<Action<string>?> BeforeCommit = new();
     internal static readonly AsyncLocal<Action<string>?> AfterReplace = new();
+    internal static readonly AsyncLocal<Action<string>?> AfterCheck = new();
 
     static void Check(string path, string? expected)
     {

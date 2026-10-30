@@ -27,7 +27,9 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
     public string GoHook => Path.Combine(BridgeHome, "bin", "agent-bridge-hook.exe");
     public string Profile => Path.Combine(Home, "AppData", "Local", "AgentBridge", "profiles", "default");
     public string HookFolder => Path.Combine(Home, "AppData", "Local", "AgentBridge", "bin");
-    public string InstalledHook => Path.Combine(HookFolder, OperatingSystem.IsWindows() ? "agent-bridge-host-hook.exe" : "agent-bridge-host-hook");
+    // Each installation's hook in a folder of its own, with its pointer.
+    public string InstallationHooks => Path.Combine(HookFolder, InstallationId);
+    public string InstalledHook => Path.Combine(InstallationHooks, OperatingSystem.IsWindows() ? "agent-bridge-host-hook.exe" : "agent-bridge-host-hook");
     public string HookSource => Path.Combine(Home, "app", "agent-bridge-host-hook.exe");
     public string CopilotHooks => Path.Combine(CopilotHome, "hooks", "decision-notifier.json");
     public string ClaudeSettings => Path.Combine(ClaudeHome, "settings.json");
@@ -39,12 +41,16 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
     public FakeHost Host { get; }
     public InProcessHook Hook { get; }
 
-    public FakeAgentHaBridge(JsonObject? config = null)
+    // Another installation's id, for a test that needs two.
+    public string InstallationId { get; }
+
+    public FakeAgentHaBridge(JsonObject? config = null, string installationId = Id)
     {
+        InstallationId = installationId;
         Directory.CreateDirectory(Profile);
         Write(Path.Combine(BridgeHome, "installation.json"), Json(new JsonObject
         {
-            ["schemaVersion"] = 1, ["id"] = Id, ["bridgeHome"] = BridgeHome, ["home"] = Home, ["configPath"] = ConfigPath, ["isolated"] = false,
+            ["schemaVersion"] = 1, ["id"] = InstallationId, ["bridgeHome"] = BridgeHome, ["home"] = Home, ["configPath"] = ConfigPath, ["isolated"] = false,
             ["copilotHome"] = CopilotHome, ["claudeHome"] = ClaudeHome, ["codexHome"] = CodexHome, ["desktopConfig"] = null, ["testRegistryId"] = null,
         }));
         Write(ConfigPath, Json(config ?? DefaultConfig()));
@@ -55,7 +61,7 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
         Write(GoHook, "MZ fake go hook");
         Directory.CreateDirectory(SpoolContract.SpoolDirectory(Runtime));
         Directory.CreateDirectory(Path.Combine(Runtime, SpoolContract.ClaudeFolder));
-        Write(Path.Combine(Runtime, "daemon.process.json"), "{\"pid\":4242,\"installationId\":\"" + Id + "\",\"executable\":\"C:\\\\pwsh.exe\",\"startedUtcTicks\":1}\r\n");
+        Write(Path.Combine(Runtime, "daemon.process.json"), "{\"pid\":4242,\"installationId\":\"" + InstallationId + "\",\"executable\":\"C:\\\\pwsh.exe\",\"startedUtcTicks\":1}\r\n");
 
         // ~/.copilot/hooks/decision-notifier.json: install.ps1's native (exec) form, after the
         // person's own preToolUse hook, which must come through untouched.
@@ -73,7 +79,7 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
             },
             ["version"] = 1,
         }));
-        Write(Path.Combine(CopilotHome, "instructions", "agent-ha-bridge.instructions.md"), $"<!-- agent-ha-bridge-owner:{Id} -->\r\n# agent-ha-bridge\r\n");
+        Write(Path.Combine(CopilotHome, "instructions", "agent-ha-bridge.instructions.md"), $"<!-- agent-ha-bridge-owner:{InstallationId} -->\r\n# agent-ha-bridge\r\n");
 
         // ~/.claude/settings.json, with a byte order mark (Windows PowerShell's UTF8), the
         // person's settings and a hook of their own.
@@ -102,7 +108,7 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
         {
             Write(Path.Combine(adapter, script), "rem agent-ha-bridge\r\n");
         }
-        Write(Path.Combine(ClaudeHome, "CLAUDE.md"), $"My notes.\r\n\r\n<!-- agent-ha-bridge-owner:{Id} -->\r\nguidance\r\n<!-- /agent-ha-bridge -->\r\n");
+        Write(Path.Combine(ClaudeHome, "CLAUDE.md"), $"My notes.\r\n\r\n<!-- agent-ha-bridge-owner:{InstallationId} -->\r\nguidance\r\n<!-- /agent-ha-bridge -->\r\n");
 
         // The Codex plugin install-codex.ps1 registers, in its native form.
         var codex = new JsonObject();
@@ -112,7 +118,7 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
         }
         Write(CodexHooks, Json(new JsonObject { ["description"] = "Copilot Home Assistant bridge", ["hooks"] = codex }));
         Write(CodexScript, "# codex hook\r\n");
-        Write(Path.Combine(CodexHome, "AGENTS.md"), $"<!-- agent-ha-bridge-owner:{Id} -->\r\nguidance\r\n<!-- /agent-ha-bridge -->\r\n");
+        Write(Path.Combine(CodexHome, "AGENTS.md"), $"<!-- agent-ha-bridge-owner:{InstallationId} -->\r\nguidance\r\n<!-- /agent-ha-bridge -->\r\n");
         Write(Path.Combine(CodexHome, "config.toml"), "model = \"gpt-5\"\r\n\r\n[hooks.state]\r\n\"agent-ha-bridge\" = \"trusted\"\r\n");
 
         Write(HookSource, "MZ the product's hook");
@@ -206,7 +212,7 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
 {
     public Dictionary<string, (bool Enabled, bool Running)> Tasks { get; } = new()
     {
-        [$"AgentBridgeDaemon_{FakeAgentHaBridge.Id}"] = (true, true),
+        [$"AgentBridgeDaemon_{fake.InstallationId}"] = (true, true),
     };
     public bool DaemonRunning { get; set; } = true;
     // A daemon that does not stop when it is told to.
@@ -247,7 +253,7 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
     // The probe cannot tell (the listing and the scheduler both refused it).
     public bool Unknown { get; set; }
 
-    public string? Active() => DaemonRunning ? "agent-ha-bridge is running for this user (AgentBridgeDaemon_" + FakeAgentHaBridge.Id + ")"
+    public string? Active() => DaemonRunning ? "agent-ha-bridge is running for this user (AgentBridgeDaemon_" + fake.InstallationId + ")"
         : Unknown ? "whether agent-ha-bridge is running for this user could not be checked; answer at the machine" : null;
 
     public bool Seen() => DaemonRunning;

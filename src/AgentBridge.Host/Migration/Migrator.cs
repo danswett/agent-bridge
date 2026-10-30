@@ -16,7 +16,9 @@ public sealed class MigrationOptions
 
     // Where the hook every migrated agent runs is installed, with its pointer: a folder of the
     // product's own (%LOCALAPPDATA%\AgentBridge\bin), so an app update replacing the app's folder
-    // never leaves an agent's hook command pointing at nothing.
+    // never leaves an agent's hook command pointing at nothing. Each installation's in a folder of
+    // its own (HookPath): a rollback keeps the hook and pointer a session started while migrated
+    // still runs, and a later migration of another installation must not point it elsewhere.
     public required string HookFolder { get; init; }
 
     // The hook program as the app ships it, beside the host.
@@ -34,8 +36,8 @@ public sealed class MigrationOptions
     // the first's imported settings and disabled tasks as the state to restore.
     public string LockPath => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(ProfileFolder))!, "migration.lock");
 
-    public string HookPath => Path.Combine(HookFolder, OperatingSystem.IsWindows() ? "agent-bridge-host-hook.exe" : "agent-bridge-host-hook");
-    public string PointerPath => Path.Combine(HookFolder, HookRunner.PointerFile);
+    public string HookPath(string installation) => Path.Combine(HookFolder, installation, OperatingSystem.IsWindows() ? "agent-bridge-host-hook.exe" : "agent-bridge-host-hook");
+    public string PointerPath(string installation) => Path.Combine(HookFolder, installation, HookRunner.PointerFile);
 }
 
 public sealed record MigrationReport(bool Ok, IReadOnlyList<string> Lines)
@@ -138,7 +140,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         {
             Say(other.Installation == install.Id
                 ? $"Refused: profile {Path.GetFileName(other.Folder)} already takes installation {install.Id}'s hook spool ({Path.Combine(other.Folder, IntakeState.FileName)}); roll that profile back first."
-                : $"Refused: profile {Path.GetFileName(other.Folder)} has migrated agent-ha-bridge installation {other.Installation}, and the hook this product installs ({options.PointerPath}) serves one installation at a time; roll that profile back first.");
+                : $"Refused: profile {Path.GetFileName(other.Folder)} has migrated agent-ha-bridge installation {other.Installation}, and this host takes one installation's hooks at a time; roll that profile back first.");
             return new(false, lines);
         }
         if (install.PublicationProblem() is { } publication) { Say("Refused: " + publication); return new(false, lines); }
@@ -149,7 +151,8 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             return new(false, lines);
         }
 
-        var plans = new[] { Registrations.Copilot(install, options.HookPath), Registrations.Claude(install, options.HookPath), Registrations.Codex(install, options.HookPath) };
+        var hookPath = options.HookPath(install.Id);
+        var plans = new[] { Registrations.Copilot(install, hookPath), Registrations.Claude(install, hookPath), Registrations.Codex(install, hookPath) };
         if (plans.FirstOrDefault(p => p.Refusal is not null) is { } blocked) { Say("Refused: " + blocked.Refusal + "."); return new(false, lines); }
         if (StillRunningPowerShell(install, plans) is { } running) { Say("Refused: " + running); return new(false, lines); }
         // Rewriting a hard-linked file either leaves its other names behind (a rename) or risks
@@ -275,7 +278,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         say(tasks.Count == 0
             ? $"* Daemon: stop it. There is no {install.TaskName} task, so nothing starts it at logon here."
             : $"* Daemon: stop it and disable {string.Join(" and ", tasks)}; the tasks are kept for a rollback.");
-        say($"* Hook: install {options.HookPath}, pointing at {install.RuntimeRoot}.");
+        say($"* Hook: install {options.HookPath(install.Id)}, pointing at {install.RuntimeRoot}.");
         say($"* Agent homes: the host reads sessions where agent-ha-bridge's hooks were registered (Copilot {install.CopilotHome}, Claude {install.ClaudeHome}, Codex {install.CodexHome}), unless started with --copilot-home, --claude-home or --codex-home.");
         foreach (var plan in plans)
         {
@@ -299,24 +302,56 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
     // The hook beside the host, copied to the product's own folder with a pointer to the runtime.
     MigrationRecord.HookRecord InstallHook(AgentHaBridgeInstall install)
     {
-        Directory.CreateDirectory(options.HookFolder);
-        var created = !File.Exists(options.HookPath);
-        if (created || MigrationRecord.Hash(options.HookPath) != MigrationRecord.Hash(options.HookSource)) { CopyHook(options.HookSource, options.HookPath); }
-        var pointerCreated = !File.Exists(options.PointerPath);
-        DurableFile.Write(options.PointerPath, HookRunner.Pointer(install.RuntimeRoot));
-        var (exit, version) = hook.Run(options.HookPath, ["--version"], "");
-        if (exit != 0 || string.IsNullOrWhiteSpace(version)) { throw new IOException($"the hook at {options.HookPath} did not run (blocked by antivirus?)"); }
-        return new(options.HookPath, options.PointerPath, created, pointerCreated);
+        var hookPath = options.HookPath(install.Id);
+        var pointerPath = options.PointerPath(install.Id);
+        Directory.CreateDirectory(Path.GetDirectoryName(hookPath)!);
+        RecoverHook(hookPath);
+        var created = !File.Exists(hookPath);
+        if (created || MigrationRecord.Hash(hookPath) != MigrationRecord.Hash(options.HookSource)) { CopyHook(options.HookSource, hookPath); }
+        var pointerCreated = !File.Exists(pointerPath);
+        DurableFile.Write(pointerPath, HookRunner.Pointer(install.RuntimeRoot));
+        var (exit, version) = hook.Run(hookPath, ["--version"], "");
+        if (exit != 0 || string.IsNullOrWhiteSpace(version)) { throw new IOException($"the hook at {hookPath} did not run (blocked by antivirus?)"); }
+        return new(hookPath, pointerPath, created, pointerCreated);
     }
 
     static void CopyHook(string source, string destination)
     {
         var staged = destination + ".new";
+        var previous = destination + ".old";
         File.Copy(source, staged, overwrite: true);
         // A running hook can be renamed but not replaced; one still running finishes on the old.
-        if (File.Exists(destination)) { File.Move(destination, destination + ".old", overwrite: true); }
-        File.Move(staged, destination);
-        try { File.Delete(destination + ".old"); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        var moved = false;
+        if (File.Exists(destination)) { File.Move(destination, previous, overwrite: true); moved = true; }
+        try
+        {
+            BeforeHookSwap.Value?.Invoke(staged);
+            File.Move(staged, destination);
+        }
+        catch (Exception e) when (moved && e is IOException or UnauthorizedAccessException)
+        {
+            // Every migrated registration runs this path: never left pointing at nothing.
+            try { File.Move(previous, destination); }
+            catch (Exception put) when (put is IOException or UnauthorizedAccessException)
+            {
+                throw new IOException($"{e.Message}; and the previous hook could not be put back ({put.Message}), so it is {previous}", e);
+            }
+            throw;
+        }
+        try { File.Delete(previous); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
+    internal static readonly AsyncLocal<Action<string>?> BeforeHookSwap = new();
+
+    // A replacement cut short (a crash between moving the hook aside and the new one into place)
+    // leaves only the previous one, beside where every registration looks: put back. False when
+    // there was nothing to put back.
+    static bool RecoverHook(string destination)
+    {
+        var previous = destination + ".old";
+        if (File.Exists(destination) || !File.Exists(previous)) { return false; }
+        File.Move(previous, destination);
+        return true;
     }
 
     // The hook migrated agents run is a copy of the program beside the host, in a folder of its
@@ -333,8 +368,18 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
         using (held)
         {
-            if (MigrationRecord.Load(profileFolder).Record is not { State: "migrated", Hook: { } hook } || !File.Exists(hookSource)) { return null; }
-            if (File.Exists(hook.Path) && MigrationRecord.Hash(hook.Path) == MigrationRecord.Hash(hookSource)) { return null; }
+            if (MigrationRecord.Load(profileFolder).Record is not { State: "migrated", Hook: { } hook }) { return null; }
+            string? recovered = null;
+            try
+            {
+                if (RecoverHook(hook.Path)) { recovered = $"put back the hook migrated agents run ({hook.Path}), whose replacement had been cut short"; }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return $"the hook migrated agents run ({hook.Path}) is missing, and its previous version could not be put back ({e.Message}); migrated agents give no events until it is";
+            }
+            if (!File.Exists(hookSource)) { return recovered; }
+            if (File.Exists(hook.Path) && MigrationRecord.Hash(hook.Path) == MigrationRecord.Hash(hookSource)) { return recovered; }
             try
             {
                 CopyHook(hookSource, hook.Path);
@@ -363,7 +408,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         // An agent_stop that names no session: Copilot's are only passed on to subscribers, so the
         // check records nothing anywhere.
         var ran = _time.GetUtcNow().AddMilliseconds(-50);
-        var (exit, reply) = hook.Run(options.HookPath, ["copilot", "agent_stop"], "{\"agentBridgeMigrationCheck\":true}");
+        var (exit, reply) = hook.Run(options.HookPath(install.Id), ["copilot", "agent_stop"], "{\"agentBridgeMigrationCheck\":true}");
         if (exit != 0 || reply != "{}\n") { return $"the installed hook replied {reply.Trim()} (exit {exit}) instead of Copilot's fixed reply"; }
         // The fixed reply is also what a hook gives when it could not spool, so the reply proves
         // nothing: the hook's own log line says where this run went.
@@ -501,7 +546,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
                 {
                     // A hook still running this host's program after the revert is one the person
                     // changed past recognition: it is reported, and the snapshot kept for it.
-                    var hookProgram = record.Hook?.Path ?? options.HookPath;
+                    var hookProgram = record.Hook?.Path ?? options.HookPath(record.InstallationId);
                     if (Registrations.Names(Utf8(reverted), hookProgram))
                     {
                         ok = false;

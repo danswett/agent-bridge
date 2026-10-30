@@ -208,7 +208,7 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.True(report.Ok, report.ToString());
         var hook = _f.InstalledHook;
         Assert.Equal(File.ReadAllBytes(_f.HookSource), File.ReadAllBytes(hook));
-        Assert.Equal(_f.Runtime, HookRunner.RuntimeRoot(_f.HookFolder).Root);
+        Assert.Equal(_f.Runtime, HookRunner.RuntimeRoot(_f.InstallationHooks).Root);
 
         // Copilot: each of its entries runs the host's hook with no shell; the person's stays.
         var copilot = FakeAgentHaBridge.Read(_f.CopilotHooks)["hooks"]!;
@@ -836,18 +836,85 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.NotNull(MigrationRecord.Load(_f.Profile).Record);
     }
 
+    [Theory]
+    [InlineData(" Claude ", "claude", false)]
+    [InlineData("gemini", "auto", true)]
+    public async Task A_launcher_is_carried_as_agent_ha_bridge_read_it(string written, string carried, bool noted)
+    {
+        var config = FakeAgentHaBridge.DefaultConfig();
+        config["newSession"]!["launcher"] = written;
+        await using var f = new FakeAgentHaBridge(config);
+
+        var report = await f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        var settings = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(f.Profile, HostSettings.FileName)))!;
+        Assert.Equal(carried, (string?)settings["launch"]!["defaultAgent"]);
+        Assert.Equal(noted, report.ToString().Contains("is not a launcher it knows", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Migrating_another_installation_after_a_rollback_leaves_the_first_s_hook_pointing_at_its_own_runtime()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        // A session started while migrated still runs this hook.
+        Assert.Equal(_f.Runtime, HookRunner.RuntimeRoot(_f.InstallationHooks).Root);
+        await using var other = new FakeAgentHaBridge(installationId: "fedcba9876543210fedcba9876543210");
+
+        Assert.True((await other.Migrator(hookFolder: _f.HookFolder).MigrateAsync(dryRun: false)).Ok);
+
+        Assert.Equal(_f.Runtime, HookRunner.RuntimeRoot(_f.InstallationHooks).Root);
+        Assert.Equal(other.Runtime, HookRunner.RuntimeRoot(Path.Combine(_f.HookFolder, other.InstallationId)).Root);
+    }
+
+    [Fact]
+    public async Task A_hook_update_that_cannot_be_put_in_place_leaves_the_previous_hook_where_agents_run_it()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var previous = File.ReadAllText(_f.InstalledHook);
+        File.WriteAllText(_f.HookSource, "MZ the next version's hook");
+        FileStream? held = null;
+        Migrator.BeforeHookSwap.Value = staged => held = new FileStream(staged, FileMode.Open, FileAccess.Read, FileShare.None);
+        try
+        {
+            Assert.Contains("could not bring", Migrator.RefreshHook(_f.Profile, _f.HookSource));
+        }
+        finally
+        {
+            Migrator.BeforeHookSwap.Value = null;
+            held?.Dispose();
+        }
+
+        Assert.Equal(previous, File.ReadAllText(_f.InstalledHook));
+    }
+
+    [Fact]
+    public async Task A_hook_replacement_cut_short_is_put_back_when_the_host_starts()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var previous = File.ReadAllText(_f.InstalledHook);
+        // Moved aside, and the new one never moved in; the app is mid-update, so no source either.
+        File.Move(_f.InstalledHook, _f.InstalledHook + ".old");
+        File.Delete(_f.HookSource);
+
+        Assert.Contains("put back", Migrator.RefreshHook(_f.Profile, _f.HookSource));
+
+        Assert.Equal(previous, File.ReadAllText(_f.InstalledHook));
+    }
+
     [Fact]
     public async Task An_app_update_s_new_hook_reaches_the_copy_migrated_agents_run_when_the_host_starts()
     {
         Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
-        var pointer = File.ReadAllBytes(Path.Combine(_f.HookFolder, HookRunner.PointerFile));
+        var pointer = File.ReadAllBytes(Path.Combine(_f.InstallationHooks, HookRunner.PointerFile));
         Assert.Null(Migrator.RefreshHook(_f.Profile, _f.HookSource));
         File.WriteAllText(_f.HookSource, "MZ the next version's hook");
 
         Assert.NotNull(Migrator.RefreshHook(_f.Profile, _f.HookSource));
 
         Assert.Equal("MZ the next version's hook", File.ReadAllText(_f.InstalledHook));
-        Assert.Equal(pointer, File.ReadAllBytes(Path.Combine(_f.HookFolder, HookRunner.PointerFile)));
+        Assert.Equal(pointer, File.ReadAllBytes(Path.Combine(_f.InstallationHooks, HookRunner.PointerFile)));
         // Not while a migrate or rollback runs, nor once rolled back.
         File.WriteAllText(_f.HookSource, "MZ another");
         using (new FileStream(Path.Combine(Path.GetDirectoryName(_f.Profile)!, "migration.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))

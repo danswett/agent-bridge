@@ -9,6 +9,7 @@ public sealed class DurableFileTests : IDisposable
     {
         DurableFile.BeforeCommit.Value = null;
         DurableFile.AfterReplace.Value = null;
+        DurableFile.AfterCheck.Value = null;
         _held?.Dispose();
         try { Directory.Delete(_root, true); } catch (IOException) { }
     }
@@ -77,6 +78,22 @@ public sealed class DurableFileTests : IDisposable
 
         Assert.Equal("theirs", File.ReadAllText(path));
         Assert.Equal(["settings.json"], Directory.GetFiles(_root).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public void A_file_deleted_after_the_check_stays_deleted_and_the_write_is_refused()
+    {
+        var path = File_("planned");
+        DurableFile.AfterCheck.Value = File.Delete;
+        Assert.Throws<DurableFile.ChangedMeanwhileException>(() => DurableFile.Replace(path, "ours"u8.ToArray(), Hash("planned")));
+        Assert.Empty(Directory.GetFiles(_root));
+
+        // Or later, as it is about to be replaced.
+        path = File_("planned");
+        DurableFile.AfterCheck.Value = null;
+        DurableFile.BeforeCommit.Value = File.Delete;
+        Assert.Throws<DurableFile.ChangedMeanwhileException>(() => DurableFile.Replace(path, "ours"u8.ToArray(), Hash("planned")));
+        Assert.Empty(Directory.GetFiles(_root));
     }
 
     [Fact]
