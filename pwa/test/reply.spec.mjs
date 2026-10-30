@@ -16,6 +16,10 @@ const later = () => new Date(Date.now() + 1000).toISOString();
 const log = (page) => page.evaluate(() => window.agentBridgeDemo.host.replyLog);
 const typed = (page) => page.evaluate(() => window.agentBridgeDemo.host.typedReplies);
 const script = (page, ...outcomes) => page.evaluate((o) => window.agentBridgeDemo.scriptReplies(...o), outcomes);
+// Keeps the host's responses back while a test looks at a reply on its way: the answer delay
+// alone was shorter than a busy CI runner's WebKit took to check it.
+const hold = (page) => page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+const release = (page) => page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
 
 async function openDemo(page, query = '') {
   await page.addInitScript(() => {
@@ -43,10 +47,12 @@ test.describe('on a phone', () => {
     await input.fill('Looks good.\nNow open the PR – please 🚀');
     // Several lines are allowed in the box, and it says how they arrive.
     await expect(reply.locator('.reply-hint')).toHaveText('Line breaks are sent as spaces: the session gets your reply as one line.');
+    await hold(page);
     await reply.getByRole('button', { name: 'Send' }).tap();
     await expect(reply.locator('.reply-status')).toHaveText('Sending…');
     await expect(reply).toHaveAttribute('aria-busy', 'true');
     await expect(reply.getByRole('button', { name: 'Send' })).toBeDisabled();
+    await release(page);
 
     await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.');
     await expect(reply).toHaveAttribute('data-reply', 'delivered');
@@ -59,14 +65,17 @@ test.describe('on a phone', () => {
   });
 
   test('words typed while a reply is on its way stay in the box once it is delivered', async ({ page }) => {
-    await openDemo(page, '&answerDelay=1500');
+    await openDemo(page);
     const reply = box(page, IDLE);
     const input = reply.getByRole('textbox', { name: 'Reply' });
     await input.fill('first');
+    await hold(page);
     await reply.getByRole('button', { name: 'Send' }).tap();
     await expect(reply.locator('.reply-status')).toHaveText(/^Sending…/);
-    await input.press('End');
+    // The caret to the end by hand: WebKit on Windows emptied the box on End.
+    await input.evaluate((el) => el.setSelectionRange(el.value.length, el.value.length));
     await input.pressSequentially(' and then');
+    await release(page);
     await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.');
     await expect(input).toHaveValue('and then');
     expect((await log(page)).map((r) => r.text)).toEqual(['first']);

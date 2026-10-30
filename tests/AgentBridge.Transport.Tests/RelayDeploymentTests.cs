@@ -119,12 +119,16 @@ public class RelayDeploymentTests
     public async Task Relay_metrics_carry_only_allowlisted_low_cardinality_tags()
     {
         var seen = new List<(string Instrument, string Tag)>();
+        // Other tests run relays in this process at the same time, on meters of the same name:
+        // only this relay's measurements count.
+        object? scope = null;
         using var listener = new MeterListener();
         listener.InstrumentPublished = (i, l) => { if (i.Meter.Name == RelayMetrics.MeterName) { l.EnableMeasurementEvents(i); } };
-        listener.SetMeasurementEventCallback<long>((i, _, tags, _) => { lock (seen) { foreach (var t in tags) { seen.Add((i.Name, t.Key)); } } });
-        listener.SetMeasurementEventCallback<int>((i, _, tags, _) => { lock (seen) { foreach (var t in tags) { seen.Add((i.Name, t.Key)); } } });
+        listener.SetMeasurementEventCallback<long>((i, _, tags, _) => { if (i.Meter.Scope == Volatile.Read(ref scope)) { lock (seen) { foreach (var t in tags) { seen.Add((i.Name, t.Key)); } } } });
+        listener.SetMeasurementEventCallback<int>((i, _, tags, _) => { if (i.Meter.Scope == Volatile.Read(ref scope)) { lock (seen) { foreach (var t in tags) { seen.Add((i.Name, t.Key)); } } } });
         listener.Start();
         await using var relay = await TestRelay.StartAsync(o => o.Blobs.Backend = "local");
+        Volatile.Write(ref scope, relay.App.Services.GetRequiredService<IMeterFactory>());
         await relay.SignInAsync(new GitHubUser(1, "octo"));
         var token = relay.TokenFor(1, "octo");
         var host = await relay.ConnectAsync(token, "host-a", "host");
@@ -145,6 +149,35 @@ public class RelayDeploymentTests
             Assert.Contains(seen, s => s.Instrument == "relay.refusals");
             Assert.Contains(seen, s => s.Instrument == "relay.blobs");
             Assert.All(seen, s => Assert.Contains(s.Tag, RelayMetrics.AllowedTags));
+        }
+    }
+
+    [Fact]
+    public async Task Relay_metrics_can_be_collected_while_a_relay_shuts_down()
+    {
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (i, l) => { if (i.Meter.Name == RelayMetrics.MeterName) { l.EnableMeasurementEvents(i); } };
+        listener.SetMeasurementEventCallback<int>((_, _, _, _) => { });
+        listener.Start();
+        using var stop = new CancellationTokenSource();
+        // An exporter collecting on its own schedule, as one does in production.
+        var collecting = Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested) { listener.RecordObservableInstruments(); Thread.Yield(); }
+        });
+
+        try
+        {
+            for (var i = 0; i < 10 && !collecting.IsCompleted; i++)
+            {
+                await using var relay = await TestRelay.StartAsync();
+                await relay.ConnectAsync(relay.TokenFor(1, "octo"), "host-a", "host");
+            }
+        }
+        finally
+        {
+            stop.Cancel();
+            await collecting;
         }
     }
 }

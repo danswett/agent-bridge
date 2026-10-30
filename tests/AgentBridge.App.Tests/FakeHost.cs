@@ -94,10 +94,12 @@ sealed class FakeHost : IAsyncDisposable
         try { Directory.Delete(folder, recursive: true); } catch (IOException) { }
     }
 
-    public HostConnection Connect(IUiDispatcher? ui = null)
+    // Started at once, unless the test has handlers to attach first: the app constructs its
+    // view models before it starts the connection, so none of them misses the first snapshot.
+    public HostConnection Connect(IUiDispatcher? ui = null, bool start = true)
     {
         var c = new HostConnection(ct => LocalClient.ConnectAsync(Endpoint, TimeSpan.FromSeconds(1), ct), ui ?? new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
-        c.Start();
+        if (start) { c.Start(); }
         return c;
     }
 }

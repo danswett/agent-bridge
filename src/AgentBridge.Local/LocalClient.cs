@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Net.Sockets;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using AgentBridge.Protocol;
 
@@ -18,7 +19,17 @@ public static class LocalClient
     // event, before any response, and gets LocalRefusedException.
     public static async Task<LocalChannel> ConnectAsync(LocalEndpoint endpoint, TimeSpan? timeout = null, CancellationToken ct = default)
     {
-        var wait = timeout ?? TimeSpan.FromSeconds(2);
+        var stream = await ConnectStreamAsync(endpoint, timeout ?? TimeSpan.FromSeconds(2), ct);
+        var channel = new LocalChannel(stream, "host", "host", "host", null, ProtocolJson.Options);
+        channel.Start();
+        return channel;
+    }
+
+    // The connection alone, with nothing reading it. Tests that speak frames by hand need it:
+    // a channel's reader disposes the stream as soon as the host hangs up, which raced their
+    // own writes to the host.
+    internal static async Task<Stream> ConnectStreamAsync(LocalEndpoint endpoint, TimeSpan wait, CancellationToken ct = default)
+    {
         Stream stream;
         if (OperatingSystem.IsWindows())
         {
@@ -29,9 +40,7 @@ public static class LocalClient
             var pipe = new NamedPipeClientStream(".", endpoint.Address, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             try
             {
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cts.CancelAfter(wait);
-                await pipe.ConnectAsync(cts.Token);
+                await ConnectPipeAsync(pipe, wait, ct);
             }
             catch (Exception e) when (e is OperationCanceledException or TimeoutException or IOException && !ct.IsCancellationRequested)
             {
@@ -56,9 +65,35 @@ public static class LocalClient
             }
             stream = new NetworkStream(socket, ownsSocket: true);
         }
-        var channel = new LocalChannel(stream, "host", "host", "host", null, ProtocolJson.Options);
-        channel.Start();
-        return channel;
+        return stream;
+    }
+
+    // How often a client waiting for the host's pipe looks for it again.
+    static readonly TimeSpan PipePoll = TimeSpan.FromMilliseconds(25);
+
+    // NamedPipeClientStream.ConnectAsync is Connect on a thread-pool thread, and while no host
+    // is listening Connect spins there for the whole wait. The app looks again every couple of
+    // seconds while its host is down, and its tests run many such waits at once: on a CI
+    // runner they held every pool thread, and everything else waited seconds for one (a 100 ms
+    // retry ran after 4 s, a running host's pipe was given up on after 300 ms, App.Tests timed
+    // out). So each attempt is Connect(0), which returns at once when there is no pipe, and
+    // the wait between attempts holds no thread. Throws TimeoutException once wait has passed.
+    [SupportedOSPlatform("windows")]
+    static async Task ConnectPipeAsync(NamedPipeClientStream pipe, TimeSpan wait, CancellationToken ct)
+    {
+        // Infinite (-1 ms) waits for the host or cancellation, as CancelAfter did.
+        var deadline = wait == Timeout.InfiniteTimeSpan ? long.MaxValue : Environment.TickCount64 + (long)wait.TotalMilliseconds;
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                pipe.Connect(0);
+                return;
+            }
+            catch (TimeoutException) when (Environment.TickCount64 < deadline) { }
+            await Task.Delay(PipePoll, ct);
+        }
     }
 
     // Sends a request and returns its result, or throws HostError with the host's reason.

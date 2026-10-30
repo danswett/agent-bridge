@@ -23,13 +23,19 @@ public static class RelayApp
         configure?.Invoke(options);
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<Tokens>();
-        builder.Services.AddSingleton<RelayHub>();
+        // The connections gauge reads this app's hub, never the service provider: a collection
+        // can run while the provider is being disposed (an exporter at shutdown, or a listener
+        // on another app's meter in the same process), and resolving then threw
+        // ObjectDisposedException out of MeterListener.RecordObservableInstruments. Until the hub
+        // exists, no socket has been admitted.
+        RelayHub? theHub = null;
+        builder.Services.AddSingleton(sp => theHub = ActivatorUtilities.CreateInstance<RelayHub>(sp));
         builder.Services.AddSingleton<PushGateway>();
         // The backend is made once, here, so a misconfigured store fails at start, not at the
         // first upload.
         var blobBackend = BlobService.CreateBackend(options.Blobs);
         builder.Services.AddSingleton(sp => new BlobService(options, sp.GetRequiredService<RelayMetrics>(), sp.GetRequiredService<ILogger<BlobService>>(), blobBackend));
-        builder.Services.AddSingleton(sp => new RelayMetrics(sp.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(), () => sp.GetRequiredService<RelayHub>().Online));
+        builder.Services.AddSingleton(sp => new RelayMetrics(sp.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(), () => Volatile.Read(ref theHub)?.Online ?? 0));
         // The slim builder's console logger stays on the simple formatter whatever the configuration
         // says, so a deployment that asks for JSON lines (infra/ does) got plain text, silently.
         if (string.Equals(builder.Configuration["Logging:Console:FormatterName"], ConsoleFormatterNames.Json, StringComparison.OrdinalIgnoreCase))

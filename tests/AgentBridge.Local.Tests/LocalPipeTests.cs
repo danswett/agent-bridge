@@ -185,11 +185,15 @@ public sealed class LocalPipeTests : IAsyncDisposable
         Assert.False(atHost.IsOpen);
     }
 
-    // A client that speaks frames by hand, through the real client's connection.
+    // A client that speaks frames by hand, over the real client's connection. Not a started
+    // channel's stream: its reader disposed the stream when the host hung up on a bad frame,
+    // sometimes before the test's flush of that frame had returned, which then threw
+    // ObjectDisposedException.
     async Task<Stream> RawAsync()
     {
-        var ch = await ConnectAsync();
-        return (Stream)typeof(LocalChannel).GetField("stream", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(ch)!;
+        var stream = await LocalClient.ConnectStreamAsync(Endpoint, Patience);
+        owned.Add(stream);
+        return stream;
     }
 
     [Fact]
@@ -204,6 +208,22 @@ public sealed class LocalPipeTests : IAsyncDisposable
     public async Task Connecting_where_no_host_listens_says_the_host_is_not_running()
     {
         await Assert.ThrowsAsync<HostNotRunningException>(() => LocalClient.ConnectAsync(Endpoint, TimeSpan.FromMilliseconds(300)));
+    }
+
+    [Fact]
+    public async Task A_client_told_to_wait_without_limit_connects_to_a_host_that_starts_later()
+    {
+        // A pipe client waits for its pipe; a Unix socket client finds no socket and is told at once.
+        if (!OperatingSystem.IsWindows()) { return; }
+        using var cts = new CancellationTokenSource(Patience);
+        var connecting = LocalClient.ConnectAsync(Endpoint, Timeout.InfiniteTimeSpan, cts.Token);
+        await Task.Delay(200);
+        Assert.False(connecting.IsCompleted);
+
+        Serve(Echo);
+        var ch = await connecting;
+        owned.Add(ch);
+        Assert.True(ch.IsOpen);
     }
 
     [Fact]
@@ -283,9 +303,16 @@ public sealed class LocalPipeTests : IAsyncDisposable
             gone.WaitForExit();
             id = gone.Id;
         }
+        // Having exited is not yet having left the process table, which is what ProcessChain
+        // reads: a CI runner's snapshot still listed the cmd.exe just waited for, under this
+        // testhost, though it could no longer be opened. Gone is when the table says so.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (Listed(id) && DateTime.UtcNow < deadline) { Thread.Sleep(20); }
 
         Assert.Empty(ProcessChain.Of(id));
     }
+
+    static bool Listed(int id) => System.Diagnostics.Process.GetProcesses().Count(p => { using (p) { return p.Id == id; } }) > 0;
 }
 
 public sealed class PeerPolicyTests

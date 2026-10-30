@@ -11,12 +11,16 @@ public sealed class ConnectionTests : IAsyncLifetime
 {
     readonly FakeHost host = new();
     HostConnection connection = null!;
+    // Snapshots read in full (sessions.synced), counted from the first connection.
+    int syncs;
 
     public Task InitializeAsync()
     {
         host.Sessions.Add(Make.Session("s1", response: "hello"));
         host.Start();
-        connection = host.Connect();
+        connection = host.Connect(start: false);
+        connection.Sessions.Synced += () => Interlocked.Increment(ref syncs);
+        connection.Start();
         return Task.CompletedTask;
     }
 
@@ -117,15 +121,18 @@ public sealed class ConnectionTests : IAsyncLifetime
     [Fact]
     public async Task After_the_host_restarts_the_app_reconnects_and_drops_sessions_that_ended_meanwhile()
     {
-        await Wait.UntilAsync(() => connection.Sessions.Get("s1") is not null, "the snapshot");
+        await Wait.UntilAsync(() => Volatile.Read(ref syncs) > 0 && connection.Sessions.Get("s1") is not null, "the snapshot");
 
         await host.StopAsync();
         await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the connection to drop");
         host.Sessions.Clear();
         host.Sessions.Add(Make.Session("s3"));
+        var before = Volatile.Read(ref syncs);
         host.Start();
 
-        await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Get("s3") is not null, "the new snapshot");
+        // Read in full: s3 arrives before sessions.synced, and only that drops s1. Waiting for
+        // s3 alone let the check run in between.
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected && Volatile.Read(ref syncs) > before && connection.Sessions.Get("s3") is not null, "the new snapshot");
         Assert.Null(connection.Sessions.Get("s1"));
     }
 

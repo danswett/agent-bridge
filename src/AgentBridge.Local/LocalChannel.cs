@@ -88,7 +88,14 @@ public sealed class LocalChannel : IProtocolChannel, IAsyncDisposable
     byte[] Serialize(object message) => JsonSerializer.SerializeToUtf8Bytes(message, json);
 
     // Tests: as if events had been dropped on the way, so the next one arrives after a gap.
-    internal void SkipEventSeq(long count) => Interlocked.Add(ref lastEventSeq, count);
+    // Under the send lock: an event being sent meanwhile stored its own seq when done and wrote
+    // over a skip made in between, so the gap a test made sometimes never happened.
+    internal void SkipEventSeq(long count)
+    {
+        sendLock.Wait();
+        try { lastEventSeq += count; }
+        finally { sendLock.Release(); }
+    }
 
     async Task SendAsync(byte[] plain, CancellationToken ct)
     {

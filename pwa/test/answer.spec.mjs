@@ -12,6 +12,10 @@ const card = (page, id) => page.locator(`.session[data-id="${id}"]`);
 const later = () => new Date(Date.now() + 1000).toISOString();
 const log = (page) => page.evaluate(() => window.agentBridgeDemo.host.answerLog);
 const typed = (page) => page.evaluate(() => window.agentBridgeDemo.host.typed);
+// Keeps the host's responses back while a test looks at an answer on its way: the answer
+// delay alone was shorter than a busy CI runner's WebKit took to check it.
+const hold = (page) => page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+const release = (page) => page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
 
 async function openDemo(page, query = '') {
   await page.addInitScript(() => {
@@ -55,12 +59,14 @@ test.describe('on a phone', () => {
     await expect(q.locator('.choice.recommended')).toHaveCount(1);
     await expect(q.locator('button.send')).toBeHidden();
 
+    await hold(page);
     await q.locator('.choice[data-value="sqlite"]').tap();
     // While it is on its way: progress, and nothing can be tapped again.
     await expect(q.locator('.answer-status')).toHaveText('Sending…');
     await expect(q.locator('.answer')).toHaveAttribute('aria-busy', 'true');
     await expect(q.locator('.choice[data-value="pg"]')).toBeDisabled();
     await expect(q.locator('.choice[data-value="sqlite"]')).toHaveAttribute('aria-pressed', 'true');
+    await release(page);
 
     // Delivered: the host's upsert takes the question away, and the card says what happened.
     await expect(q).toHaveCount(0);

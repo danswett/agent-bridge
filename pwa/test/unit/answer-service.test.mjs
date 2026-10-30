@@ -48,13 +48,17 @@ test('an answer is sent once with a fresh request, and its outcome is kept', asy
   assert.equal(conn.client.calls.length, 1);
 });
 
-test('a lost response is resent with the same request until an outcome arrives', async () => {
+test('a lost response is resent with the same request until an outcome arrives', async (t) => {
+  // The resend waits on a timer, mocked here: with a real 5 ms one, a CI runner that came
+  // back to this test more than 5 ms late found the resend already sending, not waiting.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const { conn, service, submit } = setup();
   submit();
   conn.client.last().reject(new HostError('session.answer', 'timed out'));
   await flush();
   assert.equal(service.get('h1', 's1', 'q1').state, 'waiting');
-  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(conn.client.calls.length, 1);
+  t.mock.timers.tick(5);
   assert.equal(conn.client.calls.length, 2);
   assert.equal(conn.client.calls[1].data.request, 'r1');
   conn.client.last().resolve({ outcome: 'delivered' });

@@ -29,7 +29,9 @@ The name is not a secret. What keeps others out:
   already holds the name, the host exits rather than share it.
 * The client connects with `PipeOptions.CurrentUserOnly`, which checks that the pipe's
   owner is the client's own token owner: another user's pipe fails, and so does a host at
-  a different elevation.
+  a different elevation. While no host is listening it looks for the pipe again every
+  25 ms until its timeout, holding no thread in between (`ConnectAsync` would spin on a
+  thread-pool thread for the whole wait).
 * For each connection the host reads the client's process (`GetNamedPipeClientProcessId`)
   and refuses it unless the process runs as the same user, at the same elevation as the
   host. A process it cannot identify is refused.
