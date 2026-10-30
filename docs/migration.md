@@ -41,9 +41,10 @@ second snapshot the first's changes as the state to restore; the second is refus
 1. **Preflight.** Refuses, before touching anything, when:
    * the profile is already migrated, or part-way through a migration;
    * the profile already has an `intake.json` with no migration record;
-   * another profile already takes this installation's spool, or is migrating it (two hosts
-     would handle every event twice; the intake also refuses to share a spool, see
-     `docs/host-hooks.md`);
+   * another profile is migrated, or part-way through a migration, from this installation or any
+     other. Two hosts would handle every event twice (the intake also refuses to share a spool,
+     see `docs/host-hooks.md`), and the hook this product installs has one `hook.json`, so a
+     second installation's migration would send the first's hooks into the second's spool;
    * `installation.json` is missing, is not schema 1 with a 32-hex id, belongs to another path,
      or is an isolated (test) installation;
    * agent-ha-bridge's `config.json` cannot be read, so its publication policy cannot be
@@ -108,8 +109,10 @@ are left on agent-ha-bridge's Go hook, which spools to the host just the same
 
 Into the profile's `config.json` (`docs/host-config.md`), each keeping its meaning. A setting
 the profile already has is kept, and the report says so. Workspaces are added to any already
-approved; one whose folder is already approved is skipped, and one whose label is taken by
-another folder is skipped and reported.
+approved; one whose folder is already approved (compared as the host reads it, with `~`, `.`
+and `..` resolved) is skipped, and one whose label the profile already gives another folder is
+skipped and reported. Two of agent-ha-bridge's sharing a label are both imported, and the host
+tells them apart by folder, as agent-ha-bridge did.
 
 | agent-ha-bridge | This host |
 |---|---|

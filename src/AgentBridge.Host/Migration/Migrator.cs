@@ -109,10 +109,14 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         }
         var (install, problem) = AgentHaBridgeInstall.Read(options.BridgeHome);
         if (install is null) { Say("Refused: " + problem); return new(false, lines); }
-        // One profile per installation: two hosts taking one spool would handle every event twice.
+        // One migrated profile at a time: two hosts taking one spool would handle every event
+        // twice, and the hook this product installs has one pointer (hook.json), so a second
+        // installation's migration would send the first's hooks into the second's spool.
         if (OtherProfileTaking(install) is { } other)
         {
-            Say($"Refused: profile {Path.GetFileName(other)} already takes installation {install.Id}'s hook spool ({Path.Combine(other, IntakeState.FileName)}); roll that profile back first.");
+            Say(other.Installation == install.Id
+                ? $"Refused: profile {Path.GetFileName(other.Folder)} already takes installation {install.Id}'s hook spool ({Path.Combine(other.Folder, IntakeState.FileName)}); roll that profile back first."
+                : $"Refused: profile {Path.GetFileName(other.Folder)} has migrated agent-ha-bridge installation {other.Installation}, and the hook this product installs ({options.PointerPath}) serves one installation at a time; roll that profile back first.");
             return new(false, lines);
         }
         if (install.PublicationProblem() is { } publication) { Say("Refused: " + publication); return new(false, lines); }
@@ -300,7 +304,9 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         foreach (var path in new[] { log, log + ".1" })
         {
             string[] lines;
-            try { lines = File.Exists(path) ? File.ReadAllLines(path) : []; }
+            // Sharing write and delete: a hook appending (or rotating the log) while this reads
+            // must never lose its line.
+            try { lines = File.Exists(path) ? HookStats.SharedLines(path) : []; }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
             foreach (var line in lines)
             {
@@ -523,21 +529,21 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
     static IEnumerable<string> Checked(AgentHaBridgeInstall install) =>
         new[] { install.ConfigPath, install.MetadataPath }.Concat(install.InstructionFiles);
 
-    // Another profile of this product (a sibling folder) whose intake.json, or migration record,
-    // names this installation.
-    string? OtherProfileTaking(AgentHaBridgeInstall install)
+    // Another profile of this product (a sibling folder) with an intake.json or a migration
+    // record, and the installation it names (this one's id when it takes this one's spool).
+    (string Folder, string Installation)? OtherProfileTaking(AgentHaBridgeInstall install)
     {
         var root = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(options.ProfileFolder));
         if (root is null || !Directory.Exists(root)) { return null; }
         foreach (var folder in Directory.EnumerateDirectories(root))
         {
             if (AgentHaBridgeInstall.SamePath(folder, options.ProfileFolder)) { continue; }
-            if (IntakeState.Load(folder).State is { } state
-                && (state.InstallationId == install.Id || AgentHaBridgeInstall.SamePath(state.RuntimeRoot, install.RuntimeRoot)))
+            if (IntakeState.Load(folder).State is { } state)
             {
-                return folder;
+                return (folder, AgentHaBridgeInstall.SamePath(state.RuntimeRoot, install.RuntimeRoot) ? install.Id : state.InstallationId);
             }
-            if (MigrationRecord.Load(folder).Record is { } record && record.InstallationId == install.Id) { return folder; }
+            if (MigrationRecord.Load(folder).Record is { } record) { return (folder, record.InstallationId); }
+            if (File.Exists(Path.Combine(folder, IntakeState.FileName))) { return (folder, "(unreadable intake.json)"); }
         }
         return null;
     }

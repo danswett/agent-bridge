@@ -219,17 +219,25 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
             JsonObject o => (Str(o["path"]), Str(o["label"])),
             _ => (null, null),
         };
-        static string Key(string p) => System.IO.Path.TrimEndingDirectorySeparator(p.Replace('/', System.IO.Path.DirectorySeparatorChar));
-        static string LabelOf(string? label, string path) => label ?? System.IO.Path.GetFileName(Key(path));
+        // The folder and label as LaunchConfig will read them (~, . and .. resolved), so an entry
+        // naming a folder this profile already approves, however written, is never added beside
+        // it with other settings.
+        static string Key(string p) => AgentBridge.Host.Delivery.Launch.Folders.Expand(p) ?? System.IO.Path.TrimEndingDirectorySeparator(p.Trim());
+        static string LabelOf(string? label, string path) =>
+            string.IsNullOrWhiteSpace(label) ? AgentBridge.Host.Delivery.Launch.Folders.DefaultLabel(Key(path)) : label.Trim();
+        var pathCase = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        // Only the profile's own labels are kept from agent-ha-bridge's; two of agent-ha-bridge's
+        // sharing one are both imported, and the host tells them apart by folder, as
+        // agent-ha-bridge's workspace selector did.
+        var own = target.Select(Read).ToList();
         var added = 0;
         foreach (var entry in list)
         {
             var (path, label) = Read(entry);
             if (path is null) { kept.Add("a workspace entry in newSession.workspaces has no path and was not imported"); continue; }
-            var existing = target.Select(Read).ToList();
-            if (existing.Any(e => e.Path is { } p && string.Equals(Key(p), Key(path), StringComparison.OrdinalIgnoreCase))) { continue; }
+            if (target.Select(Read).Any(e => e.Path is { } p && string.Equals(Key(p), Key(path), pathCase))) { continue; }
             var name = LabelOf(label, path);
-            if (existing.Any(e => e.Path is { } p && string.Equals(LabelOf(e.Label, p), name, StringComparison.OrdinalIgnoreCase)))
+            if (own.Any(e => e.Path is { } p && string.Equals(LabelOf(e.Label, p), name, StringComparison.OrdinalIgnoreCase)))
             {
                 kept.Add($"launch.workspaces: the label {name} is already this profile's, for another folder, so agent-ha-bridge's {path} was not imported");
                 continue;

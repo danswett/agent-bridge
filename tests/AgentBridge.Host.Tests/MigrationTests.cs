@@ -446,6 +446,50 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_profile_that_migrated_another_installation_is_rolled_back_before_this_one_migrates()
+    {
+        // The hook this product installs has one pointer, so it can serve one installation.
+        var other = Directory.CreateDirectory(Path.Combine(Root, "work")).FullName;
+        var elsewhere = FakeAgentHaBridge.Rooted("elsewhere", ".agent-ha-bridge");
+        File.WriteAllText(Path.Combine(other, IntakeState.FileName), new JsonObject
+        {
+            ["version"] = IntakeState.Version, ["runtimeRoot"] = Path.Combine(elsewhere, "runtime"), ["bridgeHome"] = elsewhere,
+            ["installationId"] = new string('b', 32), ["migratedAt"] = DateTimeOffset.UtcNow.ToString("o"),
+        }.ToJsonString());
+        var listing = _f.Listing();
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains($"profile work has migrated agent-ha-bridge installation {new string('b', 32)}", report.ToString());
+        Assert.Equal(listing, _f.Listing());
+        Assert.Empty(_f.Runtime_.Calls);
+    }
+
+    [Fact]
+    public async Task A_folder_the_profile_approves_is_not_approved_again_however_agent_ha_bridge_wrote_it_and_two_of_its_own_may_share_a_label()
+    {
+        var config = FakeAgentHaBridge.DefaultConfig();
+        var docs = FakeAgentHaBridge.Rooted("repos", "docs");
+        string[] apps = [FakeAgentHaBridge.Rooted("one", "app"), FakeAgentHaBridge.Rooted("two", "app")];
+        config["newSession"]!["workspaces"] = new JsonArray(Path.Combine(docs, "."), apps[0], apps[1]);
+        await using var f = new FakeAgentHaBridge(config);
+        Directory.CreateDirectory(f.Profile);
+        var hostConfig = Path.Combine(f.Profile, "config.json");
+        File.WriteAllText(hostConfig, new JsonObject
+        {
+            ["version"] = 1,
+            ["launch"] = new JsonObject { ["workspaces"] = new JsonArray(new JsonObject { ["path"] = docs, ["label"] = "documents", ["isolate"] = true }) },
+        }.ToJsonString());
+
+        Assert.True((await f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        var workspaces = JsonNode.Parse(Text(hostConfig))!["launch"]!["workspaces"]!.AsArray();
+        Assert.Equal([docs, apps[0], apps[1]], workspaces.Select(w => w is JsonObject o ? (string)o["path"]! : (string)w!));
+        Assert.True((bool)workspaces[0]!["isolate"]!);
+    }
+
+    [Fact]
     public async Task Rolling_back_with_nothing_migrated_says_so()
     {
         var report = await _f.Migrator().RollbackAsync(dryRun: false);
