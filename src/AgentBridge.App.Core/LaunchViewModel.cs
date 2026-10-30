@@ -101,6 +101,9 @@ public sealed class LaunchViewModel : Observable
             watchedFleet = f;
             f.LoopbackChanged += () => ui.Post(() => { WatchLoopback(); if (machine?.IsLocal == true) { Draw(); } Rediscover(); });
             f.AccountChanged += () => ui.Post(OnAccountChanged);
+            // The relay back for the same account changes no machine and, with no loopback made yet,
+            // no loopback either: only the link's own state says discovery can now be answered.
+            f.Changed += () => ui.Post(Rediscover);
         }
         var now = main.Fleet?.CurrentLoopback;
         if (now == watchedLoopback) { return; }
@@ -149,10 +152,10 @@ public sealed class LaunchViewModel : Observable
         Rediscover();
     }
 
-    // What discovery depends on: the account, whether the machine shown takes sessions from others
-    // now (for this one, its loopback's word), and the other machines there are.
+    // What discovery depends on: the account and the relay's state, whether the machine shown takes
+    // sessions from others now (for this one, its loopback's word), and the other machines there are.
     string SourcesKey(Machine m) =>
-        $"{main.Fleet?.Account}|{TakesTransfers(m)}|{string.Join(',', main.AllMachines.Where(x => !x.IsLocal && x != m).Select(x => x.Key).Order(StringComparer.Ordinal))}";
+        $"{main.Fleet?.Account}|{main.Fleet?.State}|{TakesTransfers(m)}|{string.Join(',', main.AllMachines.Where(x => !x.IsLocal && x != m).Select(x => x.Key).Order(StringComparer.Ordinal))}";
 
     // Asks again when that has changed since it last asked: a page opened while the relay was
     // still connecting, or this machine's loopback connecting after discovery stopped waiting,

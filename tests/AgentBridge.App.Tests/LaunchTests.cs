@@ -754,6 +754,25 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Sessions_to_bring_here_are_found_once_the_relay_is_back_for_the_same_account()
+    {
+        link.Sources.Add(Laptop());
+        link.Endpoints["host-id"] = localHost.Endpoint;
+        localHost.Capabilities.Add(TransferProtocol.Capability);
+        // Down for now, the same account: every machine stays as it was, and nothing is made.
+        link.Set(FleetState.Connecting, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.ShowForm, "this machine's choices");
+        await Task.Delay(300);
+        Assert.DoesNotContain(launch.Resumes, r => r.Value.StartsWith('@'));
+
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered once the relay is back");
+    }
+
+    [Fact]
     public async Task Another_account_forgets_the_last_ones_sessions_and_an_answer_from_before_it_is_dropped()
     {
         link.Sources.Add(Laptop());
