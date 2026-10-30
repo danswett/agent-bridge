@@ -8,7 +8,10 @@ namespace AgentBridge.Host.Shadow;
 // is the machine's local date. Kinds, hashed session ids, counts, enum values and times only.
 public sealed class ShadowDay
 {
-    public int Schema { get; set; } = 1;
+    // 2 adds Known and Coverage; a day begun by an earlier release has them only from the moment
+    // a release that writes them took over (Coverage.Since).
+    public int Schema { get; set; } = CurrentSchema;
+    public const int CurrentSchema = 2;
     public string Date { get; set; } = "";
     public string? TimeZone { get; set; }
     public int GraceSeconds { get; set; }
@@ -38,6 +41,10 @@ public sealed class ShadowDay
     public SortedDictionary<string, int> Overflow { get; set; } = new(StringComparer.Ordinal);
     // Disagreements that ended within the grace: timing skew between the two, by kind.
     public SortedDictionary<string, ShadowTransient> Transient { get; set; } = new(StringComparer.Ordinal);
+    // Differences with a known cause (ShadowDifference.Known), by kind and then cause: never
+    // mismatches, but counted, so a day's known differences are on the record.
+    public SortedDictionary<string, SortedDictionary<string, ShadowKnown>> Known { get; set; } = new(StringComparer.Ordinal);
+    public ShadowCoverage? Coverage { get; set; }
     public List<string> NotCompared { get; set; } = [.. ShadowKinds.NotCompared];
 
     public string Verdict => Compared == 0 ? "no data" : Mismatches.Count > 0 || Overflow.Count > 0 ? "mismatches" : "clean";
@@ -55,6 +62,12 @@ public sealed class ShadowEpisode
     // set; the next day's file carries the same episode on with the same First.
     public bool Open { get; set; }
     public List<string> Details { get; set; } = [];
+}
+
+public sealed class ShadowKnown
+{
+    public int Samples { get; set; }
+    public List<string> Sessions { get; set; } = [];
 }
 
 public sealed class ShadowTransient
@@ -96,7 +109,12 @@ public sealed class ShadowLedger
     readonly TimeSpan interval;
     readonly TimeProvider time;
     readonly Dictionary<(string Kind, string? Session), Episode> open = [];
+    readonly ShadowCoverageTracker coverage = new();
     ShadowDay? day;
+    // The last sample an earlier run wrote, and the processes' start times it last saw, read
+    // once when this run writes its first.
+    bool started;
+    DateTimeOffset? earlierSample;
 
     public ShadowLedger(string folder, TimeSpan grace, TimeSpan interval, TimeProvider time)
     {
@@ -126,8 +144,25 @@ public sealed class ShadowLedger
         var date = LocalDate(now, time.LocalTimeZone);
         if (day is null || day.Date != date)
         {
-            if (day is not null) { Save(day); }
+            var before = day;
+            if (before is not null) { Save(before); }
             day = Load(date);
+            if (!started)
+            {
+                started = true;
+                var latest = day.LastSample is not null ? day : Earlier(date);
+                earlierSample = latest?.LastSample;
+                before = latest;
+            }
+            // A restart is seen across midnight and across the comparison's own restart.
+            if (before?.Coverage is { } carried && day.Coverage is null)
+            {
+                day.Coverage = new ShadowCoverage { DaemonStartedAt = carried.DaemonStartedAt, HostStartedAt = carried.HostStartedAt };
+            }
+        }
+        if (comparison.Compared)
+        {
+            coverage.Record(day.Coverage ??= new ShadowCoverage(), comparison, daemon, host, now, earlierSample);
         }
         day.Samples++;
         if (comparison.Compared)
@@ -154,7 +189,11 @@ public sealed class ShadowLedger
         }
 
         var current = new Dictionary<(string, string?), ShadowDifference>();
-        foreach (var d in comparison.Differences) { current.TryAdd((d.Kind, d.Session), d); }
+        foreach (var d in comparison.Differences)
+        {
+            if (d.Known is { } why) { Known(d, why); }
+            else { current.TryAdd((d.Kind, d.Session), d); }
+        }
         foreach (var (key, episode) in open.ToList())
         {
             if (current.ContainsKey(key)) { continue; }
@@ -230,6 +269,33 @@ public sealed class ShadowLedger
         }
     }
 
+    void Known(ShadowDifference d, string why)
+    {
+        if (!day!.Known.TryGetValue(d.Kind, out var causes))
+        {
+            if (day.Known.Count >= MaxReasons) { return; }
+            day.Known[d.Kind] = causes = new(StringComparer.Ordinal);
+        }
+        if (!causes.TryGetValue(why, out var k))
+        {
+            if (causes.Count >= MaxReasons) { return; }
+            causes[why] = k = new ShadowKnown();
+        }
+        k.Samples++;
+        if (d.Session is { } s && k.Sessions.Count < MaxDetails * 25 && !k.Sessions.Contains(s)) { k.Sessions.Add(s); }
+    }
+
+    // The most recent earlier day's report, within a week.
+    ShadowDay? Earlier(string date)
+    {
+        var d = DateOnly.ParseExact(date, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        for (var i = 1; i <= 7; i++)
+        {
+            if (Read(folder, d.AddDays(-i).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)) is { } found) { return found; }
+        }
+        return null;
+    }
+
     void Close(Episode e)
     {
         if (e.Entry is not null) { e.Entry.Open = false; return; }
@@ -254,6 +320,7 @@ public sealed class ShadowLedger
         // An episode a previous run left open ended when that run did; this one starts afresh.
         foreach (var m in loaded?.Mismatches ?? []) { m.Open = false; }
         loaded ??= new ShadowDay { Date = date };
+        loaded.Schema = ShadowDay.CurrentSchema;
         loaded.TimeZone = time.LocalTimeZone.Id;
         loaded.GraceSeconds = (int)grace.TotalSeconds;
         loaded.IntervalSeconds = (int)interval.TotalSeconds;

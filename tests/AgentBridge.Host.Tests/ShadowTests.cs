@@ -207,6 +207,64 @@ public sealed class ShadowTests : IDisposable
         Assert.Equal((11, 155L), (ShadowLedger.Read(reports, "2026-10-28")!.Compared, ShadowLedger.Read(reports, "2026-10-28")!.ComparedSeconds));
     }
 
+    // Seen live (#40): a session whose background agents talk all the time changes its latest
+    // response every few seconds, and the daemon, writing on its own pass, kept showing the one
+    // the host had shown a moment before, past the grace.
+    [Fact]
+    public void A_response_one_side_showed_a_moment_ago_is_timing_and_one_neither_showed_is_a_difference()
+    {
+        var memory = new ShadowMemory();
+        var at = f.Time.GetUtcNow();
+        ShadowDifference? Response(string daemon, string host)
+        {
+            ShadowSession S(string tail) => new() { Id = Id, Status = "idle", ResponseTail = ShadowHash.Tail(tail) };
+            var c = ShadowCompare.Compare(View(S(daemon)), View(S(host)), memory, at);
+            at += TimeSpan.FromSeconds(15);
+            return c.Differences.SingleOrDefault(d => d.Kind == ShadowKinds.Response);
+        }
+
+        Assert.Null(Response("the first words", "the first words"));
+        Assert.Equal(ShadowCompare.Timing, Response("the first words", "the second words")!.Known);
+        Assert.Equal(ShadowCompare.Timing, Response("the second words", "the third words")!.Known);
+        Assert.Null(Response("words neither side showed", "the third words")!.Known);
+        // Remembered for minutes, not for ever: a daemon stuck on an old response differs.
+        at += TimeSpan.FromMinutes(5);
+        Assert.Null(Response("the second words", "the fourth words")!.Known);
+    }
+
+    // The live shadow's first minutes (#40): a session's subagents' shells counted by the daemon as
+    // its own (agent-ha-bridge#261) are a known difference, tallied apart, and never a mismatch.
+    [Fact]
+    public async Task A_difference_with_the_signature_of_a_known_daemon_bug_is_tallied_as_known_and_never_becomes_a_mismatch()
+    {
+        f.Time.SetLocalTimeZone(TimeZoneInfo.Utc);
+        var transcript = Paths.CopilotTranscript(Id)!;
+        Directory.CreateDirectory(Path.GetDirectoryName(transcript)!);
+        File.WriteAllText(transcript, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            type = "tool.execution_complete",
+            agentId = "fixture-agent",
+            data = new { toolCallId = "call-1", success = true, result = new { content = "<command with shellId: 41 moved to background by the user>" } },
+        }) + "\n");
+        var entry = Entry("shell", shells: ["41"]);
+        entry["Offset"] = new FileInfo(transcript).Length;
+        Daemon(new JsonObject { [Id] = entry });
+        var started = new DateTimeOffset(2026, 10, 27, 9, 30, 0, TimeSpan.Zero);
+        File.WriteAllText(Paths.ProcessRecord, new JsonObject { ["pid"] = 4242, ["startedUtcTicks"] = started.UtcTicks }.ToJsonString());
+        var host = new FixedHost(View(new ShadowSession { Id = Id, Agent = "copilot", Status = "idle", Model = "fixture-model" }));
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), f.Time);
+        var runner = new ShadowRunner(new DaemonReader(Paths, f.Time), host, ledger, log.Add, witness: new ShadowWitness(Paths), time: f.Time);
+
+        for (var i = 0; i < 8; i++) { await runner.SampleAsync(); Advance(TimeSpan.FromSeconds(15)); }
+
+        var day = ledger.Today!;
+        Assert.Empty(day.Mismatches);
+        Assert.Empty(day.Transient);
+        var known = day.Known[ShadowKinds.BackgroundShells]["agent-ha-bridge#261"];
+        Assert.Equal(8, known.Samples);
+        Assert.Equal([ShadowHash.Session(Id)], known.Sessions);
+        Assert.Equal(started, day.Coverage!.DaemonStartedAt);
+    }
     [Fact]
     public async Task A_daemon_whose_heartbeat_is_stale_is_down_and_nothing_else_is_compared_until_three_beats_have_gone()
     {

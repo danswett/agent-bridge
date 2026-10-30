@@ -11,9 +11,13 @@ namespace AgentBridge.Host.Shadow;
 //                                            whole and renamed into place (Write-DaemonState)
 //   runtime/agent-bridge-daemon.heartbeat    touched on every daemon pass (Set-BridgeDaemonAlive)
 //   installer/VERSION                        the installed release
+//   runtime/daemon.process.json              the running daemon's pid and start time
+//                                            (Register-BridgeRuntimeProcess), to see it restart
 //   <copilot>/session-state/<id>/agent-pending-decision.json, or
 //   runtime/copilot-bridge-markers/<id>/agent-pending-decision.json
 //                                            a question its hook armed (Get-CopilotDecisionMarkerPath)
+// and, by ShadowWitness, <copilot>/session-state/<id>/events.jsonl, the transcript, for the
+// evidence of the daemon's known bugs.
 // Never config.json (it holds the Home Assistant token), never the spool, and no directory is
 // ever listed.
 public sealed partial record AgentHaBridgePaths(string Home, string CopilotHome)
@@ -25,6 +29,12 @@ public sealed partial record AgentHaBridgePaths(string Home, string CopilotHome)
     public string StateFile => Path.Combine(Runtime, "agent-bridge-daemon-state.json");
     public string Heartbeat => Path.Combine(Runtime, "agent-bridge-daemon.heartbeat");
     public string VersionFile => Path.Combine(Home, "installer", "VERSION");
+    public string ProcessRecord => Path.Combine(Runtime, "daemon.process.json");
+
+    // A Copilot session's transcript, which the witness reads for the evidence of the daemon's
+    // known bugs; null for an id that is not one Copilot would have made.
+    public string? CopilotTranscript(string sessionId) =>
+        Guid.TryParseExact(sessionId, "D", out _) ? Path.Combine(CopilotHome, "session-state", sessionId.ToLowerInvariant(), "events.jsonl") : null;
 
     // As Get-CopilotDecisionMarkerPath resolves it: beside a Copilot session's own state when that
     // folder exists, else in the bridge's fallback folder (Claude, Codex).
@@ -84,7 +94,20 @@ public sealed partial class DaemonReader(AgentHaBridgePaths paths, TimeProvider 
             }
             catch (JsonException) { return new() { Problem = "the daemon's state file is not valid JSON", Version = version }; }
         }
-        return new() { Sessions = sessions, Version = version };
+        return new() { Sessions = sessions, Version = version, StartedAt = Started() };
+    }
+
+    // startedUtcTicks from the daemon's process record; null when it cannot be read now.
+    DateTimeOffset? Started()
+    {
+        if (ReadShared(paths.ProcessRecord, 64 * 1024) is not { } text) { return null; }
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            return doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("startedUtcTicks", out var t) && t.TryGetInt64(out var ticks)
+                && ticks > 0 && ticks <= DateTime.MaxValue.Ticks ? new DateTimeOffset(ticks, TimeSpan.Zero) : null;
+        }
+        catch (JsonException) { return null; }
     }
 
     ShadowSession Session(string id, JsonElement e)
@@ -100,6 +123,9 @@ public sealed partial class DaemonReader(AgentHaBridgePaths paths, TimeProvider 
             Shells = Count(e, "BackgroundShells"),
             Model = Str(e, "Model") is { Length: > 0 } m ? m : null,
             Compactions = e.TryGetProperty("Compactions", out var c) && c.TryGetInt32(out var n) ? n : 0,
+            AgentIds = Ids(e, "BackgroundAgents"),
+            ShellIds = Ids(e, "BackgroundShells"),
+            Offset = e.TryGetProperty("Offset", out var o) && o.TryGetInt64(out var offset) ? offset : null,
             ResponseTail = ShadowHash.Tail(Str(e, "LastResponse")),
             Question = question,
             QuestionUnknown = unknown,
@@ -175,6 +201,13 @@ public sealed partial class DaemonReader(AgentHaBridgePaths paths, TimeProvider 
         JsonValueKind.Array => v.EnumerateArray().Count(x => x.ValueKind != JsonValueKind.String || !string.IsNullOrEmpty(x.GetString())),
         JsonValueKind.String => string.IsNullOrEmpty(v.GetString()) ? 0 : 1,
         _ => 0,
+    };
+
+    static List<string> Ids(JsonElement e, string name) => !e.TryGetProperty(name, out var v) ? [] : v.ValueKind switch
+    {
+        JsonValueKind.Array => [.. v.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(x.GetString())).Select(x => x.GetString()!).Take(1024)],
+        JsonValueKind.String when !string.IsNullOrEmpty(v.GetString()) => [v.GetString()!],
+        _ => [],
     };
 
     // Strings as the host's options carry them: a string as itself, any other scalar as its JSON.
