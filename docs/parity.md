@@ -36,12 +36,12 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 | Status | Rows |
 |---|---|
 | `Verified` | 47 |
-| `Implemented, untested live` | 31 |
+| `Implemented, untested live` | 35 |
 | `Partial` | 3 |
-| `Missing` | 22 |
+| `Missing` | 19 |
 | `Intentionally different` | 17 |
 | `N/A` | 12 |
-| `In flight (…)` | 14: Claude/Codex live 8, HA connector 5, reclaimer 1 |
+| `In flight (…)` | 13: Claude/Codex live 8, HA connector 5 |
 | **Total** | **146** feature rows in §1–§18 |
 
 Of the 15 §6.3 invariants: 7 `Verified`, 2 `Implemented, untested live`, 2 `Partial`, 3
