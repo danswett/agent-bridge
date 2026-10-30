@@ -95,6 +95,18 @@ public sealed class UsageTests
     }
 
     [Fact]
+    public void A_further_copilot_account_is_a_row_of_its_own_named_by_its_login()
+    {
+        var vm = new UsageViewModel(new FakeTimeProvider(Now));
+
+        vm.Update(new UsageReport([Agent("GitHub Copilot", 40), Agent("GitHub Copilot", 12) with { Account = "dswett_microsoft", Plan = null, Slot = 2 },
+            Agent("GitHub Copilot", -1, error: "No Copilot credential was available for monalisa.") with { Account = "monalisa", Plan = null, Slot = 3 }]));
+
+        Assert.Equal(["octo · pro", "dswett_microsoft", "monalisa"], vm.Rows.Select(r => r.Detail));
+        Assert.Equal([null, null, "No Copilot credential was available for monalisa."], vm.Rows.Select(r => r.Error));
+    }
+
+    [Fact]
     public void A_failure_beside_a_fresh_reading_is_not_shown_but_one_beside_an_old_reading_is()
     {
         var vm = new UsageViewModel(new FakeTimeProvider(Now));

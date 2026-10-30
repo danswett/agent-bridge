@@ -41,6 +41,10 @@ public sealed record AgentUsage
     public string? Error { get; init; }
     // When the figure was taken; for a failure, when the attempt was made.
     public required DateTimeOffset MeasuredAt { get; init; }
+    // A further account the machine was asked to report beside the one the agent is signed in as
+    // (usage.copilotAccounts), by its place: 2 for the first listed. Absent for the signed-in one.
+    // Stable while the list is, so a Home Assistant sensor keeps its account (usage_copilot_<slot>).
+    public int? Slot { get; init; }
 }
 
 // usage.get's result, usage.subscribe's result and every usage.update. Agents that have never

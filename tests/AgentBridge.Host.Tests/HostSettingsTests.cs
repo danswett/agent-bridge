@@ -189,6 +189,27 @@ public sealed class HostSettingsTests : IDisposable
     }
 
     [Fact]
+    public void Usage_is_set_at_the_machine_and_a_token_pasted_where_a_login_belongs_is_not_written_or_repeated()
+    {
+        Assert.Equal(0, Run("config", "set", "usage.copilotAccounts", """["dswett_microsoft"]"""));
+        Assert.Equal(0, Run("config", "set", "usage.idleIntervalSeconds", "600"));
+        var settings = HostSettings.Load(folder).Settings;
+        Assert.Equal([(2, "dswett_microsoft")], settings.Usage.CopilotAccounts.Select(a => (a.Slot, a.Login)));
+        Assert.Equal(TimeSpan.FromMinutes(10), settings.Usage.IdleInterval);
+        Assert.Empty(settings.UsageProblems);
+
+        var text = File.ReadAllText(Path.Combine(folder, HostSettings.FileName));
+        Assert.Equal(1, Run("config", "set", "usage.copilotAccounts", """["gho_0123456789abcdef"]"""));
+        Assert.Contains("Not written: usage.copilotAccounts entry 1 looks like a token", Said);
+        Assert.DoesNotContain("gho_", Said);
+        Assert.Equal(1, Run("config", "set", "usage.publish", "off"));
+        Assert.Equal(text, File.ReadAllText(Path.Combine(folder, HostSettings.FileName)));
+
+        Assert.Equal(0, Run("config", "set", "usage.publish", "false"));
+        Assert.False(HostSettings.Load(folder).Settings.Usage.Publish);
+    }
+
+    [Fact]
     public void The_home_assistant_token_is_read_without_an_argument_kept_protected_and_never_shown()
     {
         const string token = "fixture-token-that-must-not-be-printed";

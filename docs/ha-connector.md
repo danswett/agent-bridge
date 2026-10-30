@@ -150,7 +150,8 @@ Per machine:
 | `binary_sensor.agent_bridge_<slug>_online` | `homeassistant/binary_sensor/<mnode>/online/config` | `…/online/state`, unretained `online`; `…/online/attr`, unretained `{"at"}` | config at start; beat every 60 s |
 | `sensor.agent_bridge_<slug>_sessions` | `homeassistant/sensor/<mnode>/sessions/config` | `…/global/state` = count; `…/global/attr` = `sessions[{name,machine,node,kind}]`, `machine`, `machine_slug`, `capabilities`, `resumable: []`, `discovery_held` (what holds the host's discovery, [v1-sessions.md](protocol/v1-sessions.md#discovery-held), else `""`), `updated` | on a change, and every 300 s |
 | `update.agent_bridge_<slug>_update` | `homeassistant/update/<mnode>/update/config` | `…/update/state` = `installed_version`, `latest_version` (both the host's version), `title`, `release_summary: ""`, `in_progress: false`, `update_percentage: null`; `…/update/attributes` = `stage`, `stage_detail` | at start |
-| `sensor.agent_bridge_<slug>_usage_<agent>` (copilot, claude, codex; the numbered `copilot_2`–`_4` of further Copilot logins are withdrawn, below) | `homeassistant/sensor/<mnode>/usage_<agent>/config` | state = the window closest to running out, or `unknown`; attributes `client`, `label`, `account`, `account_id`, `plan`, `source`, `windows[{key,label,percent,used?,limit?,unit?,resets_at?,elapsed?}]`, `error`, `measured_at`, `machine`, `machine_slug`, `updated` | when a reading changes |
+| `sensor.agent_bridge_<slug>_usage_<agent>` (copilot, claude, codex) | `homeassistant/sensor/<mnode>/usage_<agent>/config` | state = the window closest to running out, or `unknown`; attributes `client`, `label`, `account`, `account_id`, `plan`, `source`, `windows[{key,label,percent,used?,limit?,unit?,resets_at?,elapsed?}]`, `error`, `measured_at`, `machine`, `machine_slug`, `updated` | when a reading changes |
+| `sensor.agent_bridge_<slug>_usage_copilot_<n>` (2–4: the further Copilot logins of the host's `usage.copilotAccounts`, by place, `Get-CopilotMqttUsageRecordKey`) | `homeassistant/sensor/<mnode>/usage_copilot_<n>/config`, named `GitHub Copilot usage (<login>)` | as above, `client` `copilot` and `account` the login (GitHub's spelling once read); a login that cannot be read is `unknown` with its `error` | when its reading changes |
 
 `capabilities` is what lets the writer draw the right rows for this machine. Without a launcher
 that launches here the connector reports `newSession`, `profile`, `resume`, `agent`, `tuning`,
@@ -195,8 +196,11 @@ retained payload), so the dashboard never offers a control that silently does no
   state topic; when the host cannot launch here, also the launch card's prompt, prompt payload,
   workspace, profile, agent, model, effort, context, resume and permissions selectors, Launch,
   the launch result and its outcomes (4, or 19 without a launcher, of the 28 machine topics); and the usage sensors of further Copilot logins
-  (`usage_copilot_2`–`_4`, nine topics), which the host does not report, so a reading the daemon
-  left is not kept with nothing to refresh it (as `Remove-CopilotMqttUsageSensors` does). Forget
+  (`usage_copilot_2`–`_4`, three topics each) in a place the host's `usage.copilotAccounts` does not
+  fill, so a reading the daemon or an earlier configuration left is not kept with nothing to refresh
+  it (as the daemon's first pass does with `Remove-CopilotMqttUsageSensors`). Taken from the
+  configuration rather than the readings, so a login not yet read is not withdrawn and registered
+  again under a new id moments later. Forget
   clears all 46 (`Get-CopilotMqttMachineTopic`: 28 plus three per usage sensor);
 * per session, when the connector first publishes it: the two legacy state topics
   `decision/state` and `reply/state`; End session when the host cannot end sessions here (no

@@ -1760,6 +1760,116 @@
           "updated": "<now>",
           "windows": []
         }
+      },
+      {
+        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_2/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:gauge",
+          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/attr",
+          "name": "GitHub Copilot usage (hubot)",
+          "object_id": "agent_bridge_dswett_dev_vm1_usage_copilot_2",
+          "state_class": "measurement",
+          "state_topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/state",
+          "unique_id": "agent_bridge_dswett_dev_vm1_usage_copilot_2",
+          "unit_of_measurement": "%"
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/state",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": "42.3"
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_2/attr",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "account": "hubot",
+          "account_id": "",
+          "client": "copilot",
+          "error": "",
+          "label": "GitHub Copilot",
+          "machine": "DSWETT-DEV-VM1",
+          "machine_slug": "dswett_dev_vm1",
+          "measured_at": "2026-10-29T19:00:03.0000000+00:00",
+          "plan": "individual",
+          "source": "api",
+          "updated": "<now>",
+          "windows": [
+            {
+              "key": "premium",
+              "label": "Premium requests",
+              "limit": 300.0,
+              "percent": 42.3,
+              "resets_at": "2026-11-01T00:00:00.0000000+00:00",
+              "unit": "requests",
+              "used": 127.0
+            }
+          ]
+        }
+      },
+      {
+        "topic": "homeassistant/sensor/agent_bridge_dswett_dev_vm1/usage_copilot_4/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:gauge",
+          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/attr",
+          "name": "GitHub Copilot usage (monalisa)",
+          "object_id": "agent_bridge_dswett_dev_vm1_usage_copilot_4",
+          "state_class": "measurement",
+          "state_topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/state",
+          "unique_id": "agent_bridge_dswett_dev_vm1_usage_copilot_4",
+          "unit_of_measurement": "%"
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/state",
+        "retain": true,
+        "qos": 1,
+        "json": false,
+        "payload": "unknown"
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/usage/copilot_4/attr",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "account": "monalisa",
+          "account_id": "",
+          "client": "copilot",
+          "error": "No Copilot credential was available for monalisa (gh has no token for monalisa - run gh auth login).",
+          "label": "GitHub Copilot",
+          "machine": "DSWETT-DEV-VM1",
+          "machine_slug": "dswett_dev_vm1",
+          "measured_at": "2026-10-29T19:00:04.0000000+00:00",
+          "plan": "",
+          "source": "none",
+          "updated": "<now>",
+          "windows": []
+        }
       }
     ],
     "update": [

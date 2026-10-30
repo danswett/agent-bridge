@@ -37,6 +37,36 @@ public sealed class UsageContractTests
     }
 
     [Fact]
+    public void A_further_copilot_account_carries_its_place_and_fits_beside_every_agent_within_the_budget()
+    {
+        AgentUsage Copilot(string login, int? slot) => new()
+        {
+            Agent = AgentKind.Copilot,
+            Label = "GitHub Copilot",
+            Account = login,
+            Source = UsageSource.Api,
+            Slot = slot,
+            Error = new string('x', UsageProtocol.Error),
+            Windows = [new UsageWindow { Key = "plan", Label = "Plan", Percent = 40, Used = 600000, Limit = 1500000, Unit = "AIC" }],
+            MeasuredAt = DateTimeOffset.UnixEpoch,
+        };
+        var codex = new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.None, Error = "no rollout", MeasuredAt = DateTimeOffset.UnixEpoch };
+        // The signed-in account, Claude and Codex, and the three further accounts there are places for.
+        var report = new UsageReport([Copilot("octocat", null), codex with { Agent = AgentKind.Claude, Label = "Claude Code" }, codex,
+            Copilot("hubot", 2), Copilot("monalisa", 3), Copilot("dswett_microsoft", 4)]);
+
+        var fitted = UsageProtocol.Fit(report);
+
+        Assert.Equal(report.Agents.Select(a => (a.Account, a.Slot)), fitted.Agents.Select(a => (a.Account, a.Slot)));
+        Assert.True(ProtocolJson.ByteCount(fitted) <= UsageProtocol.MaxReportBytes);
+        var json = JsonSerializer.Serialize(fitted, ProtocolJson.Options);
+        Assert.Contains("\"account\":\"hubot\",\"source\":\"api\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"slot\":2}", json, StringComparison.Ordinal);
+        Assert.Equal(3, json.Split("\"slot\":").Length - 1);
+        Assert.Equal(3, JsonSerializer.Deserialize<UsageReport>(json, ProtocolJson.Options)!.Agents.Count(a => a.Slot is not null));
+    }
+
+    [Fact]
     public void Fitting_a_report_cuts_long_text_and_keeps_it_within_its_budget()
     {
         var agent = new AgentUsage

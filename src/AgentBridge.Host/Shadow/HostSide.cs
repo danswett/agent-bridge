@@ -58,13 +58,15 @@ public static class HostSide
     }
 
     // Under the names agent-ha-bridge gives its usage sensors (HaPayloads.Usage), the first
-    // reading of each agent, as the host's Home Assistant connector publishes it.
+    // reading of each agent, as the host's Home Assistant connector publishes it, and each further
+    // Copilot login's under its numbered sensor (copilot_2 for the first listed).
     public static IReadOnlyDictionary<string, ShadowUsage> Usage(UsageReport report)
     {
         var map = new Dictionary<string, ShadowUsage>(StringComparer.Ordinal);
         foreach (var a in report.Agents)
         {
             var client = a.Agent switch { AgentKind.Copilot => "copilot", AgentKind.Claude => "claude", AgentKind.Codex => "codex", _ => null };
+            if (client is not null && a.Slot is { } slot) { client = $"{client}_{slot}"; }
             if (client is null || map.ContainsKey(client)) { continue; }
             var windows = new Dictionary<string, double>(StringComparer.Ordinal);
             foreach (var w in a.Windows) { windows.TryAdd(w.Key, w.Percent); }

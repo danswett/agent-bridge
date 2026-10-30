@@ -287,6 +287,14 @@ $records = @(
     (New-BridgeUsageRecord -Client 'claude' -AccountId 'a1b2c3d4e5f60718' -Plan 'max' -Source 'api' -Windows $claudeWindows -MeasuredAt '2026-10-29T19:00:01.0000000+00:00')
     (New-BridgeUsageRecord -Client 'codex' -Source 'none' -Problem 'The Codex usage could not be read: no rollout' -MeasuredAt '2026-10-29T19:00:02.0000000+00:00')
 )
+# Further Copilot logins (usage.copilotAccounts), each on the numbered sensor of its place, as
+# Get-BridgeCopilotLoginAllowance tags them: one read, and one gh holds no token for.
+$further = New-BridgeUsageRecord -Client 'copilot' -Account 'hubot' -Plan 'individual' -Source 'api' -Windows $copilotWindows -MeasuredAt '2026-10-29T19:00:03.0000000+00:00'
+$further['sensor'] = 'copilot_2'
+$records += $further
+$unread = New-BridgeUsageRecord -Client 'copilot' -Account 'monalisa' -Source 'none' -Problem 'No Copilot credential was available for monalisa (gh has no token for monalisa - run gh auth login).' -MeasuredAt '2026-10-29T19:00:04.0000000+00:00'
+$unread['sensor'] = 'copilot_4'
+$records += $unread
 
 $guardCases = @(
     [ordered]@{ name = 'no target'; data = @{ topic = 't'; payload = 'p' } }

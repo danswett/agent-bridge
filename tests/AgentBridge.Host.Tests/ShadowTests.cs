@@ -552,7 +552,9 @@ public sealed class ShadowTests : IDisposable
         var ha = new Uri("https://ha.fixture.invalid/api/states/");
 
         Assert.Equal(
-            ["sensor.agent_bridge_fixture_usage_copilot", "sensor.agent_bridge_fixture_usage_claude", "sensor.agent_bridge_fixture_usage_codex", "select.agent_bridge_fixture_new_resume"],
+            ["sensor.agent_bridge_fixture_usage_copilot", "sensor.agent_bridge_fixture_usage_claude", "sensor.agent_bridge_fixture_usage_codex",
+                "sensor.agent_bridge_fixture_usage_copilot_2", "sensor.agent_bridge_fixture_usage_copilot_3", "sensor.agent_bridge_fixture_usage_copilot_4",
+                "select.agent_bridge_fixture_new_resume"],
             reader.Entities);
         foreach (var refused in new Func<Task>[]
         {
@@ -592,6 +594,9 @@ public sealed class ShadowTests : IDisposable
         {
             "sensor.agent_bridge_fixture_usage_copilot" => UsageState("copilot", 40, now - TimeSpan.FromMinutes(2)),
             "sensor.agent_bridge_fixture_usage_claude" => UsageState("claude", 10, now, account: "someone-else"),
+            // Further Copilot logins: one the host reads too, and one it is not configured with.
+            "sensor.agent_bridge_fixture_usage_copilot_2" => UsageState("copilot_2", 20, now, account: "further-login"),
+            "sensor.agent_bridge_fixture_usage_copilot_3" => UsageState("copilot_3", 30, now, account: "unlisted-login"),
             "select.agent_bridge_fixture_new_resume" => ResumeState("Fix the  login page - web", "Write the report - docs", "Old work - repo", "Agency on OTHER-PC: Shared from there (abcdef12)"),
             _ => null,
         });
@@ -604,6 +609,7 @@ public sealed class ShadowTests : IDisposable
                 ["copilot"] = Reading(55, now),
                 ["claude"] = Reading(10, now),
                 ["codex"] = Reading(3, now),
+                ["copilot_2"] = Reading(20, now, "Further-Login"),
             },
             // The host offers fewer (its own resume count): only its own are looked for. Another
             // machine's shared session on the daemon's list is not one it offers yet.
@@ -626,15 +632,16 @@ public sealed class ShadowTests : IDisposable
                 (ShadowKinds.ResumableMissingOnDaemon, null, "1 of the host's 2"),
                 (ShadowKinds.UsageAccount, "claude", "the account differs"),
                 (ShadowKinds.UsageMissingOnDaemon, "codex", "the host has a reading and the daemon none"),
+                (ShadowKinds.UsageMissingOnHost, "copilot_3", "the daemon has a reading and the host none"),
             ],
             c.Differences.Select(d => (d.Kind, d.Session, d.Detail)).OrderBy(x => x.Kind, StringComparer.Ordinal).ToList());
         // Read once a minute, not each sample; and not until five minutes is any of it a mismatch.
-        Assert.Equal(6 * 4, inner.Seen.Count);
+        Assert.Equal(6 * 7, inner.Seen.Count);
         // Copilot's 40 against 55 is one pair of readings, never confirmed by a second.
-        Assert.Equal(4, ledger.Today!.Mismatches.Count);
+        Assert.Equal(5, ledger.Today!.Mismatches.Count);
         Assert.Equal((6, 6), (ledger.Today.UsageCompared, ledger.Today.ResumableCompared));
         var report = File.ReadAllText(Path.Combine(reports, ShadowLedger.FileName("2026-10-28")));
-        foreach (var secret in new[] { Token, "FIXTURE-MQTT", Account, "someone-else", "login page", "Something new", "fixture.invalid" })
+        foreach (var secret in new[] { Token, "FIXTURE-MQTT", Account, "someone-else", "further-login", "unlisted-login", "login page", "Something new", "fixture.invalid" })
         {
             Assert.DoesNotContain(secret, report);
             Assert.DoesNotContain(secret, string.Join("\n", log));

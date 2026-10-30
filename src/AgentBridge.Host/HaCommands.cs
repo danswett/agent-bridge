@@ -81,6 +81,7 @@ public static class HaCommands
             DetailedActivityFallback = ha.DetailedActivity,
             DashboardUrlPath = ha.DashboardUrlPath,
             AgentUserIds = ha.AgentUserIds,
+            UsageAccountSensors = usage is null ? [] : HaContract.UsageAccountSensors(settings.Usage.CopilotAccounts.Select(a => a.Slot)),
         }, servesAnswers: OperatingSystem.IsWindows(), window, usage, cancellationToken);
         if (json)
         {

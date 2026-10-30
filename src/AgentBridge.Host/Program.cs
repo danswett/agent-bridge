@@ -66,9 +66,14 @@ bool Flag(string name) => arguments.Contains(name);
 
 var defaults = SessionSourceOptions.ForCurrentUser();
 // serve reads what it may do on this machine from the profile's config.json (HostSettings), and
-// so does ha shadow, which must see the sessions as serve would (permissions.remoteApproval).
+// so do ha shadow, which must see the sessions as serve would (permissions.remoteApproval), and
+// usage, which reads what serve would (usage.*). usage only reads the file: it never makes the
+// profile a device key, as loading its identity would.
 var (settings, settingsProblem) = command == "serve" || (command == "ha" && arguments.ElementAtOrDefault(1) == "shadow")
-    ? HostSettings.Load(LoadIdentity().Folder) : (HostSettings.Default, null);
+    ? HostSettings.Load(LoadIdentity().Folder)
+    : command == "usage" && Identity.IsValidProfile(Option("--profile") ?? "default")
+        ? HostSettings.Load(Path.Combine(Identity.DefaultRoot, Option("--profile") ?? "default"))
+        : (HostSettings.Default, null);
 var options = new SessionSourceOptions
 {
     CopilotHome = Option("--copilot-home") ?? defaults.CopilotHome,
@@ -136,15 +141,24 @@ switch (command)
         }
     case "usage":
         {
-            // One ask of every agent, whatever the pace: what serve would report right now.
+            // One ask of every agent, whatever the pace: what serve would report right now. What it
+            // notices goes to stderr: stdout is the report, for whatever parses it.
+            Action<string> note = m => Console.Error.WriteLine($"{DateTime.Now:HH:mm:ss} {m}");
+            if (settingsProblem is not null) { note(settingsProblem); }
+            foreach (var p in settings.UsageProblems) { note($"config.json: {p}"); }
+            if (!settings.Usage.Publish)
+            {
+                note("usage is not read on this machine (usage.publish is off)");
+                Console.WriteLine(JsonSerializer.Serialize(UsageReport.Empty, pretty));
+                return 0;
+            }
             await using var source = new SessionSource(options);
             await source.RefreshAsync();
             using var http = new UsageHttp(TimeSpan.FromSeconds(15));
-            var usageOptions = UsageOptions.For(options);
-            // What it notices goes to stderr: stdout is the report, for whatever parses it.
-            Action<string> note = m => Console.Error.WriteLine($"{DateTime.Now:HH:mm:ss} {m}");
-            await using var monitor = new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: note), source, usageOptions, log: note);
+            await using var monitor = NewUsageMonitor(source, http, note);
+            // Every further account too: a pass reads one, so as many passes as there are.
             await monitor.PassAsync();
+            for (var i = 1; i < settings.Usage.CopilotAccounts.Count; i++) { await monitor.PassAsync(); }
             Console.WriteLine(JsonSerializer.Serialize(monitor.Current.Report, pretty));
             return 0;
         }
@@ -154,14 +168,19 @@ switch (command)
         {
             await using var source = new SessionSource(options);
             await source.RefreshAsync();
-            // One reading of every agent's usage, as the usage command takes it, so the usage
-            // sensors are compared too.
+            // One reading of every agent's usage, further Copilot accounts included, as the usage
+            // command takes it, so the usage sensors are compared too. None when usage.publish is
+            // off: serve would publish none either.
             using var http = new UsageHttp(TimeSpan.FromSeconds(15));
-            var usageOptions = UsageOptions.For(options);
             Action<string> note = m => Console.Error.WriteLine($"{DateTime.Now:HH:mm:ss} {m}");
-            await using var monitor = new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: note), source, usageOptions, log: note);
-            await monitor.PassAsync();
-            return await HaCommands.ShadowAsync(LoadIdentity().Folder, source, Flag("--json"), Option("--window"), HostVersion(), IsDevBuild(), null, Console.Out, Console.Error, usage: () => monitor.Current);
+            await using var monitor = settings.Usage.Publish ? NewUsageMonitor(source, http, note) : null;
+            if (monitor is not null)
+            {
+                await monitor.PassAsync();
+                for (var i = 1; i < settings.Usage.CopilotAccounts.Count; i++) { await monitor.PassAsync(); }
+            }
+            return await HaCommands.ShadowAsync(LoadIdentity().Folder, source, Flag("--json"), Option("--window"), HostVersion(), IsDevBuild(), null, Console.Out, Console.Error,
+                usage: monitor is null ? null : () => monitor.Current);
         }
     case "ha":
         {
@@ -256,13 +275,18 @@ async Task<int> ServeAsync()
         : null;
     push?.Start();
     // Each agent's allowance, asked at the pace its sessions set, and never more often than
-    // the idle pace while agent-ha-bridge is asking the same vendors for this user.
+    // the idle pace while agent-ha-bridge is asking the same vendors for this user; further Copilot
+    // accounts at the idle pace. None at all when usage.publish is off: no vendor is asked, and
+    // hello leaves usage out.
     using var usageHttp = new UsageHttp(TimeSpan.FromSeconds(15));
-    var usageOptions = UsageOptions.For(options);
     var haProbe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : null;
-    await using var usageMonitor = new UsageMonitor(UsageMonitor.Collectors(usageOptions, usageHttp, new CommandRunner(), log: Log), source, usageOptions,
-        agentHaBridge: () => OperatingSystem.IsWindows() ? haProbe!.Active() : null, log: Log);
-    usageMonitor.Start();
+    foreach (var problem in settings.UsageProblems) { Log($"config.json: {problem}"); }
+    await using var usageMonitor = settings.Usage.Publish
+        ? NewUsageMonitor(source, usageHttp, Log, () => OperatingSystem.IsWindows() ? haProbe!.Active() : null)
+        : null;
+    Log(usageMonitor is null ? "agent usage is off (usage.publish)"
+        : $"agent usage is on{(settings.Usage.CopilotAccounts.Count == 0 ? "" : $", with {settings.Usage.CopilotAccounts.Count} further Copilot account(s) (usage.copilotAccounts)")}");
+    usageMonitor?.Start();
     // The Home Assistant connector (docs/ha-connector.md): this machine's sessions on the dashboard
     // agent-ha-bridge's writer generates. Off unless config.json turns it on, and paused while
     // agent-ha-bridge runs for this user (looked at every few seconds, as the app's view of it is).
@@ -276,7 +300,7 @@ async Task<int> ServeAsync()
     // Before the connector, which launches from the card through it.
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
         HaReplies.For(replies, attachments), stops, launcher);
-    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, new UsageService(usageMonitor, Log), launcher, transfers)
+    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log), launcher, transfers)
     {
         // What takes answering, replying, ending and launching away while it runs (design G5),
         // said in hello so a phone shows the machine read-only and why.
@@ -486,6 +510,15 @@ LaunchService Launcher(ISessionSource source, AttachmentStore? attachments, Sess
         ? $"launching sessions is on: {count} workspace(s) approved{(count == 0 ? "; approve one here with agent-bridge-host workspace add <folder>" : $" ({string.Join(", ", settings.Launch.Workspaces.Select(w => w.Label + (w.Isolate ? " [worktrees]" : "")))})")}"
         : $"launching sessions is off for now: {why}");
     return launcher;
+}
+
+// Each agent's allowance as config.json's usage section says to read it: at its pace, with its
+// further Copilot accounts.
+UsageMonitor NewUsageMonitor(ISessionSource source, IUsageHttp http, Action<string> log, Func<string?>? agentHaBridge = null)
+{
+    var usageOptions = UsageOptions.For(options, settings.Usage);
+    return new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: log, accounts: settings.Usage.CopilotAccounts), source, usageOptions,
+        agentHaBridge: agentHaBridge, log: log);
 }
 
 // host.restart: the same command again, without a window, which waits for this process to let

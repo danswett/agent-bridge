@@ -232,6 +232,113 @@ public sealed class UsageTests : IDisposable
         Assert.Equal(Token, await credentials.ResolveAsync(Login, "https://github.com"));
     }
 
+    // --- Further Copilot accounts (usage.copilotAccounts) ---
+
+    const string Further = "dswett_microsoft";
+    const string FurtherToken = "gho_further-fixture";
+
+    CopilotAccountCollector AccountCollector(CopilotCredentials credentials, int slot = 2, string login = Further) =>
+        new(Options(), http, credentials, new CopilotAccount(slot, login), time);
+
+    static (UsageSettings Settings, IReadOnlyList<string> Problems) ReadUsage(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return UsageSettings.Read(doc.RootElement.Clone());
+    }
+
+    [Fact]
+    public void Further_accounts_keep_the_place_they_were_listed_in_and_an_entry_that_is_not_a_login_is_named_by_its_place_alone()
+    {
+        var (settings, problems) = ReadUsage("""{"copilotAccounts":["ghp_pasted0123456789", " DanSwett ", "danswett", "not a login", "hubot"]}""");
+
+        Assert.Equal([new CopilotAccount(3, "DanSwett")], settings.CopilotAccounts);
+        Assert.Equal(
+        [
+            "usage.copilotAccounts entry 1 looks like a token, not a login, so it is not used",
+            "usage.copilotAccounts entry 3 repeats an earlier login",
+            "usage.copilotAccounts entry 4 is not a GitHub login",
+            "usage.copilotAccounts entry 5 is past the 3 further logins there are rows for",
+        ], problems);
+        Assert.DoesNotContain(problems, p => p.Contains("ghp_", StringComparison.Ordinal) || p.Contains("hubot", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_usage_setting_meant_as_off_is_never_read_as_on_and_a_pace_out_of_range_keeps_the_default()
+    {
+        Assert.False(ReadUsage("""{"publish":"false"}""").Settings.Publish);
+        Assert.False(ReadUsage("false").Settings.Publish);
+        Assert.False(ReadUsage("""{"publish":false}""").Settings.Publish);
+        Assert.True(ReadUsage("{}").Settings.Publish);
+
+        var (settings, problems) = ReadUsage("""{"intervalSeconds":5,"idleIntervalSeconds":60,"copilotAccounts":"hubot"}""");
+        Assert.Equal((TimeSpan.FromSeconds(120), TimeSpan.FromSeconds(120)), (settings.Interval, settings.IdleInterval));
+        Assert.Empty(settings.CopilotAccounts);
+        Assert.Equal(2, problems.Count);
+        Assert.Equal(TimeSpan.FromSeconds(300), ReadUsage("""{"idleIntervalSeconds":300}""").Settings.IdleInterval);
+    }
+
+    [Fact]
+    public async Task A_further_account_is_read_only_with_the_token_gh_holds_for_exactly_that_login()
+    {
+        // The signed-in account's token in the environment and its stored login are not this one's.
+        var store = new FakeStore { [$"https://github.com:{Further}.copilot-cli"] = Token };
+        var credentials = Credentials(env: new() { ["GH_TOKEN"] = Token }, store: store);
+        commands.Next = new CommandResult(true, false, 0, FurtherToken + "\n");
+        http.Respond(200, Quota(login: "DSwett_Microsoft", remaining: 1200000));
+
+        var usage = await AccountCollector(credentials).CollectAsync();
+
+        Assert.Equal(["auth", "token", "--hostname", "github.com", "--user", Further], Assert.Single(commands.Runs).Arguments);
+        Assert.Contains(new KeyValuePair<string, string>("Authorization", $"token {FurtherToken}"), Assert.Single(http.Requests).Headers);
+        Assert.Equal((AgentKind.Copilot, "DSwett_Microsoft", 2, UsageSource.Api, 20.0), (usage!.Agent, usage.Account, usage.Slot, usage.Source, usage.Windows[0].Percent));
+        Assert.Null(usage.Error);
+    }
+
+    [Fact]
+    public async Task A_further_account_whose_token_reads_another_login_is_refused_rather_than_shown_under_its_name()
+    {
+        commands.Next = new CommandResult(true, false, 0, FurtherToken);
+        http.Respond(200, Quota(login: "someone-else"));
+
+        var usage = await AccountCollector(Credentials()).CollectAsync();
+
+        Assert.Empty(usage!.Windows);
+        Assert.Equal((Further, 2), (usage.Account, usage.Slot));
+        Assert.Equal($"The token gh holds for {Further} reads the allowance of someone-else instead.", usage.Error);
+    }
+
+    [Fact]
+    public async Task A_further_account_gh_holds_no_token_for_keeps_its_row_and_says_why_with_the_spelling_github_last_gave()
+    {
+        var credentials = Credentials();
+        var collector = AccountCollector(credentials);
+        commands.Next = new CommandResult(true, false, 0, FurtherToken);
+        http.Respond(200, Quota(login: "DSwett_Microsoft"));
+        await collector.CollectAsync();
+
+        commands.Next = new CommandResult(true, false, 1, "");
+        var usage = await collector.CollectAsync();
+
+        Assert.Equal(UsageSource.None, usage!.Source);
+        Assert.Equal(("DSwett_Microsoft", 2), (usage.Account, usage.Slot));
+        Assert.Equal($"No Copilot credential was available for {Further} (gh has no token for this account; run gh auth login).", usage.Error);
+        Assert.Equal("no Copilot credential was available (gh has no token for this account; run gh auth login)", collector.Plain);
+        Assert.DoesNotContain(log, l => l.Contains(Further, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task A_rate_limited_further_account_is_tried_again_then_reported_as_its_own_failure()
+    {
+        commands.Next = new CommandResult(true, false, 0, FurtherToken);
+        http.Respond(429, "{}");
+
+        var usage = await AccountCollector(Credentials()).CollectAsync();
+
+        Assert.Equal(3, http.Requests.Count);
+        Assert.Empty(usage!.Windows);
+        Assert.Equal($"The Copilot quota for {Further} could not be read: the server answered 429 (TooManyRequests)", usage.Error);
+    }
+
     // --- Claude ---
 
     void ClaudeCredentials(string token = "sk-ant-oat01-fixture", DateTimeOffset? expires = null)
@@ -622,6 +729,54 @@ public sealed class UsageTests : IDisposable
         Assert.Equal("Usage for copilot could not be collected: broken", agents.Single(a => a.Agent == AgentKind.Copilot).Error);
         Assert.Single(agents.Single(a => a.Agent == AgentKind.Claude).Windows);
         Assert.Contains("usage: copilot could not be read: Usage for copilot could not be collected: broken", log);
+    }
+
+    sealed class FakeAccount(int slot, Func<AgentUsage?> read) : IUsageCollector
+    {
+        public int Calls { get; private set; }
+        public AgentKind Agent => AgentKind.Copilot;
+        public string Key => $"copilot_{slot}";
+        public int? Slot => slot;
+
+        public Task<AgentUsage?> CollectAsync(CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult(read() is { } r ? r with { Slot = slot } : null);
+        }
+    }
+
+    [Fact]
+    public async Task Further_accounts_are_read_one_a_pass_longest_waiting_first_at_the_idle_pace_whatever_is_open()
+    {
+        var sessions = new FakeSessions();
+        sessions.Open(AgentKind.Copilot);
+        var copilot = new FakeCollector(AgentKind.Copilot, () => Reading(AgentKind.Copilot, 40, time.GetUtcNow()));
+        var second = new FakeAccount(2, () => Reading(AgentKind.Copilot, 10, time.GetUtcNow()));
+        var third = new FakeAccount(3, () => throw new InvalidOperationException("broken"));
+        await using var monitor = new UsageMonitor([copilot, second, third], sessions, Options(), time, null, log.Add);
+
+        await monitor.PassAsync();
+        Assert.Equal((1, 1, 0), (copilot.Calls, second.Calls, third.Calls));
+        time.Advance(TimeSpan.FromSeconds(15));
+        await monitor.PassAsync();
+        Assert.Equal((1, 1, 1), (copilot.Calls, second.Calls, third.Calls));
+
+        // Every row, in order, each in its place; one that failed does not take the others with it.
+        var agents = monitor.Current.Report.Agents;
+        Assert.Equal([null, 2, 3], agents.Select(a => a.Slot));
+        Assert.Equal(10, agents[1].Windows[0].Percent);
+        Assert.Equal("Usage for copilot could not be collected: broken", agents[2].Error);
+
+        // The session open here sets the signed-in account's pace, never a further one's.
+        time.Advance(TimeSpan.FromMinutes(4));
+        await monitor.PassAsync();
+        Assert.Equal((2, 1, 1), (copilot.Calls, second.Calls, third.Calls));
+        time.Advance(TimeSpan.FromSeconds(885));
+        await monitor.PassAsync();
+        time.Advance(TimeSpan.FromSeconds(15));
+        await monitor.PassAsync();
+        Assert.Equal((2, 2), (second.Calls, third.Calls));
+        Assert.Contains("usage: further Copilot account 3 could not be read: Usage for copilot could not be collected: broken", log);
     }
 
     [Fact]

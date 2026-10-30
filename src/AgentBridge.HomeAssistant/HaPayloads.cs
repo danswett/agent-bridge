@@ -242,10 +242,19 @@ public static class HaPayloads
     // New-BridgeUsageRecord and Get-BridgeUsageWindow, from the host's reading. Percent is how
     // much is gone; the state is the window closest to running out, or "unknown" when there is
     // no reading (an empty bar would read as nothing used).
-    public static (string Client, string Label, string State, JsonObject Attributes)? Usage(AgentUsage u, string machineName, string slug, DateTimeOffset now)
+    //
+    // Key is the sensor it goes on: the client's, or for a further Copilot login copilot_<slot>
+    // (Get-CopilotMqttUsageRecordKey), which has no sensor outside the slots there are.
+    public static (string Client, string Key, string Label, string State, JsonObject Attributes)? Usage(AgentUsage u, string machineName, string slug, DateTimeOffset now)
     {
         var client = u.Agent switch { AgentKind.Copilot => "copilot", AgentKind.Claude => "claude", AgentKind.Codex => "codex", _ => null };
         if (client is null) { return null; }
+        var key = client;
+        if (u.Slot is { } slot)
+        {
+            key = $"{client}_{slot}";
+            if (!HaContract.UsageSensorKeys.Contains(key)) { return null; }
+        }
         var windows = new JsonArray();
         double? headline = null;
         foreach (var w in u.Windows)
@@ -280,7 +289,7 @@ public static class HaPayloads
             ["updated"] = Stamp(now),
         };
         var state = headline is { } h ? h.ToString(CultureInfo.InvariantCulture) : "unknown";
-        return (client, u.Label, state, attributes);
+        return (client, key, u.Label, state, attributes);
     }
 
     // Publish-CopilotMqttUpdate's state and attributes, for a host that offers no update through

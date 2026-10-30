@@ -41,6 +41,9 @@ function readAgent(raw) {
     windows: Array.isArray(a.windows) ? a.windows.map(readWindow).filter(Boolean) : [],
     error: str(a.error),
     measuredAt: str(a.measuredAt),
+    // A further account the host was asked to report (usage.copilotAccounts), by its place. Rows
+    // are grouped by account, not by this: one machine's further account is another's own.
+    slot: Number.isInteger(a.slot) ? a.slot : null,
   };
 }
 

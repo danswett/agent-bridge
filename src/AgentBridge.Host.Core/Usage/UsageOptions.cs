@@ -2,7 +2,8 @@ namespace AgentBridge.Host.Core.Usage;
 
 // Where each agent keeps what its allowance is read from, and how often it is asked. The
 // pacing is agent-ha-bridge's (hooks/daemon-usage.ps1), kept so the two never ask a vendor
-// more often between them than that bridge alone did.
+// more often between them than that bridge alone did; usage.intervalSeconds and
+// usage.idleIntervalSeconds change it as they change that bridge's (UsageSettings).
 public sealed class UsageOptions
 {
     // ~/.copilot: config.json names the signed-in login.
@@ -62,7 +63,7 @@ public sealed class UsageOptions
     // How many of Codex's newest transcripts are searched for a rate-limit event.
     public int CodexFiles { get; init; } = 5;
 
-    public static UsageOptions For(SessionSourceOptions sessions)
+    public static UsageOptions For(SessionSourceOptions sessions, UsageSettings? usage = null)
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -78,6 +79,8 @@ public sealed class UsageOptions
             ClaudeHome = sessions.ClaudeHome,
             ClaudeAccountPath = ClaudeAccountFor(sessions.ClaudeHome),
             CodexHome = sessions.CodexHome,
+            Interval = (usage ?? UsageSettings.Default).Interval,
+            IdleInterval = (usage ?? UsageSettings.Default).IdleInterval,
         };
     }
 

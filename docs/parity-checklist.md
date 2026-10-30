@@ -284,6 +284,7 @@ That also marks the host log, which `log` then reads from.
 |---|---|---|---|---|---|---|
 | **E8-01** | §8 "Copilot allowance", §8 "Bars with pace mark", §8 "Pace:" | App, PWA, HA | Open the usage view on the app and PWA; compare with the disposable HA's usage card from B | The same figures as the old card, with bars, pace and "resets in" | `agent-bridge-rehearsal note --step E8-01 --result pass --detail "…" --screenshot <file>` | |
 | **E8-02** | §8 "Claude session and weekly", §8 "Codex 5-hour" | PWA | As above, for Claude and Codex | Their windows shown | `agent-bridge-rehearsal note --step E8-02 --result pass --detail "…"` | Cl/Cx live |
+| **E8-04** | §8 "usage.copilotAccounts" | VM-M, PWA, HA | With a second login in `gh` on VM-M, `agent-bridge-host config set usage.copilotAccounts '["<that login>"]'` and restart serve; open the usage view | Each account is a row of its own under its login, with its own figure; the disposable HA has `sensor.agent_bridge_<slug>_usage_copilot_2` | `agent-bridge-rehearsal note --step E8-04 --result pass --detail "…" --screenshot <file>` | Two `gh` logins |
 | **E8-03** | §8 "A failure is shown" | VM-M, PWA | Disconnect VM-M's network for two minutes, then reconnect | A fresh reading shows no error; the error appears only beside a reading over an hour old | `agent-bridge-rehearsal note --step E8-03 --result pass --detail "…"` | |
 
 ### E9. Machines and updates
@@ -407,7 +408,7 @@ These rows have no step. Each has its reason. A row moves into a step when its i
 | §1 "Unknown statuses" | Only seen when two versions meet: the first update after the rehearsal, E9-02 |
 | §2 "Cancel request", §2 "Claude free text" | Missing (#56, #42) |
 | §6 "Launch from the Windows app" | Missing (#49) |
-| §8 "usage.copilotAccounts" | Missing (#52) |
+| §8 "usage.keychain" | Missing (#52) |
 | §8 "Only the publication writer" | N/A: tied to the HA writer role |
 | §9 "Offline machines", §9 "Update available" | Missing (#50, #51) |
 | §10 "Notification styling" | N/A: HA companion app only |

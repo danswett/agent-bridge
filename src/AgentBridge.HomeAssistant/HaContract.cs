@@ -170,11 +170,12 @@ public static partial class HaContract
     public static string GlobalStateTopic(string slug) => $"{MachineTopicRoot(slug)}/global/state";
     public static string GlobalAttributesTopic(string slug) => $"{MachineTopicRoot(slug)}/global/attr";
 
-    // Publish-CopilotMqttUsage: one sensor per agent, so each has its own history.
-    public static (string Topic, JsonObject Config) UsageConfig(string slug, string machineName, string client, string label) =>
+    // Publish-CopilotMqttUsage: one sensor per agent, so each has its own history, and one per
+    // further Copilot login (key copilot_<slot>), named for its account so the two can be told apart.
+    public static (string Topic, JsonObject Config) UsageConfig(string slug, string machineName, string client, string label, string? account = null) =>
         (DiscoveryTopic("sensor", MachineNode(slug), $"usage_{client}"), new JsonObject
         {
-            ["name"] = $"{label} usage",
+            ["name"] = account is null ? $"{label} usage" : $"{label} usage ({account})",
             ["unique_id"] = $"agent_bridge_{slug}_usage_{client}",
             ["object_id"] = $"agent_bridge_{slug}_usage_{client}",
             ["state_topic"] = $"{MachineTopicRoot(slug)}/usage/{client}/state",
@@ -382,6 +383,11 @@ public static partial class HaContract
     public const int UsageAccountSlots = 3;
     public static readonly IReadOnlyList<string> UsageSensorKeys =
         [.. UsageClients, .. Enumerable.Range(2, UsageAccountSlots).Select(i => $"copilot_{i}")];
+
+    // The numbered sensors for further Copilot logins in these places, in order; a place there is no
+    // sensor for has none.
+    public static IReadOnlyList<string> UsageAccountSensors(IEnumerable<int> slots) =>
+        [.. slots.Where(s => s >= 2 && s <= 1 + UsageAccountSlots).Distinct().Order().Select(s => $"copilot_{s}")];
 
     // Get-CopilotMqttUsageTopics.
     public static IReadOnlyList<string> UsageTopics(string slug, IEnumerable<string>? clients = null)
