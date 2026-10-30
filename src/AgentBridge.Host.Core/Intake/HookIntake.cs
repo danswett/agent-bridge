@@ -465,7 +465,8 @@ public sealed class HookIntake : IAsyncDisposable
             files = Directory.GetFiles(_spool, "*.json").Where(f => f.EndsWith(".json", StringComparison.Ordinal)).ToArray();
             _spoolUnlisted = false;
         }
-        catch (DirectoryNotFoundException) { return 0; }
+        // Not found only when nothing is there: Linux says so of a file in its place too (ENOTDIR).
+        catch (DirectoryNotFoundException) when (!File.Exists(_spool)) { return 0; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             // Whatever waits in it is unseen, the PreToolUse that answered an approval at the
