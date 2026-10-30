@@ -673,53 +673,61 @@ public sealed class ShadowTests : IDisposable
         Assert.Null(await Confirmed(16));
     }
 
-    // Found in review (#73): the daemon republishing an unchanged figure every half hour and the
-    // host reading every fifteen minutes, seven minutes after the daemon's polls, never once took
-    // readings within three minutes of each other, so a host fifteen points high for good was never
-    // seen. The daemon's figure is now as of its last poll.
-    [Fact]
-    public void A_run_compares_the_hosts_figure_with_the_daemons_unchanged_one_and_finds_a_lasting_difference()
+    // Found in review (#73): the daemon republishes an unchanged figure only every half hour, or
+    // with a dashboard.publication at every poll with a new measured_at; either way a host reading
+    // every fifteen minutes, seven after the daemon's polls, never landed within three minutes of
+    // one, so a host fifteen points high for good was never seen. The daemon's figure now holds
+    // from when it first stood to its last poll.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_run_compares_the_hosts_figure_with_the_daemons_unchanged_one_and_finds_a_lasting_difference(bool publication)
     {
         f.Time.SetLocalTimeZone(TimeZoneInfo.Utc);
+        Daemon(new JsonObject());
+        Config(c => { if (publication) { c["dashboard"] = new JsonObject { ["publication"] = new JsonObject { ["writer"] = "FIXTURE" } }; } });
         var start = f.Time.GetUtcNow();
-        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60), f.Time);
-        var memory = new ShadowMemory();
         var quarter = TimeSpan.FromMinutes(15);
+        var reassert = publication ? TimeSpan.FromMinutes(4) : TimeSpan.FromMinutes(30);
         (double Value, DateTimeOffset At)? published = null;
         (double Value, DateTimeOffset At)? host = null;
-        ShadowView Side(ShadowUsage usage) => new() { SeesAgentHaBridge = true, Usage = new Dictionary<string, ShadowUsage> { ["copilot"] = usage }, Resumable = [] };
-        void Minutes(int n, Func<TimeSpan, double> used, double hostHigh)
+        var inner = new FakeHomeAssistant(e => e == "sensor.agent_bridge_fixture_usage_copilot" && published is { } p ? UsageState("copilot", p.Value, p.At) : null);
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60), f.Time);
+        var memory = new ShadowMemory();
+        async Task Minutes(int n, Func<TimeSpan, double> used, double hostHigh)
         {
             for (var i = 0; i < n; i++)
             {
                 var now = f.Time.GetUtcNow();
                 var since = now - start;
-                // The daemon asks every fifteen minutes, publishing a change or a half-hour-old figure.
-                if (since.Ticks % quarter.Ticks == 0 && (published is not { } p || p.Value != used(since) || now - p.At >= TimeSpan.FromMinutes(30)))
+                // The daemon asks every fifteen minutes (no session of the agent open), publishing a
+                // change, or the same figure once the re-assert has passed.
+                if (since.Ticks % quarter.Ticks == 0 && (published is not { } p || p.Value != used(since) || now - p.At >= reassert))
                 {
                     published = (used(since), now);
                 }
                 // The host asks every fifteen minutes too, seven after the daemon.
                 if ((since - TimeSpan.FromMinutes(7)).Ticks % quarter.Ticks == 0) { host = (used(since) + hostHigh, now); }
-                if (published is { } d && host is { } h)
+                var daemon = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!;
+                if (daemon.Count > 0 && host is { } h)
                 {
-                    var daemon = Reading(d.Value, d.At) with { ConfirmedAt = DaemonUsagePace.Default.ConfirmedAt(d.At, now) };
-                    ledger.Record(ShadowCompare.Compare(Side(daemon), Side(Reading(h.Value, h.At)), memory), new ShadowView(), new ShadowView());
+                    var side = (IReadOnlyDictionary<string, ShadowUsage> usage) => new ShadowView { SeesAgentHaBridge = true, Usage = usage, Resumable = [] };
+                    ledger.Record(ShadowCompare.Compare(side(daemon), side(new Dictionary<string, ShadowUsage> { ["copilot"] = Reading(h.Value, h.At) }), memory), new ShadowView(), new ShadowView());
                 }
                 f.Time.Advance(TimeSpan.FromMinutes(1));
             }
         }
 
         // Usage rising now and then, which each side sees at its own next read.
-        Minutes(120, since => since >= TimeSpan.FromMinutes(50) ? 30 : since >= TimeSpan.FromMinutes(20) ? 20 : 10, 0);
+        await Minutes(120, since => since >= TimeSpan.FromMinutes(50) ? 30 : since >= TimeSpan.FromMinutes(20) ? 20 : 10, 0);
         Assert.Empty(ledger.Today!.Mismatches);
         Assert.False(ledger.Today.Transient.ContainsKey(ShadowKinds.UsagePercent));
 
-        Minutes(90, _ => 40, 15);
+        await Minutes(90, _ => 40, 15);
         var m = Assert.Single(ledger.Today.Mismatches);
         Assert.Equal((ShadowKinds.UsagePercent, "copilot", true), (m.Kind, m.Session, m.Open));
     }
-
     [Fact]
     public void Usage_percentages_are_compared_only_between_readings_taken_close_together_and_within_five_points()
     {

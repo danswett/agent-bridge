@@ -82,6 +82,9 @@ public sealed record ShadowUsage
     // after MeasuredAt because it republishes an unchanged figure only now and then
     // (DaemonUsagePace). Null when no later than MeasuredAt.
     public DateTimeOffset? ConfirmedAt { get; init; }
+    // The daemon's only: since when the same figure has stood, read after read, when earlier than
+    // MeasuredAt (it republishes an unchanged figure with a new measured_at).
+    public DateTimeOffset? HeldSince { get; init; }
 }
 
 // One disagreement in one sample. Session is a hashed session id, or for a usage kind the agent
@@ -266,8 +269,8 @@ public static class ShadowCompare
     // apart in time it is not compared at all. Close together because the two read on their own
     // paces (the daemon every two minutes, the host every fifteen while the daemon runs), and a
     // host reading thirteen minutes old would otherwise be a mismatch for its whole age. The
-    // daemon's figure is as of any moment from its measurement to its confirmation (ConfirmedAt),
-    // since it leaves an unchanged one unpublished for up to half an hour.
+    // daemon's figure is as of any moment from when it first stood (HeldSince) to its confirmation
+    // (ConfirmedAt), since it republishes an unchanged one only now and then.
     const double PercentTolerance = 5;
     static readonly TimeSpan ReadingsApart = TimeSpan.FromMinutes(3);
 
@@ -339,7 +342,7 @@ public static class ShadowCompare
 
         // When a side's figure is known to have held: from its measurement to its confirmation.
         static (DateTimeOffset From, DateTimeOffset To)? Held(ShadowUsage u) =>
-            u.MeasuredAt is { } m ? (m, u.ConfirmedAt is { } c && c > m ? c : m) : null;
+            u.MeasuredAt is { } m ? (u.HeldSince is { } s && s < m ? s : m, u.ConfirmedAt is { } c && c > m ? c : m) : null;
 
         static TimeSpan Apart((DateTimeOffset From, DateTimeOffset To) x, (DateTimeOffset From, DateTimeOffset To) y) =>
             x.From > y.To ? x.From - y.To : y.From > x.To ? y.From - x.To : TimeSpan.Zero;

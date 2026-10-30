@@ -155,6 +155,14 @@ public sealed class DaemonHaReader : IDisposable
 
     sealed class Unavailable(string reason) : Exception(reason);
 
+    // Each agent's figure at the last read and since when it has stood unchanged; in memory only.
+    // With a dashboard.publication the daemon republishes an unchanged figure at every poll, so
+    // measured_at keeps moving while the figure does not, and on its own it never reached back to
+    // a host reading taken between two polls (#73).
+    readonly Dictionary<string, (string Figure, DateTimeOffset Since, DateTimeOffset ReadAt)> standing = new(StringComparer.Ordinal);
+    // Reads further apart than this may have missed a change in between, so the figure starts again.
+    static readonly TimeSpan Unbroken = TimeSpan.FromMinutes(5);
+
     readonly HttpClient http;
     readonly TimeProvider clock;
     readonly TimeSpan patience;
@@ -191,8 +199,9 @@ public sealed class DaemonHaReader : IDisposable
             {
                 if (await GetAsync(access, entity, ct) is { } state && Usage(state) is var u)
                 {
-                    usage[client] = u with { ConfirmedAt = access.UsagePace.ConfirmedAt(u.MeasuredAt, readAt) };
+                    usage[client] = Stood(client, u with { ConfirmedAt = access.UsagePace.ConfirmedAt(u.MeasuredAt, readAt) }, readAt);
                 }
+                else { standing.Remove(client); }
             }
             var resume = await GetAsync(access, resumeEntity, ct);
             return resume is not { } r
@@ -236,6 +245,18 @@ public sealed class DaemonHaReader : IDisposable
             return doc.RootElement.ValueKind == JsonValueKind.Object ? doc.RootElement.Clone() : throw new Unavailable("Home Assistant sent a state that is not one");
         }
         catch (JsonException) { throw new Unavailable("Home Assistant sent a state that is not JSON"); }
+    }
+
+    // The same figure read again, republished or not, has held since it was first measured: the
+    // daemon publishes every change, and percent used only rises within a window.
+    ShadowUsage Stood(string client, ShadowUsage u, DateTimeOffset readAt)
+    {
+        if (!u.Reading || u.MeasuredAt is not { } m) { standing.Remove(client); return u; }
+        var figure = string.Join('\u001f', new[] { u.Account ?? "", u.AccountKey ?? "" }
+            .Concat(u.Windows.OrderBy(w => w.Key, StringComparer.Ordinal).Select(w => w.Key + "=" + w.Value.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+        var since = standing.TryGetValue(client, out var was) && was.Figure == figure && readAt - was.ReadAt <= Unbroken && was.Since <= m ? was.Since : m;
+        standing[client] = (figure, since, readAt);
+        return since < m ? u with { HeldSince = since } : u;
     }
 
     // New-BridgeUsageRecord as Publish-CopilotMqttUsage puts it in the sensor's attributes.
