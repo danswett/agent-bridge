@@ -75,7 +75,7 @@ public sealed partial class HaConnector
     // the next pass reads the card.
     internal void Observe(HaTrigger hit) => hits.Enqueue((Interlocked.Increment(ref hitSeq), hit));
 
-    // The entities a watch should cover: every published session's answer controls.
+    // The entities a watch should cover: every published session's controls.
     internal IReadOnlyCollection<string> WatchedEntities()
     {
         lock (gate)
@@ -84,13 +84,14 @@ public sealed partial class HaConnector
         }
     }
 
-    static IEnumerable<string> Controls(string node)
+    IEnumerable<string> Controls(string node)
     {
         yield return SessionEntities.Decision(node);
         yield return SessionEntities.Reply(node);
         yield return SessionEntities.ReplyPayload(node);
         yield return SessionEntities.Submit(node);
         for (var i = 1; i <= HaContract.MaxFields; i++) { yield return SessionEntities.Field(node, i); }
+        if (ServesStops) { yield return SessionEntities.Stop(node); }
     }
 
     // The watch: one subscription to every session's controls, rebuilt when the set changes and
@@ -351,6 +352,8 @@ public sealed partial class HaConnector
     {
         if (!ServesAnswers || !options.ConsumeAnswers) { hits.Clear(); return; }
         await RepliesDoneAsync(now, ct);
+        await StopsDoneAsync(now, ct);
+        await StopLapsesAsync(now, ct);
         var touched = new Dictionary<string, List<(long Seq, HaTrigger Hit)>>(StringComparer.Ordinal);
         while (hits.TryDequeue(out var item))
         {
@@ -371,13 +374,23 @@ public sealed partial class HaConnector
                 }
             }
         }
-        ReplyCards(touched, now);
+        // Every card, every few seconds, for a reply or an End session press: one made while the
+        // watch was down reports nothing.
+        var controlSweep = now >= nextReplySweep;
+        if (controlSweep) { nextReplySweep = now + options.ReplySweep; }
+        ReplyCards(touched, controlSweep);
+        StopCards(touched, controlSweep);
         foreach (var (node, seen) in touched)
         {
             (string Id, Published P)? entry;
             lock (gate) { entry = published.Where(x => x.Value.Node == node).Select(x => ((string, Published)?)(x.Key, x.Value)).FirstOrDefault(); }
             if (entry is not { } e) { continue; }
-            try { await CardAsync(e.Id, e.P, seen, now, ct); }
+            try
+            {
+                // End session first: it is answered whatever else the card holds.
+                if (ServesStops) { await StopPressAsync(e.Id, e.P, now, ct); }
+                await CardAsync(e.Id, e.P, seen, now, ct);
+            }
             catch
             {
                 // Read again on the next pass, with the numbers they came with.
@@ -392,7 +405,7 @@ public sealed partial class HaConnector
     {
         var dot = entityId.IndexOf('.');
         var name = dot < 0 ? entityId : entityId[(dot + 1)..];
-        foreach (var suffix in new[] { "_decision", "_reply_payload", "_reply", "_submit" })
+        foreach (var suffix in new[] { "_decision", "_reply_payload", "_reply", "_submit", "_stop" })
         {
             if (name.EndsWith(suffix, StringComparison.Ordinal)) { return name[..^suffix.Length]; }
         }

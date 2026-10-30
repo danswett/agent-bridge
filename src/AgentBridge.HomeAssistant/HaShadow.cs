@@ -53,7 +53,10 @@ public static partial class HaShadow
         Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer = servesAnswers
             ? (_, _) => Task.FromResult(new AnswerResult(AnswerOutcome.Refused, "shadow"))
             : null;
-        await using (var connector = new HaConnector(dryOptions, dry, source, () => null, usage, answer: answer))
+        Func<StopRequest, CancellationToken, Task<StopResult>>? stop = servesAnswers
+            ? (_, _) => Task.FromResult(new StopResult(StopOutcome.Refused, "shadow"))
+            : null;
+        await using (var connector = new HaConnector(dryOptions, dry, source, () => null, usage, answer: answer, stop: stop))
         {
             await connector.TickAsync(cancellationToken);
         }
@@ -114,11 +117,11 @@ public static partial class HaShadow
     static string? NotServed(string topic, bool servesAnswers, bool hasUsage)
     {
         if (!hasUsage && (topic.Contains("/usage_", StringComparison.Ordinal) || topic.Contains("/usage/", StringComparison.Ordinal))) { return "usage not compared (no reading was taken)"; }
-        foreach (var part in new[] { "/stop/", "/install_update/", "/new_", "/newsession/", "/transfer", "/transfer_request/" })
+        foreach (var part in new[] { "/install_update/", "/new_", "/newsession/", "/transfer", "/transfer_request/" })
         {
             if (topic.Contains(part, StringComparison.Ordinal)) { return "not served yet (a later stage)"; }
         }
-        if (!servesAnswers && (new[] { "/decision/", "/reply/", "/replypayload/", "/submit/" }.Any(p => topic.Contains(p, StringComparison.Ordinal))
+        if (!servesAnswers && (new[] { "/decision/", "/reply/", "/replypayload/", "/submit/", "/stop/" }.Any(p => topic.Contains(p, StringComparison.Ordinal))
             || FieldConfig().IsMatch(topic)))
         {
             return "not served without answers";

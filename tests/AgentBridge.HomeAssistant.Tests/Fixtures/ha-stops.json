@@ -1,0 +1,159 @@
+{
+  "source": {
+    "repository": "danswett/agent-ha-bridge",
+    "commit": "12cc97aad280d77a3593832f1eac6a5b65e247f8",
+    "dirty": false,
+    "generator": "tools/ha-contract/Export-HaContract.ps1",
+    "note": "Recorded by running agent-ha-bridge's own functions with a recording transport. Regenerate; do not edit by hand."
+  },
+  "sessionId": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20",
+  "machine": "DSWETT-DEV-VM1",
+  "constants": {
+    "confirmSeconds": 10,
+    "lapseRetrySeconds": 2,
+    "confirmNote": "Press End session again to end it",
+    "lapsedNote": "End session NOT confirmed"
+  },
+  "hints": {
+    "working": "this session is still working - the confirmation lapses in 10s",
+    "waiting": "this session is waiting on you - the confirmation lapses in 10s",
+    "agents": "this session is waiting for background agents it started - the confirmation lapses in 10s",
+    "shell": "this session is waiting for background commands it started - the confirmation lapses in 10s",
+    "unclassified": "this session is still working - the confirmation lapses in 10s",
+    "other": "this session is compacting - the confirmation lapses in 10s"
+  },
+  "pinned": {
+    "summary": "Press End session again to end it",
+    "hint": "this session is waiting on you - the confirmation lapses in 10s"
+  },
+  "cases": [
+    {
+      "name": "idleOnePress",
+      "status": "idle",
+      "notes": [
+        {
+          "summary": "Ending session...",
+          "extra": {}
+        }
+      ],
+      "statuses": [
+        "ending",
+        "ended"
+      ],
+      "armed": false
+    },
+    {
+      "name": "workingFirstPress",
+      "status": "working",
+      "notes": [
+        {
+          "summary": "Press End session again to end it",
+          "extra": {
+            "hint": "this session is still working - the confirmation lapses in 10s"
+          }
+        }
+      ],
+      "statuses": [],
+      "armed": true
+    },
+    {
+      "name": "waitingFirstPress",
+      "status": "waiting",
+      "notes": [
+        {
+          "summary": "Press End session again to end it",
+          "extra": {
+            "hint": "this session is waiting on you - the confirmation lapses in 10s"
+          }
+        }
+      ],
+      "statuses": [],
+      "armed": true
+    },
+    {
+      "name": "agentsFirstPress",
+      "status": "agents",
+      "notes": [
+        {
+          "summary": "Press End session again to end it",
+          "extra": {
+            "hint": "this session is waiting for background agents it started - the confirmation lapses in 10s"
+          }
+        }
+      ],
+      "statuses": [],
+      "armed": true
+    },
+    {
+      "name": "shellFirstPress",
+      "status": "shell",
+      "notes": [
+        {
+          "summary": "Press End session again to end it",
+          "extra": {
+            "hint": "this session is waiting for background commands it started - the confirmation lapses in 10s"
+          }
+        }
+      ],
+      "statuses": [],
+      "armed": true
+    },
+    {
+      "name": "workingConfirmed",
+      "status": "working",
+      "notes": [
+        {
+          "summary": "Ending session...",
+          "extra": {}
+        }
+      ],
+      "statuses": [
+        "ending",
+        "ended"
+      ],
+      "armed": false
+    },
+    {
+      "name": "endFails",
+      "status": "idle",
+      "notes": [
+        {
+          "summary": "Ending session...",
+          "extra": {}
+        },
+        {
+          "summary": "Could not end session",
+          "extra": {
+            "error": "the session did not exit"
+          }
+        }
+      ],
+      "statuses": [
+        "ending",
+        "error"
+      ],
+      "armed": false
+    },
+    {
+      "name": "repeatPress",
+      "status": "working",
+      "notes": [],
+      "statuses": [],
+      "armed": false
+    },
+    {
+      "name": "lapsed",
+      "status": "working",
+      "notes": [
+        {
+          "summary": "End session NOT confirmed",
+          "extra": {
+            "hint": "no second press within 10s"
+          }
+        }
+      ],
+      "statuses": [],
+      "armed": false
+    }
+  ]
+}

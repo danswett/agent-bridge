@@ -269,6 +269,19 @@ public static partial class HaContract
             ["availability"] = SessionAvailability(t),
         });
 
+    // End session (Publish-CopilotMqttSession's $stopConfig): two presses for a session that is
+    // not idle, one for an idle one (HaConnector.Stops.cs).
+    public static (string Topic, JsonObject Config) StopConfig(SessionTopics t, string sessionName, string machineName) =>
+        (DiscoveryTopic("button", t.Node, "stop"), new JsonObject
+        {
+            ["name"] = "End session",
+            ["unique_id"] = $"{t.Node}_stop",
+            ["command_topic"] = t.StopCommand,
+            ["icon"] = "mdi:stop-circle-outline",
+            ["device"] = SessionDevice(t.Node, sessionName, machineName),
+            ["availability"] = SessionAvailability(t),
+        });
+
     // The ids of the controls a session publishes now, keyed by unique_id, for pinning.
     public static IReadOnlyDictionary<string, string> SessionControlIds(string node)
     {

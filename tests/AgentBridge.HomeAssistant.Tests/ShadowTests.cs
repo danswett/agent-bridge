@@ -43,7 +43,7 @@ public sealed class ShadowTests
     }
 
     [Fact]
-    public async Task The_card_this_host_would_publish_matches_the_daemons_and_what_it_leaves_out_is_said_to_be_by_design()
+    public async Task The_card_this_host_would_publish_matches_the_daemons_end_session_included()
     {
         DaemonPublished();
         sessions.Set(FakeSessions.Copilot(A));
@@ -55,13 +55,11 @@ public sealed class ShadowTests
         Assert.Equal(HaShadow.Same, Verdict(HaContract.DiscoveryTopic("text", Node, "reply")));
         Assert.Equal(HaShadow.Same, Verdict(HaContract.DiscoveryTopic("sensor", Node, "replypayload")));
         Assert.Equal(HaShadow.Same, Verdict(HaContract.DiscoveryTopic("button", Node, "submit")));
+        Assert.Equal(HaShadow.Same, Verdict(HaContract.DiscoveryTopic("button", Node, "stop")));
         Assert.Equal(HaShadow.Same, Verdict(HaContract.Topics(Node).Availability));
 
-        var stop = Assert.Single(report.Differences, d => d.Topic == HaContract.DiscoveryTopic("button", Node, "stop"));
-        Assert.Equal(HaShadow.DaemonOnly, stop.Verdict);
-        Assert.NotNull(stop.Note);
-        // Every other entity of the card is the same: availability, the 18 configs and the list's.
-        Assert.True(report.Same >= 19, $"{report.Same} the same");
+        // Every entity of the card is the same: availability, the 19 configs and the list's.
+        Assert.True(report.Same >= 20, $"{report.Same} the same");
     }
 
     [Fact]

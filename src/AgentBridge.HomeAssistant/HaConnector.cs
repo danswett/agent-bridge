@@ -64,6 +64,9 @@ public sealed record HaConnectorOptions
     public long ImageMaxBytes { get; init; } = 25L * 1024 * 1024;
     // The largest file the card sends inline (Save-BridgeReplyFile's MaxBytes).
     public int InlineFileMaxBytes { get; init; } = 262144;
+    // How often a lapsed End session note is tried again when it could not be shown
+    // (StopLapseRetrySeconds).
+    public TimeSpan StopLapseRetry { get; init; } = TimeSpan.FromSeconds(2);
     // How long stopping waits for a reply being delivered.
     public TimeSpan ReplyStopWait { get; init; } = TimeSpan.FromSeconds(10);
 }
@@ -71,8 +74,9 @@ public sealed record HaConnectorOptions
 // The Home Assistant connector (docs/ha-connector.md): this machine's sessions, liveness,
 // version and agent usage on the dashboard agent-ha-bridge's publication writer generates, in
 // agent-ha-bridge's own per-machine contract (HaContract), so a machine moved off the
-// PowerShell daemon keeps its cards; and, given the host's answer and reply delivery, the answers
-// and replies given on those cards (HaConnector.Answers.cs, HaConnector.Replies.cs).
+// PowerShell daemon keeps its cards; and, given the host's answer, reply and stop delivery, the
+// answers, replies and End session presses given on those cards (HaConnector.Answers.cs,
+// HaConnector.Replies.cs, HaConnector.Stops.cs).
 //
 // What it never does, and why:
 //   * write the shared card, dashboard or publication policy. The writer is configured and fenced
@@ -82,7 +86,7 @@ public sealed record HaConnectorOptions
 //   * run while agent-ha-bridge runs for this user (design G5). Two publishers of one machine's
 //     entities would fight over every retained topic. Checked before every write, so the
 //     daemon starting part-way through a pass stops the rest of it;
-//   * launch, stop or update: later stages. Until they land, entities only those would
+//   * launch or update: later stages. Until they land, entities only those would
 //     serve are withdrawn rather than left as controls nothing acts on.
 public sealed partial class HaConnector : IAsyncDisposable
 {
@@ -142,6 +146,8 @@ public sealed partial class HaConnector : IAsyncDisposable
         public string? ToldUnserved;
         // Replies (HaConnector.Replies.cs).
         public ReplyState Reply = new();
+        // End session (HaConnector.Stops.cs).
+        public StopState Stop = new();
         // Who is driving the session's turn, and an arm left by a press for the next one
         // (Set-DaemonDriverPending): consumed by the turn it was armed for, or lapsed.
         public string Driver = "human";
@@ -194,11 +200,13 @@ public sealed partial class HaConnector : IAsyncDisposable
     public HaConnector(HaConnectorOptions options, IHomeAssistant ha, ISessionSource source, Func<string?> agentHaBridge,
         Func<(UsageReport Report, long Version)>? usage = null, Action<string>? log = null, TimeProvider? time = null,
         Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer = null,
-        Func<HaReply, CancellationToken, Task<ReplyResult>>? reply = null)
+        Func<HaReply, CancellationToken, Task<ReplyResult>>? reply = null,
+        Func<StopRequest, CancellationToken, Task<StopResult>>? stop = null)
     {
         this.options = options;
         this.answer = answer;
         this.reply = reply;
+        stopper = stop;
         // Every write asks first (design G5): a pass can run long (each request may take its
         // timeout), and agent-ha-bridge starting part-way through must stop the rest of it, not
         // race the daemon's own publishes until the pass ends.
@@ -401,7 +409,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         };
         if (ServesAnswers)
         {
-            served.UnionWith(HaContract.SessionDiscoveryTopics(node).Where(x => x != HaContract.DiscoveryTopic("button", node, "stop")));
+            served.UnionWith(HaContract.SessionDiscoveryTopics(node).Where(x => ServesStops || x != HaContract.DiscoveryTopic("button", node, "stop")));
             // The card's own publishes and the armed question: never withdrawn from under it.
             served.Add(t.ReplyPayload);
             served.Add(t.DecisionAttributes);
@@ -589,6 +597,9 @@ public sealed partial class HaConnector : IAsyncDisposable
         var summary = HaPayloads.ActivitySummary(full);
         var detail = HaPayloads.ActivityAttributes(full, name, options.MachineName, verbose, now, driver: p.Driver,
             thinking: p.Observe(full.Activity.Response, full.Activity.Reasoning), answerConsumedAt: p.LastPayloadStamp);
+        // Get-DaemonCardSummary: while End session waits for its second press, the card keeps
+        // asking for it over whatever the session does meanwhile.
+        if (p.Stop.Asking(now)) { summary = HaStop.ConfirmNote; detail["hint"] = p.Stop.Hint; }
         var activitySignature = summary + "\n" + Signature(detail);
         if (activitySignature != p.Activity)
         {
@@ -615,6 +626,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         };
         for (var i = 1; i <= HaContract.MaxFields; i++) { configs.Add(HaContract.FieldConfig(t, name, machine, i, $"Field {i}", [HaDecision.Idle])); }
         configs.Add(HaContract.SubmitConfig(t, name, machine));
+        if (ServesStops) { configs.Add(HaContract.StopConfig(t, name, machine)); }
         foreach (var (topic, config) in configs) { await PublishAsync(topic, config, true, ct); }
     }
 
@@ -623,6 +635,7 @@ public sealed partial class HaConnector : IAsyncDisposable
     {
         var ids = new Dictionary<string, string>(HaContract.SessionSensorIds(node), StringComparer.Ordinal);
         if (ServesAnswers) { foreach (var (u, e) in HaContract.SessionControlIds(node)) { ids[u] = e; } }
+        if (ServesStops) { ids[$"{node}_stop"] = SessionEntities.Stop(node); }
         return ids;
     }
 
