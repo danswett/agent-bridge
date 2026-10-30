@@ -73,7 +73,7 @@ Request `data`: `{}`. Result:
 }
 ```
 
-`machine.id` is the host's device id (S4). `os` is `windows`, `macos` or `linux`. `machine` also carries `dev` and `sessions`, for a status line ([v1-usage.md](v1-usage.md#machine-status)), and `readOnly` while the machine takes nothing from other devices: because its config makes it read-only (`delivery.readOnly`, [host-config.md](../host-config.md)), or because agent-ha-bridge runs there for the same user (design G5). It is the reason, in words, which a client shows on the machine's status line and on its read-only questions. Absent otherwise.
+`machine.id` is the host's device id (S4). `os` is `windows`, `macos` or `linux`. `machine` also carries `dev` and `sessions`, for a status line ([v1-usage.md](v1-usage.md#machine-status)), and `readOnly` while the machine takes nothing from other devices: because its config makes it read-only (`delivery.readOnly`, [host-config.md](../host-config.md)), or because agent-ha-bridge runs there for the same user (design G5). It is the reason, in words, which a client shows on the machine's status line and on its read-only questions. Absent otherwise. `machine.instance`, when present, names this run of the host: it is new each time the host starts and the same on every connection to that run, so a client can tell a reconnect from a restart before sending a request again that only the first run remembers (a reply or an answer whose outcome was lost).
 `capabilities` lists what this host supports, and a client hides anything missing:
 
 | Capability | Ops |

@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 
@@ -19,6 +20,8 @@ public partial class App : Application
     DispatcherTimer? timer;
     HostConnection? connection;
     DemoHost? demo;
+    DemoHost? remoteDemo;
+    Fleet? fleet;
     HostManager? manager;
     MainViewModel? main;
     ToastResponder? responder;
@@ -86,40 +89,64 @@ public partial class App : Application
             catch (Exception e) when (e is UnauthorizedAccessException or IOException or System.Security.SecurityException) { AppLog.Write($"toasts not registered: {e.Message}"); }
         }
 
-        var deliveries = new Deliveries(connection, ui);
         MainViewModel? self = null;
-        var conn = connection;
-        var cards = new CardContext
-        {
-            Deliveries = deliveries,
-            Folds = new FoldStore(Path.Combine(appData, $"{options.Profile}-folds.json")),
-            Capabilities = () => conn.Capabilities,
-            MachineName = () => conn.Hello?.Machine.Name,
-            ReadOnlyWhy = () => self?.ReadOnlyWhy,
-            ShowDetail = () => prefs.ShowDetail,
-            Host = conn,
-            Shrinker = new WinRtImageShrinker(),
-            FetchDetail = async id =>
-            {
-                try { return await conn.CallAsync<Session>(Ops.SessionGet, new { id }, TimeSpan.FromSeconds(15)); }
-                catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or JsonException) { return null; }
-            },
-        };
-
+        var shrinker = new WinRtImageShrinker();
         IToastSink sink = installed ? new WindowsToastSink() : new NoToasts();
-        var planner = new ToastPlanner(sink)
-        {
-            Enabled = () => prefs.Toasts && installed,
-            FinishedEnabled = () => prefs.FinishedToasts,
-            WindowActive = () => window?.IsInFront == true,
-            Quiet = FocusAssist.Quiet,
-            Capabilities = () => conn.Capabilities,
-            MachineName = () => conn.Hello?.Machine.Name,
-        };
-        main = self = new MainViewModel(connection, cards, new UsageViewModel(), settings, planner);
-        settings.PreferencesChanged += () => { foreach (var c in main.Sessions) { c.CapabilitiesChanged(); } };
-        responder = new ToastResponder(deliveries, sink, id => ShowWindow(id));
 
+        // A machine's cards and toasts, whichever machine it is: everything they do goes to that
+        // machine's own host.
+        Machine Build(string key, HostConnection conn, FoldStore folds, Func<string?> readOnlyWhy)
+        {
+            Machine? m = null;
+            var cards = new CardContext
+            {
+                Deliveries = new Deliveries(conn, ui),
+                Folds = folds,
+                Capabilities = () => conn.Capabilities,
+                MachineName = () => m?.Name,
+                ShowMachine = () => self?.ShowMachines == true,
+                ReadOnlyWhy = readOnlyWhy,
+                ShowDetail = () => prefs.ShowDetail,
+                Host = conn,
+                Shrinker = shrinker,
+                FetchDetail = async id =>
+                {
+                    try { return await conn.CallAsync<Session>(Ops.SessionGet, new { id }, TimeSpan.FromSeconds(15)); }
+                    catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or JsonException) { return null; }
+                },
+            };
+            var planner = new ToastPlanner(sink)
+            {
+                Enabled = () => prefs.Toasts && installed,
+                FinishedEnabled = () => prefs.FinishedToasts,
+                WindowActive = () => window?.IsInFront == true,
+                Quiet = FocusAssist.Quiet,
+                Capabilities = () => conn.Capabilities,
+                MachineName = () => m?.Name,
+                MachineKey = key == Machine.LocalKey ? null : key,
+            };
+            return m = new Machine(key, conn, cards, planner);
+        }
+
+        var localMachine = Build(Machine.LocalKey, connection, new FoldStore(Path.Combine(appData, $"{options.Profile}-folds.json")), () => self?.ReadOnlyWhy);
+        main = self = new MainViewModel(localMachine, new UsageViewModel(), settings);
+        settings.PreferencesChanged += () => { foreach (var c in main.AllCards) { c.CapabilitiesChanged(); } };
+        responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (machine, id) => ShowWindow(machine, id));
+        main.MachineRemoved += responder.MachineGone;
+
+        // The account's other machines, through the relay as a device of the app's own (the
+        // demo's is a second pretend host). Remote folds are not kept across restarts.
+        IFleetLink? link = null;
+        Machine Remote(FleetHost h) =>
+            Build(h.Id, new HostConnection(ct => link!.OpenAsync(h.Id, ct), ui, AppLog.Write) { RetryDelay = TimeSpan.FromSeconds(options.Demo ? 0.5 : 5) }, new FoldStore(null), () => null);
+        if (options.Demo)
+        {
+            remoteDemo = DemoHost.Start(version, remote: true);
+            link = new DemoFleetLink(remoteDemo);
+            fleet = new Fleet(link, main, ui, Remote);
+            fleet.Start();
+        }
+        else { _ = StartFleetAsync(connection, ui, Remote, l => link = l); }
         window = new MainWindow(main, options.SelfTest is not null);
         window.CloseRequested += OnWindowClosing;
         connection.Start();
@@ -127,11 +154,11 @@ public partial class App : Application
         if (options.SelfTest is not null)
         {
             window.Activate();
-            _ = SelfTest.RunAsync(window, main, options.SelfTest, demo!, code => { ExitCode = code; Quit(); });
+            _ = SelfTest.RunAsync(window, main, options.SelfTest, demo!, remoteDemo!, code => { ExitCode = code; Quit(); });
             return;
         }
 
-        tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, "Assets", "AgentBridge.ico"), () => ShowWindow(null), Quit);
+        tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, "Assets", "AgentBridge.ico"), () => ShowWindow(null, null), Quit);
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         timer.Tick += (_, _) =>
         {
@@ -142,7 +169,7 @@ public partial class App : Application
 
         // A toast click: open its session, or answer it without opening anything.
         ToastActivator.Attach((arguments, inputs) => queue.TryEnqueue(() => _ = responder.HandleAsync(arguments, inputs)));
-        showWait = ThreadPool.RegisterWaitForSingleObject(single.Show, (_, _) => queue.TryEnqueue(() => ShowWindow(null)), null, Timeout.Infinite, executeOnlyOnce: false);
+        showWait = ThreadPool.RegisterWaitForSingleObject(single.Show, (_, _) => queue.TryEnqueue(() => ShowWindow(null, null)), null, Timeout.Infinite, executeOnlyOnce: false);
 
         if (!options.Background && !options.ToastActivated) { window.Activate(); }
         if (!options.Demo) { _ = StartHostAsync(); }
@@ -180,11 +207,90 @@ public partial class App : Application
         }
     }
 
-    void ShowWindow(string? sessionId)
+    void ShowWindow(string? machine, string? sessionId)
     {
         if (window is null) { return; }
         window.ShowInFront();
-        if (sessionId is not null) { main?.Open(sessionId); }
+        if (sessionId is not null) { main?.Open(machine, sessionId); }
+    }
+
+    // The account's other machines through the relay: the app's own device key (kept like the
+    // host's, in the TPM or with DPAPI, in the app's folder), and the account this machine's host
+    // signed in to, which the host hands to the app alone (host.relay.account). Loading a TPM
+    // key can take a moment, so it is not done on the UI thread.
+    async Task StartFleetAsync(HostConnection local, IUiDispatcher ui, Func<FleetHost, Machine> remote, Action<IFleetLink> made)
+    {
+        Identity identity;
+        try
+        {
+            // The same person starting the app for the first time in two Windows sessions at once
+            // would create two keys, and the reference file would name only one of them. The
+            // first copy creates it; the other waits, then loads the same one. Off the UI thread: a
+            // TPM can take a moment, and the window and this machine's connection need not wait.
+            var root = Path.Combine(Paths.AppData, "device");
+            identity = await Task.Run(() =>
+            {
+                var folder = Directory.CreateDirectory(Path.Combine(root, options.Profile)).FullName;
+                return UserLock.RunAsync(Path.Combine(folder, "init.lock"), () => Identity.Load(options.Profile, root: root), TimeSpan.FromSeconds(60), AppLog.Write);
+            });
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            AppLog.Write($"other machines are off: this app's device key could not be loaded: {e.Message}");
+            return;
+        }
+        // The account last read, for reconnecting to the relay while this machine's host is away:
+        // the other machines need not wait for it. Dropped when the relay refuses it, and read
+        // again whenever the host is back.
+        RelayAccount? last = null;
+        var link = new RelayFleetLink(async ct =>
+        {
+            if (local.State != LinkState.Connected && Volatile.Read(ref last) is { } kept) { return kept; }
+            await local.WhenConnectedAsync(ct);
+            RelayAccount? now = null;
+            if (local.Can(HostOps.Capability))
+            {
+                try { now = await local.CallAsync<RelayAccount>(HostOps.RelayAccount, ct: ct); }
+                catch (HostErrorException) { }
+            }
+            Volatile.Write(ref last, now);
+            return now;
+        }, identity.Key, $"{Environment.MachineName} · Agent Bridge app", AppLog.Write, () => ClaimRelay(identity.Folder));
+        link.Changed += () => { if (link.State == FleetState.Refused) { Volatile.Write(ref last, null); } };
+        ui.Post(() =>
+        {
+            if (quitting || main is null) { _ = link.DisposeAsync().AsTask(); return; }
+            made(link);
+            // A sign-in (or a different account) on this machine's host: the app follows it now.
+            // The relay too: the same account signed in through another relay moves the app with it.
+            // And the host coming back: what it says now is checked against the account in use.
+            // And a sign-in that finished, even to the same account: see LocalAccountWatch.
+            var watch = new LocalAccountWatch(local.Status, local.State == LinkState.Connected);
+            local.Changed += () => { if (watch.Next(local.Status, local.State == LinkState.Connected)) { link.Poke(); } };
+            fleet = new Fleet(link, main, ui, remote);
+            fleet.Start();
+        });
+    }
+
+    // One relay link per person, not per Windows session: the same person signed in twice runs the
+    // app twice, both with this key, and the relay keeps one connection per device, so the two
+    // would take it from each other every second. Held while the app runs (UserLock).
+    FileStream? relayLock;
+
+    bool ClaimRelay(string folder)
+    {
+        if (relayLock is not null) { return true; }
+        try
+        {
+            relayLock = UserLock.TryTake(Path.Combine(folder, "relay.lock"));
+            return relayLock is not null;
+        }
+        // Not one that another copy holds: the lock cannot be had at all, so go without it.
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            AppLog.Write($"the relay lock could not be opened, so it is not kept: {e.Message}");
+            return true;
+        }
     }
 
     // Closing the window keeps the app in the notification area, where its toasts come from.
@@ -205,8 +311,10 @@ public partial class App : Application
         tray = null;
         var c = connection;
         var d = demo;
+        var f = fleet;
         _ = Task.Run(async () =>
         {
+            if (f is not null) { await f.DisposeAsync(); }
             if (c is not null) { await c.DisposeAsync(); }
             if (d is not null) { await d.DisposeAsync(); }
         });

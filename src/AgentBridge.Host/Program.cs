@@ -233,7 +233,9 @@ async Task<int> ServeAsync()
     // Started at logon there is no console; the app shows the end of this file.
     HostLog.OpenFile(Path.Combine(identity.Folder, "logs", "host.log"));
     var name = Option("--name") ?? HostConfigFile.ReadName(identity.Folder) ?? $"{Environment.MachineName}{(profile == "default" ? "" : $"/{profile}")}";
-    var machine = new MachineInfo(Wire.DeviceId(identity.Key.Public), name, OsName(), HostVersion(), Dev: IsDevBuild() ? true : null);
+    // Instance: this run's own id. A client that lost an outcome sends the request again only to
+    // the run that may have acted on it, which remembers the request; never to a fresh one.
+    var machine = new MachineInfo(Wire.DeviceId(identity.Key.Public), name, OsName(), HostVersion(), Dev: IsDevBuild() ? true : null, Instance: Guid.NewGuid().ToString("N"));
 
     using var stop = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
@@ -297,6 +299,12 @@ async Task<int> ServeAsync()
     // is never sent to a relay other than the one that gave it.
     Uri? signedInRelay = null;
     Uri? ServeRelay() => signedInRelay ?? RelayUri(identity);
+    // The account with the relay that issued it, replaced whole after each sign-in, so the app
+    // reading it (host.relay.account) never gets a new token with the old relay's address.
+    RelayAccount? credential = null;
+    void PublishCredential() => Volatile.Write(ref credential,
+        identity.Account is { } a && ServeRelay() is { } r ? new RelayAccount(r.ToString(), a.Token, a.AccountId, a.Login) : null);
+    PublishCredential();
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -309,6 +317,7 @@ async Task<int> ServeAsync()
         LocalOnly = localOnly,
         Log = HostLog.FilePath,
         Account = () => identity.Account is { } a ? new HostAccount(a.Login, a.AccountId) : null,
+        Credential = () => Volatile.Read(ref credential),
         Relay = ServeRelay,
         AgentHaBridge = haProbe is null ? () => null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64),
         SignIn = async (relay, show, ct) =>
@@ -321,6 +330,7 @@ async Task<int> ServeAsync()
             identity.Save(result);
             File.WriteAllText(Path.Combine(identity.Folder, "relay.txt"), relay.ToString());
             signedInRelay = relay;
+            PublishCredential();
             // Whatever connection there is belongs to the account before; start over.
             connection?.Cancel();
             wake.Release();
@@ -443,6 +453,7 @@ async Task<int> ServeAsync()
             if (identity.ReloadAccount())
             {
                 signedInRelay = SavedRelay(identity) ?? signedInRelay;
+                PublishCredential();
                 Log($"signed in as {identity.Account!.Login} by another process");
                 return true;
             }

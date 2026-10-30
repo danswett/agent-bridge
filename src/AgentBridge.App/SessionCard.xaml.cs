@@ -26,8 +26,19 @@ public sealed partial class SessionCard : UserControl
     static readonly bool Animations = new Windows.UI.ViewManagement.UISettings().AnimationsEnabled;
     QuestionView? questionView;
     bool pulsing;
+    // Listening to the card: only while on screen. The machine picker takes cards off the list
+    // and puts them back, which makes a new control each time while the card stays alive, so a
+    // control that kept listening once off screen would be kept, and called, for as long as the
+    // card lives. Loaded and Unloaded can come in either order when a control is moved, so
+    // Unloaded counts only once the control is no longer loaded.
+    bool attached;
 
-    public SessionCard() => InitializeComponent();
+    public SessionCard()
+    {
+        InitializeComponent();
+        Loaded += (_, _) => Attach();
+        Unloaded += (_, _) => { if (!IsLoaded) { Detach(); } };
+    }
 
     public SessionCardViewModel? Card
     {
@@ -41,16 +52,39 @@ public sealed partial class SessionCard : UserControl
 
     void OnCard(SessionCardViewModel? old, SessionCardViewModel? card)
     {
-        if (old is not null) { old.PropertyChanged -= OnCardChanged; }
+        if (attached && old is not null) { old.PropertyChanged -= OnCardChanged; }
         if (card is not null)
         {
-            card.PropertyChanged += OnCardChanged;
+            if (attached) { card.PropertyChanged += OnCardChanged; }
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(this, $"Card:{card.Id}");
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(this, card.Title);
         }
+        if (!attached) { return; }
         SyncQuestion();
         SyncGlow();
         Bindings.Update();
+    }
+
+    void Attach()
+    {
+        if (attached) { return; }
+        attached = true;
+        if (Card is { } c) { c.PropertyChanged += OnCardChanged; }
+        SyncQuestion();
+        SyncGlow();
+        Bindings.Update();
+    }
+
+    void Detach()
+    {
+        if (!attached) { return; }
+        attached = false;
+        if (Card is { } c) { c.PropertyChanged -= OnCardChanged; }
+        questionView?.Detach();
+        questionView = null;
+        QuestionHost.Content = null;
+        if (pulsing) { Pulse.Stop(); pulsing = false; }
+        Bindings.StopTracking();
     }
 
     void OnCardChanged(object? sender, PropertyChangedEventArgs e)

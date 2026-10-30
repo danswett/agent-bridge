@@ -19,6 +19,9 @@ public sealed class HostControlOptions
     public bool LocalOnly { get; init; }
     public string? Log { get; init; }
     public Func<HostAccount?> Account { get; init; } = () => null;
+    // The account's token with the relay that issued it, for host.relay.account: one snapshot,
+    // so a sign-in to another relay never pairs the new token with the old relay's address.
+    public Func<RelayAccount?> Credential { get; init; } = () => null;
     public Func<Uri?> Relay { get; init; } = () => null;
     public Func<string?> AgentHaBridge { get; init; } = () => null;
     // GitHub's device flow through a relay: (relay, show(code, uri), ct) -> the account.
@@ -136,6 +139,8 @@ public sealed class HostControl
                 return Status().SignIn;
             case HostOps.Settings:
                 return Settings(Read<SettingsRequest>(data) ?? new SettingsRequest());
+            case HostOps.RelayAccount:
+                return RelayAccount();
             case HostOps.Stop:
                 log("stopping: asked by the app");
                 return new ChannelReply(new { stopping = true }, _ => { options.Stop(); return Task.CompletedTask; });
@@ -162,6 +167,16 @@ public sealed class HostControl
         var now = Configured();
         Changed();
         return new SettingsResult(now, now != options.Running);
+    }
+
+    // Only ever with the relay that issued the account, so the app never sends the token
+    // anywhere else.
+    RelayAccount RelayAccount()
+    {
+        if (options.LocalOnly) { throw new InvalidOperationException("this host was started with --local-only and does not use the relay"); }
+        if (options.Credential() is not { } account) { throw new InvalidOperationException("this host is not signed in to the relay"); }
+        log("relay account read by the app");
+        return account;
     }
 
     async Task<SignInStatus> SignInAsync(SignInRequest request)

@@ -11,6 +11,8 @@ public sealed class CardContext
     public required FoldStore Folds { get; init; }
     public required Func<IReadOnlyList<string>> Capabilities { get; init; }
     public Func<string?> MachineName { get; init; } = () => null;
+    // Whether a card names its machine: once the app shows more than one.
+    public Func<bool> ShowMachine { get; init; } = () => false;
     public Func<string?> ReadOnlyWhy { get; init; } = () => null;
     public Func<bool> ShowDetail { get; init; } = () => true;
     public HostConnection? Host { get; init; }
@@ -61,7 +63,7 @@ public sealed class SessionCardViewModel : Observable
     public AgentKind Agent => session.Agent;
     public string AgentName => AgentNames.GetValueOrDefault(session.Agent, "Agent");
     public string Title => string.IsNullOrEmpty(session.Title) ? "Untitled session" : session.Title;
-    public string Meta => string.Join(" · ", new[] { AgentName, session.Repository ?? Words.LastSegment(session.Cwd), session.Branch, session.Model }.Where(s => !string.IsNullOrEmpty(s)));
+    public string Meta => string.Join(" · ", new[] { ctx.ShowMachine() ? ctx.MachineName() : null, AgentName, session.Repository ?? Words.LastSegment(session.Cwd), session.Branch, session.Model }.Where(s => !string.IsNullOrEmpty(s)));
 
     // What the card shows: the status, except that an idle session still waiting on work it
     // started in the background is delegating, and one waiting on a prompt only the machine

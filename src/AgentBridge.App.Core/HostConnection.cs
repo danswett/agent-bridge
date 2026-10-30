@@ -13,19 +13,23 @@ public enum LinkState { Connecting, Connected, NotRunning, Refused }
 // UI thread, so view models never see a change from anywhere else.
 public sealed class HostConnection : IAsyncDisposable
 {
-    readonly Func<CancellationToken, Task<LocalChannel>> connect;
+    readonly Func<CancellationToken, Task<IClientChannel>> connect;
     readonly IUiDispatcher ui;
     readonly Action<string> log;
     readonly CancellationTokenSource stop = new();
     TaskCompletionSource connected = new(TaskCreationOptions.RunContinuationsAsynchronously);
     Task loop = Task.CompletedTask;
-    LocalChannel? channel;
+    IClientChannel? channel;
     long statusEvents;
     long usageEvents;
     long connections;
     string? hostInstance;
 
     public HostConnection(Func<CancellationToken, Task<LocalChannel>> connect, IUiDispatcher ui, Action<string>? log = null)
+        : this(async ct => (IClientChannel)await connect(ct), ui, log) { }
+
+    // Any machine's host: this one's over the pipe, another's over a channel through the relay.
+    public HostConnection(Func<CancellationToken, Task<IClientChannel>> connect, IUiDispatcher ui, Action<string>? log = null)
     {
         this.connect = connect;
         this.ui = ui;
@@ -79,7 +83,7 @@ public sealed class HostConnection : IAsyncDisposable
     {
         while (!ct.IsCancellationRequested)
         {
-            LocalChannel? ch = null;
+            IClientChannel? ch = null;
             try
             {
                 ch = await connect(ct);
@@ -96,11 +100,14 @@ public sealed class HostConnection : IAsyncDisposable
                 // arrive on different threads); the result is applied only if no event came.
                 var heardStatus = Interlocked.Read(ref statusEvents);
                 var connectionNumber = Interlocked.Increment(ref connections);
-                var instance = $"connection {connectionNumber}";
+                // Which run of the host this is: what it says itself (hello's instance), else this
+                // machine's by its pid and start, else each connection counts as a new run, which is
+                // never wrong, only cautious (a lost reply is then not confirmed rather than resent).
+                var instance = hello.Machine.Instance ?? $"connection {connectionNumber}";
                 if (hello.Capabilities.Contains(HostOps.Capability))
                 {
                     var status = await ch.CallAsync<HostStatus>(HostOps.Subscribe, ct: ct);
-                    instance = $"{status.ProcessId}@{status.StartedAt:O}";
+                    instance = hello.Machine.Instance ?? $"{status.ProcessId}@{status.StartedAt:O}";
                     ui.Post(() => { if (Interlocked.Read(ref statusEvents) == heardStatus) { Status = status; } });
                 }
                 Volatile.Write(ref hostInstance, instance);
@@ -159,7 +166,7 @@ public sealed class HostConnection : IAsyncDisposable
         }
     }
 
-    async Task SubscribeSessionsAsync(LocalChannel ch, CancellationToken ct)
+    async Task SubscribeSessionsAsync(IClientChannel ch, CancellationToken ct)
     {
         // The snapshot is marked before the request goes, so no upsert of it is missed.
         ui.Post(Sessions.BeginSnapshot);
@@ -169,7 +176,7 @@ public sealed class HostConnection : IAsyncDisposable
     // Events were dropped, and any of them may have been the host's status or usage, not
     // only sessions: all three are read again, each applied only if no newer event of its
     // kind arrived meanwhile, as when connecting.
-    async Task RecoverAsync(LocalChannel ch, HelloResult hello, CancellationToken ct)
+    async Task RecoverAsync(IClientChannel ch, HelloResult hello, CancellationToken ct)
     {
         if (hello.Capabilities.Contains(HostOps.Capability))
         {
@@ -187,7 +194,7 @@ public sealed class HostConnection : IAsyncDisposable
     }
     // What the host offers now, and its status (whose agent-ha-bridge note the host works out
     // when asked rather than announcing). Applied only when something changed.
-    async Task RefreshAsync(LocalChannel ch, CancellationToken ct)
+    async Task RefreshAsync(IClientChannel ch, CancellationToken ct)
     {
         var hello = await ch.HelloAsync(ct);
         HostStatus? status = hello.Capabilities.Contains(HostOps.Capability) ? await ch.CallAsync<HostStatus>(HostOps.Status, ct: ct) : null;
@@ -204,7 +211,7 @@ public sealed class HostConnection : IAsyncDisposable
         });
     }
 
-    async Task PumpAsync(LocalChannel ch, SemaphoreSlim gaps, CancellationToken ct)
+    async Task PumpAsync(IClientChannel ch, SemaphoreSlim gaps, CancellationToken ct)
     {
         long last = 0;
         try

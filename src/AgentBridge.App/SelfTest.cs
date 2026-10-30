@@ -19,7 +19,7 @@ namespace AgentBridge.App;
 // card, saves a picture of each page beside the result file, writes what it saw and exits.
 static class SelfTest
 {
-    public static async Task RunAsync(MainWindow window, MainViewModel main, string outFile, DemoHost demo, Action<int> exit)
+    public static async Task RunAsync(MainWindow window, MainViewModel main, string outFile, DemoHost demo, DemoHost remote, Action<int> exit)
     {
         var result = new Dictionary<string, object?>();
         var checks = new List<string>();
@@ -27,13 +27,16 @@ static class SelfTest
         void Check(bool ok, string what) { (ok ? checks : failures).Add(what); }
         try
         {
-            var expected = demo.Count;
+            // This machine's sessions and the other machine's, through the demo's stand-in for the relay.
+            var expected = demo.Count + remote.Count;
             result["expectedCards"] = expected;
             var drawn = await Until(() => Find<SessionCard>(window.RootElement).Count == expected, TimeSpan.FromSeconds(60));
             var cards = Find<SessionCard>(window.RootElement);
             result["drawnCards"] = cards.Count;
-            Check(drawn, $"draws all {expected} demo sessions as cards");
-            Check(main.Waiting == 3, "counts three sessions waiting on you");
+            Check(drawn, $"draws all {expected} demo sessions of both machines as cards");
+            Check(main.Waiting == 4, "counts four sessions waiting on you across both machines");
+            Check(main.ShowMachines && main.Machines.Any(m => m.Label.StartsWith(remote.MachineName, StringComparison.Ordinal)), "offers the other machine in the machine picker");
+            Check(cards.FirstOrDefault(c => c.Card?.Id == "demo-remote-codex")?.Card?.Meta.StartsWith(remote.MachineName, StringComparison.Ordinal) == true, "names the machine on another machine's card");
 
             var approval = cards.FirstOrDefault(c => c.Card?.Id == "demo-approval");
             Check(approval is not null && ById<Button>(approval, "Option:approve") is { IsEnabled: true } && ById<Button>(approval, "Option:deny") is not null,
@@ -57,9 +60,46 @@ static class SelfTest
             }
             else { Check(false, "finds the single-choice question's option button"); }
 
+            // Answer a question on the other machine the same way: it goes to that machine's host.
+            var remoteChoice = cards.FirstOrDefault(c => c.Card?.Id == "demo-remote-claude");
+            if (remoteChoice is not null && ById<Button>(remoteChoice, "Option:device") is { } device)
+            {
+                ((IInvokeProvider)new ButtonAutomationPeer(device).GetPattern(PatternInterface.Invoke)).Invoke();
+                var answered = await Until(() => remoteChoice.Card?.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(20));
+                result["remoteReceipt"] = remoteChoice.Card?.ReceiptText;
+                Check(answered, "answers a question on another machine from its card and shows it was delivered");
+            }
+            else { Check(false, "finds the other machine's question's option button"); }
+
+            // The picker narrows the list to one machine.
+            var watched = main.AllCards.First(c => !c.Id.StartsWith("demo-remote", StringComparison.Ordinal));
+            main.SelectedMachine = main.Machines.First(m => m.Key == DemoHost.RemoteId);
+            var narrowed = await Until(() => Find<SessionCard>(window.RootElement).Count == remote.Count, TimeSpan.FromSeconds(10));
+            Check(narrowed, "shows only the chosen machine's cards");
+            await Picture(window.RootElement, Path.ChangeExtension(outFile, ".remote.png"));
+            await Task.Delay(500);
+            var hidden = Listeners(watched);
+            main.SelectedMachine = main.Machines[0];
+            await Until(() => Find<SessionCard>(window.RootElement).Count == expected, TimeSpan.FromSeconds(10));
+            await Task.Delay(500);
+            var shown = Listeners(watched);
+
+            // Back and forth: each time the cards get new controls, and the old ones let go.
+            for (var i = 0; i < 5; i++)
+            {
+                main.SelectedMachine = main.Machines.First(m => m.Key == DemoHost.RemoteId);
+                await Until(() => Find<SessionCard>(window.RootElement).Count == remote.Count, TimeSpan.FromSeconds(10));
+                main.SelectedMachine = main.Machines[0];
+                await Until(() => Find<SessionCard>(window.RootElement).Count == expected, TimeSpan.FromSeconds(10));
+            }
+            var settled = await Until(() => Listeners(watched) == shown, TimeSpan.FromSeconds(10));
+            var again = Find<SessionCard>(window.RootElement).FirstOrDefault(c => c.Card?.Id == "demo-approval");
+            Check(again is not null && ById<Button>(again, "Option:approve") is { IsEnabled: true }, "still shows a question's choices on a card drawn again after the picker changes");
+            Check(settled && shown > hidden && hidden >= 0, $"a card's control listens while shown and lets go when hidden, however often the picker changes ({hidden} listeners hidden, {shown} shown, {Listeners(watched)} after five more changes)");
+
             window.ShowPage("usage");
             await Task.Delay(500);
-            Check(main.Usage.Rows.Count == 2, "shows usage for two agents");
+            Check(main.Usage.Rows.Count == 3, "shows usage for three agents across both machines");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".usage.png"));
             window.ShowPage("settings");
             await Task.Delay(500);
@@ -75,6 +115,13 @@ static class SelfTest
         await File.WriteAllTextAsync(outFile, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
         exit(failures.Count == 0 ? 0 : 1);
     }
+
+    // How many are listening to a card: its controls (on screen, once each) and the app's own.
+    // -1 when the event cannot be found at all, so the check cannot pass by not looking.
+    static int Listeners(AgentBridge.App.Core.Observable o) =>
+        typeof(AgentBridge.App.Core.Observable).GetField(nameof(o.PropertyChanged), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance) is { } field
+            ? (field.GetValue(o) as Delegate)?.GetInvocationList().Length ?? 0
+            : -1;
 
     static async Task<bool> Until(Func<bool> condition, TimeSpan timeout)
     {

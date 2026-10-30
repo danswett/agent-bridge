@@ -16,7 +16,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Another machine through the in-process relay the transport tests run. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\..\src\AgentBridge.App.Core\AgentBridge.App.Core.csproj" />
+    <ProjectReference Include="..\AgentBridge.Transport.Tests\AgentBridge.Transport.Tests.csproj" />
   </ItemGroup>
 
 </Project>

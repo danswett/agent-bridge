@@ -32,8 +32,8 @@ public static class LocalApi
             if (!Reads.Contains(op) && callers.Classify(channel, fresh: true) is { Kind: not CallerKind.App } caller)
             {
                 throw Refuse(op, caller, caller.Kind == CallerKind.Agent
-                    ? "stopping, restarting, signing in and changing settings are for the person, from the Agent Bridge app"
-                    : "only the Agent Bridge app beside this host may stop, restart, sign in or change settings", log);
+                    ? "stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the Agent Bridge app"
+                    : "only the Agent Bridge app beside this host may stop, restart, sign in, change settings or read the relay account", log);
             }
             return await control.HandleAsync(channel, op, data);
         }

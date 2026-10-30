@@ -32,6 +32,8 @@ public sealed class ToastPlanner
     readonly IToastSink sink;
     readonly TimeProvider time;
     readonly Dictionary<string, Tracked> sessions = new(StringComparer.Ordinal);
+    // Sessions with a finished toast up, kept past their end, for MachineGone.
+    readonly HashSet<string> finished = new(StringComparer.Ordinal);
 
     sealed class Tracked
     {
@@ -57,6 +59,9 @@ public sealed class ToastPlanner
     public Func<bool> Quiet { get; init; } = () => false;
     public Func<IReadOnlyList<string>> Capabilities { get; init; } = () => [];
     public Func<string?> MachineName { get; init; } = () => null;
+    // Another machine's relay device id: its toasts keep tags of their own, and a click says
+    // which machine to answer. Null for this machine's.
+    public string? MachineKey { get; init; }
 
     // The sessions as the app first hears of them: a turn that finished before is not news, but
     // a question already pending is notified, as the host does after a restart. Sessions it
@@ -76,7 +81,7 @@ public sealed class ToastPlanner
             t.Last = s;
             if (t.Shown is { } shown && s.Question?.Id != shown)
             {
-                sink.Withdraw(Tag(s.Id));
+                sink.Withdraw(TagOf(s.Id));
                 t.Shown = null;
             }
             if (s.Question is { } q && !t.Notified.Contains(q.Id))
@@ -99,7 +104,7 @@ public sealed class ToastPlanner
         t.Last = s;
         if (t.Shown is { } shown && s.Question?.Id != shown)
         {
-            sink.Withdraw(Tag(s.Id));
+            sink.Withdraw(TagOf(s.Id));
             t.Shown = null;
         }
         if (s.Question is { } q && !t.Notified.Contains(q.Id))
@@ -116,10 +121,21 @@ public sealed class ToastPlanner
         else if (t.Due is { Kind: ToastKind.Question } d && s.Question?.Id != d.Question) { t.Due = null; }
     }
 
+    // A session that ended keeps its finished toast: the response is still worth reading.
     public void Remove(string id)
     {
         if (!sessions.Remove(id, out var t)) { return; }
-        if (t.Shown is not null) { sink.Withdraw(Tag(id)); }
+        if (t.Shown is not null) { sink.Withdraw(TagOf(id)); }
+    }
+
+    // The machine left: every toast it raised goes, finished ones too (even of sessions that ended
+    // before), since none of them can be acted on now.
+    public void MachineGone()
+    {
+        foreach (var (id, t) in sessions) { if (t.Shown is not null) { finished.Add(id); } }
+        foreach (var id in finished) { sink.Withdraw(TagOf(id)); }
+        finished.Clear();
+        sessions.Clear();
     }
 
     // Called every second or so: raises what is due.
@@ -136,7 +152,7 @@ public sealed class ToastPlanner
                 t.Notified.Add(q.Id);
                 if (!Enabled() || WindowActive()) { continue; }
                 t.Shown = q.Id;
-                sink.Show(new ToastNotice(Tag(id), ToastXml.Question(s, Capabilities(), MachineName()), Quiet()));
+                sink.Show(new ToastNotice(TagOf(id), ToastXml.Question(s, Capabilities(), MachineName(), MachineKey), Quiet()));
             }
             else
             {
@@ -144,17 +160,23 @@ public sealed class ToastPlanner
                 if (s.Status != SessionStatus.Idle || t.FinishedKey == key) { continue; }
                 t.FinishedKey = key;
                 if (!Enabled() || !FinishedEnabled() || WindowActive()) { continue; }
-                sink.Show(new ToastNotice(Tag(id), ToastXml.Finished(s, MachineName()), Quiet()));
+                finished.Add(id);
+                sink.Show(new ToastNotice(TagOf(id), ToastXml.Finished(s, MachineName(), MachineKey), Quiet()));
             }
         }
     }
+
+    string TagOf(string sessionId) => Tag(sessionId, MachineKey);
+
+    // A session on another machine is tagged with that machine too.
+    public static string Tag(string sessionId, string? machineKey) => Tag(machineKey is null ? sessionId : $"{machineKey}/{sessionId}");
 
     // Toast tags are at most 64 characters; a session id is a UUID, but nothing promises it.
     public static string Tag(string sessionId) => sessionId.Length <= 60 ? sessionId : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(sessionId)))[..60];
 
     // What became of an answer given on a toast: a tag of its own, so withdrawing the question's
     // toast once it is answered leaves this one.
-    public static string OutcomeTag(string sessionId) => Tag(sessionId) + "~a";
+    public static string OutcomeTag(string sessionId, string? machineKey = null) => Tag(sessionId, machineKey) + "~a";
 }
 
 // The toasts' XML. Arguments are a query string the activator reads back (ToastAction.Parse);
@@ -164,15 +186,16 @@ public static partial class ToastXml
     // Windows shows at most five buttons and five inputs.
     const int MaxActions = 5;
 
-    public static string Question(Session s, IReadOnlyList<string> capabilities, string? machine)
+    public static string Question(Session s, IReadOnlyList<string> capabilities, string? machine, string? machineKey = null)
     {
         var q = s.Question!;
         var (answerable, _) = QuestionViewModel.Answerability(q, capabilities, s.Agent);
         var what = q.AnswerAtMachine == true ? "waiting at the machine" : q.Kind == QuestionKind.Approval ? "waiting for your approval" : "waiting on you";
         var body = Plain(q.Message, 300);
-        var b = Start(Args(("action", "open"), ("session", s.Id)), Title(s), $"{Machine(machine)}{what}", body.Length > 0 ? body : "This session is waiting for an answer.");
+        var open = Args(machineKey, ("action", "open"), ("session", s.Id));
+        var b = Start(open, Title(s), $"{Machine(machine)}{what}", body.Length > 0 ? body : "This session is waiting for an answer.");
         b.Append("<actions>");
-        var basic = Args(("action", "answer"), ("session", s.Id), ("question", q.Id));
+        var basic = Args(machineKey, ("action", "answer"), ("session", s.Id), ("question", q.Id));
         if (answerable && q.Fields.Count == 0)
         {
             // Free text: a box and Send.
@@ -200,30 +223,30 @@ public static partial class ToastXml
             }
             else
             {
-                b.Append(Action("Open", Args(("action", "open"), ("session", s.Id))));
+                b.Append(Action("Open", open));
             }
             if (other) { b.Append(Action("Send", $"{basic}&{Args(("kind", "other"), ("field", f.Name))}", input: "other")); }
         }
         else
         {
             // Forms, multi-select and anything answered at the machine: the card has it.
-            b.Append(Action("Open", Args(("action", "open"), ("session", s.Id))));
+            b.Append(Action("Open", open));
         }
         b.Append("</actions></toast>");
         return b.ToString();
     }
 
-    public static string Finished(Session s, string? machine)
+    public static string Finished(Session s, string? machine, string? machineKey = null)
     {
         var preview = Plain(s.Activity.Response, 300);
-        var b = Start(Args(("action", "open"), ("session", s.Id)), Title(s), $"{Machine(machine)}finished", preview);
+        var b = Start(Args(machineKey, ("action", "open"), ("session", s.Id)), Title(s), $"{Machine(machine)}finished", preview);
         b.Append("</toast>");
         return b.ToString();
     }
 
     // What became of an answer given on a toast, replacing that toast.
-    public static string Outcome(string sessionId, string title, string text) =>
-        Start(Args(("action", "open"), ("session", sessionId)), title, text, null).Append("<audio silent=\"true\"/></toast>").ToString();
+    public static string Outcome(string sessionId, string title, string text, string? machineKey = null) =>
+        Start(Args(machineKey, ("action", "open"), ("session", sessionId)), title, text, null).Append("<audio silent=\"true\"/></toast>").ToString();
 
     static StringBuilder Start(string launch, string title, string line, string? body)
     {
@@ -246,6 +269,10 @@ public static partial class ToastXml
 
     static string Action(string content, string arguments, string? input = null) =>
         $"<action content=\"{Attr(Limits.KeepStart(content, 60)!)}\" arguments=\"{Attr(arguments)}\"{(input is null ? "" : $" hint-inputId=\"{input}\"")}/>";
+
+    // With the machine the session is on, when it is another one.
+    static string Args(string? machineKey, params (string Key, string Value)[] pairs) =>
+        machineKey is null ? Args(pairs) : $"{Args(pairs)}&{Args(("machine", machineKey))}";
 
     public static string Args(params (string Key, string Value)[] pairs) =>
         string.Join("&", pairs.Select(p => $"{Uri.EscapeDataString(p.Key)}={Uri.EscapeDataString(p.Value)}"));
@@ -276,7 +303,7 @@ public static partial class ToastXml
 }
 
 // A click on a toast, read back: open a session, or answer its question.
-public sealed record ToastAction(string Action, string? Session, string? Question, string? Kind, string? Field, string? Value)
+public sealed record ToastAction(string Action, string? Session, string? Question, string? Kind, string? Field, string? Value, string? Machine = null)
 {
     public static ToastAction Parse(string? arguments)
     {
@@ -288,7 +315,7 @@ public sealed record ToastAction(string Action, string? Session, string? Questio
             map[Uri.UnescapeDataString(pair[..i])] = Uri.UnescapeDataString(pair[(i + 1)..]);
         }
         return new ToastAction(map.GetValueOrDefault("action") ?? "open", map.GetValueOrDefault("session"), map.GetValueOrDefault("question"),
-            map.GetValueOrDefault("kind"), map.GetValueOrDefault("field"), map.GetValueOrDefault("value"));
+            map.GetValueOrDefault("kind"), map.GetValueOrDefault("field"), map.GetValueOrDefault("value"), map.GetValueOrDefault("machine"));
     }
 
     // The session.answer this click gives, or why it gives none (an empty Other box, say).

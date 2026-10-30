@@ -31,6 +31,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     readonly List<string> logged = [];
     Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> signIn = (_, _, _) => Task.FromException<SignInResult>(new InvalidOperationException("no relay in these tests"));
     (SignInResult Account, Uri Relay)? saved;
+    RelayAccount? credential;
 
     public LocalApiTests()
     {
@@ -57,6 +58,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             Machine = machine,
             Running = new HostSettingsView(RemoteApproval: true),
             Relay = () => new Uri("https://relay.example/"),
+            Credential = () => credential,
             SignIn = (relay, show, ct) => signIn(relay, show, ct),
             SignedIn = (account, relay) => saved = (account, relay),
             Stop = () => Interlocked.Increment(ref stops),
@@ -253,6 +255,19 @@ public sealed class LocalApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_app_reads_the_relay_account_so_it_can_reach_the_other_machines_without_signing_in_again()
+    {
+        var ch = await ConnectAsync();
+        var none = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.RelayAccount));
+        Assert.Equal("this host is not signed in to the relay", none.Message);
+
+        credential = new RelayAccount("https://relay.example/", "token-1", "acct-1", "octo");
+        var account = await ch.CallAsync<RelayAccount>(HostOps.RelayAccount);
+
+        Assert.Equal(new RelayAccount("https://relay.example/", "token-1", "acct-1", "octo"), account);
+    }
+
+    [Fact]
     public async Task Stop_and_restart_answer_first_and_then_act()
     {
         var ch = await ConnectAsync();
@@ -277,7 +292,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         await phone.Relay.WaitForPeerAsync(p => p.Id == host.Id, Patience);
         var ch = await phone.Hub.OpenAsync(host.Id);
 
-        foreach (var op in new[] { HostOps.Status, HostOps.Stop, HostOps.Settings, HostOps.SignIn })
+        foreach (var op in new[] { HostOps.Status, HostOps.Stop, HostOps.Settings, HostOps.SignIn, HostOps.RelayAccount })
         {
             var response = await ch.RequestAsync(op, new { });
             Assert.Equal($"unknown op {op}", response.GetProperty("error").GetString());
@@ -305,10 +320,10 @@ public sealed class LocalApiTests : IAsyncLifetime
         var hello = await ch.HelloAsync();
         Assert.DoesNotContain(HostOps.Capability, hello.Capabilities);
         Assert.DoesNotContain(Capabilities.SessionsAnswer, hello.Capabilities);
-        foreach (var op in new[] { HostOps.Restart, HostOps.Stop, HostOps.Settings, HostOps.SignIn, HostOps.SignInCancel })
+        foreach (var op in new[] { HostOps.Restart, HostOps.Stop, HostOps.Settings, HostOps.SignIn, HostOps.SignInCancel, HostOps.RelayAccount })
         {
             var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(op, new { }));
-            Assert.Equal($"refused: this connection is from pid {Environment.ProcessId}, inside the copilot session 77777777 (pid {parent.Id}); stopping, restarting, signing in and changing settings are for the person, from the Agent Bridge app", refused.Message);
+            Assert.Equal($"refused: this connection is from pid {Environment.ProcessId}, inside the copilot session 77777777 (pid {parent.Id}); stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the Agent Bridge app", refused.Message);
         }
         var answer = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), text = "yes" }));
         Assert.StartsWith("refused: this connection is from pid", answer.Message);
@@ -335,7 +350,7 @@ public sealed class LocalApiTests : IAsyncLifetime
 
         var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Restart));
 
-        Assert.Equal($"refused: this connection is from a copilot process (pid {Environment.ProcessId}); stopping, restarting, signing in and changing settings are for the person, from the Agent Bridge app", refused.Message);
+        Assert.Equal($"refused: this connection is from a copilot process (pid {Environment.ProcessId}); stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the Agent Bridge app", refused.Message);
         Assert.Equal(0, Volatile.Read(ref restarts));
     }
 
@@ -349,7 +364,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         var hello = await ch.HelloAsync();
         Assert.DoesNotContain(HostOps.Capability, hello.Capabilities);
         var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Stop));
-        Assert.EndsWith("which is not the Agent Bridge app beside this host; only the Agent Bridge app beside this host may stop, restart, sign in or change settings", refused.Message);
+        Assert.EndsWith("which is not the Agent Bridge app beside this host; only the Agent Bridge app beside this host may stop, restart, sign in, change settings or read the relay account", refused.Message);
         var answered = await ch.CallAsync<AnswerResult>(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), text = "yes" });
         Assert.Equal("this host does not take answers; answer at the machine", answered.Reason);
         await Task.Delay(200);

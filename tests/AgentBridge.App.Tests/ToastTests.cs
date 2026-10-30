@@ -92,6 +92,40 @@ public sealed class ToastTests
     }
 
     [Fact]
+    public void Another_machines_question_answered_there_withdraws_the_toast_it_raised()
+    {
+        var p = new ToastPlanner(sink, clock) { Capabilities = () => Caps, MachineName = () => "Build server", WindowActive = () => false, Quiet = () => false, MachineKey = "remote-id" };
+        p.Upsert(Make.Session(question: Make.Choice("q1")));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        p.Upsert(Make.Session());
+
+        var tag = ToastPlanner.Tag("s1", "remote-id");
+        Assert.Equal(tag, Assert.Single(sink.Shown).Tag);
+        Assert.Equal([tag], sink.Withdrawn);
+    }
+
+    [Fact]
+    public void A_session_that_ends_keeps_its_finished_toast_until_its_machine_leaves()
+    {
+        var p = new ToastPlanner(sink, clock) { Capabilities = () => Caps, MachineName = () => "Build server", WindowActive = () => false, Quiet = () => false, FinishedEnabled = () => true, MachineKey = "remote-id" };
+        foreach (var id in new[] { "s1", "s2" })
+        {
+            p.Upsert(Make.Session(id, status: SessionStatus.Working));
+            p.Upsert(Make.Session(id, response: "Done.", turns: 2));
+        }
+        p.Upsert(Make.Session("s3", question: Make.Choice("q1")));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Equal(3, sink.Shown.Count);
+
+        p.Remove("s1");
+        Assert.Empty(sink.Withdrawn);
+        p.MachineGone();
+        Assert.Equal(new[] { "s1", "s2", "s3" }.Select(s => ToastPlanner.Tag(s, "remote-id")).Order(), sink.Withdrawn.Order());
+    }
+
+    [Fact]
     public void Nothing_is_raised_while_the_window_is_in_front_and_toasts_go_quietly_when_windows_says_the_person_is_busy()
     {
         Planner(active: true).Tap(clock, Make.Session(question: Make.Choice()));

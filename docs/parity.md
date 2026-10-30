@@ -35,9 +35,9 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 
 | Status | Rows |
 |---|---|
-| `Verified` | 47 |
+| `Verified` | 48 |
 | `Implemented, untested live` | 35 |
-| `Partial` | 3 |
+| `Partial` | 2 |
 | `Missing` | 19 |
 | `Intentionally different` | 17 |
 | `N/A` | 12 |
@@ -175,7 +175,7 @@ Of the 15 §6.3 invariants: 8 `Verified`, 5 `Implemented, untested live`, 1 `Par
 
 | Feature / behaviour | Agents | agent-ha-bridge | Status | Evidence in agent-bridge | Gap / validation |
 |---|---|---|---|---|---|
-| Every machine's sessions on one screen | All | One dashboard; `Get-DaemonPeerMachines` | `Partial` | The PWA lists every machine with its status and usage, and shows one machine's sessions at a time (`pwa/test/unit/fleet.test.mjs`). Live: Progress › Windows app (the phone listed the machine). The Windows app shows this machine only | #49 |
+| Every machine's sessions on one screen | All | One dashboard; `Get-DaemonPeerMachines` | `Verified` | The Windows app shows every machine's sessions together, each card naming its machine, with a picker for one machine (`FleetTests.Each_other_machine_the_relay_lists_gets_its_cards_and_this_machines_own_host_is_not_listed_twice`); the PWA lists every machine and shows one at a time (`pwa/test/unit/fleet.test.mjs`). Live (2026-10-29, #49): the VM's app listed a second host through the relay, and replied (with an image), answered and ended sessions on it | #49 |
 | Machine row: sessions, version, dev marker | All | Status card | `Verified` | `UsageFlowTests.Hello_offers_usage_and_says_how_many_sessions_are_live_and_that_the_build_is_dev`, `pwa/test/usage.spec.mjs`. Live: Progress › Usage ("N sessions · version (dev)") | |
 | Offline machines listed as offline; Forget an offline machine with two presses | All | Status card; `tests/test-multi-machine.ps1` | `Missing` | Only machines present on the relay are listed | #50 |
 | Update available, install from another device, progress, outcome, fleet-wide check | All | `install_update` and `check_updates` buttons; `bridge-update.ps1` | `Missing` | The app updates itself from its own Settings only | #51 |

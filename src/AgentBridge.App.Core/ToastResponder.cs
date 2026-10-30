@@ -7,35 +7,87 @@ namespace AgentBridge.App.Core;
 // has gone, and the toast says so.
 public sealed class ToastResponder
 {
-    readonly Deliveries deliveries;
+    readonly Func<string?, Deliveries?> deliveriesFor;
     readonly IToastSink sink;
-    readonly Action<string?> open;
+    readonly Action<string?, string?> open;
+    // The outcome toasts shown for each other machine, which go when it does.
+    readonly Dictionary<string, HashSet<string>> shownFor = new(StringComparer.Ordinal);
 
     public ToastResponder(Deliveries deliveries, IToastSink sink, Action<string?> open)
+        : this(_ => deliveries, sink, (_, session) => open(session)) { }
+
+    // deliveriesFor(machine): that machine's deliveries (machine null for this one), or null
+    // when it is no longer there. open(machine, session).
+    public ToastResponder(Func<string?, Deliveries?> deliveriesFor, IToastSink sink, Action<string?, string?> open)
     {
-        this.deliveries = deliveries;
+        this.deliveriesFor = deliveriesFor;
         this.sink = sink;
         this.open = open;
     }
 
     public TimeSpan OutcomeWait { get; init; } = TimeSpan.FromSeconds(90);
 
+    // A click that started the app can come before the relay has said which machines are on:
+    // another machine's answer waits this long for it to turn up, rather than calling a machine
+    // that is online gone and dropping the answer.
+    public TimeSpan MachineWait { get; init; } = TimeSpan.FromSeconds(15);
+
+    async Task<Deliveries?> FindAsync(string? machine)
+    {
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            if (deliveriesFor(machine) is { } d) { return d; }
+            if (machine is null || waited.Elapsed >= MachineWait) { return null; }
+            await Task.Delay(TimeSpan.FromMilliseconds(250));
+        }
+    }
+
+    // The machine left: the outcomes of answers sent to it go with its other toasts.
+    public void MachineGone(string machine)
+    {
+        HashSet<string>? tags;
+        lock (shownFor) { shownFor.Remove(machine, out tags); }
+        foreach (var tag in tags ?? []) { sink.Withdraw(tag); }
+    }
+
+    void Show(string? machine, string tag, string xml)
+    {
+        if (machine is not null)
+        {
+            lock (shownFor)
+            {
+                if (!shownFor.TryGetValue(machine, out var tags)) { shownFor[machine] = tags = new(StringComparer.Ordinal); }
+                tags.Add(tag);
+            }
+        }
+        sink.Show(new ToastNotice(tag, xml, Quiet: true));
+    }
+
     public async Task HandleAsync(string? arguments, IReadOnlyDictionary<string, string> inputs, string title = "Agent Bridge")
     {
         var action = ToastAction.Parse(arguments);
         if (action.Action != "answer" || action.Session is null || action.Question is null)
         {
-            open(action.Session);
+            open(action.Machine, action.Session);
             return;
         }
         var (answer, problem) = action.Answer(inputs, "00000000-0000-4000-8000-000000000000");
-        var tag = ToastPlanner.OutcomeTag(action.Session);
+        var tag = ToastPlanner.OutcomeTag(action.Session, action.Machine);
         if (answer is null)
         {
             // Nothing to send (an empty box): the card is where to answer.
-            sink.Show(new ToastNotice(tag, ToastXml.Outcome(action.Session, title, $"Not sent: {problem}. Open the session to answer."), Quiet: true));
+            Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, $"Not sent: {problem}. Open the session to answer.", action.Machine));
             return;
         }
+        if (await FindAsync(action.Machine) is not { } deliveries)
+        {
+            Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, "Not sent: that machine is not connected to this app now. Open the session to answer.", action.Machine));
+            return;
+        }
+        // The machine left while the answer was on its way (its toasts have gone, MachineGone),
+        // or left and came back with deliveries of its own: nothing more is said about this one.
+        bool Gone() => action.Machine is not null && !ReferenceEquals(deliveriesFor(action.Machine), deliveries);
         var key = $"answer|{action.Session}|{action.Question}";
         var done = new TaskCompletionSource<Delivery>(TaskCreationOptions.RunContinuationsAsynchronously);
         void Watch(Delivery d)
@@ -51,11 +103,13 @@ public sealed class ToastResponder
             try { result = await done.Task.WaitAsync(OutcomeWait); }
             catch (TimeoutException)
             {
-                sink.Show(new ToastNotice(tag, ToastXml.Outcome(action.Session, title, "Still sending your answer. Open the session to see what became of it."), Quiet: true));
+                if (Gone()) { return; }
+                Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, "Still sending your answer. Open the session to see what became of it.", action.Machine));
                 return;
             }
+            if (Gone()) { return; }
             var (text, _) = QuestionViewModel.Describe(result, "");
-            sink.Show(new ToastNotice(tag, ToastXml.Outcome(action.Session, title, text), Quiet: true));
+            Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, text, action.Machine));
         }
         finally { deliveries.Changed -= Watch; }
     }

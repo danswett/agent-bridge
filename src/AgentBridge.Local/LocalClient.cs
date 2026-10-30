@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Runtime.Versioning;
 using System.Text.Json;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 
 namespace AgentBridge.Local;
 
@@ -97,7 +98,7 @@ public static class LocalClient
     }
 
     // Sends a request and returns its result, or throws HostError with the host's reason.
-    public static async Task<JsonElement> CallAsync(this LocalChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    public static async Task<JsonElement> CallAsync(this IClientChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
     {
         var response = await channel.RequestAsync(op, data ?? new { }, timeout, ct);
         if (response.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True)
@@ -107,7 +108,7 @@ public static class LocalClient
         throw new HostErrorException(response.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String ? error.GetString()! : "the host failed the request");
     }
 
-    public static async Task<T> CallAsync<T>(this LocalChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    public static async Task<T> CallAsync<T>(this IClientChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
     {
         var result = await channel.CallAsync(op, data, timeout, ct);
         return result.Deserialize<T>(ProtocolJson.Options) ?? throw new HostErrorException($"{op} returned nothing");
@@ -115,13 +116,13 @@ public static class LocalClient
 
     // hello, the first request on every connection. A host that refused this process closes
     // the pipe after saying why; that reason is what the caller gets.
-    public static async Task<HelloResult> HelloAsync(this LocalChannel channel, CancellationToken ct = default)
+    public static async Task<HelloResult> HelloAsync(this IClientChannel channel, CancellationToken ct = default)
     {
         try { return await channel.CallAsync<HelloResult>(Ops.Hello, ct: ct); }
         catch (Exception e) when (e is IOException or HostErrorException && Refusal(channel) is { } reason) { throw new LocalRefusedException(reason); }
     }
 
-    static string? Refusal(LocalChannel channel)
+    static string? Refusal(IClientChannel channel)
     {
         while (channel.Events.TryRead(out var e))
         {

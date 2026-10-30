@@ -93,7 +93,7 @@ host also asks *which* process each request comes from, op by op:
 |---|---|---|
 | **Inside an agent session** | The connecting process, or any process it descends from, is a live session's own process (by id and start time, so a reused id does not count), one a launch started, any agent CLI found running (Copilot, Claude, Codex, including under Node or Bun), or an executable named `copilot`, `claude`, `codex` or `agency` | Read: `hello` (offering only `sessions.read` and `usage`), `sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `host.status`, `host.subscribe`. Everything else is refused: `refused: this connection is from pid 4120, inside the copilot session 1a2b3c4d (pid 3112); …` |
 | **The app** | Not inside an agent session, its whole ancestry read, and its executable is `AgentBridge.exe` (the app) in the host's own folder, which is how the app ships | Everything, `host.manage` included |
-| **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before, `host.status` and `host.subscribe`; not the other management ops (`only the Agent Bridge app beside this host may stop, restart, sign in or change settings`) |
+| **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before, `host.status` and `host.subscribe`; not the other management ops (`only the Agent Bridge app beside this host may stop, restart, sign in, change settings or read the relay account`) |
 
 The ancestry is read when the connection is accepted (`GetNamedPipeClientProcessId`, then one
 process snapshot for every parent and its executable's name, with start times checked so a
@@ -141,6 +141,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `host.settings` | `{ "remoteApproval"?: bool, "name"?: string }` | `{ "settings": HostSettingsView, "restartRequired": bool }`. Written to the profile's `config.json`; read when the host starts. `name: ""` removes the name |
 | `host.restart` | none | `{ "restarting": true }`, then the host starts a replacement and exits |
 | `host.stop` | none | `{ "stopping": true }`, then the host exits |
+| `host.relay.account` | none | `{ "relay", "token", "accountId", "login" }`: the account this host signed in to, and the relay that issued it, so the app can reach the account's other machines through the relay as a device of its own (kind `app`, with its own key) without a second sign-in. `token` is a bearer credential for that relay only. Fails with `this host is not signed in to the relay` before a sign-in, and on a `--local-only` host |
 
 `HostStatus`:
 
