@@ -399,9 +399,19 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         var tasks = record.Tasks.Where(t => t.Enabled).ToList();
         if (dryRun)
         {
-            Say($"* Daemon: re-enable {string.Join(" and ", tasks.Select(t => t.Name).DefaultIfEmpty("(no task)"))} and start agent-ha-bridge.");
+            Say($"* Daemon: once the host has let go of the hook spool, re-enable {string.Join(" and ", tasks.Select(t => t.Name).DefaultIfEmpty("(no task)"))} and start agent-ha-bridge.");
             Say("Dry run: nothing was changed.");
             return new(ok, lines);
+        }
+        // The restart is only asked for: the old host may still be part-way through a pass. The
+        // daemon starts only once the intake's claim on the spool is gone, so the two never
+        // take the same events.
+        var claim = Path.Combine(record.BridgeHome, "runtime", HookIntake.ClaimFile);
+        if (!await UntilAsync(() => ClaimFree(claim), options.StopTimeout, cancellationToken))
+        {
+            Say($"* The host still holds the hook spool ({claim}) after {options.StopTimeout.TotalSeconds:0} s, so agent-ha-bridge was not started. Stop the host (or wait for it to restart) and run rollback again.");
+            Say($"Rolled back with problems (above); the record and snapshot are kept in {options.ProfileFolder}.");
+            return new(false, lines);
         }
         foreach (var task in tasks)
         {
@@ -459,6 +469,20 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
     }
 
     // ------------------------------------------------------------------ helpers
+
+    // No intake holds it: absent, or free to open alone (a claim a crashed process left behind on a
+    // system that does not delete it on close).
+    static bool ClaimFree(string path)
+    {
+        if (!File.Exists(path)) { return true; }
+        try
+        {
+            using var probe = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+            return true;
+        }
+        catch (FileNotFoundException) { return true; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+    }
 
     static IEnumerable<string> Checked(AgentHaBridgeInstall install) =>
         new[] { install.ConfigPath, install.MetadataPath }.Concat(install.InstructionFiles);

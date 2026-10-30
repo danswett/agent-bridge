@@ -14,6 +14,9 @@ agent-bridge-host migration status [--profile <name>]
 * `--bridge-home` is the installation to migrate. It defaults to `~\.agent-ha-bridge`.
 * `--hook` is the `agent-bridge-host-hook.exe` to install. It defaults to the one beside the
   host, which is where the app ships it.
+* `--profile` is the host profile to migrate into (`default` if omitted). A missing or invalid
+  name is refused. The profile's folder is only read to look for it; it is never created, so a
+  dry run against a name that does not exist leaves nothing behind.
 * Any other word is refused before anything runs, so a mistyped `--dry-run` never migrates.
 * Exit codes: 0 done, 1 refused or failed (the report says why), 2 usage or not Windows.
 
@@ -155,15 +158,20 @@ publishes the dashboard (G7).
 1. Removes `intake.json`.
 2. Restores each file migration rewrote. A file unchanged since the migration is restored
    **byte for byte** from the snapshot. A file edited since gets back only the command of each
-   entry migration re-pointed (found by the command it now runs), with the later edits kept,
-   a changed timeout included. A hook still running this host's program that cannot be matched,
+   entry migration re-pointed, with the later edits kept, a changed timeout included. Entries
+      are matched by the command they now run, within the event they were registered under, and
+      paired one to one in order, so two events whose originals differ but share a replacement
+      (Claude's `run-hook.cmd` form and its Go form both become `claude register`) each get their
+      own original back. A hook still running this host's program that cannot be matched,
    or a file that cannot be reverted, is reported as a problem, and the snapshot is kept. The profile's own `config.json` is restored, or removed if
    migration created it, unless a person has changed it since.
 3. Checks the files recorded by hash, and reports any that changed while migrated (by someone
    else; neither step writes them).
 4. Restarts the host, which reads both only when it starts: it lets go of the spool, removes
-   its heartbeat, and runs on its restored settings. The host stands back before the daemon
-   starts.
+   its heartbeat, and runs on its restored settings. Rollback then waits (up to the stop
+   timeout) until the spool's claim file, `runtime\agent-bridge-host-intake.lock`, is free. If
+   the host still holds it, agent-ha-bridge is not started, the report says so and the record
+   is kept, so the two never take the spool at once; run rollback again once the host has let go.
 5. Re-enables each task that was enabled before, starts it, and waits until the G5 probe sees
    agent-ha-bridge running again. A task that was disabled before stays disabled.
 6. Deletes `migration.json` and the snapshot. If anything above went wrong they are kept, and

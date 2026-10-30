@@ -22,6 +22,9 @@ public sealed class MigrationTests : IAsyncLifetime
 
     string Text(string path) => File.ReadAllText(path);
 
+    // Where profiles live; the fixture's is "default".
+    string Root => Path.GetDirectoryName(_f.Profile)!;
+
     [Fact]
     public async Task A_dry_run_describes_every_change_and_makes_none()
     {
@@ -437,14 +440,77 @@ public sealed class MigrationTests : IAsyncLifetime
     {
         var created = 0;
         Migrator Create(MigrationOptions o) { created++; return _f.Migrator(); }
-        foreach (var args in new[] { new[] { "migrate", "--dryrun" }, ["migrate", "nonsense"], ["migrate", "--bridge-home"], ["migrate", "--hook", "--dry-run"], ["rollback", "--dry"], ["migration", "status", "now"] })
+        foreach (var args in new[] { new[] { "migrate", "--dryrun" }, ["migrate", "nonsense"], ["migrate", "--bridge-home"], ["migrate", "--hook", "--dry-run"], ["rollback", "--dry"], ["migration", "status", "now"],
+            ["migrate", "--profile"], ["migrate", "--profile", "--dry-run"], ["rollback", "--profile", "../elsewhere"] })
         {
             var error = new StringWriter();
-            Assert.Equal(2, await MigrateCommands.RunAsync(args, _f.Profile, new StringWriter(), error, Create));
+            Assert.Equal(2, await MigrateCommands.RunAsync(args, Root, new StringWriter(), error, Create));
             Assert.Contains("usage: agent-bridge-host migrate", error.ToString());
         }
         Assert.Equal(0, created);
         Assert.Empty(_f.Runtime_.Calls);
+    }
+
+    [Fact]
+    public async Task A_dry_run_for_a_profile_that_does_not_exist_creates_nothing()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var output = new StringWriter();
+
+        Assert.Equal(0, await MigrateCommands.RunAsync(["migrate", "--dry-run", "--profile", "preview"], Root, output, new StringWriter(), o => _f.Migrator(profile: o.ProfileFolder)));
+
+        Assert.Contains("Dry run: nothing was changed.", output.ToString());
+        Assert.False(Directory.Exists(Path.Combine(Root, "preview")));
+    }
+
+    [Fact]
+    public async Task Hooks_of_two_events_that_share_a_replacement_each_get_their_own_original_back()
+    {
+        // SessionStart registered through run-hook.cmd (an older install), UserPromptSubmit through
+        // the Go hook: both become "claude register".
+        var settings = FakeAgentHaBridge.Read(_f.ClaudeSettings);
+        var launcher = $"\"{Path.Combine(_f.ClaudeHome, "ha-bridge", "run-hook.cmd")}\" \"{Path.Combine(_f.ClaudeHome, "ha-bridge", "register-claude-session.ps1")}\"";
+        settings["hooks"]!["SessionStart"]![0]!["hooks"]![0]!["command"] = launcher;
+        File.WriteAllText(_f.ClaudeSettings, settings.ToJsonString(new() { WriteIndented = true }));
+        var goForm = (string)FakeAgentHaBridge.Read(_f.ClaudeSettings)["hooks"]!["UserPromptSubmit"]![0]!["hooks"]![0]!["command"]!;
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var migrated = FakeAgentHaBridge.Read(_f.ClaudeSettings);
+        migrated["theme"] = "dark";
+        // And the person moved UserPromptSubmit's group ahead of SessionStart's in the file.
+        var hooks = migrated["hooks"]!.AsObject();
+        var prompt = hooks["UserPromptSubmit"]!.DeepClone();
+        hooks.Remove("UserPromptSubmit");
+        var reordered = new System.Text.Json.Nodes.JsonObject { ["UserPromptSubmit"] = prompt };
+        foreach (var (k, v) in hooks.ToList()) { hooks.Remove(k); reordered[k] = v; }
+        migrated["hooks"] = reordered;
+        File.WriteAllText(_f.ClaudeSettings, migrated.ToJsonString(new() { WriteIndented = true }));
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        var after = FakeAgentHaBridge.Read(_f.ClaudeSettings)["hooks"]!;
+        Assert.Equal(launcher, (string)after["SessionStart"]![0]!["hooks"]![0]!["command"]!);
+        Assert.Equal(goForm, (string)after["UserPromptSubmit"]![0]!["hooks"]![0]!["command"]!);
+    }
+
+    [Fact]
+    public async Task Agent_ha_bridge_is_not_started_while_the_old_host_still_holds_the_spool()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        // The host acknowledged the restart but its last pass has not let go yet.
+        _f.Host.Linger = true;
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("still holds the hook spool", report.ToString());
+        Assert.False(_f.Runtime_.DaemonRunning);
+        Assert.NotNull(MigrationRecord.Load(_f.Profile).Record);
+
+        _f.Host.Linger = false;
+        _f.Host.Release();
+        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        Assert.True(_f.Runtime_.DaemonRunning);
     }
 
     [Fact]
@@ -503,13 +569,13 @@ public sealed class MigrationTests : IAsyncLifetime
         var error = new StringWriter();
         Migrator Create(MigrationOptions o) => _f.Migrator();
 
-        Assert.Equal(2, await MigrateCommands.RunAsync(["migration", "nonsense"], _f.Profile, output, error, Create));
+        Assert.Equal(2, await MigrateCommands.RunAsync(["migration", "nonsense"], Root, output, error, Create));
         Assert.Contains("usage: agent-bridge-host migrate", error.ToString());
         if (!OperatingSystem.IsWindows()) { return; }
-        Assert.Equal(0, await MigrateCommands.RunAsync(["migration", "status"], _f.Profile, output, error, Create));
+        Assert.Equal(0, await MigrateCommands.RunAsync(["migration", "status"], Root, output, error, Create));
         Assert.Contains("Not migrated", output.ToString());
-        Assert.Equal(0, await MigrateCommands.RunAsync(["migrate", "--dry-run"], _f.Profile, output, error, Create));
+        Assert.Equal(0, await MigrateCommands.RunAsync(["migrate", "--dry-run"], Root, output, error, Create));
         Assert.Contains("Dry run: nothing was changed.", output.ToString());
-        Assert.Equal(1, await MigrateCommands.RunAsync(["rollback"], _f.Profile, output, error, Create));
+        Assert.Equal(1, await MigrateCommands.RunAsync(["rollback"], Root, output, error, Create));
     }
 }

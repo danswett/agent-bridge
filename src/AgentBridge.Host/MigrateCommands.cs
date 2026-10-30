@@ -8,8 +8,27 @@ namespace AgentBridge.Host;
 // tasks, and what tells it agent-ha-bridge has stopped is the Windows probe (G5).
 public static class MigrateCommands
 {
-    public static async Task<int> RunAsync(IReadOnlyList<string> args, string profileFolder, TextWriter output, TextWriter error, Func<MigrationOptions, Migrator> create, CancellationToken cancellationToken = default)
+    // profileRoot is where profiles live (Identity.DefaultRoot); --profile names one. Its folder is
+    // only located, never created: a dry run must leave nothing behind, not even a device key.
+    public static async Task<int> RunAsync(IReadOnlyList<string> arguments, string profileRoot, TextWriter output, TextWriter error, Func<MigrationOptions, Migrator> create, CancellationToken cancellationToken = default)
     {
+        const string Usage = "usage: agent-bridge-host migrate [--dry-run] [--bridge-home <dir>] [--hook <file>] | rollback [--dry-run] | migration status   [--profile <name>]";
+        var args = arguments.ToList();
+        var profile = "default";
+        var at = args.IndexOf("--profile");
+        if (at >= 0)
+        {
+            // A missing name must never fall back to the default profile and migrate that.
+            if (at + 1 >= args.Count || !AgentBridge.Transport.Identity.IsValidProfile(args[at + 1]) || args[at + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                error.WriteLine("--profile needs a profile name (letters, digits, '-', '_' and '.').");
+                error.WriteLine(Usage);
+                return 2;
+            }
+            profile = args[at + 1];
+            args.RemoveRange(at, 2);
+        }
+        var profileFolder = Path.Combine(profileRoot, profile);
         string? Option(string name)
         {
             for (var i = 0; i < args.Count - 1; i++) { if (args[i] == name) { return args[i + 1]; } }
@@ -30,7 +49,7 @@ public static class MigrateCommands
         if (problem is not null)
         {
             if (problem.Length > 0) { error.WriteLine(problem); }
-            error.WriteLine("usage: agent-bridge-host migrate [--dry-run] [--bridge-home <dir>] [--hook <file>] | rollback [--dry-run] | migration status");
+            error.WriteLine(Usage);
             return 2;
         }
         if (!OperatingSystem.IsWindows())

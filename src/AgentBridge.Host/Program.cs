@@ -236,14 +236,10 @@ switch (command)
         return HookCommands.Status(intakeFolder, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge", "runtime"), Console.Out, DateTimeOffset.Now);
     case "migrate" or "rollback" or "migration":
         {
-            var rest = new List<string>(arguments);
-            var p = rest.IndexOf("--profile");
-            if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
-            var folder = LoadIdentity().Folder;
             using var stop = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
-            return await MigrateCommands.RunAsync(rest, folder, Console.Out, Console.Error, o => OperatingSystem.IsWindows()
-                ? new AgentBridge.Host.Migration.Migrator(o, new AgentBridge.Host.Migration.WindowsAgentHaBridgeRuntime(), new AgentBridge.Host.Migration.LocalMigrationHost(folder), new AgentBridge.Host.Migration.ProcessHookRunner())
+            return await MigrateCommands.RunAsync(arguments, Identity.DefaultRoot, Console.Out, Console.Error, o => OperatingSystem.IsWindows()
+                ? new AgentBridge.Host.Migration.Migrator(o, new AgentBridge.Host.Migration.WindowsAgentHaBridgeRuntime(), new AgentBridge.Host.Migration.LocalMigrationHost(o.ProfileFolder), new AgentBridge.Host.Migration.ProcessHookRunner())
                 : throw new PlatformNotSupportedException(), stop.Token);
         }
     default:

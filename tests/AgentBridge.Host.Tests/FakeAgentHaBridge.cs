@@ -265,6 +265,10 @@ sealed class FakeHost(FakeAgentHaBridge fake) : IMigrationHost, IAsyncDisposable
         var config = Path.Combine(fake.Profile, "config.json");
         ConfigAtRestart.Add(File.Exists(config) ? File.ReadAllText(config) : null);
         if (_intake is not null) { await _intake.DisposeAsync(); _intake = null; }
+        if (Linger && _lingering is null)
+        {
+            _lingering = new FileStream(Path.Combine(fake.Runtime, HookIntake.ClaimFile), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+        }
         if (!IgnoreIntake && IntakeState.Load(fake.Profile).State is { } state)
         {
             _intake = new HookIntake(new HookIntakeOptions
@@ -281,8 +285,19 @@ sealed class FakeHost(FakeAgentHaBridge fake) : IMigrationHost, IAsyncDisposable
 
     public bool TakingSpool => _intake is not null;
 
+    // Acknowledges a restart while its last pass still holds the spool's claim, until Release().
+    public bool Linger { get; set; }
+    FileStream? _lingering;
+
+    public void Release()
+    {
+        _lingering?.Dispose();
+        _lingering = null;
+    }
+
     public async ValueTask DisposeAsync()
     {
+        Release();
         if (_intake is not null) { await _intake.DisposeAsync(); }
     }
 }

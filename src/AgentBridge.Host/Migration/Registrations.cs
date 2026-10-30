@@ -171,26 +171,35 @@ public static class Registrations
             ? string.Join("\n", CommandFields.Select(f => o[f]?.ToJsonString() ?? ""))
             : null;
 
-    // Puts back the command of each entry migration re-pointed, wherever an entry that still runs
-    // its replacement now is, leaving everything else in the file as it is now: for a file
-    // someone has edited since the migration (a timeout changed, a hook of their own added).
+    // Puts back the command of each entry migration re-pointed, wherever an entry under the same
+    // event still runs its replacement, leaving everything else in the file as it is now: for a
+    // file someone has edited since the migration (a timeout changed, a hook of their own added).
+    // Entries are paired one to one, in order, within their event: two originals can share one
+    // replacement (Claude's SessionStart and UserPromptSubmit both become `claude register`), and
+    // one must never be restored into the other's place. One left over still runs this host's
+    // program, which the caller reports (Names).
     public static (string? Text, int Replaced) Revert(byte[] current, IReadOnlyList<EntryChange> changes)
     {
         JsonNode? root;
         try { root = JsonNode.Parse(Decode(current), documentOptions: Lenient); }
         catch (JsonException) { return (null, 0); }
-        if (root is null) { return (null, 0); }
+        if (root is not JsonObject { } top) { return (null, 0); }
+        if (top["hooks"] is not JsonObject hooks) { return (Encode(top, current), 0); }
         var replaced = 0;
-        void Walk(JsonNode? node)
+        var used = new HashSet<int>();
+        void Walk(JsonNode? node, string eventName)
         {
             switch (node)
             {
                 case JsonArray array:
-                    foreach (var item in array) { Walk(item); }
+                    foreach (var item in array) { Walk(item, eventName); }
                     break;
                 case JsonObject obj:
-                    if (CommandOf(obj) is { } command && changes.FirstOrDefault(c => CommandOf(c.Replacement) == command) is { Original: JsonObject original })
+                    var command = CommandOf(obj);
+                    var index = command is null ? -1 : Enumerable.Range(0, changes.Count).FirstOrDefault(i => !used.Contains(i) && changes[i].Event == eventName && CommandOf(changes[i].Replacement) == command, -1);
+                    if (index >= 0 && changes[index].Original is JsonObject original)
                     {
+                        used.Add(index);
                         foreach (var field in CommandFields)
                         {
                             if (original[field] is { } value) { obj[field] = value.DeepClone(); }
@@ -199,12 +208,12 @@ public static class Registrations
                         replaced++;
                         break;
                     }
-                    foreach (var (_, child) in obj.ToList()) { Walk(child); }
+                    foreach (var (_, child) in obj.ToList()) { Walk(child, eventName); }
                     break;
             }
         }
-        Walk(root);
-        return (Encode(root, current), replaced);
+        foreach (var (eventName, node) in hooks.ToList()) { Walk(node, eventName); }
+        return (Encode(top, current), replaced);
     }
 
     // Whether any value in the file still names this program: a hook rollback could not restore.
