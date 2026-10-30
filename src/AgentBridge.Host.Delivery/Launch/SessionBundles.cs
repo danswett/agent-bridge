@@ -240,7 +240,7 @@ public static class SessionBundles
             var files = Extract(zip, kind, unpack, maxUnpacked, maxFiles);
             // Claude's and Codex's one file is the transcript, which also records the folder.
             var relocate = kind == AgentKind.Copilot ? null : (Func<string, string>)(line => Relocate(kind, line, cwd));
-            foreach (var f in files.Where(f => Path.GetExtension(f) is ".jsonl" or ".yaml" or ".json" or ".md")) { Rename(f, oldId, newId, relocate); }
+            foreach (var f in files.Where(f => Path.GetExtension(f).ToLowerInvariant() is ".jsonl" or ".yaml" or ".json" or ".md")) { Rename(f, oldId, newId, relocate); }
             switch (kind)
             {
                 case AgentKind.Copilot:

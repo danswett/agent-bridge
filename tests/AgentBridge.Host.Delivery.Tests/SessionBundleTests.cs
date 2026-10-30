@@ -278,6 +278,16 @@ public sealed class SessionBundleTests : IDisposable
         Assert.NotEqual(a, b);
     }
     [Fact]
+    public void A_transcript_named_in_capitals_is_rewritten_like_any_other()
+    {
+        // Accepted whatever the case of its extension, so rewritten whatever it too.
+        Bundle(Zip, ($"{Id}.JSONL", $"{{\"type\":\"user\",\"sessionId\":\"{Id}\",\"cwd\":\"C:\\\\elsewhere\"}}\n"));
+        var installed = SessionBundles.Install(Zip, AgentKind.Claude, Id, NewId, root, target, Unpack, long.MaxValue, Now);
+        var text = File.ReadAllText(installed);
+        Assert.DoesNotContain(Id, text);
+        Assert.DoesNotContain("elsewhere", text);
+    }
+    [Fact]
     public void Packing_stops_when_its_deadline_passes_and_leaves_no_bundle()
     {
         CopilotSession();
