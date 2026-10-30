@@ -333,7 +333,7 @@ show it, in the day's `coverage`:
 | Kind | One event is | Mismatches counted against it |
 |---|---|---|
 | `sessions` | A session either side listed, with its agent | `session.*`, `agent` |
-| `questions` | A question either side showed, by identity, of kind `choice`, `multi` or `text`, answered or not. Each side knows it by its own identity (the host by the tool call, the daemon by its hook's clock), so a session's run of questions counts the larger of the two sides' counts | Each question a `question.*` mismatch was about, once (`failedQuestions`, keyed so the question keeps its key while either side still shows it, and across midnight with every kind it had), however many kinds it had and however many questions one mismatch ran on across |
+| `questions` | A question either side showed, by identity, of kind `choice`, `multi` or `text`, answered or not. Each side knows it by its own identity (the host by the tool call, the daemon by its hook's clock), so a session's run of questions counts the larger of the two sides' counts, each of the kind the side ahead shows | Each question a `question.*` mismatch was about, once (`failedQuestions`, keyed by the identity it was first known by, which each side's identity for the same question maps to, and across midnight with every kind it had), however many kinds it had and however many questions one mismatch ran on across |
 | `statusTransitions` | A session's status changing (working, idle, waiting, ending) as the daemon published it | `status`, `activity.response` |
 | `background` | A background agent or shell starting or finishing, as the daemon listed it (and `backgroundSessions`, the sessions that had any) | `background.*` |
 | `compactions` | A compaction finishing | `compactions` |

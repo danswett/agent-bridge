@@ -268,6 +268,40 @@ public sealed class ShadowCoverageTests : IDisposable
         var partly = new ShadowGateConfig { Explained = [new() { Kind = ShadowKinds.QuestionMissingOnHost, Session = session }] };
         Assert.Equal((1, 0), (Questions(partly).Mismatches, Questions(partly).Explained));
     }
+    // Found in review (#77): a question the daemon showed first kept the daemon's key until the host
+    // showed it, then took the host's; and one side moving on first charged the new question to the
+    // kind of the old one the other side still showed.
+    [Fact]
+    public void A_question_keeps_the_key_it_was_first_known_by_and_is_counted_as_the_kind_of_the_side_that_shows_it_first()
+    {
+        Directory.CreateDirectory(reports);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+        var session = ShadowHash.Session(A);
+        var asked = time.GetUtcNow();
+        var choice = new ShadowField("choice", 2, "h");
+        var multi = new ShadowField("multi", 3, "h2");
+        void Show(ShadowQuestion? daemon, ShadowQuestion? host, ShadowDifference? diff, int samples)
+        {
+            for (var i = 0; i < samples; i++)
+            {
+                ledger.Record(new ShadowComparison(true, 1, 1, diff is null ? [] : [diff], []),
+                    View(null, null, null, Session(A, daemon is null ? "working" : "waiting", question: daemon)),
+                    View(null, null, null, Session(A, host is null ? "working" : "waiting", question: host)));
+                time.Advance(TimeSpan.FromSeconds(15));
+            }
+        }
+
+        // The daemon shows it for a while before the host does, then their options differ.
+        Show(Asked(null, asked, choice), null, new(ShadowKinds.QuestionMissingOnHost, session, "daemon fields=1"), 6);
+        Show(Asked(null, asked, choice), Asked("call-1", asked, choice), new(ShadowKinds.QuestionOptions, session, "field 1: 2 options, not the same ones"), 6);
+        Assert.Single(ledger.Today!.Coverage!.FailedQuestions);
+
+        // Five minutes later the daemon shows the next question, a multi, a sample before the host.
+        var next = asked.AddMinutes(5);
+        Show(Asked(null, next, multi), Asked("call-1", asked, choice), null, 1);
+        Show(Asked(null, next, multi), Asked("call-2", next, multi), null, 1);
+        Assert.Equal(new Dictionary<string, int> { ["choice"] = 1, ["multi"] = 1 }, ledger.Today.Coverage.Questions);
+    }
     // Found in review (#77): past a day's cap a mismatch keeps no time or session, so nothing can
     // say it was explained or over.
     [Fact]

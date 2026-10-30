@@ -77,11 +77,11 @@ internal sealed class ShadowCoverageTracker
         public HashSet<string> Daemon { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Host { get; } = new(StringComparer.Ordinal);
         public int Counted;
-        // The question showing now, by the host's identity when it has one, and the host's identity
-        // for each daemon identity seen beside it: the same question keeps one key while either
-        // side still shows it.
+        // The question showing now, by its key: the first identity it was known by, which every
+        // identity either side gives the same question maps to, so it keeps one key while either
+        // side shows it, whichever showed it first.
         public string? Current;
-        public Dictionary<string, string> HostFor { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, string> Key { get; } = new(StringComparer.Ordinal);
     }
 
     const int MaxFailed = 5000;
@@ -187,11 +187,18 @@ internal sealed class ShadowCoverageTracker
         if (!asked.TryGetValue(session, out var a)) { asked[session] = a = new Asked(); }
         if (d is not null) { a.Daemon.Add(Identity(d)); }
         if (h is not null) { a.Host.Add(Identity(h)); }
-        if (d is not null && h is not null) { a.HostFor[Identity(d)] = Identity(h); }
-        a.Current = h is not null ? Identity(h) : a.HostFor.GetValueOrDefault(Identity(d!)) ?? Identity(d!);
+        string? dk = d is null ? null : Identity(d), hk = h is null ? null : Identity(h);
+        // Linked only when they are the same question by the comparison's own rule: one side may
+        // already show the next question while the other still shows the last.
+        var same = d is not null && h is not null && ShadowCompare.SameQuestion(d, h);
+        var key = (hk is not null ? a.Key.GetValueOrDefault(hk) : null) ?? (same || h is null ? a.Key.GetValueOrDefault(dk!) : null) ?? hk ?? dk!;
+        if (hk is not null) { a.Key[hk] = key; }
+        if (dk is not null && (same || h is null)) { a.Key[dk] = key; }
+        a.Current = key;
         var count = Math.Max(a.Daemon.Count, a.Host.Count);
         if (count <= a.Counted) { return; }
-        var kind = ShadowCompare.QuestionKind((h ?? d)!);
+        // Charged to the kind of the side that has shown more questions: the one now ahead.
+        var kind = ShadowCompare.QuestionKind((a.Daemon.Count > a.Host.Count ? d ?? h : h ?? d)!);
         c.Questions[kind] = c.Questions.GetValueOrDefault(kind) + count - a.Counted;
         a.Counted = count;
 

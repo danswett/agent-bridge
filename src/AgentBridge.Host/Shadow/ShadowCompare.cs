@@ -459,11 +459,9 @@ public static class ShadowCompare
         {
             if (dc != hc) { diffs.Add(new(ShadowKinds.QuestionIdentity, s, "the call ids differ")); }
         }
-        // agent-ha-bridge names a Copilot question after its hook's clock, not the call, so the
-        // same question is one asked within two minutes of the host's.
-        else if (d.AskedAt is { } da && h.AskedAt is { } ha && (da - ha).Duration() > TimeSpan.FromMinutes(2))
+        else if (!SameQuestion(d, h))
         {
-            diffs.Add(new(ShadowKinds.QuestionIdentity, s, $"asked {(long)(da - ha).Duration().TotalSeconds} s apart"));
+            diffs.Add(new(ShadowKinds.QuestionIdentity, s, $"asked {(long)(d.AskedAt!.Value - h.AskedAt!.Value).Duration().TotalSeconds} s apart"));
         }
         if (d.AtMachine || h.AtMachine) { return; }
 
@@ -492,6 +490,13 @@ public static class ShadowCompare
     }
 
     public const string Timing = "timing";
+
+    // Whether two sides' questions are the same one: the same call when both know it (Claude);
+    // otherwise, since agent-ha-bridge names a Copilot question after its hook's clock and not the
+    // call, one asked within two minutes of the other; and the same when nothing tells them apart.
+    public static bool SameQuestion(ShadowQuestion d, ShadowQuestion h) =>
+        d.CallId is { Length: > 0 } dc && h.CallId is { Length: > 0 } hc ? dc == hc
+        : d.AskedAt is not { } da || h.AskedAt is not { } ha || (da - ha).Duration() <= TimeSpan.FromMinutes(2);
 
     // A question's kind for coverage: a multiple-choice field makes it multi, any other choice
     // makes it choice, and one with only free text (or nothing to fill in) is text.
