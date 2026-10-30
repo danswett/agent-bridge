@@ -690,7 +690,10 @@ public sealed partial class HaConnector
                 NoticeKey = "missing",
             };
         }
-        var pressed = Changed(armed.SubmitBaseline, submit) && submit.Value != armed.SpentPress && submit.Value != armed.UsedPress;
+        // ...nor the Send the card showed when an answer failed: pressed while it was being
+        // delivered, it belongs to the attempt that failed, not to a new one.
+        var pressed = Changed(armed.SubmitBaseline, submit) && submit.Value != armed.SpentPress && submit.Value != armed.UsedPress
+            && !(armed.SubmitAtFailure is { Present: true } atFailure && atFailure.Value == submit.Value);
         var complete = missing.Count == 0;
         // A lone choice that takes another answer, typed into the reply box and sent with Send.
         if (pressed && fields.Count == 1 && !takesText && missing.Count == 1 && !fields[0].MultiSelect && plan.TakesTypedAnswer && card is null)

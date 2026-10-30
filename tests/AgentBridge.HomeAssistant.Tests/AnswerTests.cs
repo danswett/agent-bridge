@@ -600,6 +600,37 @@ public sealed class AnswerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_send_pressed_while_a_refused_form_was_being_delivered_does_not_send_it_again()
+    {
+        var note = new Field { Name = "note", Title = "Note", Type = FieldType.Text };
+        Ask(Form("q1", Release, note));
+        await using var c = Connector();
+        outcome = _ =>
+        {
+            ha.Press(SessionEntities.Submit(Node));
+            return new AnswerResult(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");
+        };
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Wait for the fix"));
+        // Submitted from Send, then from the reply card: each time Send is pressed again mid-delivery.
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        await Pass(c, 6);
+        await Pass(c, 6);
+        Assert.Single(answered);
+        await Do(c, ha.SendFromCard(Node, "after the hotfix", "q1"));
+        Assert.Equal(2, answered.Count);
+        await Pass(c, 6);
+        await Pass(c, 6);
+        Assert.Equal(2, answered.Count);
+
+        // A press after the refusal does send it.
+        outcome = _ => new AnswerResult(AnswerOutcome.Delivered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Equal(3, answered.Count);
+        Assert.Equal("Answer sent", Activity);
+    }
+
+    [Fact]
     public async Task A_send_that_arrived_while_refused_words_were_being_delivered_does_not_send_them_again()
     {
         Ask(Form("q1"));
