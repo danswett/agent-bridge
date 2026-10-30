@@ -174,6 +174,14 @@ function script:Get-CopilotMqttMachineDevice {
     if (-not $MachineName) { $MachineName = $machine }
     & $specMachineDevice -Slug $Slug -MachineName $MachineName
 }
+# The same for whatever asks this computer's slug without naming it (the launch outcomes' topic,
+# through Get-CopilotMqttMachineTopicRoot): the fixture's machine, not the recorder's.
+$specMachineSlug = ${function:Get-BridgeMachineSlug}
+function script:Get-BridgeMachineSlug {
+    param([string]$MachineName)
+    if (-not $PSBoundParameters.ContainsKey('MachineName')) { $MachineName = $machine }
+    & $specMachineSlug -MachineName $MachineName
+}
 $copilotId = '6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20'
 $claudeId = 'c1a2b3c4-d5e6-4f70-8a91-b2c3d4e5f607'
 $codexId = '019a2b3c-4d5e-7f60-8192-a3b4c5d6e7f8'
