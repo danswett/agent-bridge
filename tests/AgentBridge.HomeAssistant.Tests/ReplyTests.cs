@@ -802,6 +802,46 @@ public sealed partial class ReplyTests : IDisposable
     }
 
     [Fact]
+    public async Task Publishes_reported_for_a_question_that_closes_before_they_are_read_are_not_replies()
+    {
+        await using var c = await Ready();
+        Idle(question: new Question { Id = "q1", Kind = QuestionKind.Form, Message = "What next?", AskedAt = FakeSessions.T0, AnswerAtMachine = true });
+        await Pass(c);
+
+        // Two publishes while the question is up, and the question answered at the machine before
+        // the next pass reads either.
+        c.Observe(ha.SendFromCard(Node, "too soon"));
+        c.Observe(ha.SendFromCard(Node, "also too soon"));
+        Idle(turn: 2);
+        await Pass(c);
+        await c.DeliveredAsync();
+        await Pass(c, 20);
+        await c.DeliveredAsync();
+        await Pass(c);
+        Assert.Empty(replied);
+
+        await Do(c, ha.SendFromCard(Node, "now"));
+        Assert.Equal("now", Assert.Single(replied).Text);
+    }
+
+    [Fact]
+    public async Task A_persons_send_that_waited_for_its_words_is_the_persons_even_after_an_agents_publish()
+    {
+        await using var c = await Ready("agent-user");
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "person"));
+        Assert.Equal("Waiting for your text", Activity);
+
+        // An agent's publish goes in meanwhile, then the person's words arrive.
+        await Do(c, ha.SendFromCard(Node, "Carry on", driver: "agent"));
+        await Do(c, ha.Type(SessionEntities.Reply(Node), "Stop and check the logs"));
+        Assert.Equal(["Carry on", "Stop and check the logs"], replied.Select(r => r.Text));
+
+        Idle(turn: 2, message: "Stop and check the logs");
+        await Pass(c);
+        Assert.Equal("human", Detail.GetProperty("driver").GetString());
+    }
+
+    [Fact]
     public async Task Each_press_and_publish_is_its_own_request_and_the_same_one_is_the_same_request()
     {
         await using var c = await Ready();

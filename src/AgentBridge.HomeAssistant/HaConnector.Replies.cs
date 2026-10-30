@@ -30,6 +30,9 @@ public sealed partial class HaConnector
         // not a reply. A card taken over from agent-ha-bridge, or from this host before a
         // restart, may hold one it already sent.
         public bool Baselined;
+        // The last change the watch had reported when the baseline was read: nothing reported up
+        // to then is new, whatever the sensor showed (two publishes during a question, say).
+        public long Boundary;
         public string? HandledPress;
         // Reply-card publishes used or passed over, most recent last: one read again, from the
         // sensor or from the watch, is not new.
@@ -203,6 +206,9 @@ public sealed partial class HaConnector
     // once it was back.
     async Task<bool> BaselineRepliesAsync(Published p, CancellationToken ct)
     {
+        // Before the states are read: a change reported after this is read again, and is new only
+        // if the state read did not already include it.
+        var boundary = Interlocked.Read(ref hitSeq);
         var payload = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
         var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
         if (payload.Kind == "unknown" || submit.Kind == "unknown") { return false; }
@@ -210,6 +216,7 @@ public sealed partial class HaConnector
         p.Reply.HandledPress = submit.Present ? submit.Value : null;
         p.Reply.PendingPress = null;
         p.Reply.Waiting.Clear();
+        p.Reply.Boundary = boundary;
         p.Reply.Baselined = true;
         return true;
     }
@@ -224,9 +231,9 @@ public sealed partial class HaConnector
             await BaselineRepliesAsync(p, ct);
             return;
         }
-        foreach (var (_, hit) in seen)
+        foreach (var (seq, hit) in seen)
         {
-            if (hit.EntityId != SessionEntities.ReplyPayload(p.Node) || !IsStamp(hit.State.State) || p.Reply.IsHandled(hit.State.State)
+            if (seq <= p.Reply.Boundary || hit.EntityId != SessionEntities.ReplyPayload(p.Node) || !IsStamp(hit.State.State) || p.Reply.IsHandled(hit.State.State)
                 || p.Reply.Waiting.Any(w => w.State == hit.State.State))
             {
                 continue;
@@ -408,6 +415,9 @@ public sealed partial class HaConnector
             return;
         }
         var text = box.Value;
+        // A press that waited for its words is armed again now: something else (an agent's
+        // publish, say) may have armed the next turn meanwhile, and these words are the press's.
+        if (!first) { p.ArmDriver(DriverOf(press.Snapshot?.UserId), now); }
         await TransientAsync(p, "Sending...", [], ct);
         p.Reply.HandledPress = press.Value;
         p.Reply.PendingPress = null;

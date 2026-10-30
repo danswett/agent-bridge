@@ -304,7 +304,8 @@ are said to be not sent.
 **Which presses are replies.** What the reply controls hold when the connector first reads a
 card is never a reply: a card taken over from agent-ha-bridge, or from this host before a
 restart, may hold one already sent. Nor is anything given while a question was open: as the
-question goes, its controls are read again, before the card is cleared. A press or publish
+question goes, its controls are read again, before the card is cleared, and nothing the watch
+reported before that is taken for new. A press or publish
 while the connector was not running is not sent when it starts.
 
 Where stage 3 knowingly differs from the daemon:
