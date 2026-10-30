@@ -141,6 +141,9 @@ internal sealed class ShadowCoverageTracker
             if (c.FailedQuestions.Count >= MaxFailed) { return; }
             c.FailedQuestions[key] = failed = new ShadowFailedQuestion { Session = session };
         }
+        // A question from a report written before kinds had their own times: each kind it had then
+        // last failed no later than the question did.
+        foreach (var k in failed.Kinds) { failed.KindLast.TryAdd(k, failed.Last); }
         if (!failed.Kinds.Contains(kind)) { failed.Kinds.Add(kind); }
         failed.Last = now;
         failed.KindLast[kind] = now;

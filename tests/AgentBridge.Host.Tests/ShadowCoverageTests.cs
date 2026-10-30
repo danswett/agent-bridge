@@ -438,6 +438,43 @@ public sealed class ShadowCoverageTests : IDisposable
         Assert.Equal(ShadowGate.Fail, Verdict().Outcome);
     }
 
+    // Found in review (#91): a report from the build before kinds had their own times, resumed the
+    // same day, moved every old kind's time on with the new one.
+    [Fact]
+    public void A_question_failing_in_a_report_from_before_kinds_had_times_keeps_its_old_kinds_times_when_it_fails_again()
+    {
+        Directory.CreateDirectory(reports);
+        var session = ShadowHash.Session(A);
+        var q = Asked("q-1", time.GetUtcNow(), new ShadowField("choice", 2, "h"));
+        void Samples(ShadowLedger ledger, int n, params ShadowDifference[] diffs)
+        {
+            for (var i = 0; i < n; i++)
+            {
+                ledger.Record(new ShadowComparison(true, 1, 1, diffs, []), View(null, null, null, Session(A, "waiting", question: q)), View(null, null, null, Session(A, "waiting", question: q)));
+                time.Advance(TimeSpan.FromSeconds(15));
+            }
+        }
+        ShadowDifference options = new(ShadowKinds.QuestionOptions, session, "field 1: daemon=2 host=3"), type = new(ShadowKinds.QuestionFieldType, session, "field 1: daemon=choice host=multi");
+        Samples(new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time), 6, options, type);
+        var optionsEnded = time.GetUtcNow();
+        // As the earlier build wrote it: no kindLast.
+        var file = Directory.GetFiles(reports, "shadow-*.json").Single();
+        var json = JsonNode.Parse(File.ReadAllText(file))!;
+        foreach (var (_, failed) in json["coverage"]!["failedQuestions"]!.AsObject()) { failed!.AsObject().Remove("kindLast"); }
+        File.WriteAllText(file, json.ToJsonString());
+
+        var resumed = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+        Samples(resumed, 6, type);
+        Sample(resumed, View(null, null, null, Session(A, "working")), View(null, null, null, Session(A, "working")));
+        Gate(new
+        {
+            questions = 1, questionsMaxRate = 0.4, sessions = 0, statusTransitions = 0, background = 0, compactions = 0, resumeSnapshots = 0, usageReadings = 0, machineEvents = 0, hours = 0, comparedHours = 0, cleanHours = 0,
+            explained = new object[] { new { kind = ShadowKinds.QuestionOptions, session, through = optionsEnded }, new { kind = ShadowKinds.QuestionFieldType, session, through = time.GetUtcNow() } },
+        });
+        // (The comparison's restart counts the question showing again: two events, one failure.)
+        Assert.Equal(ShadowGate.NotYet, Verdict().Outcome);
+    }
+
     // Found in review (#77): a question one side stops showing is the same question, and a question
     // failing across midnight keeps the kinds it had before it.
     [Fact]
