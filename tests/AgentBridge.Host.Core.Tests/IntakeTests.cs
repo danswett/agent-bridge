@@ -1299,6 +1299,20 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_pass_reading_past_an_unheard_Codex_run_holds_answers_until_it_has_settled_the_markers()
+    {
+        var intake = Running();
+        Assert.Null(intake.ApprovalsUnsettled);
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "spool failed: disk full", _f.Time.GetLocalNow(), 1);
+        var meanwhile = new List<string?>();
+        intake.AfterLogRead = () => meanwhile.Add(intake.ApprovalsUnsettled);
+
+        intake.Pass();
+
+        Assert.NotNull(Assert.Single(meanwhile));
+    }
+
+    [Fact]
     public void Answers_stop_once_the_heartbeat_is_older_than_hooks_allow_even_before_the_next_pass()
     {
         var intake = Running();

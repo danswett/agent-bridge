@@ -146,6 +146,9 @@ public sealed class HookIntake : IAsyncDisposable
     // A test's way to see each listing of the spool (G5: none once agent-ha-bridge has it).
     internal Action? Listing { get; set; }
 
+    // A test's way into a pass just after the hook log has been read.
+    internal Action? AfterLogRead { get; set; }
+
     bool Waiting()
     {
         Listing?.Invoke();
@@ -412,7 +415,13 @@ public sealed class HookIntake : IAsyncDisposable
     // rotated out of it unread (HookLogWatch.HistoryFrom). False when agent-ha-bridge started meanwhile.
     bool ReconcileApprovals(bool beat)
     {
+        // Closed before the cursor moves: once Refresh has read past an unheard run, the answer
+        // path's own look (UnheardSince) no longer sees it, and until the sweep below has settled
+        // what it stands for, an answer could reach a marker it retired. Reopened only by a
+        // reconciliation that completes.
+        _reconciled = false;
         var known = _codexLog.Refresh();
+        AfterLogRead?.Invoke();
         var cutoff = known ? Later(_codexLog.Last, _codexLog.HistoryFrom) : _time.GetLocalNow();
         if (_gap) { cutoff = _time.GetLocalNow(); }
         // Held until settled: a later pass with a lower cut-off (the log readable again, say)
