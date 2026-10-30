@@ -96,6 +96,7 @@
                         IsEnabled="{x:Bind ViewModel.CanLaunch, Mode=OneWay}" Click="OnLaunch" />
                     <!-- Why the form cannot go as it is: apart from the last launch's outcome below. -->
                     <TextBlock
+                        x:Name="ProblemLine"
                         AutomationProperties.AutomationId="LaunchProblem"
                         AutomationProperties.LiveSetting="Assertive"
                         TextWrapping="Wrap"

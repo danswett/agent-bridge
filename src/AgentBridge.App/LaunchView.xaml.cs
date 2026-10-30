@@ -29,8 +29,11 @@ public sealed partial class LaunchView : UserControl
     void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName != nameof(LaunchViewModel.StatusText) || string.IsNullOrEmpty(viewModel?.StatusText)) { return; }
-        DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(StatusLine)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
+        Announce(StatusLine);
     }
+
+    void Announce(FrameworkElement line) =>
+        DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(line)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
 
     public static Brush ProblemBrush() => Ui.ToneBrush(Tone.Bad);
     public static Brush NoteBrush(bool warns) => warns ? Ui.Brush("AbWarningText") : Ui.Brush("AbMuted");
@@ -56,7 +59,14 @@ public sealed partial class LaunchView : UserControl
         }
     }
 
-    void OnLaunch(object sender, RoutedEventArgs e) => viewModel?.Launch();
+    // A press the form refuses is answered aloud every time, even with the same reason as the last:
+    // otherwise a screen reader hears nothing happen.
+    void OnLaunch(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is null) { return; }
+        viewModel.Launch();
+        if (!string.IsNullOrEmpty(viewModel.Problem)) { Announce(ProblemLine); }
+    }
     void OnResend(object sender, RoutedEventArgs e) => viewModel?.Resend();
     void OnOpen(object sender, RoutedEventArgs e) => viewModel?.OpenSession();
     void OnReload(object sender, RoutedEventArgs e) => _ = viewModel?.RefreshAsync();

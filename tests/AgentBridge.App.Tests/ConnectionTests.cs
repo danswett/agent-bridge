@@ -348,6 +348,28 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_reply_whose_files_never_went_can_be_tried_again_however_long_after()
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Delivered));
+        var clock = new FakeTimeProvider(Make.T0);
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { GiveUp = TimeSpan.FromMinutes(9) };
+        var upload = true;
+        Task Files(Func<string, object?, TimeSpan?, Task<JsonElement>> call, Action<long, long> progress) =>
+            upload ? throw new HostErrorException("the storage could not be reached") : Task.CompletedTask;
+
+        deliveries.Submit("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, before: Files, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Failed, "the failure");
+        upload = false;
+        clock.Advance(TimeSpan.FromMinutes(10));
+        deliveries.Resend("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, Files);
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the outcome");
+        Assert.Equal("delivered", deliveries.Get("k")!.Outcome);
+        Assert.Single(host.Sent(Ops.SessionReply));
+    }
+
+    [Fact]
     public async Task An_answer_given_while_the_host_is_down_waits_and_gives_up_as_unconfirmed_only_after_the_limit()
     {
         await host.StopAsync();

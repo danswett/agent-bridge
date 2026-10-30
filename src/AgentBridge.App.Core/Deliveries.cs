@@ -32,8 +32,9 @@ public sealed record Delivery
     // The host process the op last went to, kept with the entry so a Try again after a failure
     // goes only to that process too, for an op never replayed after a restart.
     public string? SentTo { get; init; }
-    // When the request was first sent: the host remembers its id for only so long after that.
-    public DateTimeOffset FirstSent { get; init; }
+    // When the op itself first went to a host, which remembers its request id for only so long
+    // after that. Null while it never went: files that failed to go ahead of a reply are not it.
+    public DateTimeOffset? FirstSent { get; init; }
 }
 
 // Sends answers, replies and stops (session.answer, session.reply, session.stop), each to
@@ -90,7 +91,7 @@ public sealed class Deliveries
             {
                 return existing;
             }
-            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy, FirstSent = time.GetUtcNow() };
+            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy };
         }
         Publish(entry);
         _ = RunAsync(entry, op, data, before, resend: false);
@@ -110,8 +111,9 @@ public sealed class Deliveries
     {
         // An op never replayed after a restart is counted from its first send, not from this Try
         // again: once the host may have forgotten the request id, another copy could act twice.
-        var fromFirst = resend && !entry.ReplayAfterRestart;
-        var started = fromFirst ? entry.FirstSent : time.GetUtcNow();
+        var fromFirst = resend && !entry.ReplayAfterRestart && entry.FirstSent is not null;
+        var started = fromFirst ? entry.FirstSent!.Value : time.GetUtcNow();
+        var firstSent = entry.FirstSent;
         var busy = 0;
         var attempts = entry.Attempts;
         // The host the op itself last went to, if it went: files sent ahead are not the op. Carried
@@ -138,6 +140,12 @@ public sealed class Deliveries
                 var call = host.CallAsync(op, data(entry.Request), entry.Timeout, knownHost: !entry.ReplayAfterRestart,
                     onlyTo: entry.ReplayAfterRestart ? null : sentTo, out var to);
                 if (to != sentTo) { sentTo = to; Update(entry.Key, e => e with { SentTo = to }); }
+                if (to is not null && firstSent is null)
+                {
+                    var now = time.GetUtcNow();
+                    firstSent = now;
+                    Update(entry.Key, e => e with { FirstSent = now });
+                }
                 result = await call;
             }
             catch (HostRestartedException)
