@@ -105,7 +105,15 @@ public sealed class MigrationRecord
             if (!File.Exists(path)) { return (null, null); }
             var o = JsonNode.Parse(File.ReadAllText(path)) as JsonObject ?? throw new JsonException("not an object");
             if ((int?)o["version"] != Version) { throw new JsonException($"not version {Version}"); }
+            // Everything Save writes is required, as it wrote it: a list missing, or an entry in it
+            // that is not an object, read as empty would let a rollback skip a file or the
+            // daemon's task, report success and delete the record and snapshot it needed.
             string S(JsonNode? n) => (string?)n ?? throw new JsonException("a field is missing");
+            bool B(JsonNode? n) => (bool?)n ?? throw new JsonException("a field is missing");
+            IEnumerable<JsonObject> Objects(JsonNode? n, string name) =>
+                (n as JsonArray ?? throw new JsonException($"{name} is missing or not a list"))
+                .Select(e => e as JsonObject ?? throw new JsonException($"an entry in {name} is not an object"));
+            JsonNode Node(JsonNode? n) => n?.DeepClone() ?? throw new JsonException("a field is missing");
             var record = new MigrationRecord
             {
                 State = S(o["state"]),
@@ -113,20 +121,25 @@ public sealed class MigrationRecord
                 BridgeHome = S(o["bridgeHome"]),
                 StartedAt = DateTimeOffset.Parse(S(o["startedAt"]), System.Globalization.CultureInfo.InvariantCulture),
                 MigratedAt = o["migratedAt"] is { } m ? DateTimeOffset.Parse((string)m!, System.Globalization.CultureInfo.InvariantCulture) : null,
-                Tasks = [.. (o["tasks"] as JsonArray ?? []).OfType<JsonObject>().Select(t => new TaskRecord(S(t["name"]), (bool?)t["enabled"] ?? false))],
-                Files = [.. (o["files"] as JsonArray ?? []).OfType<JsonObject>().Select(f => new FileRecord
+                Tasks = [.. Objects(o["tasks"], "tasks").Select(t => new TaskRecord(S(t["name"]), B(t["enabled"])))],
+                Files = [.. Objects(o["files"], "files").Select(f => new FileRecord
                 {
                     Role = S(f["role"]),
                     Path = S(f["path"]),
-                    Existed = (bool?)f["existed"] ?? false,
+                    Existed = B(f["existed"]),
                     Backup = S(f["backup"]),
                     Before = (string?)f["before"],
                     After = (string?)f["after"],
                     Link = (string?)f["link"],
-                    Changes = [.. (f["changes"] as JsonArray ?? []).OfType<JsonObject>().Select(c => new EntryChange(S(c["agent"]), S(c["event"]), c["original"]!.DeepClone(), c["replacement"]!.DeepClone()))],
+                    Changes = [.. Objects(f["changes"], "changes").Select(c => new EntryChange(S(c["agent"]), S(c["event"]), Node(c["original"]), Node(c["replacement"])))],
                 })],
-                Checked = [.. (o["checked"] as JsonArray ?? []).OfType<JsonObject>().Select(c => new CheckedFile(S(c["path"]), (string?)c["hash"]))],
-                Hook = o["hook"] is JsonObject h ? new HookRecord(S(h["path"]), S(h["pointer"]), (bool?)h["created"] ?? false, (bool?)h["pointerCreated"] ?? false) : null,
+                Checked = [.. Objects(o["checked"], "checked").Select(c => new CheckedFile(S(c["path"]), (string?)c["hash"]))],
+                Hook = o["hook"] switch
+                {
+                    null => null,
+                    JsonObject h => new HookRecord(S(h["path"]), S(h["pointer"]), B(h["created"]), B(h["pointerCreated"])),
+                    _ => throw new JsonException("hook is not an object"),
+                },
             };
             return (record, null);
         }

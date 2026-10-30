@@ -323,6 +323,40 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Contains("C:\\mine\\guard.cmd", commands);
     }
 
+    [Theory]
+    [InlineData("tasks missing")]
+    [InlineData("a file that is not an object")]
+    [InlineData("a file without existed")]
+    [InlineData("a file without its changes")]
+    [InlineData("a task without enabled")]
+    public async Task A_record_missing_what_it_was_written_with_refuses_the_rollback_and_keeps_its_snapshot(string damage)
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var path = MigrationRecord.PathIn(_f.Profile);
+        var record = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        var files = record["files"]!.AsArray();
+        Assert.NotEmpty(files);
+        switch (damage)
+        {
+            case "tasks missing": record.Remove("tasks"); break;
+            case "a file that is not an object": files[0] = 1; break;
+            case "a file without existed": files[0]!.AsObject().Remove("existed"); break;
+            case "a file without its changes": files[0]!.AsObject().Remove("changes"); break;
+            default: record["tasks"]![0]!.AsObject().Remove("enabled"); break;
+        }
+        File.WriteAllText(path, record.ToJsonString());
+        var listing = _f.Listing();
+        var snapshot = Directory.GetFiles(MigrationRecord.SnapshotIn(_f.Profile), "*", SearchOption.AllDirectories);
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("roll back by hand", report.ToString());
+        Assert.Equal(listing, _f.Listing());
+        Assert.True(File.Exists(path));
+        Assert.Equal(snapshot, Directory.GetFiles(MigrationRecord.SnapshotIn(_f.Profile), "*", SearchOption.AllDirectories));
+    }
+
     [Fact]
     public async Task A_failed_hand_over_rolls_back_on_its_own()
     {

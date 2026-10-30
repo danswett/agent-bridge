@@ -217,6 +217,10 @@ publishes the dashboard (G7).
 
 ## What rollback does
 
+Rollback first reads `migration.json` whole: a field or list it was written with that is
+missing, or a list entry that is not an object, refuses the rollback and keeps the record and
+snapshot to roll back by hand, rather than skipping a file or a task and deleting the copies.
+
 1. Removes `intake.json`, and restores the profile's own `config.json` (as below), which the
    host reads only when it restarts.
 2. Restarts the host, which reads both only when it starts: it lets go of the spool, removes
