@@ -219,6 +219,7 @@ function Set-ShadowRelay {
         return
     }
     $url = Get-ShadowRelayUrl
+    if (-not $PSCmdlet.ShouldProcess("profile $HostProfile", "sign in to $url with a device code")) { return }
     Write-Output "Signing profile $HostProfile in to $url. Open the address below and enter the code, as the account your phone uses:"
     & $exe sign-in --profile $HostProfile --relay $url
     if ($LASTEXITCODE -eq 4) { throw 'agent-bridge-host does not sign in from inside an agent session; run -Install -Relay from an ordinary terminal' }
