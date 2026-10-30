@@ -31,7 +31,9 @@ param(
     # Questions: how the daemon arms, clears and reads a session's answer controls.
     [string]$DecisionsOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-decisions.json'),
     # Replies: how the daemon reads the reply card's payload and the reply box, and what it says.
-    [string]$RepliesOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-replies.json')
+    [string]$RepliesOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-replies.json'),
+    # Stops: End session's two presses, what the card says and what the status shows.
+    [string]$StopsOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-stops.json')
 )
 
 Set-StrictMode -Version Latest
@@ -640,4 +642,93 @@ $replies = [ordered]@{
 }
 $full = [IO.Path]::GetFullPath($RepliesOutput)
 [IO.File]::WriteAllText($full, ((ConvertTo-Stable $replies) | ConvertTo-Json -Depth 30) + "`n", [Text.UTF8Encoding]::new($false))
+Write-Host "wrote $full"
+# ---- Stops -----------------------------------------------------------------------------------
+# End session (Invoke-PendingStops, Clear-DaemonExpiredStopArms, Get-DaemonCardSummary): a press of
+# a session that is not idle arms and asks for a second; the second, or one press of an idle
+# session, ends it. The process, the shared prompt record and the ending itself are stand-ins;
+# the card notes, the status publishes and the pinned summary are the contract.
+
+Import-SpecFunction 'hooks\daemon-launch.ps1' @('Set-DaemonStopArm', 'Remove-DaemonStopArm', 'Test-DaemonStopConfirms', 'Test-DaemonStopArmed',
+    'Get-DaemonStopConfirmHint', 'Get-DaemonCardSummary', 'Clear-DaemonExpiredStopArms', 'Invoke-PendingStops')
+Import-SpecFunction 'hooks\daemon-activity.ps1' @('ConvertTo-DaemonActivityInstant')
+$stopConfig = Get-SpecConfigConstant 'hooks\agent-bridge-daemon.ps1' @('StopConfirmSeconds', 'StopLapseRetrySeconds')
+foreach ($key in $stopConfig.Keys) { $script:DaemonConfig[$key] = $stopConfig[$key] }
+$script:RecordedServices = @('mqtt.publish')
+$script:DaemonStopArmed = @{}
+$script:DaemonLaunchedPids = @{}
+$script:BridgeIsWindows = $true
+$script:DaemonReconcileNow = $false
+$script:DaemonStartedAt = [DateTimeOffset]::Parse('2026-10-29T19:00:00Z')
+$script:StopWorks = $true
+function script:Write-BridgeStopPrompt { param([string]$SessionId, [string]$Hint, $Until) $true }
+function script:Read-BridgeStopPromptStore { [pscustomobject]@{ State = 'Ok' } }
+function script:Clear-BridgeStopPromptStore { $true }
+function script:Get-DaemonProcessIdentity { param([int]$ProcessId) 638000000000000000L }
+function script:Stop-BridgeCopilotSession {
+    param([string]$SessionId, [int]$ProcessId)
+    [pscustomobject]@{ Stopped = $script:StopWorks; Detail = $(if ($script:StopWorks) { 'exited' } else { 'the session did not exit' }) }
+}
+
+$stopNode = Get-CopilotMqttNodeId -SessionId $copilotId
+$stopEntity = "button.${stopNode}_stop"
+$stopPress = [pscustomobject]@{ state = '2026-10-29T20:00:07.000000+00:00' }
+function Invoke-StopCase {
+    param([string]$Name, [string]$Status, [hashtable]$Entry = @{}, [bool]$Works = $true, [switch]$Armed, [switch]$Lapse, [int]$ProcessId = 4242)
+    $script:Recorded.Clear(); $script:Notes.Clear(); $script:DaemonStopArmed.Clear()
+    $script:StopWorks = $Works
+    $script:States = @{ $stopEntity = $stopPress }
+    $sessionEntry = [pscustomobject]@{ Name = $sessionName; Machine = $machine; Status = $Status }
+    foreach ($key in $Entry.Keys) { $sessionEntry | Add-Member -NotePropertyName $key -NotePropertyValue $Entry[$key] -Force }
+    if ($Armed) { [void](Set-DaemonStopArm -SessionId $copilotId -Status $Status -ProcessId $ProcessId) }
+    $state = @{ $copilotId = $sessionEntry }
+    if ($Lapse) {
+        $script:DaemonStopArmed[$copilotId].At = [DateTimeOffset]::Now.AddSeconds(-60)
+        Clear-DaemonExpiredStopArms -Headers $headers -State $state
+    }
+    else {
+        Invoke-PendingStops -Headers $headers -State $state -Live @{ $copilotId = [pscustomobject]@{ ProcessId = $ProcessId } }
+    }
+    [ordered]@{
+        name = $Name; status = $Status
+        notes = @($script:Notes)
+        statuses = @($script:Recorded | Where-Object { $_.Contains('topic') -and $_.topic -like '*/status/state' } | ForEach-Object { $_.payload })
+        armed = $script:DaemonStopArmed.ContainsKey($copilotId)
+    }
+}
+
+$stopCases = [System.Collections.Generic.List[object]]::new()
+$stopCases.Add((Invoke-StopCase -Name 'idleOnePress' -Status 'idle'))
+$stopCases.Add((Invoke-StopCase -Name 'workingFirstPress' -Status 'working'))
+$stopCases.Add((Invoke-StopCase -Name 'waitingFirstPress' -Status 'waiting'))
+$stopCases.Add((Invoke-StopCase -Name 'agentsFirstPress' -Status 'agents'))
+$stopCases.Add((Invoke-StopCase -Name 'shellFirstPress' -Status 'shell'))
+$stopCases.Add((Invoke-StopCase -Name 'workingConfirmed' -Status 'working' -Armed))
+$stopCases.Add((Invoke-StopCase -Name 'endFails' -Status 'idle' -Works $false))
+$stopCases.Add((Invoke-StopCase -Name 'repeatPress' -Status 'working' -Entry @{ LastStopAt = $stopPress.state }))
+$stopCases.Add((Invoke-StopCase -Name 'lapsed' -Status 'working' -Armed -Lapse))
+
+# The card while armed: the summary the daemon publishes over the session's own, and the hint.
+[void](Set-DaemonStopArm -SessionId $copilotId -Status 'waiting' -ProcessId 4242)
+$pinnedDetail = @{}
+$pinned = [ordered]@{ summary = (Get-DaemonCardSummary -SessionId $copilotId -Summary 'Reading files' -Detail $pinnedDetail); hint = $pinnedDetail['hint'] }
+$script:DaemonStopArmed.Clear()
+
+$stops = [ordered]@{
+    source = $fixture.source
+    sessionId = $copilotId; machine = $machine
+    constants = [ordered]@{
+        confirmSeconds = $stopConfig.StopConfirmSeconds; lapseRetrySeconds = $stopConfig.StopLapseRetrySeconds
+        confirmNote = $script:CopilotEndSessionConfirmNote; lapsedNote = $script:CopilotEndSessionLapsedNote
+    }
+    hints = [ordered]@{
+        working = (Get-DaemonStopConfirmHint -Status 'working'); waiting = (Get-DaemonStopConfirmHint -Status 'waiting')
+        agents = (Get-DaemonStopConfirmHint -Status 'agents'); shell = (Get-DaemonStopConfirmHint -Status 'shell')
+        unclassified = (Get-DaemonStopConfirmHint -Status ''); other = (Get-DaemonStopConfirmHint -Status 'compacting')
+    }
+    pinned = $pinned
+    cases = $stopCases
+}
+$full = [IO.Path]::GetFullPath($StopsOutput)
+[IO.File]::WriteAllText($full, ((ConvertTo-Stable $stops) | ConvertTo-Json -Depth 30) + "`n", [Text.UTF8Encoding]::new($false))
 Write-Host "wrote $full"

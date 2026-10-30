@@ -44,6 +44,9 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
             Log.Add(new Published(topic, payload, retain));
             if (retain)
             {
+                // When a state topic's value last changed, as an entity's last_changed, on this
+                // Home Assistant's clock.
+                if (!Retained.TryGetValue(topic, out var was) || was != payload) { changedAt[topic] = Now; }
                 if (payload.Length == 0) { Retained.Remove(topic); }
                 else { Retained[topic] = payload; }
             }
@@ -134,6 +137,7 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
 
     // The clock a button press is stamped with.
     public DateTimeOffset Now { get; set; } = new(2026, 10, 29, 20, 0, 0, TimeSpan.Zero);
+    readonly Dictionary<string, DateTimeOffset> changedAt = new(StringComparer.Ordinal);
 
     // What a person (or an agent) does on the card, and the change Home Assistant reports for it.
     public HaTrigger Press(string entityId, string? userId = "person") => Apply("button.press", entityId, "", userId);
@@ -251,7 +255,9 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         if (uniqueId is null) { return null; }
         var topic = discovered.First(p => p.Value == uniqueId).Key;
         var config = JsonNode.Parse(Retained[topic])!.AsObject();
-        var state = config["state_topic"]?.GetValue<string>() is { } st && Retained.TryGetValue(st, out var v) ? v : "unknown";
+        var stateTopic = config["state_topic"]?.GetValue<string>();
+        var state = stateTopic is { } st && Retained.TryGetValue(st, out var v) ? v : "unknown";
+        DateTimeOffset? changed = stateTopic is not null && changedAt.TryGetValue(stateTopic, out var at0) ? at0 : null;
         // The one value template the contract uses: the reply payload's stamp.
         if (config["value_template"]?.GetValue<string>() == "{{ value_json.at }}" && state != "unknown")
         {
@@ -261,7 +267,7 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         if (optimistic.TryGetValue(uniqueId, out var o)) { (state, user) = o; }
         var attributes = config["json_attributes_topic"]?.GetValue<string>() is { } at && Retained.TryGetValue(at, out var a) ? JsonNode.Parse(a)!.AsObject() : [];
         if (config["options"] is JsonArray options) { attributes["options"] = options.DeepClone(); }
-        return new HaState(entityId, state, JsonDocument.Parse(attributes.ToJsonString()).RootElement.Clone(), user);
+        return new HaState(entityId, state, JsonDocument.Parse(attributes.ToJsonString()).RootElement.Clone(), user, changed);
     }
 
     public Task<IReadOnlyList<HaRegistryEntry>> ListEntityRegistryAsync(CancellationToken cancellationToken = default)

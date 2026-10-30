@@ -40,6 +40,7 @@ public sealed class LiveHomeAssistantTests : IDisposable
     readonly FakeSessions sessions = new();
     readonly List<AnswerRequest> answered = [];
     readonly List<HaReply> replied = [];
+    readonly List<StopRequest> stopped = [];
     readonly List<string> log = [];
 
     public LiveHomeAssistantTests()
@@ -67,6 +68,16 @@ public sealed class LiveHomeAssistantTests : IDisposable
     {
         lock (replied) { replied.Add(r); }
         return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
+    }, stop: (r, _) =>
+    {
+        // The host's rule: a session that is not idle asks first, and its token confirms.
+        lock (stopped) { stopped.Add(r); }
+        if (r.Confirm != "live-token")
+        {
+            return Task.FromResult(new StopResult(StopOutcome.Confirm, "this session is still working") { Confirm = "live-token", ConfirmSeconds = 30 });
+        }
+        sessions.End(r.Id);
+        return Task.FromResult(new StopResult(StopOutcome.Ended));
     });
 
     static string Session() => Guid.NewGuid().ToString();
@@ -129,14 +140,47 @@ public sealed class LiveHomeAssistantTests : IDisposable
             && s.Attributes.TryGetProperty("decision_id", out var d) && d.GetString() == "q1");
         var field = await Until(SessionEntities.Field(node, 1), s => s.State == HaDecision.Choose);
         Assert.Contains("Cut the release now", field.Attributes.GetProperty("options").EnumerateArray().Select(o => o.GetString()));
-        foreach (var entity in new[] { SessionEntities.Status(node), SessionEntities.Activity(node), SessionEntities.Submit(node), SessionEntities.Reply(node), SessionEntities.ReplyPayload(node) })
+        foreach (var entity in new[] { SessionEntities.Status(node), SessionEntities.Activity(node), SessionEntities.Submit(node), SessionEntities.Reply(node), SessionEntities.ReplyPayload(node), SessionEntities.Stop(node) })
         {
             Assert.NotNull(await ha.GetStateAsync(entity));
         }
-        Assert.Null(await ha.GetStateAsync(SessionEntities.Stop(node)));
         var slug = HaContract.MachineSlug("CI-CARD");
         await Until(HaContract.MachineEntityId("binary_sensor", "online", slug), s => s.State == "on");
         await Until(HaContract.MachineEntityId("sensor", "sessions", slug), s => s.State == "1");
+    }
+
+    [HomeAssistantFact]
+    public async Task End_session_pressed_twice_on_a_working_session_reaches_the_hosts_stop_with_its_token()
+    {
+        var id = Session();
+        var node = HaContract.NodeId(id);
+        sessions.Set(FakeSessions.Copilot(id, status: SessionStatus.Working) with
+        {
+            Activity = new Activity { Response = "Working on it", TurnCount = 1, UserMessage = "go" },
+        });
+        await using var c = Connector("CI-STOP");
+        c.Start();
+        await Until(SessionEntities.Stop(node), _ => true);
+        await Until(SessionEntities.Status(node), s => s.State == "working");
+        // The connector reads what the button holds before taking a press from it.
+        await Task.Delay(TimeSpan.FromSeconds(2));
+
+        await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = SessionEntities.Stop(node) });
+        var asking = await Until(SessionEntities.Activity(node), s => s.State == HaStop.ConfirmNote);
+        Assert.Equal("this session is still working - the confirmation lapses in 30s", asking.Attributes.GetProperty("hint").GetString());
+
+        await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = SessionEntities.Stop(node) });
+        await Until(() => { lock (stopped) { return stopped.Count == 2; } }, "the second press never reached the host");
+        Assert.Equal([null, "live-token"], stopped.Select(r => r.Confirm));
+        // Ended, and then retired soon after with no dashboard drawing it: either is the end.
+        var deadline = DateTime.UtcNow.AddSeconds(60);
+        string? last = "working";
+        while (last is not ("ended" or null))
+        {
+            Assert.True(DateTime.UtcNow < deadline, $"the card never said the session ended; last {last}");
+            await Task.Delay(100);
+            last = (await ha.GetStateAsync(SessionEntities.Status(node)))?.State;
+        }
     }
 
     [HomeAssistantFact]
@@ -227,7 +271,8 @@ public sealed class LiveHomeAssistantTests : IDisposable
         var report = await HaShadow.CompareAsync(ha, sessions, new HaConnectorOptions { MachineName = machine, Version = "0.1.0", Dev = true }, true, TimeSpan.FromSeconds(3));
 
         Assert.DoesNotContain(report.Differences, d => d.Topic == HaContract.DiscoveryTopic("select", node, "decision"));
-        Assert.Equal(HaShadow.DaemonOnly, report.Differences.Single(d => d.Topic == HaContract.DiscoveryTopic("button", node, "stop")).Verdict);
+        // End session too, now that the host serves it.
+        Assert.DoesNotContain(report.Differences, d => d.Topic == HaContract.DiscoveryTopic("button", node, "stop"));
         var after = await ha.ReadTopicsAsync(filters, TimeSpan.FromSeconds(3));
         Assert.Equal(before.Select(m => (m.Topic, m.Payload)).Order(), after.Select(m => (m.Topic, m.Payload)).Order());
     }

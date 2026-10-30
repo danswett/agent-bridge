@@ -102,11 +102,9 @@ public sealed partial class HaConnector
     // The cards to read for a reply this pass, besides those the watch reported: one not yet
     // baselined or with a Send waiting on its words, and every few seconds every card, since a
     // press made while the watch was down reports nothing.
-    void ReplyCards(Dictionary<string, List<(long Seq, HaTrigger Hit)>> touched, DateTimeOffset now)
+    void ReplyCards(Dictionary<string, List<(long Seq, HaTrigger Hit)>> touched, bool sweep)
     {
         if (!ServesReplies) { return; }
-        var sweep = now >= nextReplySweep;
-        if (sweep) { nextReplySweep = now + options.ReplySweep; }
         lock (gate)
         {
             foreach (var (id, p) in published)

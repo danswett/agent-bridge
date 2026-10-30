@@ -12,7 +12,8 @@ and a migrated machine's cards render unchanged.
 
 It is built in stages. **Stage 1 is read-only status; stage 2 adds answering questions from the
 card**, and a read-only shadow that compares the connector with a daemon still running; **stage
-3 adds replies, with images and files, from the card**. The plan for the later stages is below.
+3 adds replies, with images and files, from the card; stage 4 adds End session**. The plan for
+the later stages is below.
 
 ## What it never does
 
@@ -159,14 +160,15 @@ retained payload), so the dashboard never offers a control that silently does no
 * per machine, at start: the install button, the launch card's prompt, prompt payload,
   workspace, profile, agent, model, effort, context, resume and permissions selectors, Launch,
   the launch result and transfer request, and their state topics (17 of the 25 machine topics);
-* per session, when the connector first publishes it: the stop button and the two legacy state
-  topics `decision/state` and `reply/state`; and, only when the host has no way to answer (no
-  `ISessionAnswerer` on this platform), also the decision and field selectors (12), the submit
-  button, the reply box and the reply payload sensor, as stage 1 did.
+* per session, when the connector first publishes it: the two legacy state topics
+  `decision/state` and `reply/state`; End session when the host cannot end sessions here (no
+  `ISessionStopper`); and, only when the host has no way to answer (no `ISessionAnswerer` on this
+  platform), also the decision and field selectors (12), the submit button, the reply box and the
+  reply payload sensor, as stage 1 did.
 
 The generated dashboard draws "Entity not found" for those controls until the stage that serves
 them lands. **The connector is therefore for the disposable rehearsal only; no real machine
-enables it until the stages that serve what it withdraws (4–6) have landed** (see the plan).
+enables it until the stages that serve what it withdraws (5–6) have landed** (see the plan).
 
 ### Stage 2: answering from the card
 
@@ -322,6 +324,55 @@ Where stage 3 knowingly differs from the daemon:
 | More than ten attachments in one publish are refused before any is fetched | The host takes at most ten per reply; the daemon has no limit |
 | After a box reply, a box that cannot be read is left as it is | The daemon clears it then; here the press is already spent, so nothing is sent again, and clearing blind could delete a follow-up typed meanwhile |
 
+### Stage 4: End session
+
+With the host's stop delivery (`ISessionStopper` on this platform), each card carries End session
+(`button.<node>_stop`, last of its controls, as `Publish-CopilotMqttSession` publishes it), and a
+press is taken as `Invoke-PendingStops` takes it; `Fixtures/ha-stops.json` records the daemon's
+own functions on nine cases (an idle session's one press; the first press of a working, waiting,
+background-agent and background-shell session; the confirming press; an end that fails; a
+repeated press; a confirmation that lapses), the hints for every status, and the summary the
+card keeps while it asks (`Get-DaemonCardSummary`).
+
+* **Two presses for a session that is not idle.** The rule is the host's own (`session.stop`,
+  the same for the app and the PWA): a first press arms it and hands back a token, which the
+  connector sends with a second press within the window (10 s); a press after the window is a
+  first press again. An idle session ends on one press.
+* **The card while it asks**: `Press End session again to end it`, with the daemon's hint
+  (`this session is still working - the confirmation lapses in 10s`, and so on by status),
+  kept over the session's own activity line until the window closes, while its reply and
+  reasoning stay live. A first press the card could not be told of is forgotten, so the press
+  made because it looked dead is never taken for the confirmation.
+* **A lapse** says `End session NOT confirmed` (`no second press within 10s`), and the
+  confirmation is forgotten only once that is shown, retried every 2 s
+  (`StopLapseRetrySeconds`) otherwise.
+* **Ending**: the status `ending` and `Ending session...` first; then `ended` once the host
+  has ended it (the card then goes as any ended session's does), or `Could not end session`
+  with the host's reason and the status `error`. A press the host refuses outright (the
+  session's process unknown, say) says `Could not end session` and the card shows the session
+  as it is again.
+* Ending can take a while (the session is given time to exit before it is terminated), so it
+  runs beside the passes; a press while it does is not a second end, then or afterwards, and
+  a confirmed end is never said to have lapsed however long the host takes. A press made
+  before the card has said what came of the last one (even one reported only afterwards) never
+  confirms the question it then asks, and one made the moment it asks is taken: the confirming
+  press must be no earlier, on Home Assistant's own clock, than the card's change to the
+  question (its `last_changed`), so a double press never ends a working session; while it asks,
+  the button is read every pass, so a second press is seen within the window even with the
+  watch down. The window is counted from when the press went to the host, so it never outlasts
+  the host's own, and a question the host puts too late to answer is not put.
+* What the button holds when the connector first reads it is not a press; a session asking a
+  question can be ended like any other.
+
+Where stage 4 knowingly differs from the daemon:
+
+| Difference | Why |
+|---|---|
+| The second press is checked by the host (token, same process), not by the connector | The host's `session.stop` is the one rule for every client; the daemon's process-identity check is the same check |
+| A press with no process behind the session is refused (`Could not end session`) | The host never ends what it cannot identify; the daemon lets it through to a stop that then does nothing |
+| Closing the window the bridge opened is the host's launcher's concern, not the connector's | The connector only presses; the host owns its windows |
+| Another notice replacing the question on the card (`Answer sent`, say) withdraws it: the next press asks again | The daemon pins the question back at its next publish, but until then a press would end a session whose card no longer asks |
+
 ### The shadow: comparing with a running daemon
 
 `agent-bridge-host ha shadow [--json] [--window <seconds>]` runs one connector pass against a
@@ -332,8 +383,8 @@ reads the broker's retained topics for this machine and for every session either
 `asked_at`. It takes one reading of every agent's usage first, as `agent-bridge-host usage`
 does, so the usage sensors are compared too. Each topic is reported `same`, `differs`,
 `agent-ha-bridge only` or `host only`,
-with a note where the difference is by design (stop, launch and transfer controls; the answer
-controls when the host cannot answer; usage when no reading was given). It needs `baseUrl` and the stored token but not
+with a note where the difference is by design (launch and transfer controls; the answer and
+stop controls when the host cannot use them; usage when no reading was given). It needs `baseUrl` and the stored token but not
 `enabled`, and it ignores G5: it is the one thing that is meant to run while the daemon does,
 for the week of shadow running before a machine's cutover (§10 stage 4). It complements
 `agent-bridge-host shadow`, which compares what the host *knows* with the daemon's local state
@@ -461,7 +512,7 @@ does), never by subscribing to the broker.
 |---|---|---|
 | 2 Answers (done) | The full per-session set but stop; arm, read, answer, tell the card, clear; `driver` from `context.user_id`; the read-only shadow; the container CI job (above and below) | `Set-CopilotMqttDecision`, `Publish-CopilotMqttDecisionFields`, `Clear-CopilotMqttDecision`, `daemon-decisions.ps1`, card `answer_consumed_at` |
 | 3 Replies and attachments (done) | The reply card's publish (text, image ids, inline files) and the reply box with Send; images from Home Assistant's image store, deleted after; the files through `AttachmentStore` and `ReplyService`; driver pending until the turn starts (above) | `daemon-replies.ps1`, card reply path |
-| 4 Stop | `button.<node>_stop`, two presses when the session is not idle, the confirm and lapsed notes pinned on the activity line; `StopService`; `ending` | `Invoke-PendingStops`, `Get-DaemonCardSummary`, `CopilotEndSessionConfirmNote` |
+| 4 Stop (done) | `button.<node>_stop`, two presses when the session is not idle, the confirm and lapsed notes pinned on the activity line; `StopService`; `ending` (above) | `Invoke-PendingStops`, `Get-DaemonCardSummary`, `CopilotEndSessionConfirmNote` |
 | 5 Launch and notifications | The launch card's controls (`Publish-CopilotMqttNewSession`) from the host's approved workspaces and agents; the 255-character limit lifted through the retained `newsession/promptpayload` (`{at, text, request, settings}`); `new_session_result` with `recent` per request; `capabilities.newSession`/`launchRequest`; transfer requests. Phone notifications with answer buttons and their actions | `daemon-launch.ps1`, `daemon-decision-notify.ps1` |
 | 6 Update buttons | `button.agent_bridge_<slug>_install_update` starts the product's own update (the app's Velopack update on Windows), with `stage`/`stage_detail` and `update_percentage` from it, and `latest_version` from this product's release feed — never agent-ha-bridge's (G2) | `Publish-CopilotMqttUpdate`, `daemon-maintenance.ps1` |
 | 7 Upkeep | The Detailed activity helper created when absent (`input_boolean/create`, never recreated); the liveness repair for a sensor Home Assistant has stopped applying, with its attempt limit (#177, #202); forget-machine (the card's X clears this machine's topics from the browser; the connector must not resurrect a machine that was forgotten while it was off) | `Initialize-CopilotVerboseToggle`, `Confirm-DaemonOnlineHeartbeat`, `Get-BridgeMachineForgetTopic` |
@@ -486,8 +537,11 @@ everywhere else: they run only when `AGENT_BRIDGE_HA_TEST_URL` is loopback and
 `AGENT_BRIDGE_HA_TEST_DISPOSABLE=1`. Each poses as a machine of its own and checks, through Home
 Assistant itself rather than a fake:
 
-* the card's entities exist at the ids the dashboard uses, a question is armed onto them, the
-  stop button is not offered, and the machine reads online with its session count;
+* the card's entities exist at the ids the dashboard uses, End session among them, a question is
+  armed onto them, and the machine reads online with its session count;
+* End session pressed through Home Assistant on a working session asks for a second press, and
+  the second, within the window, reaches the host's stop with the first press's token and the
+  card's status reads `ended`;
 * a choice and a Send press made through Home Assistant's services reach the host's answerer
   with the chosen value, the card says `Answer sent`, and the next turn is `agent`-driven
   because the pressing account is in `agentUserIds`;
@@ -560,7 +614,7 @@ for retained state, and `config/entity_registry/list` for ids:
 1. Daemon → host: the machine row stays (online, session count, version, `(dev)`); each card
    keeps rendering status, activity, the reply text, the trail, compactions and background
    counts; Detailed activity toggles reasoning; usage rows stay; no `_2` ids; the launch card,
-   install and stop buttons for the machine go and nothing else does; a question is answered
+   install button for the machine go and nothing else does; a question is answered
    from the card, on a phone-sized browser too.
 2. A session ending: it leaves the list, the writer drops its card, and only then do its
    entities go; all 29 topics are empty.
