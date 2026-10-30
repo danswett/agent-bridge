@@ -12,8 +12,8 @@ namespace AgentBridge.HomeAssistant;
 // controls are agent-ha-bridge's, armed exactly as its daemon arms them (HaDecision); what they
 // hold is read the way Read-DaemonDecisionAnswer and Read-DaemonFormAnswer read it, and the
 // answer goes to the host's own delivery (session.answer), which checks it against the question
-// and types it in. Replies, stopping and launching are later stages: a press for one of those is
-// said to be unserved on the card rather than silently dropped.
+// and types it in. Replies are HaConnector.Replies.cs; without the host's reply delivery, a press
+// for one is said to be unserved on the card rather than silently dropped.
 public sealed partial class HaConnector
 {
     // What a session's card is armed with, and what its answer channels held at that moment:
@@ -153,6 +153,10 @@ public sealed partial class HaConnector
                 return;
             }
             var slots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
+            // What the reply controls hold as the question goes: an answer, or words given while it
+            // was asked, never a reply after it. Read before the card is cleared, so anything sent
+            // once it shows no question is.
+            if (ServesReplies && p.Armed is not null && !await BaselineRepliesAsync(p, ct)) { p.Reply.Baselined = false; }
             await RunAsync(HaDecision.Clear(p.Node, name, options.MachineName, slots), p.Node, ct);
             p.Armed = null;
             p.Cleared = true;
@@ -179,6 +183,21 @@ public sealed partial class HaConnector
         var boundary = Interlocked.Read(ref hitSeq);
         p.ArmedSlots = plan.UsesFieldSlots ? plan.Fields.Count : 0;
         p.Cleared = false;
+        // A Send waiting on the box's words was for a reply; the question takes the box now.
+        p.Reply.PendingPress = null;
+        // Replies still waiting their turn would reach a session that is asking something: said,
+        // not sent and not dropped silently.
+        if (p.Reply.Waiting.Count > 0)
+        {
+            var waiting = p.Reply.Waiting.Count;
+            foreach (var w in p.Reply.Waiting) { p.Reply.Handle(w.State); }
+            p.Reply.Waiting.Clear();
+            await TransientAsync(p, "Reply NOT sent", new JsonObject
+            {
+                ["error"] = waiting == 1 ? "the session asked a question before it could be sent" : $"the session asked a question before {waiting} replies could be sent",
+                ["hint"] = "answer it first, then reply",
+            }, ct);
+        }
         p.Armed = new Armed
         {
             Question = question, Plan = plan, PayloadBaseline = payload, SubmitBaseline = submit, ReplyBaseline = reply,
@@ -331,6 +350,7 @@ public sealed partial class HaConnector
     async Task AnswersAsync(DateTimeOffset now, CancellationToken ct)
     {
         if (!ServesAnswers || !options.ConsumeAnswers) { hits.Clear(); return; }
+        await RepliesDoneAsync(now, ct);
         var touched = new Dictionary<string, List<(long Seq, HaTrigger Hit)>>(StringComparer.Ordinal);
         while (hits.TryDequeue(out var item))
         {
@@ -351,6 +371,7 @@ public sealed partial class HaConnector
                 }
             }
         }
+        ReplyCards(touched, now);
         foreach (var (node, seen) in touched)
         {
             (string Id, Published P)? entry;
@@ -361,7 +382,7 @@ public sealed partial class HaConnector
             {
                 // Read again on the next pass, with the numbers they came with.
                 foreach (var item in seen) { hits.Enqueue(item); }
-                if (seen.Count == 0) { nextSweep = now; }
+                if (seen.Count == 0) { nextSweep = now; nextReplySweep = now; }
                 throw;
             }
         }
@@ -384,6 +405,11 @@ public sealed partial class HaConnector
     async Task CardAsync(string sessionId, Published p, IReadOnlyList<(long Seq, HaTrigger Hit)> seen, DateTimeOffset now, CancellationToken ct)
     {
         var armed = p.Armed;
+        if (armed is null && ServesReplies)
+        {
+            await ReplyAsync(sessionId, p, seen, now, ct);
+            return;
+        }
         if (armed is null || armed.Plan.TerminalOnly || armed.Settled)
         {
             if (seen.Count > 0) { await UnservedAsync(p, seen[^1].Hit, ct); }
@@ -504,11 +530,15 @@ public sealed partial class HaConnector
         var key = hit.EntityId + "|" + hit.State.State;
         if (p.ToldUnserved == key) { return; }
         p.ToldUnserved = key;
-        await TransientAsync(p, "Reply NOT sent", new JsonObject
-        {
-            ["error"] = "this machine's host does not take replies from the dashboard yet",
-            ["hint"] = "reply at the machine",
-        }, ct);
+        // With the host's reply delivery, a reply waits for no question: this one is being
+        // answered at the machine, or its answer is going in, and the reply would land in it.
+        await TransientAsync(p, "Reply NOT sent", ServesReplies
+            ? new JsonObject { ["error"] = "the session is waiting on a question", ["hint"] = "answer it first, then reply" }
+            : new JsonObject
+            {
+                ["error"] = "this machine's host does not take replies from the dashboard yet",
+                ["hint"] = "reply at the machine",
+            }, ct);
     }
 
     static bool HasAttachments(HaState state) =>

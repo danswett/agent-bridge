@@ -11,8 +11,8 @@ agent-ha-bridge, goes on generating the dashboard from every machine's retained 
 and a migrated machine's cards render unchanged.
 
 It is built in stages. **Stage 1 is read-only status; stage 2 adds answering questions from the
-card**, and a read-only shadow that compares the connector with a daemon still running. The
-plan for the later stages is below.
+card**, and a read-only shadow that compares the connector with a daemon still running; **stage
+3 adds replies, with images and files, from the card**. The plan for the later stages is below.
 
 ## What it never does
 
@@ -166,7 +166,7 @@ retained payload), so the dashboard never offers a control that silently does no
 
 The generated dashboard draws "Entity not found" for those controls until the stage that serves
 them lands. **The connector is therefore for the disposable rehearsal only; no real machine
-enables it until the stages that serve what it withdraws (3–6) have landed** (see the plan).
+enables it until the stages that serve what it withdraws (4–6) have landed** (see the plan).
 
 ### Stage 2: answering from the card
 
@@ -240,9 +240,87 @@ Where stage 2 knowingly differs from the daemon:
 | Claude forms use field slots, never the selector's choices | Claude's questions always arrive as forms here |
 | An approval offers `Approve` / `Deny` on the selector with `answer_on_tap` | The host's approval is a question kind of its own |
 | `Cancel request` says `Answer NOT sent` and resets the selector | The host has no way to cancel an agent's question |
-| A reply with no question says `Reply NOT sent` | Replies are stage 3 |
+| A reply while a question is open answers the question; at a question only the terminal can answer, it says `Reply NOT sent` (`the session is waiting on a question`) | The host refuses a reply while its session asks a question |
 | A free-text answer from the reply box must differ from the box at arming | The box keeps the previous reply; the daemon reads it the same way through its baseline |
 | Baselines, `answer_consumed_at` and a pending driver are kept in memory | A host restart re-arms every open question with a fresh baseline, so a press before it is not replayed |
+
+### Stage 3: replies from the card
+
+With a replier as well as an answerer (`ISessionReplier` on this platform), a card with no
+question on it takes replies, read as the daemon reads them, and `Fixtures/ha-replies.json`
+records the daemon's own `Send-DaemonCardPayload`, `Send-DaemonReplyBoxText` and
+`Invoke-DaemonReply` on sixteen cases (card words, attachments, an agent's publish, a refusal,
+an image that cannot be fetched, incomplete metadata, a publish for a question, blank and
+repeated publishes; box words, a refusal, a follow-up typed during delivery, a blank box from a
+person, from an agent and given up on, a repeated press) with the daemon's constants. The
+contract tests assert the connector tells the card exactly what the daemon told it, and makes
+the same service calls.
+
+**The reply card** publishes `{at, text, images: [{id, name, content_type}], files: [{name,
+content_type, b64}], driver?}` (not retained) to `copilot/cli/<node>/replypayload/set`, read
+through the reply payload sensor: its state is `at`, the stamp that makes a publish new. A new
+stamp is one reply. One tagged with a `decision_id` is words for a question, used by stage 2 or
+not at all. One whose `images` or `files` hold an entry the connector cannot read, or are not
+lists, says `Reply NOT sent` (`The attachment metadata is incomplete; no reply was sent.`) and sends nothing. The
+images are fetched from Home Assistant's image store (`GET /api/image/serve/<id>/original`,
+ids of letters and digits only, at most 25 MiB, above Home Assistant's own 10 MiB upload
+limit, within the client's timeout for the whole body); the files are decoded inline, at most
+256 KiB each (`Save-BridgeReplyFile`). Any that fails, a timeout included, says the daemon's
+sentence and sends nothing. More than ten attachments (the host's limit for one reply) are refused
+before any is fetched. A reply that went in deletes its images
+from the store (`image/delete`, beside the passes, so a slow delete holds up nothing); one
+that reached nothing keeps them. The publish takes
+precedence over the reply box in the same pass.
+
+**The reply box and Send.** A new Send press sends the box's words. The tap on Send is what
+commits the box, so a press usually arrives first: the box is read again up to six times,
+500 ms apart, then, for a person, the card says `Waiting for your text` and the press stays
+armed, sending the words the moment they arrive, for ten minutes (`SubmitArmSeconds`), after
+which it says `Nothing to send` (`Type a reply first, then press Send.`). An agent's press at an
+empty box says `Nothing to send` at once, since an agent's text commits immediately; unless its
+reply-card publish went in within the driver window, when the press is that message's Send and
+its arm is kept. After a reply, sent or not, the box is reset to `' '` once it is read still
+holding what was sent, never if something was typed meanwhile or it cannot be read.
+
+**Telling the card**: `Sending...`, then `Reply sent` (`sent`, the first 60 characters, and
+`at`), `Reply unconfirmed - check the terminal`, or `Reply NOT sent` (`error`, and `unsent`
+when delivery refused it).
+
+**Driver**: a press's `context.user_id`, or the publish's `driver`, arms the next turn as for
+an answer. A reply that reached nothing disarms it; one that went in restarts its window
+(`Update-DaemonDriverPendingStamp`).
+
+**Delivery.** The reply goes to the host's `ISessionReplier` (`session.reply`, as the app's),
+each press or publish its own request id. Its files go into the `AttachmentStore` as the
+desktop app's do over the local pipe (direct, in 11 KiB chunks, checked against their SHA-256),
+under a peer of their own (`home-assistant`), and the reply names them; whatever the reply did
+not use is discarded afterwards. Delivery may take a minute to confirm, so it runs beside the
+connector's passes, and the card is read again as soon as it is done; status, answers and the
+other cards are not held up meanwhile. A pause (agent-ha-bridge starting) does not lose track of
+a delivery under way: the card waits for it, and what it comes to touches only the driver arm
+it made. Publishes the watch reports meanwhile wait their turn and each is sent, in the order they
+came (the sensor itself shows only the latest); any still waiting when the session asks a question
+are said to be not sent.
+
+**Which presses are replies.** What the reply controls hold when the connector first reads a
+card is never a reply: a card taken over from agent-ha-bridge, or from this host before a
+restart, may hold one already sent. Nor is anything given while a question was open: as the
+question goes, its controls are read again, before the card is cleared, and nothing the watch
+reported before that is taken for new. A press or publish
+while the connector was not running is not sent when it starts.
+
+Where stage 3 knowingly differs from the daemon:
+
+| Difference | Why |
+|---|---|
+| The host stages the files and types `@path` itself (`ReplyService`), not the connector | The same staging, naming and private folder as an app's attachments |
+| `Reply unconfirmed - check the terminal` | The host's delivery can be unconfirmed; the daemon has only sent or not |
+| A reply of attachments alone shows `(n attachments)` as `sent`, not the typed `@path` line | The connector never learns where the host staged them |
+| A press or publish made while the connector was not running is not sent at start | The daemon keeps what it handled in its state file; the connector cannot know what agent-ha-bridge already sent, so it never replays |
+| Words given while a question is open never become a reply once it goes | The host refuses replies while a question is open, and they belonged to the question |
+| Publishes made while a reply is being delivered are each sent, in order | The daemon reads only the sensor's latest, but types a reply in well under a second; the host's delivery waits up to a minute for confirmation |
+| More than ten attachments in one publish are refused before any is fetched | The host takes at most ten per reply; the daemon has no limit |
+| After a box reply, a box that cannot be read is left as it is | The daemon clears it then; here the press is already spent, so nothing is sent again, and clearing blind could delete a follow-up typed meanwhile |
 
 ### The shadow: comparing with a running daemon
 
@@ -382,7 +460,7 @@ does), never by subscribing to the broker.
 | Stage | Commands | agent-ha-bridge spec |
 |---|---|---|
 | 2 Answers (done) | The full per-session set but stop; arm, read, answer, tell the card, clear; `driver` from `context.user_id`; the read-only shadow; the container CI job (above and below) | `Set-CopilotMqttDecision`, `Publish-CopilotMqttDecisionFields`, `Clear-CopilotMqttDecision`, `daemon-decisions.ps1`, card `answer_consumed_at` |
-| 3 Replies and attachments | The reply card's JSON on `copilot/cli/<node>/replypayload/set` (text, uploaded image ids, `at`), read through the reply payload sensor's attributes; images fetched from Home Assistant's image store (`/api/image/serve/<id>/original`), staged in `AttachmentStore`, deleted after (`image/delete`); `ReplyService`; driver pending until the turn starts | `daemon-replies.ps1`, card reply path |
+| 3 Replies and attachments (done) | The reply card's publish (text, image ids, inline files) and the reply box with Send; images from Home Assistant's image store, deleted after; the files through `AttachmentStore` and `ReplyService`; driver pending until the turn starts (above) | `daemon-replies.ps1`, card reply path |
 | 4 Stop | `button.<node>_stop`, two presses when the session is not idle, the confirm and lapsed notes pinned on the activity line; `StopService`; `ending` | `Invoke-PendingStops`, `Get-DaemonCardSummary`, `CopilotEndSessionConfirmNote` |
 | 5 Launch and notifications | The launch card's controls (`Publish-CopilotMqttNewSession`) from the host's approved workspaces and agents; the 255-character limit lifted through the retained `newsession/promptpayload` (`{at, text, request, settings}`); `new_session_result` with `recent` per request; `capabilities.newSession`/`launchRequest`; transfer requests. Phone notifications with answer buttons and their actions | `daemon-launch.ps1`, `daemon-decision-notify.ps1` |
 | 6 Update buttons | `button.agent_bridge_<slug>_install_update` starts the product's own update (the app's Velopack update on Windows), with `stage`/`stage_detail` and `update_percentage` from it, and `latest_version` from this product's release feed — never agent-ha-bridge's (G2) | `Publish-CopilotMqttUpdate`, `daemon-maintenance.ps1` |
@@ -415,6 +493,11 @@ Assistant itself rather than a fake:
   because the pressing account is in `agentUserIds`;
 * a reply card payload published through `mqtt.publish` answers a free-text question and
   `answer_consumed_at` comes back;
+* words typed into the reply box and a Send press reach the host's reply delivery, the card says
+  `Reply sent` and the box is reset to `' '`;
+* an image uploaded to Home Assistant's image store (`/api/image/upload`, as the card does) and
+  a file, sent in one reply-card publish that is not retained, reach the host's reply delivery
+  byte for byte, and the image is then deleted from the store;
 * with no dashboard at all, an ended session is retired, and nothing it published is left
   retained;
 * the shadow, against the daemon's own recorded publications seeded into the broker, reports

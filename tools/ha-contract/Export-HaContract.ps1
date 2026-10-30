@@ -29,7 +29,9 @@ param(
     [Parameter(Mandatory)][string]$Source,
     [string]$Output = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-contract.json'),
     # Questions: how the daemon arms, clears and reads a session's answer controls.
-    [string]$DecisionsOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-decisions.json')
+    [string]$DecisionsOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-decisions.json'),
+    # Replies: how the daemon reads the reply card's payload and the reply box, and what it says.
+    [string]$RepliesOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-replies.json')
 )
 
 Set-StrictMode -Version Latest
@@ -119,7 +121,10 @@ function script:Invoke-HomeAssistantService {
         $script:Recorded.Add([ordered]@{ topic = [string]$Data.topic; payload = [string]$Data.payload; retain = [bool]$Data.retain; qos = [int]$Data.qos })
     }
     else {
-        $script:Recorded.Add([ordered]@{ service = "$Domain.$Service"; entity_id = [string]$Data.entity_id; option = [string]$Data.option })
+        $call = [ordered]@{ service = "$Domain.$Service"; entity_id = [string]$Data['entity_id'] }
+        # Each call's own field: a select's option, a text's value.
+        foreach ($field in @('option', 'value')) { if ($Data.ContainsKey($field)) { $call[$field] = [string]$Data[$field] } }
+        $script:Recorded.Add($call)
     }
 }
 $headers = @{ Authorization = 'Bearer not-a-token' }
@@ -508,4 +513,131 @@ $decisions = [ordered]@{
 }
 $full = [IO.Path]::GetFullPath($DecisionsOutput)
 [IO.File]::WriteAllText($full, ((ConvertTo-Stable $decisions) | ConvertTo-Json -Depth 30) + "`n", [Text.UTF8Encoding]::new($false))
+Write-Host "wrote $full"
+
+# ---- Replies ---------------------------------------------------------------------------------
+# What the daemon does with a session's reply card payload and its reply box when nothing is being
+# asked: Send-DaemonCardPayload and Send-DaemonReplyBoxText, through Invoke-DaemonReply, with the
+# Home Assistant reads, the staging of attachments and the typing itself replaced by stand-ins that
+# record what they were asked. The card notes (Set-DaemonTransientActivity) and every service call
+# are the contract; the typed text is recorded for reference (the host stages files its own way).
+
+Import-SpecFunction 'hooks\daemon-replies.ps1' @('Get-BridgeReplyPayload', 'New-BridgeAttachmentPrompt', 'Send-DaemonCardPayload', 'Send-DaemonReplyBoxText', 'Invoke-DaemonReply')
+Import-SpecFunction 'hooks\agent-bridge-daemon.ps1' @('Set-DaemonSessionProperty', 'Set-DaemonDriverPending', 'Update-DaemonDriverPendingStamp', 'Test-DaemonPayloadJustDelivered', 'Test-DaemonDriverPending')
+
+function Get-SpecConfigConstant {
+    # Values from the daemon's $script:DaemonConfig hashtable, each of which must be a constant.
+    param([string]$Path, [string[]]$Name)
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Source $Path), [ref]$null, [ref]$null)
+    $assign = @($ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.AssignmentStatementAst] -and $a.Left.Extent.Text -eq '$script:DaemonConfig' }, $true))
+    if ($assign.Count -ne 1) { throw "$Path assigns `$script:DaemonConfig $($assign.Count) times" }
+    $table = $assign[0].Right.Find({ param($a) $a -is [System.Management.Automation.Language.HashtableAst] }, $true)
+    $values = [ordered]@{}
+    foreach ($n in $Name) {
+        $pair = @($table.KeyValuePairs | Where-Object { $_.Item1.Extent.Text -eq $n })
+        if ($pair.Count -ne 1) { throw "`$script:DaemonConfig has $n $($pair.Count) times" }
+        $text = $pair[0].Item2.Extent.Text
+        if ($text -notmatch "^(\d+|'[^']*')$") { throw "`$script:DaemonConfig.$n is not a constant: $text" }
+        $values[$n] = [scriptblock]::Create($text).Invoke()[0]
+    }
+    $values
+}
+$replyConfig = Get-SpecConfigConstant 'hooks\agent-bridge-daemon.ps1' @('ReplyCommitAttempts', 'ReplyCommitWaitMs', 'SubmitArmSeconds', 'DriverArmSeconds', 'ReplyBlankValue')
+foreach ($key in $replyConfig.Keys) { $script:DaemonConfig[$key] = $replyConfig[$key] }
+$fileLimit = (Get-Command Save-BridgeReplyFile -ErrorAction SilentlyContinue)
+$replyAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Source 'hooks\daemon-replies.ps1'), [ref]$null, [ref]$null)
+$saveFile = $replyAst.Find({ param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq 'Save-BridgeReplyFile' }, $true)
+$maxBytes = ($saveFile.Body.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'MaxBytes' }).DefaultValue.Extent.Text
+
+$script:RecordedServices = @('mqtt.publish', 'text.set_value')
+$script:DaemonLive = $null
+$script:DaemonAgents = @{}
+$script:States = @{}
+$script:Notes = [System.Collections.Generic.List[object]]::new()
+$script:Typed = [System.Collections.Generic.List[string]]::new()
+$script:Deliver = $true
+$script:FailImage = $false
+$script:AfterTyping = $null
+$script:DeletedImages = [System.Collections.Generic.List[string]]::new()
+function script:Write-DaemonLog { param([string]$Message) }
+function script:Get-DaemonEntityState { param([string]$EntityId, [hashtable]$Headers) if (-not $script:States.ContainsKey($EntityId)) { throw "no $EntityId" }; $script:States[$EntityId] }
+function script:Get-HomeAssistantState { param([string]$EntityId, [hashtable]$Headers) if (-not $script:States.ContainsKey($EntityId)) { throw "no $EntityId" }; $script:States[$EntityId] }
+function script:Get-BridgeDriverFromState { param($State) if ($State.PSObject.Properties['context'] -and $State.context.user_id -eq 'agent-user') { 'agent' } else { 'human' } }
+function script:Set-DaemonTransientActivity {
+    param([string]$SessionId, [string]$Summary, [hashtable]$Extra = @{}, [hashtable]$Headers)
+    $shown = [ordered]@{}
+    foreach ($key in @($Extra.Keys | Sort-Object)) { $shown[$key] = if ($key -eq 'at') { '<time>' } else { [string]$Extra[$key] } }
+    $script:Notes.Add([ordered]@{ summary = $Summary; extra = $shown })
+}
+function script:Save-BridgeReplyAttachment { param([string]$ImageId, [string]$Name, [hashtable]$Headers) if ($script:FailImage) { '' } else { "C:\staged\$ImageId.png" } }
+function script:Save-BridgeReplyFile { param([string]$Name, [string]$Base64, [int]$MaxBytes = 262144) "C:\staged\$Name" }
+function script:Remove-BridgeHomeAssistantImage { param([string]$ImageId) $script:DeletedImages.Add($ImageId) }
+function script:Remove-BridgeStaleAttachment { }
+function script:Send-CopilotSessionPrompt {
+    param([string]$SessionId, [string]$Text, [int]$ProcessId)
+    $script:Typed.Add($Text)
+    if ($script:AfterTyping) { & $script:AfterTyping }
+    [pscustomobject]@{ Delivered = $script:Deliver; Detail = $(if ($script:Deliver) { 'typed' } else { 'the console refused the keys' }); ProcessId = 4242 }
+}
+
+$replyNode = Get-CopilotMqttNodeId -SessionId $copilotId
+$payloadEntity = "sensor.${replyNode}_reply_payload"
+$submitEntity = "button.${replyNode}_submit"
+$boxEntity = "text.${replyNode}_reply"
+function New-PayloadState([hashtable]$Attributes, [string]$Stamp = '2026-10-29T20:00:00.000Z') {
+    [pscustomobject]@{ state = $Stamp; attributes = [pscustomobject]$Attributes }
+}
+function Invoke-ReplyCase {
+    param([string]$Name, [hashtable]$States, [hashtable]$Entry = @{}, [bool]$Deliver = $true, [switch]$FailImage, [scriptblock]$AfterTyping, [ValidateSet('card', 'box')][string]$Path)
+    $script:Recorded.Clear(); $script:Notes.Clear(); $script:Typed.Clear(); $script:DeletedImages.Clear()
+    $script:States = $States; $script:Deliver = $Deliver; $script:FailImage = [bool]$FailImage; $script:AfterTyping = $AfterTyping
+    $sessionEntry = [pscustomobject]@{ Name = $sessionName; Machine = $machine }
+    foreach ($key in $Entry.Keys) { $sessionEntry | Add-Member -NotePropertyName $key -NotePropertyValue $Entry[$key] }
+    $handled = $null
+    if ($Path -eq 'card') { $handled = [bool](@(Send-DaemonCardPayload -SessionId $copilotId -Entry $sessionEntry -Headers $headers) | Select-Object -Last 1) }
+    else { Send-DaemonReplyBoxText -SessionId $copilotId -Entry $sessionEntry -Headers $headers }
+    $after = [ordered]@{}
+    foreach ($property in @('LastReplyPayloadAt', 'LastSubmitAt', 'PendingSubmitAt', 'Driver', 'DriverPending')) {
+        if ($sessionEntry.PSObject.Properties[$property]) { $after[$property] = [string]$sessionEntry.$property }
+    }
+    [ordered]@{
+        name = $Name; path = $Path; handled = $handled
+        notes = @($script:Notes); typed = @($script:Typed); deletedImages = @($script:DeletedImages)
+        calls = @($script:Recorded | Where-Object { $_.Contains('service') }); entry = $after
+    }
+}
+
+$hello = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('hello'))
+$press = [pscustomobject]@{ state = '2026-10-29T20:00:05.000000+00:00'; context = [pscustomobject]@{ user_id = 'person' } }
+$agentPress = [pscustomobject]@{ state = '2026-10-29T20:00:05.000000+00:00'; context = [pscustomobject]@{ user_id = 'agent-user' } }
+$replyCases = [System.Collections.Generic.List[object]]::new()
+$replyCases.Add((Invoke-ReplyCase -Name 'cardText' -Path card -States @{ $payloadEntity = (New-PayloadState @{ text = 'Ship it after the hotfix' }) }))
+$replyCases.Add((Invoke-ReplyCase -Name 'cardAttachments' -Path card -States @{ $payloadEntity = (New-PayloadState @{ text = 'What is this?'; images = @([pscustomobject]@{ id = '0123abcd'; name = 'shot.png' }); files = @([pscustomobject]@{ name = 'notes.txt'; b64 = $hello }) }) }))
+$replyCases.Add((Invoke-ReplyCase -Name 'cardAgent' -Path card -States @{ $payloadEntity = (New-PayloadState @{ text = 'Carry on'; driver = 'agent' }) }))
+$replyCases.Add((Invoke-ReplyCase -Name 'cardFailed' -Path card -Deliver $false -States @{ $payloadEntity = (New-PayloadState @{ text = 'Ship it' }) }))
+$replyCases.Add((Invoke-ReplyCase -Name 'cardImageFails' -Path card -FailImage -States @{ $payloadEntity = (New-PayloadState @{ text = 'Look'; images = @([pscustomobject]@{ id = '0123abcd'; name = 'shot.png' }) }) }))
+$replyCases.Add((Invoke-ReplyCase -Name 'cardIncomplete' -Path card -States @{ $payloadEntity = (New-PayloadState @{ text = 'Look'; images = @([pscustomobject]@{ name = 'shot.png' }) }) }))
+$replyCases.Add((Invoke-ReplyCase -Name 'cardTagged' -Path card -States @{ $payloadEntity = (New-PayloadState @{ text = 'For the form'; decision_id = 'decision-1' }) }))
+$replyCases.Add((Invoke-ReplyCase -Name 'cardBlank' -Path card -States @{ $payloadEntity = (New-PayloadState @{ text = '  ' }) }))
+$replyCases.Add((Invoke-ReplyCase -Name 'cardRepeat' -Path card -Entry @{ LastReplyPayloadAt = '2026-10-29T20:00:00.000Z' } -States @{ $payloadEntity = (New-PayloadState @{ text = 'Ship it' }) }))
+$replyCases.Add((Invoke-ReplyCase -Name 'boxText' -Path box -States @{ $submitEntity = $press; $boxEntity = [pscustomobject]@{ state = 'Ship it after the hotfix' } }))
+$replyCases.Add((Invoke-ReplyCase -Name 'boxFailed' -Path box -Deliver $false -States @{ $submitEntity = $press; $boxEntity = [pscustomobject]@{ state = 'Ship it' } }))
+$replyCases.Add((Invoke-ReplyCase -Name 'boxFollowUpKept' -Path box -AfterTyping { $script:States[$boxEntity] = [pscustomobject]@{ state = 'and then the docs' } } -States @{ $submitEntity = $press; $boxEntity = [pscustomobject]@{ state = 'Ship it' } }))
+$replyCases.Add((Invoke-ReplyCase -Name 'boxBlank' -Path box -States @{ $submitEntity = $press; $boxEntity = [pscustomobject]@{ state = ' ' } }))
+$replyCases.Add((Invoke-ReplyCase -Name 'boxBlankAgent' -Path box -States @{ $submitEntity = $agentPress; $boxEntity = [pscustomobject]@{ state = '' } }))
+$replyCases.Add((Invoke-ReplyCase -Name 'boxBlankGivenUp' -Path box -Entry @{ PendingSubmitAt = $press.state; PendingSubmitSince = '2026-10-29T00:00:00.0000000+00:00' } -States @{ $submitEntity = $press; $boxEntity = [pscustomobject]@{ state = '' } }))
+$replyCases.Add((Invoke-ReplyCase -Name 'boxRepeat' -Path box -Entry @{ LastSubmitAt = $press.state } -States @{ $submitEntity = $press; $boxEntity = [pscustomobject]@{ state = 'Ship it' } }))
+
+$replies = [ordered]@{
+    source = $fixture.source
+    sessionId = $copilotId; machine = $machine
+    constants = [ordered]@{
+        replyCommitAttempts = $replyConfig.ReplyCommitAttempts; replyCommitWaitMs = $replyConfig.ReplyCommitWaitMs
+        submitArmSeconds = $replyConfig.SubmitArmSeconds; driverArmSeconds = $replyConfig.DriverArmSeconds
+        replyBlank = $replyConfig.ReplyBlankValue; inlineFileMaxBytes = [int]$maxBytes
+    }
+    cases = $replyCases
+}
+$full = [IO.Path]::GetFullPath($RepliesOutput)
+[IO.File]::WriteAllText($full, ((ConvertTo-Stable $replies) | ConvertTo-Json -Depth 30) + "`n", [Text.UTF8Encoding]::new($false))
 Write-Host "wrote $full"

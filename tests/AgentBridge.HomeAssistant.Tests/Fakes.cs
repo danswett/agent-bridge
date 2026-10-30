@@ -141,9 +141,12 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     public HaTrigger Type(string entityId, string text, string? userId = "person") => Apply("text.set_value", entityId, text, userId);
 
     // The reply card's Send: a retained publish to the session's reply-payload topic.
-    public HaTrigger SendFromCard(string node, string text, string? decisionId = null, string? driver = null, string? at = null)
+    public HaTrigger SendFromCard(string node, string text, string? decisionId = null, string? driver = null, string? at = null,
+        JsonArray? images = null, JsonArray? files = null)
     {
         var payload = new JsonObject { ["at"] = at ?? $"{Now:O}", ["text"] = text };
+        if (images is not null) { payload["images"] = images; }
+        if (files is not null) { payload["files"] = files; }
         if (decisionId is not null) { payload["decision_id"] = decisionId; }
         if (driver is not null) { payload["driver"] = driver; }
         Now = Now.AddSeconds(1);
@@ -158,6 +161,51 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         await foreach (var t in triggers.Reader.ReadAllAsync(cancellationToken))
         {
             if (entityIds.Contains(t.EntityId)) { yield return t; }
+        }
+    }
+
+    // Home Assistant's image store, as the reply card's uploads fill it.
+    public Dictionary<string, byte[]> Images { get; } = new(StringComparer.Ordinal);
+    public List<string> DeletedImages { get; } = [];
+    public Func<string, bool>? ImageFails { get; set; }
+    // What a failing fetch throws: a 500 unless said otherwise (a timeout, say).
+    public Exception? ImageError { get; set; }
+    public int ImageFetches { get; private set; }
+
+    public string Upload(byte[] bytes, string? id = null)
+    {
+        id ??= Guid.NewGuid().ToString("N");
+        lock (gate) { Images[id] = bytes; }
+        return id;
+    }
+
+    public Task<byte[]?> DownloadImageAsync(string imageId, long maxBytes, CancellationToken cancellationToken = default)
+    {
+        if (!HaImageId.IsValid(imageId)) { throw new ArgumentException("not an image id", nameof(imageId)); }
+        lock (gate) { ImageFetches++; }
+        if (ImageFails?.Invoke(imageId) == true) { throw ImageError ?? new HttpRequestException("GET image: Home Assistant answered 500 Internal Server Error"); }
+        lock (gate)
+        {
+            if (!Images.TryGetValue(imageId, out var bytes)) { return Task.FromResult<byte[]?>(null); }
+            if (bytes.Length > maxBytes) { throw new InvalidDataException($"the image is larger than {maxBytes} bytes"); }
+            return Task.FromResult<byte[]?>(bytes);
+        }
+    }
+
+    // A delete that fails, with what it throws (a command timing out on its own, say).
+    public Func<string, Exception?>? DeleteFails { get; set; }
+
+    // A delete Home Assistant is slow to answer: it waits for this.
+    public Task? DeleteWaits { get; set; }
+
+    public async Task DeleteImageAsync(string imageId, CancellationToken cancellationToken = default)
+    {
+        if (DeleteWaits is { } wait) { await wait.WaitAsync(cancellationToken); }
+        if (DeleteFails?.Invoke(imageId) is { } failed) { throw failed; }
+        lock (gate)
+        {
+            Images.Remove(imageId);
+            DeletedImages.Add(imageId);
         }
     }
 

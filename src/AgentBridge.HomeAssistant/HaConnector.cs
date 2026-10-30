@@ -50,13 +50,29 @@ public sealed record HaConnectorOptions
     // Whether presses on the cards are read and answered. Off for the shadow's dry pass, which
     // publishes the controls to compare them but must act on nothing.
     public bool ConsumeAnswers { get; init; } = true;
+    // How long a press of Send waits for the reply box's words to reach Home Assistant before the
+    // card is told it is waiting for them (ReplyCommitAttempts, ReplyCommitWaitMs): the tap on Send
+    // is what commits the box, so the press usually lands first.
+    public int ReplyCommitAttempts { get; init; } = 6;
+    public TimeSpan ReplyCommitWait { get; init; } = TimeSpan.FromMilliseconds(500);
+    // How long a press of Send at an empty box stays armed for the words to arrive (SubmitArmSeconds).
+    public TimeSpan SubmitArm { get; init; } = TimeSpan.FromSeconds(600);
+    // How often every card is read for a reply even though the watch reported nothing.
+    public TimeSpan ReplySweep { get; init; } = TimeSpan.FromSeconds(15);
+    // The largest image fetched back from Home Assistant's image store. Its upload takes up to
+    // 10 MiB, so anything larger did not come from the card.
+    public long ImageMaxBytes { get; init; } = 25L * 1024 * 1024;
+    // The largest file the card sends inline (Save-BridgeReplyFile's MaxBytes).
+    public int InlineFileMaxBytes { get; init; } = 262144;
+    // How long stopping waits for a reply being delivered.
+    public TimeSpan ReplyStopWait { get; init; } = TimeSpan.FromSeconds(10);
 }
 
 // The Home Assistant connector (docs/ha-connector.md): this machine's sessions, liveness,
 // version and agent usage on the dashboard agent-ha-bridge's publication writer generates, in
 // agent-ha-bridge's own per-machine contract (HaContract), so a machine moved off the
-// PowerShell daemon keeps its cards; and, given the host's answer delivery, the answers given on
-// those cards (HaConnector.Answers.cs).
+// PowerShell daemon keeps its cards; and, given the host's answer and reply delivery, the answers
+// and replies given on those cards (HaConnector.Answers.cs, HaConnector.Replies.cs).
 //
 // What it never does, and why:
 //   * write the shared card, dashboard or publication policy. The writer is configured and fenced
@@ -66,7 +82,7 @@ public sealed record HaConnectorOptions
 //   * run while agent-ha-bridge runs for this user (design G5). Two publishers of one machine's
 //     entities would fight over every retained topic. Checked before every write, so the
 //     daemon starting part-way through a pass stops the rest of it;
-//   * reply, launch, stop or update: later stages. Until they land, entities only those would
+//   * launch, stop or update: later stages. Until they land, entities only those would
 //     serve are withdrawn rather than left as controls nothing acts on.
 public sealed partial class HaConnector : IAsyncDisposable
 {
@@ -124,6 +140,8 @@ public sealed partial class HaConnector : IAsyncDisposable
         // The reply-card publish last used (Add-DaemonAnswerStamp's answer_consumed_at).
         public string? LastPayloadStamp;
         public string? ToldUnserved;
+        // Replies (HaConnector.Replies.cs).
+        public ReplyState Reply = new();
         // Who is driving the session's turn, and an arm left by a press for the next one
         // (Set-DaemonDriverPending): consumed by the turn it was armed for, or lapsed.
         public string Driver = "human";
@@ -175,10 +193,12 @@ public sealed partial class HaConnector : IAsyncDisposable
 
     public HaConnector(HaConnectorOptions options, IHomeAssistant ha, ISessionSource source, Func<string?> agentHaBridge,
         Func<(UsageReport Report, long Version)>? usage = null, Action<string>? log = null, TimeProvider? time = null,
-        Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer = null)
+        Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer = null,
+        Func<HaReply, CancellationToken, Task<ReplyResult>>? reply = null)
     {
         this.options = options;
         this.answer = answer;
+        this.reply = reply;
         // Every write asks first (design G5): a pass can run long (each request may take its
         // timeout), and agent-ha-bridge starting part-way through must stop the rest of it, not
         // race the daemon's own publishes until the pass ends.
@@ -863,6 +883,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             try { await loop; } catch (OperationCanceledException) { }
             stop.Dispose();
         }
+        await StopRepliesAsync();
         // Nothing is withdrawn on the way out, as the daemon withdraws nothing: liveness lapses on
         // its own (expire_after), the cards stay, and whichever bridge starts next takes them over.
         SaveLedger();
@@ -899,6 +920,13 @@ public sealed partial class HaConnector : IAsyncDisposable
             return inner.CallServiceAsync(domain, service, data, cancellationToken);
         }
 
+        public Task DeleteImageAsync(string imageId, CancellationToken cancellationToken = default)
+        {
+            Check();
+            return inner.DeleteImageAsync(imageId, cancellationToken);
+        }
+
+        public Task<byte[]?> DownloadImageAsync(string imageId, long maxBytes, CancellationToken cancellationToken = default) => inner.DownloadImageAsync(imageId, maxBytes, cancellationToken);
         public IAsyncEnumerable<HaTrigger> WatchAsync(IReadOnlyCollection<string> entityIds, CancellationToken cancellationToken = default) => inner.WatchAsync(entityIds, cancellationToken);
         public Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default) => inner.ReadTopicsAsync(filters, window, cancellationToken);
 
