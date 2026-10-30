@@ -1616,6 +1616,40 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void An_intake_record_whose_existence_cannot_be_checked_is_a_problem_not_an_unmigrated_profile()
+    {
+        var profile = Path.Combine(_f.Root, "profile");
+        // Not a file that can be read, though something is there (File.Exists says false).
+        Directory.CreateDirectory(Path.Combine(profile, IntakeState.FileName));
+
+        var (state, problem) = IntakeState.Load(profile);
+
+        Assert.Null(state);
+        Assert.Contains("hook intake is off", problem);
+    }
+
+    [Fact]
+    public void A_codex_event_that_fails_once_refuses_answers_until_the_markers_are_settled()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        _f.CodexApprovalMarker("x1", "d1", created: _f.Time.GetUtcNow());
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        Assert.Null(intake.ApprovalsUnsettled);
+        // The PreToolUse that answered it at the terminal, unreadable for a moment.
+        var file = Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PreToolUse", tool_name = "shell" });
+        using (new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            intake.Pass();
+        }
+
+        Assert.NotNull(intake.ApprovalsUnsettled);
+        intake.Pass();
+        Assert.False(File.Exists(marker));
+        Assert.False(File.Exists(file));
+    }
+
+    [Fact]
     public void Hook_health_counts_each_path_and_folds_the_numbers_out_of_the_reasons()
     {
         var log = SpoolContract.LogPath(_f.Runtime);

@@ -529,6 +529,10 @@ public sealed class HookIntake : IAsyncDisposable
                 {
                     _attempts[name] = attempts;
                     _log($"spooled hook {name} failed, will retry: {e.Message}");
+                    // Until it has been, it may be the Codex PreToolUse that answered an approval at
+                    // the terminal, whose marker would stay answerable meanwhile. So it is a gap at
+                    // once, as a drop is: no answer until the sweep has settled the markers.
+                    if (spooled is null || spooled.Agent == "codex") { Gap(); }
                     // Nothing after it is handled until it has been: a Codex PermissionRequest
                     // retried after the PreToolUse that answered it would re-arm an approval
                     // nobody is being asked. (The daemon carried on past a failure; order is

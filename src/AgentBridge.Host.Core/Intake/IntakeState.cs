@@ -19,8 +19,12 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
         var path = Path.Combine(profileFolder, FileName);
         try
         {
-            if (!File.Exists(path)) { return (null, null); }
-            using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+            // Read, not File.Exists first: that is false too when existence cannot be checked (no
+            // access), and an unreadable record must refuse Codex approvals, not look unmigrated.
+            byte[] bytes;
+            try { bytes = File.ReadAllBytes(path); }
+            catch (Exception absent) when (absent is FileNotFoundException or DirectoryNotFoundException) { return (null, null); }
+            using var doc = JsonDocument.Parse(bytes);
             var e = doc.RootElement;
             if (e.ValueKind != JsonValueKind.Object || Json.Int(e, "version") != Version) { return (null, $"{path} is not a version {Version} intake record; hook intake is off"); }
             var runtime = Json.Str(e, "runtimeRoot");

@@ -51,4 +51,19 @@ public sealed class HookStatusTests : IDisposable
         Assert.Contains("spool: 1 event(s) waiting", text);
         Assert.Contains("runs: 1 runs in the last 24 h, 0 not spooled (0%); median 31 ms", text);
     }
+
+    [Fact]
+    public void Status_reads_the_heartbeat_while_the_intake_holds_it_open_to_write()
+    {
+        var profile = Directory.CreateDirectory(Path.Combine(_root, "profile")).FullName;
+        var runtime = Directory.CreateDirectory(Path.Combine(_root, "runtime")).FullName;
+        File.WriteAllText(SpoolContract.HeartbeatPath(runtime), "123");
+
+        // The intake's next heartbeat or clean-stop deletion, open meanwhile: a read that shares
+        // neither would be refused (and so would refuse it).
+        using var held = new FileStream(SpoolContract.HeartbeatPath(runtime), FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+        var text = Status(profile, runtime);
+
+        Assert.Contains("written by pid 123", text);
+    }
 }
