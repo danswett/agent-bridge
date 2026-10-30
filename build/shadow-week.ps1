@@ -107,9 +107,10 @@ function Sync-AgentHaBridgeWorkspace {
     foreach ($line in $listed) {
         $fields = ([string]$line).Split("`t")
         if ($fields.Count -lt 2) { continue }
-        if ($PSCmdlet.ShouldProcess($fields[1], "remove from profile $HostProfile, to copy agent-ha-bridge's afresh")) {
-            & $exe workspace remove $fields[1] --profile $HostProfile | Out-Null
-            if ($LASTEXITCODE) { throw "could not remove $($fields[1]) from profile $HostProfile" }
+        # By label: a workspace whose folder is gone is listed with a note after its path.
+        if ($PSCmdlet.ShouldProcess($fields[0], "remove from profile $HostProfile, to copy agent-ha-bridge's afresh")) {
+            & $exe workspace remove $fields[0] --profile $HostProfile | Out-Null
+            if ($LASTEXITCODE) { throw "could not remove '$($fields[0])' from profile $HostProfile" }
         }
     }
 

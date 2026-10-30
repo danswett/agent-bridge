@@ -435,6 +435,8 @@ public sealed class ShadowTests : IDisposable
             () => http.GetAsync(new Uri(ha, "sensor.agent_bridge_fixture_usage_copilot?x=1")),
             () => http.GetAsync(new Uri("https://ha.fixture.invalid/api/services/button/press")),
             () => http.GetAsync(new Uri("https://ha.fixture.invalid/api/states")),
+            () => http.GetAsync(new Uri("https://ha.fixture.invalid/other/api/states/sensor.agent_bridge_fixture_usage_copilot")),
+            () => http.GetAsync(new Uri("https://ha.fixture.invalid/api/states/sensor.agent_bridge_fixture_usage_copilot/history")),
         })
         {
             await Assert.ThrowsAsync<HomeAssistantRequestRefusedException>(refused);

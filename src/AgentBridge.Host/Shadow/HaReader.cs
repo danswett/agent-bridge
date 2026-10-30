@@ -39,11 +39,13 @@ public static class AgentHaBridgeConfig
             var url = ha.TryGetProperty("baseUrl", out var u) && u.ValueKind == JsonValueKind.String ? u.GetString() : null;
             var token = ha.TryGetProperty("token", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
             if (string.IsNullOrWhiteSpace(token)) { return (null, "agent-ha-bridge's config holds no Home Assistant token"); }
-            if (!Uri.TryCreate(url, UriKind.Absolute, out var baseUrl) || baseUrl.Scheme is not ("https" or "http") || baseUrl.Query.Length > 0)
+            // The API is read from the root (ReadOnlyHomeAssistantHandler), so an address with a
+            // path is not one it can use.
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var baseUrl) || baseUrl.Scheme is not ("https" or "http") || baseUrl.Query.Length > 0 || baseUrl.AbsolutePath.TrimEnd('/').Length > 0)
             {
                 return (null, "agent-ha-bridge's config holds no usable Home Assistant address");
             }
-            if (!baseUrl.AbsolutePath.EndsWith('/')) { baseUrl = new Uri(baseUrl.GetLeftPart(UriPartial.Path) + "/"); }
+            baseUrl = new Uri(baseUrl.GetLeftPart(UriPartial.Authority) + "/");
             return (new HomeAssistantAccess(baseUrl, token.Trim()), null);
         }
         // The parser's message can quote the file, and the file holds the token.
@@ -83,8 +85,11 @@ public sealed class ReadOnlyHomeAssistantHandler(IEnumerable<string> entities, H
         {
             throw new HomeAssistantRequestRefusedException("a request to Home Assistant for anything but an entity's state was refused");
         }
-        var segments = uri.AbsolutePath.Split('/');
-        if (segments.Length < 4 || segments[^3] != "api" || segments[^2] != "states" || !allowed.Contains(Uri.UnescapeDataString(segments[^1])))
+        // Exactly /api/states/<entity>, from the root: Home Assistant serves its API there, and
+        // anything under another prefix is not the read that was approved.
+        const string States = "/api/states/";
+        var path = uri.AbsolutePath;
+        if (!path.StartsWith(States, StringComparison.Ordinal) || !allowed.Contains(Uri.UnescapeDataString(path[States.Length..])))
         {
             throw new HomeAssistantRequestRefusedException("a request to Home Assistant for an entity the shadow comparison does not read was refused");
         }
