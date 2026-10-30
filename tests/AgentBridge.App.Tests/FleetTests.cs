@@ -32,7 +32,7 @@ public sealed class FleetTests : IAsyncLifetime
     {
         localHost.Sessions.Add(Make.Session("here", updated: Make.T0));
         localHost.Start();
-        remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "windows", "0.1.0"),
+        remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "windows", "0.1.0", Instance: "run-7"),
             [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, UsageProtocol.Capability]));
         remoteHost.Sessions.Add(Make.Session("there", question: Make.Choice(), updated: Make.T0.AddMinutes(1)));
         remoteHost.Start();
@@ -208,6 +208,69 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Another_machines_host_is_known_by_the_run_it_names_and_sessions_opened_on_two_machines_both_open()
+    {
+        await BothMachinesAsync();
+        Machine? remote = null;
+        ui.Post(() => remote = main.MachineOf("remote-id"));
+        await Wait.UntilAsync(() => remote!.Host.HostInstance == "run-7", "the remote host's run");
+
+        // Two launches start, on two machines, before either card arrives.
+        var opened = new List<string>();
+        ui.Post(() =>
+        {
+            main.OpenRequested += c => opened.Add(c.Id);
+            main.Open("remote-id", "there-new");
+            main.Open(null, "here-new");
+        });
+        await remoteHost.SendAsync(Events.SessionUpsert, Make.Session("there-new", updated: Make.T0.AddMinutes(5)));
+        await localHost.SendAsync(Events.SessionUpsert, Make.Session("here-new", updated: Make.T0.AddMinutes(5)));
+
+        await Wait.UntilAsync(() => { lock (opened) { return opened.Count == 2; } }, "both sessions to open");
+    }
+
+    [Fact]
+    public async Task A_launched_session_still_opens_when_it_registers_after_a_reconnect()
+    {
+        await BothMachinesAsync();
+        var opened = new List<string>();
+        ui.Post(() =>
+        {
+            main.OpenRequested += c => opened.Add(c.Id);
+            main.Open(null, "late", untilItArrives: true);
+        });
+
+        // The host's list after reconnecting does not have it yet: it is still asking about trust.
+        await localHost.StopAsync();
+        await Wait.UntilAsync(() => local.State != LinkState.Connected, "the host to go");
+        localHost.Start();
+        await Wait.UntilAsync(() => local.State == LinkState.Connected, "the host to come back");
+        await localHost.SendAsync(Events.SessionUpsert, Make.Session("late", updated: Make.T0.AddMinutes(5)));
+
+        await Wait.UntilAsync(() => { lock (opened) { return opened.Contains("late"); } }, "the session to open");
+    }
+
+    [Fact]
+    public async Task A_launched_session_still_opens_when_its_machine_drops_out_and_comes_back_first()
+    {
+        await BothMachinesAsync();
+        var opened = new List<string>();
+        ui.Post(() =>
+        {
+            main.OpenRequested += c => opened.Add(c.Id);
+            main.Open("remote-id", "late", untilItArrives: true);
+        });
+
+        link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        await Wait.UntilAsync(() => Card("there") is null, "the other machine to go");
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        await Wait.UntilAsync(() => Card("there") is not null, "the other machine to come back");
+        await remoteHost.SendAsync(Events.SessionUpsert, Make.Session("late", updated: Make.T0.AddMinutes(5)));
+
+        await Wait.UntilAsync(() => { lock (opened) { return opened.Contains("late"); } }, "the session to open");
+    }
+
+    [Fact]
     public async Task Machines_still_come_and_go_while_this_machines_host_is_away()
     {
         await BothMachinesAsync();
@@ -376,7 +439,7 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     // The relay's presence as the test says, and channels to the fake hosts on their pipes.
-    sealed class FakeFleetLink : IFleetLink
+    internal sealed class FakeFleetLink : IFleetLink
     {
         public Dictionary<string, LocalEndpoint> Endpoints { get; } = [];
         public FleetState State { get; private set; } = FleetState.Connecting;

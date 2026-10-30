@@ -17,6 +17,8 @@ public sealed class DemoHost : IAsyncDisposable
     readonly object gate = new();
     readonly Dictionary<string, (string Token, DateTimeOffset At)> armed = [];
     readonly Dictionary<string, long> attachments = [];
+    readonly Dictionary<string, LaunchResult> launches = [];
+    readonly List<ResumableSession> resumable = [];
     long revision = 118;
 
     public string Folder { get; }
@@ -37,6 +39,16 @@ public sealed class DemoHost : IAsyncDisposable
         this.version = version;
         this.remote = remote;
         foreach (var s in remote ? RemoteExamples() : Examples()) { sessions[s.Id] = s; }
+        resumable.Add(new ResumableSession
+        {
+            Id = remote ? "demo-remote-ended" : "demo-ended",
+            Agent = AgentKind.Copilot,
+            Launcher = "copilot",
+            Title = remote ? "Release notes for 0.2" : "Tidy the usage panel",
+            Cwd = remote ? "/srv/agent-bridge" : @"C:\src\agent-bridge",
+            Workspace = "agent-bridge",
+            UpdatedAt = DateTimeOffset.UtcNow.AddHours(-3),
+        });
         server = LocalServer.Start(LocalEndpoint.For(folder), HandleAsync);
     }
 
@@ -103,8 +115,8 @@ public sealed class DemoHost : IAsyncDisposable
         {
             case Ops.Hello:
                 return Done(new HelloResult(1, new MachineInfo(MachineId, MachineName, "windows", version, Dev: true, Sessions: Count), remote
-                    ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, UsageProtocol.Capability]
-                    : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, UsageProtocol.Capability, HostOps.Capability]));
+                    ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability]
+                    : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability]));
             case HostOps.Status or HostOps.Subscribe when !remote:
                 return Done(Status());
             case UsageProtocol.Get or UsageProtocol.Subscribe:
@@ -154,6 +166,10 @@ public sealed class DemoHost : IAsyncDisposable
                     _ = Change(s with { Status = SessionStatus.Working, StatusSince = now, UpdatedAt = now, Activity = s.Activity with { UserMessage = r.Text } });
                     return Done(new ReplyResult(AnswerOutcome.Delivered));
                 }
+            case LaunchProtocol.Options:
+                lock (gate) { return Done(LaunchChoices()); }
+            case LaunchProtocol.Launch:
+                return Done(Launch(data.Deserialize<LaunchRequest>(ProtocolJson.Options)!, now));
             case Ops.SessionStop:
                 {
                     var r = data.Deserialize<StopRequest>(ProtocolJson.Options)!;
@@ -207,6 +223,72 @@ public sealed class DemoHost : IAsyncDisposable
     }
 
     static Task<object?> Done(object? result) => Task.FromResult(result);
+
+    // What the demo offers to launch: three agents (Codex needs a first message), one approved
+    // workspace that starts each session in a worktree of its own, and one ended session.
+    LaunchOptions LaunchChoices() => new()
+    {
+        Agents =
+        [
+            new LaunchAgent { Id = "copilot", Label = "Copilot", Kind = AgentKind.Copilot, Models = ["gpt-6.1-sol", "claude-opus-5.5"], Efforts = ["low", "medium", "high"], Defaults = new LaunchTuning { Model = "gpt-6.1-sol" }, Attachments = true },
+            new LaunchAgent { Id = "claude", Label = "Claude", Kind = AgentKind.Claude, Models = ["opus", "sonnet"] },
+            new LaunchAgent { Id = "codex", Label = "Codex", Kind = AgentKind.Codex, Models = ["gpt-6.1-sol"], Efforts = ["low", "high"], NeedsPrompt = true },
+        ],
+        Workspaces = [new LaunchWorkspace { Label = "agent-bridge", Path = remote ? "/srv/agent-bridge" : @"C:\src\agent-bridge", Isolate = true }],
+        Resumable = [.. resumable],
+        Defaults = new LaunchDefaults { Agent = "copilot", Workspace = "agent-bridge", Permissions = LaunchProtocol.Ask },
+    };
+
+    // A launch as a cooperative host carries it out: the session appears at once, working on its
+    // first message, and the same request again gets the same outcome.
+    LaunchResult Launch(LaunchRequest r, DateTimeOffset now)
+    {
+        Session started;
+        LaunchResult result;
+        lock (gate)
+        {
+            if (launches.TryGetValue(r.Request, out var again)) { return again; }
+            var choices = LaunchChoices();
+            if (LaunchProtocol.Check(r) is { } problem) { return launches[r.Request] = new LaunchResult(LaunchOutcome.Refused, problem); }
+            var agent = choices.Agents.FirstOrDefault(a => a.Id == (r.Agent ?? "copilot"));
+            if (agent is null) { return launches[r.Request] = new LaunchResult(LaunchOutcome.Refused, $"{r.Agent} is not installed on this machine"); }
+            var resumed = r.Resume is { } id ? resumable.FirstOrDefault(x => x.Id == id) : null;
+            if (r.Resume is not null && resumed is null) { return launches[r.Request] = new LaunchResult(LaunchOutcome.Refused, "that session is not one this machine can resume"); }
+            if (resumed is not null) { resumable.Remove(resumed); }
+            var prompt = LaunchProtocol.Flatten(r.Prompt);
+            var sessionId = resumed?.Id ?? Guid.NewGuid().ToString();
+            started = new Session
+            {
+                Id = sessionId,
+                Agent = agent.Kind,
+                Title = resumed?.Title ?? (prompt.Length > 0 ? Limits.KeepStart(prompt, 60) : null),
+                Repository = "danswett/agent-bridge",
+                Branch = resumed is null ? $"wt-{sessionId[..8]}" : "main",
+                Model = string.IsNullOrEmpty(r.Model) ? agent.Defaults?.Model : r.Model,
+                Cwd = resumed?.Cwd ?? (remote ? $"/srv/wt/agent-bridge-{sessionId[..8]}" : $@"C:\src\wt\agent-bridge-{sessionId[..8]}"),
+                Status = prompt.Length > 0 ? SessionStatus.Working : SessionStatus.Idle,
+                StatusSince = now,
+                UpdatedAt = now,
+                Activity = new Activity { UserMessage = prompt.Length > 0 ? prompt : null, TurnCount = 1 },
+            };
+            result = launches[r.Request] = new LaunchResult(LaunchOutcome.Started)
+            {
+                Session = sessionId,
+                Launched = new LaunchedWith
+                {
+                    Agent = agent.Id,
+                    Workspace = resumed is null ? r.Workspace ?? "agent-bridge" : null,
+                    Resume = resumed?.Id,
+                    Cwd = started.Cwd,
+                    Worktree = resumed is null ? true : null,
+                    Model = started.Model,
+                    Permissions = r.Permissions ?? LaunchProtocol.Ask,
+                },
+            };
+        }
+        _ = Change(started);
+        return result;
+    }
 
     async Task Change(Session next)
     {

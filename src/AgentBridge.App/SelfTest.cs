@@ -19,7 +19,7 @@ namespace AgentBridge.App;
 // card, saves a picture of each page beside the result file, writes what it saw and exits.
 static class SelfTest
 {
-    public static async Task RunAsync(MainWindow window, MainViewModel main, string outFile, DemoHost demo, DemoHost remote, Action<int> exit)
+    public static async Task RunAsync(MainWindow window, MainViewModel main, LaunchViewModel launch, string outFile, DemoHost demo, DemoHost remote, Action<int> exit)
     {
         var result = new Dictionary<string, object?>();
         var checks = new List<string>();
@@ -61,7 +61,10 @@ static class SelfTest
             else { Check(false, "finds the single-choice question's option button"); }
 
             // Answer a question on the other machine the same way: it goes to that machine's host.
-            var remoteChoice = cards.FirstOrDefault(c => c.Card?.Id == "demo-remote-claude");
+            // Found afresh: the answer above re-sorts the list, which recycles the card elements found
+            // before it, so the earlier list can hold this card's element under another session.
+            SessionCard? remoteChoice = null;
+            await Until(() => (remoteChoice = Find<SessionCard>(window.RootElement).FirstOrDefault(c => c.Card?.Id == "demo-remote-claude" && ById<Button>(c, "Option:device") is not null)) is not null, TimeSpan.FromSeconds(10));
             if (remoteChoice is not null && ById<Button>(remoteChoice, "Option:device") is { } device)
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(device).GetPattern(PatternInterface.Invoke)).Invoke();
@@ -97,12 +100,51 @@ static class SelfTest
             Check(again is not null && ById<Button>(again, "Option:approve") is { IsEnabled: true }, "still shows a question's choices on a card drawn again after the picker changes");
             Check(settled && shown > hidden && hidden >= 0, $"a card's control listens while shown and lets go when hidden, however often the picker changes ({hidden} listeners hidden, {shown} shown, {Listeners(watched)} after five more changes)");
 
+            // Launch a session from the Launch page: it starts, its card appears, and Open goes to it.
+            window.ShowPage("launch");
+            var ready = await Until(() => launch.ShowForm && launch.Machines.Count == 2 && ById<Button>(window.RootElement, "LaunchButton") is { IsEnabled: true }, TimeSpan.FromSeconds(10));
+            Check(ready, "offers both machines on the Launch page");
+            // Wider than a page's column, which is where they once spilled off the right edge.
+            var scale = window.RootElement.XamlRoot.RasterizationScale;
+            window.AppWindow.Resize(new Windows.Graphics.SizeInt32((int)(1000 * scale), (int)(900 * scale)));
+            await Task.Delay(700);
+            Check(Fits(window, "LaunchPane"), "fits the Launch page's column in a wide window");
+            window.ShowPage("sessions");
+            await Task.Delay(500);
+            Check(Fits(window, "SessionsPane"), "fits the Sessions page's column in a wide window");
+            window.ShowPage("launch");
+            await Task.Delay(500);
+            var before = main.AllCards.Count();
+            launch.Prompt = "Summarize the open pull requests.";
+            await Picture(window.RootElement, Path.ChangeExtension(outFile, ".launch.png"));
+            if (ById<Button>(window.RootElement, "LaunchButton") is { } go)
+            {
+                ((IInvokeProvider)new ButtonAutomationPeer(go).GetPattern(PatternInterface.Invoke)).Invoke();
+                var started = await Until(() => launch.State == "started" && main.AllCards.Count() == before + 1, TimeSpan.FromSeconds(20));
+                result["launchStatus"] = launch.StatusText;
+                Check(started, "launches a session from the Launch page and shows its card");
+            }
+            else { Check(false, "finds the Launch button"); }
+            await Picture(window.RootElement, Path.ChangeExtension(outFile, ".launched.png"));
+
+            // Codex on the other machine starts only on a first message: nothing is sent without one.
+            // The new session's card opened on the Sessions page: back to Launch, which fetches its choices.
+            window.ShowPage("launch");
+            launch.SelectedMachine = launch.Machines.First(m => m.Value == DemoHost.RemoteId);
+            await Until(() => launch.Title.EndsWith(remote.MachineName, StringComparison.Ordinal) && launch.Agents.Any(a => a.Value == "codex"), TimeSpan.FromSeconds(10));
+            launch.Agent = launch.Agents.FirstOrDefault(a => a.Value == "codex");
+            launch.Prompt = "";
+            launch.Launch();
+            Check(launch.Problem.StartsWith("Not launched: Codex starts its session only on a first message", StringComparison.Ordinal), "refuses to launch Codex on another machine without a first message");
+
             window.ShowPage("usage");
             await Task.Delay(500);
             Check(main.Usage.Rows.Count == 3, "shows usage for three agents across both machines");
+            Check(Fits(window, "UsagePane"), "fits the Usage page's column in a wide window");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".usage.png"));
             window.ShowPage("settings");
             await Task.Delay(500);
+            Check(Fits(window, "SettingsPane"), "fits the Settings page's column in a wide window");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".settings.png"));
         }
         catch (Exception e)
@@ -122,6 +164,14 @@ static class SelfTest
         typeof(AgentBridge.App.Core.Observable).GetField(nameof(o.PropertyChanged), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance) is { } field
             ? (field.GetValue(o) as Delegate)?.GetInvocationList().Length ?? 0
             : -1;
+
+    // A page's column lies within the window: centred, not pushed past its right edge.
+    static bool Fits(MainWindow window, string paneId)
+    {
+        if (ById<FrameworkElement>(window.RootElement, paneId) is not { } pane || Find<StackPanel>(pane).FirstOrDefault() is not { } column) { return false; }
+        var left = column.TransformToVisual(window.RootElement).TransformPoint(default).X;
+        return left >= 0 && left + column.ActualWidth <= window.RootElement.ActualWidth + 1;
+    }
 
     static async Task<bool> Until(Func<bool> condition, TimeSpan timeout)
     {

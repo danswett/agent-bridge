@@ -24,6 +24,20 @@ public sealed record Delivery
     // The host remembers request ids only in memory, so only ops it guards across restarts
     // otherwise (answers: its attempt ledger; End session: its two-press rule) may.
     public bool ReplayAfterRestart { get; init; } = true;
+    // How long one attempt waits for the host's outcome: a launch waits for its session to start.
+    public TimeSpan Timeout { get; init; } = Deliveries.DefaultTimeout;
+    // Whether busy on a resend is the first copy still being delivered (answers, replies) rather
+    // than an outcome of its own (a launch: the host answers a resend with the first's result).
+    public bool ResendOnBusy { get; init; } = true;
+    // The host process the op last went to, kept with the entry so a Try again after a failure
+    // goes only to that process too, for an op never replayed after a restart.
+    public string? SentTo { get; init; }
+    // When the op itself first went to a host, which remembers its request id for only so long
+    // after that. Null while it never went: files that failed to go ahead of a reply are not it.
+    public DateTimeOffset? FirstSent { get; init; }
+    // The same moment on the monotonic clock (TimeProvider.GetTimestamp), which every elapsed
+    // check uses: a wall clock stepped back must not reopen the window and send a launch twice.
+    public long? FirstSentAt { get; init; }
 }
 
 // Sends answers, replies and stops (session.answer, session.reply, session.stop), each to
@@ -36,8 +50,10 @@ public sealed record Delivery
 public sealed class Deliveries
 {
     const string NoOutcome = "no outcome came back from the machine in time";
+    const string TooOld = "too long has passed since it was first sent for the machine to still recognise it; check at the machine";
     const string Restarted = "the Bridge Host restarted before saying whether it went";
     const int MaxBusyResends = 5;
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(90);
 
     readonly HostConnection host;
     readonly IUiDispatcher ui;
@@ -68,7 +84,7 @@ public sealed class Deliveries
     // stands, so doing it again sends nothing. before: work on the connection ahead of the op
     // (a reply's files), given a progress callback.
     public Delivery Submit(string key, string op, Func<string, object> data, Func<string, bool> final, object? payload = null,
-        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true)
+        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true, TimeSpan? timeout = null, bool resendOnBusy = true)
     {
         Delivery entry;
         lock (gate)
@@ -78,7 +94,7 @@ public sealed class Deliveries
             {
                 return existing;
             }
-            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart };
+            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy };
         }
         Publish(entry);
         _ = RunAsync(entry, op, data, before, resend: false);
@@ -94,33 +110,81 @@ public sealed class Deliveries
         _ = RunAsync(entry, op, data, before, resend: true);
     }
 
+    static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
+    static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
+
     async Task RunAsync(Delivery entry, string op, Func<string, object> data, Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before, bool resend)
     {
-        var started = time.GetUtcNow();
+        // Two limits, both on the monotonic clock. This run gives up after GiveUp. An op never replayed
+        // after a restart also goes, and is waited on, only for GiveUp from its first send, whichever
+        // run or Try again: once the host may have forgotten the request id, another copy could act twice.
+        var limited = !entry.ReplayAfterRestart;
+        var started = time.GetTimestamp();
+        var firstSent = entry.FirstSentAt;
+        TimeSpan RunLeft() => GiveUp - time.GetElapsedTime(started);
+        TimeSpan? WindowLeft() => limited && firstSent is { } f ? GiveUp - time.GetElapsedTime(f) : null;
+        TimeSpan Left() => WindowLeft() is { } w && w < RunLeft() ? w : RunLeft();
+        string Late() => WindowLeft() is { } w && w <= RunLeft() ? TooOld : NoOutcome;
         var busy = 0;
         var attempts = entry.Attempts;
-        // The host the op itself last went to, if it went: files sent ahead are not the op.
-        string? sentTo = null;
+        // The host the op itself last went to, if it went: files sent ahead are not the op. Carried
+        // over from an earlier run of this request (a resend after it failed).
+        var sentTo = entry.SentTo;
         while (true)
         {
-            if (time.GetUtcNow() - started > GiveUp)
+            if (Left() <= TimeSpan.Zero)
             {
-                Update(entry.Key, e => e with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = NoOutcome });
+                var late = Late();
+                Update(entry.Key, e => e with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = late, Progress = null });
                 return;
             }
             attempts++;
             Update(entry.Key, e => e with { State = DeliveryState.Sending, Attempts = attempts, Reason = null });
             JsonElement result;
+            // A copy of an op that already went is sent, and waited on, only until the host may forget
+            // the request: a send still queued then is dropped unencrypted and unsent (SecureChannel), and
+            // a wait cut short reads unconfirmed. Either way it can only lose an outcome, never act twice.
+            using var bound = WindowLeft() is { } remaining ? new CancellationTokenSource(Max(remaining, TimeSpan.Zero), time) : null;
             try
             {
                 if (before is not null)
                 {
                     await before((o, d, t) => host.CallAsync(o, d, t), (sent, total) => Update(entry.Key, e => e with { Progress = (sent, total) }));
+                    // Files can take minutes to go: the request goes only while the host still knows it.
+                    // The host remembers a reply's request for 15 minutes and a launch's for 25, so a frame
+                    // already being written at 9 (written whole, or the relay socket's keepalive aborts it)
+                    // still lands inside that.
+                    if (WindowLeft() <= TimeSpan.Zero)
+                    {
+                        Update(entry.Key, e => e with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = TooOld, Progress = null });
+                        return;
+                    }
                 }
-                var to = host.HostInstance;
-                var call = host.CallAsync(op, data(entry.Request), TimeSpan.FromSeconds(90));
-                sentTo = to;
+                // Which host it went to is read with the connection it goes on. An op never replayed
+                // after a restart waits until that host is known, and goes again only to the same one.
+                var call = host.CallAsync(op, data(entry.Request), entry.Timeout, knownHost: !entry.ReplayAfterRestart,
+                    onlyTo: entry.ReplayAfterRestart ? null : sentTo, out var to, bound?.Token ?? default);
+                if (to != sentTo) { sentTo = to; Update(entry.Key, e => e with { SentTo = to }); }
+                if (to is not null && firstSent is null)
+                {
+                    var at = time.GetTimestamp();
+                    var now = time.GetUtcNow();
+                    firstSent = at;
+                    Update(entry.Key, e => e with { FirstSent = now, FirstSentAt = at });
+                }
                 result = await call;
+            }
+            catch (HostRestartedException)
+            {
+                // A replacement host has no memory of the request, so for a reply or a launch sending
+                // it again could do it twice: what became of it is the machine's to say.
+                Update(entry.Key, x => x with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = Restarted, Progress = null });
+                return;
+            }
+            catch (OperationCanceledException) when (bound?.IsCancellationRequested == true)
+            {
+                Update(entry.Key, x => x with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = TooOld, Progress = null });
+                return;
             }
             catch (HostErrorException e)
             {
@@ -132,11 +196,16 @@ public sealed class Deliveries
                 // No outcome: the host went (or was never there). It may have acted, so the
                 // same request goes again once it is back.
                 Update(entry.Key, x => x with { State = DeliveryState.Waiting, Reason = e is HostNotRunningException ? "not connected" : e.Message });
-                try { await host.WhenConnectedAsync().WaitAsync(GiveUp, time); }
-                catch (TimeoutException) { }
-                await Task.Delay(RetryDelay);
-                // A replacement host has no memory of the request, so for a reply sending it
-                // again could type it twice: what became of it is the machine's to say.
+                // Waited on only for what is left of the limits, so a Try again pressed late does not hold
+                // the page past them while the machine is away.
+                if (Left() is var left && left > TimeSpan.Zero)
+                {
+                    try { await host.WhenConnectedAsync().WaitAsync(left, time); }
+                    catch (TimeoutException) { }
+                }
+                await Task.Delay(Min(RetryDelay, Max(Left(), TimeSpan.Zero)));
+                // Seen early, before any files go again to a host that would not know them; the call
+                // itself checks again on the connection it goes on.
                 if (!entry.ReplayAfterRestart && sentTo is not null && host.HostInstance is { } now && now != sentTo)
                 {
                     Update(entry.Key, x => x with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = Restarted, Progress = null });
@@ -148,7 +217,7 @@ public sealed class Deliveries
             var reason = result.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
             // A resend can reach the host while it still delivers the first copy, which says
             // busy: that busy is our own, so ask again with the same request, a few times.
-            if (outcome == "busy" && (attempts > 1 || resend))
+            if (outcome == "busy" && entry.ResendOnBusy && (attempts > 1 || resend))
             {
                 if (++busy > MaxBusyResends)
                 {

@@ -147,14 +147,15 @@ public partial class App : Application
             fleet.Start();
         }
         else { _ = StartFleetAsync(connection, ui, Remote, l => link = l); }
-        window = new MainWindow(main, options.SelfTest is not null);
+        var launch = new LaunchViewModel(main, ui);
+        window = new MainWindow(main, launch, options.SelfTest is not null);
         window.CloseRequested += OnWindowClosing;
         connection.Start();
 
         if (options.SelfTest is not null)
         {
             window.Activate();
-            _ = SelfTest.RunAsync(window, main, options.SelfTest, demo!, remoteDemo!, code => { ExitCode = code; Quit(); });
+            _ = SelfTest.RunAsync(window, main, launch, options.SelfTest, demo!, remoteDemo!, code => { ExitCode = code; Quit(); });
             return;
         }
 

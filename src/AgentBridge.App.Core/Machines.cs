@@ -379,8 +379,10 @@ public sealed class RelayFleetLink : IFleetLink
         if (!c.Relay.Presence.Any(p => p.Id == hostId)) { throw new HostNotRunningException("the machine is offline"); }
         try
         {
-            var ch = await c.Hub.OpenAsync(hostId, TimeSpan.FromSeconds(15)).WaitAsync(ct);
-            return new RelayClientChannel(c.Hub, ch);
+            // A host too old to name its run in hello is known by nothing better than this channel:
+            // the relay's presence can arrive out of order, so when it joined could name the run
+            // before a restart, and a lost launch would go to the new one too.
+            return new RelayClientChannel(c.Hub, await c.Hub.OpenAsync(hostId, TimeSpan.FromSeconds(15)).WaitAsync(ct));
         }
         // Whatever ends a handshake (ChannelHub.EndsChannel: a malformed introduction too) is the
         // machine not answering for now; the connection loop tries again rather than stopping.

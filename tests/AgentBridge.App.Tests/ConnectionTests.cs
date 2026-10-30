@@ -271,6 +271,39 @@ public sealed class ConnectionTests : IAsyncLifetime
         }
     }
 
+    // An older host over the relay: no host.manage and no instance in its hello, so nothing names
+    // its run. Each connection counts as a new one: a lost reply is not confirmed, never sent again,
+    // even when it was the same process all along.
+    [Fact]
+    public async Task A_host_that_names_no_run_gets_a_lost_reply_only_once()
+    {
+        await using var remote = new FakeHost();
+        remote.Capabilities.Remove(HostOps.Capability);
+        remote.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "linux", "0.1.0"), [.. remote.Capabilities]));
+        remote.Sessions.Add(Make.Session("s1"));
+        remote.Start();
+        await using var link = remote.Connect();
+        await Wait.UntilAsync(() => link.State == LinkState.Connected && link.HostInstance is not null, "connected");
+        Assert.StartsWith("connection ", link.HostInstance);
+        var first = true;
+        var gate = new TaskCompletionSource();
+        remote.On(Ops.SessionReply, data =>
+        {
+            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => remote.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
+            return new ReplyResult(AnswerOutcome.Delivered);
+        });
+        var deliveries = new Deliveries(link, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+
+        var entry = deliveries.Submit("reply|s1", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, replayAfterRestart: false);
+        await gate.Task.WaitAsync(FakeHost.Patience);
+        await remote.StopAsync();
+        remote.Start();
+
+        await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
+        Assert.Equal("unconfirmed", deliveries.Get(entry.Key)!.Outcome);
+        Assert.Single(remote.Sent(Ops.SessionReply));
+    }
+
     [Fact]
     public async Task A_busy_that_answers_our_own_resend_is_waited_out_and_never_shown()
     {
@@ -293,6 +326,202 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => deliveries.Get("k")!.Outcome == "delivered", "delivered");
         Assert.DoesNotContain("busy", shown);
         Assert.Equal(entry.Request, host.Sent(Ops.SessionAnswer).Last().GetProperty("request").GetString());
+    }
+
+    [Fact]
+    public async Task A_try_again_long_after_the_first_send_of_a_launch_or_reply_sends_nothing_more()
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        host.On(Ops.SessionReply, _ => throw new InvalidOperationException("the host failed after reading it"));
+        var clock = new FakeTimeProvider(Make.T0);
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { GiveUp = TimeSpan.FromMinutes(9) };
+
+        deliveries.Submit("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Failed, "the failure");
+        clock.Advance(TimeSpan.FromMinutes(10));
+        deliveries.Resend("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" });
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
+        Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
+        Assert.StartsWith("too long has passed since it was first sent", deliveries.Get("k")!.Reason);
+        Assert.Single(host.Sent(Ops.SessionReply));
+    }
+
+    [Fact]
+    public async Task A_try_again_whose_files_outlast_the_first_sends_window_sends_nothing_more()
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        host.On(Ops.SessionReply, _ => throw new InvalidOperationException("the host failed after reading it"));
+        var clock = new FakeTimeProvider(Make.T0);
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { GiveUp = TimeSpan.FromMinutes(9) };
+        var slow = false;
+        Task Files(Func<string, object?, TimeSpan?, Task<JsonElement>> call, Action<long, long> progress)
+        {
+            if (slow) { clock.Advance(TimeSpan.FromMinutes(3)); }
+            return Task.CompletedTask;
+        }
+
+        deliveries.Submit("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, before: Files, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Failed, "the failure");
+        clock.Advance(TimeSpan.FromMinutes(8));
+        slow = true;
+        deliveries.Resend("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, Files);
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
+        Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
+        Assert.Single(host.Sent(Ops.SessionReply));
+    }
+
+    [Fact]
+    public async Task A_try_again_still_waiting_when_the_first_sends_window_closes_reads_unconfirmed()
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        var calls = 0;
+        var gate = new TaskCompletionSource();
+        host.On(Ops.SessionReply, _ =>
+        {
+            if (Interlocked.Increment(ref calls) == 1) { throw new InvalidOperationException("the host failed after reading it"); }
+            gate.Task.Wait(FakeHost.Patience);
+            return new ReplyResult(AnswerOutcome.Delivered);
+        });
+        var clock = new FakeTimeProvider(Make.T0);
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { GiveUp = TimeSpan.FromMinutes(9) };
+
+        deliveries.Submit("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Failed, "the failure");
+        clock.Advance(TimeSpan.FromMinutes(8));
+        deliveries.Resend("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" });
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionReply).Count == 2, "the try again to reach the host");
+        clock.Advance(TimeSpan.FromMinutes(2));
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
+        gate.SetResult();
+        Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
+        Assert.StartsWith("too long has passed since it was first sent", deliveries.Get("k")!.Reason);
+    }
+
+    [Fact]
+    public async Task A_wall_clock_stepped_back_does_not_reopen_the_window_for_a_try_again()
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        host.On(Ops.SessionReply, _ => throw new InvalidOperationException("the host failed after reading it"));
+        var clock = new SteppedClock(new FakeTimeProvider(Make.T0));
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { GiveUp = TimeSpan.FromMinutes(9) };
+
+        deliveries.Submit("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Failed, "the failure");
+        // Ten minutes pass, but the wall clock is set back an hour meanwhile (a time sync, by hand).
+        clock.Inner.Advance(TimeSpan.FromMinutes(10));
+        clock.Step = TimeSpan.FromHours(-1);
+        deliveries.Resend("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" });
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
+        Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
+        Assert.Single(host.Sent(Ops.SessionReply));
+    }
+
+    [Fact]
+    public async Task A_wall_clock_stepped_back_does_not_keep_a_first_send_going_past_its_limit()
+    {
+        await host.StopAsync();
+        await Wait.UntilAsync(() => connection.State == LinkState.NotRunning, "not running");
+        var clock = new SteppedClock(new FakeTimeProvider(Make.T0));
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { RetryDelay = TimeSpan.FromMilliseconds(20), GiveUp = TimeSpan.FromMinutes(9) };
+
+        deliveries.Submit("k", Ops.SessionAnswer, r => new { request = r }, _ => true);
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Waiting, "waiting");
+        clock.Step = TimeSpan.FromHours(-1);
+        clock.Inner.Advance(TimeSpan.FromMinutes(10));
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up", TimeSpan.FromSeconds(30));
+        Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
+    }
+
+    // Monotonic time and timers from the fake; the wall clock shifted by Step, as a clock set back.
+    sealed class SteppedClock(FakeTimeProvider inner) : TimeProvider
+    {
+        public FakeTimeProvider Inner => inner;
+        public TimeSpan Step { get; set; }
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow() + Step;
+        public override long GetTimestamp() => inner.GetTimestamp();
+        public override long TimestampFrequency => inner.TimestampFrequency;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) => inner.CreateTimer(callback, state, dueTime, period);
+    }
+
+    [Fact]
+    public async Task An_automatic_resend_whose_files_outlast_the_first_sends_window_sends_nothing_more()
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        var first = true;
+        var gate = new TaskCompletionSource();
+        host.On(Ops.SessionReply, _ =>
+        {
+            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => host.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
+            return new ReplyResult(AnswerOutcome.Delivered);
+        });
+        var clock = new FakeTimeProvider(Make.T0);
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { RetryDelay = TimeSpan.FromMilliseconds(100), GiveUp = TimeSpan.FromMinutes(9) };
+        var uploads = 0;
+        Task Files(Func<string, object?, TimeSpan?, Task<JsonElement>> call, Action<long, long> progress)
+        {
+            // The second time, the files take ten minutes to go again.
+            if (Interlocked.Increment(ref uploads) == 2) { clock.Advance(TimeSpan.FromMinutes(10)); }
+            return Task.CompletedTask;
+        }
+
+        deliveries.Submit("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, before: Files, replayAfterRestart: false);
+        await gate.Task.WaitAsync(FakeHost.Patience);
+        await host.StopAsync();
+        host.Start();
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
+        Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
+        Assert.Equal(2, uploads);
+        Assert.Single(host.Sent(Ops.SessionReply));
+    }
+
+    [Fact]
+    public async Task A_try_again_while_the_machine_is_away_waits_only_for_what_is_left_of_its_window()
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        host.On(Ops.SessionReply, _ => throw new InvalidOperationException("the host failed after reading it"));
+        var clock = new FakeTimeProvider(Make.T0);
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { RetryDelay = TimeSpan.FromMilliseconds(20), GiveUp = TimeSpan.FromMinutes(9) };
+
+        deliveries.Submit("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Failed, "the failure");
+        await host.StopAsync();
+        await Wait.UntilAsync(() => connection.State == LinkState.NotRunning, "not running");
+        clock.Advance(TimeSpan.FromMinutes(8));
+        deliveries.Resend("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" });
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Waiting, "waiting for the machine");
+        clock.Advance(TimeSpan.FromMinutes(2));
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
+        Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
+        Assert.StartsWith("too long has passed since it was first sent", deliveries.Get("k")!.Reason);
+    }
+
+    [Fact]
+    public async Task A_reply_whose_files_never_went_can_be_tried_again_however_long_after()
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Delivered));
+        var clock = new FakeTimeProvider(Make.T0);
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { GiveUp = TimeSpan.FromMinutes(9) };
+        var upload = true;
+        Task Files(Func<string, object?, TimeSpan?, Task<JsonElement>> call, Action<long, long> progress) =>
+            upload ? throw new HostErrorException("the storage could not be reached") : Task.CompletedTask;
+
+        deliveries.Submit("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, before: Files, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Failed, "the failure");
+        upload = false;
+        clock.Advance(TimeSpan.FromMinutes(10));
+        deliveries.Resend("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, Files);
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the outcome");
+        Assert.Equal("delivered", deliveries.Get("k")!.Outcome);
+        Assert.Single(host.Sent(Ops.SessionReply));
     }
 
     [Fact]

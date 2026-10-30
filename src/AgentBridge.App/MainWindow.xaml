@@ -25,6 +25,13 @@
                             Background="{ThemeResource AbWarning}" />
                     </NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
+                <NavigationViewItem
+                    x:Name="LaunchItem" Content="Launch" Tag="launch" AutomationProperties.AutomationId="NavLaunch"
+                    Visibility="{x:Bind local:Ui.Show(Launch.Available), Mode=OneWay}">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE768;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
                 <NavigationViewItem Content="Usage" Tag="usage" AutomationProperties.AutomationId="NavUsage">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE9D2;" />
@@ -62,50 +69,55 @@
                 </StackPanel>
 
                 <ScrollViewer x:Name="SessionsPane" Grid.Row="1" AutomationProperties.AutomationId="SessionsPane">
-                    <StackPanel MaxWidth="920" Padding="16,12,16,24" Spacing="12">
-                        <ComboBox
-                            x:Name="MachinePicker"
-                            AutomationProperties.AutomationId="MachinePicker"
-                            AutomationProperties.Name="Show sessions from"
-                            Header="Machines"
-                            MinWidth="260"
-                            ItemsSource="{x:Bind ViewModel.Machines}"
-                            SelectedItem="{x:Bind ViewModel.SelectedMachine, Mode=OneWay}"
-                            SelectionChanged="OnMachineChosen"
-                            Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachines), Mode=OneWay}">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate x:DataType="core:MachineChoice">
-                                    <TextBlock Text="{x:Bind Label, Mode=OneWay}" />
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                        <InfoBar
-                            AutomationProperties.AutomationId="FleetNote"
-                            IsClosable="False"
-                            Severity="Informational"
-                            IsOpen="{x:Bind ViewModel.HasFleetNote, Mode=OneWay}"
-                            Message="{x:Bind ViewModel.FleetNote, Mode=OneWay}" />
-                        <TextBlock
-                            Style="{StaticResource AbSecondaryText}"
-                            AutomationProperties.AutomationId="EmptyText"
-                            TextWrapping="Wrap"
-                            Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}"
-                            Visibility="{x:Bind local:Ui.Show(ViewModel.Empty), Mode=OneWay}" />
-                        <ItemsControl x:Name="Cards" ItemsSource="{x:Bind ViewModel.Sessions}" IsTabStop="False" AutomationProperties.AutomationId="Cards">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <StackPanel Spacing="14" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="core:SessionCardViewModel">
-                                    <local:SessionCard Card="{x:Bind}" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </StackPanel>
+                    <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, which pushed
+                         the column off the right edge (see LaunchView). -->
+                    <Grid>
+                        <StackPanel MaxWidth="920" Padding="16,12,16,24" Spacing="12">
+                            <ComboBox
+                                x:Name="MachinePicker"
+                                AutomationProperties.AutomationId="MachinePicker"
+                                AutomationProperties.Name="Show sessions from"
+                                Header="Machines"
+                                MinWidth="260"
+                                ItemsSource="{x:Bind ViewModel.Machines}"
+                                SelectedItem="{x:Bind ViewModel.SelectedMachine, Mode=OneWay}"
+                                SelectionChanged="OnMachineChosen"
+                                Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachines), Mode=OneWay}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="core:MachineChoice">
+                                        <TextBlock Text="{x:Bind Label, Mode=OneWay}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <InfoBar
+                                AutomationProperties.AutomationId="FleetNote"
+                                IsClosable="False"
+                                Severity="Informational"
+                                IsOpen="{x:Bind ViewModel.HasFleetNote, Mode=OneWay}"
+                                Message="{x:Bind ViewModel.FleetNote, Mode=OneWay}" />
+                            <TextBlock
+                                Style="{StaticResource AbSecondaryText}"
+                                AutomationProperties.AutomationId="EmptyText"
+                                TextWrapping="Wrap"
+                                Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}"
+                                Visibility="{x:Bind local:Ui.Show(ViewModel.Empty), Mode=OneWay}" />
+                            <ItemsControl x:Name="Cards" ItemsSource="{x:Bind ViewModel.Sessions}" IsTabStop="False" AutomationProperties.AutomationId="Cards">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Spacing="14" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="core:SessionCardViewModel">
+                                        <local:SessionCard Card="{x:Bind}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Grid>
                 </ScrollViewer>
 
+                <local:LaunchView x:Name="LaunchPane" Grid.Row="1" Visibility="Collapsed" />
                 <local:UsageView x:Name="UsagePane" Grid.Row="1" Visibility="Collapsed" />
                 <local:SettingsView x:Name="SettingsPane" Grid.Row="1" Visibility="Collapsed" />
             </Grid>

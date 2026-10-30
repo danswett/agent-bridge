@@ -277,6 +277,7 @@ That also marks the host log, which `log` then reads from.
 | **E6-05** | §6 "Folder trust", §16 "Elevated targets" | PWA, Machine | `agent-bridge-host workspace add C:\rehearsal\untrusted --label Untrusted`. Launch Claude there. While it waits on trust, launch again. Then decline the trust question at Claude's window and close it. Last, start an elevated `copilot` by hand, type **P1**, answer from the PWA, then close that window | The first launch is left for the machine; the second is `busy`. The elevated session's answer is refused, saying it is elevated | `agent-bridge-rehearsal log --contains "is asking whether to trust the folder" --timeout 60 --step E6-05` | Cl/Cx live |
 | **E6-06** | §6 "Codex launched with no prompt", §6 "A batch-file agent" | PWA | Launch Codex with no prompt, then Copilot with a prompt containing `" & echo pwned & "` | Codex is refused. Copilot receives the prompt as text and nothing is run | `agent-bridge-rehearsal note --step E6-06 --result pass --detail "…"` | |
 | **E6-07** | §7 "Fails closed", §7 "Reclaim finished worktrees", §7 "Neither product" | PWA, VM-M | (1) From the PWA, end every session launched in E6-01 to E6-06, so none of the host's worktrees is in use. (2) `agent-bridge-host config set launch.worktrees.limit 2` and `agent-bridge-host config set launch.worktrees.idleHours 0`, then restart the host. (3) Mark `$cp`, then launch into **Rehearsal** three times, ending nothing | The first launch removes the host's finished trees before counting, and never agent-ha-bridge's tree from B-05. The first two start; the third is refused at the cap, with no fallback to `$repo` | (3) `agent-bridge-rehearsal log --contains "removed finished worktree" --timeout 60 --step E6-07`, `agent-bridge-rehearsal worktrees $repo --expect-host-trees 2 --expect-old-trees 1 --step E6-07b`, and a screenshot of the refusal. Then end the two, `agent-bridge-host config unset` both settings, and restart | #43 |
+| **E6-08** | §6 "Launch from the Windows app" | App | `agent-bridge-rehearsal mark $cp`. On the app's Launch page, launch Claude into **Rehearsal** with prompt **P11**; then pick an ended session under Resume and launch it | Each press is `started` and opens the new session's card; the resumed one reopens under its own id in its own folder | `agent-bridge-rehearsal log --contains "registered as session" --timeout 60 --step E6-08` | |
 
 ### E8. Usage
 
@@ -407,7 +408,6 @@ These rows have no step. Each has its reason. A row moves into a step when its i
 | §1 "Purple edge", §1 "Spinner verbs" | Missing (#46, #53). The step would only confirm absence |
 | §1 "Unknown statuses" | Only seen when two versions meet: the first update after the rehearsal, E9-02 |
 | §2 "Cancel request", §2 "Claude free text" | Missing (#56, #42) |
-| §6 "Launch from the Windows app" | Missing (#49) |
 | §8 "usage.keychain" | Missing (#52) |
 | §8 "Only the publication writer" | N/A: tied to the HA writer role |
 | §9 "Offline machines", §9 "Update available" | Missing (#50, #51) |

@@ -11,6 +11,9 @@ public enum LinkState { Connecting, Connected, NotRunning, Refused }
 // reconnects whenever the host restarts), says hello, and keeps three subscriptions running:
 // the sessions, the agents' usage and the host's own status. What it hears is applied on the
 // UI thread, so view models never see a change from anywhere else.
+// The host process a request went to has been replaced: it is not sent to the new one.
+public sealed class HostRestartedException() : Exception("the Bridge Host restarted");
+
 public sealed class HostConnection : IAsyncDisposable
 {
     readonly Func<CancellationToken, Task<IClientChannel>> connect;
@@ -19,11 +22,14 @@ public sealed class HostConnection : IAsyncDisposable
     readonly CancellationTokenSource stop = new();
     TaskCompletionSource connected = new(TaskCreationOptions.RunContinuationsAsynchronously);
     Task loop = Task.CompletedTask;
-    IClientChannel? channel;
+    // The connection with the host process it reaches, swapped whole so the two are never read
+    // apart: Instance is null until that process is known.
+    Current? current;
     long statusEvents;
     long usageEvents;
     long connections;
-    string? hostInstance;
+
+    sealed record Current(IClientChannel Channel, string? Instance);
 
     public HostConnection(Func<CancellationToken, Task<LocalChannel>> connect, IUiDispatcher ui, Action<string>? log = null)
         : this(async ct => (IClientChannel)await connect(ct), ui, log) { }
@@ -49,7 +55,7 @@ public sealed class HostConnection : IAsyncDisposable
     // Which host process the current connection reaches (its pid and start), set before the
     // connection counts as connected, on any thread: a delivery whose outcome was lost can
     // tell whether the host that may have acted on it is still the one listening.
-    public string? HostInstance => Volatile.Read(ref hostInstance);
+    public string? HostInstance => Volatile.Read(ref current)?.Instance;
     public string? StateDetail { get; private set; }
     public HelloResult? Hello { get; private set; }
     public IReadOnlyList<string> Capabilities => Hello?.Capabilities ?? [];
@@ -69,11 +75,21 @@ public sealed class HostConnection : IAsyncDisposable
 
     // Sends a request on the current connection. Throws HostNotRunningException without one,
     // IOException when the connection goes under it, HostErrorException when the host fails it.
-    public Task<JsonElement> CallAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    public Task<JsonElement> CallAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
+        CallAsync(op, data, timeout, knownHost: false, onlyTo: null, out _, ct);
+
+    // The same, saying which host process it went to (instance), read with the connection it
+    // goes on. knownHost: send nothing until that process is known, for an op that must never
+    // reach a restarted host a second time. onlyTo: send only to that process, else throw
+    // HostRestartedException, checked against the very connection the call would go on.
+    public Task<JsonElement> CallAsync(string op, object? data, TimeSpan? timeout, bool knownHost, string? onlyTo, out string? instance, CancellationToken ct = default)
     {
-        var ch = Volatile.Read(ref channel);
-        if (ch is null || !ch.IsOpen) { throw new HostNotRunningException("not connected to the Bridge Host"); }
-        return ch.CallAsync(op, data, timeout, ct);
+        var now = Volatile.Read(ref current);
+        if (now is null || !now.Channel.IsOpen) { throw new HostNotRunningException("not connected to the Bridge Host"); }
+        if (knownHost && now.Instance is null) { throw new HostNotRunningException("still connecting to the Bridge Host"); }
+        if (onlyTo is not null && now.Instance != onlyTo) { throw new HostRestartedException(); }
+        instance = now.Instance;
+        return now.Channel.CallAsync(op, data, timeout, ct);
     }
 
     public async Task<T> CallAsync<T>(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
@@ -94,7 +110,7 @@ public sealed class HostConnection : IAsyncDisposable
                 // SemaphoreSlim whose wait handle was never asked for holds nothing to free.
                 var gaps = new SemaphoreSlim(0);
                 var pump = Task.Run(() => PumpAsync(ch, gaps, ct), ct);
-                Volatile.Write(ref channel, ch);
+                Volatile.Write(ref current, new Current(ch, null));
                 ui.Post(() => Hello = hello);
                 // An event can overtake the subscribe's result on its way to the UI thread (they
                 // arrive on different threads); the result is applied only if no event came.
@@ -102,7 +118,8 @@ public sealed class HostConnection : IAsyncDisposable
                 var connectionNumber = Interlocked.Increment(ref connections);
                 // Which run of the host this is: what it says itself (hello's instance), else this
                 // machine's by its pid and start, else each connection counts as a new run, which is
-                // never wrong, only cautious (a lost reply is then not confirmed rather than resent).
+                // never wrong, only cautious (a lost launch or reply is then not confirmed, never sent
+                // again).
                 var instance = hello.Machine.Instance ?? $"connection {connectionNumber}";
                 if (hello.Capabilities.Contains(HostOps.Capability))
                 {
@@ -110,7 +127,7 @@ public sealed class HostConnection : IAsyncDisposable
                     instance = hello.Machine.Instance ?? $"{status.ProcessId}@{status.StartedAt:O}";
                     ui.Post(() => { if (Interlocked.Read(ref statusEvents) == heardStatus) { Status = status; } });
                 }
-                Volatile.Write(ref hostInstance, instance);
+                Volatile.Write(ref current, new Current(ch, instance));
                 var heardUsage = Interlocked.Read(ref usageEvents);
                 if (hello.Capabilities.Contains(UsageProtocol.Capability))
                 {
@@ -154,8 +171,7 @@ public sealed class HostConnection : IAsyncDisposable
             }
             finally
             {
-                Volatile.Write(ref channel, null);
-                Volatile.Write(ref hostInstance, null);
+                Volatile.Write(ref current, null);
                 if (ch is not null) { await ch.DisposeAsync(); }
                 if (Volatile.Read(ref connected).Task.IsCompleted) { Volatile.Write(ref connected, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)); }
             }
