@@ -176,7 +176,7 @@ minute:
 | `usage.missingOnHost`, `usage.missingOnDaemon` | One side has a reading for an agent (Copilot, Claude, Codex) and the other none. The report names the agent in place of a session |
 | `usage.account` | The account the reading is for differs (compared case-insensitively, never written) |
 | `usage.windows` | The metered windows differ (by key: `monthly`, `five_hour`, …) |
-| `usage.percent` | A window's percent used differs by more than 5 points, between readings taken within 3 minutes of each other (further apart, it is not compared: the host reads every 15 minutes while the daemon runs) |
+| `usage.percent` | A window's percent used differs by more than 5 points. Judged only on a pair of fresh readings, taken within 3 minutes of each other: the host reads every 15 minutes while the daemon runs and the daemon every 2, so this is now and then. `run` counts it once two such pairs in a row disagree, and keeps it until a fresh pair agrees, so a lasting difference outlasts the grace and a rise one side has not read yet never counts. `once` reports a single fresh pair |
 | `resumable.count` | The resume lists are of different lengths |
 | `resumable.missingOnHost`, `resumable.missingOnDaemon` | How many of one side's sessions the other does not offer, by label ("summary - folder", as both write it, whitespace collapsed). Each side cuts its list to its own resume count, so when the lengths differ only the shorter list's sessions are looked for in the longer one |
 

@@ -497,12 +497,12 @@ public sealed class ShadowTests : IDisposable
                 (ShadowKinds.ResumableMissingOnDaemon, null, "1 of the host's 2"),
                 (ShadowKinds.UsageAccount, "claude", "the account differs"),
                 (ShadowKinds.UsageMissingOnDaemon, "codex", "the host has a reading and the daemon none"),
-                (ShadowKinds.UsagePercent, "copilot", "monthly daemon=40 host=55"),
             ],
             c.Differences.Select(d => (d.Kind, d.Session, d.Detail)).OrderBy(x => x.Kind, StringComparer.Ordinal).ToList());
         // Read once a minute, not each sample; and not until five minutes is any of it a mismatch.
         Assert.Equal(6 * 4, inner.Seen.Count);
-        Assert.Equal(5, ledger.Today!.Mismatches.Count);
+        // Copilot's 40 against 55 is one pair of readings, never confirmed by a second.
+        Assert.Equal(4, ledger.Today!.Mismatches.Count);
         Assert.Equal((6, 6), (ledger.Today.UsageCompared, ledger.Today.ResumableCompared));
         var report = File.ReadAllText(Path.Combine(reports, ShadowLedger.FileName("2026-10-28")));
         foreach (var secret in new[] { Token, "FIXTURE-MQTT", Account, "someone-else", "login page", "Something new", "fixture.invalid" })
@@ -591,6 +591,44 @@ public sealed class ShadowTests : IDisposable
 
         Assert.Same(read, await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(10))));
         Assert.Equal(("Home Assistant is unreachable", "Home Assistant is unreachable"), ((await read).UsageProblem, (await read).ResumableProblem));
+    }
+
+    // The host reads every 15 minutes while the daemon runs and the daemon every 2, so both are
+    // fresh only now and then. A run keeps the last verdict between those moments: a lasting
+    // difference outlasts the grace, and a rise the host has not read yet never counts.
+    [Fact]
+    public void A_run_counts_a_percentage_difference_once_two_fresh_pairs_of_readings_show_it_and_keeps_it_until_one_agrees()
+    {
+        f.Time.SetLocalTimeZone(TimeZoneInfo.Utc);
+        var start = f.Time.GetUtcNow();
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60), f.Time);
+        var memory = new ShadowMemory();
+        ShadowView Side(double percent, DateTimeOffset at) => new()
+        {
+            SeesAgentHaBridge = true,
+            Usage = new Dictionary<string, ShadowUsage> { ["copilot"] = Reading(percent, at) },
+            Resumable = [],
+        };
+        DateTimeOffset Last(TimeSpan every) => start + TimeSpan.FromTicks((f.Time.GetUtcNow() - start).Ticks / every.Ticks * every.Ticks);
+        void Minutes(int n, Func<DateTimeOffset, double> daemon, Func<DateTimeOffset, double> host)
+        {
+            for (var i = 0; i < n; i++)
+            {
+                var (d, h) = (Last(TimeSpan.FromMinutes(2)), Last(TimeSpan.FromMinutes(15)));
+                ledger.Record(ShadowCompare.Compare(Side(daemon(d), d), Side(host(h), h), memory), new ShadowView(), new ShadowView());
+                f.Time.Advance(TimeSpan.FromMinutes(1));
+            }
+        }
+
+        // Usage rises at minute 2; the host reads it at minute 15, and agrees from then on.
+        Minutes(45, at => at - start >= TimeSpan.FromMinutes(2) ? 20 : 10, at => at - start >= TimeSpan.FromMinutes(2) ? 20 : 10);
+        Assert.Empty(ledger.Today!.Mismatches);
+        Assert.False(ledger.Today.Transient.ContainsKey(ShadowKinds.UsagePercent));
+
+        // Now the host reads 15 points high for good.
+        Minutes(60, _ => 40, _ => 55);
+        var m = Assert.Single(ledger.Today.Mismatches);
+        Assert.Equal((ShadowKinds.UsagePercent, "copilot", true), (m.Kind, m.Session, m.Open));
     }
 
     [Fact]

@@ -10,6 +10,9 @@ namespace AgentBridge.Host.Shadow;
 // One sample: both views, compared, and (for run) recorded.
 public sealed class ShadowRunner(DaemonReader daemon, IShadowHost host, ShadowLedger? ledger, Action<string> log, IDaemonHomeAssistant? homeAssistant = null)
 {
+    // Only a run judges usage percentages over time; one sample (once) compares what it sees.
+    readonly ShadowMemory? memory = ledger is null ? null : new();
+
     public async Task<ShadowComparison> SampleAsync(CancellationToken ct = default)
     {
         var h = await host.ObserveAsync(ct);
@@ -19,7 +22,7 @@ public sealed class ShadowRunner(DaemonReader daemon, IShadowHost host, ShadowLe
             var ha = await (homeAssistant ?? new NoDaemonHomeAssistant()).ReadAsync(ct);
             d = d with { Usage = ha.Usage, UsageProblem = ha.UsageProblem, Resumable = ha.Resumable, ResumableProblem = ha.ResumableProblem };
         }
-        var comparison = ShadowCompare.Compare(d, h);
+        var comparison = ShadowCompare.Compare(d, h, memory);
         if (ledger is not null)
         {
             foreach (var m in ledger.Record(comparison, d, h))

@@ -193,6 +193,23 @@ public static partial class ShadowHash
         string.IsNullOrEmpty(value) ? "(none)" : SafeToken().IsMatch(value) ? value : "(other)";
 }
 
+// What a run remembers between samples: each agent's last verdict on its percentages. The two
+// sides read on their own paces (the daemon every two minutes, the host every fifteen while the
+// daemon runs), so only now and then are both readings fresh enough to compare; in between,
+// the last verdict stands, so a lasting disagreement is seen to last rather than flickering
+// into timing skew, and polling lag never becomes one.
+public sealed class ShadowMemory
+{
+    internal sealed class PercentVerdict
+    {
+        public (DateTimeOffset Daemon, DateTimeOffset Host)? Pair;
+        public int Disagreeing;
+        public string? Detail;
+    }
+
+    internal Dictionary<string, PercentVerdict> Percent { get; } = new(StringComparer.Ordinal);
+}
+
 public static class ShadowCompare
 {
     // The host's status for one of the daemon's. agents and shell are the daemon's idle with
@@ -213,7 +230,7 @@ public static class ShadowCompare
         _ => "idle",
     };
 
-    public static ShadowComparison Compare(ShadowView daemon, ShadowView host)
+    public static ShadowComparison Compare(ShadowView daemon, ShadowView host, ShadowMemory? memory = null)
     {
         var diffs = new List<ShadowDifference>();
         if (!daemon.Available) { diffs.Add(new(ShadowKinds.MachineDaemon, null, daemon.Problem!)); }
@@ -236,7 +253,7 @@ public static class ShadowCompare
             Session(d, h, s, diffs);
         }
         var notCompared = new List<string>();
-        var usage = Usage(daemon, host, diffs, notCompared);
+        var usage = Usage(daemon, host, diffs, notCompared, memory);
         var resumable = Resumable(daemon, host, diffs, notCompared);
         return new(true, daemon.Sessions.Count, host.Sessions.Count, diffs, seen) { UsageCompared = usage, ResumableCompared = resumable, NotCompared = notCompared };
     }
@@ -248,11 +265,12 @@ public static class ShadowCompare
     const double PercentTolerance = 5;
     static readonly TimeSpan ReadingsApart = TimeSpan.FromMinutes(3);
 
-    static bool Usage(ShadowView daemon, ShadowView host, List<ShadowDifference> diffs, List<string> notCompared)
+    static bool Usage(ShadowView daemon, ShadowView host, List<ShadowDifference> diffs, List<string> notCompared, ShadowMemory? memory)
     {
         if (daemon.Usage is null) { notCompared.Add("usage: " + (daemon.UsageProblem ?? "the daemon's was not read")); }
         if (host.Usage is null) { notCompared.Add("usage: " + (host.UsageProblem ?? "the host's was not read")); }
         if (daemon.Usage is null || host.Usage is null) { return false; }
+        var judged = new HashSet<string>(StringComparer.Ordinal);
         foreach (var client in daemon.Usage.Keys.Union(host.Usage.Keys).Order(StringComparer.Ordinal))
         {
             var a = daemon.Usage.GetValueOrDefault(client);
@@ -270,15 +288,35 @@ public static class ShadowCompare
             {
                 diffs.Add(new(ShadowKinds.UsageWindows, name, $"daemon={string.Join(',', keys.Item1.Select(ShadowHash.Token))} host={string.Join(',', keys.Item2.Select(ShadowHash.Token))}"));
             }
-            if (a.MeasuredAt is { } ma && b.MeasuredAt is { } mb && (ma - mb).Duration() <= ReadingsApart)
+            string? detail = null;
+            var fresh = a.MeasuredAt is { } ma && b.MeasuredAt is { } mb && (ma - mb).Duration() <= ReadingsApart;
+            if (fresh)
             {
                 var off = keys.Item1.Intersect(keys.Item2)
                     .Where(k => Math.Abs(a.Windows[k] - b.Windows[k]) > PercentTolerance)
                     .Select(k => $"{ShadowHash.Token(k)} daemon={Math.Round(a.Windows[k])} host={Math.Round(b.Windows[k])}")
                     .ToList();
-                if (off.Count > 0) { diffs.Add(new(ShadowKinds.UsagePercent, name, string.Join("; ", off.Take(4)))); }
+                if (off.Count > 0) { detail = string.Join("; ", off.Take(4)); }
             }
+            if (memory is null)
+            {
+                if (detail is not null) { diffs.Add(new(ShadowKinds.UsagePercent, name, detail)); }
+                continue;
+            }
+            // A run: judged once per new pair of fresh readings, a disagreement counted only once
+            // two pairs in a row show one, and the verdict standing until a fresh pair agrees.
+            judged.Add(client);
+            if (!memory.Percent.TryGetValue(client, out var verdict)) { memory.Percent[client] = verdict = new(); }
+            if (fresh && (a.MeasuredAt!.Value, b.MeasuredAt!.Value) is var pair && verdict.Pair != pair)
+            {
+                verdict.Pair = pair;
+                verdict.Disagreeing = detail is null ? 0 : verdict.Disagreeing + 1;
+                verdict.Detail = detail;
+            }
+            if (verdict.Disagreeing >= 2) { diffs.Add(new(ShadowKinds.UsagePercent, name, verdict.Detail!)); }
         }
+        // An agent no longer read on both sides starts afresh when it is.
+        if (memory is not null) { foreach (var gone in memory.Percent.Keys.Where(k => !judged.Contains(k)).ToList()) { memory.Percent.Remove(gone); } }
         return true;
 
         // Empty on either side is not a disagreement: some agents name no account.
