@@ -86,7 +86,8 @@ cards exactly as on this one's, each going to that card's own host.
   pipe's does. A machine that leaves presence goes, with its cards and toasts (answer outcomes
   too); while the app's relay connection is down, every machine stays as it was and reconnects
   when it is back. With no account to find them through (this machine's host signed out, or
-  refused), they all go. The
+  refused), they all go, and so do the last account's when the host signs in to another account
+  or relay, without waiting for the new one to connect. The
   app serves nothing on the relay: it only opens channels, as the PWA does.
 * **Not the app's management.** Another machine's host is never managed from here: `host.*`
   is the pipe's alone, and a relay channel answers it with `unknown op`.

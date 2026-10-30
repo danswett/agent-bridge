@@ -47,6 +47,9 @@ public interface IFleetLink : IAsyncDisposable
     FleetState State { get; }
     string? Detail { get; }
     IReadOnlyList<FleetHost> Hosts { get; }
+    // Changes when the account (or relay) the machines come from does: whatever was shown for
+    // the one before goes, even while the new one is still connecting.
+    int Account => 0;
     // Raised on any thread when the state or the hosts change.
     event Action? Changed;
     void Start();
@@ -67,6 +70,7 @@ public sealed class Fleet : IAsyncDisposable
     readonly Func<FleetHost, Machine> create;
     readonly Dictionary<string, Machine> machines = new(StringComparer.Ordinal);
     bool disposed;
+    int account;
 
     public Fleet(IFleetLink link, MainViewModel main, IUiDispatcher ui, Func<FleetHost, Machine> create)
     {
@@ -118,10 +122,13 @@ public sealed class Fleet : IAsyncDisposable
             main.Add(m);
             m.Host.Start();
         }
-        // Only a relay connection that is down for now keeps every machine as it was. Otherwise the
-        // list is the answer: presence while connected, and none when there is no account to find
-        // them through (signed out, refused) or another copy of the app shows them instead.
-        if (link.State == FleetState.Connecting) { return; }
+        // Only a relay connection that is down for now, to the same account, keeps every machine as
+        // it was. Otherwise the list is the answer: presence while connected, and none when there is
+        // no account to find them through (signed out, refused), the account is another one now, or
+        // another copy of the app shows them instead.
+        var switched = link.Account != account;
+        account = link.Account;
+        if (link.State == FleetState.Connecting && !switched) { return; }
         foreach (var id in machines.Keys.Where(id => !hosts.ContainsKey(id)).ToList())
         {
             machines.Remove(id, out var gone);
@@ -212,6 +219,10 @@ public sealed class RelayFleetLink : IFleetLink
     public string? Detail => state.Detail;
     public event Action? Changed;
 
+    int accountGeneration;
+    RelayAccount? tried;
+    public int Account => Volatile.Read(ref accountGeneration);
+
     public IReadOnlyList<FleetHost> Hosts => current is { } c
         ? [.. c.Relay.Presence.Where(p => p.Kind == "host" && p.Id != c.Relay.DeviceId).Select(p => new FleetHost(p.Id, p.Name))]
         : [];
@@ -255,6 +266,14 @@ public sealed class RelayFleetLink : IFleetLink
                 await WaitAsync(Recheck, ct);
                 continue;
             }
+            // Another account or relay than the one tried last: what was shown for that one goes
+            // now, not when (or if) this one connects.
+            if (tried is { } was && (was.Relay != a.Relay || was.AccountId != a.AccountId))
+            {
+                Interlocked.Increment(ref accountGeneration);
+                Changed?.Invoke();
+            }
+            tried = a;
             var switched = false;
             var replaced = false;
             try

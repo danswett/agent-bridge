@@ -144,6 +144,17 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Another_account_takes_the_last_ones_machines_away_even_before_it_connects()
+    {
+        await BothMachinesAsync();
+
+        link.Switch();
+
+        await Wait.UntilAsync(() => Card("there") is null, "the last account's machine to go");
+        Assert.Single(main.AllMachines);
+    }
+
+    [Fact]
     public async Task Machines_still_come_and_go_while_this_machines_host_is_away()
     {
         await BothMachinesAsync();
@@ -320,6 +331,15 @@ public sealed class FleetTests : IAsyncLifetime
         public IReadOnlyList<FleetHost> Hosts { get; private set; } = [];
         public event Action? Changed;
 
+        public int Account { get; private set; }
+
+        // Another account, still connecting.
+        public void Switch()
+        {
+            Account++;
+            Set(FleetState.Connecting);
+        }
+
         public void Set(FleetState state, params (string Id, string Name)[] hosts)
         {
             State = state;
@@ -403,8 +423,10 @@ public sealed class RelayFleetLinkTests
         await Task.Delay(300);
         Assert.Equal(FleetState.Connected, link.State);
 
+        var before = link.Account;
         account = new RelayAccount(relay.Url.ToString(), eight, "8", "other");
         link.Poke();
+        await Wait.UntilAsync(() => link.Account != before, "the switch noticed", Patience);
 
         await Wait.UntilAsync(() => link.State == FleetState.Connected && link.Hosts.Any(h => h.Id == host8.Id), "account 8's machine", Patience);
         Assert.DoesNotContain(link.Hosts, h => h.Id == host7.Id);

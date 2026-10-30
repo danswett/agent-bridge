@@ -152,7 +152,9 @@ public sealed class ConnectionTests : IAsyncLifetime
         var gate = new TaskCompletionSource();
         host.On(Ops.SessionAnswer, data =>
         {
-            if (first) { first = false; gate.SetResult(); Thread.Sleep(200); }
+            // Held until the pipe has closed, so this first outcome is surely lost: a fixed sleep
+            // lost the race to a slow runner's stop, and the outcome got through (CI on #81).
+            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => host.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
             return new AnswerResult(AnswerOutcome.Delivered);
         });
         var deliveries = new Deliveries(connection, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
@@ -179,7 +181,9 @@ public sealed class ConnectionTests : IAsyncLifetime
         var gate = new TaskCompletionSource();
         host.On(Ops.SessionReply, data =>
         {
-            if (first) { first = false; gate.SetResult(); Thread.Sleep(200); }
+            // Held until the pipe has closed, so this first outcome is surely lost: a fixed sleep
+            // lost the race to a slow runner's stop, and the outcome got through (CI on #81).
+            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => host.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
             return new ReplyResult(AnswerOutcome.Delivered);
         });
         var deliveries = new Deliveries(connection, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
@@ -225,7 +229,7 @@ public sealed class ConnectionTests : IAsyncLifetime
         var gate = new TaskCompletionSource();
         remote.On(Ops.SessionReply, data =>
         {
-            // The first answer is held until the pipe has closed, so it is surely lost.
+            // Held until the pipe has closed, so this first outcome is surely lost.
             if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => remote.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
             return new ReplyResult(AnswerOutcome.Delivered);
         });
