@@ -309,9 +309,20 @@ public static class ShadowCompare
             if (!memory.Percent.TryGetValue(client, out var verdict)) { memory.Percent[client] = verdict = new(); }
             if (fresh && (a.MeasuredAt!.Value, b.MeasuredAt!.Value) is var pair && verdict.Pair != pair)
             {
-                verdict.Pair = pair;
-                verdict.Disagreeing = detail is null ? 0 : verdict.Disagreeing + 1;
-                verdict.Detail = detail;
+                if (detail is null)
+                {
+                    verdict.Pair = pair;
+                    verdict.Disagreeing = 0;
+                    verdict.Detail = null;
+                }
+                // Evidence only when both sides have read again: a daemon update against the same
+                // host reading is the host not having read the change yet, not a second witness.
+                else if (verdict.Pair is not { } last || (pair.Item1 > last.Daemon && pair.Item2 > last.Host))
+                {
+                    verdict.Pair = pair;
+                    verdict.Disagreeing++;
+                    verdict.Detail = detail;
+                }
             }
             if (verdict.Disagreeing >= 2) { diffs.Add(new(ShadowKinds.UsagePercent, name, verdict.Detail!)); }
         }

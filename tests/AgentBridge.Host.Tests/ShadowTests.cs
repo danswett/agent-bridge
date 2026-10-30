@@ -620,8 +620,10 @@ public sealed class ShadowTests : IDisposable
             }
         }
 
-        // Usage rises at minute 2; the host reads it at minute 15, and agrees from then on.
-        Minutes(45, at => at - start >= TimeSpan.FromMinutes(2) ? 20 : 10, at => at - start >= TimeSpan.FromMinutes(2) ? 20 : 10);
+        // Usage rises at minute 2, and again at minute 16 just after a host read; each time the
+        // daemon's next readings disagree with the host's old one until the host reads again.
+        static double Used(TimeSpan since) => since >= TimeSpan.FromMinutes(16) ? 30 : since >= TimeSpan.FromMinutes(2) ? 20 : 10;
+        Minutes(45, at => Used(at - start), at => Used(at - start));
         Assert.Empty(ledger.Today!.Mismatches);
         Assert.False(ledger.Today.Transient.ContainsKey(ShadowKinds.UsagePercent));
 
