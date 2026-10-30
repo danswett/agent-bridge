@@ -248,9 +248,11 @@ Where stage 2 knowingly differs from the daemon:
 Home Assistant that **forwards reads and records writes without sending any** (`HaShadow`), then
 reads the broker's retained topics for this machine and for every session either side names
 (the daemon's from its `global/attr`), and compares them as JSON, ignoring `updated` and
-`asked_at`. Each topic is reported `same`, `differs`, `agent-ha-bridge only` or `host only`,
+`asked_at`. It takes one reading of every agent's usage first, as `agent-bridge-host usage`
+does, so the usage sensors are compared too. Each topic is reported `same`, `differs`,
+`agent-ha-bridge only` or `host only`,
 with a note where the difference is by design (stop, launch and transfer controls; the answer
-controls when the host cannot answer). It needs `baseUrl` and the stored token but not
+controls when the host cannot answer; usage when no reading was given). It needs `baseUrl` and the stored token but not
 `enabled`, and it ignores G5: it is the one thing that is meant to run while the daemon does,
 for the week of shadow running before a machine's cutover (§10 stage 4). It complements
 `agent-bridge-host shadow`, which compares what the host *knows* with the daemon's local state

@@ -519,6 +519,87 @@ public sealed class AnswerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_slot_still_showing_the_last_questions_choice_is_not_an_answer_to_the_next()
+    {
+        Ask(Form("q1", Push));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Yes"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+
+        // The next question, and the slot cannot be reset: it still says Yes.
+        ha.ServiceFailsFor = (service, entity) => service == "select.select_option" && entity == SessionEntities.Field(Node, 1);
+        Ask(Form("q2", Push), turn: 2);
+        await Pass(c);
+        Assert.Equal("Yes", State(SessionEntities.Field(Node, 1)));
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+        Assert.Equal("Not sent - answer every field", Activity);
+
+        ha.ServiceFailsFor = null;
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "No"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Equal(2, answered.Count);
+        Assert.False(answered[1].Fields!["push"].GetBoolean());
+    }
+
+    [Fact]
+    public async Task A_number_is_sent_exactly_as_typed()
+    {
+        Ask(Form("q1", Release, new Field { Name = "count", Title = "Count", Type = FieldType.Number }));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Wait for the fix"));
+        await Do(c, ha.Type(SessionEntities.Reply(Node), "9007199254740993"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Equal("9007199254740993", Assert.Single(answered).Fields!["count"].GetRawText());
+    }
+
+    [Fact]
+    public async Task Refused_words_go_again_on_a_send_the_watch_never_reported()
+    {
+        outcome = _ => new AnswerResult(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");
+        Ask(Form("q1"));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Type(SessionEntities.Reply(Node), "Call it Aurora"));
+        Assert.Equal("Answer NOT sent", Activity);
+
+        outcome = _ => new AnswerResult(AnswerOutcome.Delivered);
+        // Pressed while the watch was reconnecting: only the next read of the card sees it.
+        ha.Press(SessionEntities.Submit(Node));
+        await Pass(c, 6);
+        Assert.Equal(2, answered.Count);
+        Assert.Equal("Answer sent", Activity);
+    }
+
+    [Fact]
+    public async Task Words_sent_to_a_question_that_takes_only_options_do_not_stand_in_the_way_of_choosing()
+    {
+        Ask(Form("q1", Push));
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.SendFromCard(Node, "maybe later", "q1"));
+        Assert.Equal("Not sent - this question takes options", Activity);
+        // Chosen and sent together, in one read of the card.
+        c.Observe(ha.Choose(SessionEntities.Field(Node, 1), "Yes"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.True(Assert.Single(answered).Fields!["push"].GetBoolean());
+
+        // And on a form of several choices.
+        answered.Clear();
+        Ask(Form("q2", Release, Push), turn: 2);
+        await Pass(c);
+        await Do(c, ha.SendFromCard(Node, "whatever you think", "q2"));
+        Assert.Equal("Not sent - this question takes options", Activity);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Wait for the fix"));
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 2), "No"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Equal("wait", Assert.Single(answered).Fields!["release"].GetString());
+    }
+
+    [Fact]
     public async Task A_send_that_arrived_while_refused_words_were_being_delivered_does_not_send_them_again()
     {
         Ask(Form("q1"));

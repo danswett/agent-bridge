@@ -49,7 +49,8 @@ public static class HaCommands
     // while agent-ha-bridge still runs the machine. Needs the address and the token, not
     // homeAssistant.enabled: it is how a machine is checked before the connector is turned on.
     public static async Task<int> ShadowAsync(string folder, ISessionSource source, bool json, string? windowSeconds, string version, bool devBuild,
-        Func<HostSettings, string, IHomeAssistant>? connect, TextWriter output, TextWriter error, CancellationToken cancellationToken = default)
+        Func<HostSettings, string, IHomeAssistant>? connect, TextWriter output, TextWriter error, CancellationToken cancellationToken = default,
+        Func<(AgentBridge.Protocol.UsageReport Report, long Version)>? usage = null)
     {
         var (settings, problem) = HostSettings.Load(folder);
         if (problem is not null) { error.WriteLine(problem); }
@@ -80,7 +81,7 @@ public static class HaCommands
             DetailedActivityFallback = ha.DetailedActivity,
             DashboardUrlPath = ha.DashboardUrlPath,
             AgentUserIds = ha.AgentUserIds,
-        }, servesAnswers: OperatingSystem.IsWindows(), window, cancellationToken);
+        }, servesAnswers: OperatingSystem.IsWindows(), window, usage, cancellationToken);
         if (json)
         {
             output.WriteLine(System.Text.Json.JsonSerializer.Serialize(report, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web) { WriteIndented = true }));

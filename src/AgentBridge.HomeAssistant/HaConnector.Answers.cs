@@ -44,6 +44,12 @@ public sealed partial class HaConnector
         // it reached nothing, or came while a field was still unanswered.
         public string? HeldStamp;
         public bool AwaitTap;
+        // Send as read when an answer failed: a later press read over REST differs from it, so a
+        // press made while the watch was down still counts as fresh.
+        public Observation? SubmitAtFailure;
+        // Field slots arming could not reset (slot, what it showed then, what it was to show): until
+        // they change, what they show is the last question's, not an answer to this one.
+        public Dictionary<int, (string? Stale, string Intended)> StaleSlots = [];
         // Said once, not on every hit.
         public string? Told;
     }
@@ -170,9 +176,27 @@ public sealed partial class HaConnector
             Question = question, Plan = plan, PayloadBaseline = payload, SubmitBaseline = submit, ReplyBaseline = reply,
             // A selector that could not be set waiting may still show the last question's tap;
             // that must not answer this one, so a tap counts only once it is seen waiting.
-            AwaitTap = plan.AnswerOnTap && unset.Contains(SessionEntities.Decision(p.Node)),
+            AwaitTap = plan.AnswerOnTap && unset.ContainsKey(SessionEntities.Decision(p.Node)),
+            StaleSlots = await StaleSlotsAsync(plan, p.Node, unset, ct),
         };
         log($"Home Assistant connector armed {p.Node} for its question{(plan.TerminalOnly ? " (answered at the machine)" : "")}");
+    }
+
+    // The choice slots arming could not reset, and what each showed instead.
+    async Task<Dictionary<int, (string? Stale, string Intended)>> StaleSlotsAsync(DecisionPlan plan, string node, Dictionary<string, string> unset, CancellationToken ct)
+    {
+        var stale = new Dictionary<int, (string? Stale, string Intended)>();
+        if (!plan.UsesFieldSlots) { return stale; }
+        for (var i = 1; i <= plan.Fields.Count; i++)
+        {
+            if (plan.Fields[i - 1].IsText || !unset.TryGetValue(SessionEntities.Field(node, i), out var intended)) { continue; }
+            string? shown = null;
+            try { shown = (await ha.GetStateAsync(SessionEntities.Field(node, i), ct))?.State; }
+            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { }
+            if (shown is HaDecision.Choose or HaDecision.Idle || shown == intended) { continue; }
+            stale[i] = (shown, intended);
+        }
+        return stale;
     }
 
     // Whether the card still shows a question nobody is asking: one armed before a restart, or by
@@ -206,10 +230,11 @@ public sealed partial class HaConnector
         return -1;
     }
 
-    // The steps in order; returns the selects Home Assistant would not set.
-    async Task<HashSet<string>> RunAsync(IReadOnlyList<DecisionStep> steps, string node, CancellationToken ct)
+    // The steps in order; returns the selects Home Assistant would not set, with what they were
+    // to show.
+    async Task<Dictionary<string, string>> RunAsync(IReadOnlyList<DecisionStep> steps, string node, CancellationToken ct)
     {
-        var unset = new HashSet<string>(StringComparer.Ordinal);
+        var unset = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var step in steps)
         {
             switch (step)
@@ -222,7 +247,7 @@ public sealed partial class HaConnector
                     await PinNowAsync(Enumerable.Range(1, f.Slots).ToDictionary(i => $"{node}_f{i}", i => SessionEntities.Field(node, i)), time.GetUtcNow(), ct);
                     break;
                 case SelectStep s:
-                    if (!await SelectAsync(s.EntityId, s.Option, ct)) { unset.Add(s.EntityId); }
+                    if (!await SelectAsync(s.EntityId, s.Option, ct)) { unset[s.EntityId] = s.Option; }
                     break;
             }
         }
@@ -402,6 +427,7 @@ public sealed partial class HaConnector
                 // on its own), or for words already given, by a press of Send after this.
                 armed.Attempts++;
                 armed.FailedAt = Interlocked.Read(ref hitSeq);
+                armed.SubmitAtFailure = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
                 if (outcome.Box)
                 {
                     armed.UsedPress = null;
@@ -508,7 +534,8 @@ public sealed partial class HaConnector
         var node = p.Node;
         // A press of Send (or of the box) the watch reported after the last failure: what lets
         // words that failed be given again.
-        var fresh = since.Any(h => h.EntityId == SessionEntities.Submit(node) || h.EntityId == SessionEntities.Reply(node));
+        var fresh = since.Any(h => h.EntityId == SessionEntities.Submit(node) || h.EntityId == SessionEntities.Reply(node))
+            || await PressedSinceFailureAsync(node, armed, ct);
         var decision = await ha.GetStateAsync(SessionEntities.Decision(node), ct);
         if (decision?.State == HaDecision.Cancel)
         {
@@ -582,6 +609,9 @@ public sealed partial class HaConnector
                 if (source.Type == FieldType.Number)
                 {
                     if (text.Length == 0) { continue; }
+                    // The number as typed when it is a JSON number, so nothing is rounded through a
+                    // double (9007199254740993 stays itself); otherwise as .NET reads it.
+                    if (ExactNumber(text.Trim()) is { } exact) { values[source.Name] = exact; continue; }
                     if (!double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var number) || !double.IsFinite(number))
                     {
                         problem ??= $"{field.Label} needs a number";
@@ -593,6 +623,17 @@ public sealed partial class HaConnector
                 continue;
             }
             var slot = (await ha.GetStateAsync(SessionEntities.Field(node, i + 1), ct))?.State ?? "";
+            if (armed.StaleSlots.TryGetValue(i + 1, out var stale))
+            {
+                if (stale.Stale is not null && slot != stale.Stale) { armed.StaleSlots.Remove(i + 1); }
+                else
+                {
+                    // Still what the last question left: not an answer. Reset it again.
+                    if (await SelectAsync(SessionEntities.Field(node, i + 1), stale.Intended, ct)) { armed.StaleSlots.Remove(i + 1); }
+                    missing.Add(field.Label);
+                    continue;
+                }
+            }
             if (slot is HaDecision.Choose or HaDecision.Idle or "unknown" or "unavailable" or "")
             {
                 missing.Add(field.Label);
@@ -614,19 +655,28 @@ public sealed partial class HaConnector
                 : JsonSerializer.SerializeToElement(source.Options![index].Value);
         }
 
-        // A lone choice answered in words, through the prompt's own "Other" entry.
-        if (fields.Count == 1 && !takesText && missing.Count == 1 && !fields[0].MultiSelect && card is { } other && (!other.Retry || fresh))
+        // A lone choice answered in words, through the prompt's own "Other" entry. Words for a
+        // question that takes only options are said to be wrong once and then held, so they never
+        // stand in the way of the options and Send.
+        if (fields.Count == 1 && !takesText && missing.Count == 1 && !fields[0].MultiSelect && card is { } other)
         {
             if (!plan.TakesTypedAnswer)
             {
-                return new Read
+                if (!other.Retry)
                 {
-                    Notice = new Notice("Not sent - this question takes options", new JsonObject { ["typed"] = other.Text }),
-                    NoticeKey = other.Stamp,
-                };
+                    return new Read
+                    {
+                        Notice = new Notice("Not sent - this question takes options", new JsonObject { ["typed"] = other.Text }),
+                        NoticeKey = other.Stamp,
+                        HoldStamp = other.Stamp,
+                    };
+                }
             }
-            var answer = new Dictionary<string, JsonElement> { [fields[0].Source!.Name] = JsonSerializer.SerializeToElement(new { other = other.Text }) };
-            return Answer(sessionId, armed, answer, null, other.Text, other.Stamp, null, other.Driver);
+            else if (!other.Retry || fresh)
+            {
+                var answer = new Dictionary<string, JsonElement> { [fields[0].Source!.Name] = JsonSerializer.SerializeToElement(new { other = other.Text }) };
+                return Answer(sessionId, armed, answer, null, other.Text, other.Stamp, null, other.Driver);
+            }
         }
 
         // Send is what answers; a press is one only if it differs from the arm-time snapshot, and
@@ -679,6 +729,7 @@ public sealed partial class HaConnector
             {
                 Notice = new Notice("Not sent - this question takes options", new JsonObject { ["typed"] = words.Text }),
                 NoticeKey = words.Stamp,
+                HoldStamp = words.Stamp,
             };
         }
         // Send on the reply card submits a complete form too: its publish is the press. Words from
@@ -740,6 +791,26 @@ public sealed partial class HaConnector
         Press = press,
         Driver = driver,
     };
+
+    static JsonElement? ExactNumber(string text)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            var e = doc.RootElement;
+            return e.ValueKind == JsonValueKind.Number && e.TryGetDouble(out var d) && double.IsFinite(d) ? e.Clone() : null;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    // Whether Send was pressed since the last failure, read over REST: the watch may have been
+    // down. A press made while that answer was being delivered is part of the failure, not after it.
+    async Task<bool> PressedSinceFailureAsync(string node, Armed armed, CancellationToken ct)
+    {
+        if (armed.Attempts == 0 || armed.SubmitAtFailure is not { } before || before.Kind == "unknown") { return false; }
+        var now = await ObserveAsync(SessionEntities.Submit(node), ct);
+        return now.Present && (!before.Present || !string.Equals(now.Value, before.Value, StringComparison.Ordinal));
+    }
 
     // Get-BridgeDriverFromState: "agent" when the account behind a press is one of the agents'
     // (Test-BridgeAgentUserId, homeAssistant.agentUserIds), else "human".

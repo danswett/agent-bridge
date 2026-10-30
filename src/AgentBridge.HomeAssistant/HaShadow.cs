@@ -34,8 +34,10 @@ public static partial class HaShadow
     // Fields that carry the moment they were written, which no two publishers share.
     static readonly string[] Volatile = ["updated", "asked_at"];
 
+    // usage: the host's agent usage, as serve would publish it; without it the usage sensors are
+    // reported as not compared rather than as something only the daemon serves.
     public static async Task<ShadowReport> CompareAsync(IHomeAssistant real, ISessionSource source, HaConnectorOptions options, bool servesAnswers,
-        TimeSpan window, CancellationToken cancellationToken = default)
+        TimeSpan window, Func<(UsageReport Report, long Version)>? usage = null, CancellationToken cancellationToken = default)
     {
         var dry = new DryRun(real);
         var dryOptions = options with
@@ -50,7 +52,7 @@ public static partial class HaShadow
         Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer = servesAnswers
             ? (_, _) => Task.FromResult(new AnswerResult(AnswerOutcome.Refused, "shadow"))
             : null;
-        await using (var connector = new HaConnector(dryOptions, dry, source, () => null, answer: answer))
+        await using (var connector = new HaConnector(dryOptions, dry, source, () => null, usage, answer: answer))
         {
             await connector.TickAsync(cancellationToken);
         }
@@ -101,15 +103,16 @@ public static partial class HaShadow
                 if (Equivalent(d, h)) { same++; continue; }
                 differences.Add(new ShadowEntry(topic, Differs, d, h, Keys(d, h)));
             }
-            else if (d is not null) { differences.Add(new ShadowEntry(topic, DaemonOnly, d, null, NotServed(topic, servesAnswers))); }
+            else if (d is not null) { differences.Add(new ShadowEntry(topic, DaemonOnly, d, null, NotServed(topic, servesAnswers, usage is not null))); }
             else { differences.Add(new ShadowEntry(topic, HostOnly, null, h, null)); }
         }
         return new ShadowReport(options.MachineName, slug, hostNodes, [.. daemonNodes.Distinct().Order(StringComparer.Ordinal)], same, differences);
     }
 
     // Why a topic the daemon holds is not one this host publishes, when that is by design.
-    static string? NotServed(string topic, bool servesAnswers)
+    static string? NotServed(string topic, bool servesAnswers, bool hasUsage)
     {
+        if (!hasUsage && (topic.Contains("/usage_", StringComparison.Ordinal) || topic.Contains("/usage/", StringComparison.Ordinal))) { return "usage not compared (no reading was taken)"; }
         foreach (var part in new[] { "/stop/", "/install_update/", "/new_", "/newsession/", "/transfer", "/transfer_request/" })
         {
             if (topic.Contains(part, StringComparison.Ordinal)) { return "not served yet (a later stage)"; }

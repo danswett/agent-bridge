@@ -216,35 +216,39 @@ public class ContractTests
         }
     }
 
+    // The readings the usage contract was recorded from.
+    internal static readonly AgentUsage[] UsageReadings =
+    {
+        new AgentUsage
+        {
+            Agent = AgentKind.Copilot, Label = "GitHub Copilot", Account = "octocat", Plan = "business", Source = UsageSource.Api,
+            MeasuredAt = DateTimeOffset.Parse("2026-10-29T19:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
+            Windows = [new UsageWindow { Key = "premium", Label = "Premium requests", Percent = 42.3, Used = 127, Limit = 300, Unit = "requests", ResetsAt = DateTimeOffset.Parse("2026-11-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture) }],
+        },
+        new AgentUsage
+        {
+            Agent = AgentKind.Claude, Label = "Claude Code", AccountKey = "a1b2c3d4e5f60718", Plan = "max", Source = UsageSource.Api,
+            MeasuredAt = DateTimeOffset.Parse("2026-10-29T19:00:01Z", System.Globalization.CultureInfo.InvariantCulture),
+            Windows =
+            [
+                new UsageWindow { Key = "five_hour", Label = "5h limit", Percent = 12, ResetsAt = DateTimeOffset.Parse("2026-10-29T23:00:00Z", System.Globalization.CultureInfo.InvariantCulture) },
+                new UsageWindow { Key = "seven_day", Label = "Weekly", Percent = 61, ResetsAt = DateTimeOffset.Parse("2020-01-08T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture), StartsAt = DateTimeOffset.Parse("2020-01-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture) },
+            ],
+        },
+        new AgentUsage
+        {
+            Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.None, Error = "The Codex usage could not be read: no rollout",
+            MeasuredAt = DateTimeOffset.Parse("2026-10-29T19:00:02Z", System.Globalization.CultureInfo.InvariantCulture),
+        },
+    };
+
     [Fact]
     public void Usage_sensors_match_the_contract_for_a_reading_and_a_failure()
     {
         var recorded = Contract.Publications("usage");
         var now = DateTimeOffset.Parse("2026-10-29T19:00:05Z", System.Globalization.CultureInfo.InvariantCulture);
-        var readings = new[]
-        {
-            new AgentUsage
-            {
-                Agent = AgentKind.Copilot, Label = "GitHub Copilot", Account = "octocat", Plan = "business", Source = UsageSource.Api,
-                MeasuredAt = DateTimeOffset.Parse("2026-10-29T19:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
-                Windows = [new UsageWindow { Key = "premium", Label = "Premium requests", Percent = 42.3, Used = 127, Limit = 300, Unit = "requests", ResetsAt = DateTimeOffset.Parse("2026-11-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture) }],
-            },
-            new AgentUsage
-            {
-                Agent = AgentKind.Claude, Label = "Claude Code", AccountKey = "a1b2c3d4e5f60718", Plan = "max", Source = UsageSource.Api,
-                MeasuredAt = DateTimeOffset.Parse("2026-10-29T19:00:01Z", System.Globalization.CultureInfo.InvariantCulture),
-                Windows =
-                [
-                    new UsageWindow { Key = "five_hour", Label = "5h limit", Percent = 12, ResetsAt = DateTimeOffset.Parse("2026-10-29T23:00:00Z", System.Globalization.CultureInfo.InvariantCulture) },
-                    new UsageWindow { Key = "seven_day", Label = "Weekly", Percent = 61, ResetsAt = DateTimeOffset.Parse("2020-01-08T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture), StartsAt = DateTimeOffset.Parse("2020-01-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture) },
-                ],
-            },
-            new AgentUsage
-            {
-                Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.None, Error = "The Codex usage could not be read: no rollout",
-                MeasuredAt = DateTimeOffset.Parse("2026-10-29T19:00:02Z", System.Globalization.CultureInfo.InvariantCulture),
-            },
-        };
+        var readings = UsageReadings;
+
         var actual = new List<Published>();
         foreach (var r in readings)
         {

@@ -85,6 +85,29 @@ public sealed class ShadowTests
     }
 
     [Fact]
+    public async Task Usage_sensors_are_compared_with_a_reading_and_said_to_be_not_compared_without_one()
+    {
+        DaemonPublished();
+        foreach (var p in Contract.Publications("usage")) { ha.Seed(p.Topic, p.Payload); }
+        sessions.Set(FakeSessions.Copilot(A));
+        var slug = HaContract.MachineSlug(Machine);
+        var config = HaContract.DiscoveryTopic("sensor", HaContract.MachineNode(slug), "usage_copilot");
+
+        var without = await Shadow();
+        foreach (var topic in new[] { config, HaContract.UsageStateTopic(slug, "copilot") })
+        {
+            var entry = Assert.Single(without.Differences, d => d.Topic == topic);
+            Assert.Equal(HaShadow.DaemonOnly, entry.Verdict);
+            Assert.Equal("usage not compared (no reading was taken)", entry.Note);
+        }
+
+        var with = await HaShadow.CompareAsync(ha, sessions, new HaConnectorOptions { MachineName = Machine, Version = "0.1.0", Dev = true }, true,
+            TimeSpan.Zero, () => (new AgentBridge.Protocol.UsageReport(ContractTests.UsageReadings), 1));
+        Assert.DoesNotContain(with.Differences, d => d.Topic == config);
+        Assert.DoesNotContain(with.Differences, d => d.Topic == HaContract.UsageStateTopic(slug, "copilot"));
+    }
+
+    [Fact]
     public async Task Without_answers_the_answer_controls_are_said_to_be_left_out_by_design()
     {
         DaemonPublished();

@@ -152,7 +152,14 @@ switch (command)
         {
             await using var source = new SessionSource(options);
             await source.RefreshAsync();
-            return await HaCommands.ShadowAsync(LoadIdentity().Folder, source, Flag("--json"), Option("--window"), HostVersion(), IsDevBuild(), null, Console.Out, Console.Error);
+            // One reading of every agent's usage, as the usage command takes it, so the usage
+            // sensors are compared too.
+            using var http = new UsageHttp(TimeSpan.FromSeconds(15));
+            var usageOptions = UsageOptions.For(options);
+            Action<string> note = m => Console.Error.WriteLine($"{DateTime.Now:HH:mm:ss} {m}");
+            await using var monitor = new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: note), source, usageOptions, log: note);
+            await monitor.PassAsync();
+            return await HaCommands.ShadowAsync(LoadIdentity().Folder, source, Flag("--json"), Option("--window"), HostVersion(), IsDevBuild(), null, Console.Out, Console.Error, usage: () => monitor.Current);
         }
     case "ha":
         {
