@@ -7,6 +7,7 @@ import { fromUtf8, utf8 } from '../../js/bytes.js';
 import { TRANSFER, collectRemote, commandKey, macOf, signTransfer } from '../../js/transfer.js';
 import { checkLaunch, readLaunchResult } from '../../js/launch.js';
 import { HostClient } from '../../js/host-client.js';
+import { LaunchService } from '../../js/launch-service.js';
 
 const fromHex = (s) => Uint8Array.from(s.match(/../g).map((b) => parseInt(b, 16)));
 // The keys and body tests/AgentBridge.Host.Tests/SignedCommandTests.cs uses: the same MAC on
@@ -117,4 +118,26 @@ test('a launch that brings a session over waits for the transfer, not just for a
   await new Promise((r) => setTimeout(r, 60));
   t.onmessage({ re: 2, ok: true, result: { outcome: 'started', session: 'n' } });
   assert.equal((await brought).outcome, 'started');
+});
+test('a transfer launch is resent for longer than a plain one before it is called unconfirmed', async () => {
+  const wait = (ms) => new Promise((r) => { setTimeout(r, ms); });
+  async function afterTenMinutes(launch) {
+    let now = 0;
+    const sent = [];
+    // Every response lost, as a timeout would leave it.
+    const client = { closed: false, launch(data) { sent.push(data); return Promise.reject(new Error('the request timed out')); } };
+    const service = new LaunchService({ current: () => ({ client, hostId: 'h' }), uuid: () => 'r1', retryMs: 5, now: () => now });
+    service.submit({ hostId: 'h', launch });
+    await wait(20);
+    now = 10 * 60000;
+    await wait(40);
+    const result = { entry: service.get('h'), sent: sent.length };
+    service.clear();
+    return result;
+  }
+  const plain = await afterTenMinutes({ agent: 'copilot', workspace: 'w' });
+  assert.equal(plain.entry.outcome, 'unconfirmed');
+  const brought = await afterTenMinutes({ agent: 'copilot', workspace: 'w', transfer: { from: 'f', session: 's' } });
+  assert.notEqual(brought.entry.state, 'done');
+  assert.ok(brought.sent > plain.sent);
 });

@@ -101,6 +101,43 @@ public sealed class SessionBundleTests : IDisposable
     }
 
     [Fact]
+    public void A_folder_swapped_for_a_link_after_the_walk_is_caught_when_its_file_is_opened()
+    {
+        var dir = CopilotSession();
+        var cache = Directory.CreateDirectory(Path.Combine(dir, "files", "cache")).FullName;
+        File.WriteAllText(Path.Combine(cache, "a.txt"), "cached!");
+        var secrets = Directory.CreateDirectory(Path.Combine(root, "secrets")).FullName;
+        // The same length and time as the file it stands in for: what the walk witnessed cannot
+        // tell them apart, only the open handle can.
+        File.WriteAllText(Path.Combine(secrets, "a.txt"), "PRIVATE");
+        File.SetLastWriteTimeUtc(Path.Combine(secrets, "a.txt"), File.GetLastWriteTimeUtc(Path.Combine(cache, "a.txt")));
+        SessionBundles.BeforeOpen = file =>
+        {
+            if (Path.GetFileName(file) != "a.txt") { return; }
+            Directory.Delete(cache, recursive: true);
+            Link(cache, secrets);
+        };
+        try
+        {
+            Assert.Equal("that session changed while it was being packed; it is probably open somewhere",
+                Assert.Throws<InvalidOperationException>(() => SessionBundles.Pack(AgentKind.Copilot, source, Id, Zip, long.MaxValue)).Message);
+        }
+        finally { SessionBundles.BeforeOpen = null; }
+        Assert.False(File.Exists(Zip));
+        Directory.Delete(cache);
+    }
+
+    static void Link(string link, string target)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", link, target]) { CreateNoWindow = true, UseShellExecute = false })!;
+            p.WaitForExit();
+        }
+        else { Directory.CreateSymbolicLink(link, target); }
+        Assert.True(Directory.Exists(link));
+    }
+    [Fact]
     public void Claude_and_Codex_sessions_keep_the_names_their_agents_find_them_by_and_are_listed_in_the_folder_they_open_in()
     {
         const string There = @"C:\\Users\\rezna\\repos\\app";

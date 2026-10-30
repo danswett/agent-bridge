@@ -1,4 +1,6 @@
 using System.IO.Compression;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -110,6 +112,9 @@ public static class SessionBundles
         return files;
     }
 
+    // For a test to change the tree between the walk and a file's open, as a race would.
+    [ThreadStatic] internal static Action<string>? BeforeOpen;
+
     // Packs a session into zip (a new file), bounded by maxSource bytes read and maxFiles files.
     // Throws InvalidOperationException, saying why, for one that cannot be sent.
     // cancellationToken is checked between and within files, so a deadline stops a slow pack.
@@ -127,11 +132,15 @@ public static class SessionBundles
             using (var output = new FileStream(zip, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             using (var archive = new ZipArchive(output, ZipArchiveMode.Create))
             {
+                string? realRoot = null;
                 foreach (var file in spec.Files)
                 {
-                    var name = spec.Kind == AgentKind.Copilot ? Path.GetRelativePath(spec.Root, file).Replace('\\', '/') : Path.GetFileName(file);
-                    var entry = archive.CreateEntry(name, CompressionLevel.Optimal);
+                    var relative = Path.GetRelativePath(spec.Root, file);
+                    var name = spec.Kind == AgentKind.Copilot ? relative.Replace('\\', '/') : Path.GetFileName(file);
+                    BeforeOpen?.Invoke(file);
                     using var from = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    realRoot = Opened(from, spec.Root, relative, realRoot);
+                    var entry = archive.CreateEntry(name, CompressionLevel.Optimal);
                     using var to = entry.Open();
                     Copy(from, to, witness[file].Length, cancellationToken);
                 }
@@ -172,6 +181,43 @@ public static class SessionBundles
         }
         if (from.ReadByte() >= 0) { throw new InvalidOperationException(Changed); }
     }
+
+    // After a file is opened: it is the one the walk found, not one a link swapped in since (a
+    // folder under files/ replaced by a junction between the walk and the open would otherwise
+    // put files from anywhere in the bundle). Every folder from the session's root down, and the
+    // file, must still be no link; on Windows the handle's own final path must also be where the
+    // file sits under the root the first file was opened in. Returns that root.
+    static string? Opened(FileStream from, string root, string relative, string? realRoot)
+    {
+        var path = root;
+        foreach (var part in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            if (Linked(path)) { throw new InvalidOperationException(Changed); }
+            path = Path.Combine(path, part);
+        }
+        if (Linked(path)) { throw new InvalidOperationException(Changed); }
+        if (!OperatingSystem.IsWindows() || FinalPath(from.SafeFileHandle) is not { } real) { return realRoot; }
+        var parts = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Length;
+        var found = real;
+        for (var i = 0; i < parts; i++) { found = Path.GetDirectoryName(found) ?? ""; }
+        if (realRoot is not null && !string.Equals(found, realRoot, StringComparison.OrdinalIgnoreCase)) { throw new InvalidOperationException(Changed); }
+        if (!string.Equals(Path.GetRelativePath(found, real), relative, StringComparison.OrdinalIgnoreCase)) { throw new InvalidOperationException(Changed); }
+        return found;
+    }
+
+    // The path Windows resolves an open handle to, links and all, or null if it will not say.
+    static string? FinalPath(SafeFileHandle handle)
+    {
+        var buffer = new char[1024];
+        var n = GetFinalPathNameByHandleW(handle, buffer, (uint)buffer.Length, 0);
+        if (n > buffer.Length) { buffer = new char[n]; n = GetFinalPathNameByHandleW(handle, buffer, (uint)buffer.Length, 0); }
+        if (n == 0 || n > buffer.Length) { return null; }
+        var s = new string(buffer, 0, (int)n);
+        return s.StartsWith(@"\\?\UNC\", StringComparison.Ordinal) ? @"\\" + s[8..] : s.StartsWith(@"\\?\", StringComparison.Ordinal) ? s[4..] : s;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern uint GetFinalPathNameByHandleW(SafeFileHandle hFile, [Out] char[] lpszFilePath, uint cchFilePath, uint dwFlags);
 
     const string Changed = "that session changed while it was being packed; it is probably open somewhere";
 

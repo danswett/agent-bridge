@@ -6,6 +6,10 @@ import { AnswerService } from './answer-service.js';
 
 // Where an answer's entry keeps its session and question, a launch's keeps these.
 const LAUNCH = 'launch';
+// A launch that brings a session from another machine waits up to twelve minutes for its
+// outcome (host-client.js), so it is resent for longer than other ops: past one lost response
+// and its resend, and still within the ten minutes a host remembers an outcome once settled.
+export const TRANSFER_GIVE_UP_MS = 20 * 60000;
 
 export class LaunchService extends AnswerService {
   constructor(options) {
@@ -15,6 +19,7 @@ export class LaunchService extends AnswerService {
       payload: (e) => ({ ...e.answer, request: e.request }),
       final: () => false,
       resendOnBusy: false,
+      giveUpFor: (e) => (e.answer?.transfer ? Math.max(TRANSFER_GIVE_UP_MS, options.giveUpMs ?? 0) : options.giveUpMs ?? 9 * 60000),
     });
   }
 

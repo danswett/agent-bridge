@@ -43,6 +43,8 @@ export class AnswerService {
     now = () => Date.now(),
     retryMs = 3000,
     giveUpMs = 9 * 60 * 1000,
+    // How long one entry may go on being resent, when some ops take longer than others.
+    giveUpFor = null,
     send = (client, data) => client.answer(data),
     payload = (e) => ({ id: e.sessionId, question: e.questionId, request: e.request, ...e.answer }),
     final = (e) => !['busy', 'refused'].includes(e.outcome),
@@ -51,6 +53,7 @@ export class AnswerService {
     resendOnBusy = true,
   }) {
     Object.assign(this, { current, uuid, now, retryMs, giveUpMs, send, payload, final, resendOnBusy });
+    this.giveUpFor = giveUpFor ?? (() => this.giveUpMs);
   }
 
   static key(hostId, sessionId, questionId) { return JSON.stringify([hostId, sessionId, questionId]); }
@@ -129,7 +132,7 @@ export class AnswerService {
     clearTimeout(entry.timer);
     entry.timer = null;
     const token = ++entry.token;
-    if (entry.firstSentAt !== null && this.now() - entry.firstSentAt > this.giveUpMs) {
+    if (entry.firstSentAt !== null && this.now() - entry.firstSentAt > this.giveUpFor(entry)) {
       this.#set(entry, { state: 'done', outcome: 'unconfirmed', reason: NO_OUTCOME });
       return;
     }
