@@ -144,10 +144,13 @@ public sealed partial class HaConnector
         Track(Task.Run(async () =>
         {
             StopResult result;
+            // Read here, not from the pass: what the pass did before this took time the host's
+            // window does not.
+            var sent = time.GetUtcNow();
             try { result = await stopper!(request, cancel); }
             catch (OperationCanceledException) when (cancel.IsCancellationRequested) { result = new StopResult(StopOutcome.Failed, "the host stopped while ending the session"); }
             catch (Exception e) { result = new StopResult(StopOutcome.Failed, $"ending failed: {e.GetType().Name}"); }
-            stopsDone.Enqueue(new StopDone(sessionId, p.Node, p.Name, session, status, ending, now, result));
+            stopsDone.Enqueue(new StopDone(sessionId, p.Node, p.Name, session, status, ending, sent, result));
         }, CancellationToken.None));
     }
 

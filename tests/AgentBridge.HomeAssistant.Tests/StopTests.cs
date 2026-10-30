@@ -490,6 +490,21 @@ public sealed class StopTests : IDisposable
     }
 
     [Fact]
+    public async Task A_slow_pass_before_the_press_goes_to_the_host_does_not_use_up_the_window()
+    {
+        await using var c = await Ready(SessionStatus.Working);
+        // The pass that reads the press first publishes the session's news, slowly.
+        sessions.Set(sessions.Get(A)! with { Activity = sessions.Get(A)!.Activity with { Response = "Slow news" } });
+        ha.PublishFailsFor = (topic, payload) =>
+        {
+            if (topic == HaContract.Topics(Node).ActivityState && payload == "Slow news") { time.Advance(TimeSpan.FromSeconds(11)); }
+            return false;
+        };
+        await Press(c);
+        Assert.Equal(HaStop.ConfirmNote, Activity);
+    }
+
+    [Fact]
     public async Task A_notice_that_replaces_the_question_on_the_card_disarms_it()
     {
         Status(SessionStatus.Waiting);
