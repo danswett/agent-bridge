@@ -35,7 +35,11 @@ function Get-ScheduledTask {
         [pscustomobject]@{ TaskName = $TaskName; State = $t.State; Actions = @([pscustomobject]@{ Arguments = $t.Xml }) }
     }
 }
-function Export-ScheduledTask { [CmdletBinding()] param([string]$TaskName) $global:SwTasks[$TaskName].Xml }
+function Export-ScheduledTask {
+    [CmdletBinding()] param([string]$TaskName)
+    if ($global:SwFail['export']) { throw "stand-in: exporting $TaskName failed" }
+    $global:SwTasks[$TaskName].Xml
+}
 function Get-ScheduledTaskInfo { [CmdletBinding()] param([string]$TaskName) [pscustomobject]@{ LastTaskResult = 0; LastRunTime = [datetime]::MinValue } }
 function Register-ScheduledTask {
     [CmdletBinding()] param([string]$TaskName, [string]$Xml, [switch]$Force)
@@ -44,7 +48,18 @@ function Register-ScheduledTask {
     $global:SwTasks[$TaskName] = @{ Xml = $Xml; State = 'Ready' }
 }
 function Unregister-ScheduledTask { [CmdletBinding()] param([string]$TaskName, [switch]$Confirm) $global:SwCalls.Add("unregister $TaskName"); $global:SwTasks.Remove($TaskName) }
-function Start-ScheduledTask { [CmdletBinding()] param([string]$TaskName) $global:SwCalls.Add("start $TaskName"); $global:SwTasks[$TaskName].State = 'Running' }
+function Start-ScheduledTask {
+    [CmdletBinding()] param([string]$TaskName)
+    $global:SwCalls.Add("start $TaskName")
+    $xml = $global:SwTasks[$TaskName].Xml
+    # A new build that exits at once leaves its task Ready; one that serves writes its log.
+    if ($global:SwFail['exit'] -and $xml -notlike 'PREVIOUS*' -and $TaskName -like $global:SwFail['exit']) { return }
+    $global:SwTasks[$TaskName].State = 'Running'
+    if ($TaskName -like 'AgentBridgeShadowHost_*' -and $xml -notlike 'PREVIOUS*') {
+        New-Item -ItemType Directory -Force (Join-Path $profileFolder 'logs') | Out-Null
+        Add-Content (Join-Path $profileFolder 'logs\host.log') 'serving'
+    }
+}
 function Stop-ScheduledTask { [CmdletBinding()] param([string]$TaskName) $global:SwCalls.Add("stop $TaskName"); $global:SwTasks[$TaskName].State = 'Ready' }
 function Get-Process { [CmdletBinding()] param([string[]]$Name) }
 function Stop-Process { [CmdletBinding()] param([int]$Id, [switch]$Force) throw 'stand-in: no process may be stopped here' }
@@ -202,6 +217,62 @@ Write-Output '-RelayUrl names the relay to sign in to'
 $err = Invoke-Install @{ Relay = $true; RelayUrl = 'https://relay.example.com' }
 Assert ($null -eq $err) "it succeeds ($err)"
 Assert ($global:SwCalls -contains 'host sign-in --profile shadowtest --relay https://relay.example.com') 'it signed in there'
+
+Reset-World -Previous
+Write-Output 'A profile signed in to a relay that is not one fails before anything is stopped'
+$global:SwSignedIn = 'http://relay.example.com'
+Set-Content (Join-Path $profileFolder 'relay.txt') 'http://relay.example.com'
+$env:AGENT_BRIDGE_RELAY = 'https://relay.example.org'
+$err = Invoke-Install @{ Relay = $true }
+Remove-Item Env:AGENT_BRIDGE_RELAY
+Assert ($err -match 'not a relay address' -and $err -match 'nothing was stopped') "it fails, saying why ($err)"
+Test-PreviousUntouched
+
+Reset-World -Previous
+Write-Output 'A task that cannot be exported fails before anything is touched'
+$global:SwFail['export'] = $true
+$err = Invoke-Install
+Assert ($err -match 'stand-in: exporting') "it fails ($err)"
+Assert (-not ($global:SwCalls -match '^(stop|register|start|unregister|dotnet) |^host ')) 'nothing was published, configured or stopped'
+Test-PreviousUntouched
+
+Reset-World -Previous
+Write-Output 'A new host that exits at once is not kept: the previous install is put back'
+$global:SwFail['exit'] = 'AgentBridgeShadowHost_*'
+$err = Invoke-Install
+Assert ($err -match 'wrote nothing' -and $err -match 'put back') "it fails, saying why ($err)"
+Test-PreviousUntouched
+
+Reset-World -Previous
+Write-Output 'A comparison that exits at once is not kept either'
+$global:SwFail['exit'] = 'AgentBridgeShadowRun_*'
+$err = Invoke-Install
+Assert ($err -match 'just after starting' -and $err -match 'put back') "it fails, saying why ($err)"
+Test-PreviousUntouched
+
+Reset-World -Previous
+Write-Output 'After a swap that never finished, the build last known to serve is the one kept'
+Move-Item $bin "$bin.previous"
+New-Item -ItemType Directory -Force $bin | Out-Null
+Set-Content (Join-Path $bin 'agent-bridge-host.exe') 'UNFINISHED'
+Set-Content "$bin.swapping" 'then'
+$global:SwFail['register'] = 'AgentBridgeShadowRun_*'
+$err = Invoke-Install
+Assert ($err -match 'put back') "a failing install puts back ($err)"
+Test-PreviousUntouched
+Assert (-not (Test-Path "$bin.swapping")) 'and the swap is finished'
+$global:SwFail = @{}
+Set-Content "$bin.swapping" 'then'
+Copy-Item -Recurse $bin "$bin.previous"
+Set-Content (Join-Path $bin 'agent-bridge-host.exe') 'UNFINISHED'
+$err = Invoke-Install
+Assert ($null -eq $err -and (Get-Content (Join-Path $bin 'agent-bridge-host.exe')) -eq 'NEW') "a succeeding one installs the new build ($err)"
+Assert (-not (Test-Path "$bin.previous") -and -not (Test-Path "$bin.swapping")) 'and leaves nothing beside it'
+
+Reset-World
+Write-Output 'The comparison reads the agent-ha-bridge it was installed from'
+$err = Invoke-Install
+Assert ($null -eq $err -and $global:SwTasks[$script:runTask].Xml -match [regex]::Escape("--agent-ha-bridge-home $ahb")) "the run task names it ($err)"
 
 Reset-World -Previous
 Write-Output '-WhatIf changes nothing'

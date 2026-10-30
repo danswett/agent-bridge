@@ -55,6 +55,10 @@ $ahb = $AgentHaBridgeHome
 # new one is serving.
 $staging = "$Bin.new"
 $previousBin = "$Bin.previous"
+# Present from stopping the previous install until the new one serves, or the previous one is back:
+# found at the start, the last swap never finished, and bin.previous is the build to keep.
+$swapMarker = "$Bin.swapping"
+$script:UnfinishedSwap = Test-Path -LiteralPath $swapMarker
 $profileConfig = Join-Path $env:LOCALAPPDATA "AgentBridge\$HostProfile\config.json"
 
 # agent-bridge-host, as published for this install ($exe moves from the new build to $Bin as the
@@ -263,6 +267,7 @@ function Set-ShadowRelay {
         if ($RelayUrl -and $RelayUrl.TrimEnd('/') -ne $issuer.TrimEnd('/')) {
             throw "profile $HostProfile is signed in to $issuer, not $RelayUrl; sign it in again there (agent-bridge-host sign-in --profile $HostProfile --relay $RelayUrl) first"
         }
+        Assert-ShadowRelayUrl $issuer
         Write-Output "profile $HostProfile is signed in as $account on $issuer"
         $script:ShadowRelay = $issuer
         return
@@ -275,6 +280,7 @@ function Set-ShadowRelay {
     if ($LASTEXITCODE) { throw "signing profile $HostProfile in failed" }
     $script:ShadowRelay = Get-ShadowSignedInRelay
     if (-not $script:ShadowRelay) { throw "signed in, but profile $HostProfile has no relay saved" }
+    Assert-ShadowRelayUrl $script:ShadowRelay
 }
 
 # The previous install's tasks as they are now: what to put back, and which were running.
@@ -316,6 +322,8 @@ function Restore-ShadowInstall($Previous, $Config) {
     foreach ($t in $Previous | Where-Object Running) {
         try { Start-ScheduledTask -TaskName $t.Name } catch { $problems += "starting $($t.Name): $_" }
     }
+    # Back as it was: the next install has no unfinished swap to recover.
+    if (-not $problems.Count) { Remove-Item -LiteralPath $swapMarker -Force -ErrorAction SilentlyContinue }
     $problems
 }
 
@@ -323,7 +331,35 @@ function Restore-ShadowInstall($Previous, $Config) {
 function Save-ShadowConfig { if (Test-Path $profileConfig) { , [IO.File]::ReadAllBytes($profileConfig) } else { $null } }
 function Restore-ShadowConfig($Saved) {
     if ($null -eq $Saved) { if (Test-Path $profileConfig) { Remove-Item $profileConfig -Force } }
-    else { [IO.File]::WriteAllBytes($profileConfig, $Saved) }
+    elseif (-not (Test-Path $profileConfig) -or -not [Linq.Enumerable]::SequenceEqual([byte[]]$Saved, [IO.File]::ReadAllBytes($profileConfig))) {
+        New-Item -ItemType Directory -Force (Split-Path $profileConfig) | Out-Null
+        [IO.File]::WriteAllBytes($profileConfig, $Saved)
+    }
+}
+
+# The new host has started serving: its log written since it was started, and its task still
+# running. Start-ScheduledTask only asks; a host that exits at once would otherwise be committed
+# and the previous build let go.
+function Wait-ShadowHostReady([datetime]$Since) {
+    $log = Join-Path $env:LOCALAPPDATA "AgentBridge\$HostProfile\logs\host.log"
+    for ($i = 0; $i -lt 60; $i++) {
+        if ((Test-Path $log) -and (Get-Item $log).LastWriteTime -ge $Since.AddSeconds(-2)) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not ((Test-Path $log) -and (Get-Item $log).LastWriteTime -ge $Since.AddSeconds(-2))) { throw "the new host wrote nothing to $log within 30 seconds of starting" }
+}
+
+# Both tasks still running a few seconds after starting: a launcher that ends at once is a host or
+# comparison that could not start.
+function Assert-ShadowTaskRunning {
+    Start-Sleep -Seconds 5
+    foreach ($name in $hostTask, $runTask) {
+        $state = [string](Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue).State
+        if ($state -ne 'Running') {
+            $info = Get-ScheduledTaskInfo -TaskName $name
+            throw ("{0} is {1} just after starting (last result 0x{2:x})" -f $name, $state, $info.LastTaskResult)
+        }
+    }
 }
 
 # Moved with a few tries: a process just ended may hold its files a moment longer.
@@ -339,22 +375,24 @@ if ($Install) {
     if (-not (Test-Path $ahb)) { throw "agent-ha-bridge is not installed for this user ($ahb); there is nothing to compare with" }
     if ($RelayUrl) { Assert-ShadowRelayUrl $RelayUrl }
     if ($Relay) { Assert-ShadowRelayUrl (Get-ShadowRelayUrl) }
-    # A swap that was cut short: the previous build is put back first, or dropped once replaced.
-    if (Test-Path $previousBin) {
-        if (Test-Path $Bin) { Remove-Item $previousBin -Recurse -Force } else { Move-ShadowFolder $previousBin $Bin }
-    }
-    if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
-    if ($PSCmdlet.ShouldProcess($staging, "publish the host from $root")) {
-        foreach ($project in 'src/AgentBridge.Host/AgentBridge.Host.csproj', 'src/AgentBridge.HostLauncher/AgentBridge.HostLauncher.csproj') {
-            dotnet publish (Join-Path $root $project) -c Release -r win-x64 --self-contained -o $staging --nologo -v q
-            if ($LASTEXITCODE) { Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue; throw "publishing $project failed; the previous install is still running, unchanged" }
-        }
-    }
-    $exe = Join-Path $staging 'agent-bridge-host.exe'
+    # What to put back, read before anything changes: a task that cannot be exported stops the
+    # install here, with nothing touched.
+    $previous = @(Get-ShadowTaskState)
     $config = Save-ShadowConfig
+    if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
     $serveArguments = @('serve', '--profile', $HostProfile)
-    $prepared = $false
+    # prepare: only bin.new and the profile's config have changed. swap: the previous install has
+    # been stopped. done: the new one is serving.
+    $phase = 'prepare'
+    $handled = $false
     try {
+        if ($PSCmdlet.ShouldProcess($staging, "publish the host from $root")) {
+            foreach ($project in 'src/AgentBridge.Host/AgentBridge.Host.csproj', 'src/AgentBridge.HostLauncher/AgentBridge.HostLauncher.csproj') {
+                dotnet publish (Join-Path $root $project) -c Release -r win-x64 --self-contained -o $staging --nologo -v q
+                if ($LASTEXITCODE) { throw "publishing $project failed" }
+            }
+        }
+        $exe = Join-Path $staging 'agent-bridge-host.exe'
         Sync-AgentHaBridgeWorkspace
         # Read-only whatever agent-ha-bridge is doing: G5 alone lasts only while its daemon runs, and an
         # update, a crash or a logoff race restarting it would leave this host acting in the gap.
@@ -369,53 +407,64 @@ if ($Install) {
             if ($script:ShadowRelay) { $serveArguments += @('--relay', $script:ShadowRelay) }
         }
         else { $serveArguments += '--local-only' }
-        $prepared = $true
-    }
-    catch { throw "$_ (nothing was stopped or replaced: the previous install is still running, unchanged)" }
-    finally {
-        # Also when interrupted (Ctrl+C runs no catch): the previous install never saw any of it.
-        if (-not $prepared) {
-            Restore-ShadowConfig $config
-            Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
-    $serve = New-ShadowTaskXml "Agent Bridge host, profile $HostProfile, read-only beside agent-ha-bridge for the shadow comparison (docs/host-shadow.md)" $serveArguments $null
-    $run = New-ShadowTaskXml "Agent Bridge shadow comparison with agent-ha-bridge, profile $HostProfile (docs/host-shadow.md)" @('shadow', 'run', '--profile', $HostProfile, '--interval', "$Interval", '--grace', "$Grace") 'PT1M'
+        $runArguments = @('shadow', 'run', '--profile', $HostProfile, '--interval', "$Interval", '--grace', "$Grace")
+        # The daemon compared is the one the workspaces were copied from.
+        if ($PSBoundParameters.ContainsKey('AgentHaBridgeHome')) { $runArguments += @('--agent-ha-bridge-home', (Resolve-Path -LiteralPath $ahb).ProviderPath) }
+        $serve = New-ShadowTaskXml "Agent Bridge host, profile $HostProfile, read-only beside agent-ha-bridge for the shadow comparison (docs/host-shadow.md)" $serveArguments $null
+        $run = New-ShadowTaskXml "Agent Bridge shadow comparison with agent-ha-bridge, profile $HostProfile (docs/host-shadow.md)" $runArguments 'PT1M'
 
-    # 2. The swap: stop the previous install, put the new build in its place, register and start.
-    if (-not $PSCmdlet.ShouldProcess("$hostTask, $runTask", 'stop the previous install, swap in the new build, register and start the logon tasks')) { return }
-    $previous = @(Get-ShadowTaskState)
-    $swapped = $false
-    $restored = $false
-    try {
+        # 2. The swap: stop the previous install, put the new build in its place, register, start,
+        # and see both running before the previous build is let go.
+        if (-not $PSCmdlet.ShouldProcess("$hostTask, $runTask", 'stop the previous install, swap in the new build, register and start the logon tasks')) { return }
+        $phase = 'swap'
+        Set-Content -LiteralPath $swapMarker -Value (Get-Date -Format o)
         Stop-ShadowProcess
+        if (Test-Path $previousBin) {
+            # Left by a swap that never finished: bin.previous is the last build known to serve, and
+            # bin the one that never did, which goes instead. Else a finished swap's leftover.
+            if (-not (Test-Path $Bin) -or $script:UnfinishedSwap) { if (Test-Path $Bin) { Remove-Item $Bin -Recurse -Force } }
+            else { Remove-Item $previousBin -Recurse -Force }
+        }
         if (Test-Path $Bin) { Move-ShadowFolder $Bin $previousBin }
         Move-ShadowFolder $staging $Bin
         $exe = Join-Path $Bin 'agent-bridge-host.exe'
         Register-ScheduledTask -TaskName $hostTask -Xml $serve -Force | Out-Null
         Register-ScheduledTask -TaskName $runTask -Xml $run -Force | Out-Null
+        $started = Get-Date
         Start-ScheduledTask -TaskName $hostTask
-        # Given a moment to start serving, so the first samples find it.
-        $log = Join-Path $env:LOCALAPPDATA "AgentBridge\$HostProfile\logs\host.log"
-        for ($i = 0; $i -lt 30 -and -not (Test-Path $log); $i++) { Start-Sleep -Seconds 1 }
+        Wait-ShadowHostReady $started
         Start-ScheduledTask -TaskName $runTask
-        $swapped = $true
+        Assert-ShadowTaskRunning
+        $phase = 'done'
     }
     catch {
         $failure = $_
-        $restored = $true
+        $handled = $true
+        if ($phase -eq 'prepare') {
+            Restore-ShadowConfig $config
+            Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+            throw "$failure (nothing was stopped or replaced: the previous install is still running, unchanged)"
+        }
         $problems = @(Restore-ShadowInstall $previous $config)
         Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
         if ($problems.Count) { throw "$failure; and the previous install could not all be put back: $($problems -join '; ')" }
         throw "$failure (the previous install was put back, and the tasks that were running were started again)"
     }
     finally {
-        # Interrupted mid-swap (Ctrl+C runs no catch): put back all the same.
-        if (-not $swapped -and -not $restored) {
-            Restore-ShadowInstall $previous $config | Out-Null
-            Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+        # Interrupted (Ctrl+C runs no catch), or -Confirm declined at the swap: put back all the
+        # same, and say what could not be, on stderr, since nothing else is left to say it.
+        if (-not $handled -and $phase -ne 'done') {
+            if ($phase -eq 'prepare') {
+                Restore-ShadowConfig $config
+                Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            else {
+                foreach ($problem in @(Restore-ShadowInstall $previous $config)) { [Console]::Error.WriteLine("shadow-week: not put back: $problem") }
+                Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
+    Remove-Item -LiteralPath $swapMarker -Force -ErrorAction SilentlyContinue
     if (Test-Path $previousBin) { Remove-Item $previousBin -Recurse -Force -ErrorAction SilentlyContinue }
     Write-Output "started $hostTask and $runTask. Check in a few minutes with: pwsh $PSCommandPath -Status"
     return

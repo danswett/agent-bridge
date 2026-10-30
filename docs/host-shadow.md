@@ -138,16 +138,22 @@ nothing is left that can fail for want of an input:
 
    Never named `AgentBridgeDaemon*` (agent-ha-bridge's, which the G5 probe looks for) or
    `AgentBridgeHost_*` (the app's).
-4. Starts both, and drops `bin.previous`.
+4. Starts both, and waits to see them serve: the host's log written since it started, and both
+   tasks still running a few seconds later (`Start-ScheduledTask` only asks). Only then is
+   `bin.previous` dropped. With `-AgentHaBridgeHome`, the run task is given it too
+   (`--agent-ha-bridge-home`), so it compares the daemon the workspaces were copied from.
 
-**All or nothing.** An install that fails in steps 1 and 2 (a bad relay, a failed publish, a
-refused config change, a sign-in that did not complete) has stopped nothing: the previous
+**All or nothing.** An install that fails in steps 1 and 2 (a bad relay, including one a
+signed-in profile already uses, a task that cannot be exported, a failed publish, a refused
+config change, a sign-in that did not complete, `-Confirm` declined at the swap) has stopped nothing: the previous
 tasks keep running as they were, and the profile's config is put back as it was. One that
-fails in the swap stops the new build, puts back `bin`, the profile's config and the previous
+fails in the swap, including a new host or comparison that exits at once, stops the new build, puts back `bin`, the profile's config and the previous
 tasks exactly as exported, starts again those that were running, and only then fails, saying
 so (or saying what it could not put back). Interrupted with Ctrl+C, it puts them back the same
-way. An install cut short harder than that (the machine losing power mid-swap) leaves
-`bin.previous`, which the next `-Install` restores before anything else.
+way, and writes to stderr anything it could not. An install cut short harder than that (the
+machine losing power mid-swap) leaves `bin.swapping` beside `bin.previous`; the next `-Install`
+then keeps `bin.previous`, the last build known to serve, as the one to fall back to, and
+drops the unfinished `bin`.
 `pwsh build/test-shadow-week.ps1` checks each of those against stand-ins for the tasks,
 `dotnet` and the host, and CI runs it on Windows. `-WhatIf` shows the whole plan and changes
 nothing.
