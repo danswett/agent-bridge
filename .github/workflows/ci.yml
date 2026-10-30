@@ -33,6 +33,11 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $env:AGENT_BRIDGE_INJECTOR = "$env:RUNNER_TEMP/injector/agent-bridge-injector.exe"
           dotnet test tests/AgentBridge.Host.Delivery.Tests -c Release --no-build --nologo --filter "FullyQualifiedName~InjectorIntegrationTests"
+      - name: The shadow install leaves the previous one running when it fails
+        # Against stand-ins for the scheduled tasks, dotnet and the host: nothing is registered.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -NoProfile -File build/test-shadow-week.ps1
       - name: Relay container builds and serves
         # Run as it ships: its own unprivileged user and a read-only file system. The first product
         # image built but crashed at start, which only running it shows.

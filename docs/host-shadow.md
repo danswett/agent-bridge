@@ -107,12 +107,14 @@ pwsh build/shadow-week.ps1 -Install           # this machine only
 pwsh build/shadow-week.ps1 -Install -Relay    # and on the phone, read-only
 ```
 
-`-Install`:
+`-Install` prepares everything while a previous install keeps running, and swaps only once
+nothing is left that can fail for want of an input:
 
-1. Stops a previous install's tasks and processes (only those running from its own folder),
-   then publishes `agent-bridge-host` and `agent-bridge-hostw` from the checkout,
-   self-contained, into `%LOCALAPPDATA%\AgentBridgeShadow\bin`. Not the app's folder, and
-   nothing on `PATH`.
+1. Checks agent-ha-bridge is installed and, with `-Relay` or `-RelayUrl`, that the relay is an
+   `https` address (`http` only to this machine). Then publishes `agent-bridge-host` and
+   `agent-bridge-hostw` from the checkout, self-contained, into
+   `%LOCALAPPDATA%\AgentBridgeShadow\bin.new`, beside the folder the running install uses.
+   Not the app's folder, and nothing on `PATH`.
 2. Makes the profile `shadow` approve exactly agent-ha-bridge's workspaces
    (`newSession.workspaces`, `~` expanded, labelled as `Get-BridgeWorkspaceChoices` labels them, a repeated label getting its path after it, with `isolate`): whatever it
    approved before is removed with `workspace remove`, then each is added with
@@ -121,7 +123,11 @@ pwsh build/shadow-week.ps1 -Install -Relay    # and on the phone, read-only
    the resume lists cannot agree; any step failing stops the install. A folder that no
    longer exists is skipped with a warning. Only those two keys are read from
    agent-ha-bridge's config. Re-run `-Install` after changing agent-ha-bridge's workspaces.
-3. Registers two per-user logon tasks, made like the app's (`LogonTaskXml`): the user's
+   Then sets `delivery.readOnly`, and with `-Relay` `push.enabled` and signs in (below). A
+   running host reads its config only when it starts, so none of this reaches it until the swap.
+3. Swaps: stops the previous install's tasks and processes (only those running from its own
+   folder), moves `bin` to `bin.previous` and `bin.new` to `bin`, then registers two per-user
+   logon tasks, made like the app's (`LogonTaskXml`): the user's
    interactive token, `LeastPrivilege`, hidden, restarted every minute on failure (three
    times), no time limit, not stopped on battery, one instance:
    * `AgentBridgeShadowHost_shadow_<user hash>`: `agent-bridge-hostw serve --profile shadow --local-only`,
@@ -132,7 +138,25 @@ pwsh build/shadow-week.ps1 -Install -Relay    # and on the phone, read-only
 
    Never named `AgentBridgeDaemon*` (agent-ha-bridge's, which the G5 probe looks for) or
    `AgentBridgeHost_*` (the app's).
-4. Starts both.
+4. Starts both, and waits to see them serve: the host's log written since it started, and both
+   tasks still running a few seconds later (`Start-ScheduledTask` only asks). Only then is
+   `bin.previous` dropped. With `-AgentHaBridgeHome`, the run task is given it too
+   (`--agent-ha-bridge-home`), so it compares the daemon the workspaces were copied from.
+
+**All or nothing.** An install that fails in steps 1 and 2 (a bad relay, including one a
+signed-in profile already uses, a task that cannot be exported, a failed publish, a refused
+config change, a sign-in that did not complete, `-Confirm` declined at the swap) has stopped nothing: the previous
+tasks keep running as they were, and the profile's config is put back as it was. One that
+fails in the swap, including a new host or comparison that exits at once, stops the new build, puts back `bin`, the profile's config and the previous
+tasks exactly as exported, starts again those that were running, and only then fails, saying
+so (or saying what it could not put back). Interrupted with Ctrl+C, it puts them back the same
+way, and writes to stderr anything it could not. An install cut short harder than that (the
+machine losing power mid-swap) leaves `bin.swapping` beside `bin.previous`; the next `-Install`
+then keeps `bin.previous`, the last build known to serve, as the one to fall back to, and
+drops the unfinished `bin`.
+`pwsh build/test-shadow-week.ps1` checks each of those against stand-ins for the tasks,
+`dotnet` and the host, and CI runs it on Windows. `-WhatIf` shows the whole plan and changes
+nothing.
 
 **Read-only by construction.** `-Install` sets `delivery.readOnly` in the profile's config
 ([host-config.md](host-config.md)), so the host takes no answer, reply, stop, launch, approval
@@ -171,7 +195,10 @@ others, read-only:
 * **Signed in once.** A profile that has never signed in is signed in during the install:
   `agent-bridge-host sign-in --profile shadow` prints an address and a device code; open it
   on any device and sign in as the account the phone uses. The relay is `-RelayUrl`, else
-  `AGENT_BRIDGE_RELAY`, else the one the profile used before, else the app's own profile's.
+  `AGENT_BRIDGE_RELAY`, else the one the profile used before, else the app's own profile's,
+  else the relay the phone's app uses: `S4_RELAY` in `.github/workflows/pages.yml`, which the
+  Pages build bakes into the PWA, read from the checkout. So on a machine without the app
+  (DEV-VM1) `-Install -Relay` needs no `-RelayUrl`.
   The task names the relay that issued the profile's account (`--relay`), so the host never
   sends that account's token to another relay, `AGENT_BRIDGE_RELAY` included. A profile already
   signed in keeps its relay; a different `-RelayUrl` stops the install until it is signed in
