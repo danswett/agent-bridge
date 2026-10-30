@@ -33,6 +33,18 @@ public sealed class DurableFileTests : IDisposable
     }
 
     [Fact]
+    public void A_file_created_after_the_check_is_kept_and_the_write_refused()
+    {
+        var path = Path.Combine(_root, "settings.json");
+        DurableFile.BeforeCommit.Value = p => File.WriteAllText(p, "theirs");
+
+        Assert.Throws<DurableFile.ChangedMeanwhileException>(() => DurableFile.Replace(path, "ours"u8.ToArray(), expected: null));
+
+        Assert.Equal("theirs", File.ReadAllText(path));
+        Assert.Equal(["settings.json"], Directory.GetFiles(_root).Select(Path.GetFileName));
+    }
+
+    [Fact]
     public void A_save_landing_after_the_check_is_kept_rather_than_removed()
     {
         var path = File_("planned");

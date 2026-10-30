@@ -624,11 +624,13 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Extra_arguments_and_profiles_agent_ha_bridge_read_as_one_string_are_carried_as_a_list_of_one()
+    public async Task Lists_agent_ha_bridge_read_from_one_value_are_carried_as_a_list_of_one()
     {
         var config = FakeAgentHaBridge.DefaultConfig();
         config["newSession"]!["extraArgs"] = "--banner";
         config["newSession"]!["profiles"] = "work";
+        config["newSession"]!["models"] = new JsonObject { ["claude"] = "opus" };
+        config["newSession"]!["contexts"] = new JsonObject { ["codex"] = 200000 };
         await using var f = new FakeAgentHaBridge(config);
 
         Assert.True((await f.Migrator().MigrateAsync(dryRun: false)).Ok);
@@ -636,6 +638,8 @@ public sealed class MigrationTests : IAsyncLifetime
         var launch = JsonNode.Parse(File.ReadAllText(Path.Combine(f.Profile, "config.json")))!["launch"]!;
         Assert.Equal(["work"], launch["profiles"]!.AsArray().Select(v => (string)v!));
         Assert.Equal(["--banner"], launch["agents"]!["copilot"]!["extraArgs"]!.AsArray().Select(v => (string)v!));
+        Assert.Equal(["opus"], launch["agents"]!["claude"]!["models"]!.AsArray().Select(v => (string)v!));
+        Assert.Equal(["200000"], launch["agents"]!["codex"]!["contexts"]!.AsArray().Select(v => (string)v!));
     }
 
     [Fact]
@@ -732,21 +736,20 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_settings_file_with_another_hard_link_is_rewritten_in_place_so_every_name_sees_it()
+    public async Task A_settings_file_with_another_hard_link_is_refused_since_no_rewrite_keeps_every_name_whole()
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var other = Path.Combine(_f.Home, "dotfiles", "settings-hard.json");
         Directory.CreateDirectory(Path.GetDirectoryName(other)!);
         Assert.True(CreateHardLink(other, _f.ClaudeSettings, IntPtr.Zero));
-        var original = File.ReadAllBytes(other);
+        var listing = _f.Listing();
 
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
-        Assert.Equal(File.ReadAllBytes(_f.ClaudeSettings), File.ReadAllBytes(other));
-        Assert.Contains("agent-bridge-host-hook", File.ReadAllText(other));
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
 
-        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
-        Assert.Equal(original, File.ReadAllBytes(other));
-        Assert.Equal(original, File.ReadAllBytes(_f.ClaudeSettings));
+        Assert.False(report.Ok);
+        Assert.Contains($"Refused: {_f.ClaudeSettings} has another hard link", report.ToString());
+        Assert.Equal(listing, _f.Listing());
+        Assert.Empty(_f.Runtime_.Calls);
     }
 
     [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]

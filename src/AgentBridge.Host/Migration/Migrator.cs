@@ -152,6 +152,14 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         var plans = new[] { Registrations.Copilot(install, options.HookPath), Registrations.Claude(install, options.HookPath), Registrations.Codex(install, options.HookPath) };
         if (plans.FirstOrDefault(p => p.Refusal is not null) is { } blocked) { Say("Refused: " + blocked.Refusal + "."); return new(false, lines); }
         if (StillRunningPowerShell(install, plans) is { } running) { Say("Refused: " + running); return new(false, lines); }
+        // Rewriting a hard-linked file either leaves its other names behind (a rename) or risks
+        // every name truncated if cut short (in place), so it is not done at all.
+        var hostConfigPath = Path.Combine(options.ProfileFolder, HostSettings.FileName);
+        if (plans.Where(p => p.NewText is not null).Select(p => p.Path).Append(hostConfigPath).FirstOrDefault(DurableFile.HardLinked) is { } linked)
+        {
+            Say($"Refused: {linked} has another hard link, which a rewrite would break or could leave truncated. Make it a plain file (or a symbolic link) and migrate again.");
+            return new(false, lines);
+        }
         var hostConfig = Path.Combine(options.ProfileFolder, HostSettings.FileName);
         // Read once: these bytes are what the import is built from, what is snapshotted, and what
         // the file must still be when it is written.

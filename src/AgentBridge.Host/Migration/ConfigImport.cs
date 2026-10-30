@@ -326,7 +326,8 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
     static string? Tuning(JsonNode? n) =>
         Str(n) ?? (n is JsonValue v && v.GetValueKind() == JsonValueKind.Number ? v.ToJsonString() : null);
 
-    static List<string>? Tunings(JsonNode? n) => n is JsonArray a ? a.Select(Tuning).OfType<string>().ToList() : null;
+    // Read through @(...) by agent-ha-bridge too (Get-BridgeTuningChoices): one value is a list of one.
+    static List<string>? Tunings(JsonNode? n) => n is JsonArray a ? a.Select(Tuning).OfType<string>().ToList() : Tuning(n) is { } one ? [one] : null;
 
     static string? Str(JsonNode? n) => n is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s) ? s : null;
 

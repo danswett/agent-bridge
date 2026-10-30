@@ -57,6 +57,7 @@ second snapshot the first's changes as the state to restore; the second is refus
      equals `writer`), or the policy is there but cannot be read (G7). The writer migrates
      last, at P7. A machine with no `dashboard.publication` is not a writer;
    * the hook program is missing;
+   * a settings file it would rewrite (or the profile's `config.json`) has another hard link;
    * the hook program's path has a space and Codex runs agent-ha-bridge's PowerShell hook
      directly: Codex cannot run a path with a space, and that entry would go on writing beside
      the host. (Entries running the Go hook are left: they hand their events to the spool);
@@ -98,7 +99,7 @@ second snapshot the first's changes as the state to restore; the second is refus
    settings (`/model`, `/permissions`) meanwhile. If one has, the migration is undone and that
    file is left as the agent wrote it. A save landing between that check and the rename is
    caught too: the file replaced is kept aside and checked, and put back if it was not what was
-   planned from (a hard-linked file is held alone from the check to its last byte instead).
+   planned from. A file that was absent is created only if it still is.
 6. **Settings.** Carries agent-ha-bridge's settings into the profile's `config.json` (below).
 7. **Hand-over.** Writes `intake.json` (the runtime folder, and the agents' homes the
    installation recorded, whose hooks were re-pointed: the host reads sessions from those unless
@@ -126,9 +127,10 @@ Files are written whole, flushed to the disk and renamed into place (snapshots, 
 `intake.json` and `hook.json` too), so a power cut leaves either the old file or the new one,
 never a zero-filled one. A plain file is replaced keeping its ACL and attributes. A symbolic link
 (a dotfiles checkout, say) is written through to its target and stays a link, as
-agent-ha-bridge's `Set-Content` wrote it; a file with another hard link is rewritten in place, so
-every name sees it. Either way the link is recorded, and rollback writes through it the same
-way (making it a link again if something replaced it with a copy of what migration wrote).
+agent-ha-bridge's `Set-Content` wrote it. The link is recorded, and rollback writes through it the
+same way (making it a link again if something replaced it with a copy of what migration wrote).
+A file with another hard link is refused in preflight: a rename would leave its other names on
+the old contents, and rewriting in place could leave every name truncated if cut short.
 JSON keeps a two-space indent and any byte order mark the file had. Codex asks for its hooks to be trusted again once, since their command
 changed, and again after a rollback. Its trust lives in `~\.codex\config.toml`, which neither
 step touches. Codex cannot quote a command, so if the hook's path has a space Codex's entries
@@ -156,7 +158,7 @@ tells them apart by folder, as agent-ha-bridge did.
 | `newSession.allowAllTools` | `launch.permissions` (`allowAll` or `ask`) |
 | `newSession.model` (text: every agent's, as agent-ha-bridge falls back to it; object: per agent) | `launch.agents.<agent>.model` |
 | `newSession.effort.<agent>`, `context.<agent>` | `launch.agents.<agent>.effort`, `context` |
-| `newSession.models`, `efforts`, `contexts` `.<agent>` (numbers as their text, as agent-ha-bridge passes them) | `launch.agents.<agent>.models`, `efforts`, `contexts` |
+| `newSession.models`, `efforts`, `contexts` `.<agent>` (numbers as their text, as agent-ha-bridge passes them; one value as a list of one, as its `@(...)` reads it) | `launch.agents.<agent>.models`, `efforts`, `contexts` |
 | `newSession.extraArgs` (one string as a list of one) | `launch.agents.<each agent>.extraArgs` (agent-ha-bridge added them to every launcher) |
 | `newSession.<agent>Path` | `launch.agents.<agent>.path` |
 | `newSession.worktreeRoot`, `worktreeLimit`, `worktreeIdleHours` | `launch.worktrees.root`, `limit`, `idleHours` |

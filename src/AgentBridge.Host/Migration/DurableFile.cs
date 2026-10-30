@@ -10,8 +10,8 @@ namespace AgentBridge.Host.Migration;
 //   a power cut cannot leave a settings file, a snapshot or migration.json renamed but zero-filled.
 // * Through links, as agent-ha-bridge's Set-Content wrote: a symbolic link (a dotfiles checkout,
 //   say) is resolved and its target written, so the link stays a link. A file with more than one
-//   hard link is rewritten in place, since a rename would leave the other names on the old
-//   contents. Any other file is replaced keeping its ACL and attributes (File.Replace).
+//   hard link is refused (migrate refuses it in preflight). Any other file is replaced keeping its
+//   ACL and attributes (File.Replace).
 // * Checked: a settings file is re-read immediately before it is written, and refused
 //   (ChangedMeanwhileException) unless it is still what the change was planned from. An agent
 //   already on its new hook keeps running and may write its settings at any moment.
@@ -39,25 +39,26 @@ public static class DurableFile
     {
         Check(path, expected);
         var target = Target(path);
+        // A rename would leave the other names on the old contents, and rewriting in place could
+        // leave every name truncated if cut short. Migrate refuses such a file in preflight; one
+        // made since is left for the person, its contents in the snapshot.
+        if (LinkCount(target) > 1) { throw new IOException($"{path} has another hard link, so it is not rewritten; restore it by hand"); }
+        var directory = Path.GetDirectoryName(target)!;
         if (!File.Exists(target))
         {
-            Write(target, bytes);
+            Directory.CreateDirectory(directory);
+            var staged = Path.Combine(directory, $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                Flushed(staged, bytes);
+                BeforeCommit.Value?.Invoke(target);
+                // Never over a file created since the check.
+                try { File.Move(staged, target, overwrite: false); }
+                catch (IOException) when (File.Exists(target)) { throw new ChangedMeanwhileException(path); }
+            }
+            finally { Delete(staged); }
             return;
         }
-        if (LinkCount(target) > 1)
-        {
-            // Held alone from the check to the last byte: nobody saves in between.
-            using var stream = new FileStream(target, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-            var current = new byte[stream.Length];
-            stream.ReadExactly(current);
-            if (MigrationRecord.Hash(current) != expected) { throw new ChangedMeanwhileException(path); }
-            stream.Position = 0;
-            stream.SetLength(0);
-            stream.Write(bytes);
-            stream.Flush(flushToDisk: true);
-            return;
-        }
-        var directory = Path.GetDirectoryName(target)!;
         var partial = Path.Combine(directory, $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.tmp");
         var displaced = Path.Combine(directory, $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.old");
         try
@@ -112,6 +113,8 @@ public static class DurableFile
         if (info.LinkTarget is null) { return path; }
         return File.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName ?? path;
     }
+
+    public static bool HardLinked(string path) => File.Exists(path) && LinkCount(Target(path)) > 1;
 
     // How a file is linked, for the record and the report, or null for a plain file.
     public static string? Link(string path)
