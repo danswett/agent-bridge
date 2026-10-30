@@ -355,7 +355,9 @@ card keeps while it asks (`Get-DaemonCardSummary`).
   runs beside the passes; a press while it does is not a second end, then or afterwards, and
   a confirmed end is never said to have lapsed however long the host takes. A press made
   before the card has said what came of the last one (even one reported only afterwards) never
-  confirms the question it then asks, and one made the moment it asks is taken; while it asks,
+  confirms the question it then asks, and one made the moment it asks is taken: the confirming
+  press must be no earlier, on Home Assistant's own clock, than the card's change to the
+  question (its `last_changed`), so a double press never ends a working session; while it asks,
   the button is read every pass, so a second press is seen within the window even with the
   watch down. The window is counted from when the press went to the host, so it never outlasts
   the host's own, and a question the host puts too late to answer is not put.

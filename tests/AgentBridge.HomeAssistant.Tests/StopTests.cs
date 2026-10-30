@@ -414,21 +414,48 @@ public sealed class StopTests : IDisposable
     {
         await using var c = await Ready(SessionStatus.Working);
         // Pressed as soon as the question is on the card, before the connector has finished the pass.
+        var t = HaContract.Topics(Node);
         var pressed = false;
-        ha.PublishFailsFor = (topic, payload) =>
+        ha.BeforePublish = topic =>
         {
-            if (!pressed && topic == HaContract.Topics(Node).ActivityState && payload == HaStop.ConfirmNote)
+            if (!pressed && topic == t.ActivityAttributes && ha.Retained.GetValueOrDefault(t.ActivityState) == HaStop.ConfirmNote)
             {
                 pressed = true;
-                time.Advance(TimeSpan.FromMilliseconds(10));
                 c.Observe(ha.Press(SessionEntities.Stop(Node)));
             }
-            return false;
         };
         await Press(c);
         Assert.True(pressed);
         await Pass(c);
         await c.DeliveredAsync();
+        Assert.Equal([null, "token-1"], stopped.Select(r => r.Confirm));
+    }
+
+    [Fact]
+    public async Task A_double_press_whose_second_lands_just_before_the_card_asks_does_not_end_the_session()
+    {
+        await using var c = await Ready(SessionStatus.Working);
+        // After the connector has read the button, before the question reaches the card.
+        var pressed = false;
+        ha.BeforePublish = topic =>
+        {
+            if (!pressed && topic == HaContract.Topics(Node).ActivityState && stopped.Count == 1 && ha.Log.Count(l => l.Payload == HaStop.ConfirmNote) == 0)
+            {
+                pressed = true;
+                c.Observe(ha.Press(SessionEntities.Stop(Node)));
+            }
+        };
+        await Press(c);
+        Assert.True(pressed);
+        await Pass(c);
+        await c.DeliveredAsync();
+        Assert.Single(stopped);
+        Assert.Equal(HaStop.ConfirmNote, Activity);
+        Assert.Contains(log, m => m.Contains("came before its card asked", StringComparison.Ordinal));
+
+        // A press made once it asks is the confirmation.
+        ha.BeforePublish = null;
+        await Press(c);
         Assert.Equal([null, "token-1"], stopped.Select(r => r.Confirm));
     }
 

@@ -109,7 +109,7 @@ public sealed partial class HaConnector
             return;
         }
         // A press is a time; anything else on the button is not one.
-        if (!DateTimeOffset.TryParse(press.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+        if (!DateTimeOffset.TryParse(press.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var pressedAt))
         {
             p.Stop.Handled = press.Value;
             return;
@@ -119,6 +119,20 @@ public sealed partial class HaConnector
         // A second press within the window sends the first's token; after it, a press is a first
         // press again.
         var token = p.Stop.Asking(now) ? p.Stop.Token : null;
+        if (token is not null)
+        {
+            // Only a press made once the question was on the card answers it: a double press, the
+            // second landing just before the card asked, must not end a working session. Both
+            // times are Home Assistant's, the press's and the card's last change to the question.
+            var card = await ObserveAsync(SessionEntities.Activity(p.Node), ct);
+            if (card.Kind == "unknown") { return; }
+            if (card.Snapshot is not { State: HaStop.ConfirmNote, LastChanged: { } asked } || pressedAt < asked)
+            {
+                p.Stop.Handled = press.Value;
+                log($"Home Assistant connector: a press of end for {sessionId[..Math.Min(8, sessionId.Length)]} came before its card asked for it; not taken as the confirmation");
+                return;
+            }
+        }
         // What the host will do: end an idle session, or one confirmed; anything else asks. Said
         // first, as the daemon says it, when it is about to end it; corrected if the host asks.
         var ending = token is not null || status == "idle";
