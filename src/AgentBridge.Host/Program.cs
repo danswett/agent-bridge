@@ -362,6 +362,12 @@ async Task<int> ServeAsync()
         hostImage: OperatingSystem.IsWindows() ? Environment.ProcessPath : null);
     // On a machine migrated from agent-ha-bridge, the hooks hand their events to this host
     // (docs/host-hooks.md). Its notices are there for the Home Assistant connector to subscribe to.
+    // Migrated agents run a copy of the hook beside this host; an app update brings a new one.
+    if (intakeState is not null && OperatingSystem.IsWindows()
+        && AgentBridge.Host.Migration.Migrator.RefreshHook(serveFolder!, Path.Combine(AppContext.BaseDirectory, "agent-bridge-host-hook.exe")) is { } refreshed)
+    {
+        Log(refreshed);
+    }
     await using var intake = StartIntake(haProbe, stop.Token);
     runningIntake = intake;
 

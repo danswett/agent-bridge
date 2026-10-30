@@ -301,20 +301,50 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
     {
         Directory.CreateDirectory(options.HookFolder);
         var created = !File.Exists(options.HookPath);
-        if (created || MigrationRecord.Hash(options.HookPath) != MigrationRecord.Hash(options.HookSource))
-        {
-            var staged = options.HookPath + ".new";
-            File.Copy(options.HookSource, staged, overwrite: true);
-            // A running hook can be renamed but not replaced.
-            if (File.Exists(options.HookPath)) { File.Move(options.HookPath, options.HookPath + ".old", overwrite: true); }
-            File.Move(staged, options.HookPath);
-            try { File.Delete(options.HookPath + ".old"); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
-        }
+        if (created || MigrationRecord.Hash(options.HookPath) != MigrationRecord.Hash(options.HookSource)) { CopyHook(options.HookSource, options.HookPath); }
         var pointerCreated = !File.Exists(options.PointerPath);
         DurableFile.Write(options.PointerPath, HookRunner.Pointer(install.RuntimeRoot));
         var (exit, version) = hook.Run(options.HookPath, ["--version"], "");
         if (exit != 0 || string.IsNullOrWhiteSpace(version)) { throw new IOException($"the hook at {options.HookPath} did not run (blocked by antivirus?)"); }
         return new(options.HookPath, options.PointerPath, created, pointerCreated);
+    }
+
+    static void CopyHook(string source, string destination)
+    {
+        var staged = destination + ".new";
+        File.Copy(source, staged, overwrite: true);
+        // A running hook can be renamed but not replaced; one still running finishes on the old.
+        if (File.Exists(destination)) { File.Move(destination, destination + ".old", overwrite: true); }
+        File.Move(staged, destination);
+        try { File.Delete(destination + ".old"); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
+    // The hook migrated agents run is a copy of the program beside the host, in a folder of its
+    // own (an app update replaces the app's folder, and a registration must never point at
+    // nothing). So once an update has brought a new hook, the host brings the copy up to it when
+    // it starts: an already-migrated profile cannot migrate again to get it. Its hook.json is left
+    // as it is. Null when nothing needed doing (not migrated, the same hook, or a migrate or
+    // rollback is running); otherwise what was done, or why not.
+    public static string? RefreshHook(string profileFolder, string hookSource)
+    {
+        var options = new MigrationOptions { ProfileFolder = profileFolder, BridgeHome = "", HookFolder = "", HookSource = hookSource, LocalAppData = "" };
+        FileStream? held;
+        try { held = new FileStream(options.LockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        using (held)
+        {
+            if (MigrationRecord.Load(profileFolder).Record is not { State: "migrated", Hook: { } hook } || !File.Exists(hookSource)) { return null; }
+            if (File.Exists(hook.Path) && MigrationRecord.Hash(hook.Path) == MigrationRecord.Hash(hookSource)) { return null; }
+            try
+            {
+                CopyHook(hookSource, hook.Path);
+                return $"brought the hook migrated agents run ({hook.Path}) up to this version";
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return $"could not bring the hook migrated agents run ({hook.Path}) up to this version ({e.Message}); they keep the previous one";
+            }
+        }
     }
 
     // The hand-over, proven: the host restarts and keeps the heartbeat, and an event the hook
@@ -571,7 +601,9 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         var daemonTask = tasks.FirstOrDefault(t => t.Name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal));
         if (daemonTask is not null)
         {
-            if (await UntilAsync(() => runtime.Active() is not null, options.StopTimeout, cancellationToken)) { Say($"* Re-enabled {string.Join(" and ", tasks.Select(t => t.Name))}; agent-ha-bridge is running again."); }
+            // Seen, not merely uncheckable: a probe that cannot tell would otherwise pass for a daemon
+            // back, and the record and snapshot be deleted with nothing running.
+            if (await UntilAsync(runtime.Seen, options.StopTimeout, cancellationToken)) { Say($"* Re-enabled {string.Join(" and ", tasks.Select(t => t.Name))}; agent-ha-bridge is running again."); }
             else
             {
                 ok = false;

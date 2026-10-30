@@ -99,7 +99,8 @@ second snapshot the first's changes as the state to restore; the second is refus
    settings (`/model`, `/permissions`) meanwhile. If one has, the migration is undone and that
    file is left as the agent wrote it. A save landing between that check and the rename is
    caught too: the file replaced is kept aside and checked, and put back if it was not what was
-   planned from. A file that was absent is created only if it still is.
+   planned from (and if it cannot be put back, it stays beside the file, the error naming it).
+   A file that was absent is created only if it still is.
 6. **Settings.** Carries agent-ha-bridge's settings into the profile's `config.json` (below).
 7. **Hand-over.** Writes `intake.json` (the runtime folder, and the agents' homes the
    installation recorded, whose hooks were re-pointed: the host reads sessions from those unless
@@ -150,7 +151,7 @@ tells them apart by folder, as agent-ha-bridge did.
 | agent-ha-bridge | This host |
 |---|---|
 | `newSession.enabled` | `launch.enabled` |
-| `newSession.workspaces` (label, path, isolate) | `launch.workspaces` |
+| `newSession.workspaces` (label, path, isolate; one path or entry as a list of one, as `@(...)` reads it) | `launch.workspaces` |
 | `newSession.defaultWorkspace` (as the label the host offers the folder it chose: agent-ha-bridge's `-eq` ignores case, the host matches exactly, and the profile may already approve that folder under its own label, or as the second of two sharing one, `label (folder)`) | `launch.defaultWorkspace` |
 | `newSession.launcher` | `launch.defaultAgent` |
 | `newSession.profiles` (one string as a list of one, as agent-ha-bridge's `@(...)` reads it), `defaultProfile` (as the listed profile it matched, whatever the case; as written when there is no list, since Agency's own are known only at launch) | `launch.profiles`, `launch.defaultProfile` |
@@ -225,7 +226,8 @@ publishes the dashboard (G7).
    the host still holds it, agent-ha-bridge's tasks are re-enabled but not started, the report
    says so and the record is kept, so the two never take the spool at once; run rollback again once the host has let go.
 5. Re-enables each task that was enabled before, starts it, and waits until the G5 probe sees
-   agent-ha-bridge running again. A task that was disabled before stays disabled.
+   agent-ha-bridge running again: actually seen, since a probe that cannot tell would otherwise
+   pass for it, and the record and snapshot would go with nothing running. A task that was disabled before stays disabled.
 6. Deletes `migration.json` and the snapshot. If anything above went wrong they are kept, and
    the report says what to do. A migration cut short (`migration status` says "part-way") is
    rolled back the same way.
@@ -240,6 +242,9 @@ migration replaces it.
 * Do not run agent-ha-bridge's installer or its update (the update button does nothing while
   the daemon is stopped). It would add its hooks back beside the re-pointed ones, and every
   event would be spooled twice. Roll back first.
+* The host brings the hook migrated agents run (the copy in `%LOCALAPPDATA%\AgentBridge\bin`)
+  up to the one beside it whenever it starts, so an app update's hook reaches them; `hook.json`
+  is left as it is, and a hook still running finishes on the old copy.
 * `agent-bridge-host migration status` shows the installation, since when, and whether each
   re-pointed file is still as migrated. `agent-bridge-host hooks status` shows the spool.
 * Sessions the host launches do not get agent-ha-bridge's agent token in their environment

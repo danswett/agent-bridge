@@ -61,6 +61,9 @@ public static class DurableFile
         }
         var partial = Path.Combine(directory, $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.tmp");
         var displaced = Path.Combine(directory, $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.old");
+        // Deleted only once known to be what was planned from: otherwise it may be the only copy
+        // of a save that landed meanwhile.
+        var planned = false;
         try
         {
             Flushed(partial, bytes);
@@ -68,16 +71,22 @@ public static class DurableFile
             // What this replaces is kept aside and checked: a save that landed after the check
             // above is put back, rather than lost under this write.
             File.Replace(partial, target, displaced, ignoreMetadataErrors: true);
-            if (MigrationRecord.Hash(displaced) != expected)
+            planned = MigrationRecord.Hash(displaced) == expected;
+            if (!planned)
             {
-                File.Replace(displaced, target, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                AfterReplace.Value?.Invoke(target);
+                try { File.Replace(displaced, target, destinationBackupFileName: null, ignoreMetadataErrors: true); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    throw new IOException($"{path} changed while it was being rewritten, and the save that landed could not be put back ({e.Message}); it is in {displaced}", e);
+                }
                 throw new ChangedMeanwhileException(path);
             }
         }
         finally
         {
             Delete(partial);
-            Delete(displaced);
+            if (planned) { Delete(displaced); }
         }
     }
 
@@ -92,14 +101,17 @@ public static class DurableFile
         File.Move(path, displaced);
         if (MigrationRecord.Hash(displaced) != expected)
         {
-            if (!File.Exists(path)) { File.Move(displaced, path); }
+            if (File.Exists(path)) { throw new IOException($"{path} changed while it was being removed, and was written again since; the save that landed is in {displaced}"); }
+            File.Move(displaced, path);
             throw new ChangedMeanwhileException(path);
         }
         Delete(displaced);
     }
 
-    // For tests: runs between the check and the commit, as a save landing there would.
+    // For tests: runs between the check and the commit, as a save landing there would; and before
+    // a save found displaced is put back, as a reader holding the file would.
     internal static readonly AsyncLocal<Action<string>?> BeforeCommit = new();
+    internal static readonly AsyncLocal<Action<string>?> AfterReplace = new();
 
     static void Check(string path, string? expected)
     {

@@ -33,7 +33,11 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
     [GeneratedRegex("^(AgentBridgeDaemon|CopilotBridgeDaemon)(_[0-9A-Fa-f]{1,64})?$")]
     private static partial Regex TaskName();
 
-    public string? Active()
+    // Whether agent-ha-bridge was actually seen running: unlike Active, not knowing is not a yes
+    // here. Rollback is done only once it has seen the daemon back.
+    public bool Seen() => Scan().Found.Count > 0;
+
+    (SortedSet<string> Found, bool Known) Scan()
     {
         var found = new SortedSet<string>(StringComparer.Ordinal);
         var listed = NamedMutexes(found);
@@ -46,11 +50,17 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
             Probe("CopilotBridgeSupervisor" + id, found);
             if (running) { found.Add($"task {task} (running)"); }
         }
+        return (found, listed || tasks is not null);
+    }
+
+    public string? Active()
+    {
+        var (found, known) = Scan();
         if (found.Count > 0)
         {
             return $"agent-ha-bridge is running for this user ({string.Join(", ", found)}); answer at the machine or through it";
         }
-        if (!listed && tasks is null)
+        if (!known)
         {
             return "whether agent-ha-bridge is running for this user could not be checked; answer at the machine";
         }

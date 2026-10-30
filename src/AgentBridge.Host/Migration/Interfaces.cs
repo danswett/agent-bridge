@@ -20,8 +20,12 @@ public interface IAgentHaBridgeRuntime
     // cannot restart the daemon. Throws when one is still running afterwards.
     void Stop(AgentHaBridgeInstall install);
 
-    // Design G5's answer: why agent-ha-bridge counts as running for this user, or null.
+    // Design G5's answer: why agent-ha-bridge counts as running for this user, or null. Not being
+    // able to tell counts as running.
     string? Active();
+
+    // Whether agent-ha-bridge was seen running: not being able to tell is no.
+    bool Seen();
 
     // How many of the agent's processes run now, or null when they could not all be identified.
     int? Running(AgentBridge.Protocol.AgentKind agent);

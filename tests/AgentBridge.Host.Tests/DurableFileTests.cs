@@ -8,6 +8,8 @@ public sealed class DurableFileTests : IDisposable
     public void Dispose()
     {
         DurableFile.BeforeCommit.Value = null;
+        DurableFile.AfterReplace.Value = null;
+        _held?.Dispose();
         try { Directory.Delete(_root, true); } catch (IOException) { }
     }
 
@@ -30,6 +32,24 @@ public sealed class DurableFileTests : IDisposable
 
         Assert.Equal("theirs", File.ReadAllText(path));
         Assert.Equal(["settings.json"], Directory.GetFiles(_root).Select(Path.GetFileName));
+    }
+
+    FileStream? _held;
+
+    [Fact]
+    public void A_save_landing_after_the_check_that_cannot_be_put_back_is_kept_beside_the_file()
+    {
+        // Only Windows lets a reader refuse a rename over the file it holds.
+        if (!OperatingSystem.IsWindows()) { return; }
+        var path = File_("planned");
+        DurableFile.BeforeCommit.Value = p => File.WriteAllText(p, "theirs");
+        DurableFile.AfterReplace.Value = p => _held = new FileStream(p, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+        var e = Assert.Throws<IOException>(() => DurableFile.Replace(path, "ours"u8.ToArray(), Hash("planned")));
+
+        var kept = Assert.Single(Directory.GetFiles(_root, "*.old"));
+        Assert.Contains(kept, e.Message);
+        Assert.Equal("theirs", File.ReadAllText(kept));
     }
 
     [Fact]

@@ -643,6 +643,24 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_single_workspace_agent_ha_bridge_read_as_a_list_of_one_is_carried_and_stays_the_default()
+    {
+        var app = FakeAgentHaBridge.Rooted("repos", "app");
+        var config = FakeAgentHaBridge.DefaultConfig();
+        config["newSession"]!["workspaces"] = new JsonObject { ["path"] = app, ["label"] = "App", ["isolate"] = true };
+        config["newSession"]!["defaultWorkspace"] = "app";
+        await using var f = new FakeAgentHaBridge(config);
+
+        Assert.True((await f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        var launch = JsonNode.Parse(File.ReadAllText(Path.Combine(f.Profile, "config.json")))!["launch"]!;
+        var workspace = Assert.Single(launch["workspaces"]!.AsArray())!;
+        Assert.Equal(app, (string?)workspace["path"]);
+        Assert.True((bool)workspace["isolate"]!);
+        Assert.Equal("App", (string?)launch["defaultWorkspace"]);
+    }
+
+    [Fact]
     public async Task The_default_profile_agent_ha_bridge_matched_whatever_its_case_stays_the_default()
     {
         var config = FakeAgentHaBridge.DefaultConfig();
@@ -802,6 +820,43 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Contains("(unreadable migration.json)", report.ToString());
         Assert.Equal(listing, _f.Listing());
         Assert.Empty(_f.Runtime_.Calls);
+    }
+
+    [Fact]
+    public async Task A_rollback_is_not_done_until_agent_ha_bridge_is_seen_running_not_merely_when_it_cannot_be_checked()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        _f.Runtime_.StartsNothing = true;
+        _f.Runtime_.Unknown = true;
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("was not seen running", report.ToString());
+        Assert.NotNull(MigrationRecord.Load(_f.Profile).Record);
+    }
+
+    [Fact]
+    public async Task An_app_update_s_new_hook_reaches_the_copy_migrated_agents_run_when_the_host_starts()
+    {
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var pointer = File.ReadAllBytes(Path.Combine(_f.HookFolder, HookRunner.PointerFile));
+        Assert.Null(Migrator.RefreshHook(_f.Profile, _f.HookSource));
+        File.WriteAllText(_f.HookSource, "MZ the next version's hook");
+
+        Assert.NotNull(Migrator.RefreshHook(_f.Profile, _f.HookSource));
+
+        Assert.Equal("MZ the next version's hook", File.ReadAllText(_f.InstalledHook));
+        Assert.Equal(pointer, File.ReadAllBytes(Path.Combine(_f.HookFolder, HookRunner.PointerFile)));
+        // Not while a migrate or rollback runs, nor once rolled back.
+        File.WriteAllText(_f.HookSource, "MZ another");
+        using (new FileStream(Path.Combine(Path.GetDirectoryName(_f.Profile)!, "migration.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Null(Migrator.RefreshHook(_f.Profile, _f.HookSource));
+        }
+        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        Assert.Null(Migrator.RefreshHook(_f.Profile, _f.HookSource));
+        Assert.Equal("MZ the next version's hook", File.ReadAllText(_f.InstalledHook));
     }
 
     [Fact]

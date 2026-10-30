@@ -85,11 +85,13 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
             if (ns is not null)
             {
                 if (Bool(ns["enabled"]) is { } enabled) { Put(launch, "enabled", enabled, "newSession.enabled", "launch.enabled"); }
-                Workspaces(ns["workspaces"], launch, imported, kept);
+                // Get-BridgeWorkspaceChoices reads them through @(...): one path or entry is a list of one.
+                var legacyWorkspaces = ns["workspaces"] is JsonArray or null ? ns["workspaces"] : new JsonArray(ns["workspaces"]!.DeepClone());
+                Workspaces(legacyWorkspaces, launch, imported, kept);
                 foreach (var (from, to) in new[] { ("defaultWorkspace", "defaultWorkspace"), ("launcher", "defaultAgent"), ("defaultProfile", "defaultProfile") })
                 {
                     if (from == "defaultProfile") { continue; }
-                    if (Str(ns[from]) is { } value) { Put(launch, to, from == "defaultWorkspace" ? DefaultLabel(launch, ns["workspaces"], value) : value, $"newSession.{from}", $"launch.{to}"); }
+                    if (Str(ns[from]) is { } value) { Put(launch, to, from == "defaultWorkspace" ? DefaultLabel(launch, legacyWorkspaces, value) : value, $"newSession.{from}", $"launch.{to}"); }
                 }
                 if (Strings(ns["profiles"]) is { Count: > 0 } profiles) { Put(launch, "profiles", Array(profiles), "newSession.profiles", "launch.profiles"); }
                 // After the profiles, which it is matched against.

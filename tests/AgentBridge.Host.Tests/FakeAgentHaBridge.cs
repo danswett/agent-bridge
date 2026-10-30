@@ -211,6 +211,8 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
     public bool DaemonRunning { get; set; } = true;
     // A daemon that does not stop when it is told to.
     public bool Stubborn { get; set; }
+    // A task that starts, but no daemon that is seen.
+    public bool StartsNothing { get; set; }
     public List<string> Calls { get; } = [];
 
     public ScheduledTaskState? Task(string name) => Tasks.TryGetValue(name, out var t) ? new(t.Enabled, t.Running) : null;
@@ -226,7 +228,7 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
         Calls.Add($"start {name}");
         if (!Tasks[name].Enabled) { throw new IOException("disabled"); }
         Tasks[name] = (true, true);
-        if (name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal)) { DaemonRunning = true; }
+        if (name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal) && !StartsNothing) { DaemonRunning = true; }
     }
 
     // Runs as the daemon is stopped: after the snapshot, before any settings file is written.
@@ -242,7 +244,13 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
         foreach (var name in Tasks.Keys.ToList()) { Tasks[name] = (Tasks[name].Enabled, false); }
     }
 
-    public string? Active() => DaemonRunning ? "agent-ha-bridge is running for this user (AgentBridgeDaemon_" + FakeAgentHaBridge.Id + ")" : null;
+    // The probe cannot tell (the listing and the scheduler both refused it).
+    public bool Unknown { get; set; }
+
+    public string? Active() => DaemonRunning ? "agent-ha-bridge is running for this user (AgentBridgeDaemon_" + FakeAgentHaBridge.Id + ")"
+        : Unknown ? "whether agent-ha-bridge is running for this user could not be checked; answer at the machine" : null;
+
+    public bool Seen() => DaemonRunning;
 
     // Each agent's running processes (none unless set); null when they could not all be identified.
     public Dictionary<AgentBridge.Protocol.AgentKind, int?> Agents { get; } = [];
