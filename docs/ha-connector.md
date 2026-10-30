@@ -352,7 +352,8 @@ card keeps while it asks (`Get-DaemonCardSummary`).
   session's process unknown, say) says `Could not end session` and the card shows the session
   as it is again.
 * Ending can take a while (the session is given time to exit before it is terminated), so it
-  runs beside the passes; a press while it does is not a second end.
+  runs beside the passes; a press while it does is not a second end, then or afterwards, and
+  a confirmed end is never said to have lapsed however long the host takes.
 * What the button holds when the connector first reads it is not a press; a session asking a
   question can be ended like any other.
 

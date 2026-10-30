@@ -88,7 +88,6 @@ public sealed partial class HaConnector
     // Invoke-PendingStops: a new press of End session.
     async Task StopPressAsync(string sessionId, Published p, DateTimeOffset now, CancellationToken ct)
     {
-        if (p.Stop.Busy) { return; }
         var press = await ObserveAsync(SessionEntities.Stop(p.Node), ct);
         if (!p.Stop.Baselined)
         {
@@ -98,6 +97,14 @@ public sealed partial class HaConnector
             return;
         }
         if (!press.Present || press.Value == p.Stop.Handled) { return; }
+        // A press while the session is being ended is not a second end, and is used up here: left
+        // unread, it would be taken once the first is done, retrying an end that failed or was
+        // refused without anyone pressing again.
+        if (p.Stop.Busy)
+        {
+            p.Stop.Handled = press.Value;
+            return;
+        }
         // A press is a time; anything else on the button is not one.
         if (!DateTimeOffset.TryParse(press.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
         {
@@ -124,6 +131,9 @@ public sealed partial class HaConnector
             await TransientAsync(p, HaStop.Ending, [], ct);
         }
         p.Stop.Handled = press.Value;
+        // The confirmation is used by this press: no longer asked for, and never said to have
+        // lapsed while the host ends the session (which can take longer than the window).
+        if (token is not null) { p.Stop.Token = null; }
         p.Stop.Busy = true;
         var request = new StopRequest { Id = sessionId, Request = RequestId(sessionId, "stop", press.Value), Confirm = token };
         var cancel = replyStop.Token;

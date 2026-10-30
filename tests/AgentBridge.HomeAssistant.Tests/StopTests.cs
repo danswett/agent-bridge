@@ -365,16 +365,50 @@ public sealed class StopTests : IDisposable
         await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal(HaStop.Ending, Activity);
 
-        // A second press while it is ending is not a second end.
+        // A second press while it is ending is not a second end, then or once the first is done.
         c.Observe(ha.Press(SessionEntities.Stop(Node)));
         await Pass(c).WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Single(stopped);
 
+        release.SetResult(new StopResult(StopOutcome.Failed, "the process would not exit"));
+        await c.DeliveredAsync();
+        await Pass(c);
+        await Pass(c, 20);
+        await Pass(c, 20);
+        Assert.Single(stopped);
+        Assert.Equal(HaStop.Failed, Activity);
+    }
+
+    [Fact]
+    public async Task A_confirmed_end_that_outlasts_the_window_is_never_said_to_have_lapsed()
+    {
+        await using var c = await Ready(SessionStatus.Working);
+        await Press(c);
+        var release = new TaskCompletionSource<StopResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        outcome = _ =>
+        {
+            reached.TrySetResult();
+            return release.Task;
+        };
+        var mark = ha.Log.Count;
+        c.Observe(ha.Press(SessionEntities.Stop(Node)));
+        await Pass(c);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal("token-1", stopped[1].Confirm);
+
+        // The host gives the session time to exit, past the confirmation's 10 s.
+        await Pass(c, 6);
+        sessions.Set(sessions.Get(A)! with { Activity = sessions.Get(A)!.Activity with { Response = "Still exiting" } });
+        await Pass(c, 6);
+        Assert.DoesNotContain(NotesSince(mark), n => n.Summary is HaStop.LapsedNote or HaStop.ConfirmNote);
+        Assert.NotEqual(HaStop.ConfirmNote, Activity);
+
         sessions.End(A);
         release.SetResult(new StopResult(StopOutcome.Ended));
         await c.DeliveredAsync();
-        await Pass(c);
-        Assert.Single(stopped);
+        await Pass(c, 0.01);
+        Assert.Contains("ended", StatusesSince(mark));
     }
 
     [Fact]
