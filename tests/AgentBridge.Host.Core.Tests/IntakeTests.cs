@@ -909,6 +909,48 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void Every_approval_is_withdrawn_when_the_clock_moves_back_so_an_event_it_makes_look_old_cannot_leave_one_answerable()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var clock = new ManualClock(_f.Time.GetUtcNow());
+        var intake = new HookIntake(new HookIntakeOptions { RuntimeRoot = _f.Runtime, ClaudeHome = _f.ClaudeHome, UseFileSystemWatcher = false, PruneInterval = TimeSpan.FromDays(1) }, _f.Processes, clock, _log.Add);
+        _intakes.Add(intake);
+        intake.Pass();
+        clock.Now += TimeSpan.FromSeconds(1);
+        SpooledAt(clock.Now, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        clock.Now += TimeSpan.FromSeconds(1);
+        intake.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        Assert.True(File.Exists(marker));
+        Assert.Null(intake.ApprovalsUnsettled);
+        // The clock goes back ten minutes; the PreToolUse that answered it at the terminal now looks
+        // older than the registration it would update.
+        clock.Now -= TimeSpan.FromMinutes(10);
+        SpooledAt(clock.Now, "0002", "codex", "hook", new { session_id = "x1", hook_event_name = "PreToolUse", tool_name = "shell" }, 60);
+
+        intake.Pass();
+
+        Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public void A_marker_dated_ahead_of_now_is_withdrawn_when_the_host_takes_the_spool()
+    {
+        _f.CodexRegistration("x1", 60, null);
+        _f.CodexApprovalMarker("x1", "d1", created: _f.Time.GetUtcNow().AddMinutes(10));
+
+        Intake().Pass();
+
+        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+    }
+
+    sealed class ManualClock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    [Fact]
     public void A_pass_whose_heartbeat_could_not_be_written_leaves_Codex_approvals_unanswerable()
     {
         var intake = Running();

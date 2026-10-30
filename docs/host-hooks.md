@@ -257,6 +257,12 @@ event's worth of space (1 MiB) in the runtime folder. While that fails it remove
 heartbeat, so hooks give their fixed reply at once, withdraws every approval, and answers none.
 A pass whose heartbeat could not be written never counts approvals as settled.
 
+The wall clock moving back (a correction, a restored VM) is a gap too: an event timed by it can
+look older than the registration it should update and be passed over as a replay, leaving the
+approval it settled answerable. The intake withdraws every approval when it reads a time more
+than 5 s behind the last it read, and a marker dated more than 5 s ahead of now is withdrawn by
+any sweep (one written before the clock moved back, even across a restart).
+
 While the intake runs, the log is followed every pass (only what it gained), and a Codex hook
 that fails to spool while the heartbeat is fresh withdraws every approval asked before it. Only
 one previous log is kept: the intake knows a rotation it followed (the log it was reading is the

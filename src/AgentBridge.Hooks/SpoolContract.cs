@@ -105,7 +105,8 @@ public static class SpoolContract
     {
         try
         {
-            var reader = new Utf8JsonReader(utf8);
+            // As deep as any event the hook accepts (IsJson), or a deep one would withdraw nothing.
+            var reader = new Utf8JsonReader(utf8, new JsonReaderOptions { MaxDepth = MaxEventDepth });
             using var doc = JsonDocument.ParseValue(ref reader);
             return doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("session_id", out var id)
                 && id.ValueKind == JsonValueKind.String && id.GetString() is { Length: > 0 } s ? s : null;

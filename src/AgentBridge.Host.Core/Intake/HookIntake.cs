@@ -260,6 +260,20 @@ public sealed class HookIntake : IAsyncDisposable
     bool Beat()
     {
         var now = _time.GetUtcNow();
+        // The wall clock moved back (a correction, a restored VM): times recorded since were read
+        // from a clock ahead of this one, so a later event can look older than the registration
+        // it should update and be passed over as a replay, leaving an approval it settled
+        // answerable. Every approval is withdrawn (ReconcileApprovals withdraws markers dated
+        // ahead of now too) and none answered until that is done.
+        if (_clock is { } seen && now < seen - ClockSlack)
+        {
+            _log($"the clock moved back ({seen:o} to {now:o}); withdrawing every Codex approval");
+            Gap();
+            // Cut-offs read from the clock ahead would hold back the sweep this one asks for.
+            _settled = null;
+            _pending = null;
+        }
+        _clock = now;
         // Hooks gave up spooling once the heartbeat was this old, whether or not it can be renewed
         // now (and mid-drain too): no Codex answer until the next pass has settled the markers.
         if (_beatAt != default && now - _beatAt >= SpoolContract.HeartbeatMaxAge) { Gap(); }
@@ -293,6 +307,11 @@ public sealed class HookIntake : IAsyncDisposable
     }
 
     bool _noRoom;
+    DateTimeOffset? _clock;
+
+    // How far behind what it last read the clock may seem before it has moved back, and how far
+    // ahead of now a marker's time may be before it was written under a clock since moved back.
+    internal static readonly TimeSpan ClockSlack = TimeSpan.FromSeconds(5);
 
     // A realistic event's worth of space, allocated (not written) and given back at once.
     internal const long SpaceProbeBytes = 1024 * 1024;
@@ -369,7 +388,8 @@ public sealed class HookIntake : IAsyncDisposable
             {
                 if (doc is not null && Json.Time(doc.RootElement, "Created") is { } at) { created = at; }
             }
-            if (created is { } c && c > unheard) { continue; }
+            // Asked since the cut-off, unless dated ahead of now: written before the clock moved back.
+            if (created is { } c && c > unheard && c <= _time.GetUtcNow() + ClockSlack) { continue; }
             if (_options.AgentHaBridgeActive() is { } active)
             {
                 StandBack(active);

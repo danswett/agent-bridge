@@ -155,6 +155,10 @@ public sealed class HookRunnerTests : IDisposable
         Invoke("{\"session_id\":\"x1\",\"hook_event_name\":\"PreToolUse\"}", "codex", "hook");
         Assert.False(File.Exists(unheard));
         Assert.True(File.Exists(other));
+        // However deeply nested, as deep as the hook accepts.
+        var deep = Marker("x1");
+        Invoke("{\"session_id\":\"x1\",\"tool_input\":" + string.Concat(Enumerable.Repeat("{\"a\":", 200)) + "{}" + new string('}', 200) + "}", "codex", "hook");
+        Assert.False(File.Exists(deep));
         // Nor through the fixed-reply registration.
         var forced = Marker("x1");
         Invoke("{\"session_id\":\"x1\",\"hook_event_name\":\"Stop\"}", Env(drain: TimeSpan.FromSeconds(5)), "--fallback", "codex", "hook");
