@@ -83,6 +83,9 @@ public sealed class ShadowLedger
 {
     public const int MaxMismatches = 1000;
     const int MaxDetails = 8;
+    // States a status or activity.response disagreement can go through within its grace that are
+    // kept by identity; one changing every sample through a long grace runs past it.
+    const int MaxPendingStates = 256;
     const int MaxSessions = 2000;
     const int MaxReasons = 32;
 
@@ -102,6 +105,11 @@ public sealed class ShadowLedger
         public List<string> Details { get; } = [];
         public ShadowEpisode? Entry { get; set; }
         public string? EntryDate { get; set; }
+        // For a status or activity.response one, the states it has been about and not yet marked
+        // failed: one it was about only during its grace fails too once it lasts it.
+        public List<string> States { get; } = [];
+        // Those past the limit kept, which fail with no identity, in the overflow.
+        public int StatesDropped { get; set; }
     }
 
     readonly string folder;
@@ -157,7 +165,16 @@ public sealed class ShadowLedger
             // A restart is seen across midnight and across the comparison's own restart.
             if (before?.Coverage is { } carried && day.Coverage is null)
             {
-                day.Coverage = new ShadowCoverage { DaemonStartedAt = carried.DaemonStartedAt, HostStartedAt = carried.HostStartedAt };
+                day.Coverage = new ShadowCoverage
+                {
+                    DaemonStartedAt = carried.DaemonStartedAt,
+                    HostStartedAt = carried.HostStartedAt,
+                    // Not the new day's first sample: a status episode across midnight is not from
+                    // before states were counted.
+                    StatesSince = carried.StatesSince,
+                    // A session in the same state after midnight is not a new one to compare.
+                    Shown = new(carried.Shown.ToDictionary(x => x.Key, x => new ShadowShown { Status = x.Value.Status, StatusAt = x.Value.StatusAt, StatusFailed = x.Value.StatusFailed, Response = x.Value.Response, ResponseAt = x.Value.ResponseAt, ResponseFailed = x.Value.ResponseFailed }), StringComparer.Ordinal),
+                };
             }
         }
         if (comparison.Compared)
@@ -214,9 +231,28 @@ public sealed class ShadowLedger
             episode.Last = now;
             episode.Samples++;
             if (episode.Details.Count < MaxDetails && !episode.Details.Contains(d.Detail)) { episode.Details.Add(d.Detail); }
+            var state = d.Kind is ShadowKinds.Status or ShadowKinds.Response && d.Session is { } ds && day.Coverage is { } dc ? ShadowCoverageTracker.StateKey(dc, ds, d.Kind) : null;
+            if (state is not null && !episode.States.Contains(state))
+            {
+                // The oldest makes way, never the current: that is the one later samples repeat,
+                // and the one StateFailed marks in shown.
+                if (episode.States.Count >= MaxPendingStates)
+                {
+                    episode.States.RemoveAt(0);
+                    episode.StatesDropped++;
+                }
+                episode.States.Add(state);
+            }
             if (episode.Last - episode.First < GraceFor(d.Kind)) { continue; }
             if (Persist(episode, date) is { } fresh) { made.Add(fresh); }
             if (d.Kind.StartsWith("question.", StringComparison.Ordinal) && d.Session is { } s && day.Coverage is { } c) { coverage.QuestionFailed(c, s, d.Kind, now); }
+            if (d.Session is { } ss && day.Coverage is { } sc)
+            {
+                foreach (var failed in episode.States) { ShadowCoverageTracker.StateFailed(sc, ss, d.Kind, failed, now); }
+                if (episode.StatesDropped > 0) { sc.FailedStatesOverflow[d.Kind] = sc.FailedStatesOverflow.GetValueOrDefault(d.Kind) + episode.StatesDropped; }
+                episode.States.Clear();
+                episode.StatesDropped = 0;
+            }
         }
         Save(day);
         return made;

@@ -87,8 +87,8 @@ public sealed class ShadowCoverageTests : IDisposable
         var c = ledger.Today!.Coverage!;
         Assert.Equal(new Dictionary<string, string> { [ShadowHash.Session(A)] = "copilot", [ShadowHash.Session(B)] = "claude" }, c.Sessions);
         Assert.Equal(new Dictionary<string, int> { ["choice"] = 1, ["multi"] = 1 }, c.Questions);
-        // waiting, working, waiting.
-        Assert.Equal(2, c.StatusTransitions);
+        // The state each session was first compared in, then A's working and waiting again.
+        Assert.Equal(4, c.StatusTransitions);
         Assert.Equal([ShadowHash.Session(A)], c.BackgroundSessions);
         Assert.Equal((2, 1), (c.BackgroundStarts, c.BackgroundFinishes));
         Assert.Equal((1, 1), (c.Compactions, c.ModelChanges));
@@ -102,6 +102,162 @@ public sealed class ShadowCoverageTests : IDisposable
         Sample(after, View(daemonStart.AddHours(5), null, null), View(hostStart.AddHours(2), null, null));
         Assert.Equal(new Dictionary<string, int> { [ShadowCoverage.DaemonRestart] = 1, [ShadowCoverage.HostRestart] = 1, [ShadowCoverage.ObserverResumed] = 1 },
             ShadowLedger.Read(reports, "2026-10-28")!.Coverage!.MachineEvents);
+    }
+
+    // Found live (#40): the host going to waiting while the daemon stayed working was a status
+    // mismatch with no event counted, since only the daemon's changes were.
+    [Fact]
+    public void Every_state_the_two_sides_are_compared_in_is_counted_once_whichever_side_changed_and_across_a_restart_or_midnight()
+    {
+        time.SetUtcNow(new DateTimeOffset(2026, 10, 28, 23, 58, 0, TimeSpan.Zero));
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+        ShadowSession S(string status, string? response) => Session(A, status) with { ResponseTail = response };
+        void Both(ShadowLedger l, ShadowSession d, ShadowSession h) => Sample(l, View(null, null, null, d), View(null, null, null, h));
+
+        Both(ledger, S("working", "r1"), S("working", "r1"));
+        Both(ledger, S("working", "r1"), S("working", "r1"));
+        // Only the host changes: a new state compared, though the daemon's is unchanged.
+        Both(ledger, S("working", "r1"), S("waiting", "r2"));
+        Both(ledger, S("working", "r1"), S("waiting", "r2"));
+        var c = ledger.Today!.Coverage!;
+        Assert.Equal((2, 2), (c.StatusTransitions, c.ResponseChanges));
+
+        // The comparison restarts: the same states are not counted again.
+        var restarted = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+        Both(restarted, S("working", "r1"), S("waiting", "r2"));
+        Assert.Equal((2, 2), (restarted.Today!.Coverage!.StatusTransitions, restarted.Today.Coverage.ResponseChanges));
+
+        // Past midnight neither are they, and the next change is.
+        time.SetUtcNow(new DateTimeOffset(2026, 10, 29, 0, 0, 5, TimeSpan.Zero));
+        Both(restarted, S("working", "r1"), S("waiting", "r2"));
+        Both(restarted, S("idle", "r3"), S("waiting", "r2"));
+        var next = restarted.Today!.Coverage!;
+        Assert.Equal("2026-10-29", restarted.Today.Date);
+        Assert.Equal((1, 1), (next.StatusTransitions, next.ResponseChanges));
+
+        // A marker caught half written: a definite disagreement is still a state compared, and one
+        // the host's waiting could match either way is waiting.
+        Both(restarted, S("working", "r3") with { QuestionUnknown = true }, S("idle", "r2"));
+        Assert.Equal("working/idle", next.Shown[ShadowHash.Session(A)].Status);
+        Both(restarted, S("working", "r3") with { QuestionUnknown = true }, S("waiting", "r2"));
+        Assert.Equal(("waiting/waiting", 3), (next.Shown[ShadowHash.Session(A)].Status, next.StatusTransitions));
+    }
+
+    // Found in review (#82): an episode is not what a rate counts. One running on across several
+    // states is one episode, and a restart of the comparison during one state is two.
+    [Fact]
+    public void A_status_or_response_mismatch_counts_once_for_each_state_it_was_about_and_not_before_states_were_counted()
+    {
+        Directory.CreateDirectory(reports);
+        var session = ShadowHash.Session(A);
+        void Samples(ShadowLedger ledger, int n, string hostResponse, bool differ = true)
+        {
+            for (var i = 0; i < n; i++)
+            {
+                ShadowDifference[] diffs = differ ? [new(ShadowKinds.Status, session, "daemon=idle host=working"), new(ShadowKinds.Response, session, "the end of the latest response differs")] : [];
+                ledger.Record(new ShadowComparison(true, 1, 1, diffs, []),
+                    View(null, null, null, Session(A, "idle") with { ResponseTail = "r1" }),
+                    View(null, null, null, Session(A, differ ? "working" : "idle") with { ResponseTail = differ ? hostResponse : "r1" }));
+                time.Advance(TimeSpan.FromSeconds(15));
+            }
+        }
+        Samples(new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time), 6, "r2");
+        // Restarted during the same disagreement: another episode, the same states.
+        var restarted = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+        Samples(restarted, 6, "r2");
+        // The host's response moves on, still differing: a second response state, failing too.
+        Samples(restarted, 2, "r3");
+        Samples(restarted, 1, "r1", differ: false);
+        var today = DateOnly.FromDateTime(time.GetUtcNow().UtcDateTime);
+
+        var summary = ShadowSummary.Build(reports, today, 1, time.GetUtcNow());
+        var lines = summary.Coverage.ToDictionary(l => l.Kind);
+        Assert.Equal(2, summary.Kinds.Single(k => k.Kind == ShadowKinds.Response).Count);
+        Assert.Equal((3, 2), (lines[ShadowCoverageKinds.Responses].Events, lines[ShadowCoverageKinds.Responses].Mismatches));
+        // idle/working, then idle/idle.
+        Assert.Equal((2, 1), (lines[ShadowCoverageKinds.Transitions].Events, lines[ShadowCoverageKinds.Transitions].Mismatches));
+
+        // The same day as a release before states were counted wrote it, a day's cap passed: its
+        // status episodes and overflow count against the daemon's changes, as they did, and its
+        // response ones have nothing to count against.
+        var path = Path.Combine(reports, ShadowLedger.FileName(today.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)));
+        var day = JsonNode.Parse(File.ReadAllText(path))!;
+        var coverage = day["coverage"]!.AsObject();
+        coverage.Remove("statesSince");
+        coverage.Remove("failedStates");
+        day["overflow"] = new JsonObject { [ShadowKinds.Response] = 3, [ShadowKinds.Status] = 2 };
+        File.WriteAllText(path, day.ToJsonString());
+        lines = ShadowSummary.Build(reports, today, 1, time.GetUtcNow()).Coverage.ToDictionary(l => l.Kind);
+        Assert.Equal(0, lines[ShadowCoverageKinds.Responses].Mismatches);
+        Assert.Equal(4, lines[ShadowCoverageKinds.Transitions].Mismatches);
+    }
+
+    // Found in review (#82): a state a mismatch was about only during its grace went uncounted, a
+    // state past the cap could be counted again after a restart, and midnight reset when states
+    // began to be counted.
+    [Fact]
+    public void A_state_changed_during_the_grace_fails_too_one_past_the_cap_fails_once_and_midnight_keeps_when_counting_began()
+    {
+        Directory.CreateDirectory(reports);
+        time.SetUtcNow(new DateTimeOffset(2026, 10, 28, 23, 58, 0, TimeSpan.Zero));
+        var session = ShadowHash.Session(A);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+        void Sample(string hostStatus, bool differ = true)
+        {
+            ledger.Record(new ShadowComparison(true, 1, 1, differ ? [new ShadowDifference(ShadowKinds.Status, session, $"daemon=idle host={hostStatus}")] : [], []),
+                View(null, null, null, Session(A, "idle")), View(null, null, null, Session(A, hostStatus)));
+            time.Advance(TimeSpan.FromSeconds(15));
+        }
+        Sample("working");
+        Sample("working");
+        Sample("waiting");
+        Sample("waiting");
+        Sample("waiting");
+        Sample("waiting");
+        var c = ledger.Today!.Coverage!;
+        Assert.Equal(2, c.StatusTransitions);
+        Assert.Equal(2, c.FailedStates.Count);
+
+        // Past midnight, the cutoff is the day before's, and the state that failed then is not a
+        // new failure today.
+        var since = c.StatesSince;
+        time.SetUtcNow(new DateTimeOffset(2026, 10, 29, 0, 0, 5, TimeSpan.Zero));
+        Sample("waiting");
+        Assert.Equal("2026-10-29", ledger.Today!.Date);
+        Assert.Equal(since, ledger.Today.Coverage!.StatesSince);
+        Assert.True(ledger.Today.Coverage.Shown[session].StatusFailed);
+        Assert.Empty(ledger.Today.Coverage.FailedStates);
+
+        // Past the cap, the state fails once, whoever asks again.
+        var full = new ShadowCoverage();
+        for (var i = 0; i < 5000; i++) { full.FailedStates["k" + i] = new ShadowFailedState(); }
+        full.Shown[session] = new ShadowShown { Status = "idle/working", StatusAt = time.GetUtcNow() };
+        var key = ShadowCoverageTracker.StateKey(full, session, ShadowKinds.Status)!;
+        ShadowCoverageTracker.StateFailed(full, session, ShadowKinds.Status, key, time.GetUtcNow());
+        ShadowCoverageTracker.StateFailed(full, session, ShadowKinds.Status, key, time.GetUtcNow());
+        Assert.Equal(1, full.FailedStatesOverflow[ShadowKinds.Status]);
+    }
+
+    // Found in review (#82): with a long grace, a response changing every sample went through more
+    // states than an episode kept, and those past it were not counted as failing.
+    [Fact]
+    public void Every_state_a_long_disagreement_went_through_in_its_grace_fails_those_past_what_is_kept_by_identity_included()
+    {
+        Directory.CreateDirectory(reports);
+        var session = ShadowHash.Session(A);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(1500), TimeSpan.FromSeconds(5), time);
+        // A new response every sample, 257 of them, more than are kept by identity; then the last
+        // goes on unchanged past the grace: the same state, counted once.
+        for (var i = 0; i <= 305; i++)
+        {
+            ledger.Record(new ShadowComparison(true, 1, 1, [new ShadowDifference(ShadowKinds.Response, session, "the end of the latest response differs")], []),
+                View(null, null, null, Session(A, "idle") with { ResponseTail = "d" }), View(null, null, null, Session(A, "idle") with { ResponseTail = "h" + Math.Min(i, 256) }));
+            time.Advance(TimeSpan.FromSeconds(5));
+        }
+        var c = ledger.Today!.Coverage!;
+        Assert.Equal(257, c.ResponseChanges);
+        Assert.Equal(257, c.FailedStates.Count + c.FailedStatesOverflow.GetValueOrDefault(ShadowKinds.Response));
+        Assert.True(c.Shown[session].ResponseFailed);
     }
 
     [Fact]
