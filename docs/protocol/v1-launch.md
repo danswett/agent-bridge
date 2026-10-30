@@ -57,7 +57,7 @@ Request `data`: `{}`. Result, what `session.launch` can name on this machine now
 | `agents[].attachments` | The opening prompt can carry attachments (Copilot and Agency, with `sessions.attach`) |
 | `agents[].needsPrompt` | It creates its session only on a first message (Codex), so a launch must carry a prompt |
 | `workspaces` | The folders approved at the machine that exist now, at most 64. `label` is what a launch names; `isolate` means each new session starts in a git worktree of its own |
-| `resumable` | Sessions that can be resumed, newest first, at most 50 (12 by default): ended (never live), and only those whose folder is in an approved workspace or a worktree the host made for one. `launcher` resumes it; `title` is at most 120 characters, unique in the list |
+| `resumable` | Sessions that can be resumed, newest first, at most 50 (12 by default): ended (never live), and only those whose folder is in an approved workspace or a worktree the host made for one. None of an agent whose discovery is held ([below](#while-discovery-is-held)). `launcher` resumes it; `title` is at most 120 characters, unique in the list |
 | `defaults` | `agent` and `workspace` a launch gets when it names none, and `permissions`, `ask` or `allowAll` |
 | `busy` | Present when a launch now would be `busy`, saying why |
 
@@ -115,7 +115,7 @@ Result: `{ "outcome", "reason", "session", "launched" }`:
 | `started` | The session registered: it is live on the host, and `session` is its `id`. It arrives through `sessions.subscribe` as any other, normally before this result | Yes |
 | `unconfirmed` | The agent's process was started, but the host cannot say its session runs: it had not registered within the host's wait (60 s; a first launch that has to sign in can take longer), or the agent is asking a question in its window that only a person at the machine answers (whether to trust the folder; Codex's hook review). `reason` says which; `session` is set when the id is known in advance (Copilot, Agency, Claude, a resume). Never retried | Yes |
 | `failed` | The host tried, and the agent did not run: it could not be started, or its process exited before its session registered | No session |
-| `busy` | A session launched earlier on this machine is waiting for a person to answer whether to trust its folder. Nothing was started | No |
+| `busy` | A session launched earlier on this machine is waiting for a person to answer whether to trust its folder, or the host's discovery is held ([below](#while-discovery-is-held)). `reason` says which. Nothing was started | No |
 | `refused` | Nothing was started: an invalid request, a value the machine does not offer (`reason` lists what it does), no approved workspace, a session to resume that is not on the list or is running, its folder no longer approved, worktree isolation that failed or is at its cap, a prompt too long for the command line, attachments the agent cannot take, launching off, agent-ha-bridge active for the user, an elevated host or one not on the desktop, or a platform without launching | No |
 
 `reason` is present for anything but `started`. `launched` says what was settled on, after the
@@ -140,3 +140,30 @@ one under it. Only when that cannot be told is a session started after the launc
 then only if no other Codex launch could claim it; no session is ever bound to two launches.
 While a launch's agent runs, the session it was started on is not resumable: it is left out of
 `resumable`, and a resume of it is `refused`, even after its launch has answered.
+
+### While discovery is held
+
+A host whose last discovery pass could not account for everything says so on `sessions.list`
+and `sessions.synced` (`discoveryHeld`, [v1-sessions.md](v1-sessions.md#discovery-held)). A
+live session it could not see may be the one a person asks to resume, and two agents on one
+transcript would corrupt it (§6.3 invariants 6 and 10), so while an agent is held:
+
+* `launch.options` offers none of that agent's sessions in `resumable`;
+* a resume of one, or of any session not on the list while anything is held, is `busy`,
+  saying what holds it ("Held: session discovery is waiting on an unrecognised copilot process
+  (pid 4120)…"). A press a minute or two later goes ahead once the hold has cleared;
+* a new Codex session is `busy` too, since its launch is bound to the first new Codex session
+  to appear, which could be one that was running unseen;
+* no worktree is reclaimed before an isolated launch: the launch goes on to the cap as if
+  nothing were finished. The reclaimer asks again after reading which trees are in use, so a
+  hold that begins during that read keeps them too.
+
+The hold is checked again just before the agent is started, after any worktree has been made,
+so one that began in those seconds is `busy` as well; the worktree's reservation and any staged
+attachments are released.
+
+A new session of any other kind decides nothing from an absence, and starts as usual.
+agent-ha-bridge refused every launch while discovery was incomplete, which kept machines
+from launching anything for a day at a time. Here the unaccounted-process grace keeps holds
+short ([v1-sessions.md](v1-sessions.md#discovery-held)), and the decisions held are only those
+that read an absence.

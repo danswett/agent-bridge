@@ -6,6 +6,8 @@ export class SessionsStore {
   #sessions = new Map();
   #listeners = new Set();
   revision = null;
+  // What holds the host's discovery ({ reason, agents }), or null.
+  held = null;
 
   onChange(fn) {
     this.#listeners.add(fn);
@@ -52,9 +54,18 @@ export class SessionsStore {
     this.#emit({ type: 'synced', changed });
   }
 
+  // Announced only when it changes.
+  setHeld(held) {
+    const was = this.held;
+    if ((was?.reason ?? null) === (held?.reason ?? null) && (was?.agents ?? []).join() === (held?.agents ?? []).join()) { return; }
+    this.held = held ?? null;
+    this.#emit({ type: 'held' });
+  }
+
   clear() {
     this.#sessions.clear();
     this.revision = null;
+    this.held = null;
     this.#emit({ type: 'clear' });
   }
 }

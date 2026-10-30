@@ -35,6 +35,17 @@ public sealed class SessionSource : ISessionSource
     long _revision;
     volatile bool _discoverRequested;
     DateTimeOffset _nextDiscovery;
+    // Under _gate.
+    DiscoveryHeld? _held;
+    // Only on the pass, under _pass.
+    readonly Unaccounted _unaccounted;
+    string? _heldLogged;
+    DateTimeOffset _heldLoggedAt;
+
+    // How often a hold that has not changed is said again in the log: it is a standing
+    // condition, and a line written only when it began scrolls away long before anyone comes
+    // looking for why nothing was resumed or reclaimed.
+    static readonly TimeSpan HeldLogEvery = TimeSpan.FromMinutes(10);
 
     sealed class Entry(SessionTracker tracker)
     {
@@ -58,8 +69,13 @@ public sealed class SessionSource : ISessionSource
         _options = options;
         _processes = processes ?? new SystemProcessInspector();
         _time = time ?? TimeProvider.System;
+        _unaccounted = new Unaccounted(_time, Log);
         _dispatch = Task.Run(DispatchAsync);
     }
+
+    void Log(string message) => _options.Log?.Invoke(message);
+
+    public DiscoveryHeld? Held { get { lock (_gate) { return _held; } } }
 
     // The current user's sessions on the real machine, with default roots.
     public static SessionSource ForCurrentUser() => new(SessionSourceOptions.ForCurrentUser());
@@ -82,15 +98,17 @@ public sealed class SessionSource : ISessionSource
         }
         List<Session> sessions;
         long revision;
+        DiscoveryHeld? held;
         lock (_gate)
         {
             sessions = [.. Sorted().Select(e => e.ListForm)];
             revision = _revision;
+            held = _held;
         }
-        if (start >= sessions.Count) { return new SessionList([], revision); }
+        if (start >= sessions.Count) { return new SessionList([], revision, null, held); }
         var page = Paging.Pages(sessions.Skip(start)).First();
         var next = start + page.Count < sessions.Count ? (start + page.Count).ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
-        return new SessionList(page, revision, next);
+        return new SessionList(page, revision, next, held);
     }
 
     public Session? Get(string id)
@@ -123,7 +141,7 @@ public sealed class SessionSource : ISessionSource
             var sorted = Sorted();
             var subscription = new SessionSubscription(new SubscribeResult(_revision, sorted.Count), Unsubscribe);
             foreach (var e in sorted) { subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, e.ListForm)); }
-            subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionsSynced, new SessionsSynced(_revision)));
+            subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionsSynced, new SessionsSynced(_revision, _held)));
             _subscribers.Add(subscription);
             return subscription;
         }
@@ -203,13 +221,33 @@ public sealed class SessionSource : ISessionSource
     void Pass(bool discover)
     {
         List<DiscoveredSession> found;
+        var release = false;
+        DiscoveryHeld? held = null;
         if (discover)
         {
-            found = [.. Discover()];
+            var observed = Discover();
+            found = [.. observed.SelectMany(o => o.Sessions)];
             var live = found.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
+            var holding = observed.Where(o => o.Holds.Count > 0).Select(o => o.Agent).ToHashSet();
             List<string> gone;
-            lock (_gate) { gone = [.. _entries.Keys.Where(id => !live.Contains(id))]; }
+            lock (_gate)
+            {
+                // An agent whose pass was incomplete keeps every session it had: one it could
+                // not see this time is not one that has ended, and it keeps being read.
+                foreach (var e in _entries.Values.Where(e => !live.Contains(e.ListForm.Id) && holding.Contains(e.Tracker.Discovered.Agent)))
+                {
+                    found.Add(e.Tracker.Discovered);
+                }
+                gone = [.. _entries.Keys.Where(id => !live.Contains(id) && !holding.Contains(_entries[id].Tracker.Discovered.Agent))];
+            }
             foreach (var id in gone) { Remove(id); }
+            held = HeldBy(observed);
+            // A hold that begins is said at once. One that ends, or lets an agent go, waits until
+            // the sessions this pass found are listed: a session the hold kept unseen (its
+            // registration unreadable until now) is otherwise neither listed nor held for a
+            // moment, and a resume of it in that moment starts a second CLI on its transcript.
+            release = Releases(held);
+            if (!release) { SetHeld(held); }
         }
         else
         {
@@ -231,53 +269,155 @@ public sealed class SessionSource : ISessionSource
             }
             Commit(entry ?? new Entry(tracker), full);
         }
+        if (release) { SetHeld(held); }
     }
 
-    IEnumerable<DiscoveredSession> Discover()
+    bool Releases(DiscoveryHeld? next)
     {
-        foreach (var s in CopilotDiscovery.Find(_options.CopilotHome, _processes.GetAgentProcesses(AgentKind.Copilot))) { yield return s; }
-        // Listing processes is the expensive part; without a registration folder or Claude's
-        // own sessions folder there is nothing it could match.
-        var claudeSessions = Directory.Exists(Path.Combine(_options.ClaudeHome, "sessions"));
-        if (claudeSessions || _options.ClaudeRegistrationRoots.Any(Directory.Exists))
+        lock (_gate) { return _held is { } now && (next is null || now.Agents.Except(next.Agents).Any()); }
+    }
+
+    // One agent's part of a discovery pass: what it found, and anything that kept it from
+    // being sure that is all (none when complete).
+    sealed record AgentDiscovery(AgentKind Agent, IReadOnlyList<DiscoveredSession> Sessions, IReadOnlyList<string> Holds);
+
+    List<AgentDiscovery> Discover()
+    {
+        Dictionary<AgentKind, List<AgentProcess>> previous;
+        lock (_gate)
         {
-            var processes = _processes.GetAgentProcesses(AgentKind.Claude);
-            var registered = RegistrationDiscovery.Find(AgentKind.Claude, _options.ClaudeRegistrationRoots, processes, FindClaudeTranscript);
-            foreach (var s in registered) { yield return s; }
-            if (claudeSessions)
-            {
-                // agent-ha-bridge's registration, where there is one, carries what its hooks
-                // saw (status, permission prompts) and wins. One CLI owns one session.
-                var ids = registered.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
-                var pids = registered.Select(s => s.ProcessId).ToHashSet();
-                foreach (var s in ClaudeSessionDiscovery.Find(_options.ClaudeHome, processes, FindClaudeTranscript))
-                {
-                    if (!ids.Contains(s.Id) && !pids.Contains(s.ProcessId)) { yield return s; }
-                }
-            }
+            previous = _entries.Values.Where(e => e.Tracker.Discovered.ProcessId is not null)
+                .GroupBy(e => e.Tracker.Discovered.Agent)
+                .ToDictionary(g => g.Key, g => g.Select(e => new AgentProcess(e.Tracker.Discovered.ProcessId!.Value, e.Tracker.Discovered.ProcessStartedAt, null)).ToList());
         }
-        var codexLocks = Directory.Exists(Path.Combine(_options.CodexHome, "thread-writer-locks"));
-        if (codexLocks || _options.CodexRegistrationRoots.Any(Directory.Exists))
+        var result = new List<AgentDiscovery>();
+
         {
-            var processes = _processes.GetAgentProcesses(AgentKind.Codex);
-            var ended = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var registered = RegistrationDiscovery.Find(AgentKind.Codex, _options.CodexRegistrationRoots, processes, FindCodexTranscript, ended);
-            foreach (var s in registered) { yield return s; }
-            if (codexLocks)
-            {
-                // agent-ha-bridge's registration, where there is one, carries what its hooks
-                // saw (status, the approval marker) and wins, an ended one included. One CLI
-                // owns one session.
-                var ids = registered.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                ids.UnionWith(ended);
-                var pids = registered.Select(s => s.ProcessId).ToHashSet();
-                foreach (var s in CodexLockDiscovery.Find(_options.CodexHome, processes, _processes.FileHolders, _codexLockHolders, FindCodexTranscript, _time.GetUtcNow()))
-                {
-                    if (!ids.Contains(s.Id) && !pids.Contains(s.ProcessId)) { yield return s; }
-                }
-            }
+            var observed = _processes.Observe(AgentKind.Copilot);
+            var holds = new List<string>();
+            var sessions = CopilotDiscovery.Find(_options.CopilotHome, observed.Processes, holds, observed.Unidentified);
+            var accounted = sessions.Where(s => s.ProcessId is not null).Select(s => s.ProcessId!.Value).ToHashSet();
+            // Scout's embedded `copilot --headless` is nobody's session and never will be.
+            accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsEmbedded(p.CommandLine)).Select(p => p.Id));
+            Account(AgentKind.Copilot, observed, accounted, previous, holds);
+            result.Add(new(AgentKind.Copilot, sessions, holds));
+        }
+        // Listing processes is the expensive part; without a registration folder or Claude's
+        // own sessions folder there is nothing it could match, and an agent that was never
+        // installed is absence, not doubt.
+        var claudeSessions = Installed(Path.Combine(_options.ClaudeHome, "sessions"));
+        if (claudeSessions || _options.ClaudeRegistrationRoots.Any(Installed))
+        {
+            result.Add(Registrations(AgentKind.Claude, _options.ClaudeRegistrationRoots, FindClaudeTranscript, previous, claudeSessions));
+        }
+        var codexLocks = Installed(Path.Combine(_options.CodexHome, "thread-writer-locks"));
+        if (codexLocks || _options.CodexRegistrationRoots.Any(Installed))
+        {
+            result.Add(Registrations(AgentKind.Codex, _options.CodexRegistrationRoots, FindCodexTranscript, previous, codexLocks: codexLocks));
+        }
+        return result;
+    }
+
+    // A root that cannot be read is not one that is missing: that agent is asked, and holds.
+    static bool Installed(string root) => CopilotDiscovery.ProbeFolder(root) != CopilotDiscovery.Folder.Absent;
+
+    AgentDiscovery Registrations(AgentKind agent, IReadOnlyList<string> roots, Func<string, string?> findTranscript, Dictionary<AgentKind, List<AgentProcess>> previous,
+        bool claudeSessions = false, bool codexLocks = false)
+    {
+        var observed = _processes.Observe(agent);
+        var holds = new List<string>();
+        var accounted = new HashSet<int>();
+        var ended = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        IReadOnlyList<DiscoveredSession> sessions = RegistrationDiscovery.Find(agent, roots, observed.Processes, findTranscript, holds, accounted, _options.AfterRegistrationRead, observed.Unidentified, ended);
+        if (codexLocks)
+        {
+            // agent-ha-bridge's registration, where there is one, carries what its hooks saw
+            // (status, the approval marker) and wins, an ended one included. One CLI owns one
+            // session. A terminal a thread lock binds to a session is accounted for by it.
+            var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            ids.UnionWith(ended);
+            var pids = sessions.Select(s => s.ProcessId).ToHashSet();
+            var locked = CodexLockDiscovery.Find(_options.CodexHome, observed.Processes, _processes.FileHolders, _codexLockHolders, findTranscript, _time.GetUtcNow(), holds)
+                .Where(s => !ids.Contains(s.Id) && !pids.Contains(s.ProcessId)).ToList();
+            accounted.UnionWith(locked.Where(s => s.ProcessId is not null).Select(s => s.ProcessId!.Value));
+            sessions = [.. sessions, .. locked];
+        }
+        if (claudeSessions)
+        {
+            // agent-ha-bridge's registration, where there is one, carries what its hooks saw
+            // (status, permission prompts) and wins. One CLI owns one session.
+            var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+            var pids = sessions.Select(s => s.ProcessId).ToHashSet();
+            var own = ClaudeSessionDiscovery.Find(_options.ClaudeHome, observed.Processes, findTranscript, holds, accounted, observed.Unidentified);
+            sessions = [.. sessions, .. own.Where(s => !ids.Contains(s.Id) && !pids.Contains(s.ProcessId))];
+        }
+        if (agent == AgentKind.Codex)
+        {
+            accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsCodexAppServer(p.CommandLine)).Select(p => p.Id));
+        }
+        Account(agent, observed, accounted, previous, holds);
+        return new(agent, sessions, holds);
+    }
+
+    // What makes an agent's pass incomplete beyond what it could not read: agent-ha-bridge's
+    // Known false, as Read-DaemonAdapterRegistrations and Select-DaemonHoldingProcesses set it.
+    void Account(AgentKind agent, AgentProcessObservation observed, HashSet<int> accounted, Dictionary<AgentKind, List<AgentProcess>> previous, List<string> holds)
+    {
+        var name = agent.ToString().ToLowerInvariant();
+        // Not Known, which an unrelated unreadable runtime also clears (see AgentProcessObservation).
+        if (!observed.Listed) { holds.Add($"the {name} processes could not be listed"); }
+        // A runtime whose command line could not be read this time, that was a session's own
+        // process last time: a failed read, not a session that ended. Every other user's node
+        // is unreadable too, so only those discovery already knew are held for - by start time as
+        // well as id, since a pid the session's process left behind can be reused by any runtime.
+        if (previous.TryGetValue(agent, out var had) && observed.Unidentified.FirstOrDefault(p => had.Any(h => SameProcess(h, p))) is { } unread)
+        {
+            holds.Add($"a {name} process that could not be read (pid {unread.Id})");
+        }
+        var unaccounted = observed.Processes.Where(p => !accounted.Contains(p.Id)).ToList();
+        var present = observed.Processes.Where(p => accounted.Contains(p.Id)).ToList();
+        foreach (var p in _unaccounted.Holding(agent, unaccounted, present))
+        {
+            holds.Add($"an unrecognised {name} process (pid {p.Id})");
         }
     }
+
+    // Unknown start times cannot tell two generations of a pid apart, so they are taken to match:
+    // holding for a stranger costs a pass of retirement, retiring a live session costs the session.
+    static bool SameProcess(AgentProcess known, AgentProcess seen) =>
+        known.Id == seen.Id && (known.StartedAt is not { } a || seen.StartedAt is not { } b || (a - b).Duration() <= TimeSpan.FromSeconds(1));
+
+    // Publishes the hold when it changes: on the source, to subscribers as discovery.changed,
+    // and to the log, which also says it again now and then while it stands.
+    static DiscoveryHeld? HeldBy(List<AgentDiscovery> observed)
+    {
+        var reasons = observed.SelectMany(o => o.Holds).Distinct(StringComparer.Ordinal).ToList();
+        if (reasons.Count == 0) { return null; }
+        var text = Limits.KeepStart(string.Join(", ", reasons), DiscoveryHeld.MaxReasonBytes)!;
+        return new DiscoveryHeld(text, [.. observed.Where(o => o.Holds.Count > 0).Select(o => o.Agent)]);
+    }
+
+    void SetHeld(DiscoveryHeld? held)
+    {
+        var now = _time.GetUtcNow();
+        var summary = held?.Reason;
+        if (summary != _heldLogged || (summary is not null && now - _heldLoggedAt >= HeldLogEvery))
+        {
+            if (summary is not null) { Log($"session discovery held ({summary}); sessions of {string.Join(", ", held!.Agents.Select(a => a.ToString().ToLowerInvariant()))} are kept, and no resume of them or worktree reclaim is done until it clears"); }
+            else if (_heldLogged is not null) { Log("session discovery complete again"); }
+            _heldLogged = summary;
+            _heldLoggedAt = now;
+        }
+        lock (_gate)
+        {
+            if (Same(_held, held)) { return; }
+            _held = held;
+            foreach (var s in _subscribers) { s.Channel.Writer.TryWrite(new SessionEvent(Events.DiscoveryChanged, new DiscoveryChanged(held))); }
+        }
+    }
+
+    static bool Same(DiscoveryHeld? a, DiscoveryHeld? b) =>
+        a is null ? b is null : b is not null && a.Reason == b.Reason && a.Agents.SequenceEqual(b.Agents);
 
     // A registration written before the agent reported its transcript: Claude's is
     // projects/<slug>/<id>.jsonl, Codex's sessions/<y>/<m>/<d>/rollout-*-<id>.jsonl.

@@ -5,7 +5,7 @@
 // `onmessage(message)` / `onclose(error)` callbacks, carrying already-parsed JSON. In the
 // app that is an end-to-end Noise channel (channels.js); in demo mode and the unit tests
 // it is an in-process fake. Nothing here knows which.
-import { Events, Ops, readAnswerResult, readAttachmentState, readHello, readSession, readStopResult } from './protocol.js';
+import { Events, Ops, readAnswerResult, readAttachmentState, readDiscoveryHeld, readHello, readSession, readStopResult } from './protocol.js';
 import { USAGE, readUsage } from './usage.js';
 import { LAUNCH, readLaunchOptions, readLaunchResult } from './launch.js';
 
@@ -218,14 +218,21 @@ export class HostClient {
         break;
       case Events.sessionsSynced:
         if (this.#snapshot) {
-          if (this.store) {
-            this.store.revision = Number.isFinite(data.revision) ? data.revision : this.store.revision;
-            this.store.retain(this.#snapshot);
-          }
+          const snapshot = this.#snapshot;
+          // Synced before the store tells anyone: a view drawn from that news reads the live
+          // count and the hold only once this is true, and nothing redraws it after.
           this.#snapshot = null;
           this.synced = true;
+          if (this.store) {
+            this.store.revision = Number.isFinite(data.revision) ? data.revision : this.store.revision;
+            this.store.setHeld(readDiscoveryHeld(data.discoveryHeld));
+            this.store.retain(snapshot);
+          }
           this.#emit('synced', data);
         }
+        break;
+      case Events.discoveryChanged:
+        this.store?.setHeld(readDiscoveryHeld(data.discoveryHeld));
         break;
       case USAGE.update:
         this.#emit('usage', readUsage(data));

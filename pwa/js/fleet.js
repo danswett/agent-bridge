@@ -58,7 +58,7 @@ export class FleetStatus {
     if (!m) { return ''; }
     // The viewed machine's count is live once its snapshot is in.
     const live = id === this.hosts.targetId && this.hosts.phase === 'open' && this.hosts.client?.synced;
-    return machineStatus({ ...m, sessions: live ? this.store.size : m.sessions });
+    return machineStatus({ ...m, sessions: live ? this.store.size : m.sessions, held: live ? this.store.held?.reason : null });
   }
 
   // Settles when every look asked for so far is done.

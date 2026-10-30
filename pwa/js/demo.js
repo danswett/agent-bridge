@@ -131,7 +131,7 @@ export class DemoHost {
         t.subscribed = true;
         reply({ revision: this.revision, count: this.sessions.size });
         for (const s of this.sessions.values()) { this.#event(t, 'session.upsert', withoutHistory(s)); }
-        this.#event(t, 'sessions.synced', { revision: this.revision });
+        this.#event(t, 'sessions.synced', { revision: this.revision, ...(this.held ? { discoveryHeld: this.held } : {}) });
         return undefined;
       }
       case 'session.answer':
@@ -439,6 +439,12 @@ export class DemoHost {
     this.sessions.delete(id);
     this.revision++;
     this.#broadcast('session.remove', { id });
+  }
+
+  // What holds discovery ({ reason, agents }), or null once nothing does, as discovery.changed.
+  hold(held) {
+    this.held = held ?? null;
+    this.#broadcast('discovery.changed', held ? { discoveryHeld: held } : {});
   }
 
   // A frame exactly as given, for testing what the client does with odd ones. A frame

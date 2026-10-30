@@ -90,27 +90,49 @@ internal static class CopilotDiscovery
     // inuse.<pid>.lock files cover anything whose command line could not be read. The
     // locks alone missed a resumed session entirely: resuming onto an id that already
     // has history writes no lock, and a session ran 103 turns without a card.
-    public static IReadOnlyList<DiscoveredSession> Find(string copilotHome, IReadOnlyList<AgentProcess> processes)
+    //
+    // Anything it could not read is added to holds, in words: a folder it could not list may
+    // hold the lock of a session that is still running.
+    //
+    // unidentified are the runtimes whose command line could not be read: a lock one of them
+    // wrote is a live session discovery cannot see, so it holds rather than being dropped.
+    public static IReadOnlyList<DiscoveredSession> Find(string copilotHome, IReadOnlyList<AgentProcess> processes, ICollection<string>? holds = null, IReadOnlyList<AgentProcess>? unidentified = null)
     {
+        unidentified ??= [];
         var root = Path.Combine(copilotHome, "session-state");
-        if (processes.Count == 0 || !Directory.Exists(root)) { return []; }
+        if (processes.Count == 0 && unidentified.Count == 0) { return []; }
+        switch (ProbeFolder(root))
+        {
+            case Folder.Absent: return [];
+            case Folder.Link: holds?.Add("copilot's session folder is a link"); return [];
+            case Folder.Unreadable: holds?.Add("copilot's session folders could not be read"); return [];
+        }
         var byPid = processes.ToDictionary(p => p.Id);
 
         var candidates = new List<Candidate>();
-        foreach (var dir in SafeEnumerateDirectories(root))
+        if (!TryEnumerateFolders(root, out var folders)) { holds?.Add("copilot's session folders could not be listed"); }
+        // A linked session folder is not one Copilot made, and what it points at is unknown: its
+        // locks may be a live session's, or another folder's seen twice (agent-ha-bridge's
+        // workspace usage refuses on one too).
+        if (folders.Any(f => f.Link)) { holds?.Add("a copilot session folder is a link"); }
+        foreach (var dir in folders.Where(f => !f.Link).Select(f => f.Path))
         {
-            foreach (var lockFile in SafeEnumerateFiles(dir, "inuse.*.lock"))
+            if (!TryEnumerateFiles(dir, "inuse.*.lock", out var locks)) { holds?.Add("a copilot session folder could not be listed"); }
+            foreach (var lockFile in locks)
             {
                 var name = Path.GetFileName(lockFile);
                 var digits = name.AsSpan("inuse.".Length, name.Length - "inuse.".Length - ".lock".Length);
                 if (!int.TryParse(digits, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var pid)) { continue; }
-                if (!byPid.TryGetValue(pid, out var process)) { continue; }
                 var lockWrite = LastWrite(lockFile);
-                // A lock written before the process now holding its pid started is a dead
-                // CLI's leftover, not evidence about this process: pids are reused, and
-                // accepting it brought an ended session back (or let its newer transcript
-                // win this pid's tie-break over the session it is really in).
-                if (process.StartedAt is { } started && lockWrite != DateTime.MinValue && lockWrite < started.UtcDateTime - TimeSpan.FromSeconds(1)) { continue; }
+                if (!byPid.TryGetValue(pid, out var process))
+                {
+                    if (unidentified.FirstOrDefault(u => u.Id == pid) is { } unread && OfGeneration(lockWrite, unread))
+                    {
+                        holds?.Add($"a copilot process that could not be read (pid {pid})");
+                    }
+                    continue;
+                }
+                if (!OfGeneration(lockWrite, process)) { continue; }
                 // One candidate per live lock: a folder two live CLIs both hold a lock in
                 // used to yield only one of them.
                 candidates.Add(Candidate.Of(dir, pid, lockWrite));
@@ -124,8 +146,16 @@ internal static class CopilotDiscovery
             var named = CommandLine.CopilotSessionId(process.CommandLine);
             if (named is null) { continue; }
             var dir = Path.Combine(root, named);
-            var winner = candidates.FirstOrDefault(c => c.Pid == process.Id && string.Equals(c.Id, named, StringComparison.OrdinalIgnoreCase))
-                ?? (Directory.Exists(dir) ? Candidate.Of(dir, process.Id, DateTime.MinValue) : null);
+            var winner = candidates.FirstOrDefault(c => c.Pid == process.Id && string.Equals(c.Id, named, StringComparison.OrdinalIgnoreCase));
+            if (winner is null)
+            {
+                switch (ProbeFolder(dir))
+                {
+                    case Folder.Present: winner = Candidate.Of(dir, process.Id, DateTime.MinValue); break;
+                    case Folder.Link: holds?.Add("a copilot session folder is a link"); break;
+                    case Folder.Unreadable: holds?.Add("a copilot session folder could not be read"); break;
+                }
+            }
             if (winner is null) { continue; }
             winner = ResolveResume(winner, candidates, process.StartedAt?.UtcDateTime);
             live[winner.Id] = winner.ToSession(process.StartedAt);
@@ -175,22 +205,65 @@ internal static class CopilotDiscovery
             new(Id, AgentKind.Copilot, Path.Combine(Directory, "events.jsonl"), Directory, Pid, ProcessStartedAt: processStartedAt);
     }
 
+    // A lock written before the process now holding its pid started is a dead CLI's leftover,
+    // not evidence about this process: pids are reused, and accepting it brought an ended
+    // session back (or let its newer transcript win this pid's tie-break over the session it
+    // is really in).
+    static bool OfGeneration(DateTime lockWrite, AgentProcess process) =>
+        process.StartedAt is not { } started || lockWrite == DateTime.MinValue || lockWrite >= started.UtcDateTime - TimeSpan.FromSeconds(1);
+
     static DateTime LastWrite(string path)
     {
         try { return File.GetLastWriteTimeUtc(path); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return DateTime.MinValue; }
     }
 
-    internal static IEnumerable<string> SafeEnumerateDirectories(string path)
+    internal static IEnumerable<string> SafeEnumerateDirectories(string path) => TryEnumerateDirectories(path, out var found) ? found : [];
+
+    internal enum Folder { Absent, Present, Link, Unreadable }
+
+    // What is at a path discovery is about to read. Only the OS saying it is not there is
+    // absence: Directory.Exists is false for a folder it may not look into as well, which read
+    // an unreadable registration root as an agent with no sessions and retired them all.
+    // Anything there but a plain folder is Unreadable.
+    internal static Folder ProbeFolder(string path)
     {
-        try { return Directory.EnumerateDirectories(path).ToList(); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return []; }
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            if (attributes.HasFlag(FileAttributes.ReparsePoint)) { return Folder.Link; }
+            return attributes.HasFlag(FileAttributes.Directory) ? Folder.Present : Folder.Unreadable;
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return Folder.Absent; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return Folder.Unreadable; }
     }
 
-    internal static IEnumerable<string> SafeEnumerateFiles(string path, string pattern)
+    // The subfolders, each with whether it is a link. The attributes come with the listing.
+    internal static bool TryEnumerateFolders(string path, out IReadOnlyList<(string Path, bool Link)> found)
     {
-        try { return Directory.EnumerateFiles(path, pattern).ToList(); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return []; }
+        try
+        {
+            found = new DirectoryInfo(path).EnumerateDirectories().Select(d => (d.FullName, d.Attributes.HasFlag(FileAttributes.ReparsePoint))).ToList();
+            return true;
+        }
+        catch (DirectoryNotFoundException) { found = []; return true; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { found = []; return false; }
+    }
+
+    // False when the folder exists but could not be listed: not the same as empty. One that
+    // has gone meanwhile is empty.
+    internal static bool TryEnumerateDirectories(string path, out IReadOnlyList<string> found)
+    {
+        try { found = Directory.EnumerateDirectories(path).ToList(); return true; }
+        catch (DirectoryNotFoundException) { found = []; return true; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { found = []; return false; }
+    }
+
+    internal static bool TryEnumerateFiles(string path, string pattern, out IReadOnlyList<string> found)
+    {
+        try { found = Directory.EnumerateFiles(path, pattern).ToList(); return true; }
+        catch (DirectoryNotFoundException) { found = []; return true; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { found = []; return false; }
     }
 }
 
@@ -200,30 +273,75 @@ internal static class ClaudeSessionDiscovery
     // interactive CLI (seen with 2.1.312) whether or not any hook is installed. Without
     // this, a Claude session had no card at all unless agent-ha-bridge's hooks had
     // registered it, and the new host registers none.
-    public static IReadOnlyList<DiscoveredSession> Find(string claudeHome, IReadOnlyList<AgentProcess> processes, Func<string, string?> findTranscript)
+    //
+    // Into holds and accounted as RegistrationDiscovery: a file for a running (or unreadable)
+    // process of its generation that could not be read is a session discovery cannot see, and
+    // one that says it is an SDK or print-mode run accounts for its process as nobody's session.
+    public static IReadOnlyList<DiscoveredSession> Find(string claudeHome, IReadOnlyList<AgentProcess> processes, Func<string, string?> findTranscript,
+        ICollection<string>? holds = null, ISet<int>? accounted = null, IReadOnlyList<AgentProcess>? unidentified = null)
     {
         var root = Path.Combine(claudeHome, "sessions");
-        if (processes.Count == 0 || !Directory.Exists(root)) { return []; }
-        var running = processes.ToDictionary(p => p.Id);
-        var live = new List<DiscoveredSession>();
-        foreach (var file in CopilotDiscovery.SafeEnumerateFiles(root, "*.json"))
+        unidentified ??= [];
+        if (processes.Count == 0 && unidentified.Count == 0) { return []; }
+        switch (CopilotDiscovery.ProbeFolder(root))
         {
-            if (Parse(file) is not { } entry || !running.TryGetValue(entry.Pid, out var process)) { continue; }
+            case CopilotDiscovery.Folder.Absent: return [];
+            case CopilotDiscovery.Folder.Link: holds?.Add("claude's sessions folder is a link"); return [];
+            case CopilotDiscovery.Folder.Unreadable: holds?.Add("claude's sessions folder could not be read"); return [];
+        }
+        var running = processes.ToDictionary(p => p.Id);
+        var unread = unidentified.ToDictionary(p => p.Id);
+        var live = new List<DiscoveredSession>();
+        if (!CopilotDiscovery.TryEnumerateFiles(root, "*.json", out var files)) { holds?.Add("claude's sessions folder could not be listed"); }
+        foreach (var file in files)
+        {
+            var parsed = Parse(file, out var filePid);
+            var holder = running.TryGetValue(filePid, out var p) ? p : unread.TryGetValue(filePid, out var u) ? u : null;
+            if (holder is null) { continue; }
+            if (parsed is null)
+            {
+                // Unreadable, or not a whole file of its own process: the file's time is all
+                // there is to tell whether it is this process's or a crashed one's leftover.
+                if (Written(file) is not { } written || holder.StartedAt is not { } began || written >= began - TimeSpan.FromSeconds(1))
+                {
+                    holds?.Add($"a claude session file could not be read (pid {filePid})");
+                }
+                continue;
+            }
+            var entry = parsed;
             // A pid is reused, and a CLI that crashed leaves its file behind: one written by
             // a session that began before the process now holding the pid started is not
             // that process's session. A second of slack covers start times the OS rounds.
-            if (process.StartedAt is { } started && (entry.StartedAt ?? entry.UpdatedAt) is { } at && at < started - TimeSpan.FromSeconds(1)) { continue; }
-            live.Add(new DiscoveredSession(entry.SessionId, AgentKind.Claude, findTranscript(entry.SessionId), null, entry.Pid, ProcessStartedAt: process.StartedAt));
+            if (holder.StartedAt is { } started && (entry.StartedAt ?? entry.UpdatedAt) is { } at && at < started - TimeSpan.FromSeconds(1)) { continue; }
+            if (!running.ContainsKey(filePid))
+            {
+                holds?.Add($"a claude process that could not be read (pid {filePid})");
+                continue;
+            }
+            accounted?.Add(filePid);
+            if (!entry.Interactive) { continue; }
+            live.Add(new DiscoveredSession(entry.SessionId, AgentKind.Claude, findTranscript(entry.SessionId), null, entry.Pid, ProcessStartedAt: holder.StartedAt));
         }
         return live;
     }
 
-    internal sealed record Entry(int Pid, string SessionId, DateTimeOffset? StartedAt, DateTimeOffset? UpdatedAt);
+    static DateTimeOffset? Written(string path)
+    {
+        try { return File.GetLastWriteTimeUtc(path) is var t && t.Year > 1601 ? new DateTimeOffset(t, TimeSpan.Zero) : null; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
 
-    internal static Entry? Parse(string path)
+    internal sealed record Entry(int Pid, string SessionId, DateTimeOffset? StartedAt, DateTimeOffset? UpdatedAt, bool Interactive = true);
+
+    internal static Entry? Parse(string path) => Parse(path, out _) is { Interactive: true } entry ? entry : null;
+
+    // Null when the file could not be read whole, or is not one of its own process; pid is
+    // the process its name gives, 0 when it names none. A file of a run that is not interactive
+    // is returned, so its process is known to be nobody's session.
+    internal static Entry? Parse(string path, out int pid)
     {
         var name = Path.GetFileNameWithoutExtension(path);
-        if (!int.TryParse(name, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var filePid) || filePid <= 0) { return null; }
+        if (!int.TryParse(name, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out pid) || pid <= 0) { pid = 0; return null; }
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -232,14 +350,15 @@ internal static class ClaudeSessionDiscovery
             var e = doc.RootElement;
             if (e.ValueKind != JsonValueKind.Object) { return null; }
             // Named after its own process; one that is not is a stray or a copy.
-            if (Json.Int(e, "pid") != filePid) { return null; }
+            if (Json.Int(e, "pid") != pid) { return null; }
             var id = Json.Str(e, "sessionId");
             if (string.IsNullOrWhiteSpace(id) || RegistrationDiscovery.SafeKey(id) != id) { return null; }
             // Only a CLI at a console can be typed into; an SDK or print-mode run is not
             // a session a person drives.
-            if (Json.Str(e, "kind") is { } kind && kind != "interactive") { return null; }
-            return new Entry(filePid, id, Millis(e, "startedAt"), Millis(e, "updatedAt"));
+            var interactive = Json.Str(e, "kind") is not { } kind || kind == "interactive";
+            return new Entry(pid, id, Millis(e, "startedAt"), Millis(e, "updatedAt"), interactive);
         }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { pid = 0; return null; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }
     }
 
@@ -271,25 +390,34 @@ internal static class CodexLockDiscovery
     // conversation is open in another app" and waits (0.165, seen live).
     public static IReadOnlyList<DiscoveredSession> Find(
         string codexHome, IReadOnlyList<AgentProcess> processes, Func<string, IReadOnlyList<int>> holders,
-        Dictionary<string, CodexLockHolding> known, Func<string, string?> findTranscript, DateTimeOffset now)
+        Dictionary<string, CodexLockHolding> known, Func<string, string?> findTranscript, DateTimeOffset now, ICollection<string>? holds = null)
     {
         var root = Path.Combine(codexHome, "thread-writer-locks");
         // Only a terminal can hold a session's lock for it. With none running (the daemon and
         // its helpers, or processes not yet read), nobody is asked about any lock.
         var terminals = processes.Where(p => IsTerminal(p.CommandLine)).OrderBy(p => p.Id).ToList();
-        if (terminals.Count == 0 || !Directory.Exists(root)) { known.Clear(); return []; }
+        if (terminals.Count == 0) { known.Clear(); return []; }
+        // A folder or lock that cannot be read may be a running terminal's session: it holds,
+        // as for registrations, rather than reading as none.
+        switch (CopilotDiscovery.ProbeFolder(root))
+        {
+            case CopilotDiscovery.Folder.Absent: known.Clear(); return [];
+            case CopilotDiscovery.Folder.Link: holds?.Add("codex's thread lock folder is a link"); return [];
+            case CopilotDiscovery.Folder.Unreadable: holds?.Add("codex's thread lock folder could not be read"); return [];
+        }
         var signature = string.Join(',', terminals.Select(p => $"{p.Id}@{p.StartedAt?.ToUnixTimeMilliseconds()}"));
         var running = processes.ToDictionary(p => p.Id);
         var held = new List<(string Id, AgentProcess Process)>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var file in CopilotDiscovery.SafeEnumerateFiles(root, "*.lock"))
+        if (!CopilotDiscovery.TryEnumerateFiles(root, "*.lock", out var files)) { holds?.Add("codex's thread lock folder could not be listed"); }
+        foreach (var file in files)
         {
             var id = Path.GetFileNameWithoutExtension(file);
             if (!Guid.TryParse(id, out _) || RegistrationDiscovery.SafeKey(id) != id) { continue; }
             seen.Add(file);
             DateTime created;
             try { created = File.GetCreationTimeUtc(file); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { holds?.Add("a codex thread lock could not be read"); continue; }
 
             // A decision stands for Recheck, and only while what it rested on holds: the holder
             // still the same process (its pid *and* start time, since a pid reused by a later
@@ -546,16 +674,32 @@ internal static class RegistrationDiscovery
     // is live while its recorded process is still a running agent process, however long
     // it has been quiet (an idle limit retired sessions waiting out a usage cap), and,
     // for Codex, until its SessionEnd marked the registration Ended.
+    //
+    // Anything it could not read is added to holds, in words, and every running process a
+    // readable registration names (live, ended or stale) to accounted: agent-ha-bridge's
+    // Read-DaemonAdapterRegistrations. A registration it could not read may be a live session's.
     public static IReadOnlyList<DiscoveredSession> Find(
         AgentKind agent, IReadOnlyList<string> roots, IReadOnlyList<AgentProcess> processes, Func<string, string?> findTranscript,
+        ICollection<string>? holds = null, ISet<int>? accounted = null, Action<string>? afterRead = null, IReadOnlyList<AgentProcess>? unidentified = null,
         ISet<string>? ended = null)
     {
+        var name = agent.ToString().ToLowerInvariant();
         var running = processes.ToDictionary(p => p.Id);
+        var unread = (unidentified ?? []).ToDictionary(p => p.Id);
         var best = new Dictionary<string, Registration>(StringComparer.Ordinal);
         foreach (var root in roots)
         {
-            foreach (var registration in Read(agent, root))
+            foreach (var registration in Read(agent, root, problem => holds?.Add($"a {name} {problem}"), afterRead))
             {
+                // Only the generation it was written by: a process that took an old registration's
+                // pid is a session yet to register, which is exactly what the hold is for.
+                if (running.TryGetValue(registration.ProcessId, out var holder) && OfGeneration(registration, holder)) { accounted?.Add(registration.ProcessId); }
+                // A live session whose runtime's command line could not be read: not one that ended.
+                else if (!registration.Ended && unread.TryGetValue(registration.ProcessId, out var runtime) && OfGeneration(registration, runtime))
+                {
+                    holds?.Add($"a {name} process that could not be read (pid {registration.ProcessId})");
+                }
+                if (!registration.Ended && registration.ProcessId <= 0) { holds?.Add($"a {name} registration names no process"); continue; }
                 // The same session registered under both the runtime and the legacy temp
                 // root: the one written last is the current one.
                 if (best.TryGetValue(registration.SessionId, out var other) && (other.Updated ?? DateTimeOffset.MinValue) >= (registration.Updated ?? DateTimeOffset.MinValue)) { continue; }
@@ -567,11 +711,7 @@ internal static class RegistrationDiscovery
         foreach (var r in best.Values)
         {
             if (r.ProcessId <= 0 || !running.TryGetValue(r.ProcessId, out var process)) { continue; }
-            // A pid is reused. A registration last written before the process now holding
-            // its pid started belongs to a session that is gone, and would otherwise come
-            // back, old question and all, for as long as the newcomer runs. A second of
-            // slack covers start times the OS rounds.
-            if (r.Updated is { } updated && process.StartedAt is { } started && updated < started - TimeSpan.FromSeconds(1)) { continue; }
+            if (!OfGeneration(r, process)) { continue; }
             // An ended session whose process still runs is not a session, and other ways of
             // finding one (a thread lock) are told so rather than bringing it back.
             if (r.Ended) { ended?.Add(r.SessionId); continue; }
@@ -583,30 +723,49 @@ internal static class RegistrationDiscovery
         return live;
     }
 
-    // Lists the root itself, never its parent: agent-ha-bridge's hook spool sits beside
-    // these folders and must not even be enumerated.
-    static IEnumerable<Registration> Read(AgentKind agent, string root)
-    {
-        DirectoryInfo directory;
-        try
-        {
-            directory = new DirectoryInfo(root);
-            if (!directory.Exists || directory.Attributes.HasFlag(FileAttributes.ReparsePoint)) { yield break; }
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { yield break; }
+    // A pid is reused. A registration last written before the process now holding its pid
+    // started belongs to a session that is gone, and would otherwise come back, old question
+    // and all, for as long as the newcomer runs. A second of slack covers start times the OS
+    // rounds.
+    static bool OfGeneration(Registration registration, AgentProcess process) =>
+        registration.Updated is not { } updated || process.StartedAt is not { } started || updated >= started - TimeSpan.FromSeconds(1);
 
-        foreach (var file in CopilotDiscovery.SafeEnumerateFiles(root, "*.json"))
+    // Lists the root itself, never its parent: agent-ha-bridge's hook spool sits beside
+    // these folders and must not even be enumerated. What it cannot read goes to problem.
+    static IEnumerable<Registration> Read(AgentKind agent, string root, Action<string> problem, Action<string>? afterRead)
+    {
+        switch (CopilotDiscovery.ProbeFolder(root))
+        {
+            case CopilotDiscovery.Folder.Absent: yield break;
+            // A linked folder is not one agent-ha-bridge made; what it points at is unknown.
+            case CopilotDiscovery.Folder.Link: problem("registration folder is a link"); yield break;
+            case CopilotDiscovery.Folder.Unreadable: problem("registration folder could not be read"); yield break;
+        }
+
+        if (!CopilotDiscovery.TryEnumerateFiles(root, "*.json", out var files)) { problem("registration folder could not be listed"); }
+        foreach (var file in files)
         {
             var name = Path.GetFileName(file);
             // Codex keeps approval markers in the same folder; read with their session.
             if (name.EndsWith(".approval.json", StringComparison.OrdinalIgnoreCase)) { continue; }
-            var registration = Parse(agent, file);
+            var registration = Parse(agent, file, out var why, afterRead);
             if (registration is not null) { yield return registration; }
+            else if (why is not null) { problem(why); }
         }
     }
 
-    internal static Registration? Parse(AgentKind agent, string path)
+    internal static Registration? Parse(AgentKind agent, string path) => Parse(agent, path, out _);
+
+    // Null with why when it could not be read as a whole registration of its own session; null
+    // and no why when it has gone. afterRead runs between the read and the check that the file
+    // did not change under it, for tests.
+    internal static Registration? Parse(AgentKind agent, string path, out string? why, Action<string>? afterRead = null)
     {
+        why = "registration could not be read";
+        var before = Stamp(path);
+        if (before is null) { why = null; return null; }
+        if (before == Linked) { why = "registration is a link"; return null; }
+        if (before == Unreadable) { return null; }
         using var doc = ReadJson(path);
         if (doc is null || doc.RootElement.ValueKind != JsonValueKind.Object) { return null; }
         var e = doc.RootElement;
@@ -616,9 +775,14 @@ internal static class RegistrationDiscovery
         // copy, and believing it would put one session's state on another's card.
         var expected = SafeKey(id) + ".json";
         var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        if (!string.Equals(Path.GetFileName(path), expected, comparison)) { return null; }
+        if (!string.Equals(Path.GetFileName(path), expected, comparison)) { why = "registration is not named for its own session"; return null; }
 
         var pid = Json.Int(e, "ProcessId") ?? 0;
+        afterRead?.Invoke(path);
+        // agent-ha-bridge's Read-DaemonRegistrationFile: a hook rewriting it while it was read
+        // may have given half of each version, which is neither.
+        if (Stamp(path) != before) { why = "registration changed while it was read"; return null; }
+        why = null;
         ApprovalMarker? approval = null;
         if (agent == AgentKind.Codex
             && ApprovalMarkerRead.Read(path, id) is { State: ApprovalMarkerState.Present } marker)
@@ -638,6 +802,24 @@ internal static class RegistrationDiscovery
             e.TryGetProperty("Ended", out var ended) && ended.ValueKind == JsonValueKind.True,
             path,
             approval);
+    }
+
+    static readonly (long, long) Unreadable = (-1, -1);
+    static readonly (long, long) Linked = (-2, -2);
+
+    // When it was last written and how long it is; null once it has gone. Gone only when the OS
+    // says so: FileInfo.Exists is false for a file whose details cannot be read as well, which
+    // took an unreadable registration for a deleted one and let its process age out of the hold.
+    static (long Ticks, long Length)? Stamp(string path)
+    {
+        try
+        {
+            if (File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint)) { return Linked; }
+            var info = new FileInfo(path);
+            return (info.LastWriteTimeUtc.Ticks, info.Length);
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return null; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Unreadable; }
     }
 
     static JsonDocument? ReadJson(string path)

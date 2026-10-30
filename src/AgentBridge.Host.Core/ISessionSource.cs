@@ -31,7 +31,8 @@ public interface ISessionSource : IAsyncDisposable
     SessionFiles? Files(string id) => null;
 
     // sessions.subscribe: the result to send, then on Events one session.upsert per live
-    // session, sessions.synced, and every live change after that, in order. Dispose the
+    // session, sessions.synced (with what holds discovery, if anything does), and every live
+    // change after that, discovery.changed included, in order. Dispose the
     // subscription when the channel closes. A second sessions.subscribe on a channel
     // replaces the first: dispose the old subscription and call this again, which sends
     // the whole snapshot and sessions.synced afresh. The channel, not this, numbers
@@ -50,6 +51,12 @@ public interface ISessionSource : IAsyncDisposable
     // show it does nothing.
     Task SetEndingAsync(string id, bool ending) => Task.CompletedTask;
 
+    // Why the last discovery pass could not account for everything, and for which agents, or
+    // null when it could. While an agent is held, its sessions are not removed for being
+    // missing, and nothing may be decided from a session of it being absent: no resume of it is
+    // offered or started, and no worktree is reclaimed (§6.3 invariants 6 and 10).
+    DiscoveryHeld? Held => null;
+
     // The process discovery bound a session to: its id, and its start time, which is what
     // tells it from a later process given the same id before the next discovery pass
     // notices. Null when the session has gone or the source cannot say.
@@ -65,7 +72,7 @@ public sealed record SessionChange(SessionChangeKind Kind, string Id, Session? S
 public sealed record SessionFiles(AgentKind Agent, string? Transcript, string? Registration);
 
 // One event for a subscriber, named as on the wire (Events.SessionUpsert and so on), with
-// its data record: Session, SessionRemoved or SessionsSynced.
+// its data record: Session, SessionRemoved, SessionsSynced or DiscoveryChanged.
 public sealed record SessionEvent(string Name, object Data);
 
 public sealed class SessionSubscription : IDisposable

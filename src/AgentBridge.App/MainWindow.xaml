@@ -44,14 +44,22 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
-                <InfoBar
-                    Grid.Row="0"
-                    Margin="16,8,16,0"
-                    AutomationProperties.AutomationId="Banner"
-                    IsClosable="False"
-                    Severity="Warning"
-                    IsOpen="{x:Bind ViewModel.HasBanner, Mode=OneWay}"
-                    Message="{x:Bind ViewModel.Banner, Mode=OneWay}" />
+                <StackPanel Grid.Row="0">
+                    <InfoBar
+                        Margin="16,8,16,0"
+                        AutomationProperties.AutomationId="Banner"
+                        IsClosable="False"
+                        Severity="Warning"
+                        IsOpen="{x:Bind ViewModel.HasBanner, Mode=OneWay}"
+                        Message="{x:Bind ViewModel.Banner, Mode=OneWay}" />
+                    <InfoBar
+                        Margin="16,8,16,0"
+                        AutomationProperties.AutomationId="DiscoveryHeld"
+                        IsClosable="False"
+                        Severity="Informational"
+                        IsOpen="{x:Bind ViewModel.IsHeld, Mode=OneWay}"
+                        Message="{x:Bind ViewModel.HeldWhy, Mode=OneWay}" />
+                </StackPanel>
 
                 <ScrollViewer x:Name="SessionsPane" Grid.Row="1" AutomationProperties.AutomationId="SessionsPane">
                     <StackPanel MaxWidth="920" Padding="16,12,16,24" Spacing="12">

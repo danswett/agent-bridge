@@ -232,3 +232,28 @@ test('a gap subscribes to usage again too, so a lost update is replaced by the c
   await flush();
   assert.equal(heard.at(-1).agents[0].agent, 'claude');
 });
+test('what holds the host\'s discovery arrives with the snapshot and with each change, and an unreadable one holds nothing', async () => {
+  const t = fakeTransport();
+  const store = new SessionsStore();
+  const changes = [];
+  let client = null;
+  // What a view drawing on each change sees: the hold, with the snapshot counted as in.
+  const seen = [];
+  store.onChange((c) => { changes.push(c.type); seen.push([c.type, client?.synced, store.held?.reason ?? null]); });
+  client = await subscribed(t, store);
+
+  t.host({ ev: 'sessions.synced', seq: 1, data: { revision: 1, discoveryHeld: { reason: 'an unrecognised copilot process (pid 4120)', agents: ['copilot', 'gemini', 7] } } });
+  assert.deepEqual(store.held, { reason: 'an unrecognised copilot process (pid 4120)', agents: ['copilot', 'unknown'] });
+  assert.deepEqual(seen.filter(([type]) => type === 'held' || type === 'synced'), [
+    ['held', true, 'an unrecognised copilot process (pid 4120)'],
+    ['synced', true, 'an unrecognised copilot process (pid 4120)'],
+  ]);
+
+  t.host({ ev: 'discovery.changed', seq: 2, data: { discoveryHeld: { reason: 'an unrecognised copilot process (pid 4120)', agents: ['copilot', 'gemini'] } } });
+  assert.equal(changes.filter((c) => c === 'held').length, 1, 'the same hold again is not news');
+
+  t.host({ ev: 'discovery.changed', seq: 3, data: {} });
+  assert.equal(store.held, null);
+  t.host({ ev: 'discovery.changed', seq: 4, data: { discoveryHeld: { reason: 42 } } });
+  assert.equal(store.held, null);
+});

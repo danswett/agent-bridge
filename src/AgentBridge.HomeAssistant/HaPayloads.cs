@@ -211,8 +211,9 @@ public static class HaPayloads
 
     public sealed record Descriptor(string Name, string Machine, string Node, string Kind);
 
-    // Publish-CopilotMqttGlobalStatus's attributes.
-    public static JsonObject GlobalAttributes(IEnumerable<Descriptor> sessions, string machineName, string slug, JsonObject capabilities, DateTimeOffset now) => new()
+    // Publish-CopilotMqttGlobalStatus's attributes. discoveryHeld is what holds the host's
+    // discovery, as Get-DaemonDiscoveryHoldSummary words it for the status line, or "".
+    public static JsonObject GlobalAttributes(IEnumerable<Descriptor> sessions, string machineName, string slug, JsonObject capabilities, DateTimeOffset now, string discoveryHeld = "") => new()
     {
         ["sessions"] = new JsonArray([.. sessions.Select(d => (JsonNode)new JsonObject
         {
@@ -225,7 +226,7 @@ public static class HaPayloads
         ["machine_slug"] = slug,
         ["capabilities"] = capabilities,
         ["resumable"] = new JsonArray(),
-        ["discovery_held"] = "",
+        ["discovery_held"] = discoveryHeld,
         ["updated"] = Stamp(now),
     };
 

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Protocol;
 
@@ -27,6 +28,23 @@ public sealed record WorktreeUsage(bool Known, IReadOnlyList<string> Directories
 public interface IWorktreeUsage
 {
     WorktreeUsage Read();
+}
+
+// The safety snapshot, unknown while session discovery is held: a session discovery could not
+// see may be working in any of the trees, and a wrong absence here deletes its work (§6.3
+// invariants 6 and 8). Asked afresh for each read, so a hold that begins between two removals
+// stops the second, and again after the inner read, so one that began during it (the
+// reclaimer's last read, under git's locks) does too.
+public sealed class HeldWorktreeUsage(ISessionSource sessions, IWorktreeUsage? inner) : IWorktreeUsage
+{
+    public WorktreeUsage Read()
+    {
+        if (sessions.Held is { } held) { return Unknown(held); }
+        var usage = inner?.Read() ?? WorktreeUsage.Unknown("this host has no way to read it");
+        return usage.Known && sessions.Held is { } after ? Unknown(after) : usage;
+    }
+
+    static WorktreeUsage Unknown(DiscoveryHeld held) => WorktreeUsage.Unknown($"session discovery is held, waiting on {held.Reason}");
 }
 
 // A read-only safety snapshot, as agent-ha-bridge's Get-BridgeWorktreeUsage takes it: not

@@ -285,6 +285,10 @@ public sealed partial class LaunchService : ISessionLauncher
 
         var candidates = stored.Where(e => e.Agent != AgentKind.Copilot).Concat(fromAgency)
             .Concat(stored.Where(e => e.Agent == AgentKind.Copilot).Select(e => e with { Launcher = copilotLauncher! }));
+        // An agent whose discovery is held may have a live session discovery could not see, and
+        // offering it would put two CLIs on one transcript; none of its sessions is offered
+        // until a complete pass (§6.3 invariants 6 and 10).
+        if (source.Held is { } held) { candidates = candidates.Where(e => !held.Agents.Contains(e.Agent)); }
         var excluded = new HashSet<string>(live.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
         // And any a launch has started an agent on that has not registered yet.
         lock (pendingGate) { excluded.UnionWith(launchedOn.Where(x => starter.Running(x.Value)).Select(x => x.Key)); }
@@ -350,6 +354,13 @@ public sealed partial class LaunchService : ISessionLauncher
             if (BusyReason() is { } busy) { return new LaunchResult(LaunchOutcome.Busy, busy); }
 
             var resolved = await ResolveAsync(CancellationToken.None);
+            // A resume not on the list while discovery is held may be of a session that is
+            // running unseen; that cannot be told until a complete pass, so it waits.
+            if (request.Resume is { } resumeId && source.Held is { } held
+                && !resolved.Resumable.Any(e => string.Equals(e.Id, resumeId, StringComparison.OrdinalIgnoreCase)))
+            {
+                return new LaunchResult(LaunchOutcome.Busy, HeldReason(held));
+            }
             var (plan, problem) = Settle(request, resolved);
             if (plan is null) { return Refused(problem!); }
 
@@ -486,12 +497,16 @@ public sealed partial class LaunchService : ISessionLauncher
             {
                 return Refused("that session is already running; two agents on one session would corrupt it");
             }
+            // Or whose agent's discovery became held meanwhile. And a new Codex session, which is
+            // bound to its launch as the first new Codex session to appear: with Codex's
+            // discovery held, one that was running unseen could appear first and be taken for it.
+            if (HeldFor(plan) is { } held) { return new LaunchResult(LaunchOutcome.Busy, HeldReason(held)); }
 
             var directory = plan.Directory;
             string? worktree = null;
             if (plan.Isolated is { } isolated)
             {
-                var made = await Task.Run(() => Worktrees.Create(directory, Config, options.LocalNow, options.WorktreeUsage, m => log($"launch {Short(key)}: worktree: {m}")));
+                var made = await Task.Run(() => Worktrees.Create(directory, Config, options.LocalNow, new HeldWorktreeUsage(source, options.WorktreeUsage), m => log($"launch {Short(key)}: worktree: {m}")));
                 if (made.Detail.Length > 0) { log($"launch {Short(key)}: worktree: {made.Detail}"); }
                 if (made.Path is null) { return Refused($"Launch refused: requested isolation failed. {made.Problem}"); }
                 directory = made.Path;
@@ -544,6 +559,9 @@ public sealed partial class LaunchService : ISessionLauncher
                 Context = plan.Context.Length > 0 ? plan.Context : null,
                 Permissions = plan.AllowAll ? LaunchProtocol.AllowAll : LaunchProtocol.Ask,
             };
+            // And again last thing: preparing a worktree takes seconds, in which a hold can begin.
+            // The reservation and any staged attachments are released below.
+            if (HeldFor(plan) is { } heldNow) { return new LaunchResult(LaunchOutcome.Busy, HeldReason(heldNow)); }
             var codexBefore = source.Snapshot().Where(s => s.Agent == AgentKind.Codex).Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var tuning = string.Join(" / ", new[] { plan.Model, plan.Effort, plan.Context, plan.AllowAll ? "allow all" : "" }.Where(x => x.Length > 0));
             log($"launch {Short(key)}: {(plan.Resume is null ? "new" : "resuming")} {plan.Launcher.Label} session in '{plan.Where}' ({directory}){(plan.Profile.Length > 0 ? $" profile '{plan.Profile}'" : "")}{(tuning.Length > 0 ? $" [{tuning}]" : "")}");
@@ -767,6 +785,15 @@ public sealed partial class LaunchService : ISessionLauncher
     }
 
     static string Short(Guid key) => key.ToString()[..8];
+
+    // Says what is holding it, as agent-ha-bridge's launch note learned to: "discovery is
+    // incomplete" alone sent somebody through the log for the process responsible, on a
+    // machine where every launch had been refused all day.
+    DiscoveryHeld? HeldFor(Plan plan) =>
+        source.Held is { } held && held.Agents.Contains(plan.Launcher.Kind) && (plan.Resume is not null || plan.Launcher.ChoosesOwnSessionId) ? held : null;
+
+    static string HeldReason(DiscoveryHeld held) =>
+        $"Held: session discovery is waiting on {held.Reason}, so whether that session is still running cannot be told yet. Try again in a minute or two.";
 
     static string Short(string id) => id.Length > 8 ? id[..8] : id;
 

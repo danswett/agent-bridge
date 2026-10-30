@@ -507,7 +507,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 .Select(p => new HaPayloads.Descriptor(p.Name, options.MachineName, p.Node, p.Kind))];
         }
         var capabilities = HaPayloads.Capabilities(helperExists, options.Dev);
-        var attributes = HaPayloads.GlobalAttributes(descriptors, options.MachineName, Slug, capabilities, now);
+        var attributes = HaPayloads.GlobalAttributes(descriptors, options.MachineName, Slug, capabilities, now, source.Held?.Reason ?? "");
         var signature = Signature(attributes);
         if (signature == globalSignature && now - globalAt < HaContract.GlobalReassert) { return; }
         var (topic, config) = HaContract.SessionsConfig(Slug, options.MachineName);

@@ -61,6 +61,26 @@ public sealed class MainTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task What_holds_the_hosts_discovery_is_shown_until_it_clears()
+    {
+        await SnapshotAsync();
+        Assert.False(main.IsHeld);
+
+        await host.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot])));
+        await Wait.UntilAsync(() => main.IsHeld, "the hold");
+        Assert.StartsWith("Discovery held: an unrecognised copilot process (pid 4120).", main.HeldWhy);
+
+        await host.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged());
+        await Wait.UntilAsync(() => !main.IsHeld, "the hold to clear");
+
+        // A host already held when the app connects says so with its snapshot.
+        host.Held = new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude]);
+        await host.StopAsync();
+        host.Start();
+        await Wait.UntilAsync(() => main.HeldWhy?.Contains("the claude processes could not be listed", StringComparison.Ordinal) == true, "the hold from the snapshot");
+    }
+
+    [Fact]
     public async Task No_card_moves_while_someone_is_typing_in_any_card()
     {
         await SnapshotAsync();

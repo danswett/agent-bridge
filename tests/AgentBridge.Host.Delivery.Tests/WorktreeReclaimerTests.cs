@@ -248,6 +248,77 @@ public sealed class WorktreeReclaimerTests : IDisposable
     }
 
     [Fact]
+    public async Task Nothing_is_reclaimed_while_session_discovery_is_held_and_finished_trees_go_once_it_is_complete()
+    {
+        var finished = Tree();
+        using var f = new Fixture();
+        f.Processes.Unreadable(AgentKind.Copilot);
+        await using var sessions = f.Source();
+        await sessions.RefreshAsync();
+
+        Assert.Equal(0, Reclaim(new HeldWorktreeUsage(sessions, nobody)));
+        Assert.True(Directory.Exists(finished));
+        Assert.Contains(logs, l => l.EndsWith("cannot be established (session discovery is held, waiting on the copilot processes could not be listed)", StringComparison.Ordinal));
+
+        f.Processes.Unreadable(AgentKind.Copilot, false);
+        await sessions.RefreshAsync();
+        Assert.Equal(1, Reclaim(new HeldWorktreeUsage(sessions, nobody)));
+        Assert.False(Directory.Exists(finished));
+    }
+
+    [Fact]
+    public void A_hold_that_begins_while_a_worktree_is_being_checked_keeps_it()
+    {
+        var finished = Tree();
+        var sessions = new Holding();
+        // Clear at the first look; held by the second, taken with git's locks held.
+        var usage = new HeldWorktreeUsage(sessions, new FixedUsage(new WorktreeUsage(true, [], ""), new WorktreeUsage(true, [], "")));
+        sessions.HoldAfter = 1;
+
+        Assert.Equal(0, Reclaim(usage));
+        Assert.True(File.Exists(Path.Combine(finished, "README.md")));
+    }
+
+    [Fact]
+    public void A_hold_that_begins_during_the_last_read_under_gits_locks_keeps_the_tree()
+    {
+        var finished = Tree();
+        var sessions = new Holding { HoldAfter = int.MaxValue };
+        // Clear before and through the first look; held from inside the second read on.
+        var usage = new HeldWorktreeUsage(sessions, new HoldsOnRead(sessions, 2));
+
+        Assert.Equal(0, Reclaim(usage));
+        Assert.True(File.Exists(Path.Combine(finished, "README.md")));
+    }
+
+    sealed class HoldsOnRead(Holding sessions, int on) : IWorktreeUsage
+    {
+        int reads;
+        public WorktreeUsage Read()
+        {
+            if (++reads == on) { sessions.HoldAfter = -1; }
+            return new WorktreeUsage(true, [], "");
+        }
+    }
+
+    // Held from the HoldAfter+1th question on.
+    sealed class Holding : AgentBridge.Host.Core.ISessionSource
+    {
+        int asked;
+        public int HoldAfter { get; set; }
+        public DiscoveryHeld? Held => ++asked > HoldAfter ? new DiscoveryHeld("an unrecognised copilot process (pid 1)", [AgentKind.Copilot]) : null;
+        public long Revision => 0;
+        public event EventHandler<AgentBridge.Host.Core.SessionChange>? Changed { add { } remove { } }
+        public IReadOnlyList<Session> Snapshot() => [];
+        public SessionList List(string? cursor = null) => new([], 0);
+        public Session? Get(string id) => null;
+        public AgentBridge.Host.Core.SessionSubscription Subscribe() => throw new NotSupportedException();
+        public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Fact]
     public void A_session_that_starts_while_a_worktree_is_being_checked_keeps_it()
     {
         var finished = Tree();

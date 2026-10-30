@@ -211,7 +211,7 @@ async function startDemo() {
     me: null,
     current: hello.machine.id,
     onSelect: () => {},
-    status: () => machineStatus({ ...hello.machine, sessions: client.synced ? store.size : hello.machine.sessions }),
+    status: () => machineStatus({ ...hello.machine, sessions: client.synced ? store.size : hello.machine.sessions, held: client.synced ? store.held?.reason : null }),
   });
   drawMachine();
   store.onChange(drawMachine);
@@ -244,6 +244,7 @@ async function startDemo() {
     scriptLaunches: (...outcomes) => host.scriptLaunches(outcomes),
     upsert: (s) => host.upsert(s),
     remove: (id) => host.remove(id),
+    hold: (held) => host.hold(held),
     frame: (f) => host.frame(f),
     get calls() { return [...host.calls]; },
     pause: () => script?.pause(),

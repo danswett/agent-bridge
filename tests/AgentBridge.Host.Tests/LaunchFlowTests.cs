@@ -76,7 +76,7 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null) => new(source, probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null) => new(source, probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
     {
         CopilotHome = f.CopilotHome,
         ClaudeHome = f.ClaudeHome,
@@ -91,10 +91,11 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         // The fixture's folders are under temp, which is a system folder to a real launch.
         IsSystemDirectory = _ => false,
         WorktreeUsage = usage,
+        LocalNow = now ?? (() => DateTime.Now),
     });
 
-    void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null) =>
-        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: Launcher(config, wait, usage)).HandleAsync;
+    void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null) =>
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: Launcher(config, wait, usage, now)).HandleAsync;
 
     async Task<SecureChannel> OpenAsync()
     {
@@ -437,6 +438,71 @@ public sealed class LaunchFlowTests : IAsyncLifetime
     }
 
     static (string, string?) Pair(Outcome o) => (o.Outcome_, o.Reason);
+
+    [Fact]
+    public async Task While_Copilot_discovery_is_held_none_of_its_sessions_is_offered_for_resume_and_resuming_one_is_busy()
+    {
+        const string Id = "88888888-8888-4888-8888-888888888888";
+        Resumable(Id, app, "Ship it");
+        // A Copilot no session accounts for: it may be that very session, running unseen.
+        f.Processes.Run(AgentKind.Copilot, 950, "copilot", DateTimeOffset.UtcNow);
+        await source.RefreshAsync();
+        var ch = await OpenAsync();
+
+        Assert.Empty((await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("resumable").EnumerateArray());
+        var held = await LaunchAsync(ch, new { resume = Id });
+        Assert.Equal("busy", held.Outcome_);
+        Assert.Contains("an unrecognised copilot process (pid 950)", held.Reason);
+        Assert.Empty(starter.Specs);
+        // A new session decides nothing from an absence, so it still starts.
+        Assert.Equal("started", (await LaunchAsync(ch, new { prompt = "go" })).Outcome_);
+
+        f.Processes.Exit(AgentKind.Copilot, 950);
+        await source.RefreshAsync();
+        Assert.Contains((await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("resumable").EnumerateArray(), r => r.GetProperty("id").GetString() == Id);
+        Assert.Equal("started", (await LaunchAsync(ch, new { resume = Id })).Outcome_);
+    }
+
+    [Fact]
+    public async Task A_new_Codex_session_is_not_launched_while_Codex_discovery_is_held_since_it_is_bound_by_appearing_first()
+    {
+        locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        Directory.CreateDirectory(f.CodexRegistrations);
+        f.Processes.Run(AgentKind.Codex, 960, "codex", DateTimeOffset.UtcNow);
+        await source.RefreshAsync();
+        var ch = await OpenAsync();
+
+        var o = await LaunchAsync(ch, new { agent = "codex", prompt = "add pagination" });
+
+        Assert.Equal("busy", o.Outcome_);
+        Assert.Contains("an unrecognised codex process (pid 960)", o.Reason);
+        Assert.Empty(starter.Specs);
+    }
+
+    [Fact]
+    public async Task A_hold_that_begins_while_the_worktree_is_made_stops_the_launch_before_anything_starts()
+    {
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "hi\n");
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "one");
+        locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        Directory.CreateDirectory(f.CodexRegistrations);
+        // The worktree's name is the moment it is made; a Codex nothing accounts for appears then.
+        Serve(Config(c => c with { Workspaces = [new("App", app, true)] }), now: () =>
+        {
+            f.Processes.Run(AgentKind.Codex, 970, "codex", DateTimeOffset.UtcNow);
+            source.RefreshAsync().GetAwaiter().GetResult();
+            return DateTime.Now;
+        });
+        var ch = await OpenAsync();
+
+        var o = await LaunchAsync(ch, new { agent = "codex", prompt = "add pagination" });
+
+        Assert.Equal("busy", o.Outcome_);
+        Assert.Contains("an unrecognised codex process (pid 970)", o.Reason);
+        Assert.Empty(starter.Specs);
+    }
 
     void Resumable(string id, string cwd, string summary)
     {

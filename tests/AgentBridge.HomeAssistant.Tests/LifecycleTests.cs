@@ -163,6 +163,24 @@ public sealed class LifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task What_holds_the_hosts_discovery_reaches_the_status_line_as_discovery_held_and_clears_with_it()
+    {
+        sessions.Set(FakeSessions.Copilot(A));
+        await using var c = Connector();
+        await Run(c, 3);
+        string Held() => JsonDocument.Parse(ha.Retained[HaContract.GlobalAttributesTopic(Slug)]).RootElement.GetProperty("discovery_held").GetString()!;
+        Assert.Equal("", Held());
+
+        sessions.Held = new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
+        await Pass(c, 1);
+        Assert.Equal("an unrecognised copilot process (pid 4120)", Held());
+
+        sessions.Held = null;
+        await Pass(c, 1);
+        Assert.Equal("", Held());
+    }
+
+    [Fact]
     public async Task A_session_ending_leaves_the_list_at_once_and_its_entities_only_after_its_card_has_left_the_dashboard()
     {
         sessions.Set(FakeSessions.Copilot(A));
