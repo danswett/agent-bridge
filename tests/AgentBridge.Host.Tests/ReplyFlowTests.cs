@@ -330,7 +330,9 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Contains("cannot start with /", (await ReplyAsync(ch, "/clear")).Reason);
         Assert.Equal(("refused", "this host does not take attachments; send the text alone, or attach at the machine"), await ReplyAsync(ch, "see this", attachments: new[] { new { id = Guid.NewGuid() } }));
         Assert.Equal(("refused", "request must be a UUID"), await ReplyAsync(ch, "hello", request: "7"));
-        Assert.Equal(("refused", "replying is not supported for claude yet; reply at the machine"), await ReplyAsync(ch, "hello", id: ClaudeId));
+        // Claude is typed into only where its input box is seen on screen; an injector that
+        // cannot read screens types nothing.
+        Assert.Equal(("refused", "this host cannot read the session's screen; answer at the machine"), await ReplyAsync(ch, "hello", id: ClaudeId));
         Assert.Empty(injector.Plans);
     }
 

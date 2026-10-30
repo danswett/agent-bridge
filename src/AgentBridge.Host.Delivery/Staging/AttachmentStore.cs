@@ -448,6 +448,11 @@ public sealed partial class AttachmentStore : IDisposable
         return b[..n];
     }
 
+    // Whether every file of a claim is an image Codex attaches when its path is pasted; a file
+    // too large for memory is told by its start on disk.
+    public static bool AllPastableImages(Claim claim) =>
+        claim.Items.All(h => AttachmentFiles.IsPastableImage(h.File is null ? h.Bytes : Head(h.File)));
+
     // The reply was typed: the attachments are the agent's now, and leave memory and incoming/.
     // Their staged copies stay until the sweep.
     public void Consume(Claim claim)
@@ -608,6 +613,10 @@ public static partial class AttachmentFiles
     static readonly Format Pdf = new("PDF", [".pdf"]);
     static readonly Format[] Known = [Png, Jpeg, Gif, Webp, Heic, Heif, Pdf];
     static readonly string[] HeicBrands = ["heic", "heix", "hevc", "hevx", "heim", "heis"];
+
+    // An image Codex takes in when its path is pasted into its input: it attaches only images,
+    // and a path to anything else stays as text in the prompt.
+    public static bool IsPastableImage(ReadOnlySpan<byte> b) => Detect(b) is { } f && (f == Png || f == Jpeg || f == Gif || f == Webp);
 
     public static Format? Detect(ReadOnlySpan<byte> b)
     {

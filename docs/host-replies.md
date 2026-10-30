@@ -12,12 +12,9 @@ one session at once.
 | Agent | Replies | Why |
 |---|---|---|
 | Copilot CLI | Yes | agent-ha-bridge has long typed replies into it, and its transcript records every prompt (`user.message`) with the text as typed, which confirms one by identity |
-| Claude Code | Refused: "not supported for claude yet" | agent-ha-bridge types replies into it, but confirms only that *some* prompt was submitted (a `user` entry or a `queue-operation` enqueue), not which. Claude Code takes a long burst as a paste and can swallow the Enter after it, so the bridge presses Enter up to twice more, and must not while a permission prompt is open, which only agent-ha-bridge's own hook status says. No transcript of a queued Claude prompt has been examined here to confirm by identity |
-| Codex | Refused: "not supported for codex yet" | agent-ha-bridge types replies into it with no confirmation at all (its Codex entry has no `TranscriptConfirmsInput`), and records having no Codex install to check against |
+| Claude Code | Yes, typed only into its input box as seen on screen | Its transcript records a prompt typed while idle as a `user` entry whose content is the line as typed, and one typed while it works as a `queue-operation` `enqueue` with that content (2.1.312, seen live), which confirms one by identity. agent-ha-bridge confirmed only that *some* prompt was submitted |
+| Codex | Yes, typed only into its input box as seen on screen, and only while it is empty | Its rollout records every prompt, idle or mid-turn, as an `item_completed` `UserMessage` with the line as typed (0.165, seen live), which confirms one by identity. agent-ha-bridge typed with no confirmation at all |
 | Any, on macOS or Linux | Refused, and `sessions.reply` is not offered | Delivery through tmux comes later |
-
-Claude and Codex slot in beside the Copilot planner and verifier once their prompts are
-confirmed by identity on a live session.
 
 ## The keys (Copilot)
 
@@ -99,8 +96,64 @@ log says how many files and how many KiB, never their names.
 256 KiB through the end-to-end channel, and up to 100 MiB through the blob store, end to end
 encrypted; Home Assistant's image store took images of any size, and other files only up to
 256 KiB. Against a relay without a blob store the phone keeps to 256 KiB and shrinks a larger
-photo or screenshot to fit (see the PWA). Only Copilot sessions take replies here, so only
-they take attachments; agent-ha-bridge also typed them into Claude Code and Codex.
+photo or screenshot to fit (see the PWA). Claude Code and Codex take attachments too (below).
+
+## Claude Code and Codex
+
+The keys are agent-ha-bridge's (`Invoke-DaemonReply`): one line, 300 ms, then Enter on its
+own. What guards them is new. agent-ha-bridge's hooks tell it when a permission prompt, an
+`AskUserQuestion` or a Codex approval is waiting; this host registers no hooks
+([app-windows.md](app-windows.md)), and a reply typed into one of those would answer it
+(words pick an option; Enter accepts the highlighted one). Each of them takes the input
+box's place on screen, so the host reads the screen first (`AgentReplies/Composer.cs`) and
+types only into an **input box that is positively on screen**, with the first send
+held to those rows (`KeySend.Expect`), so nothing is typed if they change in between:
+
+- Claude Code 2.1: a row starting `>` at the left edge between two full-width rules. A
+  permission prompt shows indented options under one rule; an `AskUserQuestion` shows tabs
+  between its rules and "Esc to cancel" beneath. Neither is taken for the box. After a turn
+  Claude suggests a next prompt in the empty box, as text a screen read cannot tell from
+  typed words, so the box is typed into whatever it shows: words someone left in it would go
+  with the reply, and Claude's record of them would leave the reply `unconfirmed`.
+- Codex 0.165: the last row starting `›` with "? for shortcuts" in the footer below it,
+  which Codex shows only while nothing is typed (idle or working; the box's own text is one
+  of several placeholders). An approval's first option also starts `›`, but has no such
+  footer and ends "Press enter to confirm or esc to cancel".
+
+Otherwise the reply is `refused` ("input box is not on its screen", or, for Codex, "already
+typed in Codex's input box"), and nothing is typed.
+
+**Confirmed by identity.** Claude: a `user` entry (not meta, not a subagent's, no
+`tool_result`) whose content is the line, or, typed while it works, the `queue-operation`
+`enqueue` with that content; the `user` entry Claude writes when it later takes a queued
+prompt (`promptSource: "queued"`) repeats it and confirms nothing. Codex: an
+`item_completed` `UserMessage` whose text is the line (an older `user_message` event is read
+too). Each record confirms one reply. Anything else is `unconfirmed`.
+
+**Enter again.** Claude takes a long burst as a paste and can swallow the Enter after it
+(the reason for `Confirm-DaemonClaudeSubmit`); Codex was seen live to make it a new line in
+the box instead. If nothing is recorded within 1.5 s, the host reads the screen and presses
+Enter alone, held to the box's rows, only if the box still holds exactly this reply; at most
+twice. A box still empty or showing only the start of the reply is looked at again (Codex
+takes typed keys in slowly while it streams output, seen live). A prompt that has taken the
+box's place, or other words in it, stop it.
+
+**Attachments.** Claude reads a file its prompt mentions as `@<path>`, image or text, and
+records an `attachment` entry with `filename` set to the path for each (seen live), so the
+line is Copilot's. An image too large to go inline gets no such entry; Claude reads it with
+its `Read` tool instead (seen live with 290 KiB), and a successful `Read` of the path counts
+the same. That `Read` is outside Claude's working directories, so Claude may first ask at the
+machine to allow it, which without hooks the card does not show; the reply is then
+`unconfirmed` unless it is allowed within the wait. A reply is `delivered` once every staged path has been read (for a queued
+reply, once Claude takes it). Codex does not read `@<path>` (left as words, seen live): it
+attaches an image when a paste is exactly a path to one, showing `[Image #n]`. Keys that
+reach it together are one paste, though: a path and the words sent 500 ms after it were seen
+live taken as words. So each image path goes as a paste of its own only once the box shows
+the ones before it as `[Image #n]`, and the words and Enter once it shows them all (each
+waited for up to 10 s; if the box shows a path as words instead, typing stops there and the
+reply is `unconfirmed`). The record must list each as a `local_image`. Codex is sent PNG,
+JPEG, GIF and WebP only; a reply with any other file is `refused` before anything is typed,
+and its files are kept.
 
 ## Before and after typing
 
@@ -108,7 +161,7 @@ In order, for every reply:
 
 1. Platform, agent-ha-bridge, then `Replies.Check` (blank without attachments, over 16 KiB,
    a leading `/` or `!`, more than 10 attachments or a malformed one).
-2. The session is live (`stale` otherwise) and is a Copilot session (`refused` otherwise).
+2. The session is live (`stale` otherwise) and is a Copilot, Claude Code or Codex session (`refused` otherwise).
 3. One delivery per session (`busy`), shared with answers. Every request's outcome is
    remembered for 15 minutes and returned for a resend, which types nothing.
 4. No question or permission prompt in the session as reported (`refused`: "answer that

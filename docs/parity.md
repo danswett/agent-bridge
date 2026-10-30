@@ -35,10 +35,10 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 
 | Status | Rows |
 |---|---|
-| `Verified` | 45 |
+| `Verified` | 47 |
 | `Implemented, untested live` | 28 |
 | `Partial` | 3 |
-| `Missing` | 24 |
+| `Missing` | 22 |
 | `Intentionally different` | 17 |
 | `N/A` | 12 |
 | `In flight (…)` | 17: Claude/Codex live 8, HA connector 5, blob store 3, reclaimer 1 |
@@ -109,13 +109,13 @@ Of the 15 §6.3 invariants: 7 `Verified`, 2 `Implemented, untested live`, 2 `Par
 |---|---|---|---|---|---|
 | Reply to a session, typed as one line then Enter, confirmed in the transcript | Cp | `Send-CopilotSessionPrompt`; `tests/test-daemon-replies.ps1` | `Verified` | `ReplyFlowTests.A_reply_the_transcript_then_records_as_the_persons_prompt_is_delivered_typed_as_one_line_then_Enter`. Live: Progress › Replies | |
 | Reply to a working session (steering or queued) | Cp | `Test-DaemonReplyBoxFree` | `Verified` | `ReplyFlowTests.A_reply_to_a_working_session_is_delivered_once_copilot_takes_it_at_its_next_step`. Live: Progress › Steering | |
-| Replies to Claude and Codex | Cl, Cx | `Invoke-DaemonReply`, `Confirm-DaemonClaudeSubmit` | `Missing` | Refused: "replying is not supported for claude yet" (`ReplyService.cs`) | #41. The design Progress note "Claude and Codex answering and replies" overstates #24 |
+| Replies to Claude and Codex | Cl, Cx | `Invoke-DaemonReply`, `Confirm-DaemonClaudeSubmit` | `Verified` | Typed only into the empty input box seen on screen, confirmed by identity, Enter again only while the box holds the reply (`AgentReplyFlowTests`; live on the VM, #41) | Without hooks, a question or permission prompt is seen only on screen ([host-replies.md](host-replies.md#claude-code-and-codex)) |
 | A leading `/` or `!` is refused | All | `hooks/daemon-replies.ps1` | `Verified` | `ReplyTests.A_slash_or_bang_command_is_refused_wherever_leading_space_or_control_characters_hide_it`. Live: Progress › Replies (`/help` refused) | |
 | A reply waits while a question or permission prompt is open | All | `Test-DaemonReplyBoxFree` | `Verified` | `ReplyFlowTests.While_the_session_asks_a_question_a_reply_is_refused_untyped_even_before_the_host_has_read_it`, `CopilotPermissionFlowTests.A_reply_waits_while_a_permission_prompt_that_can_be_answered_is_pending`. Live: Progress › Replies | |
 | Ctrl/Cmd+Enter sends; Enter is a new line; text is kept until it is consumed | All | Reply card | `Implemented, untested live` | `pwa/test/reply.spec.mjs: "Ctrl+Enter or Cmd+Enter sends…"`, `"words typed while a reply is on its way stay in the box…"`, `CardTests.A_reply_goes_with_its_files_sent_first_in_chunks_and_leaves_what_was_typed_meanwhile` | #39 |
 | Paste an image or attach a file (up to 256 KiB), mentioned as `@path` | Cp | `New-BridgeAttachmentPrompt`, `Save-BridgeReplyFile` | `Verified` | `ReplyFlowTests.A_reply_with_files_sent_first_mentions_each_ahead_of_the_words_and_is_delivered_once_copilot_attaches_them`, `pwa/test/attach.spec.mjs`. Live: Progress › Attachments (#27) | |
 | Images of any size (HA image store) and files over 256 KiB | All | `/api/image/upload` | `In flight (blob store)` | The phone shrinks photos to fit (`pwa/test/unit/attachments.test.mjs: "an image over 256 KiB is redrawn smaller…"`) | |
-| Attachments to Claude and Codex | Cl, Cx | `New-BridgeAttachmentPrompt` | `Missing` | Only Copilot takes replies | #41 |
+| Attachments to Claude and Codex | Cl, Cx | `New-BridgeAttachmentPrompt` | `Verified` | Claude: `@<path>`, read back from its `attachment` entries; Codex: images pasted as paths, read back as `local_image` (`AgentReplyFlowTests`; live on the VM, #41) | Codex takes images only; other files are refused |
 | Attachments staged in a protected per-installation folder, never shared TEMP; swept after 24 h | All | `Get-BridgeAttachmentRootForInstallation`, `Remove-BridgeStaleAttachment`; `tests/test-p5-attachment-privacy.ps1` | `Verified` | `AttachmentStoreTests.Staged_files_go_in_a_folder_only_this_user_can_open_named_safely_with_the_extension_their_bytes_call_for`, `The_sweep_deletes_only_old_files_it_staged_and_nothing_through_a_linked_folder`. Live: Progress › Attachments | |
 
 ## 5. Ending a session
@@ -301,7 +301,7 @@ All 87 agent-ha-bridge suites, grouped by feature, with where the behaviour stan
 | Discovery and sessions | `test-daemon-discovery`, `test-daemon-sessions`, `test-daemon-agents`, `test-daemon-loop`, `test-resume-discovery`, `test-registration-isolation` [HA] | `DiscoveryTests`, `SourceTests`. Holds missing (#43) |
 | Decisions and answers | `test-daemon-decisions`, `test-decision-args`, `test-decision-lifecycle`, `test-decision-retry` [HA], `test-decision-select-race` [HA], `test-answer-match`, `test-p3b-contracts`, `test-choices-form` [HA] | `CopilotPlannerTests`, `TranscriptAndVerifierTests`, `AnswerFlowTests`, `AnswerTests`: Verified for Copilot (§2). Cancel request: #56 |
 | Notifications | `test-answer-buttons` [HA] | `PushNotifierTests`, `PushFlowTests`, `ToastTests`: Verified (§10) |
-| Replies and attachments | `test-daemon-replies`, `test-reply-card` [HA], `test-p5-attachment-privacy` | `ReplyFlowTests`, `CopilotReplyTests`, `AttachmentStoreTests`: Verified for Copilot. Claude and Codex: #41 |
+| Replies and attachments | `test-daemon-replies`, `test-reply-card` [HA], `test-p5-attachment-privacy` | `ReplyFlowTests`, `CopilotReplyTests`, `AttachmentStoreTests`, `AgentReplyFlowTests`: Verified for Copilot, Claude and Codex |
 | End session | `test-stop-session`, `test-write-boundary-stop` [HA] | `StopFlowTests`, `StopTests`: Verified (§5) |
 | Launch, resume, worktrees | `test-new-session`, `test-launchers`, `test-launch-permissions`, `test-agent-launched`, `test-worktree-isolation`, `test-p4-worktree-safety`, `test-resume-sharing` | `LaunchFlowTests`, `LaunchPieceTests`: Verified or untested live (§6, §7). Reclaimer and sharing in flight. Agent principal: #44, #45 |
 | Transfer and fork | `test-session-transfer`, `test-session-fork` | In flight (blob store) |

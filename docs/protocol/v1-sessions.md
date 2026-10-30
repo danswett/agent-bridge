@@ -274,10 +274,11 @@ Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`:
 | `busy` | An answer or another reply to this session is being typed | No |
 | `refused` | The host will not type it: an invalid reply (above), **a question or permission prompt pending in the session** (the words would answer it, and Enter accept it; answer it first, at the machine for one marked `answerAtMachine`), a transcript the host cannot read to rule that out, an attachment the host does not hold (expired, removed, sent by another device, still arriving, or gone with an earlier reply) or cannot hand over, an elevated or otherwise unreachable session, an agent or platform without delivery yet, or agent-ha-bridge active for this user | No |
 
-Only Copilot CLI sessions take replies. Claude Code and Codex replies are `refused`:
-agent-ha-bridge types replies into both, but confirms a Claude reply only by *some* prompt
-being submitted (any `user` entry or queued prompt, not this one), and a Codex reply not at
-all, so neither could be `delivered` on evidence.
+Copilot CLI, Claude Code and Codex sessions take replies. A Claude Code or Codex reply is
+typed only into the agent's input box as its screen shows it, since without
+agent-ha-bridge's hooks a host cannot otherwise see their permission prompts and questions;
+it is `refused` when that box is not on screen, or for Codex already has words in it. Codex takes only
+images as attachments; a Codex reply with any other file is `refused`.
 
 A reply is never typed while the session is asking anything, which a host checks both in
 what it reports and, immediately before typing, in the transcript itself. The per-session
