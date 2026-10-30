@@ -194,7 +194,14 @@ public sealed class LiveHomeAssistantTests : IDisposable
             await Task.Delay(500);
         }
         Assert.Null(await ha.GetStateAsync(SessionEntities.Decision(node)));
-        Assert.Empty(await ha.ReadTopicsAsync([$"{HaContract.TopicRoot}/{node}/#", $"{HaContract.DiscoveryPrefix}/+/{node}/#"], TimeSpan.FromSeconds(2)));
+        // The entities go with their configs; the retained values follow, availability last.
+        string[] filters = [$"{HaContract.TopicRoot}/{node}/#", $"{HaContract.DiscoveryPrefix}/+/{node}/#"];
+        IReadOnlyList<HaMessage> left;
+        while ((left = await ha.ReadTopicsAsync(filters, TimeSpan.FromSeconds(2))).Count > 0)
+        {
+            Assert.True(DateTime.UtcNow < deadline, $"still retained: {string.Join(", ", left.Select(m => m.Topic))}");
+            await Task.Delay(500);
+        }
     }
 
     [HomeAssistantFact]
