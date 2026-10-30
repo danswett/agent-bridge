@@ -786,6 +786,22 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Another_profile_whose_migration_record_cannot_be_read_refuses_a_new_migration()
+    {
+        var other = Path.Combine(Path.GetDirectoryName(_f.Profile)!, "work");
+        Directory.CreateDirectory(other);
+        File.WriteAllText(MigrationRecord.PathIn(other), "{ broken");
+        var listing = _f.Listing();
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("(unreadable migration.json)", report.ToString());
+        Assert.Equal(listing, _f.Listing());
+        Assert.Empty(_f.Runtime_.Calls);
+    }
+
+    [Fact]
     public async Task Rolling_back_with_nothing_migrated_says_so()
     {
         var report = await _f.Migrator().RollbackAsync(dryRun: false);

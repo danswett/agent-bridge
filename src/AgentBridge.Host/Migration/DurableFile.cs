@@ -46,28 +46,59 @@ public static class DurableFile
         }
         if (LinkCount(target) > 1)
         {
-            using var stream = new FileStream(target, FileMode.Open, FileAccess.Write, FileShare.Read);
+            // Held alone from the check to the last byte: nobody saves in between.
+            using var stream = new FileStream(target, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            var current = new byte[stream.Length];
+            stream.ReadExactly(current);
+            if (MigrationRecord.Hash(current) != expected) { throw new ChangedMeanwhileException(path); }
+            stream.Position = 0;
             stream.SetLength(0);
             stream.Write(bytes);
             stream.Flush(flushToDisk: true);
             return;
         }
-        var partial = Path.Combine(Path.GetDirectoryName(target)!, $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.tmp");
+        var directory = Path.GetDirectoryName(target)!;
+        var partial = Path.Combine(directory, $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.tmp");
+        var displaced = Path.Combine(directory, $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.old");
         try
         {
             Flushed(partial, bytes);
-            File.Replace(partial, target, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            BeforeCommit.Value?.Invoke(target);
+            // What this replaces is kept aside and checked: a save that landed after the check
+            // above is put back, rather than lost under this write.
+            File.Replace(partial, target, displaced, ignoreMetadataErrors: true);
+            if (MigrationRecord.Hash(displaced) != expected)
+            {
+                File.Replace(displaced, target, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                throw new ChangedMeanwhileException(path);
+            }
         }
-        finally { Delete(partial); }
+        finally
+        {
+            Delete(partial);
+            Delete(displaced);
+        }
     }
 
     // Deletes a file another program owns, if it still hashes to expected. A link is removed,
-    // not its target, as Remove-Item does.
+    // not its target, as Remove-Item does. Moved aside first and checked, as Replace does.
     public static void Remove(string path, string? expected)
     {
         Check(path, expected);
-        File.Delete(path);
+        if (!File.Exists(path) && new FileInfo(path).LinkTarget is null) { return; }
+        var displaced = Path.Combine(Path.GetDirectoryName(path)!, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.old");
+        BeforeCommit.Value?.Invoke(path);
+        File.Move(path, displaced);
+        if (MigrationRecord.Hash(displaced) != expected)
+        {
+            if (!File.Exists(path)) { File.Move(displaced, path); }
+            throw new ChangedMeanwhileException(path);
+        }
+        Delete(displaced);
     }
+
+    // For tests: runs between the check and the commit, as a save landing there would.
+    internal static readonly AsyncLocal<Action<string>?> BeforeCommit = new();
 
     static void Check(string path, string? expected)
     {

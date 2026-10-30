@@ -44,7 +44,9 @@ second snapshot the first's changes as the state to restore; the second is refus
    * another profile is migrated, or part-way through a migration, from this installation or any
      other. Two hosts would handle every event twice (the intake also refuses to share a spool,
      see `docs/host-hooks.md`), and the hook this product installs has one `hook.json`, so a
-     second installation's migration would send the first's hooks into the second's spool;
+     second installation's migration would send the first's hooks into the second's spool. A
+     profile whose `intake.json` or `migration.json` cannot be read counts: it may hold a
+     migration not yet rolled back, whose disabled tasks would be snapshotted as the originals;
    * `installation.json` is missing, is not schema 1 with a 32-hex id, belongs to another path,
      or is an isolated (test) installation;
    * agent-ha-bridge's `config.json` cannot be read, so its publication policy cannot be
@@ -94,7 +96,9 @@ second snapshot the first's changes as the state to restore; the second is refus
    is written and must still be what the change was planned from (the same goes for the
    profile's `config.json`): an agent already on its native hook keeps running and may write its
    settings (`/model`, `/permissions`) meanwhile. If one has, the migration is undone and that
-   file is left as the agent wrote it.
+   file is left as the agent wrote it. A save landing between that check and the rename is
+   caught too: the file replaced is kept aside and checked, and put back if it was not what was
+   planned from (a hard-linked file is held alone from the check to its last byte instead).
 6. **Settings.** Carries agent-ha-bridge's settings into the profile's `config.json` (below).
 7. **Hand-over.** Writes `intake.json` (the runtime folder, and the agents' homes the
    installation recorded, whose hooks were re-pointed: the host reads sessions from those unless

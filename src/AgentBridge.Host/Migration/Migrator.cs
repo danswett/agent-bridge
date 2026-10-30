@@ -640,6 +640,10 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             }
             if (MigrationRecord.Load(folder).Record is { } record) { return (folder, record.InstallationId); }
             if (File.Exists(Path.Combine(folder, IntakeState.FileName))) { return (folder, "(unreadable intake.json)"); }
+            // A migration that profile cannot yet roll back (cut short before intake.json, or a
+            // rollback that kept its record): starting another would snapshot its disabled tasks
+            // and re-pointed hooks as the state to restore.
+            if (File.Exists(MigrationRecord.PathIn(folder))) { return (folder, "(unreadable migration.json)"); }
         }
         return null;
     }
@@ -655,7 +659,6 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         }
     }
 
-    // Replaced in one step, so an agent starting never reads half a settings file.
     // A file that was a symbolic link when migrated, and is now a plain file holding exactly what
     // the migration wrote through it (something replaced the link with a copy): the link is made
     // again, so the restore below goes through to its target as before.
