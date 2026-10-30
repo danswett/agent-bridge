@@ -80,11 +80,10 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
     }
 
     // This installation's processes in a role: pwsh or powershell running that script by its
-    // full path, and, where a receipt names the process, started when the receipt says.
+    // full path (RunsScript), and, where a receipt names the process, started when the receipt says.
     static List<Process> Owned(AgentHaBridgeInstall install, string role, string script)
     {
-        var path = Regex.Escape(Path.Combine(install.HooksDir, script));
-        var pattern = new Regex($"(?i:-File)\\s+(?:\"{path}\"|'{path}'|{path})(?=\\s|$)", RegexOptions.IgnoreCase);
+        var path = Path.Combine(install.HooksDir, script);
         var receipt = Receipt(install, role);
         var owned = new List<Process>();
         foreach (var process in Process.GetProcessesByName("pwsh").Concat(Process.GetProcessesByName("powershell")))
@@ -93,13 +92,40 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
             try
             {
                 keep = process.Id != Environment.ProcessId
-                    && SystemProcessInspector.ReadCommandLine(process.Id) is { } commandLine && pattern.IsMatch(commandLine)
+                    && SystemProcessInspector.ReadCommandLine(process.Id) is { } commandLine && RunsScript(commandLine, path)
                     && (receipt is not { } r || r.Pid != process.Id || r.StartedUtcTicks == process.StartTime.ToUniversalTime().Ticks);
             }
             catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
             if (keep) { owned.Add(process); } else { process.Dispose(); }
         }
         return owned;
+    }
+
+    // Whether a command line is PowerShell running that script, as Test-BridgeLaunchAgentOwnership
+    // reads one: the interpreter, then only the options agent-ha-bridge starts its runtime with,
+    // then -File and the script. Not "-File <script>" anywhere: that also matches another
+    // script's own arguments (pwsh -File inspect.ps1 -File <daemon>), and that process is killed.
+    internal static bool RunsScript(string commandLine, string script)
+    {
+        var arguments = CommandLine.Split(commandLine);
+        if (arguments.Count < 3 || Path.GetFileNameWithoutExtension(arguments[0]).ToLowerInvariant() is not ("pwsh" or "powershell")) { return false; }
+        for (var i = 1; i < arguments.Count; i++)
+        {
+            var a = arguments[i];
+            if (a.Equals("-File", StringComparison.OrdinalIgnoreCase))
+            {
+                return i + 1 < arguments.Count && AgentHaBridgeInstall.SamePath(arguments[i + 1], script);
+            }
+            if (a.Equals("-NoProfile", StringComparison.OrdinalIgnoreCase) || a.Equals("-NonInteractive", StringComparison.OrdinalIgnoreCase) || a.Equals("-NoLogo", StringComparison.OrdinalIgnoreCase)) { continue; }
+            if ((a.Equals("-ExecutionPolicy", StringComparison.OrdinalIgnoreCase) || a.Equals("-WindowStyle", StringComparison.OrdinalIgnoreCase))
+                && i + 1 < arguments.Count && Regex.IsMatch(arguments[i + 1], @"^\w+$"))
+            {
+                i++;
+                continue;
+            }
+            return false;
+        }
+        return false;
     }
 
     static (int Pid, long StartedUtcTicks)? Receipt(AgentHaBridgeInstall install, string role)

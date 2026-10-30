@@ -250,7 +250,16 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
     {
         var host = Parsed(launch["workspaces"]);
         var chosen = LegacyChoices(source).FirstOrDefault(w => string.Equals(w.Label, configured, StringComparison.OrdinalIgnoreCase));
-        if (chosen.Path is not null && host.FirstOrDefault(w => string.Equals(Key(w.Path), chosen.Path, PathCase)) is { } kept) { return kept.Label; }
+        // The folder's entry here that is the same choice: isolated or not as it was, under its
+        // own label where it was carried with it.
+        if (chosen.Path is not null
+            && host.Where(w => string.Equals(Key(w.Path), chosen.Path, PathCase))
+                .OrderBy(w => w.Isolate == chosen.Isolate ? 0 : 1)
+                .ThenBy(w => string.Equals(w.Label, chosen.Named, StringComparison.Ordinal) ? 0 : 1)
+                .FirstOrDefault() is { } kept)
+        {
+            return kept.Label;
+        }
         return host.FirstOrDefault(w => string.Equals(w.Label, configured, StringComparison.OrdinalIgnoreCase))?.Label ?? configured;
     }
 
@@ -258,20 +267,28 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
     // unlabelled, and one whose label is taken already, whatever its case (a PowerShell
     // hashtable), offered as "label (folder)", or dropped if that is taken too. (It also left
     // out folders that did not exist when it ran, which is not known here.)
-    static List<(string Label, string Path)> LegacyChoices(JsonNode? source)
+    // An entry whose isolate is not true or false it did not offer at all.
+    static List<(string Label, string Path, string Named, bool Isolate)> LegacyChoices(JsonNode? source)
     {
-        var choices = new List<(string Label, string Path)>();
+        var choices = new List<(string Label, string Path, string Named, bool Isolate)>();
         if (source is not JsonArray list) { return choices; }
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in list)
         {
-            var (path, label) = Read(entry is JsonObject o ? Canonical(o) : entry);
+            var canonical = entry is JsonObject o ? Canonical(o) : null;
+            var (path, label) = Read(canonical ?? entry);
             if (string.IsNullOrWhiteSpace(path)) { continue; }
+            var isolate = false;
+            if (canonical?["isolate"] is { } i)
+            {
+                if (i.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False)) { continue; }
+                isolate = i.GetValue<bool>();
+            }
             var folder = Key(path);
-            var name = string.IsNullOrWhiteSpace(label) ? LabelOf(null, path) : label;
-            if (seen.Contains(name)) { name = $"{name} ({folder})"; }
+            var named = string.IsNullOrWhiteSpace(label) ? LabelOf(null, path) : label;
+            var name = seen.Contains(named) ? $"{named} ({folder})" : named;
             if (!seen.Add(name)) { continue; }
-            choices.Add((name, folder));
+            choices.Add((name, folder, LabelOf(label, path), isolate));
         }
         return choices;
     }
@@ -307,7 +324,9 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
         {
             var (path, label) = Read(entry);
             if (path is null) { kept.Add("a workspace entry in newSession.workspaces has no path and was not imported"); continue; }
-            if (target.Select(Read).Any(e => e.Path is { } p && string.Equals(Key(p), Key(path), pathCase))) { continue; }
+            // Against the profile's own only: two of agent-ha-bridge's for one folder (app, and
+            // app-isolated with isolate) were two choices there, and both are carried.
+            if (own.Any(e => e.Path is { } p && string.Equals(Key(p), Key(path), pathCase))) { continue; }
             var name = LabelOf(label, path);
             if (own.Any(e => e.Path is { } p && string.Equals(LabelOf(e.Label, p), name, StringComparison.OrdinalIgnoreCase)))
             {

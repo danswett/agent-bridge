@@ -84,7 +84,11 @@ second snapshot the first's changes as the state to restore; the second is refus
    `AgentBridgeDevBoxKeepAwake_<id>`, then stops the supervisor, the daemon and the keep-awake.
    They are found as agent-ha-bridge's own `Stop-BridgeOwnedRuntime` finds them: pwsh running
    `-File <bridgeHome>\hooks\agent-bridge-<role>.ps1`, honouring the receipt in
-   `runtime\<role>.process.json` when it names the process. The supervisor goes first, so it
+   `runtime\<role>.process.json` when it names the process. The command line is read as
+   `Test-BridgeLaunchAgentOwnership` reads one: the interpreter, only the options agent-ha-bridge
+   starts them with (`-NoProfile`, `-NonInteractive`, `-NoLogo`, `-ExecutionPolicy`,
+   `-WindowStyle`), then the first `-File`, which must be that script. Another script given it
+   as an argument (`pwsh -File inspect.ps1 -File <daemon>`) is not stopped. The supervisor goes first, so it
    cannot restart the daemon. It then waits until the G5 probe sees agent-ha-bridge gone.
 4. **Hook.** Copies `agent-bridge-host-hook.exe` to
    `%LOCALAPPDATA%\AgentBridge\bin\<installation id>`, with a `hook.json` pointing at the
@@ -155,7 +159,7 @@ tells them apart by folder, as agent-ha-bridge did.
 | agent-ha-bridge | This host |
 |---|---|
 | `newSession.enabled` | `launch.enabled` |
-| `newSession.workspaces` (label, path, isolate; one path or entry as a list of one, as `@(...)` reads it) | `launch.workspaces` |
+| `newSession.workspaces` (label, path, isolate; one path or entry as a list of one, as `@(...)` reads it; two for one folder, `app` and an isolated `app-isolated`, are both carried) | `launch.workspaces` |
 | `newSession.defaultWorkspace` (as the label the host offers the folder it chose: agent-ha-bridge's `-eq` ignores case, and so does its `label (folder)` for a second label differing only in case; the host matches exactly, and the profile may already approve that folder under its own label, or as the second of two sharing one, `label (folder)`) | `launch.defaultWorkspace` |
 | `newSession.launcher` (trimmed and in lowercase, as `Get-BridgeLauncherKind` reads it; one it does not know is `auto`, as it was there, and reported) | `launch.defaultAgent` |
 | `newSession.profiles` (one string as a list of one, as agent-ha-bridge's `@(...)` reads it), `defaultProfile` (as the listed profile it matched, whatever the case; as written when there is no list, since Agency's own are known only at launch) | `launch.profiles`, `launch.defaultProfile` |

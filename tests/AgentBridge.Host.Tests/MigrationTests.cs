@@ -643,6 +643,58 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Contains(launch["workspaces"]!.AsArray(), w => (string?)w!["path"] == apps[1] && (string?)w["label"] == "app");
     }
 
+    [Theory]
+    [InlineData("\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\me\\.agent-ha-bridge\\hooks\\agent-bridge-daemon.ps1\"", true)]
+    [InlineData("pwsh.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"C:\\Users\\me\\.agent-ha-bridge\\hooks\\agent-bridge-daemon.ps1\"", true)]
+    [InlineData("powershell.exe -noprofile -file C:\\Users\\me\\.agent-ha-bridge\\hooks\\agent-bridge-daemon.ps1 -Verbose", true)]
+    [InlineData("pwsh.exe -File C:\\tools\\inspect.ps1 -File \"C:\\Users\\me\\.agent-ha-bridge\\hooks\\agent-bridge-daemon.ps1\"", false)]
+    [InlineData("pwsh.exe -Command \"& 'C:\\Users\\me\\.agent-ha-bridge\\hooks\\agent-bridge-daemon.ps1'\"", false)]
+    [InlineData("pwsh.exe -c echo -File C:\\Users\\me\\.agent-ha-bridge\\hooks\\agent-bridge-daemon.ps1", false)]
+    [InlineData("pwsh.exe -NoProfile -File C:\\elsewhere\\hooks\\agent-bridge-daemon.ps1", false)]
+    [InlineData("node.exe -File C:\\Users\\me\\.agent-ha-bridge\\hooks\\agent-bridge-daemon.ps1", false)]
+    public void Only_PowerShell_running_the_daemon_s_own_script_is_taken_for_the_daemon(string commandLine, bool daemon)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.Equal(daemon, WindowsAgentHaBridgeRuntime.RunsScript(commandLine, "C:\\Users\\me\\.agent-ha-bridge\\hooks\\agent-bridge-daemon.ps1"));
+    }
+
+    [Fact]
+    public async Task Two_of_agent_ha_bridge_s_choices_for_one_folder_are_both_carried_and_the_default_stays_the_one_chosen()
+    {
+        var app = FakeAgentHaBridge.Rooted("repos", "app");
+        var config = FakeAgentHaBridge.DefaultConfig();
+        config["newSession"]!["workspaces"] = new JsonArray(
+            new JsonObject { ["path"] = app, ["label"] = "app" },
+            new JsonObject { ["path"] = app, ["label"] = "app-isolated", ["isolate"] = true });
+        config["newSession"]!["defaultWorkspace"] = "app-isolated";
+        await using var f = new FakeAgentHaBridge(config);
+
+        Assert.True((await f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        var launch = JsonNode.Parse(File.ReadAllText(Path.Combine(f.Profile, "config.json")))!["launch"]!;
+        Assert.Equal(["app", "app-isolated"], launch["workspaces"]!.AsArray().Select(w => (string?)w!["label"]));
+        // A default launch still gets a worktree of its own, not the primary checkout.
+        Assert.Equal("app-isolated", (string?)launch["defaultWorkspace"]);
+    }
+
+    [Fact]
+    public async Task Two_choices_for_one_folder_under_one_label_keep_the_default_on_the_isolated_one()
+    {
+        var app = FakeAgentHaBridge.Rooted("repos", "app");
+        var config = FakeAgentHaBridge.DefaultConfig();
+        config["newSession"]!["workspaces"] = new JsonArray(
+            new JsonObject { ["path"] = app, ["label"] = "app" },
+            new JsonObject { ["path"] = app, ["label"] = "app", ["isolate"] = true });
+        // Both programs offer the second as "app (<folder>)".
+        config["newSession"]!["defaultWorkspace"] = $"app ({app})";
+        await using var f = new FakeAgentHaBridge(config);
+
+        Assert.True((await f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        var launch = JsonNode.Parse(File.ReadAllText(Path.Combine(f.Profile, "config.json")))!["launch"]!;
+        Assert.Equal($"app ({app})", (string?)launch["defaultWorkspace"]);
+    }
+
     [Fact]
     public async Task Lists_agent_ha_bridge_read_from_one_value_are_carried_as_a_list_of_one()
     {
