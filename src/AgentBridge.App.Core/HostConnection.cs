@@ -100,11 +100,14 @@ public sealed class HostConnection : IAsyncDisposable
                 // arrive on different threads); the result is applied only if no event came.
                 var heardStatus = Interlocked.Read(ref statusEvents);
                 var connectionNumber = Interlocked.Increment(ref connections);
-                var instance = $"connection {connectionNumber}";
+                // Which run of the host this is: what it says itself (hello's instance), else this
+                // machine's by its pid and start, else each connection counts as a new run, which is
+                // never wrong, only cautious (a lost reply is then not confirmed rather than resent).
+                var instance = hello.Machine.Instance ?? $"connection {connectionNumber}";
                 if (hello.Capabilities.Contains(HostOps.Capability))
                 {
                     var status = await ch.CallAsync<HostStatus>(HostOps.Subscribe, ct: ct);
-                    instance = $"{status.ProcessId}@{status.StartedAt:O}";
+                    instance = hello.Machine.Instance ?? $"{status.ProcessId}@{status.StartedAt:O}";
                     ui.Post(() => { if (Interlocked.Read(ref statusEvents) == heardStatus) { Status = status; } });
                 }
                 Volatile.Write(ref hostInstance, instance);

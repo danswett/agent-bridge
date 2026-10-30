@@ -233,7 +233,9 @@ async Task<int> ServeAsync()
     // Started at logon there is no console; the app shows the end of this file.
     HostLog.OpenFile(Path.Combine(identity.Folder, "logs", "host.log"));
     var name = Option("--name") ?? HostConfigFile.ReadName(identity.Folder) ?? $"{Environment.MachineName}{(profile == "default" ? "" : $"/{profile}")}";
-    var machine = new MachineInfo(Wire.DeviceId(identity.Key.Public), name, OsName(), HostVersion(), Dev: IsDevBuild() ? true : null);
+    // Instance: this run's own id. A client that lost an outcome sends the request again only to
+    // the run that may have acted on it, which remembers the request; never to a fresh one.
+    var machine = new MachineInfo(Wire.DeviceId(identity.Key.Public), name, OsName(), HostVersion(), Dev: IsDevBuild() ? true : null, Instance: Guid.NewGuid().ToString("N"));
 
     using var stop = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };

@@ -206,6 +206,51 @@ public sealed class ConnectionTests : IAsyncLifetime
         }
     }
 
+    // As another machine's host over the relay: no host.manage, so no status to know the run by;
+    // its hello names it.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_host_known_only_by_the_run_its_hello_names_gets_a_lost_reply_again_only_in_that_run(bool hostRestarted)
+    {
+        await using var remote = new FakeHost();
+        remote.Capabilities.Remove(HostOps.Capability);
+        var run = "run-1";
+        remote.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "linux", "0.1.0", Instance: Volatile.Read(ref run)), [.. remote.Capabilities]));
+        remote.Sessions.Add(Make.Session("s1"));
+        remote.Start();
+        await using var link = remote.Connect();
+        await Wait.UntilAsync(() => link.State == LinkState.Connected && link.HostInstance == "run-1", "connected to run-1");
+        var first = true;
+        var gate = new TaskCompletionSource();
+        remote.On(Ops.SessionReply, data =>
+        {
+            // The first answer is held until the pipe has closed, so it is surely lost.
+            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => remote.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
+            return new ReplyResult(AnswerOutcome.Delivered);
+        });
+        var deliveries = new Deliveries(link, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+
+        var entry = deliveries.Submit("reply|s1", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, replayAfterRestart: false);
+        await gate.Task.WaitAsync(FakeHost.Patience);
+        await remote.StopAsync();
+        if (hostRestarted) { Volatile.Write(ref run, "run-2"); }
+        remote.Start();
+
+        await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
+        var done = deliveries.Get(entry.Key)!;
+        if (hostRestarted)
+        {
+            Assert.Equal("unconfirmed", done.Outcome);
+            Assert.Single(remote.Sent(Ops.SessionReply));
+        }
+        else
+        {
+            Assert.Equal("delivered", done.Outcome);
+            Assert.True(remote.Sent(Ops.SessionReply).Count >= 2);
+        }
+    }
+
     [Fact]
     public async Task A_busy_that_answers_our_own_resend_is_waited_out_and_never_shown()
     {
