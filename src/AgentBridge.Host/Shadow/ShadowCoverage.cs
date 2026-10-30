@@ -88,8 +88,12 @@ public sealed class ShadowShown
 {
     public string? Status { get; set; }
     public DateTimeOffset? StatusAt { get; set; }
+    // Whether this state has failed: counted in failedStates, or past their cap in the overflow,
+    // so neither a restart nor midnight counts it again.
+    public bool StatusFailed { get; set; }
     public string? Response { get; set; }
     public DateTimeOffset? ResponseAt { get; set; }
+    public bool ResponseFailed { get; set; }
 }
 
 public sealed class ShadowFailedState
@@ -262,6 +266,7 @@ internal sealed class ShadowCoverageTracker
             c.StatusTransitions++;
             was.Status = status;
             was.StatusAt = now;
+            was.StatusFailed = false;
         }
         // Compared only when both have one, so counted only then.
         if (d.ResponseTail is not null && h.ResponseTail is not null && ShadowHash.Text(d.ResponseTail + "\n" + h.ResponseTail) is var response && response != was.Response)
@@ -269,29 +274,31 @@ internal sealed class ShadowCoverageTracker
             c.ResponseChanges++;
             was.Response = response;
             was.ResponseAt = now;
+            was.ResponseFailed = false;
         }
     }
 
-    readonly HashSet<string> overflowedStates = new(StringComparer.Ordinal);
-
-    // A status or activity.response mismatch, lasting its grace, on a session: the state it is
-    // being compared in now failed.
-    public void StateFailed(ShadowCoverage c, string session, string kind, DateTimeOffset now)
+    // The state a session is being compared in now, for a status or activity.response mismatch:
+    // its session, kind and when it was counted, hashed.
+    public static string? StateKey(ShadowCoverage c, string session, string kind)
     {
-        if (!c.Shown.TryGetValue(session, out var shown)) { return; }
+        if (!c.Shown.TryGetValue(session, out var shown)) { return null; }
         var at = kind == ShadowKinds.Status ? shown.StatusAt : shown.ResponseAt;
-        if (at is null) { return; }
-        var key = ShadowHash.Text(session + "\n" + kind + "\n" + at.Value.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture));
-        if (!c.FailedStates.TryGetValue(key, out var failed))
-        {
-            if (c.FailedStates.Count >= MaxFailed)
-            {
-                if (overflowedStates.Add(key)) { c.FailedStatesOverflow[kind] = c.FailedStatesOverflow.GetValueOrDefault(kind) + 1; }
-                return;
-            }
-            c.FailedStates[key] = failed = new ShadowFailedState { Session = session, Kind = kind };
-        }
-        failed.Last = now;
+        return at is null ? null : ShadowHash.Text(session + "\n" + kind + "\n" + at.Value.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture));
+    }
+
+    // A status or activity.response mismatch, lasting its grace, on a session: a state it was about
+    // (StateKey, taken while it was pending) failed.
+    public static void StateFailed(ShadowCoverage c, string session, string kind, string key, DateTimeOffset now)
+    {
+        var shown = StateKey(c, session, kind) == key ? c.Shown[session] : null;
+        if (c.FailedStates.TryGetValue(key, out var failed)) { failed.Last = now; }
+        else if (shown is not null && (kind == ShadowKinds.Status ? shown.StatusFailed : shown.ResponseFailed)) { return; }
+        else if (c.FailedStates.Count >= MaxFailed) { c.FailedStatesOverflow[kind] = c.FailedStatesOverflow.GetValueOrDefault(kind) + 1; }
+        else { c.FailedStates[key] = new ShadowFailedState { Session = session, Kind = kind, Last = now }; }
+        if (shown is null) { return; }
+        if (kind == ShadowKinds.Status) { shown.StatusFailed = true; }
+        else { shown.ResponseFailed = true; }
     }
 
     // What changed in one session between two samples, as the daemon published it.

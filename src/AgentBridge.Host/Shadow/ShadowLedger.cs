@@ -102,6 +102,9 @@ public sealed class ShadowLedger
         public List<string> Details { get; } = [];
         public ShadowEpisode? Entry { get; set; }
         public string? EntryDate { get; set; }
+        // For a status or activity.response one, the states it has been about and not yet marked
+        // failed: one it was about only during its grace fails too once it lasts it.
+        public List<string> States { get; } = [];
     }
 
     readonly string folder;
@@ -161,6 +164,9 @@ public sealed class ShadowLedger
                 {
                     DaemonStartedAt = carried.DaemonStartedAt,
                     HostStartedAt = carried.HostStartedAt,
+                    // Not the new day's first sample: a status episode across midnight is not from
+                    // before states were counted.
+                    StatesSince = carried.StatesSince,
                     // A session in the same state after midnight is not a new one to compare.
                     Shown = new(carried.Shown.ToDictionary(x => x.Key, x => new ShadowShown { Status = x.Value.Status, StatusAt = x.Value.StatusAt, Response = x.Value.Response, ResponseAt = x.Value.ResponseAt }), StringComparer.Ordinal),
                 };
@@ -220,10 +226,16 @@ public sealed class ShadowLedger
             episode.Last = now;
             episode.Samples++;
             if (episode.Details.Count < MaxDetails && !episode.Details.Contains(d.Detail)) { episode.Details.Add(d.Detail); }
+            var state = d.Kind is ShadowKinds.Status or ShadowKinds.Response && d.Session is { } ds && day.Coverage is { } dc ? ShadowCoverageTracker.StateKey(dc, ds, d.Kind) : null;
+            if (state is not null && !episode.States.Contains(state) && episode.States.Count < 64) { episode.States.Add(state); }
             if (episode.Last - episode.First < GraceFor(d.Kind)) { continue; }
             if (Persist(episode, date) is { } fresh) { made.Add(fresh); }
             if (d.Kind.StartsWith("question.", StringComparison.Ordinal) && d.Session is { } s && day.Coverage is { } c) { coverage.QuestionFailed(c, s, d.Kind, now); }
-            if (d.Kind is ShadowKinds.Status or ShadowKinds.Response && d.Session is { } ss && day.Coverage is { } sc) { coverage.StateFailed(sc, ss, d.Kind, now); }
+            if (d.Session is { } ss && day.Coverage is { } sc)
+            {
+                foreach (var failed in episode.States) { ShadowCoverageTracker.StateFailed(sc, ss, d.Kind, failed, now); }
+                episode.States.Clear();
+            }
         }
         Save(day);
         return made;

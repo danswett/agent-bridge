@@ -343,7 +343,7 @@ show it, in the day's `coverage`:
 |---|---|---|
 | `sessions` | A session either side listed, with its agent | `session.*`, `agent` |
 | `questions` | A question either side showed, by identity, of kind `choice`, `multi` or `text`, answered or not. Each side knows it by its own identity (the host by the tool call, the daemon by its hook's clock), so a session's run of questions counts the larger of the two sides' counts, each of the kind the side ahead shows | Each question a `question.*` mismatch was about, once (`failedQuestions`, keyed by the identity it was first known by, which each side's identity for the same question maps to, and across midnight with every kind it had), however many kinds it had and however many questions one mismatch ran on across |
-| `statusTransitions` | A state a session showing on both sides is compared in: the status it has when first compared, then each change of status (working, idle, waiting, ending) on either side, once a sample. Kept in `shown` (per session hash, the status pair and a hash of the two response hashes), so neither a restart of the comparison nor midnight counts a state again. A marker caught half written counts as the comparison judged it | Each state a `status` mismatch was about, once (`failedStates`, by session, kind and when the state was counted): a mismatch running on across several states fails each, and one split by a restart of the comparison fails its state once |
+| `statusTransitions` | A state a session showing on both sides is compared in: the status it has when first compared, then each change of status (working, idle, waiting, ending) on either side, once a sample. Kept in `shown` (per session hash, the status pair and a hash of the two response hashes), so neither a restart of the comparison nor midnight counts a state again. A marker caught half written counts as the comparison judged it | Each state a `status` mismatch was about, once (`failedStates`, by session, kind and when the state was counted, and marked failed in `shown`): a mismatch running on across several states fails each, those it was about during its grace included, and one split by a restart of the comparison or midnight fails its state once |
 | `responses` | Likewise each latest response compared, when both sides have one: the first, then each change on either side | Each response state an `activity.response` mismatch was about, once, likewise |
 | `background` | A background agent or shell starting or finishing, as the daemon listed it (and `backgroundSessions`, the sessions that had any) | `background.*` |
 | `compactions` | A compaction finishing | `compactions` |
@@ -374,7 +374,7 @@ Until the release after 5d5149b, `statusTransitions` counted the daemon's change
 begun by the host's change alone (its `waiting` on a question against the daemon's unchanged
 `working`) was a mismatch with no event. From that release (`statesSince`) each state
 compared counts whichever side changed, and each state a mismatch was about fails once, so
-the rate is failed states over states. Before `statesSince`, a `status` episode, and a day's
+the rate is failed states over states. `statesSince` is carried across midnight with `shown`. Before `statesSince`, a `status` episode, and a day's
 `status` overflow, still count against `statusTransitions` as they did; `activity.response`
 ones count nowhere, and a day's overflow from the redeploy on (which has no time to place it)
 counts only through the gate's overflow check. Past a day's cap of 5,000 failed states, the
@@ -459,7 +459,8 @@ when `run` starts is kept beside it as `.unreadable-<time>`, never overwritten.
     "since": "…", "sessions": { "s8a666b6daa65": "copilot" }, "questions": { "choice": 14, "text": 3 },
     "failedQuestions": { "4c1d…": { "session": "s8a666b6daa65", "kinds": ["question.options"], "last": "…" } },
     "statusTransitions": 410, "responseChanges": 380, "statesSince": "…",
-    "shown": { "s8a666b6daa65": { "status": "working/working", "statusAt": "…", "response": "9b2e…", "responseAt": "…" } },
+    "shown": { "s8a666b6daa65": { "status": "working/working", "statusAt": "…", "statusFailed": false,
+      "response": "9b2e…", "responseAt": "…", "responseFailed": false } },
     "failedStates": { "77ac…": { "session": "s9fc81a924c6a", "kind": "status", "last": "…" } }, "failedStatesOverflow": {},
     "backgroundSessions": ["s8a666b6daa65"], "backgroundStarts": 61,
     "backgroundFinishes": 58, "compactions": 2, "modelChanges": 0, "resumeSnapshots": 37,

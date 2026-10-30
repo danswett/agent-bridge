@@ -192,6 +192,49 @@ public sealed class ShadowCoverageTests : IDisposable
         Assert.Equal(4, lines[ShadowCoverageKinds.Transitions].Mismatches);
     }
 
+    // Found in review (#82): a state a mismatch was about only during its grace went uncounted, a
+    // state past the cap could be counted again after a restart, and midnight reset when states
+    // began to be counted.
+    [Fact]
+    public void A_state_changed_during_the_grace_fails_too_one_past_the_cap_fails_once_and_midnight_keeps_when_counting_began()
+    {
+        Directory.CreateDirectory(reports);
+        time.SetUtcNow(new DateTimeOffset(2026, 10, 28, 23, 58, 0, TimeSpan.Zero));
+        var session = ShadowHash.Session(A);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+        void Sample(string hostStatus, bool differ = true)
+        {
+            ledger.Record(new ShadowComparison(true, 1, 1, differ ? [new ShadowDifference(ShadowKinds.Status, session, $"daemon=idle host={hostStatus}")] : [], []),
+                View(null, null, null, Session(A, "idle")), View(null, null, null, Session(A, hostStatus)));
+            time.Advance(TimeSpan.FromSeconds(15));
+        }
+        Sample("working");
+        Sample("working");
+        Sample("waiting");
+        Sample("waiting");
+        Sample("waiting");
+        Sample("waiting");
+        var c = ledger.Today!.Coverage!;
+        Assert.Equal(2, c.StatusTransitions);
+        Assert.Equal(2, c.FailedStates.Count);
+
+        // Past midnight, the cutoff is the day before's.
+        var since = c.StatesSince;
+        time.SetUtcNow(new DateTimeOffset(2026, 10, 29, 0, 0, 5, TimeSpan.Zero));
+        Sample("idle", differ: false);
+        Assert.Equal("2026-10-29", ledger.Today!.Date);
+        Assert.Equal(since, ledger.Today.Coverage!.StatesSince);
+
+        // Past the cap, the state fails once, whoever asks again.
+        var full = new ShadowCoverage();
+        for (var i = 0; i < 5000; i++) { full.FailedStates["k" + i] = new ShadowFailedState(); }
+        full.Shown[session] = new ShadowShown { Status = "idle/working", StatusAt = time.GetUtcNow() };
+        var key = ShadowCoverageTracker.StateKey(full, session, ShadowKinds.Status)!;
+        ShadowCoverageTracker.StateFailed(full, session, ShadowKinds.Status, key, time.GetUtcNow());
+        ShadowCoverageTracker.StateFailed(full, session, ShadowKinds.Status, key, time.GetUtcNow());
+        Assert.Equal(1, full.FailedStatesOverflow[ShadowKinds.Status]);
+    }
+
     [Fact]
     public void The_upper_bound_is_three_over_n_with_no_mismatches_and_the_exact_clopper_pearson_bound_otherwise()
     {
