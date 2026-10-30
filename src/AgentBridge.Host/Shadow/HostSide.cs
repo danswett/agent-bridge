@@ -56,21 +56,66 @@ public static class HostSide
         foreach (var s in sessions) { map[s.Id] = From(s); }
         return map;
     }
+
+    // Under the names agent-ha-bridge gives its usage sensors (HaPayloads.Usage), the first
+    // reading of each agent, as the host's Home Assistant connector publishes it.
+    public static IReadOnlyDictionary<string, ShadowUsage> Usage(UsageReport report)
+    {
+        var map = new Dictionary<string, ShadowUsage>(StringComparer.Ordinal);
+        foreach (var a in report.Agents)
+        {
+            var client = a.Agent switch { AgentKind.Copilot => "copilot", AgentKind.Claude => "claude", AgentKind.Codex => "codex", _ => null };
+            if (client is null || map.ContainsKey(client)) { continue; }
+            var windows = new Dictionary<string, double>(StringComparer.Ordinal);
+            foreach (var w in a.Windows) { windows.TryAdd(w.Key, w.Percent); }
+            map[client] = new ShadowUsage
+            {
+                Reading = windows.Count > 0,
+                Account = a.Account,
+                AccountKey = a.AccountKey,
+                Windows = windows,
+                MeasuredAt = a.MeasuredAt,
+            };
+        }
+        return map;
+    }
+
+    // A host that approves no folder offers nothing to resume, by design: that is its config,
+    // not a disagreement about the sessions (docs/host-shadow.md says to approve the same ones).
+    public static (IReadOnlyList<string>?, string?) Resumable(LaunchOptions options) =>
+        options.Workspaces.Count == 0
+            ? (null, "the host approves no workspace, so offers nothing to resume")
+            : ([.. options.Resumable.Select(r => ShadowHash.Normalize(r.Title))], null);
 }
 
 // The running host for a profile, through its own pipe (docs/protocol/local-pipe.md): what this
 // host actually shows the user's devices. A connection each sample, so a host that restarted is
-// simply found again.
-public sealed class PipeShadowHost(LocalEndpoint endpoint) : IShadowHost
+// simply found again. Usage and the resume list are asked for at most once a minute: listing
+// resumable sessions reads every agent's store (and asks Agency), and neither side's figure
+// moves faster than that.
+public sealed class PipeShadowHost(LocalEndpoint endpoint, TimeProvider? time = null, TimeSpan? refresh = null) : IShadowHost
 {
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+    readonly TimeProvider clock = time ?? TimeProvider.System;
+    readonly TimeSpan every = refresh ?? TimeSpan.FromMinutes(1);
+    DateTimeOffset? asked;
+    (IReadOnlyDictionary<string, ShadowUsage>? Usage, string? UsageProblem, IReadOnlyList<string>? Resumable, string? ResumableProblem) extras;
 
     public async Task<ShadowView> ObserveAsync(CancellationToken ct = default)
     {
         try
         {
             await using var channel = await LocalClient.ConnectAsync(endpoint, TimeSpan.FromSeconds(3), ct);
-            await channel.HelloAsync(ct);
+            var hello = await channel.HelloAsync(ct);
+            // Usage and the resume list first: launch.options can take up to a minute, and the
+            // sessions read after it would be that much older than the daemon's files read
+            // next, so a busy session's activity would differ by however long it took.
+            var now = clock.GetUtcNow();
+            if (asked is not { } at || now - at >= every)
+            {
+                extras = await ExtrasAsync(channel, hello.Capabilities.Contains(UsageProtocol.Capability), ct);
+                asked = now;
+            }
             var status = await channel.CallAsync<HostStatus>(HostOps.Status, timeout: Patience, ct: ct);
             var sessions = new List<Session>();
             string? cursor = null;
@@ -87,6 +132,10 @@ public sealed class PipeShadowHost(LocalEndpoint endpoint) : IShadowHost
                 Version = ShadowHash.Token(status.Version),
                 Dev = status.Dev,
                 SeesAgentHaBridge = status.AgentHaBridge is not null,
+                Usage = extras.Usage,
+                UsageProblem = extras.UsageProblem,
+                Resumable = extras.Resumable,
+                ResumableProblem = extras.ResumableProblem,
             };
         }
         catch (HostNotRunningException) { return new() { Problem = "the host is not running for this profile" }; }
@@ -97,6 +146,29 @@ public sealed class PipeShadowHost(LocalEndpoint endpoint) : IShadowHost
         {
             return new() { Problem = "the host did not answer" };
         }
+    }
+
+    // Each asked on its own, so a host that does not answer one still has the other compared.
+    static async Task<(IReadOnlyDictionary<string, ShadowUsage>?, string?, IReadOnlyList<string>?, string?)> ExtrasAsync(LocalChannel channel, bool offersUsage, CancellationToken ct)
+    {
+        IReadOnlyDictionary<string, ShadowUsage>? usage = null;
+        string? usageProblem = null;
+        if (!offersUsage) { usageProblem = "the host does not offer usage"; }
+        else
+        {
+            try { usage = HostSide.Usage(await channel.CallAsync<UsageReport>(UsageProtocol.Get, timeout: Patience, ct: ct)); }
+            catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested) { usageProblem = "the host did not answer usage.get"; }
+        }
+        IReadOnlyList<string>? resumable = null;
+        string? resumableProblem = null;
+        try
+        {
+            // Listing resumable sessions asks Agency, which a cold machine can take a while to answer.
+            var options = await channel.CallAsync<LaunchOptions>(LaunchProtocol.Options, timeout: TimeSpan.FromSeconds(60), ct: ct);
+            (resumable, resumableProblem) = HostSide.Resumable(options);
+        }
+        catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested) { resumableProblem = "the host did not answer launch.options"; }
+        return (usage, usageProblem, resumable, resumableProblem);
     }
 }
 
@@ -110,5 +182,7 @@ public sealed class SourceShadowHost(ISessionSource source, IAgentHaBridgeProbe?
         Version = ShadowHash.Token(version),
         Dev = dev,
         SeesAgentHaBridge = probe is null ? null : probe.Active() is not null,
+        UsageProblem = "the host's is read only through its pipe (--in-process)",
+        ResumableProblem = "the host's is read only through its pipe (--in-process)",
     });
 }

@@ -14,8 +14,9 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
 `Get-BridgeResumableSessions`):
 
 * **Where.** Only a workspace in `newSession.workspaces`, labelled; discovery suggests folders
-  but never approves one. A resume only in its own folder, and only if that folder is in an
-  approved workspace (or a worktree the bridge made for an isolated one). Paths are compared
+  but never approves one. A resume only in its own folder, and only if that folder is an
+  approved workspace itself, not one below it (or is in a worktree this host or agent-ha-bridge made for an
+  isolated one; agent-ha-bridge's are resumed in but never counted, locked or removed). Paths are compared
   physically, links resolved.
 * **How.** `Start-Process` of the agent's executable (CreateProcess with a new console), in
   the working directory, with the daemon's environment plus the agent token variable. The

@@ -39,9 +39,14 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
         S.Observe(at, before, visible);
     }
 
+    // Whatever the skim took as still going may have ended in the bytes never read.
+    public virtual void Skipped() { }
+
     protected abstract IReadOnlyList<byte[]> SkimMarkers { get; }
 
-    // What a skimmed line contributes: counts and first-seen facts, never current state.
+    // What a skimmed line contributes: counts and first-seen facts, and the few facts that
+    // outlive any window (a session's model, a background shell still running), never the
+    // rest of its current state.
     protected abstract void Count(JsonElement e);
 
     // Applies one event and says whether it is one that can change what a client shows.

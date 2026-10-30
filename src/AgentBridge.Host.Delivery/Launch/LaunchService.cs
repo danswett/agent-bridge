@@ -142,6 +142,10 @@ public sealed partial class LaunchService : ISessionLauncher
         lock (pendingGate) { return [.. launchedOn.Values.Concat(pending.Select(p => p.Started)).Distinct().Where(starter.Running)]; }
     }
 
+    // agent-ha-bridge's $script:BridgeResumeCacheLimit: how many of the newest sessions in
+    // approved folders it caches, and so decides the resume labels over.
+    const int KindsAmong = 200;
+
     public bool Available => Config.Enabled && options.PlatformSupported && probe.Active() is null && starter.Unavailable() is null;
 
     // ---- launch.options ----
@@ -307,23 +311,51 @@ public sealed partial class LaunchService : ISessionLauncher
         // An agent whose discovery is held may have a live session discovery could not see, and
         // offering it would put two CLIs on one transcript; none of its sessions is offered
         // until a complete pass (§6.3 invariants 6 and 10).
+        if (source.Held is { } held) { candidates = candidates.Where(e => !held.Agents.Contains(e.Agent)); }
+        var once = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Approval can ask git (a worktree's top and marker), so each folder is asked once per
+        // pass, and newest first, so the older sessions past the limit are never asked about.
+        var approvals = new Dictionary<string, WorkspaceConfig?>(StringComparer.Ordinal);
+        WorkspaceConfig? ApprovedOnce(string? folder)
+        {
+            if (folder is not { Length: > 0 }) { return null; }
+            if (!approvals.TryGetValue(folder, out var w)) { approvals[folder] = w = Approved(folder); }
+            return w;
+        }
+        var eligible = candidates.Where(e => once.Add(e.Id))
+            .OrderByDescending(e => e.Updated ?? DateTimeOffset.MinValue)
+            .Select(e => (Entry: e, Workspace: ApprovedOnce(e.Folder)))
+            .Where(x => x.Workspace is not null)
+            .Take(KindsAmong)
+            .ToList();
         // The live list read after the hold, not the one taken before the awaits above: a session
         // that discovery found meanwhile is listed before its hold is said to clear, so a clear
         // hold here means it is in this snapshot.
-        if (source.Held is { } held) { candidates = candidates.Where(e => !held.Agents.Contains(e.Agent)); }
         var excluded = new HashSet<string>(live.Concat(source.Snapshot()).Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
         // And any a launch has started an agent on that has not registered yet.
         lock (pendingGate) { excluded.UnionWith(launchedOn.Where(x => starter.Running(x.Value)).Select(x => x.Key)); }
         var offered = new List<Offered>();
-        var labels = new HashSet<string>(StringComparer.Ordinal);
-        var prefixed = candidates.Select(e => e.Agent).Distinct().Count() > 1;
-        foreach (var e in candidates.Where(e => excluded.Add(e.Id)).OrderByDescending(e => e.Updated ?? DateTimeOffset.MinValue))
+        // The agent is named once the sessions that could be offered are of more than one kind:
+        // agent-ha-bridge decides it over its cached list (the newest 200 in approved folders,
+        // live ones still in it). Decided over every session found instead, one Claude session
+        // in a folder nobody approved put "Agency: " on every label of a Copilot-only list.
+        var prefixed = eligible.Select(x => x.Entry.Agent).Distinct().Count() > 1;
+        // Labels are told apart over that same list, live ones included and ignoring case, as
+        // agent-ha-bridge's Get-BridgeResumableSessions does: a repeat gets its id's first eight
+        // characters, and one that still repeats is not offered. Told apart over what is left
+        // after the live ones, an older namesake of a running session kept a plain label here
+        // and a suffixed one there (#40).
+        var labels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (e, workspace) in eligible)
         {
             if (offered.Count >= Config.ResumeCount) { break; }
-            if (e.Folder is not { Length: > 0 } folder || Approved(folder) is not { } workspace) { continue; }
             var title = Title(e, prefixed);
-            if (!labels.Add(title)) { title = Limits.KeepStart($"{title} ({e.Id[..8]})", LaunchProtocol.MaxLabel * 2)!; labels.Add(title); }
-            offered.Add(new Offered(e, title, workspace.Label));
+            if (!labels.Add(title))
+            {
+                title = Limits.KeepStart($"{title} ({e.Id[..Math.Min(8, e.Id.Length)]})", LaunchProtocol.MaxLabel * 2)!;
+                if (!labels.Add(title)) { continue; }
+            }
+            if (!excluded.Contains(e.Id)) { offered.Add(new Offered(e, title, workspace!.Label)); }
         }
         return offered;
     }
@@ -340,12 +372,15 @@ public sealed partial class LaunchService : ISessionLauncher
         return label.Length > LaunchProtocol.MaxLabel ? label[..(LaunchProtocol.MaxLabel - 3)] + "..." : label;
     }
 
-    // The approved workspace a folder is in, directly or through a worktree this host made for
-    // an isolated one; null when it is in none.
+    // The approved workspace a session ran in: that folder itself, as agent-ha-bridge's
+    // Test-BridgeWorkspacePathApproved has it, or anywhere in a worktree this host made for an
+    // isolated one; null when neither. Not a folder below a workspace: approving ~\repos
+    // approved resuming every session in every repository under it, which agent-ha-bridge
+    // never offered (found by the shadow comparison, #40).
     WorkspaceConfig? Approved(string folder)
     {
         if (!Path.IsPathFullyQualified(folder) || Folders.Physical(folder) is not { } physical || options.IsSystemDirectory(physical)) { return null; }
-        return Folders.Containing(Config.Workspaces, physical) ?? Worktrees.Managed(Config.Workspaces, physical)?.Workspace;
+        return Folders.Exactly(Config.Workspaces, physical) ?? Worktrees.Managed(Config.Workspaces, physical)?.Workspace;
     }
 
     // ---- session.transfer, the source's half ----

@@ -321,15 +321,426 @@ public sealed class ShadowTests : IDisposable
             var view = new PipeShadowHost(LocalEndpoint.For(profile));
             Assert.Equal("the host is not running for this profile", (await view.ObserveAsync()).Problem);
 
-            await using (LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(new SessionService(source, machine), control, new FixedCallerGuard(new Caller(CallerKind.Other, "the shadow comparison"))))) // reading needs no management
+            // The strictest caller short of the app: reading is all the comparison asks.
+            var api = LocalApi.Handler(new SessionService(source, machine), control, new FixedCallerGuard(new Caller(CallerKind.Agent, "the shadow comparison, run from inside an agent session")));
+            var asked = new List<string>();
+            await using (LocalServer.Start(LocalEndpoint.For(profile), (channel, op, data) => { lock (asked) { asked.Add(op); } return api(channel, op, data); }))
             {
                 var seen = await view.ObserveAsync();
 
                 Assert.True(seen.Available);
                 Assert.Equal(("working", "copilot"), (seen.Sessions[Id].Status, seen.Sessions[Id].Agent));
                 Assert.Equal((true, "0.1.0", true), (seen.SeesAgentHaBridge, seen.Version, seen.Dev));
+                Assert.Equal(("the host does not offer usage", "the host did not answer launch.options"), (seen.UsageProblem, seen.ResumableProblem));
+                // The slow ask first, so the sessions are as recent as the daemon's files read next.
+                Assert.True(asked.IndexOf(LaunchProtocol.Options) < asked.IndexOf(Ops.SessionsList), string.Join(", ", asked));
             }
         }
         finally { try { Directory.Delete(profile, recursive: true); } catch (IOException) { } }
+    }
+
+    // ---- usage and the resume list, from Home Assistant ----
+
+    const string Token = "FIXTURE-TOKEN-0f9e8d7c6b5a";
+    const string Account = "fixture-login";
+
+    // Home Assistant as far as the comparison may see it: the states it holds, by entity id, and
+    // every request that reached it.
+    sealed class FakeHomeAssistant(Func<string, string?> state) : HttpMessageHandler
+    {
+        public List<(HttpMethod Method, string Path, string? Auth)> Seen { get; } = [];
+        public Exception? Fail { get; set; }
+        public System.Net.HttpStatusCode? Status { get; set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Seen.Add((request.Method, request.RequestUri!.AbsolutePath, request.Headers.Authorization?.ToString()));
+            if (Fail is { } e) { throw e; }
+            if (Status is { } s) { return Task.FromResult(new HttpResponseMessage(s)); }
+            var entity = Uri.UnescapeDataString(request.RequestUri.AbsolutePath.Split('/')[^1]);
+            return Task.FromResult(state(entity) is { } json
+                ? new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(json) }
+                : new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+        }
+    }
+
+    // agent-ha-bridge's config.json as its installer writes it, with more in it than the
+    // comparison reads.
+    void Config(Action<JsonObject>? more = null)
+    {
+        Directory.CreateDirectory(Paths.Home);
+        var config = new JsonObject
+        {
+            ["homeAssistant"] = new JsonObject { ["baseUrl"] = "https://ha.fixture.invalid:8123", ["token"] = Token, ["agentTokenEnvVar"] = "AGENT_HA_AGENT_TOKEN" },
+            ["mqtt"] = new JsonObject { ["password"] = "FIXTURE-MQTT" },
+            ["newSession"] = new JsonObject { ["resumeCount"] = 12 },
+        };
+        more?.Invoke(config);
+        File.WriteAllText(Path.Combine(Paths.Home, "config.json"), config.ToJsonString());
+    }
+
+    // Publish-CopilotMqttUsage's state for one agent, and the resume select's.
+    static string UsageState(string client, double percent, DateTimeOffset at, string account = Account) => new JsonObject
+    {
+        ["entity_id"] = $"sensor.agent_bridge_fixture_usage_{client}",
+        ["state"] = percent.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        ["attributes"] = new JsonObject
+        {
+            ["client"] = client,
+            ["account"] = account,
+            ["account_id"] = "",
+            ["windows"] = new JsonArray(new JsonObject { ["key"] = "monthly", ["label"] = "Monthly", ["percent"] = percent }),
+            ["measured_at"] = at.ToString("o"),
+        },
+    }.ToJsonString();
+
+    static string ResumeState(params string[] labels) => new JsonObject
+    {
+        ["entity_id"] = "select.agent_bridge_fixture_new_resume",
+        ["state"] = "New session",
+        ["attributes"] = new JsonObject { ["options"] = new JsonArray([.. labels.Prepend("New session").Select(l => (JsonNode)l)]) },
+    }.ToJsonString();
+
+    // Time passing with the daemon still beating.
+    void Advance(TimeSpan by)
+    {
+        f.Time.Advance(by);
+        File.SetLastWriteTimeUtc(Paths.Heartbeat, (f.Time.GetUtcNow() - TimeSpan.FromSeconds(5)).UtcDateTime);
+    }
+
+    sealed class FixedHost(ShadowView view) : IShadowHost
+    {
+        public Task<ShadowView> ObserveAsync(CancellationToken ct = default) => Task.FromResult(view);
+    }
+
+    static ShadowUsage Reading(double percent, DateTimeOffset at, string account = Account) => new()
+    {
+        Reading = true,
+        Account = account,
+        Windows = new Dictionary<string, double> { ["monthly"] = percent },
+        MeasuredAt = at,
+    };
+
+    [Fact]
+    public async Task Home_Assistant_is_only_ever_sent_a_get_of_this_machines_usage_sensors_and_resume_select()
+    {
+        var inner = new FakeHomeAssistant(_ => "{}");
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        using var http = new HttpClient(new ReadOnlyHomeAssistantHandler(reader.Entities, inner));
+        var ha = new Uri("https://ha.fixture.invalid/api/states/");
+
+        Assert.Equal(
+            ["sensor.agent_bridge_fixture_usage_copilot", "sensor.agent_bridge_fixture_usage_claude", "sensor.agent_bridge_fixture_usage_codex", "select.agent_bridge_fixture_new_resume"],
+            reader.Entities);
+        foreach (var refused in new Func<Task>[]
+        {
+            () => http.PostAsync(new Uri(ha, "sensor.agent_bridge_fixture_usage_copilot"), new StringContent("{}")),
+            () => http.DeleteAsync(new Uri(ha, "sensor.agent_bridge_fixture_usage_copilot")),
+            () => http.SendAsync(new HttpRequestMessage(HttpMethod.Get, new Uri(ha, "sensor.agent_bridge_fixture_usage_copilot")) { Content = new StringContent("{}") }),
+            () => http.GetAsync(new Uri(ha, "sensor.agent_bridge_other_usage_copilot")),
+            () => http.GetAsync(new Uri(ha, "button.agent_bridge_fixture_new_session")),
+            () => http.GetAsync(new Uri(ha, "sensor.agent_bridge_fixture_usage_copilot?x=1")),
+            () => http.GetAsync(new Uri("https://ha.fixture.invalid/api/services/button/press")),
+            () => http.GetAsync(new Uri("https://ha.fixture.invalid/api/states")),
+            () => http.GetAsync(new Uri("https://ha.fixture.invalid/other/api/states/sensor.agent_bridge_fixture_usage_copilot")),
+            () => http.GetAsync(new Uri("https://ha.fixture.invalid/api/states/sensor.agent_bridge_fixture_usage_copilot/history")),
+        })
+        {
+            await Assert.ThrowsAsync<HomeAssistantRequestRefusedException>(refused);
+        }
+        Assert.Empty(inner.Seen);
+
+        Config();
+        var reading = await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!);
+
+        Assert.All(inner.Seen, r => Assert.Equal(HttpMethod.Get, r.Method));
+        Assert.Equal(reader.Entities.Select(e => "/api/states/" + e), inner.Seen.Select(r => r.Path));
+        Assert.All(inner.Seen, r => Assert.Equal("Bearer " + Token, r.Auth));
+        Assert.Equal(0, reading.Usage!.Count(u => u.Value.Reading));
+    }
+
+    [Fact]
+    public async Task The_daemons_usage_and_resume_list_are_compared_with_the_hosts_and_no_report_carries_the_token_an_account_or_a_label()
+    {
+        f.Time.SetLocalTimeZone(TimeZoneInfo.Utc);
+        Daemon(new JsonObject());
+        Config();
+        var now = f.Time.GetUtcNow();
+        var inner = new FakeHomeAssistant(entity => entity switch
+        {
+            "sensor.agent_bridge_fixture_usage_copilot" => UsageState("copilot", 40, now - TimeSpan.FromMinutes(2)),
+            "sensor.agent_bridge_fixture_usage_claude" => UsageState("claude", 10, now, account: "someone-else"),
+            "select.agent_bridge_fixture_new_resume" => ResumeState("Fix the  login page - web", "Write the report - docs", "Old work - repo", "Agency on OTHER-PC: Shared from there (abcdef12)"),
+            _ => null,
+        });
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        var host = new FixedHost(new ShadowView
+        {
+            SeesAgentHaBridge = true,
+            Usage = new Dictionary<string, ShadowUsage>
+            {
+                ["copilot"] = Reading(55, now),
+                ["claude"] = Reading(10, now),
+                ["codex"] = Reading(3, now),
+            },
+            // The host offers fewer (its own resume count): only its own are looked for. Another
+            // machine's shared session on the daemon's list is not one it offers yet.
+            Resumable = ["Fix the login page - web", "Something new - web"],
+        });
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60), f.Time);
+        var runner = new ShadowRunner(new DaemonReader(Paths, f.Time), host, ledger, log.Add, new CachedDaemonHomeAssistant(Paths, reader, f.Time));
+
+        var c = await runner.SampleAsync();
+        for (var i = 0; i < 4; i++) { Advance(TimeSpan.FromSeconds(60)); await runner.SampleAsync(); }
+        Assert.Empty(ledger.Today!.Mismatches);
+        Advance(TimeSpan.FromSeconds(60));
+        await runner.SampleAsync();
+
+        Assert.True(c.UsageCompared && c.ResumableCompared);
+        Assert.Empty(c.NotCompared);
+        Assert.Equal(
+            [
+                (ShadowKinds.ResumableCount, null, "daemon=3 host=2"),
+                (ShadowKinds.ResumableMissingOnDaemon, null, "1 of the host's 2"),
+                (ShadowKinds.UsageAccount, "claude", "the account differs"),
+                (ShadowKinds.UsageMissingOnDaemon, "codex", "the host has a reading and the daemon none"),
+            ],
+            c.Differences.Select(d => (d.Kind, d.Session, d.Detail)).OrderBy(x => x.Kind, StringComparer.Ordinal).ToList());
+        // Read once a minute, not each sample; and not until five minutes is any of it a mismatch.
+        Assert.Equal(6 * 4, inner.Seen.Count);
+        // Copilot's 40 against 55 is one pair of readings, never confirmed by a second.
+        Assert.Equal(4, ledger.Today!.Mismatches.Count);
+        Assert.Equal((6, 6), (ledger.Today.UsageCompared, ledger.Today.ResumableCompared));
+        var report = File.ReadAllText(Path.Combine(reports, ShadowLedger.FileName("2026-10-28")));
+        foreach (var secret in new[] { Token, "FIXTURE-MQTT", Account, "someone-else", "login page", "Something new", "fixture.invalid" })
+        {
+            Assert.DoesNotContain(secret, report);
+            Assert.DoesNotContain(secret, string.Join("\n", log));
+        }
+    }
+
+    [Fact]
+    public async Task Home_Assistant_unreachable_or_refusing_leaves_usage_and_the_resume_list_not_compared_rather_than_mismatched()
+    {
+        f.Time.SetLocalTimeZone(TimeZoneInfo.Utc);
+        Daemon(new JsonObject());
+        Config();
+        var inner = new FakeHomeAssistant(_ => null) { Fail = new HttpRequestException("connection refused to ha.fixture.invalid with " + Token) };
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        var host = new FixedHost(new ShadowView
+        {
+            SeesAgentHaBridge = true,
+            Usage = new Dictionary<string, ShadowUsage> { ["copilot"] = Reading(55, f.Time.GetUtcNow()) },
+            Resumable = ["Fix the login page - web"],
+        });
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60), f.Time);
+        var ha = new CachedDaemonHomeAssistant(Paths, reader, f.Time);
+        var runner = new ShadowRunner(new DaemonReader(Paths, f.Time), host, ledger, log.Add, ha);
+
+        var unreachable = await runner.SampleAsync();
+        inner.Fail = null;
+        inner.Status = System.Net.HttpStatusCode.Unauthorized;
+        Advance(TimeSpan.FromSeconds(60));
+        var refused = await runner.SampleAsync();
+        File.Delete(Path.Combine(Paths.Home, "config.json"));
+        Advance(TimeSpan.FromSeconds(60));
+        var unconfigured = await runner.SampleAsync();
+
+        foreach (var c in new[] { unreachable, refused, unconfigured })
+        {
+            Assert.True(c.Compared);
+            Assert.Empty(c.Differences);
+            Assert.False(c.UsageCompared || c.ResumableCompared);
+        }
+        Assert.Equal(["usage: Home Assistant is unreachable", "resumable: Home Assistant is unreachable"], unreachable.NotCompared);
+        Assert.Equal("usage: Home Assistant refused agent-ha-bridge's token", refused.NotCompared[0]);
+        Assert.Equal("usage: agent-ha-bridge's config could not be read", unconfigured.NotCompared[0]);
+        var day = ledger.Today!;
+        Assert.Equal(("clean", 0, 0, 1), (day.Verdict, day.UsageCompared, day.ResumableCompared, day.NotComparedWhy["usage: Home Assistant is unreachable"]));
+        var report = File.ReadAllText(Path.Combine(reports, ShadowLedger.FileName("2026-10-28")));
+        Assert.DoesNotContain(Token, report);
+        Assert.DoesNotContain("fixture.invalid", report);
+    }
+
+    // Answers the headers, then never finishes the body.
+    sealed class StallingHomeAssistant : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StreamContent(new StallingStream()) });
+
+        sealed class StallingStream : Stream
+        {
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => 0; set => throw new NotSupportedException(); }
+            public override void Flush() { }
+            public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                return 0;
+            }
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
+    }
+
+    [Fact]
+    public async Task A_home_assistant_that_stalls_partway_through_a_state_is_unreachable_once_the_deadline_passes()
+    {
+        Config();
+        using var reader = new DaemonHaReader("FIXTURE", new StallingHomeAssistant(), TimeSpan.FromMilliseconds(200));
+
+        var read = reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!);
+
+        Assert.Same(read, await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(10))));
+        Assert.Equal(("Home Assistant is unreachable", "Home Assistant is unreachable"), ((await read).UsageProblem, (await read).ResumableProblem));
+    }
+
+    // The host reads every 15 minutes while the daemon runs and the daemon every 2, so both are
+    // fresh only now and then. A run keeps the last verdict between those moments: a lasting
+    // difference outlasts the grace, and a rise the host has not read yet never counts.
+    [Fact]
+    public void A_run_counts_a_percentage_difference_once_two_fresh_pairs_of_readings_show_it_and_keeps_it_until_one_agrees()
+    {
+        f.Time.SetLocalTimeZone(TimeZoneInfo.Utc);
+        var start = f.Time.GetUtcNow();
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60), f.Time);
+        var memory = new ShadowMemory();
+        ShadowView Side(double percent, DateTimeOffset at) => new()
+        {
+            SeesAgentHaBridge = true,
+            Usage = new Dictionary<string, ShadowUsage> { ["copilot"] = Reading(percent, at) },
+            Resumable = [],
+        };
+        DateTimeOffset Last(TimeSpan every) => start + TimeSpan.FromTicks((f.Time.GetUtcNow() - start).Ticks / every.Ticks * every.Ticks);
+        void Minutes(int n, Func<DateTimeOffset, double> daemon, Func<DateTimeOffset, double> host)
+        {
+            for (var i = 0; i < n; i++)
+            {
+                var (d, h) = (Last(TimeSpan.FromMinutes(2)), Last(TimeSpan.FromMinutes(15)));
+                ledger.Record(ShadowCompare.Compare(Side(daemon(d), d), Side(host(h), h), memory), new ShadowView(), new ShadowView());
+                f.Time.Advance(TimeSpan.FromMinutes(1));
+            }
+        }
+
+        // Usage rises at minute 2, and again at minute 16 just after a host read; each time the
+        // daemon's next readings disagree with the host's old one until the host reads again.
+        static double Used(TimeSpan since) => since >= TimeSpan.FromMinutes(16) ? 30 : since >= TimeSpan.FromMinutes(2) ? 20 : 10;
+        Minutes(45, at => Used(at - start), at => Used(at - start));
+        Assert.Empty(ledger.Today!.Mismatches);
+        Assert.False(ledger.Today.Transient.ContainsKey(ShadowKinds.UsagePercent));
+
+        // Now the host reads 15 points high for good.
+        Minutes(60, _ => 40, _ => 55);
+        var m = Assert.Single(ledger.Today.Mismatches);
+        Assert.Equal((ShadowKinds.UsagePercent, "copilot", true), (m.Kind, m.Session, m.Open));
+    }
+
+    // Sync-DaemonUsage publishes a change at its next poll but an unchanged figure only every half
+    // hour (two intervals with a dashboard.publication), so the sensor's measured_at can be half an
+    // hour old while the daemon is still confirming it at every poll.
+    [Fact]
+    public async Task A_daemon_figure_published_a_while_ago_holds_until_its_last_poll_while_the_daemon_still_republishes_it()
+    {
+        var now = f.Time.GetUtcNow();
+        var measured = now;
+        var inner = new FakeHomeAssistant(e => e == "sensor.agent_bridge_fixture_usage_copilot" ? UsageState("copilot", 40, measured) : null);
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        async Task<DateTimeOffset?> Confirmed(int minutesAgo)
+        {
+            measured = now - TimeSpan.FromMinutes(minutesAgo);
+            return (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!["copilot"].ConfirmedAt;
+        }
+
+        // Asked at least every fifteen minutes, so what it published holds until sixteen ago (a
+        // minute's slack), for as long as half an hour and a poll say it is still republishing.
+        Config();
+        Assert.Equal(now - TimeSpan.FromMinutes(16), await Confirmed(29));
+        Assert.Null(await Confirmed(10));
+        Assert.Null(await Confirmed(47));
+
+        // Its own pace from its config, and a publication's shorter re-assert.
+        Config(c =>
+        {
+            c["usage"] = new JsonObject { ["idleIntervalSeconds"] = "600" };
+            c["dashboard"] = new JsonObject { ["publication"] = new JsonObject { ["writer"] = "FIXTURE" } };
+        });
+        Assert.Equal(now - TimeSpan.FromMinutes(11), await Confirmed(14));
+        Assert.Null(await Confirmed(16));
+    }
+
+    // Found in review (#73): the daemon republishes an unchanged figure only every half hour, or
+    // with a dashboard.publication at every poll with a new measured_at; either way a host reading
+    // every fifteen minutes, seven after the daemon's polls, never landed within three minutes of
+    // one, so a host fifteen points high for good was never seen. The daemon's figure now holds
+    // from when it first stood to its last poll.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_run_compares_the_hosts_figure_with_the_daemons_unchanged_one_and_finds_a_lasting_difference(bool publication)
+    {
+        f.Time.SetLocalTimeZone(TimeZoneInfo.Utc);
+        Daemon(new JsonObject());
+        Config(c => { if (publication) { c["dashboard"] = new JsonObject { ["publication"] = new JsonObject { ["writer"] = "FIXTURE" } }; } });
+        var start = f.Time.GetUtcNow();
+        var quarter = TimeSpan.FromMinutes(15);
+        var reassert = publication ? TimeSpan.FromMinutes(4) : TimeSpan.FromMinutes(30);
+        (double Value, DateTimeOffset At)? published = null;
+        (double Value, DateTimeOffset At)? host = null;
+        var inner = new FakeHomeAssistant(e => e == "sensor.agent_bridge_fixture_usage_copilot" && published is { } p ? UsageState("copilot", p.Value, p.At) : null);
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60), f.Time);
+        var memory = new ShadowMemory();
+        async Task Minutes(int n, Func<TimeSpan, double> used, double hostHigh)
+        {
+            for (var i = 0; i < n; i++)
+            {
+                var now = f.Time.GetUtcNow();
+                var since = now - start;
+                // The daemon asks every fifteen minutes (no session of the agent open), publishing a
+                // change, or the same figure once the re-assert has passed.
+                if (since.Ticks % quarter.Ticks == 0 && (published is not { } p || p.Value != used(since) || now - p.At >= reassert))
+                {
+                    published = (used(since), now);
+                }
+                // The host asks every fifteen minutes too, seven after the daemon.
+                if ((since - TimeSpan.FromMinutes(7)).Ticks % quarter.Ticks == 0) { host = (used(since) + hostHigh, now); }
+                var daemon = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!;
+                if (daemon.Count > 0 && host is { } h)
+                {
+                    var side = (IReadOnlyDictionary<string, ShadowUsage> usage) => new ShadowView { SeesAgentHaBridge = true, Usage = usage, Resumable = [] };
+                    ledger.Record(ShadowCompare.Compare(side(daemon), side(new Dictionary<string, ShadowUsage> { ["copilot"] = Reading(h.Value, h.At) }), memory), new ShadowView(), new ShadowView());
+                }
+                f.Time.Advance(TimeSpan.FromMinutes(1));
+            }
+        }
+
+        // Usage rising now and then, which each side sees at its own next read.
+        await Minutes(120, since => since >= TimeSpan.FromMinutes(50) ? 30 : since >= TimeSpan.FromMinutes(20) ? 20 : 10, 0);
+        Assert.Empty(ledger.Today!.Mismatches);
+        Assert.False(ledger.Today.Transient.ContainsKey(ShadowKinds.UsagePercent));
+
+        await Minutes(90, _ => 40, 15);
+        var m = Assert.Single(ledger.Today.Mismatches);
+        Assert.Equal((ShadowKinds.UsagePercent, "copilot", true), (m.Kind, m.Session, m.Open));
+    }
+    [Fact]
+    public void Usage_percentages_are_compared_only_between_readings_taken_close_together_and_within_five_points()
+    {
+        var at = new DateTimeOffset(2026, 10, 28, 12, 0, 0, TimeSpan.Zero);
+        ShadowView Side(double percent, DateTimeOffset when) => new()
+        {
+            SeesAgentHaBridge = true,
+            Usage = new Dictionary<string, ShadowUsage> { ["copilot"] = Reading(percent, when) },
+            Resumable = [],
+        };
+
+        Assert.Empty(ShadowCompare.Compare(Side(40, at), Side(44, at)).Differences);
+        Assert.Empty(ShadowCompare.Compare(Side(40, at), Side(90, at + TimeSpan.FromMinutes(13))).Differences);
+        Assert.Equal(ShadowKinds.UsagePercent, Assert.Single(ShadowCompare.Compare(Side(40, at), Side(46, at + TimeSpan.FromMinutes(2))).Differences).Kind);
     }
 }

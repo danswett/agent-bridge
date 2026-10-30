@@ -8,13 +8,21 @@ using AgentBridge.Transport;
 namespace AgentBridge.Host.Shadow;
 
 // One sample: both views, compared, and (for run) recorded.
-public sealed class ShadowRunner(DaemonReader daemon, IShadowHost host, ShadowLedger? ledger, Action<string> log)
+public sealed class ShadowRunner(DaemonReader daemon, IShadowHost host, ShadowLedger? ledger, Action<string> log, IDaemonHomeAssistant? homeAssistant = null)
 {
+    // Only a run judges usage percentages over time; one sample (once) compares what it sees.
+    readonly ShadowMemory? memory = ledger is null ? null : new();
+
     public async Task<ShadowComparison> SampleAsync(CancellationToken ct = default)
     {
         var h = await host.ObserveAsync(ct);
         var d = daemon.Read();
-        var comparison = ShadowCompare.Compare(d, h);
+        if (d.Available && h.Available)
+        {
+            var ha = await (homeAssistant ?? new NoDaemonHomeAssistant()).ReadAsync(ct);
+            d = d with { Usage = ha.Usage, UsageProblem = ha.UsageProblem, Resumable = ha.Resumable, ResumableProblem = ha.ResumableProblem };
+        }
+        var comparison = ShadowCompare.Compare(d, h, memory);
         if (ledger is not null)
         {
             foreach (var m in ledger.Record(comparison, d, h))
@@ -53,7 +61,7 @@ public sealed class ShadowRunner(DaemonReader daemon, IShadowHost host, ShadowLe
 // agent-bridge-host shadow run | once | summary (docs/host-shadow.md).
 public static class ShadowCommand
 {
-    public const string Usage = "agent-bridge-host shadow run [--interval <s>] [--grace <s>] [--in-process] | shadow once [--in-process] [--json] | shadow summary [--days <n>] [--json]   [--profile <name>] [--agent-ha-bridge-home <dir>]";
+    public const string Usage = "agent-bridge-host shadow run [--interval <s>] [--grace <s>] [--in-process] [--no-home-assistant] | shadow once [--in-process] [--no-home-assistant] [--json] | shadow summary [--days <n>] [--json]   [--profile <name>] [--agent-ha-bridge-home <dir>]";
 
     public static async Task<int> RunAsync(IReadOnlyList<string> args, SessionSourceOptions options, string version, bool dev, TextWriter output, TextWriter error)
     {
@@ -78,6 +86,15 @@ public static class ShadowCommand
         var reports = Path.Combine(folder, "shadow");
         var paths = Option("--agent-ha-bridge-home") is { } home ? new AgentHaBridgePaths(Path.GetFullPath(home), options.CopilotHome) : AgentHaBridgePaths.ForCurrentUser(options.CopilotHome);
         var time = TimeProvider.System;
+        // The daemon's usage and resume list, from Home Assistant with agent-ha-bridge's own token
+        // (GET of this machine's entities only; docs/host-shadow.md).
+        DaemonHaReader? reader = null;
+        IDaemonHomeAssistant HomeAssistant()
+        {
+            if (Flag("--no-home-assistant")) { return new NoDaemonHomeAssistant(); }
+            reader ??= new DaemonHaReader(Environment.MachineName);
+            return new CachedDaemonHomeAssistant(paths, reader, time);
+        }
         try
         {
             switch (sub)
@@ -94,12 +111,13 @@ public static class ShadowCommand
                     {
                         if (!Directory.Exists(paths.Home)) { error.WriteLine($"agent-ha-bridge is not installed here ({paths.Home}); there is nothing to compare with"); return 2; }
                         await using var host = await HostAsync(Flag("--in-process"), folder, options, version, dev, CancellationToken.None);
-                        var comparison = await new ShadowRunner(new DaemonReader(paths, time), host.View, null, _ => { }).SampleAsync();
+                        var comparison = await new ShadowRunner(new DaemonReader(paths, time), host.View, null, _ => { }, HomeAssistant()).SampleAsync();
                         if (Flag("--json")) { output.WriteLine(JsonSerializer.Serialize(comparison, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true })); }
                         else
                         {
                             output.WriteLine($"{(comparison.Compared ? "compared" : "not compared")}: daemon {comparison.DaemonSessions} session(s), host {comparison.HostSessions}; {comparison.Differences.Count} difference(s) now (a mismatch is one that lasts the grace; see shadow run)");
                             foreach (var d in comparison.Differences) { output.WriteLine($"  {d.Kind,-26} {d.Session ?? "-",-14} {d.Detail}"); }
+                            foreach (var n in comparison.NotCompared) { output.WriteLine($"  not compared: {n}"); }
                         }
                         return comparison.Differences.Count == 0 ? 0 : 1;
                     }
@@ -116,8 +134,8 @@ public static class ShadowCommand
                         using var stop = new CancellationTokenSource();
                         Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
                         await using var host = await HostAsync(Flag("--in-process"), folder, options, version, dev, stop.Token);
-                        HostLog.Write($"shadow comparison with agent-ha-bridge ({paths.Home}) against {host.Describe}, every {interval.TotalSeconds} s, grace {grace.TotalSeconds} s; reports in {ledger.Folder}");
-                        await new ShadowRunner(new DaemonReader(paths, time), host.View, ledger, HostLog.Write).RunAsync(interval, time, stop.Token);
+                        HostLog.Write($"shadow comparison with agent-ha-bridge ({paths.Home}) against {host.Describe}, every {interval.TotalSeconds} s, grace {grace.TotalSeconds} s, {(Flag("--no-home-assistant") ? "not reading" : "reading (GET only)")} its Home Assistant entities; reports in {ledger.Folder}");
+                        await new ShadowRunner(new DaemonReader(paths, time), host.View, ledger, HostLog.Write, HomeAssistant()).RunAsync(interval, time, stop.Token);
                         HostLog.Write("shadow comparison stopped");
                         return 0;
                     }
@@ -131,6 +149,7 @@ public static class ShadowCommand
             error.WriteLine(e.Message);
             return 2;
         }
+        finally { reader?.Dispose(); }
     }
 
     sealed class HostHandle(IShadowHost view, string describe, IAsyncDisposable? owned) : IAsyncDisposable

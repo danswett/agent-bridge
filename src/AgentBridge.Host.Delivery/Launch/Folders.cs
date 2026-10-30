@@ -117,6 +117,14 @@ public static class Folders
         return null;
     }
 
+    // The approved workspace that is this folder, physically; null when none is.
+    public static WorkspaceConfig? Exactly(IReadOnlyList<WorkspaceConfig> workspaces, string folder)
+    {
+        var physical = Physical(folder);
+        if (physical is null) { return null; }
+        return workspaces.FirstOrDefault(w => Physical(w.Path) is { } root && Same(physical, root));
+    }
+
     static string Trim(string path)
     {
         var root = Path.GetPathRoot(path) ?? "";

@@ -350,11 +350,11 @@ agent-ha-bridge's manual checks, `tests/verify-mac-terminal.ps1`,
 |---|---|---|
 | Trace recorder in agent-ha-bridge (opt-in, off by default, G10) | `Intentionally different` | Not needed for the shadow diff, which reads the daemon's own state file, heartbeat and question markers, so agent-ha-bridge is unchanged ([host-shadow.md](host-shadow.md)). A recorder may still be wanted for replay traces. #40 |
 | Replay harness (recorded traces become xUnit cases named for the PS scenarios) | `Missing` | #40 |
-| Shadow mode (read-only beside the daemon, diffing state) | `Implemented, untested live` | `agent-bridge-host shadow run` and `summary` ([host-shadow.md](host-shadow.md)); `ShadowTests` (10). Compares sessions, status, background work, model, compactions, the response's end, questions and their fields, and machine status (daemon up, host up, G5). Usage and resumable sessions are not compared: the daemon keeps them only in Home Assistant. The week on DEV-VM1 has not run yet. #40 |
+| Shadow mode (read-only beside the daemon, diffing state) | `Implemented, untested live` | `agent-bridge-host shadow run` and `summary` ([host-shadow.md](host-shadow.md)); `ShadowTests` (18). Compares sessions, status, background work, model, compactions, the response's end, questions and their fields, machine status (daemon up, host up, G5), and usage and the resume list (the daemon's read from Home Assistant: GET of four entities only, with its own token, owner-approved). Five daemon bugs it found are filed (agent-ha-bridge#258 to #262) and documented as known differences. The week on DEV-VM1 has not run yet; `build/shadow-week.ps1` sets it up. #40 |
 
 **For a week of shadow comparison on DEV-VM1:**
 
-1. `agent-bridge-host shadow run` beside the daemon and the serving host
+1. `pwsh build/shadow-week.ps1 -Install`: the host serving a profile of its own and `agent-bridge-host shadow run`, each a per-user logon task, beside the daemon
    ([host-shadow.md](host-shadow.md)). It writes a daily report: sessions missing on either
    side, disagreements in status and the other compared fields that last longer than the
    grace (60 s), question identity and field mismatches, and timing skew. It never

@@ -316,6 +316,23 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    public void A_session_in_one_of_agent_ha_bridges_worktrees_is_resumable_there_but_the_worktree_is_never_this_hosts_to_lock()
+    {
+        var work = Repo();
+        var theirs = Path.Combine(root, "wt", "theirs");
+        Git(work, "worktree", "add", "--detach", theirs, "HEAD");
+        IReadOnlyList<WorkspaceConfig> ws = [new("Work", work, true)];
+        Assert.Null(Worktrees.Managed(ws, theirs));
+
+        File.WriteAllText(Path.Combine(Worktrees.AdminFolder(theirs)!, Worktrees.AgentHaBridgeMarker), DateTime.Now.ToString("o"));
+
+        Assert.Equal("Work", Worktrees.Managed(ws, theirs)?.Workspace.Label);
+        Assert.False(Worktrees.IsManaged(theirs));
+        Assert.Equal((null, null), Worktrees.Reserve(theirs));
+        Assert.False(File.Exists(Path.Combine(Worktrees.AdminFolder(theirs)!, "locked")));
+    }
+
+    [Fact]
     public void The_cap_counts_only_this_hosts_worktrees_and_refuses_rather_than_falling_back()
     {
         var work = Repo();
