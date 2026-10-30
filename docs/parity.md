@@ -35,11 +35,11 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 
 | Status | Rows |
 |---|---|
-| `Verified` | 49 |
-| `Implemented, untested live` | 36 |
+| `Verified` | 47 |
+| `Implemented, untested live` | 39 |
 | `Partial` | 2 |
-| `Missing` | 18 |
-| `Intentionally different` | 17 |
+| `Missing` | 15 |
+| `Intentionally different` | 18 |
 | `N/A` | 12 |
 | `In flight (…)` | 13: Claude/Codex live 8, HA connector 5 |
 | **Total** | **147** feature rows in §1–§18 |
