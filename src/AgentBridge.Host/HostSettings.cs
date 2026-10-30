@@ -95,6 +95,14 @@ public sealed record HostSettings(bool RemoteApproval)
         {
             return (Off, $"{path} could not be read ({e.Message}); remote approval of permission prompts, launching, notifications and agent usage are off, and the host is read-only");
         }
+        return Parse(text, path);
+    }
+
+    // The file's text as Load reads it, path only naming it in what is said: config set checks a
+    // change with this before anything is written, so a value it refuses (a token pasted where a
+    // login belongs) never reaches the disk.
+    public static (HostSettings Settings, string? Problem) Parse(string text, string path)
+    {
         try
         {
             using var doc = JsonDocument.Parse(text, Options);

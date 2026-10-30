@@ -177,6 +177,13 @@ export class UsageBook {
     this.#emit();
   }
 
+  // A machine that has said it reports no usage (hello without the capability: usage.publish
+  // off) has nothing to outvote; its last report would otherwise be shown for good.
+  delete(machineId) {
+    if (!this.#reports.delete(machineId)) { return; }
+    this.#emit();
+  }
+
   get size() { return this.#reports.size; }
 
   entries() { return mergeUsage([...this.#reports.values()]); }

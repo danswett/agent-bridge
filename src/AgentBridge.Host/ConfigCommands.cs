@@ -206,26 +206,20 @@ public static class ConfigCommands
         return created;
     }
 
-    // Checked as serve would read it, then written in one step.
+    // Checked as serve would read it, in memory, so a change that is refused is never written
+    // anywhere; then written in one step.
     static bool Save(string path, JsonObject root, TextWriter error)
     {
         root["version"] ??= HostSettings.Version;
         var text = root.ToJsonString(Pretty) + Environment.NewLine;
         var folder = Path.GetDirectoryName(path)!;
-        var check = Path.Combine(folder, $".config-check-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(check);
-        try
+        var (settings, problem) = HostSettings.Parse(text, path);
+        var problems = (problem is null ? [] : new[] { problem }).Concat(settings.SectionProblems).ToList();
+        if (problems.Count > 0)
         {
-            File.WriteAllText(Path.Combine(check, HostSettings.FileName), text);
-            var (settings, problem) = HostSettings.Load(check);
-            var problems = (problem is null ? [] : new[] { problem }).Concat(settings.SectionProblems).ToList();
-            if (problems.Count > 0)
-            {
-                error.WriteLine("Not written: " + string.Join("; ", problems.Select(p => p.Replace(check, folder, StringComparison.OrdinalIgnoreCase))));
-                return false;
-            }
+            error.WriteLine("Not written: " + string.Join("; ", problems));
+            return false;
         }
-        finally { Directory.Delete(check, true); }
         var temp = Path.Combine(folder, $".{HostSettings.FileName}.{Guid.NewGuid():N}.tmp");
         File.WriteAllText(temp, text);
         File.Move(temp, path, overwrite: true);

@@ -117,6 +117,8 @@ public sealed class HostConnection : IAsyncDisposable
                     var usage = await ch.CallAsync<UsageReport>(UsageProtocol.Subscribe, ct: ct);
                     ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; } });
                 }
+                // A host that reports no usage now (usage.publish off) has no figure to keep showing.
+                else { ui.Post(() => Usage = UsageReport.Empty); }
                 await SubscribeSessionsAsync(ch, ct);
                 ui.Post(() => SetState(LinkState.Connected, null));
                 Volatile.Read(ref connected).TrySetResult();

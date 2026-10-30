@@ -88,7 +88,7 @@ export class FleetStatus {
       if (this.hosts.capabilities.includes(USAGE.capability)) {
         client.on('usage', (r) => { if (this.#viewed === client) { this.book.set(id, r); } });
         client.subscribeUsage().then((r) => { if (this.#viewed === client) { this.book.set(id, r); } }, () => {});
-      }
+      } else { this.book.delete(id); }
     }
     this.#emit();
     this.probe();
@@ -135,6 +135,9 @@ export class FleetStatus {
       if (hello.capabilities.includes(USAGE.capability)) {
         const report = await client.usage();
         if (!viewed()) { this.book.set(id, report); }
+      } else {
+        // Said by the machine itself, so its last report goes; one that cannot be reached keeps it.
+        this.book.delete(id);
       }
     } catch {
       // Not retried before the minute is up, whatever went wrong.

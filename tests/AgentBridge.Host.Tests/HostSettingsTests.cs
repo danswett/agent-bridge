@@ -205,6 +205,8 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Equal(1, Run("config", "set", "usage.copilotAccounts", """["gho_0123456789abcdef"]"""));
         Assert.Contains("Not written: usage.copilotAccounts entry 1 looks like a token", Said);
         Assert.DoesNotContain("gho_", Said);
+        // Never on disk at all, not even while it is being checked.
+        Assert.DoesNotContain(Directory.GetFiles(folder, "*", SearchOption.AllDirectories), f => File.ReadAllText(f).Contains("gho_", StringComparison.Ordinal));
         Assert.Equal(1, Run("config", "set", "usage.publish", "off"));
         Assert.Equal(text, File.ReadAllText(Path.Combine(folder, HostSettings.FileName)));
 
