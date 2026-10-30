@@ -490,6 +490,51 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Codex_running_agent_ha_bridges_PowerShell_directly_is_refused_when_its_new_hook_path_has_a_space()
+    {
+        // Codex runs its command unquoted, so it cannot be re-pointed at a path with a space; an
+        // entry left running the PowerShell hook would go on writing beside the host.
+        var spaced = Path.Combine(_f.Home, "App Data", "bin");
+        // Entries that run its Go hook hand their events to whoever takes the spool, so they
+        // can stay.
+        var kept = await _f.Migrator(hookFolder: spaced).MigrateAsync(dryRun: true);
+        Assert.True(kept.Ok, kept.ToString());
+        Assert.Contains("Codex's hooks are left on agent-ha-bridge's", kept.ToString());
+        var codex = FakeAgentHaBridge.Read(_f.CodexHooks);
+        foreach (var (_, list) in codex["hooks"]!.AsObject()) { list![0]!["hooks"]![0]!["command"] = $"pwsh -NoProfile -ExecutionPolicy Bypass -File {_f.CodexScript}"; }
+        File.WriteAllText(_f.CodexHooks, codex.ToJsonString());
+        var listing = _f.Listing();
+
+        var report = await _f.Migrator(hookFolder: spaced).MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("Codex runs agent-ha-bridge's PowerShell hook directly", report.ToString());
+        Assert.Equal(listing, _f.Listing());
+        Assert.Empty(_f.Runtime_.Calls);
+    }
+
+    [Fact]
+    public async Task A_workspace_flag_and_numeric_tuning_agent_ha_bridge_reads_are_carried_with_their_meaning()
+    {
+        var config = FakeAgentHaBridge.DefaultConfig();
+        var app = FakeAgentHaBridge.Rooted("repos", "cased");
+        config["newSession"]!["workspaces"] = new JsonArray(new JsonObject { ["Path"] = app, ["Isolate"] = true });
+        config["newSession"]!["context"] = new JsonObject { ["codex"] = 200000 };
+        config["newSession"]!["contexts"] = new JsonObject { ["codex"] = new JsonArray(200000, 400000) };
+        await using var f = new FakeAgentHaBridge(config);
+
+        Assert.True((await f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        var launch = JsonNode.Parse(File.ReadAllText(Path.Combine(f.Profile, "config.json")))!["launch"]!;
+        var workspace = launch["workspaces"]!.AsArray().Single()!.AsObject();
+        Assert.Equal(["path", "isolate"], workspace.Select(p => p.Key));
+        Assert.Equal(app, (string?)workspace["path"]);
+        Assert.True((bool)workspace["isolate"]!);
+        Assert.Equal("200000", (string?)launch["agents"]!["codex"]!["context"]);
+        Assert.Equal(["200000", "400000"], launch["agents"]!["codex"]!["contexts"]!.AsArray().Select(v => (string)v!));
+    }
+
+    [Fact]
     public async Task Rolling_back_with_nothing_migrated_says_so()
     {
         var report = await _f.Migrator().RollbackAsync(dryRun: false);

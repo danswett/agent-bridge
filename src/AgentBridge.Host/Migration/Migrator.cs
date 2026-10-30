@@ -128,6 +128,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         }
 
         var plans = new[] { Registrations.Copilot(install, options.HookPath), Registrations.Claude(install, options.HookPath), Registrations.Codex(install, options.HookPath) };
+        if (plans.FirstOrDefault(p => p.Refusal is not null) is { } blocked) { Say("Refused: " + blocked.Refusal + "."); return new(false, lines); }
         var hostConfig = Path.Combine(options.ProfileFolder, HostSettings.FileName);
         var import = ConfigImport.Build(install.Config, File.Exists(hostConfig) ? File.ReadAllText(hostConfig) : null);
         if (import.Problems.Count > 0)

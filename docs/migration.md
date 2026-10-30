@@ -55,6 +55,9 @@ second snapshot the first's changes as the state to restore; the second is refus
      equals `writer`), or the policy is there but cannot be read (G7). The writer migrates
      last, at P7. A machine with no `dashboard.publication` is not a writer;
    * the hook program is missing;
+   * the hook program's path has a space and Codex runs agent-ha-bridge's PowerShell hook
+     directly: Codex cannot run a path with a space, and that entry would go on writing beside
+     the host. (Entries running the Go hook are left: they hand their events to the spool);
    * no host is serving the profile;
    * the settings to carry over would leave the profile's `config.json` with problems, in
      launching or in the Home Assistant connector (a `baseUrl` it could not use, say).
@@ -111,7 +114,8 @@ Into the profile's `config.json` (`docs/host-config.md`), each keeping its meani
 the profile already has is kept, and the report says so. Workspaces are added to any already
 approved; one whose folder is already approved (compared as the host reads it, with `~`, `.`
 and `..` resolved) is skipped, and one whose label the profile already gives another folder is
-skipped and reported. Two of agent-ha-bridge's sharing a label are both imported, and the host
+skipped and reported. Each entry's `path`, `label` and `isolate` are read whatever their letter
+case, as agent-ha-bridge reads them, and written as the host reads them. Two of agent-ha-bridge's sharing a label are both imported, and the host
 tells them apart by folder, as agent-ha-bridge did.
 
 | agent-ha-bridge | This host |
@@ -125,7 +129,7 @@ tells them apart by folder, as agent-ha-bridge did.
 | `newSession.allowAllTools` | `launch.permissions` (`allowAll` or `ask`) |
 | `newSession.model` (text: every agent's, as agent-ha-bridge falls back to it; object: per agent) | `launch.agents.<agent>.model` |
 | `newSession.effort.<agent>`, `context.<agent>` | `launch.agents.<agent>.effort`, `context` |
-| `newSession.models`, `efforts`, `contexts` `.<agent>` | `launch.agents.<agent>.models`, `efforts`, `contexts` |
+| `newSession.models`, `efforts`, `contexts` `.<agent>` (numbers as their text, as agent-ha-bridge passes them) | `launch.agents.<agent>.models`, `efforts`, `contexts` |
 | `newSession.extraArgs` | `launch.agents.<each agent>.extraArgs` (agent-ha-bridge added them to every launcher) |
 | `newSession.<agent>Path` | `launch.agents.<agent>.path` |
 | `newSession.worktreeRoot`, `worktreeLimit`, `worktreeIdleHours` | `launch.worktrees.root`, `limit`, `idleHours` |

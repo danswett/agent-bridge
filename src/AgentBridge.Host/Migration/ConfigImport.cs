@@ -123,7 +123,7 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                     {
                         foreach (var id in Agents)
                         {
-                            if (Str(perAgent[id]) is { } value) { Put(Agent(id), axis, value, $"newSession.{axis}.{id}", $"launch.agents.{id}.{axis}"); }
+                            if (Tuning(perAgent[id]) is { } value) { Put(Agent(id), axis, value, $"newSession.{axis}.{id}", $"launch.agents.{id}.{axis}"); }
                         }
                     }
                     else if (axis != "model" && ns[axis] is not null) { notCarried.Add($"newSession.{axis} (agent-ha-bridge reads it per agent, as newSession.{axis}.<agent>)"); }
@@ -131,7 +131,7 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                     {
                         foreach (var id in Agents)
                         {
-                            if (Strings(lists[id]) is { Count: > 0 } values) { Put(Agent(id), axis + "s", Array(values), $"newSession.{axis}s.{id}", $"launch.agents.{id}.{axis}s"); }
+                            if (Tunings(lists[id]) is { Count: > 0 } values) { Put(Agent(id), axis + "s", Array(values), $"newSession.{axis}s.{id}", $"launch.agents.{id}.{axis}s"); }
                         }
                     }
                 }
@@ -244,7 +244,9 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
             }
             JsonNode copy = entry switch
             {
-                JsonObject o => new JsonObject(o.Where(p => p.Key is "path" or "label" or "isolate").Select(p => KeyValuePair.Create(p.Key, p.Value?.DeepClone()))),
+                // Looked up through the source's own case-insensitive names (agent-ha-bridge reads
+                // "Isolate" as isolate) and written under the names LaunchConfig reads.
+                JsonObject o => Canonical(o),
                 _ => path,
             };
             target.Add(copy);
@@ -270,6 +272,23 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
         }
         finally { Directory.Delete(check, true); }
     }
+
+    static JsonObject Canonical(JsonObject o)
+    {
+        var copy = new JsonObject();
+        foreach (var key in new[] { "path", "label", "isolate" })
+        {
+            if (o[key] is { } value) { copy[key] = value.DeepClone(); }
+        }
+        return copy;
+    }
+
+    // A tuning value as agent-ha-bridge passes it on the command line: a number is its text
+    // (newSession.context.codex: 200000).
+    static string? Tuning(JsonNode? n) =>
+        Str(n) ?? (n is JsonValue v && v.GetValueKind() == JsonValueKind.Number ? v.ToJsonString() : null);
+
+    static List<string>? Tunings(JsonNode? n) => n is JsonArray a ? a.Select(Tuning).OfType<string>().ToList() : null;
 
     static string? Str(JsonNode? n) => n is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s) ? s : null;
 

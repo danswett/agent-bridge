@@ -12,7 +12,11 @@ public sealed record EntryChange(string Agent, string Event, JsonNode Original, 
 
 // What migration does to one agent's hook file: its bytes before, its text after, and each
 // entry it re-points. Null text when there is nothing of agent-ha-bridge's in it.
-public sealed record FilePlan(string Role, string Path, bool Existed, byte[] Original, string? NewText, IReadOnlyList<EntryChange> Changes, IReadOnlyList<string> Notes);
+public sealed record FilePlan(string Role, string Path, bool Existed, byte[] Original, string? NewText, IReadOnlyList<EntryChange> Changes, IReadOnlyList<string> Notes)
+{
+    // Why the migration must not go ahead with this file as it is, or null.
+    public string? Refusal { get; init; }
+}
 
 // Finding agent-ha-bridge's own hook entries in each agent's settings, exactly as its installers
 // wrote them, and re-pointing them at this product's hook. Anything else in those files belongs
@@ -114,7 +118,7 @@ public static class Registrations
             var changes = new List<EntryChange>();
             if (hook.Any(char.IsWhiteSpace) || root["hooks"] is not JsonObject hooks) { return changes; }
             var native = $"{install.GoHook} codex hook {install.CodexHookScript}";
-            var pwsh = $"pwsh -NoProfile -ExecutionPolicy Bypass -File {install.CodexHookScript}";
+            var pwsh = CodexPowerShell(install);
             foreach (var (eventName, list) in hooks)
             {
                 if (list is not JsonArray groups) { continue; }
@@ -136,6 +140,16 @@ public static class Registrations
         });
         if (hook.Any(char.IsWhiteSpace) && plan.Existed)
         {
+            // Left alone, an entry that runs agent-ha-bridge's PowerShell directly would go on
+            // writing registrations and approval markers (and to Home Assistant) beside the host.
+            // Only the Go hook's entries hand their events to whoever takes the spool.
+            if (CodexRunsPowerShell(install))
+            {
+                return plan with
+                {
+                    Refusal = $"Codex runs agent-ha-bridge's PowerShell hook directly ({install.CodexHooksFile}), and cannot run this product's hook from a path with a space ({hook}), so it would go on running beside the host. Install the app where its path has no space, or let agent-ha-bridge register Codex through its native hook, and migrate again",
+                };
+            }
             return plan with { Notes = [.. plan.Notes, $"Codex's hooks are left on agent-ha-bridge's: Codex cannot run a command whose path has a space ({hook}); they spool to the host while it runs and fall back to PowerShell when it does not"] };
         }
         if (plan.Changes.Count > 0)
@@ -143,6 +157,21 @@ public static class Registrations
             return plan with { Notes = [.. plan.Notes, "Codex asks for its hooks to be trusted again once, since their command changed (and again after a rollback)"] };
         }
         return plan;
+    }
+
+    static string CodexPowerShell(AgentHaBridgeInstall install) => $"pwsh -NoProfile -ExecutionPolicy Bypass -File {install.CodexHookScript}";
+
+    static bool CodexRunsPowerShell(AgentHaBridgeInstall install)
+    {
+        try
+        {
+            if (JsonNode.Parse(Decode(File.ReadAllBytes(install.CodexHooksFile)), documentOptions: Lenient) is not JsonObject { } root || root["hooks"] is not JsonObject hooks) { return false; }
+            var pwsh = CodexPowerShell(install);
+            return hooks.Select(e => e.Value).OfType<JsonArray>().SelectMany(g => g.OfType<JsonObject>())
+                .Select(g => g["hooks"]).OfType<JsonArray>().SelectMany(h => h.OfType<JsonObject>())
+                .Any(h => Text(h["command"]) is { } command && string.Equals(command, pwsh, PathCase));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return false; }
     }
 
     static FilePlan Plan(string role, string path, Func<JsonObject, List<EntryChange>> rewrite)
