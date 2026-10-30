@@ -227,6 +227,16 @@ public sealed class ReplyService : ISessionReplier
             // moment ago is there first, and a subagent's is only there. One that cannot be
             // read cannot say nothing is asking.
             var before = input.Read();
+            // Copilot (1.0.105, seen live) writes events.jsonl only with the first prompt, and
+            // registers its session (inuse.<pid>.lock) while its folder-trust question may still
+            // be on screen. So a session with no transcript yet may be asking that, where typed
+            // words are dropped and Enter answers "Yes": a reply to one on the test VM trusted
+            // the folder. Only a person at the machine answers it, so nothing is typed, and the
+            // reason says which case this is rather than calling the transcript unreadable.
+            if (!before.Readable && NotYetWritten(transcript, now))
+            {
+                return Done(Refused("Copilot has not started this session's transcript yet (it does with the first prompt), so the host cannot tell whether it is still asking whether to trust its folder, which a reply would answer; send the first prompt at the machine, or launch with a prompt"));
+            }
             if (!before.Readable) { return Done(Refused("the session's transcript could not be read, so nothing is typed; reply at the machine")); }
             if (before.Asking) { return Done(Asking()); }
             from = before.ScannedTo;
@@ -520,6 +530,11 @@ public sealed class ReplyService : ISessionReplier
             await Task.Delay(options.PollInterval, options.Time);
         }
     }
+
+    static bool NotYetWritten(string transcript, Session session) =>
+        session.Activity.TurnCount is null
+        && !File.Exists(transcript)
+        && Path.GetDirectoryName(transcript) is { } folder && Directory.Exists(folder);
 
     bool TakePrompt(string transcript, long offset)
     {

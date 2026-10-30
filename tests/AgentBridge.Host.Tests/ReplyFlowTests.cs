@@ -244,6 +244,24 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_session_with_no_transcript_yet_may_be_asking_whether_to_trust_its_folder_so_a_reply_is_refused_and_says_why()
+    {
+        const string fresh = "88888888-8888-4888-8888-888888888888";
+        var transcript = f.CopilotSession(fresh, 101, name: null);
+        f.Processes.Run(AgentKind.Copilot, 101);
+        await source.RefreshAsync();
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "hello there", id: fresh);
+
+        Assert.Equal("refused", outcome);
+        Assert.StartsWith("Copilot has not started this session's transcript yet", reason);
+        Assert.Contains("trust its folder", reason);
+        Assert.Empty(injector.Plans);
+        Assert.False(File.Exists(transcript));
+    }
+
+    [Fact]
     public async Task A_reply_while_an_answer_to_that_session_is_being_typed_is_busy_as_is_one_behind_another_reply()
     {
         Fixture.Append(events, Ask("q1", second++));
