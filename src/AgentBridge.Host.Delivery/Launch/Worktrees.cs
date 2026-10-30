@@ -155,9 +155,12 @@ public static class Worktrees
         return new WorktreeResult(launchIn, target, null, string.Join("; ", detail));
     }
 
-    // Whether a folder lies in a worktree this host created for one of the isolated workspaces,
-    // at or below the same subdirectory the workspace names in its repository: where a session
-    // launched there runs, and so where it may be resumed. Returns that workspace and the
+    // Whether a folder lies in a worktree made for one of the isolated workspaces, by this host
+    // or by agent-ha-bridge (its marker, agent-bridge-created), at or below the same
+    // subdirectory the workspace names in its repository: where a session launched there runs,
+    // and so where it may be resumed. agent-ha-bridge's own are included because it offers its
+    // sessions there for resume, and a machine moved off it would otherwise lose them; they are
+    // still never counted, locked or removed here (IsManaged). Returns that workspace and the
     // worktree's top folder.
     public static (WorkspaceConfig Workspace, string Worktree)? Managed(IReadOnlyList<WorkspaceConfig> workspaces, string folder)
     {
@@ -165,7 +168,7 @@ public static class Worktrees
         var physical = Folders.Physical(folder);
         if (physical is null) { return null; }
         var top = Git.Run(physical, ["rev-parse", "--show-toplevel"]);
-        if (!top.Ok || Folders.Physical(top.Output.Trim()) is not { } worktree || !IsManaged(worktree)) { return null; }
+        if (!top.Ok || Folders.Physical(top.Output.Trim()) is not { } worktree || !(IsManaged(worktree) || IsAgentHaBridges(worktree))) { return null; }
         var common = CommonDir(worktree);
         if (common is null) { return null; }
         foreach (var w in workspaces.Where(w => w.Isolate))
@@ -499,6 +502,11 @@ public static class Worktrees
     // This host's marker in the worktree's administration folder. The primary checkout has a
     // .git folder, not a file, so it never qualifies.
     public static bool IsManaged(string worktree) => AdminFolder(worktree) is { } admin && File.Exists(Path.Combine(admin, Marker));
+
+    // agent-ha-bridge's marker (Get-BridgeWorktreeMarkerPath).
+    public const string AgentHaBridgeMarker = "agent-bridge-created";
+
+    public static bool IsAgentHaBridges(string worktree) => AdminFolder(worktree) is { } admin && File.Exists(Path.Combine(admin, AgentHaBridgeMarker));
 
     // A linked worktree's .git is a file, "gitdir: <its administration folder>".
     internal static string? AdminFolder(string worktree)

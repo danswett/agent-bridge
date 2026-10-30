@@ -247,4 +247,56 @@ public class TailTests
         Assert.Equal("prompt 299", s.Activity.UserMessage);
         Assert.Equal(SessionStatus.Idle, s.Status);
     }
+
+    // The large session the shadow comparison found (#40): its background agents filled the
+    // window, so no message of the session's own was in it and no model was shown, where
+    // agent-ha-bridge showed the one the session started with.
+    [Fact]
+    public async Task The_sessions_own_model_is_known_from_its_start_and_model_changes_when_the_window_holds_only_its_agents_messages()
+    {
+        using var f = new Fixture();
+        const string id = "36363636-3636-4363-8363-363636363636";
+        var events = f.CopilotSession(id, 100);
+        Fixture.Append(events,
+            Copilot.Event("session.start", new { sessionId = id, selectedModel = "model-a" }, 0),
+            Copilot.Event("session.model_change", new { newModel = "model-b" }, 1),
+            Copilot.Event("session.model_change", new { newModel = "agent-model" }, 2, agentId: "agent-1"),
+            Copilot.User("go", 3));
+        Fixture.Append(events, [.. Enumerable.Range(0, 100).Select(i => Copilot.Assistant("working " + new string('w', 300), 4 + i, model: "agent-model", agentId: "agent-1"))]);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(tailBytes: 4 * 1024);
+
+        await source.RefreshAsync();
+
+        Assert.Equal("model-b", source.Get(id)!.Model);
+    }
+
+    // A background shell started hours earlier, outside the window, is still running and
+    // still the session's to wait on; agent-ha-bridge, reading every line, counts it.
+    [Fact]
+    public async Task A_background_shell_started_before_the_window_is_counted_until_it_reports_its_end()
+    {
+        using var f = new Fixture();
+        const string id = "37373737-3737-4373-8373-373737373737";
+        var events = f.CopilotSession(id, 100);
+        Fixture.Append(events,
+            Copilot.User("watch CI", 1),
+            Copilot.ToolResult("c1", "<command started in background with shellId: ci-watch>", 2),
+            Copilot.ToolResult("c2", "<command with shellId: quick moved to background by the user. Respond to the user.>", 3),
+            Copilot.ToolResult("c3", "<command started in background with shellId: stopped-one>", 4),
+            Copilot.ShellCompleted("quick", 5),
+            Copilot.ToolResult("c4", "<command with id: stopped-one stopped>", 6),
+            // Quoting a marker in a command's output starts nothing.
+            Copilot.ToolResult("c5", "a log that mentions\n<command started in background with shellId: quoted> in passing", 7));
+        Fixture.Append(events, [.. Enumerable.Range(0, 100).Select(i => Copilot.Assistant("filler " + new string('f', 300), 8 + i))]);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(tailBytes: 4 * 1024);
+
+        await source.RefreshAsync();
+        Assert.Equal(new Background { Agents = 0, Shells = 1 }, source.Get(id)!.Activity.Background);
+
+        Fixture.Append(events, Copilot.ShellCompleted("ci-watch", 200));
+        await source.RefreshAsync();
+        Assert.Null(source.Get(id)!.Activity.Background);
+    }
 }

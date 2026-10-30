@@ -31,7 +31,15 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         Marker("\"user.message\""),
         Marker("\"session.compaction_complete\""),
         Marker("\"session.start\""),
+        Marker("\"session.resume\""),
+        Marker("\"session.model_change\""),
+        Marker("\"session.shutdown\""),
         Marker("\"subagent.started\""),
+        // A shell's start, end or stop is in a tool result's text, and its completion in a
+        // notification; agent-ha-bridge reads both from wherever they are.
+        Marker("shellId: "),
+        Marker("command with id: "),
+        Marker("\"shell_completed\""),
     ];
 
     bool _turnAskedForTools;
@@ -66,12 +74,41 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 break;
             case "session.start":
                 S.StartedAt ??= Json.Time(e, "timestamp");
+                if (!IsSubagent(e)) { S.Model ??= Json.Str(data, "selectedModel"); }
+                break;
+            // The session's own model, from before the window: a session whose background
+            // agents filled the window had no message of its own in it, and so showed no model
+            // where agent-ha-bridge, which reads every line as it comes, showed one.
+            case "session.resume" when !IsSubagent(e):
+                S.Model = Json.Str(data, "selectedModel") ?? S.Model;
+                break;
+            case "session.model_change" when !IsSubagent(e):
+                S.Model = Json.Str(data, "newModel") ?? S.Model;
                 break;
             case "subagent.started":
                 // Only the mode: the agent's events in the parsed window say whether it is
                 // still working, and only an agent known to be background is tracked, so a
                 // sync one's events never look like one.
                 S.Background.KnowMode(Json.Str(data, "toolCallId"), Json.Str(e, "agentId"), Json.Str(data, "executionMode") == "background");
+                break;
+            // A background shell is started once and reports its end once, however long
+            // apart: a CI watch started hours ago in a busy session is far outside the window.
+            // So its start and end are taken from the skim as well, as agent-ha-bridge takes
+            // them from every line; BackgroundWork.Running still drops any that began before
+            // the session's current process.
+            case "tool.execution_complete" when !IsSubagent(e):
+                {
+                    var content = Json.Obj(data, "result") is { } result ? Json.Str(result, "content") : null;
+                    var (started, ended) = ShellMarkers.Read(content);
+                    if (ended is not null) { S.Background.ShellEnded(ended); }
+                    if (started is not null) { S.Background.ShellStarted(started, Json.Time(e, "timestamp")); }
+                    break;
+                }
+            case "system.notification" when Json.Obj(data, "kind") is { } kind && Json.Str(kind, "type") == "shell_completed":
+                S.Background.ShellEnded(Json.Str(kind, "shellId"));
+                break;
+            case "session.shutdown" when !IsSubagent(e):
+                S.Background.EndAll();
                 break;
         }
     }

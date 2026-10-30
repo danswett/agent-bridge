@@ -19,6 +19,11 @@ public sealed class ShadowDay
     // How long both sides were compared, each compared sample counting the interval it was taken
     // at, so a run restarted with another --interval does not rescale the rest of the day.
     public long ComparedSeconds { get; set; }
+    // Of the compared samples, those in which usage and the resume list could be compared too
+    // (they come from Home Assistant and the host's pipe), and why the rest were not.
+    public int UsageCompared { get; set; }
+    public int ResumableCompared { get; set; }
+    public SortedDictionary<string, int> NotComparedWhy { get; set; } = new(StringComparer.Ordinal);
     public DateTimeOffset? FirstSample { get; set; }
     public DateTimeOffset? LastSample { get; set; }
     public string? DaemonVersion { get; set; }
@@ -66,10 +71,7 @@ public sealed class ShadowLedger
     public const int MaxMismatches = 1000;
     const int MaxDetails = 8;
     const int MaxSessions = 2000;
-    // Either side being down, or the host not seeing the daemon, gets at least the three missed
-    // beats agent-ha-bridge itself allows before calling a machine offline: both restart for
-    // updates, and that is not a disagreement about what either shows.
-    public static readonly TimeSpan MachineGrace = TimeSpan.FromSeconds(180);
+    const int MaxReasons = 32;
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -113,7 +115,8 @@ public sealed class ShadowLedger
 
     public static string LocalDate(DateTimeOffset at, TimeZoneInfo zone) => TimeZoneInfo.ConvertTime(at, zone).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
 
-    TimeSpan GraceFor(string kind) => ShadowKinds.IsMachine(kind) && grace < MachineGrace ? MachineGrace : grace;
+    // Some kinds always need longer than --grace before they count (ShadowKinds.MinimumGrace).
+    TimeSpan GraceFor(string kind) => ShadowKinds.MinimumGrace(kind) is var least && grace < least ? least : grace;
 
     // Records one sample and writes the day's file. Returns the mismatches that this sample made
     // (a disagreement that has just lasted its grace), for the log.
@@ -131,6 +134,12 @@ public sealed class ShadowLedger
         {
             day.Compared++;
             day.ComparedSeconds += (long)interval.TotalSeconds;
+            if (comparison.UsageCompared) { day.UsageCompared++; }
+            if (comparison.ResumableCompared) { day.ResumableCompared++; }
+            foreach (var why in comparison.NotCompared.Distinct(StringComparer.Ordinal))
+            {
+                if (day.NotComparedWhy.ContainsKey(why) || day.NotComparedWhy.Count < MaxReasons) { day.NotComparedWhy[why] = day.NotComparedWhy.GetValueOrDefault(why) + 1; }
+            }
         }
         day.FirstSample ??= now;
         day.LastSample = now;

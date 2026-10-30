@@ -59,14 +59,40 @@ public sealed record ShadowView
     public bool? Dev { get; init; }
     // The host only: whether it sees agent-ha-bridge running (design G5), so it does not deliver.
     public bool? SeesAgentHaBridge { get; init; }
+    // Each agent's allowance by client (copilot, claude, codex), or null when this side's could
+    // not be read this time, with why in UsageProblem. The daemon's comes from Home Assistant.
+    public IReadOnlyDictionary<string, ShadowUsage>? Usage { get; init; }
+    public string? UsageProblem { get; init; }
+    // The resume list's labels, newest first, whitespace collapsed; in memory only. Null when
+    // not read, with why in ResumableProblem.
+    public IReadOnlyList<string>? Resumable { get; init; }
+    public string? ResumableProblem { get; init; }
     public bool Available => Problem is null;
 }
 
-// One disagreement in one sample. Session is a hash; Detail comes from a fixed vocabulary with
-// counts, enum values and model names in it, never anything a person or an agent wrote.
+// One agent's allowance as one side last read it. Account names are compared, never reported.
+public sealed record ShadowUsage
+{
+    public bool Reading { get; init; }
+    public string? Account { get; init; }
+    public string? AccountKey { get; init; }
+    public IReadOnlyDictionary<string, double> Windows { get; init; } = new Dictionary<string, double>();
+    public DateTimeOffset? MeasuredAt { get; init; }
+}
+
+// One disagreement in one sample. Session is a hashed session id, or for a usage kind the agent
+// (copilot, claude, codex); Detail comes from a fixed vocabulary with counts, enum values and
+// model names in it, never anything a person or an agent wrote.
 public sealed record ShadowDifference(string Kind, string? Session, string Detail);
 
-public sealed record ShadowComparison(bool Compared, int DaemonSessions, int HostSessions, IReadOnlyList<ShadowDifference> Differences, IReadOnlyList<string> SessionsSeen);
+// UsageCompared and ResumableCompared: whether those could be compared in this sample, and if
+// not, why (NotCompared), so a clean day says how much of it they were looked at.
+public sealed record ShadowComparison(bool Compared, int DaemonSessions, int HostSessions, IReadOnlyList<ShadowDifference> Differences, IReadOnlyList<string> SessionsSeen)
+{
+    public bool UsageCompared { get; init; }
+    public bool ResumableCompared { get; init; }
+    public IReadOnlyList<string> NotCompared { get; init; } = [];
+}
 
 public static class ShadowKinds
 {
@@ -89,13 +115,20 @@ public static class ShadowKinds
     public const string QuestionFieldType = "question.fieldType";
     public const string QuestionOptions = "question.options";
     public const string Response = "activity.response";
+    public const string UsageMissingOnHost = "usage.missingOnHost";
+    public const string UsageMissingOnDaemon = "usage.missingOnDaemon";
+    public const string UsageAccount = "usage.account";
+    public const string UsageWindows = "usage.windows";
+    public const string UsagePercent = "usage.percent";
+    public const string ResumableCount = "resumable.count";
+    public const string ResumableMissingOnHost = "resumable.missingOnHost";
+    public const string ResumableMissingOnDaemon = "resumable.missingOnDaemon";
 
-    // What the daemon's files cannot show, so a clean report says nothing about it. Listed in
+    // What neither side's records can show, so a clean report says nothing about it. Listed in
     // every report so a week of "clean" is never read as covering them.
     public static readonly IReadOnlyList<string> NotCompared =
     [
-        "usage (agent-ha-bridge keeps it only in Home Assistant)",
-        "resumable sessions (agent-ha-bridge keeps them only in Home Assistant)",
+        "usage of extra Copilot accounts (usage.copilotAccounts; only usage_copilot, usage_claude and usage_codex are read)",
         "titles (agent-ha-bridge names sessions for Home Assistant)",
         "reasoning and tool history (bounded differently, parity §1)",
         "driver and the purple edge (missing here, #46)",
@@ -103,6 +136,16 @@ public static class ShadowKinds
     ];
 
     public static bool IsMachine(string kind) => kind.StartsWith("machine.", StringComparison.Ordinal);
+
+    // The least a disagreement of a kind must last to be a mismatch, whatever --grace says.
+    // Either side down: the three missed beats agent-ha-bridge allows before calling a machine
+    // offline, since both restart for updates. Usage: each side asks the vendor on its own two
+    // minute pace. Resumable sessions: the daemon refreshes its list every three minutes
+    // (ResumeCacheSeconds), so a session that just ended is resumable here first.
+    public static TimeSpan MinimumGrace(string kind) =>
+        IsMachine(kind) ? TimeSpan.FromSeconds(180)
+        : kind.StartsWith("usage.", StringComparison.Ordinal) || kind.StartsWith("resumable.", StringComparison.Ordinal) ? TimeSpan.FromSeconds(300)
+        : TimeSpan.Zero;
 }
 
 public static partial class ShadowHash
@@ -192,7 +235,75 @@ public static class ShadowCompare
             if (d is null) { diffs.Add(new(ShadowKinds.MissingOnDaemon, s, $"host {ShadowHash.Token(h.Agent)} {ShadowHash.Token(h.Status)}")); continue; }
             Session(d, h, s, diffs);
         }
-        return new(true, daemon.Sessions.Count, host.Sessions.Count, diffs, seen);
+        var notCompared = new List<string>();
+        var usage = Usage(daemon, host, diffs, notCompared);
+        var resumable = Resumable(daemon, host, diffs, notCompared);
+        return new(true, daemon.Sessions.Count, host.Sessions.Count, diffs, seen) { UsageCompared = usage, ResumableCompared = resumable, NotCompared = notCompared };
+    }
+
+    // Percent gone may move between two reads; within this it is the same reading, and further
+    // apart in time it is not compared at all.
+    const double PercentTolerance = 5;
+    static readonly TimeSpan ReadingsApart = TimeSpan.FromMinutes(15);
+
+    static bool Usage(ShadowView daemon, ShadowView host, List<ShadowDifference> diffs, List<string> notCompared)
+    {
+        if (daemon.Usage is null) { notCompared.Add("usage: " + (daemon.UsageProblem ?? "the daemon's was not read")); }
+        if (host.Usage is null) { notCompared.Add("usage: " + (host.UsageProblem ?? "the host's was not read")); }
+        if (daemon.Usage is null || host.Usage is null) { return false; }
+        foreach (var client in daemon.Usage.Keys.Union(host.Usage.Keys).Order(StringComparer.Ordinal))
+        {
+            var a = daemon.Usage.GetValueOrDefault(client);
+            var b = host.Usage.GetValueOrDefault(client);
+            var name = ShadowHash.Token(client);
+            if (a?.Reading != true && b?.Reading != true) { continue; }
+            if (b?.Reading != true) { diffs.Add(new(ShadowKinds.UsageMissingOnHost, name, "the daemon has a reading and the host none")); continue; }
+            if (a?.Reading != true) { diffs.Add(new(ShadowKinds.UsageMissingOnDaemon, name, "the host has a reading and the daemon none")); continue; }
+            if (Differs(a.Account, b.Account) || Differs(a.AccountKey, b.AccountKey))
+            {
+                diffs.Add(new(ShadowKinds.UsageAccount, name, "the account differs"));
+            }
+            var keys = (a.Windows.Keys.Order(StringComparer.Ordinal).ToList(), b.Windows.Keys.Order(StringComparer.Ordinal).ToList());
+            if (!keys.Item1.SequenceEqual(keys.Item2))
+            {
+                diffs.Add(new(ShadowKinds.UsageWindows, name, $"daemon={string.Join(',', keys.Item1.Select(ShadowHash.Token))} host={string.Join(',', keys.Item2.Select(ShadowHash.Token))}"));
+            }
+            if (a.MeasuredAt is { } ma && b.MeasuredAt is { } mb && (ma - mb).Duration() <= ReadingsApart)
+            {
+                var off = keys.Item1.Intersect(keys.Item2)
+                    .Where(k => Math.Abs(a.Windows[k] - b.Windows[k]) > PercentTolerance)
+                    .Select(k => $"{ShadowHash.Token(k)} daemon={Math.Round(a.Windows[k])} host={Math.Round(b.Windows[k])}")
+                    .ToList();
+                if (off.Count > 0) { diffs.Add(new(ShadowKinds.UsagePercent, name, string.Join("; ", off.Take(4)))); }
+            }
+        }
+        return true;
+
+        // Empty on either side is not a disagreement: some agents name no account.
+        static bool Differs(string? x, string? y) =>
+            !string.IsNullOrEmpty(x) && !string.IsNullOrEmpty(y) && !string.Equals(x, y, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // The labels each side offers, which the host writes exactly as agent-ha-bridge does
+    // ("<summary> - <folder>", the agent named when there are several kinds). Each side cuts
+    // its list to its own resume count, so when the lengths differ only the shorter list's
+    // labels are looked for in the longer one.
+    static bool Resumable(ShadowView daemon, ShadowView host, List<ShadowDifference> diffs, List<string> notCompared)
+    {
+        if (daemon.Resumable is null) { notCompared.Add("resumable: " + (daemon.ResumableProblem ?? "the daemon's was not read")); }
+        if (host.Resumable is null) { notCompared.Add("resumable: " + (host.ResumableProblem ?? "the host's was not read")); }
+        if (daemon.Resumable is not { } d || host.Resumable is not { } h) { return false; }
+        var (ds, hs) = (d.ToHashSet(StringComparer.Ordinal), h.ToHashSet(StringComparer.Ordinal));
+        if (d.Count != h.Count) { diffs.Add(new(ShadowKinds.ResumableCount, null, $"daemon={d.Count} host={h.Count}")); }
+        if (d.Count <= h.Count && d.Count(l => !hs.Contains(l)) is > 0 and var missingHere)
+        {
+            diffs.Add(new(ShadowKinds.ResumableMissingOnHost, null, $"{missingHere} of the daemon's {d.Count}"));
+        }
+        if (h.Count <= d.Count && h.Count(l => !ds.Contains(l)) is > 0 and var missingThere)
+        {
+            diffs.Add(new(ShadowKinds.ResumableMissingOnDaemon, null, $"{missingThere} of the host's {h.Count}"));
+        }
+        return true;
     }
 
     static void Session(ShadowSession d, ShadowSession h, string s, List<ShadowDifference> diffs)

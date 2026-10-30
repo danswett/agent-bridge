@@ -167,6 +167,44 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         Assert.Equal(("copilot", "App", "ask"), (options.GetProperty("defaults").GetProperty("agent").GetString(), options.GetProperty("defaults").GetProperty("workspace").GetString(), options.GetProperty("defaults").GetProperty("permissions").GetString()));
     }
 
+    // Found by the shadow comparison (#40): approving ~\repos offered every session in every
+    // repository under it, where agent-ha-bridge resumes only a session that ran in an
+    // approved folder itself (Test-BridgeWorkspacePathApproved).
+    [Fact]
+    public async Task A_session_is_resumable_only_from_an_approved_folder_itself_not_one_below_it()
+    {
+        var below = Directory.CreateDirectory(Path.Combine(app, "src")).FullName;
+        Resumable("11111111-1111-4111-8111-111111111111", app, "At the top");
+        Resumable("66666666-6666-4666-8666-666666666666", below, "Further down");
+        var ch = await OpenAsync();
+
+        var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
+
+        Assert.Equal(["At the top - app"], options.GetProperty("resumable").EnumerateArray().Select(r => r.GetProperty("title").GetString()));
+        Assert.Equal("refused", (await LaunchAsync(ch, new { resume = "66666666-6666-4666-8666-666666666666" })).Outcome_);
+        Assert.Empty(starter.Specs);
+    }
+
+    // Found by the shadow comparison (#40): a Claude session in a folder nobody approved put
+    // "Copilot: " on every label of a list that offers only Copilot sessions, where
+    // agent-ha-bridge names the agent only when what it could offer is of more than one kind.
+    [Fact]
+    public async Task Resumable_sessions_name_their_agent_only_when_the_approved_folders_hold_more_than_one_kind()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        Resumable("11111111-1111-4111-8111-111111111111", app, "Fix the flaky test");
+        ClaudeResumable("44444444-4444-4444-8444-444444444444", elsewhere, "Somewhere nobody approved");
+        var ch = await OpenAsync();
+
+        string[] Titles(JsonElement options) => [.. options.GetProperty("resumable").EnumerateArray().Select(r => r.GetProperty("title").GetString()!)];
+        Assert.Equal(["Fix the flaky test - app"], Titles(await RequestAsync(ch, LaunchProtocol.Options, new { })));
+
+        ClaudeResumable("55555555-5555-4555-8555-555555555555", api, "Plan the release");
+        // A fresh service: each keeps what it read of the stores for a minute.
+        Serve(Config());
+        Assert.Equal(["Claude: Plan the release - api", "Copilot: Fix the flaky test - app"], Titles(await RequestAsync(ch, LaunchProtocol.Options, new { })).Order());
+    }
+
     [Fact]
     public async Task A_new_session_starts_in_its_workspace_with_the_whole_prompt_and_the_answer_names_the_session_it_became()
     {
@@ -534,6 +572,16 @@ public sealed class LaunchFlowTests : IAsyncLifetime
     {
         var dir = Directory.CreateDirectory(Path.Combine(f.CopilotHome, "session-state", id)).FullName;
         File.WriteAllText(Path.Combine(dir, "workspace.yaml"), $"id: {id}\ncwd: '{cwd}'\nsummary: {summary}\n");
+    }
+
+    // A Claude session as its own store keeps it: a project folder's transcript, named by its
+    // first prompt's AI title.
+    void ClaudeResumable(string id, string cwd, string title)
+    {
+        var project = Directory.CreateDirectory(Path.Combine(f.ClaudeHome, "projects", "-" + Path.GetFileName(cwd))).FullName;
+        File.WriteAllText(Path.Combine(project, id + ".jsonl"),
+            JsonSerializer.Serialize(new { type = "user", cwd, message = new { content = new[] { new { type = "text", text = title } } } }) + "\n"
+            + JsonSerializer.Serialize(new { type = "ai-title", aiTitle = title }) + "\n");
     }
 
     void Live(string id, int pid)
