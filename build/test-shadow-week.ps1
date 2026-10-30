@@ -280,10 +280,14 @@ function Set-AhbUsage([string]$Json) {
 
 Reset-World
 Write-Output "agent-ha-bridge's further Copilot logins are copied in their places, and nothing that is not a login"
-Set-AhbUsage '{"copilotAccounts":["alt-login","ghp_notalogin0123456789",5,"third"]}'
+Set-AhbUsage '{"copilotAccounts":["alt-login","ghp_notalogin0123456789","ALT-LOGIN","fourth"]}'
 $err = Invoke-Install 3>$null
 Assert ($null -eq $err) "it succeeds ($err)"
-Assert ($global:SwCalls -contains 'host config set usage.copilotAccounts ["alt-login","","","third"] --profile shadowtest') 'each keeps its place, the rest empty'
+Assert ($global:SwCalls -contains 'host config set usage.copilotAccounts ["alt-login"] --profile shadowtest') 'a token and a repeat keep no login, and past the third there is no place'
+Reset-World
+Set-AhbUsage '{"copilotAccounts":["alt-login",5,"third"]}'
+$null = Invoke-Install 3>$null
+Assert ($global:SwCalls -contains 'host config set usage.copilotAccounts ["alt-login","","third"] --profile shadowtest') 'each keeps its place, one that is not a login empty'
 Assert (-not ($global:SwCalls -match 'ghp_')) 'the token-shaped entry is passed nowhere'
 
 Reset-World

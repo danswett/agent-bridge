@@ -212,22 +212,31 @@ function Sync-AgentHaBridgeWorkspace {
 
 # usage.copilotAccounts as agent-ha-bridge reads it (Get-BridgeCopilotExtraAccounts): a list,
 # or one login alone. Not set there (absent or null), the profile keeps its own, so one set by
-# hand survives a reinstall. Each entry keeps its place, the Nth naming usage_copilot_<N+1>; one
-# that is not a login goes over empty, which keeps its place in the host too, and is never
-# repeated: a token pasted where a login belongs would otherwise reach a second config, and this
-# window.
+# hand survives a reinstall. Each of the first three keeps its place, the Nth naming
+# usage_copilot_<N+1>; one the daemon would skip (not a login, or repeating an earlier one) goes
+# over as "", the host's place kept unused, and is never repeated: a token pasted where a login
+# belongs would otherwise reach a second config, and this window. Past the third there is no
+# place, in either.
 function Sync-CopilotAccount($Accounts) {
     if ($null -eq $Accounts) { return }
     if ($Accounts -is [System.Collections.IDictionary]) {
         Write-Warning "agent-ha-bridge's usage.copilotAccounts is not a list of logins; profile $HostProfile keeps its own"
         return
     }
-    $logins = [string[]]@(@($Accounts) | ForEach-Object {
-            $login = if ($_ -is [string]) { $_.Trim() } else { '' }
-            if ($login -cmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$' -and $login -cnotmatch '^(?:gh[opusr]_|github_pat_)') { $login } else { '' }
-        })
+    $entries = @($Accounts)
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $logins = [Collections.Generic.List[string]]::new()
+    foreach ($entry in $entries | Select-Object -First 3) {
+        $login = if ($entry -is [string]) { $entry.Trim() } else { '' }
+        $usable = $login -cmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$' -and $login -cnotmatch '^(?:gh[opusr]_|github_pat_)' -and $seen.Add($login)
+        $logins.Add($(if ($usable) { $login } else { '' }))
+    }
+    # A place left unused at the end holds no later login's place.
+    while ($logins.Count -and -not $logins[$logins.Count - 1]) { $logins.RemoveAt($logins.Count - 1) }
     $skipped = @($logins | Where-Object { -not $_ }).Count
-    if ($skipped) { Write-Warning "$skipped of agent-ha-bridge's usage.copilotAccounts are not logins; each keeps its place, unused" }
+    if ($skipped) { Write-Warning "$skipped of agent-ha-bridge's usage.copilotAccounts are not logins agent-ha-bridge uses; each keeps its place, unused" }
+    if ($entries.Count -gt 3) { Write-Warning "agent-ha-bridge's usage.copilotAccounts has $($entries.Count) entries; only the first three have places" }
+    $logins = [string[]]$logins
     $json = ConvertTo-Json -InputObject $logins -Compress
     if ($PSCmdlet.ShouldProcess("usage.copilotAccounts ($($logins.Count) entr$(if ($logins.Count -eq 1) { 'y' } else { 'ies' }))", "set in profile $HostProfile, as agent-ha-bridge has it")) {
         Invoke-ShadowHost config set usage.copilotAccounts $json --profile $HostProfile
