@@ -191,8 +191,12 @@ on the next event however it was answered, and the rollout does not name the app
 a typed approval is always `unconfirmed`, as agent-ha-bridge logs it ("native approval is
 not confirmed"), and the client says to check at the machine.
 
-Codex sessions are known to this host only through agent-ha-bridge's hook registrations.
-Claude sessions are found from them too, or else from Claude Code's own
+Codex sessions are known to this host through agent-ha-bridge's hook registrations, or,
+for a Codex run with `--no-daemon` (every launch from this host), from the terminal that
+holds its thread's writer lock; but an approval is answerable only through the marker that
+hook writes, and Codex 0.165 writes no approval request into its rollout at all (seen
+live: the prompt on screen, nothing in the rollout), so without the hook an approval is not
+seen. Claude sessions are found from registrations too, or else from Claude Code's own
 `~/.claude/sessions/<pid>.json`; but Claude Code 2.1.312 writes an `AskUserQuestion`
 `tool_use` into its transcript only once the question has been answered, so a waiting
 question is seen only through agent-ha-bridge's `PreToolUse` hook (seen live: the question
