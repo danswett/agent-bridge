@@ -110,11 +110,17 @@ public sealed record ShadowSummary(
                 resume += c.ResumeSnapshots;
                 usage += c.UsageReadings;
                 resets += c.UsageResets;
-                // A question failing across midnight is in both days: once, with its latest.
+                // A question failing across midnight is in both days: once, with every kind it had
+                // on either and its latest time.
                 foreach (var (key, q) in c.FailedQuestions)
                 {
-                    if (!failedQuestions.TryGetValue(key, out var was) || was.Last < q.Last) { failedQuestions[key] = q; }
-                    else { foreach (var k in q.Kinds.Where(k => !was.Kinds.Contains(k))) { was.Kinds.Add(k); } }
+                    if (!failedQuestions.TryGetValue(key, out var was))
+                    {
+                        failedQuestions[key] = new ShadowFailedQuestion { Session = q.Session, Kinds = [.. q.Kinds], Last = q.Last };
+                        continue;
+                    }
+                    foreach (var k in q.Kinds.Where(k => !was.Kinds.Contains(k))) { was.Kinds.Add(k); }
+                    if (q.Last > was.Last) { was.Last = q.Last; }
                 }
             }
             else if (ShadowCoverageTracker.SidesDownAndBack(day) is > 0 and var down)

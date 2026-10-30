@@ -73,21 +73,40 @@ public sealed partial class TranscriptEvidence(string path)
     // host does not.
     enum StartKind { Proper, QuotedStillRunning, QuotedOther }
 
-    sealed record Start(long Offset, bool Subagent, StartKind Kind);
+    // A run of starts of one kind from one side, with no end between them: a shell polled for an
+    // hour says "still running" at every poll, and only the kinds and where they lie matter.
+    sealed class Run(long first, bool subagent, StartKind kind)
+    {
+        public long First { get; } = first;
+        public long Last { get; set; } = first;
+        public bool Subagent { get; } = subagent;
+        public StartKind Kind { get; } = kind;
+    }
 
     sealed class Shell
     {
-        // The latest few of each: a shell polled for an hour says "still running" at every poll.
         const int Recent = 32;
-        public List<Start> Starts { get; } = [];
+        public List<Run> Runs { get; } = [];
         public List<long> Ends { get; } = [];
+        // Where the latest run dropped for room ended; a shell whose dropped starts could matter
+        // is not classified at all.
+        public long DroppedThrough = -1;
         public long Last;
 
-        public void Started(Start s) { Starts.Add(s); if (Starts.Count > Recent) { Starts.RemoveAt(0); } }
+        public void Started(long at, bool subagent, StartKind kind)
+        {
+            if (Runs.Count > 0 && Runs[^1] is { } run && run.Subagent == subagent && run.Kind == kind && (Ends.Count == 0 || Ends[^1] < run.Last))
+            {
+                run.Last = at;
+                return;
+            }
+            Runs.Add(new Run(at, subagent, kind));
+            if (Runs.Count > Recent) { DroppedThrough = Math.Max(DroppedThrough, Runs[0].Last); Runs.RemoveAt(0); }
+        }
 
+        // Only the latest ends matter: an end counts against the starts before it.
         public void Ended(long at) { Ends.Add(at); if (Ends.Count > Recent) { Ends.RemoveAt(0); } }
     }
-
     // A background agent's runs, the way agent-bridge's host follows them (BackgroundWork).
     sealed class Agent
     {
@@ -292,17 +311,17 @@ public sealed partial class TranscriptEvidence(string path)
         {
             var id = started.Groups[1].Value.Trim();
             var proper = StartedWhole().IsMatch(whole);
-            ShellFor(id, at).Started(new(at, subagent, proper ? StartKind.Proper : StartKind.QuotedOther));
+            ShellFor(id, at).Started(at, subagent, proper ? StartKind.Proper : StartKind.QuotedOther);
             return;
         }
         if (StillRunning().Match(content) is { Success: true } running)
         {
             var id = running.Groups[1].Value;
             var proper = StillRunningLast().Match(last) is { Success: true } l && l.Groups[1].Value == id;
-            ShellFor(id, at).Started(new(at, subagent, proper ? StartKind.Proper : StartKind.QuotedStillRunning));
+            ShellFor(id, at).Started(at, subagent, proper ? StartKind.Proper : StartKind.QuotedStillRunning);
             return;
         }
-        if (Moved().Match(whole) is { Success: true } moved) { ShellFor(moved.Groups[1].Value, at).Started(new(at, subagent, StartKind.Proper)); }
+        if (Moved().Match(whole) is { Success: true } moved) { ShellFor(moved.Groups[1].Value, at).Started(at, subagent, StartKind.Proper); }
     }
 
     // The daemon lists more (or fewer) background shells than the host. Known when every listed
@@ -321,12 +340,15 @@ public sealed partial class TranscriptEvidence(string path)
         foreach (var id in daemon.ShellIds.Distinct(StringComparer.Ordinal))
         {
             if (!shells.TryGetValue(id, out var shell)) { continue; }
-            var starts = shell.Starts.Where(s => s.Offset < through).ToList();
+            var starts = shell.Runs.Where(s => s.First < through).ToList();
             var ends = shell.Ends.Where(o => o < through).ToList();
             if (starts.Count == 0) { continue; }
-            if (ends.Count > 0 && ends.Max() > starts.Max(s => s.Offset)) { issues.Add(259); explained++; continue; }
+            // A run the daemon has read only part of may hold a start just short of its offset.
+            var latestStart = starts.Max(s => s.Last < through ? s.Last : through - 1);
+            if (ends.Count > 0 && ends.Max() > latestStart) { issues.Add(259); explained++; continue; }
             var lastEnd = ends.Count > 0 ? ends.Max() : -1;
-            var holding = starts.Where(s => s.Offset > lastEnd).ToList();
+            if (shell.DroppedThrough > lastEnd) { continue; }
+            var holding = starts.Where(s => s.Last > lastEnd).ToList();
             if (holding.Count == 0 || holding.Any(s => !s.Subagent && s.Kind != StartKind.QuotedStillRunning)) { continue; }
             if (holding.Any(s => s.Subagent)) { issues.Add(261); }
             if (holding.Any(s => !s.Subagent)) { issues.Add(262); }
@@ -396,11 +418,12 @@ public sealed partial class TranscriptEvidence(string path)
         return agent;
     }
 
+    // Where it was woken is where it went from not working to working, not its latest event.
     static void Wake(Agent agent, long at)
     {
+        if (!agent.Working && agent.Completed) { agent.WokenAt = at; }
         agent.Working = true;
         agent.Last = at;
-        if (agent.Completed) { agent.WokenAt = at; }
     }
 
     static void EndRun(Agent agent)

@@ -235,6 +235,39 @@ public sealed class ShadowCoverageTests : IDisposable
         Assert.Equal(["questions: upper bound 7.5% over 3.0%, more questions needed"], explained.Missing);
     }
 
+    // Found in review (#77): a question one side stops showing is the same question, and a question
+    // failing across midnight keeps the kinds it had before it.
+    [Fact]
+    public void A_failed_question_keeps_one_key_while_either_side_shows_it_and_every_kind_it_had_across_midnight()
+    {
+        Directory.CreateDirectory(reports);
+        time.SetUtcNow(new DateTimeOffset(2026, 10, 28, 23, 58, 0, TimeSpan.Zero));
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+        var session = ShadowHash.Session(A);
+        var asked = time.GetUtcNow();
+        var field = new ShadowField("choice", 2, "h");
+        void Show(bool onHost, ShadowDifference diff, int samples)
+        {
+            for (var i = 0; i < samples; i++)
+            {
+                ledger.Record(new ShadowComparison(true, 1, 1, [diff], []),
+                    View(null, null, null, Session(A, "waiting", question: Asked(null, asked, field))),
+                    View(null, null, null, Session(A, onHost ? "waiting" : "working", question: onHost ? Asked("call-1", asked, field) : null)));
+                time.Advance(TimeSpan.FromSeconds(15));
+            }
+        }
+
+        // Its options differ for a while before midnight; after it the host stops showing it.
+        Show(onHost: true, new ShadowDifference(ShadowKinds.QuestionOptions, session, "field 1: daemon=2 host=3"), 6);
+        Show(onHost: false, new ShadowDifference(ShadowKinds.QuestionMissingOnHost, session, "daemon fields=1"), 8);
+
+        var today = new DateOnly(2026, 10, 29);
+        ShadowCoverageLine Questions(ShadowGateConfig config) => ShadowSummary.Build(reports, today, 2, time.GetUtcNow(), config).Coverage.Single(c => c.Kind == ShadowCoverageKinds.Questions);
+        Assert.Equal((1, 1, 0), (Questions(new()).Events, Questions(new()).Mismatches, Questions(new()).Explained));
+        // Explaining only what it did after midnight leaves what it did before unexplained.
+        var partly = new ShadowGateConfig { Explained = [new() { Kind = ShadowKinds.QuestionMissingOnHost, Session = session }] };
+        Assert.Equal((1, 0), (Questions(partly).Mismatches, Questions(partly).Explained));
+    }
     // Found in review (#77): past a day's cap a mismatch keeps no time or session, so nothing can
     // say it was explained or over.
     [Fact]

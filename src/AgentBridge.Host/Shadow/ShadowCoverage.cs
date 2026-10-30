@@ -77,8 +77,11 @@ internal sealed class ShadowCoverageTracker
         public HashSet<string> Daemon { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Host { get; } = new(StringComparer.Ordinal);
         public int Counted;
-        // The question showing now, by the host's identity when it has one.
+        // The question showing now, by the host's identity when it has one, and the host's identity
+        // for each daemon identity seen beside it: the same question keeps one key while either
+        // side still shows it.
         public string? Current;
+        public Dictionary<string, string> HostFor { get; } = new(StringComparer.Ordinal);
     }
 
     const int MaxFailed = 5000;
@@ -184,7 +187,8 @@ internal sealed class ShadowCoverageTracker
         if (!asked.TryGetValue(session, out var a)) { asked[session] = a = new Asked(); }
         if (d is not null) { a.Daemon.Add(Identity(d)); }
         if (h is not null) { a.Host.Add(Identity(h)); }
-        a.Current = Identity((h ?? d)!);
+        if (d is not null && h is not null) { a.HostFor[Identity(d)] = Identity(h); }
+        a.Current = h is not null ? Identity(h) : a.HostFor.GetValueOrDefault(Identity(d!)) ?? Identity(d!);
         var count = Math.Max(a.Daemon.Count, a.Host.Count);
         if (count <= a.Counted) { return; }
         var kind = ShadowCompare.QuestionKind((h ?? d)!);

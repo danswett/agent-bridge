@@ -118,6 +118,36 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Null(Known(Daemon(through, agents: ["c2"]) with { Agents = 2 }, Host(agents: 3), ShadowKinds.BackgroundAgents));
     }
 
+    // Found in review (#77): a shell polled more often than the witness kept starts lost the start
+    // that ruled the signature out.
+    [Fact]
+    public void A_shell_polled_for_hours_keeps_the_start_that_decides_its_signature()
+    {
+        Write(Result("<command started in background with shellId: own1>"));
+        Write([.. Enumerable.Range(0, 40).Select(_ => Result("viewing a file\n<command with shellId: own1 is still running after 30 seconds>\nmore of it"))]);
+        Write(Result("<command with shellId: sub1 moved to background by the user>", agentId: "agent-a"));
+        var through = Write([.. Enumerable.Range(0, 40).Select(_ => Result("output\n<command with shellId: sub1 is still running after 30 seconds>", agentId: "agent-a"))]);
+
+        // The session's own start, read long before, still rules #262 out for own1.
+        Assert.Null(Known(Daemon(through, shells: ["own1"]), Host(), ShadowKinds.BackgroundShells));
+        // And forty polls of a subagent's shell are still only a subagent's.
+        Assert.Equal("agent-ha-bridge#261", Known(Daemon(through, shells: ["sub1"]), Host(), ShadowKinds.BackgroundShells));
+    }
+
+    // Found in review (#77): every message of a woken agent moved where it was woken, so a daemon
+    // a message behind lost the #258 signature.
+    [Fact]
+    public void A_woken_agent_is_woken_where_it_started_working_again_not_at_its_latest_message()
+    {
+        var woken = Write(
+            Event("subagent.started", new { toolCallId = "c1", executionMode = "background" }, agentId: "a1"),
+            Event("assistant.turn_end", new { }, agentId: "a1"),
+            Event("subagent.completed", new { toolCallId = "c1" }),
+            Event("user.message", new { content = "carry on" }, agentId: "a1"));
+        Write(Event("assistant.message", new { content = "working on it", toolRequests = new[] { new { name = "view" } } }, agentId: "a1"));
+
+        Assert.Equal("agent-ha-bridge#258", Known(Daemon(woken), Host(agents: 1), ShadowKinds.BackgroundAgents));
+    }
     [Fact]
     public void A_daemon_model_is_put_down_to_a_subagent_only_when_a_subagent_named_it_last()
     {
