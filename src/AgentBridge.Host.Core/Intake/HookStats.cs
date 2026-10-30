@@ -123,8 +123,14 @@ public sealed record HookStats(
 public sealed class HookLogWatch(string runtimeRoot, string agent, TimeProvider? time = null)
 {
     readonly string _log = SpoolContract.LogPath(runtimeRoot);
+    // Read by the answer path too (UnheardSince), so kept where it can be read whole.
     long _offset = -1;
-    DateTime _rotated;
+    long _rotatedTicks;
+    DateTime _rotated
+    {
+        get => new(Interlocked.Read(ref _rotatedTicks), DateTimeKind.Utc);
+        set => Interlocked.Exchange(ref _rotatedTicks, value.Ticks);
+    }
     // The first line of the log this watch is reading, to know it again once rotated to .1.
     string? _head;
 
@@ -170,12 +176,12 @@ public sealed class HookLogWatch(string runtimeRoot, string agent, TimeProvider?
                 }
                 if (Present(old)) { Scan(old, 0); }
                 _rotated = rotated;
-                _offset = 0;
+                Interlocked.Exchange(ref _offset, 0);
                 _head = null;
             }
             if (Present(_log))
             {
-                _offset = Scan(_log, _offset);
+                Interlocked.Exchange(ref _offset, Scan(_log, _offset));
                 if (_head is null && _offset > 0) { _head = FirstLine(_log); }
             }
             return true;
@@ -210,6 +216,42 @@ public sealed class HookLogWatch(string runtimeRoot, string agent, TimeProvider?
             return Json.Str(doc.RootElement, "at") is { } text && DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at) ? at : null;
         }
         catch (JsonException) { return null; }
+    }
+
+    // Whether the log has gained a run of this agent's that did not spool since the last Refresh,
+    // looked at without moving on: the answer path's look between passes (a Codex PreToolUse that
+    // could not spool, nor delete its marker, ran after the last pass). True when it cannot tell:
+    // rotated since, or unreadable.
+    public bool UnheardSince()
+    {
+        var offset = Interlocked.Read(ref _offset);
+        if (offset < 0) { return true; }
+        try
+        {
+            var old = _log + ".1";
+            if ((Present(old) ? File.GetLastWriteTimeUtc(old) : default) != new DateTime(Interlocked.Read(ref _rotatedTicks), DateTimeKind.Utc)) { return true; }
+            if (!Present(_log)) { return offset > 0; }
+            using var stream = new FileStream(_log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length < offset) { return true; }
+            if (stream.Length == offset) { return false; }
+            stream.Seek(offset, SeekOrigin.Begin);
+            var bytes = new byte[stream.Length - offset];
+            stream.ReadExactly(bytes);
+            return System.Text.Encoding.UTF8.GetString(bytes).Split('\n').Any(Unheard);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return true; }
+    }
+
+    bool Unheard(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line)) { return false; }
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            return Json.Str(doc.RootElement, "agent") == agent && Json.Str(doc.RootElement, "path") is not (null or "spool");
+        }
+        // A line still being written: that run's outcome is not known yet.
+        catch (JsonException) { return true; }
     }
 
     // Reads whole lines from the offset; returns where the next look starts.

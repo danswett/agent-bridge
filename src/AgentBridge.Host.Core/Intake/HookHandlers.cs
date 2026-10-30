@@ -423,7 +423,9 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             if (fallback == 0) { fallback = id; }
         }
         if (fallback == 0) { return 0; }
-        var windows = running.Values.Where(p => !IsAppServer(p)).ToList();
+        // Interactive terminals only, as discovery tells them: not an MCP server, a headless
+        // `codex exec` or a command line that could not be read, none of which can be typed into.
+        var windows = running.Values.Where(p => CodexLockDiscovery.IsTerminal(p.CommandLine)).ToList();
         using (var mine = ReadJson(CodexPath(sessionId)))
         {
             if (mine is not null && Json.Int(mine.RootElement, "ProcessId") is { } recorded && recorded > 0

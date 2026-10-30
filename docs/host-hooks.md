@@ -305,7 +305,9 @@ Until the markers are settled (after a gap, while the log cannot be read, after 
 run, or while a withdrawal is pending), and while events wait in the spool (a `PermissionRequest`
 handled from a backlog arms its marker before the `PreToolUse` that answered it, further down, is
 reached; and one spooled since the last pass is not reflected in any marker yet, so the spool is
-looked at as each answer is admitted, never once agent-ha-bridge has been seen to take it), the
+looked at as each answer is admitted, never once agent-ha-bridge has been seen to take it), and
+from the moment a Codex hook is logged without spooling or the heartbeat passes the 60 s hooks
+allow (both also looked at as each answer is admitted, until the next pass settles them), the
 answer path refuses Codex approvals
 (`HookIntake.ApprovalsUnsettled`), so an answer cannot reach a marker that may already have been
 answered. A migrated profile whose `intake.json` cannot be read runs no intake, and refuses them
@@ -328,7 +330,7 @@ exited:
   that, the owner is:
   1. the window this session recorded, while it still runs, is still that process and no other
      live session has claimed it;
-  2. then the newest unclaimed window;
+  2. then the newest unclaimed interactive window (as discovery tells one, `CodexLockDiscovery.IsTerminal`: never an MCP server, a headless `codex exec` or a command line that could not be read, none of which can be typed into);
   3. then the app-server.
 
   A registration written more than a second before the process under its pid started names an

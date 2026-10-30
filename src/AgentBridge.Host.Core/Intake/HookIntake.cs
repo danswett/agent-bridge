@@ -89,6 +89,8 @@ public sealed class HookIntake : IAsyncDisposable
     DateTimeOffset? _pending;
     readonly HookLogWatch _codexLog;
     DateTimeOffset _beatAt;
+    // The same, for the answer path to read whole.
+    long _beatTicks;
     // Held while this intake takes the spool, so a second host (another profile migrated from
     // the same installation) never handles the same events.
     FileStream? _claim;
@@ -124,6 +126,13 @@ public sealed class HookIntake : IAsyncDisposable
         {
             if (Paused is { } paused) { return $"agent-ha-bridge has the hook spool ({paused}); answer at the machine"; }
             if (_queued || Waiting()) { return "the host is still handling hook events that are waiting; try again shortly"; }
+            // Since the last pass: hooks have stopped spooling (the heartbeat is past what they
+            // allow), or a Codex hook ran without spooling (it may have been the PreToolUse that
+            // answered this approval, and failed to remove its marker too). The next pass settles it.
+            if (_time.GetUtcNow().UtcTicks - Interlocked.Read(ref _beatTicks) >= SpoolContract.HeartbeatMaxAge.Ticks || _codexLog.UnheardSince())
+            {
+                return "a Codex hook has run that the host has not yet checked approvals against; try again shortly";
+            }
             return _reconciled && !_handlers.WithdrawalsPending ? null
                 : "the host has not yet checked Codex approvals against the hooks that ran while nobody took them; answer at the machine or try again shortly";
         }
@@ -332,6 +341,7 @@ public sealed class HookIntake : IAsyncDisposable
             File.WriteAllText(_heartbeat, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             _heartbeatOwned = true;
             _beatAt = now;
+            Interlocked.Exchange(ref _beatTicks, now.UtcTicks);
             return true;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)

@@ -1283,6 +1283,33 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_Codex_hook_that_did_not_spool_since_the_last_pass_holds_answers_until_it_is_checked()
+    {
+        var intake = Running();
+        Assert.Null(intake.ApprovalsUnsettled);
+        // Other agents' runs, and Codex's spooled ones, change nothing.
+        SpoolContract.Record(_f.Runtime, "claude", "stop", "reply", "no fresh heartbeat", _f.Time.GetLocalNow(), 1);
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "spool", null, _f.Time.GetLocalNow(), 1);
+        Assert.Null(intake.ApprovalsUnsettled);
+
+        // A PreToolUse that could not spool, nor remove its marker.
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "spool failed: disk full", _f.Time.GetLocalNow(), 1);
+
+        Assert.NotNull(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
+    public void Answers_stop_once_the_heartbeat_is_older_than_hooks_allow_even_before_the_next_pass()
+    {
+        var intake = Running();
+        Assert.Null(intake.ApprovalsUnsettled);
+
+        _f.Time.Advance(SpoolContract.HeartbeatMaxAge);
+
+        Assert.NotNull(intake.ApprovalsUnsettled);
+    }
+
+    [Fact]
     public void The_spool_is_not_looked_at_again_once_agent_ha_bridge_takes_it_mid_drain()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
@@ -1582,6 +1609,21 @@ public sealed class IntakeTests : IDisposable
         Spooled("0001", "codex", "hook", new { session_id = "s", hook_event_name = "SessionStart" }, 10, 20, 50, 60);
         Intake().Pass();
         Assert.Equal(60, Registration("agent-bridge-codex", "s").GetProperty("ProcessId").GetInt32());
+    }
+
+    [Fact]
+    public void Only_an_interactive_Codex_is_taken_for_the_window_behind_the_shared_app_server()
+    {
+        _f.Processes.Run(AgentKind.Codex, 50, "codex app-server");
+        _f.Processes.Run(AgentKind.Codex, 70, "codex.exe", _base.AddMinutes(-30));
+        // Newer, but nothing to type into.
+        _f.Processes.Run(AgentKind.Codex, 80, "codex.exe mcp-server", _base.AddMinutes(-5));
+        _f.Processes.Run(AgentKind.Codex, 90, "codex.exe exec \"fix the build\"", _base.AddMinutes(-1));
+        Spooled("0001", "codex", "hook", new { session_id = "mine", hook_event_name = "SessionStart" }, 50);
+
+        Intake().Pass();
+
+        Assert.Equal(70, Registration("agent-bridge-codex", "mine").GetProperty("ProcessId").GetInt32());
     }
 
     [Fact]
