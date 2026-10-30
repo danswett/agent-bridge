@@ -68,6 +68,9 @@ public sealed record AgentHaBridgeInstall(
     // the 1.33 layout.
     public static (AgentHaBridgeInstall? Install, string? Problem) Read(string bridgeHome)
     {
+        // Absolute from here on: the hook pointer and intake.json written from it are refused by
+        // their readers otherwise, and only once the daemon has been stopped.
+        bridgeHome = Path.TrimEndingDirectorySeparator(Path.GetFullPath(bridgeHome));
         var metadata = Path.Combine(bridgeHome, "installation.json");
         JsonElement record;
         try
@@ -95,14 +98,20 @@ public sealed record AgentHaBridgeInstall(
         {
             return (null, $"{bridgeHome} is an isolated (test) installation; only a machine's own installation is migrated");
         }
-        var configPath = Str("configPath") ?? Path.Combine(bridgeHome, "config.json");
+        var configPath = Path.GetFullPath(Str("configPath") ?? "config.json", bridgeHome);
         JsonObject config;
         try
         {
-            config = JsonNode.Parse(File.ReadAllText(configPath), documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }) as JsonObject
+            // Names case-insensitively, as agent-ha-bridge's Get-BridgeSetting reads them: a writer's
+            // "Dashboard"/"Publication" must not look absent to the G7 check. Two names differing
+            // only in case are refused, as ConvertFrom-Json refuses them.
+            config = JsonNode.Parse(File.ReadAllText(configPath), new JsonNodeOptions { PropertyNameCaseInsensitive = true },
+                new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }) as JsonObject
                 ?? throw new JsonException("not a JSON object");
+            // A JsonObject builds its lookup lazily; touching it here makes a duplicate fail now.
+            Touch(config);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
         {
             return (null, $"agent-ha-bridge's configuration {configPath} could not be read ({e.Message}), so its publication policy cannot be checked; nothing was changed");
         }
@@ -140,6 +149,20 @@ public sealed record AgentHaBridgeInstall(
             return $"this machine is the dashboard's publication writer ({writer}); it migrates last, once the dashboard no longer needs it, so migration is refused (G7)";
         }
         return null;
+    }
+
+    static void Touch(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject o:
+                _ = o.ContainsKey("");
+                foreach (var (_, child) in o) { Touch(child); }
+                break;
+            case JsonArray a:
+                foreach (var child in a) { Touch(child); }
+                break;
+        }
     }
 
     public static bool SamePath(string a, string b) =>

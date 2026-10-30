@@ -11,7 +11,8 @@ agent-bridge-host migration status [--profile <name>]
 ```
 
 * `--dry-run` reads everything, says what it would do, and changes nothing.
-* `--bridge-home` is the installation to migrate. It defaults to `~\.agent-ha-bridge`.
+* `--bridge-home` is the installation to migrate. It defaults to `~\.agent-ha-bridge`; a
+  relative path is made absolute first.
 * `--hook` is the `agent-bridge-host-hook.exe` to install. It defaults to the one beside the
   host, which is where the app ships it.
 * `--profile` is the host profile to migrate into (`default` if omitted). A missing or invalid
@@ -33,7 +34,9 @@ this yet; that is WinUI slice 2 (`docs/app-windows.md`).
 ## What migrate does
 
 In order. A failure at any step after the snapshot rolls back on its own, and the report ends
-with what the rollback did.
+with what the rollback did. A migrate or rollback (not a dry run) holds `migration.lock` beside the
+profiles for all of it, so two at once (from any profile) cannot both pass the checks and the
+second snapshot the first's changes as the state to restore; the second is refused.
 
 1. **Preflight.** Refuses, before touching anything, when:
    * the profile is already migrated, or part-way through a migration;
@@ -44,7 +47,9 @@ with what the rollback did.
    * `installation.json` is missing, is not schema 1 with a 32-hex id, belongs to another path,
      or is an isolated (test) installation;
    * agent-ha-bridge's `config.json` cannot be read, so its publication policy cannot be
-     checked;
+     checked. Its names are read case-insensitively, as `Get-BridgeSetting` reads them (a
+     `Dashboard.Publication` is the policy), and two names differing only in case make it
+     unreadable, as `ConvertFrom-Json` finds them;
    * **this machine is the dashboard's publication writer** (`dashboard.publication.participant`
      equals `writer`), or the policy is there but cannot be read (G7). The writer migrates
      last, at P7. A machine with no `dashboard.publication` is not a writer;
@@ -58,7 +63,8 @@ with what the rollback did.
    re-points, and whether each task was enabled. agent-ha-bridge's `config.json`,
    `installation.json` and instruction files are recorded **by hash only**: the config can hold
    secrets and is never copied.
-3. **Daemon.** Disables (never deletes) `AgentBridgeDaemon_<id>` and
+3. **Daemon.** A task the scheduler cannot read (access denied, say) refuses the migration; only
+   a task that does not exist is left out. Disables (never deletes) `AgentBridgeDaemon_<id>` and
    `AgentBridgeDevBoxKeepAwake_<id>`, then stops the supervisor, the daemon and the keep-awake.
    They are found as agent-ha-bridge's own `Stop-BridgeOwnedRuntime` finds them: pwsh running
    `-File <bridgeHome>\hooks\agent-bridge-<role>.ps1`, honouring the receipt in
@@ -114,7 +120,7 @@ another folder is skipped and reported.
 | `newSession.profiles`, `defaultProfile` | `launch.profiles`, `launch.defaultProfile` |
 | `newSession.resumeCount` | `launch.resumeCount` (at most 50 here; a larger value is reported) |
 | `newSession.allowAllTools` | `launch.permissions` (`allowAll` or `ask`) |
-| `newSession.model` (text: Copilot's; object: per agent) | `launch.agents.<agent>.model` |
+| `newSession.model` (text: every agent's, as agent-ha-bridge falls back to it; object: per agent) | `launch.agents.<agent>.model` |
 | `newSession.effort.<agent>`, `context.<agent>` | `launch.agents.<agent>.effort`, `context` |
 | `newSession.models`, `efforts`, `contexts` `.<agent>` | `launch.agents.<agent>.models`, `efforts`, `contexts` |
 | `newSession.extraArgs` | `launch.agents.<each agent>.extraArgs` (agent-ha-bridge added them to every launcher) |

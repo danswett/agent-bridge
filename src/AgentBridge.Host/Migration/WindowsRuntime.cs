@@ -105,6 +105,12 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
     }
 
     // Task Scheduler's COM service, as AgentHaBridgeProbe reads it.
+    // Only "no such task" means it is not there. Anything else (access denied, the service
+    // failing) leaves whether it exists unknown, and a task left out of the snapshot would stay
+    // enabled, and its stopped daemon never be restarted on a rollback.
+    internal static bool TaskMissing(Exception? e) =>
+        e is FileNotFoundException or DirectoryNotFoundException || e is COMException { HResult: unchecked((int)0x80070002) or unchecked((int)0x80070003) };
+
     static T WithTask<T>(string name, Func<object, T> use, bool missing = false)
     {
         object? service = null;
@@ -117,7 +123,7 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
             Call(service, "Connect");
             folder = Call(service, "GetFolder", @"\")!;
             try { task = Call(folder, "GetTask", name)!; }
-            catch (TargetInvocationException e) when (missing && e.InnerException is COMException or FileNotFoundException) { return default!; }
+            catch (TargetInvocationException e) when (missing && TaskMissing(e.InnerException)) { return default!; }
             return use(task);
         }
         catch (TargetInvocationException e) when (e.InnerException is { } inner)

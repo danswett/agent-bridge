@@ -29,6 +29,11 @@ public sealed class MigrationOptions
     public TimeSpan VerifyTimeout { get; init; } = TimeSpan.FromSeconds(45);
     public TimeSpan PollEvery { get; init; } = TimeSpan.FromMilliseconds(250);
 
+    // Held for the whole of a migrate or rollback, by every profile of this user: two at once
+    // could each pass the checks before either saved its record, and the second would snapshot
+    // the first's imported settings and disabled tasks as the state to restore.
+    public string LockPath => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(ProfileFolder))!, "migration.lock");
+
     public string HookPath => Path.Combine(HookFolder, OperatingSystem.IsWindows() ? "agent-bridge-host-hook.exe" : "agent-bridge-host-hook");
     public string PointerPath => Path.Combine(HookFolder, HookRunner.PointerFile);
 }
@@ -57,6 +62,30 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
     // ------------------------------------------------------------------ migrate
 
     public async Task<MigrationReport> MigrateAsync(bool dryRun, CancellationToken cancellationToken = default)
+    {
+        if (dryRun) { return await MigrateUnlockedAsync(dryRun, cancellationToken); }
+        using var held = Lock(out var busy);
+        return held is null ? new(false, [busy!]) : await MigrateUnlockedAsync(dryRun, cancellationToken);
+    }
+
+    // Opened for this process alone and deleted when closed; null (and why) while another
+    // migrate or rollback holds it.
+    FileStream? Lock(out string? busy)
+    {
+        busy = null;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(options.LockPath)!);
+            return new FileStream(options.LockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            busy = $"Refused: another migrate or rollback is running ({options.LockPath} is held); wait for it to finish.";
+            return null;
+        }
+    }
+
+    async Task<MigrationReport> MigrateUnlockedAsync(bool dryRun, CancellationToken cancellationToken)
     {
         var lines = new List<string>();
         void Say(string line) => lines.Add(line);
@@ -310,6 +339,13 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
     // ------------------------------------------------------------------ roll back
 
     public async Task<MigrationReport> RollbackAsync(bool dryRun, CancellationToken cancellationToken = default)
+    {
+        if (dryRun) { return await RollbackUnlockedAsync(dryRun, cancellationToken); }
+        using var held = Lock(out var busy);
+        return held is null ? new(false, [busy!]) : await RollbackUnlockedAsync(dryRun, cancellationToken);
+    }
+
+    async Task<MigrationReport> RollbackUnlockedAsync(bool dryRun, CancellationToken cancellationToken)
     {
         var (record, problem) = MigrationRecord.Load(options.ProfileFolder);
         if (record is null)

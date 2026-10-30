@@ -15,7 +15,7 @@ namespace AgentBridge.Host.Migration;
 //   newSession.profiles, defaultProfile         launch.profiles, launch.defaultProfile
 //   newSession.resumeCount                      launch.resumeCount (at most 50 here)
 //   newSession.allowAllTools                    launch.permissions (allowAll or ask)
-//   newSession.model (Copilot's, or per agent)  launch.agents.<agent>.model
+//   newSession.model (every agent's, or per agent)  launch.agents.<agent>.model
 //   newSession.effort/context.<agent>           launch.agents.<agent>.effort/context
 //   newSession.models/efforts/contexts.<agent>  launch.agents.<agent>.models/efforts/contexts
 //   newSession.extraArgs (every launcher's)     launch.agents.<each agent>.extraArgs
@@ -110,9 +110,13 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                 }
 
                 JsonObject Agent(string id) => Section(Section(launch, "agents"), id);
-                // newSession.model: Copilot's (and Agency's) when it is text; one per agent when
-                // it is an object (Get-BridgeConfiguredTuning).
-                if (Str(ns["model"]) is { } copilotModel) { Put(Agent("copilot"), "model", copilotModel, "newSession.model", "launch.agents.copilot.model"); }
+                // newSession.model: when it is text, every agent's model (Get-BridgeConfiguredTuning
+                // falls back to it for whichever launcher has none of its own; Agency's is
+                // Copilot's); one per agent when it is an object.
+                if (Str(ns["model"]) is { } scalarModel)
+                {
+                    foreach (var id in Agents) { Put(Agent(id), "model", scalarModel, "newSession.model", $"launch.agents.{id}.model"); }
+                }
                 foreach (var axis in new[] { "model", "effort", "context" })
                 {
                     if (ns[axis] is JsonObject perAgent)

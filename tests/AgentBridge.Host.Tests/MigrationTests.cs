@@ -65,6 +65,95 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.False(File.Exists(Path.Combine(writer.Profile, MigrationRecord.FileName)));
     }
 
+    [Fact]
+    public async Task A_publication_writer_named_in_other_letter_case_is_still_the_writer_as_agent_ha_bridge_reads_it()
+    {
+        var config = FakeAgentHaBridge.DefaultConfig();
+        var publication = config["dashboard"]!["publication"]!.DeepClone();
+        publication["participant"] = "desk";
+        config.Remove("dashboard");
+        config["Dashboard"] = new JsonObject { ["Publication"] = publication };
+        await using var writer = new FakeAgentHaBridge(config);
+        var before = writer.Listing();
+
+        var report = await writer.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("publication writer (desk)", report.ToString());
+        Assert.Equal(before, writer.Listing());
+    }
+
+    [Fact]
+    public async Task A_configuration_naming_one_setting_twice_in_different_case_is_refused_as_unreadable()
+    {
+        await using var odd = new FakeAgentHaBridge();
+        var text = File.ReadAllText(odd.ConfigPath).TrimEnd().TrimEnd('}') + ", \"DASHBOARD\": {} }";
+        File.WriteAllText(odd.ConfigPath, text);
+        var before = odd.Listing();
+
+        var report = await odd.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("could not be read", report.ToString());
+        Assert.Equal(before, odd.Listing());
+    }
+
+    [Fact]
+    public void A_relative_installation_path_is_made_absolute_before_anything_is_derived_from_it()
+    {
+        var relative = Path.GetRelativePath(Environment.CurrentDirectory, _f.BridgeHome);
+        if (Path.IsPathRooted(relative)) { return; }
+
+        var (install, problem) = AgentHaBridgeInstall.Read(relative + Path.DirectorySeparatorChar);
+
+        Assert.Null(problem);
+        Assert.Equal(_f.BridgeHome, install!.BridgeHome);
+        Assert.True(Path.IsPathFullyQualified(install.RuntimeRoot));
+    }
+
+    [Fact]
+    public async Task A_migration_or_rollback_already_running_for_this_user_refuses_another_before_it_reads_anything()
+    {
+        var before = _f.Listing();
+        // Another profile's migration, in another process.
+        await using (new FileStream(Path.Combine(Root, "migration.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose))
+        {
+            var report = await _f.Migrator().MigrateAsync(dryRun: false);
+            Assert.False(report.Ok);
+            Assert.Contains("another migrate or rollback is running", report.ToString());
+            Assert.Equal(before, _f.Listing());
+            Assert.Empty(_f.Runtime_.Calls);
+            Assert.False((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+            // A dry run only reads.
+            Assert.True((await _f.Migrator().MigrateAsync(dryRun: true)).Ok);
+        }
+
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+    }
+
+    [Fact]
+    public async Task A_model_set_for_every_agent_at_once_reaches_each_of_them()
+    {
+        var config = FakeAgentHaBridge.DefaultConfig();
+        config["newSession"]!["model"] = "house-model";
+        await using var f = new FakeAgentHaBridge(config);
+
+        Assert.True((await f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        var agents = JsonNode.Parse(File.ReadAllText(Path.Combine(f.Profile, "config.json")))!["launch"]!["agents"]!;
+        Assert.All(new[] { "copilot", "claude", "codex" }, id => Assert.Equal("house-model", (string?)agents[id]!["model"]));
+    }
+
+    [Fact]
+    public void Only_no_such_task_counts_as_a_missing_task_and_a_refusal_from_the_scheduler_does_not()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.True(WindowsAgentHaBridgeRuntime.TaskMissing(new System.Runtime.InteropServices.COMException("not found", unchecked((int)0x80070002))));
+        Assert.True(WindowsAgentHaBridgeRuntime.TaskMissing(new FileNotFoundException()));
+        Assert.False(WindowsAgentHaBridgeRuntime.TaskMissing(new System.Runtime.InteropServices.COMException("denied", unchecked((int)0x80070005))));
+        Assert.False(WindowsAgentHaBridgeRuntime.TaskMissing(new UnauthorizedAccessException()));
+    }
+
     [Theory]
     [InlineData("{\"authority\":\"home\",\"participant\":\"laptop\"}")]
     [InlineData("\"desk\"")]

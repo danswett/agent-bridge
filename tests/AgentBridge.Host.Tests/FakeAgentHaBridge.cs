@@ -169,7 +169,8 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
     }, Runtime_, Host, Hook);
 
     // Every file under HOME and its hash, but for what the daemon and the hook change by
-    // running (the runtime folder) and the hook a migration installs, which stays.
+    // running (the runtime folder), the hook a migration installs, which stays, and the lock a
+    // migrate or rollback holds while it runs.
     public SortedDictionary<string, string> Listing()
     {
         var listing = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -177,6 +178,7 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
         {
             if (file.StartsWith(Runtime + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) { continue; }
             if (file.StartsWith(HookFolder + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) { continue; }
+            if (Path.GetFileName(file) == "migration.lock") { continue; }
             listing[Path.GetRelativePath(Home, file)] = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(file)));
         }
         return listing;
