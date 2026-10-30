@@ -35,6 +35,9 @@ public sealed record Delivery
     // When the op itself first went to a host, which remembers its request id for only so long
     // after that. Null while it never went: files that failed to go ahead of a reply are not it.
     public DateTimeOffset? FirstSent { get; init; }
+    // The same moment on the monotonic clock (TimeProvider.GetTimestamp), which every elapsed
+    // check uses: a wall clock stepped back must not reopen the window and send a launch twice.
+    public long? FirstSentAt { get; init; }
 }
 
 // Sends answers, replies and stops (session.answer, session.reply, session.stop), each to
@@ -113,9 +116,10 @@ public sealed class Deliveries
     {
         // An op never replayed after a restart is counted from its first send, not from this Try
         // again: once the host may have forgotten the request id, another copy could act twice.
-        var fromFirst = resend && !entry.ReplayAfterRestart && entry.FirstSent is not null;
-        var started = fromFirst ? entry.FirstSent!.Value : time.GetUtcNow();
-        var firstSent = entry.FirstSent;
+        var fromFirst = resend && !entry.ReplayAfterRestart && entry.FirstSentAt is not null;
+        var started = fromFirst ? entry.FirstSentAt!.Value : time.GetTimestamp();
+        var firstSent = entry.FirstSentAt;
+        bool Expired() => time.GetElapsedTime(started) > GiveUp;
         var busy = 0;
         var attempts = entry.Attempts;
         // The host the op itself last went to, if it went: files sent ahead are not the op. Carried
@@ -123,7 +127,7 @@ public sealed class Deliveries
         var sentTo = entry.SentTo;
         while (true)
         {
-            if (time.GetUtcNow() - started > GiveUp)
+            if (Expired())
             {
                 Update(entry.Key, e => e with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = fromFirst && attempts == entry.Attempts ? TooOld : NoOutcome });
                 return;
@@ -134,7 +138,7 @@ public sealed class Deliveries
             // A Try again goes, and is waited on, only until the host may forget the request: a send
             // still queued then is dropped unsent, and a wait cut short reads unconfirmed. Either way it
             // can only lose an outcome, never act twice.
-            using var bound = fromFirst ? new CancellationTokenSource(Max(started + GiveUp - time.GetUtcNow(), TimeSpan.Zero), time) : null;
+            using var bound = fromFirst ? new CancellationTokenSource(Max(GiveUp - time.GetElapsedTime(started), TimeSpan.Zero), time) : null;
             try
             {
                 if (before is not null)
@@ -142,7 +146,7 @@ public sealed class Deliveries
                     await before((o, d, t) => host.CallAsync(o, d, t), (sent, total) => Update(entry.Key, e => e with { Progress = (sent, total) }));
                     // Files can take minutes to go: the request goes only while the host still knows it.
                     // It is written as the call starts, well inside the host's 10 minutes after the 9.
-                    if (fromFirst && time.GetUtcNow() - started > GiveUp)
+                    if (fromFirst && Expired())
                     {
                         Update(entry.Key, e => e with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = TooOld, Progress = null });
                         return;
@@ -155,9 +159,10 @@ public sealed class Deliveries
                 if (to != sentTo) { sentTo = to; Update(entry.Key, e => e with { SentTo = to }); }
                 if (to is not null && firstSent is null)
                 {
+                    var at = time.GetTimestamp();
                     var now = time.GetUtcNow();
-                    firstSent = now;
-                    Update(entry.Key, e => e with { FirstSent = now });
+                    firstSent = at;
+                    Update(entry.Key, e => e with { FirstSent = now, FirstSentAt = at });
                 }
                 result = await call;
             }

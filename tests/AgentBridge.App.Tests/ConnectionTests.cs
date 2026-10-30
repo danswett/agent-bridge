@@ -401,6 +401,54 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_wall_clock_stepped_back_does_not_reopen_the_window_for_a_try_again()
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        host.On(Ops.SessionReply, _ => throw new InvalidOperationException("the host failed after reading it"));
+        var clock = new SteppedClock(new FakeTimeProvider(Make.T0));
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { GiveUp = TimeSpan.FromMinutes(9) };
+
+        deliveries.Submit("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Failed, "the failure");
+        // Ten minutes pass, but the wall clock is set back an hour meanwhile (a time sync, by hand).
+        clock.Inner.Advance(TimeSpan.FromMinutes(10));
+        clock.Step = TimeSpan.FromHours(-1);
+        deliveries.Resend("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" });
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
+        Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
+        Assert.Single(host.Sent(Ops.SessionReply));
+    }
+
+    [Fact]
+    public async Task A_wall_clock_stepped_back_does_not_keep_a_first_send_going_past_its_limit()
+    {
+        await host.StopAsync();
+        await Wait.UntilAsync(() => connection.State == LinkState.NotRunning, "not running");
+        var clock = new SteppedClock(new FakeTimeProvider(Make.T0));
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { RetryDelay = TimeSpan.FromMilliseconds(20), GiveUp = TimeSpan.FromMinutes(9) };
+
+        deliveries.Submit("k", Ops.SessionAnswer, r => new { request = r }, _ => true);
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Waiting, "waiting");
+        clock.Step = TimeSpan.FromHours(-1);
+        clock.Inner.Advance(TimeSpan.FromMinutes(10));
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up", TimeSpan.FromSeconds(30));
+        Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
+    }
+
+    // Monotonic time and timers from the fake; the wall clock shifted by Step, as a clock set back.
+    sealed class SteppedClock(FakeTimeProvider inner) : TimeProvider
+    {
+        public FakeTimeProvider Inner => inner;
+        public TimeSpan Step { get; set; }
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow() + Step;
+        public override long GetTimestamp() => inner.GetTimestamp();
+        public override long TimestampFrequency => inner.TimestampFrequency;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) => inner.CreateTimer(callback, state, dueTime, period);
+    }
+
+    [Fact]
     public async Task A_reply_whose_files_never_went_can_be_tried_again_however_long_after()
     {
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
