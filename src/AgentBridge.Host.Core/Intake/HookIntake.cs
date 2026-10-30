@@ -72,6 +72,10 @@ public sealed class HookIntake : IAsyncDisposable
     // Whether approvals have been checked against the hooks that ran while nobody took events,
     // since this intake last (re)took the spool.
     bool _reconciled;
+    // The cut-off approvals were last settled to, and the hook log it is read from.
+    DateTimeOffset? _settled;
+    readonly HookLogWatch _codexLog;
+    DateTimeOffset _beatAt;
     // Held while this intake takes the spool, so a second host (another profile migrated from
     // the same installation) never handles the same events.
     FileStream? _claim;
@@ -86,6 +90,7 @@ public sealed class HookIntake : IAsyncDisposable
         _log = log ?? (_ => { });
         _handlers = new HookHandlers(options.RuntimeRoot, options.ClaudeHome, processes, _time);
         _spool = SpoolContract.SpoolDirectory(options.RuntimeRoot);
+        _codexLog = new HookLogWatch(options.RuntimeRoot, "codex");
         _heartbeat = SpoolContract.HeartbeatPath(options.RuntimeRoot);
         _prunedAt = _time.GetUtcNow();
     }
@@ -148,11 +153,7 @@ public sealed class HookIntake : IAsyncDisposable
             if (_paused is not null) { _log($"the host takes the hook spool again (was: {_paused})"); }
             _paused = null;
         }
-        if (Beat() && !_reconciled)
-        {
-            ReconcileApprovals();
-            _reconciled = true;
-        }
+        if (Beat() && !ReconcileApprovals()) { return 0; }
         EnsureWatcher();
         var handled = Consume();
         var now = _time.GetUtcNow();
@@ -167,6 +168,7 @@ public sealed class HookIntake : IAsyncDisposable
             }
             _prunedAt = now;
             Prune();
+            if (Paused is not null) { return handled; }
         }
         return handled;
     }
@@ -209,6 +211,7 @@ public sealed class HookIntake : IAsyncDisposable
             Directory.CreateDirectory(_options.RuntimeRoot);
             File.WriteAllText(_heartbeat, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             _heartbeatOwned = true;
+            _beatAt = _time.GetUtcNow();
             return true;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -226,14 +229,21 @@ public sealed class HookIntake : IAsyncDisposable
     // before the last such run is withdrawn when the intake takes the spool again; one asked
     // after it is still pending. The hook log is the record of those runs (both hooks write it).
     // The same cut-off holds for a PermissionRequest still waiting in the spool from before the
-    // outage: it is handled, but arms no approval.
-    void ReconcileApprovals()
+    // outage: it is handled, but arms no approval. It is checked every pass, since a hook can
+    // also fail to spool while the heartbeat is fresh, and settles again whenever the log shows a
+    // later unspooled run. While the log cannot be read the history is unknown, so no approval
+    // is offered at all. False when agent-ha-bridge started meanwhile.
+    bool ReconcileApprovals()
     {
-        if (HookStats.LastUnspooled(_options.RuntimeRoot, "codex") is not { } unheard) { return; }
+        var known = _codexLog.Refresh();
+        var cutoff = known ? _codexLog.Last : _time.GetLocalNow();
+        if (cutoff is not { } unheard || (_reconciled && _settled is { } done && unheard <= done)) { _reconciled = known; return true; }
         _handlers.ApprovalsSettledBefore = unheard;
+        _settled = unheard;
+        _reconciled = known;
         string[] markers;
         try { markers = Directory.Exists(_handlers.CodexRoot) ? Directory.GetFiles(_handlers.CodexRoot, "*.approval.json") : []; }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return true; }
         foreach (var marker in markers)
         {
             DateTimeOffset? created = null;
@@ -244,6 +254,11 @@ public sealed class HookIntake : IAsyncDisposable
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { }
             if (created is { } c && c > unheard) { continue; }
+            if (_options.AgentHaBridgeActive() is { } active)
+            {
+                StandBack(active);
+                return false;
+            }
             try
             {
                 File.Delete(marker);
@@ -251,6 +266,7 @@ public sealed class HookIntake : IAsyncDisposable
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
+        return true;
     }
 
     void EnsureWatcher()
@@ -301,6 +317,9 @@ public sealed class HookIntake : IAsyncDisposable
                 StandBack(active);
                 break;
             }
+            // A long backlog must not let the heartbeat go stale while it drains: hooks would stop
+            // spooling, and the approvals they settle would be lost.
+            if (_time.GetUtcNow() - _beatAt >= TimeSpan.FromSeconds(10)) { Beat(); }
             var name = Path.GetFileName(path);
             // Handled already; only its deletion failed. Its handler must not run twice: a Codex
             // PermissionRequest replayed after the PreToolUse that answered it would re-arm it.
@@ -402,7 +421,11 @@ public sealed class HookIntake : IAsyncDisposable
                 var pid = Json.Int(doc.RootElement, "ProcessId") ?? 0;
                 var updated = Json.Time(doc.RootElement, "Updated");
                 var stale = updated is { } u && now - u > _options.StaleAfter;
-                if (!(pid > 0 && live.Contains(pid)) && stale) { Delete(file); }
+                if (!(pid > 0 && live.Contains(pid)) && stale)
+                {
+                    if (!Ours()) { return; }
+                    Delete(file);
+                }
             }
         }
         var codex = _processes.Observe(AgentKind.Codex);
@@ -417,9 +440,22 @@ public sealed class HookIntake : IAsyncDisposable
                 var pid = Json.Int(doc.RootElement, "ProcessId") ?? 0;
                 var ended = Json.Bool(doc.RootElement, "Ended") == true;
                 var stale = Json.Time(doc.RootElement, "Updated") is { } u && now - u > _options.StaleAfter;
-                if (ended || (pid > 0 && !live.Contains(pid)) || (pid <= 0 && stale)) { Delete(file); }
+                if (ended || (pid > 0 && !live.Contains(pid)) || (pid <= 0 && stale))
+                {
+                    if (!Ours()) { return; }
+                    Delete(file);
+                }
             }
         }
+    }
+
+    // Before each delete of something the daemon would own: false (and standing back) once
+    // agent-ha-bridge has started.
+    bool Ours()
+    {
+        if (_options.AgentHaBridgeActive() is not { } active) { return true; }
+        StandBack(active);
+        return false;
     }
 
     static System.Text.Json.JsonDocument? Read(string path)

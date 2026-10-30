@@ -61,7 +61,7 @@ holds every name; it is tested against files the Go hook writes and the daemon r
 
 `<name>` is the time in Unix nanoseconds (20 digits), the hook's pid and 8 random hex digits.
 Names sort in the order the events happened, which is the order they are handled. Events are
-at most 16 MB, and the ancestry at most 12 processes.
+at most 16 MB and 512 levels deep, and the ancestry at most 12 processes.
 
 ## The hook: `agent-bridge-host-hook`
 
@@ -113,7 +113,9 @@ is one JSON value, prints the reply, logs the run and exits 0.
 `serve` starts it only for a profile with an **`intake.json`** in its folder (`IntakeState`:
 the runtime folder, the agent-ha-bridge installation's home and id, and when it migrated). A
 missing or unreadable record means no intake. Off Windows the intake does not start yet: it
-must be able to see agent-ha-bridge's daemon first.
+must be able to see agent-ha-bridge's daemon first. `sessions`, `get`, `watch` and `usage` read
+the same profile's record (without creating the profile), so they find a migrated
+installation's registrations where `serve` does.
 
 **G5.** Before every pass, and again before every file, the intake asks the same probe that
 gates typing (`AgentHaBridgeProbe`, cached for 2 s). While agent-ha-bridge's daemon or
@@ -150,7 +152,10 @@ refuses a second profile for an installation that one already has.
    it would arm an approval nobody is being asked. Keeping strict order costs one pass.
    An event handled whose file could not be deleted (a reader that would not share the
    delete) is only deleted again on later passes, never handled again, for the same reason.
-4. Prune now and then (below), unless agent-ha-bridge started during the pass.
+   The heartbeat is touched again every 10 s while a long backlog drains, so hooks keep
+   spooling meanwhile.
+4. Prune now and then (below), unless agent-ha-bridge started during the pass. Pruning, and
+   withdrawing approvals (below), check for agent-ha-bridge again before each delete.
 
 A `FileSystemWatcher` on the spool wakes a pass the moment a hook renames a file into place.
 A sweep every 2 s covers anything the watcher misses.
@@ -192,11 +197,17 @@ Three rules carry over from agent-ha-bridge:
 * A later event without a pid or status keeps the one already recorded.
 * Each file is written whole and renamed into place.
 * The `DecisionId` is `agent_bridge_<node>-<unix ms>`, as agent-ha-bridge names its decisions.
+  The milliseconds never repeat: two approvals handled in one millisecond get consecutive
+  ones, so an answer made for the first can never pass the check for the second.
 
-One differs: `HookStatusAt`, a Codex registration's `Updated` and a marker's `Created` are when
-the hook ran (the spooled `receivedAt`), not when the event was handled. The daemon used the
-time it handled it, which was almost always the same. Here an event can wait in the spool while
-the host is down, and must not then read as newer than what the transcript said since.
+Two differ. Times in these files (`Updated`, `HookStatusAt`, a marker's `Created`) are when the
+hook ran (the spooled `receivedAt`), not when the event was handled. The daemon used the time it
+handled it, which was almost always the same. Here an event can wait in the spool while the host
+is down, and must not then read as newer than what the transcript said since; a recycled pid
+must not make an old Claude session look alive. And an event older than its session's
+registration's `Updated` is not applied at all: it can only be a replay (a file whose delete
+failed, handled again after a restart) or a late arrival, and a replayed `PermissionRequest`
+would arm an approval its `PreToolUse` has already settled.
 
 Discovery (`RegistrationDiscovery`) and the answer path (`ApprovalMarkerRead`,
 `AnswerService`) read these unchanged. On a rollback, agent-ha-bridge's daemon reads them too.
@@ -212,8 +223,11 @@ terminal may never arrive. When the intake takes the spool again (it starts, age
 stops, or the heartbeat can be written again), it withdraws every approval marker asked before
 the last Codex hook run the hook log records as not spooled. One asked after it is still
 pending. A `PermissionRequest` still waiting in the spool from before that run is handled but
-arms no approval, for the same reason. Answering an approval twice could type into whatever the
-terminal shows now; losing a remote answer only means answering at the terminal.
+arms no approval, for the same reason. The log is followed every pass (only what it gained), so
+a Codex hook that fails to spool while the heartbeat is fresh settles approvals the same way.
+While the log cannot be read the history is unknown, and no approval is offered at all.
+Answering an approval twice could type into whatever the terminal shows now; losing a remote
+answer only means answering at the terminal.
 
 **The owning process** is found from the recorded ancestry, so the shells in between can have
 exited:

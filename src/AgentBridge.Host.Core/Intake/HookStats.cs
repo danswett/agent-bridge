@@ -107,3 +107,60 @@ public sealed record HookStats(
         return text;
     }
 }
+
+// The latest run of one agent's hook that was not spooled, kept up to date by reading only what
+// the log gained since the last look (it is read every pass), and the whole of it again when it
+// has been rotated.
+public sealed class HookLogWatch(string runtimeRoot, string agent)
+{
+    readonly string _log = SpoolContract.LogPath(runtimeRoot);
+    long _offset = -1;
+    DateTime _rotated;
+
+    public DateTimeOffset? Last { get; private set; }
+
+    // False when the log could not be read: what happened since the last look is unknown.
+    public bool Refresh()
+    {
+        try
+        {
+            var old = _log + ".1";
+            var rotated = File.Exists(old) ? File.GetLastWriteTimeUtc(old) : default;
+            var length = File.Exists(_log) ? new FileInfo(_log).Length : 0;
+            if (_offset < 0 || rotated != _rotated || length < _offset)
+            {
+                if (File.Exists(old)) { Scan(old, 0); }
+                _rotated = rotated;
+                _offset = 0;
+            }
+            if (File.Exists(_log)) { _offset = Scan(_log, _offset); }
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    // Reads whole lines from the offset; returns where the next look starts.
+    long Scan(string path, long offset)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        if (offset > stream.Length) { offset = 0; }
+        stream.Seek(offset, SeekOrigin.Begin);
+        var bytes = new byte[stream.Length - offset];
+        stream.ReadExactly(bytes);
+        var end = Array.LastIndexOf(bytes, (byte)'\n');
+        if (end < 0) { return offset; }
+        foreach (var line in System.Text.Encoding.UTF8.GetString(bytes, 0, end).Split('\n'))
+        {
+            if (string.IsNullOrWhiteSpace(line)) { continue; }
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var e = doc.RootElement;
+                if (Json.Str(e, "agent") != agent || Json.Str(e, "path") is null or "spool") { continue; }
+                if (Json.Str(e, "at") is { } text && DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at) && (Last is null || at > Last)) { Last = at; }
+            }
+            catch (JsonException) { }
+        }
+        return offset + end + 1;
+    }
+}

@@ -54,6 +54,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
     {
         var e = spooled.Event;
         if (notice.SessionId is not { } sessionId) { return notice; }
+        if (Superseded(ClaudePath(sessionId), spooled)) { return notice; }
         var known = Str(e, "transcript_path");
         var cwd = Str(e, "cwd") ?? "";
         string? status;
@@ -92,6 +93,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
     {
         var e = spooled.Event;
         if (notice.SessionId is not { } sessionId) { return notice; }
+        if (Superseded(CodexPath(sessionId), spooled)) { return notice; }
         var eventName = notice.EventName ?? "";
         // A later lifecycle event retires the prompt, whichever input answered it. SessionStart
         // too: a Codex that died waiting for an approval never sent SessionEnd, and its resumed
@@ -150,7 +152,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         {
             // agent-ha-bridge's generation: the session's node id and the time, so an answer
             // made for one approval is never typed into the next.
-            approvalId = $"{NodeId(sessionId)}-{time.GetUtcNow().ToUnixTimeMilliseconds()}";
+            approvalId = $"{NodeId(sessionId)}-{NextDecisionMs()}";
             WriteApprovalMarker(sessionId, approvalId, activity, At(spooled));
         }
         return notice with { OwnerPid = owner > 0 ? owner : null, Status = status, ApprovalId = approvalId };
@@ -184,7 +186,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             w.WriteNumber("ProcessId", pid);
             w.WriteString("TranscriptPath", transcript ?? "");
             w.WriteString("WorkingDirectory", cwd);
-            w.WriteString("Updated", Now());
+            w.WriteString("Updated", at);
             w.WriteString("HookStatus", hookStatus);
             w.WriteString("HookStatusAt", hookStatusAt);
         });
@@ -225,7 +227,29 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             w.WriteString("Created", at);
         });
 
-    string Now() => time.GetLocalNow().ToString("o");
+
+    // The generation in a DecisionId: the time in ms, as agent-ha-bridge's, but never the same
+    // twice. Two approvals handled in one millisecond would otherwise share one, and an answer
+    // made for the first would pass the answer path's check for the second.
+    long _lastDecisionMs;
+
+    long NextDecisionMs()
+    {
+        var ms = Math.Max(time.GetUtcNow().ToUnixTimeMilliseconds(), _lastDecisionMs + 1);
+        _lastDecisionMs = ms;
+        return ms;
+    }
+
+    // An event older than what its session's registration already records, by when the hooks
+    // ran: a replay (a spooled file whose delete failed, handled again after a restart) or one
+    // that arrived late. Applying it would roll the session back, and a replayed
+    // PermissionRequest would arm an approval its PreToolUse has already settled.
+    static bool Superseded(string registration, SpoolEvent spooled)
+    {
+        if (spooled.ReceivedAt is not { } received) { return false; }
+        using var existing = ReadJson(registration);
+        return existing is not null && Json.Time(existing.RootElement, "Updated") is { } updated && received < updated;
+    }
 
     // When the hook ran, not when the event was handled: an event that waited in the spool (the
     // host was down) must not read as newer than what the transcript or a lost hook said since.

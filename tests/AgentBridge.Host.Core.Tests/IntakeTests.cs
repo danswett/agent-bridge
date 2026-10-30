@@ -47,10 +47,12 @@ public sealed class IntakeTests : IDisposable
     }
 
     // A spool file as either bridge's hook writes it, under a name that sorts where given.
-    string Spooled(string name, string agent, string hook, object ev, params int[] ancestors)
+    string Spooled(string name, string agent, string hook, object ev, params int[] ancestors) => SpooledAt(Fixture.T0, name, agent, hook, ev, ancestors);
+
+    string SpooledAt(DateTimeOffset receivedAt, string name, string agent, string hook, object ev, params int[] ancestors)
     {
         Directory.CreateDirectory(Spool);
-        var body = JsonSerializer.Serialize(new { v = 1, agent, hook, ancestors, receivedAt = Fixture.T0.ToString("o"), @event = ev });
+        var body = JsonSerializer.Serialize(new { v = 1, agent, hook, ancestors, receivedAt = receivedAt.ToString("o"), @event = ev });
         var path = Path.Combine(Spool, name + ".json");
         File.WriteAllText(path, body);
         return path;
@@ -294,6 +296,7 @@ public sealed class IntakeTests : IDisposable
 
         DateTimeOffset At(JsonElement e, string field) => DateTimeOffset.Parse(e.GetProperty(field).GetString()!, System.Globalization.CultureInfo.InvariantCulture);
         Assert.Equal(Fixture.T0, At(Registration("agent-bridge-claude", "s1"), "HookStatusAt"));
+        Assert.Equal(Fixture.T0, At(Registration("agent-bridge-claude", "s1"), "Updated"));
         Assert.Equal(Fixture.T0, At(Registration("agent-bridge-codex", "x1"), "Updated"));
         using var marker = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
         Assert.Equal(Fixture.T0, At(marker.RootElement, "Created"));
@@ -444,6 +447,169 @@ public sealed class IntakeTests : IDisposable
         }));
         Assert.Equal(1, intake.Pass());
         Assert.True(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+    }
+
+    [Fact]
+    public void Two_approvals_handled_in_the_same_millisecond_get_different_decision_ids()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        Spooled("0002", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "apply_patch" }, 60);
+        var intake = Intake();
+        var heard = intake.Subscribe();
+
+        Assert.Equal(2, intake.Pass());
+
+        var ids = new List<string?>();
+        while (heard.TryRead(out var n)) { ids.Add(n.ApprovalId); }
+        Assert.Equal(2, ids.Distinct().Count(i => i is not null));
+    }
+
+    [Fact]
+    public void A_replayed_approval_its_session_has_moved_past_arms_nothing()
+    {
+        // A PermissionRequest whose delete failed, handled again after a restart, behind the
+        // PreToolUse that settled it.
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        SpooledAt(Fixture.T0.AddSeconds(10), "0002", "codex", "hook", new { session_id = "x1", hook_event_name = "PreToolUse", tool_name = "shell" }, 60);
+        Intake().Pass();
+        SpooledAt(Fixture.T0, "0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+
+        Assert.Equal(1, Intake().Pass());
+
+        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+        Assert.Equal("working", Registration("agent-bridge-codex", "x1").GetProperty("Status").GetString());
+    }
+
+    [Fact]
+    public void An_approval_whose_answering_hook_failed_to_spool_is_withdrawn_on_the_next_pass()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        var intake = Intake();
+        intake.Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        Assert.True(File.Exists(marker));
+
+        // The heartbeat is fresh, but the PreToolUse could not be spooled.
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "spool not writable", Fixture.T0.AddSeconds(5), 3);
+        intake.Pass();
+
+        Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public void While_the_hook_log_cannot_be_read_no_approval_is_offered()
+    {
+        // Only Windows refuses a reader outright.
+        if (!OperatingSystem.IsWindows()) { return; }
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "spool", null, Fixture.T0.AddSeconds(-5), 3);
+        var intake = Intake();
+
+        using (new FileStream(SpoolContract.LogPath(_f.Runtime), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Equal(1, intake.Pass());
+        }
+
+        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "x1.approval.json")));
+    }
+
+    [Fact]
+    public void Withdrawing_approvals_stops_at_once_when_agent_ha_bridge_starts()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell" }, 60);
+        Intake().Pass();
+        var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
+        SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", Fixture.T0.AddSeconds(5), 3);
+        foreach (var i in _intakes) { i.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        _intakes.Clear();
+        // The pass, then the marker: agent-ha-bridge is running by the second.
+        var checks = 0;
+        var gated = new HookIntake(new HookIntakeOptions
+        {
+            RuntimeRoot = _f.Runtime,
+            ClaudeHome = _f.ClaudeHome,
+            AgentHaBridgeActive = () => ++checks > 1 ? "the daemon started" : null,
+            UseFileSystemWatcher = false,
+        }, _f.Processes, _f.Time, _log.Add);
+        _intakes.Add(gated);
+
+        Assert.Equal(0, gated.Pass());
+
+        Assert.True(File.Exists(marker));
+        Assert.Equal("the daemon started", gated.Paused);
+    }
+
+    [Fact]
+    public void Pruning_stops_at_once_when_agent_ha_bridge_starts()
+    {
+        _f.ClaudeRegistration("dead-old", 31, null);
+        // The pass, the prune, then the first delete: agent-ha-bridge is running by the third.
+        var checks = 0;
+        var gated = new HookIntake(new HookIntakeOptions
+        {
+            RuntimeRoot = _f.Runtime,
+            ClaudeHome = _f.ClaudeHome,
+            AgentHaBridgeActive = () => ++checks > 2 ? "the daemon started" : null,
+            UseFileSystemWatcher = false,
+            PruneInterval = TimeSpan.Zero,
+        }, _f.Processes, _f.Time, _log.Add);
+        _intakes.Add(gated);
+        _f.Time.Advance(TimeSpan.FromHours(6));
+
+        gated.Pass();
+
+        Assert.True(File.Exists(Path.Combine(_f.ClaudeRegistrations, "dead-old.json")));
+        Assert.Equal("the daemon started", gated.Paused);
+    }
+
+    [Fact]
+    public void The_heartbeat_is_kept_fresh_while_a_long_backlog_drains()
+    {
+        Spooled("0001", "copilot", "agent_stop", new { });
+        Spooled("0002", "copilot", "agent_stop", new { });
+        var heartbeat = SpoolContract.HeartbeatPath(_f.Runtime);
+        // Each file takes half a minute; the heartbeat written before the drain goes away.
+        var checks = 0;
+        var slow = new HookIntake(new HookIntakeOptions
+        {
+            RuntimeRoot = _f.Runtime,
+            ClaudeHome = _f.ClaudeHome,
+            AgentHaBridgeActive = () =>
+            {
+                if (++checks > 1)
+                {
+                    _f.Time.Advance(TimeSpan.FromSeconds(30));
+                    File.Delete(heartbeat);
+                }
+                return null;
+            },
+            UseFileSystemWatcher = false,
+            PruneInterval = TimeSpan.FromDays(1),
+        }, _f.Processes, _f.Time, _log.Add);
+        _intakes.Add(slow);
+
+        Assert.Equal(2, slow.Pass());
+
+        Assert.True(File.Exists(heartbeat));
+    }
+
+    [Fact]
+    public void A_deeply_nested_event_a_hook_accepted_is_handled_not_dropped()
+    {
+        var deep = "{}";
+        for (var i = 0; i < 200; i++) { deep = "{\"a\":" + deep + "}"; }
+        Directory.CreateDirectory(Spool);
+        File.WriteAllText(Path.Combine(Spool, "0001.json"), "{\"v\":1,\"agent\":\"copilot\",\"hook\":\"agent_stop\",\"ancestors\":[],\"receivedAt\":\"" + Fixture.T0.ToString("o") + "\",\"event\":" + deep + "}");
+        Assert.True(SpoolContract.IsJson(System.Text.Encoding.UTF8.GetBytes(deep)));
+        var intake = Intake();
+
+        Assert.Equal(1, intake.Pass());
+        Assert.Equal(0, intake.Dropped);
     }
 
     [Fact]

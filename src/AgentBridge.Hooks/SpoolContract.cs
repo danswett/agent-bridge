@@ -32,6 +32,7 @@ public static class SpoolContract
     public const long LogMaxBytes = 1 << 20;
     public const int MaxAncestors = 12;
     public const int MaxEventBytes = 16 << 20;
+    public const int MaxEventDepth = 512;
     public const int Version = 1;
 
     // As Test-BridgeDaemonAlive: a consumer that has not touched the heartbeat for a minute is
@@ -94,7 +95,7 @@ public static class SpoolContract
         if (utf8.IsEmpty) { return false; }
         try
         {
-            var reader = new Utf8JsonReader(utf8, new JsonReaderOptions { CommentHandling = JsonCommentHandling.Disallow, MaxDepth = 512 });
+            var reader = new Utf8JsonReader(utf8, new JsonReaderOptions { CommentHandling = JsonCommentHandling.Disallow, MaxDepth = MaxEventDepth });
             if (!reader.Read()) { return false; }
             reader.Skip();
             return !reader.Read();
@@ -186,7 +187,8 @@ public static class SpoolContract
     {
         try
         {
-            var reader = new Utf8JsonReader(utf8);
+            // Whatever IsJson let a hook spool, plus the envelope around it.
+            var reader = new Utf8JsonReader(utf8, new JsonReaderOptions { MaxDepth = MaxEventDepth + 1 });
             using var doc = JsonDocument.ParseValue(ref reader);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) { return null; }

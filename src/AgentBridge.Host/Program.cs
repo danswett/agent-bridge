@@ -83,7 +83,11 @@ var (settings, settingsProblem) = serveFolder is not null
         ? HostSettings.Load(Path.Combine(Identity.DefaultRoot, Option("--profile") ?? "default"))
         // An invalid profile is refused by the usage command itself, before anything is read.
         : (HostSettings.Default, null);
-var (intakeState, intakeProblem) = serveFolder is not null ? IntakeState.Load(serveFolder) : (null, null);
+// sessions, get, watch and usage read a migrated installation's registrations as serve does, from
+// the same profile; they look for its folder without creating one.
+var profileName = Option("--profile") ?? "default";
+var intakeFolder = serveFolder ?? (Identity.IsValidProfile(profileName) ? Path.Combine(Identity.DefaultRoot, profileName) : null);
+var (intakeState, intakeProblem) = intakeFolder is not null && Directory.Exists(intakeFolder) ? IntakeState.Load(intakeFolder) : (null, null);
 // A migrated installation's registrations are read where its runtime is, wherever that is.
 string[] WithIntake(IReadOnlyList<string> roots, string folder) =>
     intakeState is null ? [.. roots] : [.. roots.Prepend(Path.Combine(intakeState.RuntimeRoot, folder)).Distinct(StringComparer.OrdinalIgnoreCase)];
