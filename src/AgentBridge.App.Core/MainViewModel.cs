@@ -124,6 +124,8 @@ public sealed class MainViewModel : Observable
 
     // Raised on the UI thread when this machine's host says hello or goes.
     public event Action? LocalChanged;
+    // Another machine gone, by its key, after its cards and toasts.
+    public event Action<string>? MachineRemoved;
 
     internal void AttachFleet(Fleet f)
     {
@@ -184,6 +186,7 @@ public sealed class MainViewModel : Observable
             Sessions.Remove(card);
         }
         m.Toasts?.MachineGone();
+        MachineRemoved?.Invoke(key);
         unhook.Remove(m, out var undo);
         undo?.Invoke();
         machines.Remove(m);

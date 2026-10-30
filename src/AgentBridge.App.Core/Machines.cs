@@ -118,9 +118,10 @@ public sealed class Fleet : IAsyncDisposable
             main.Add(m);
             m.Host.Start();
         }
-        // Gone from presence only counts while the relay connection is up to say so, or when
-        // another copy of the app shows the other machines instead: this one shows none.
-        if (link.State is not (FleetState.Connected or FleetState.Elsewhere)) { return; }
+        // Only a relay connection that is down for now keeps every machine as it was. Otherwise the
+        // list is the answer: presence while connected, and none when there is no account to find
+        // them through (signed out, refused) or another copy of the app shows them instead.
+        if (link.State == FleetState.Connecting) { return; }
         foreach (var id in machines.Keys.Where(id => !hosts.ContainsKey(id)).ToList())
         {
             machines.Remove(id, out var gone);
@@ -135,6 +136,35 @@ public sealed class Fleet : IAsyncDisposable
         foreach (var m in machines.Values) { await m.DisposeAsync(); }
         machines.Clear();
         await link.DisposeAsync();
+    }
+}
+
+// When the relay link should look at this machine's host's account again: the host signed in
+// to another account or relay, came back, or finished a sign-in (even to the same account and
+// relay, which is how a person brings the other machines back after another copy of the app
+// took the connection over). A poke only makes the link read the account; it reconnects only if
+// it needs to.
+public sealed class LocalAccountWatch
+{
+    (string?, string?) account;
+    bool up;
+    bool signingIn;
+
+    public LocalAccountWatch(HostStatus? status, bool connected) => (account, up, signingIn) = (Of(status), connected, status?.SignIn.State == SignInState.Pending);
+
+    static (string?, string?) Of(HostStatus? s) => (s?.Account?.AccountId, s?.Relay.Url);
+
+    // On each change of the host connection: whether to poke the link.
+    public bool Next(HostStatus? status, bool connected)
+    {
+        var now = Of(status);
+        var back = !up && connected;
+        var signing = status?.SignIn.State == SignInState.Pending;
+        var signedIn = signingIn && !signing && status?.SignIn.State != SignInState.Failed && status?.Account is not null;
+        (up, signingIn) = (connected, signing);
+        if (now == account && !back && !signedIn) { return false; }
+        account = now;
+        return true;
     }
 }
 

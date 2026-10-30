@@ -132,6 +132,7 @@ public partial class App : Application
         main = self = new MainViewModel(localMachine, new UsageViewModel(), settings);
         settings.PreferencesChanged += () => { foreach (var c in main.AllCards) { c.CapabilitiesChanged(); } };
         responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (machine, id) => ShowWindow(machine, id));
+        main.MachineRemoved += responder.MachineGone;
 
         // The account's other machines, through the relay as a device of the app's own (the
         // demo's is a second pretend host). Remote folds are not kept across restarts.
@@ -251,17 +252,9 @@ public partial class App : Application
             // A sign-in (or a different account) on this machine's host: the app follows it now.
             // The relay too: the same account signed in through another relay moves the app with it.
             // And the host coming back: what it says now is checked against the account in use.
-            var account = (local.Status?.Account?.AccountId, local.Status?.Relay.Url);
-            var up = local.State == LinkState.Connected;
-            local.Changed += () =>
-            {
-                var now = (local.Status?.Account?.AccountId, local.Status?.Relay.Url);
-                var back = !up && local.State == LinkState.Connected;
-                up = local.State == LinkState.Connected;
-                if (now == account && !back) { return; }
-                account = now;
-                link.Poke();
-            };
+            // And a sign-in that finished, even to the same account: see LocalAccountWatch.
+            var watch = new LocalAccountWatch(local.Status, local.State == LinkState.Connected);
+            local.Changed += () => { if (watch.Next(local.Status, local.State == LinkState.Connected)) { link.Poke(); } };
             fleet = new Fleet(link, main, ui, remote);
             fleet.Start();
         });

@@ -129,12 +129,15 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal(["here"], main.Sessions.Select(c => c.Id));
     }
 
-    [Fact]
-    public async Task When_another_copy_of_the_app_shows_the_other_machines_this_one_shows_none()
+    [Theory]
+    [InlineData(FleetState.SignedOut)]
+    [InlineData(FleetState.Refused)]
+    [InlineData(FleetState.Elsewhere)]
+    public async Task Without_an_account_to_find_them_through_or_with_another_copy_showing_them_the_other_machines_go(FleetState state)
     {
         await BothMachinesAsync();
 
-        link.Set(FleetState.Elsewhere);
+        link.Set(state);
 
         await Wait.UntilAsync(() => Card("there") is null, "the other machine's cards to go");
         Assert.Equal(["here"], main.AllCards.Select(c => c.Id));
@@ -213,6 +216,69 @@ public sealed class FleetTests : IAsyncLifetime
         await responder.HandleAsync(button.Replace("remote-id", "gone-id"), new Dictionary<string, string>());
         Assert.Contains("that machine is not connected", shown.Last().Xml);
         Assert.Equal(2, remoteHost.Sent(Ops.SessionAnswer).Count);
+    }
+
+    [Fact]
+    public async Task A_machine_that_leaves_takes_its_answer_outcome_toasts_and_an_answer_on_its_way_there_says_nothing_more()
+    {
+        var release = new ManualResetEventSlim();
+        var calls = 0;
+        remoteHost.On(Ops.SessionAnswer, _ =>
+        {
+            if (Interlocked.Increment(ref calls) > 1) { release.Wait(TimeSpan.FromSeconds(10)); }
+            return new AnswerResult(AnswerOutcome.Delivered);
+        });
+        await BothMachinesAsync();
+        var sink = new Recorder();
+        var responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (_, _) => { }) { MachineWait = TimeSpan.FromSeconds(3), OutcomeWait = TimeSpan.FromSeconds(2) };
+        main.MachineRemoved += responder.MachineGone;
+        var button = "action=answer&machine=remote-id&session=there&question=q1&kind=option&field=answer&value=sqlite";
+        await responder.HandleAsync(button, new Dictionary<string, string>());
+        var outcome = ToastPlanner.OutcomeTag("there", "remote-id");
+        Assert.Equal(outcome, sink.Shown.Last().Tag);
+
+        // A second answer, held at the host, and the machine leaves meanwhile.
+        var held = responder.HandleAsync(button.Replace("q1", "q2"), new Dictionary<string, string>());
+        await Wait.UntilAsync(() => Volatile.Read(ref calls) == 2, "the second answer at the host");
+        link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        await Wait.UntilAsync(() => Card("there") is null, "the machine to go");
+
+        Assert.Contains(outcome, sink.Withdrawn);
+        var before = sink.Shown.Count;
+        await held;
+        release.Set();
+        Assert.Equal(before, sink.Shown.Count);
+    }
+
+    sealed class Recorder : IToastSink
+    {
+        public List<ToastNotice> Shown { get; } = [];
+        public List<string> Withdrawn { get; } = [];
+        public void Show(ToastNotice notice) { lock (Shown) { Shown.Add(notice); } }
+        public void Withdraw(string tag) { lock (Withdrawn) { Withdrawn.Add(tag); } }
+    }
+
+    [Fact]
+    public void This_machines_host_is_asked_for_its_account_again_on_a_switch_a_return_or_a_finished_sign_in()
+    {
+        static HostStatus S(string? account, string relay = "https://relay.example", SignInState signIn = SignInState.Idle) => FakeHost.StatusOf() with
+        {
+            Account = account is null ? null : new HostAccount("octo", account),
+            Relay = new RelayStatus(account is null ? RelayState.SignedOut : RelayState.Connected, relay),
+            SignIn = new SignInStatus(signIn),
+        };
+        var watch = new LocalAccountWatch(S("7"), connected: true);
+
+        Assert.False(watch.Next(S("7"), true));
+        Assert.True(watch.Next(S("8"), true));
+        Assert.True(watch.Next(S("8", "https://other.example"), true));
+        Assert.False(watch.Next(S("8", "https://other.example"), false));
+        Assert.True(watch.Next(S("8", "https://other.example"), true));
+        // Signing in again to the same account and relay: nothing differs but the sign-in ending.
+        Assert.False(watch.Next(S("8", "https://other.example", SignInState.Pending), true));
+        Assert.True(watch.Next(S("8", "https://other.example"), true));
+        Assert.False(watch.Next(S("8", "https://other.example", SignInState.Pending), true));
+        Assert.False(watch.Next(S("8", "https://other.example", SignInState.Failed), true));
     }
 
     [Fact]

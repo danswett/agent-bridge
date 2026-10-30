@@ -82,8 +82,10 @@ cards exactly as on this one's, each going to that card's own host.
 * **Which machines.** Every host in the relay's presence for the account, other than this
   machine's own (its device id is the `machine.id` its hello gives), which the app reaches over
   its pipe. Each gets a connection that subscribes to sessions and usage and reconnects as the
-  pipe's does. A machine that leaves presence goes, with its cards and toasts; while the app's
-  relay connection is down, every machine stays as it was and reconnects when it is back. The
+  pipe's does. A machine that leaves presence goes, with its cards and toasts (answer outcomes
+  too); while the app's relay connection is down, every machine stays as it was and reconnects
+  when it is back. With no account to find them through (this machine's host signed out, or
+  refused), they all go. The
   app serves nothing on the relay: it only opens channels, as the PWA does.
 * **Not the app's management.** Another machine's host is never managed from here: `host.*`
   is the pipe's alone, and a relay channel answers it with `unknown op`.
