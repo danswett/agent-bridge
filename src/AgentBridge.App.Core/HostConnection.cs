@@ -117,9 +117,10 @@ public sealed class HostConnection : IAsyncDisposable
                 var heardStatus = Interlocked.Read(ref statusEvents);
                 var connectionNumber = Interlocked.Increment(ref connections);
                 // Which run of the host this is: what it says itself (hello's instance), else this
-                // machine's by its pid and start, another's by when it joined the relay, else each
-                // connection counts as a new run, which is never wrong, only cautious.
-                var instance = hello.Machine.Instance ?? ch.Instance ?? $"connection {connectionNumber}";
+                // machine's by its pid and start, else each connection counts as a new run, which is
+                // never wrong, only cautious (a lost launch or reply is then not confirmed, never sent
+                // again).
+                var instance = hello.Machine.Instance ?? $"connection {connectionNumber}";
                 if (hello.Capabilities.Contains(HostOps.Capability))
                 {
                     var status = await ch.CallAsync<HostStatus>(HostOps.Subscribe, ct: ct);

@@ -52,6 +52,10 @@ public sealed class LaunchViewModel : Observable
     string? lost;
     // The machine last picked by hand, picked again when it comes back after dropping out.
     string? wanted;
+    // What was picked on each machine, by its key: a machine that drops out for a moment, or is
+    // left for another and picked again, comes back with the choices still offered as they were.
+    readonly Dictionary<string, Picks> picked = new(StringComparer.Ordinal);
+    sealed record Picks(Choice? Resume, Choice? Agent, Choice? Workspace, Choice? Profile, Choice? Model, Choice? Effort, Choice? Context, Choice? Permissions, bool PermissionsSet, string Scope);
     string prompt = "";
     (string Text, Tone Tone)? local;
 
@@ -141,7 +145,11 @@ public sealed class LaunchViewModel : Observable
     public string StatusText { get; private set; } = "";
     public Tone StatusTone { get; private set; }
     public bool CanLaunch => options is not null && !Pending;
-    public bool ShowResend => lost is null && last?.State == DeliveryState.Failed && lastMachine is { } m && main.AllMachines.Contains(m);
+    // Try again: a launch that could not be sent goes again with the same request; one the machine
+    // reports failed (the agent did not start) goes as a new one, since the machine keeps the
+    // failure as that request's outcome.
+    public bool ShowResend => lost is null && (last?.State == DeliveryState.Failed || last is { State: DeliveryState.Done } d && OutcomeOf(d) == "failed")
+        && lastMachine is { } m && main.AllMachines.Contains(m);
     public bool ShowOpen => lost is null && last is { State: DeliveryState.Done } e && Result(e)?.Session is not null;
     // What the last launch came to, for tests and the self-test: none, sending, waiting, failed or its outcome.
     public string State => lost is not null ? "unconfirmed" : last is not { } e ? "none" : e.State != DeliveryState.Done ? e.State.ToString().ToLowerInvariant() : OutcomeOf(e);
@@ -170,10 +178,11 @@ public sealed class LaunchViewModel : Observable
             // An outcome already in, whose notice is still on its way, is handled before letting go.
             // One still on its way leaves with the machine (one that comes back is a new one, with no
             // memory of it), and the session may have started.
-            if (m == lastMachine && lost is null && m.Deliveries.Get(Key) is { } final && final.Request == last?.Request)
+            if (m == lastMachine && lost is null && last is not null)
             {
-                if (final.State == DeliveryState.Done) { OnDelivery(m, final); }
-                else if (final.State is DeliveryState.Sending or DeliveryState.Waiting)
+                // Done or failed: shown as it ended, so the page is not left waiting on it.
+                if (m.Deliveries.Get(Key) is { State: DeliveryState.Done or DeliveryState.Failed } final && final.Request == last.Request) { OnDelivery(m, final); }
+                else if (Pending)
                 {
                     lost = $"Not confirmed: {m.Name} left before saying whether the launch started. Check at that machine before launching again.";
                 }
@@ -205,16 +214,29 @@ public sealed class LaunchViewModel : Observable
 
     void Target(Machine? next)
     {
+        if (machine is { } was && options is not null)
+        {
+            picked[was.Key] = new Picks(resume, agent, workspace, profile, model, effort, context, permissions, permissionsSet, scope);
+        }
         machine = next;
         options = null;
         error = null;
         local = null;
-        scope = "";
-        permissionsSet = false;
         loads++;
         loading = false;
         // Another machine's choices: nothing picked on the last one carries over but the prompt.
-        resume = agent = workspace = profile = model = effort = context = permissions = null;
+        // What was picked on this one before is kept, for as far as it is still offered (Draw).
+        if (next is not null && picked.TryGetValue(next.Key, out var p))
+        {
+            (resume, agent, workspace, profile, model, effort, context, permissions, permissionsSet, scope) =
+                (p.Resume, p.Agent, p.Workspace, p.Profile, p.Model, p.Effort, p.Context, p.Permissions, p.PermissionsSet, p.Scope);
+        }
+        else
+        {
+            resume = agent = workspace = profile = model = effort = context = permissions = null;
+            permissionsSet = false;
+            scope = "";
+        }
         Raise(nameof(Title));
         Draw();
         Show();
@@ -394,15 +416,24 @@ public sealed class LaunchViewModel : Observable
         last = null;
         // No request is ever replayed to a host that restarted meanwhile: it remembers requests in
         // memory only, so a second copy could start a second session.
-        last = m.Deliveries.Submit(Key, LaunchProtocol.Launch, request => launch with { Request = request }, _ => false, payload: launch, replayAfterRestart: false, timeout: LaunchTimeout, resendOnBusy: false);
+        Submit(m, launch);
+    }
+
+    void Submit(Machine m, LaunchRequest launch)
+    {
+        var sent = m.Deliveries.Submit(Key, LaunchProtocol.Launch, request => launch with { Request = request }, _ => false, payload: launch, replayAfterRestart: false, timeout: LaunchTimeout, resendOnBusy: false);
+        // Submit returns its first snapshot; the delivery may already have moved on (no connection:
+        // waiting), and that newer state is the one to show.
+        last = m.Deliveries.Get(Key) is { } now && now.Request == sent.Request ? now : sent;
         Show();
     }
 
     public void Resend()
     {
-        if (!ShowResend || lastMachine is not { } m || last is not { Payload: LaunchRequest launch }) { return; }
+        if (!ShowResend || lastMachine is not { } m || last is not { Payload: LaunchRequest launch } e) { return; }
         local = null;
-        m.Deliveries.Resend(Key, LaunchProtocol.Launch, request => launch with { Request = request });
+        if (e.State == DeliveryState.Done) { Submit(m, launch); }
+        else { m.Deliveries.Resend(Key, LaunchProtocol.Launch, request => launch with { Request = request }); }
     }
 
     // The new session's card, which may arrive after the outcome.
@@ -461,7 +492,7 @@ public sealed class LaunchViewModel : Observable
             case DeliveryState.Waiting:
                 return ($"Waiting for the connection to the machine{on}. The launch goes as soon as it is back.", Tone.Progress);
             case DeliveryState.Failed:
-                return ($"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad);
+                return ($"Couldn't send it{on}: {e.Reason ?? "the machine said no"}.", Tone.Bad);
         }
         var how = Result(e)?.Launched?.Worktree == true ? " in a new worktree" : "";
         return OutcomeOf(e) switch

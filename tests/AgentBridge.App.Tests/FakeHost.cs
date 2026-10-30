@@ -134,6 +134,33 @@ sealed class LockedDispatcher : IUiDispatcher
     public void Post(Action action) { lock (gate) { action(); } }
 }
 
+// Runs each post at once, as LockedDispatcher does, except while held: then they wait, as they
+// would in a busy UI thread's queue, until released.
+sealed class HoldingDispatcher : IUiDispatcher
+{
+    readonly object gate = new();
+    readonly Queue<Action> held = new();
+    bool holding;
+
+    public void Hold() { lock (gate) { holding = true; } }
+
+    public void Release()
+    {
+        List<Action> queued;
+        lock (gate) { holding = false; queued = [.. held]; held.Clear(); }
+        foreach (var a in queued) { Post(a); }
+    }
+
+    public void Post(Action action)
+    {
+        lock (gate)
+        {
+            if (holding) { held.Enqueue(action); return; }
+            action();
+        }
+    }
+}
+
 static class Wait
 {
     public static async Task UntilAsync(Func<bool> done, string what, TimeSpan? patience = null)

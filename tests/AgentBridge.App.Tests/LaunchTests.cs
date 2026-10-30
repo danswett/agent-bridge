@@ -9,7 +9,7 @@ using Xunit;
 public sealed class LaunchTests : IAsyncLifetime
 {
     readonly FakeHost host = new();
-    readonly LockedDispatcher ui = new();
+    readonly HoldingDispatcher ui = new();
     readonly List<JsonElement> launched = [];
     HostConnection connection = null!;
     MainViewModel main = null!;
@@ -148,7 +148,8 @@ public sealed class LaunchTests : IAsyncLifetime
         var first = true;
         outcome = _ =>
         {
-            if (first) { first = false; gate.SetResult(); Thread.Sleep(200); }
+            // Held until the pipe has closed, so this first outcome is surely lost.
+            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => host.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
             return new LaunchResult(LaunchOutcome.Started) { Session = "new-1" };
         };
         ui.Post(launch.Launch);
@@ -169,7 +170,7 @@ public sealed class LaunchTests : IAsyncLifetime
         var first = true;
         outcome = _ =>
         {
-            if (first) { first = false; gate.SetResult(); Thread.Sleep(200); return new LaunchResult(LaunchOutcome.Started) { Session = "never-seen" }; }
+            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => host.Channels.All(c => !c.IsOpen), FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "never-seen" }; }
             return new LaunchResult(LaunchOutcome.Busy, "Busy: Copilot in bridge is waiting for a person to answer whether to trust that folder");
         };
         ui.Post(launch.Launch);
@@ -244,6 +245,86 @@ public sealed class LaunchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_launch_the_machine_reports_failed_can_be_tried_again_as_a_new_request()
+    {
+        outcome = _ => new LaunchResult(LaunchOutcome.Failed, "the agent process exited at once");
+        ui.Post(launch.Launch);
+        await Wait.UntilAsync(() => launch.State == "failed", "failed");
+        Assert.True(launch.ShowResend);
+
+        outcome = _ => new LaunchResult(LaunchOutcome.Started) { Session = "new-1" };
+        ui.Post(launch.Resend);
+
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        var requests = Sent().Select(s => s.GetProperty("request").GetString()).ToList();
+        Assert.Equal(2, requests.Distinct().Count());
+    }
+
+    [Fact]
+    public async Task Try_again_after_a_host_error_never_sends_the_launch_to_a_host_that_restarted_since()
+    {
+        outcome = _ => throw new InvalidOperationException("the launcher could not be found");
+        ui.Post(launch.Launch);
+        await Wait.UntilAsync(() => launch.ShowResend, "the failure");
+        // The host may have started something before it failed; a new process would not know.
+        await host.StopAsync();
+        host.Status = FakeHost.StatusOf() with { ProcessId = 4343 };
+        host.Start();
+        await Wait.UntilAsync(() => connection.HostInstance?.StartsWith("4343@", StringComparison.Ordinal) == true && launch.ShowResend, "the restarted host");
+
+        ui.Post(launch.Resend);
+
+        await Wait.UntilAsync(() => launch.State == "unconfirmed", "unconfirmed");
+        Assert.Single(Sent());
+    }
+
+    [Fact]
+    public async Task A_launch_pressed_as_the_connection_drops_says_it_is_waiting_for_it()
+    {
+        // The page has not heard yet that the host went.
+        ui.Hold();
+        await host.StopAsync();
+        await Wait.UntilAsync(() => host.Channels.All(c => !c.IsOpen), "the pipe to close");
+
+        launch.Launch();
+
+        Assert.Equal("waiting", launch.State);
+        Assert.StartsWith("Waiting for the connection", launch.StatusText);
+        ui.Release();
+    }
+
+    [Fact]
+    public async Task A_profile_and_context_go_as_picked_and_start_again_from_defaults_for_another_agent()
+    {
+        options = options with
+        {
+            Agents =
+            [
+                new LaunchAgent { Id = "copilot", Label = "Copilot", Kind = AgentKind.Copilot, Profiles = ["work", "home"], Contexts = ["200k", "1m"], Defaults = new LaunchTuning { Profile = "home" } },
+                new LaunchAgent { Id = "claude", Label = "Claude", Kind = AgentKind.Claude, Contexts = ["1m"] },
+            ],
+        };
+        await launch.RefreshAsync();
+        Assert.True(launch.ShowProfile && launch.ShowContext);
+        Assert.Equal("home", launch.Profile!.Value);
+
+        ui.Post(() => { launch.Profile = Pick(launch.Profiles, "work"); launch.Context = Pick(launch.Contexts, "1m"); });
+        // Another agent: no profiles, its own contexts from its default; and back, from Copilot's defaults.
+        ui.Post(() => launch.Agent = Pick(launch.Agents, "claude"));
+        Assert.False(launch.ShowProfile);
+        Assert.Equal("", launch.Context!.Value);
+        Assert.Null(launch.Settings().Profile);
+        ui.Post(() => launch.Agent = Pick(launch.Agents, "copilot"));
+        Assert.Equal(("home", ""), (launch.Profile!.Value, launch.Context!.Value));
+
+        ui.Post(() => { launch.Profile = Pick(launch.Profiles, "work"); launch.Context = Pick(launch.Contexts, "200k"); launch.Launch(); });
+
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        var sent = Assert.Single(Sent());
+        Assert.Equal(("copilot", "work", "200k"), (sent.GetProperty("agent").GetString(), sent.GetProperty("profile").GetString(), sent.GetProperty("context").GetString()));
+    }
+
+    [Fact]
     public async Task A_machine_with_no_approved_folder_says_how_to_approve_one_at_the_machine()
     {
         options = options with { Workspaces = [], Resumable = [] };
@@ -284,6 +365,8 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     readonly FakeHost localHost = new();
     readonly FakeHost remoteHost = new();
     readonly LockedDispatcher ui = new();
+    // The other machine's deliveries' notices, which a test can hold as a busy UI thread would.
+    readonly HoldingDispatcher remoteUi = new();
     readonly FleetTests.FakeFleetLink link = new();
     HostConnection local = null!;
     MainViewModel main = null!;
@@ -297,7 +380,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
             h.On(LaunchProtocol.Options, _ => new LaunchOptions
             {
                 Agents = [new LaunchAgent { Id = "claude", Label = "Claude", Kind = AgentKind.Claude }],
-                Workspaces = [new LaunchWorkspace { Label = label, Path = $"/{label}" }],
+                Workspaces = [new LaunchWorkspace { Label = label, Path = $"/{label}" }, new LaunchWorkspace { Label = $"{label}-2", Path = $"/{label}-2" }],
                 Defaults = new LaunchDefaults { Agent = "claude", Workspace = label, Permissions = LaunchProtocol.Ask },
             });
             h.On(LaunchProtocol.Launch, _ => new LaunchResult(LaunchOutcome.Started) { Session = $"{label}-new" });
@@ -310,12 +393,12 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         local = localHost.Connect(ui);
         await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
         main = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel());
-        fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100) }));
+        fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100) }, remoteUi));
         link.Set(FleetState.Connected, ("remote-id", "Build server"));
     }
 
-    Machine Build(string key, HostConnection c) =>
-        new(key, c, new CardContext { Deliveries = new Deliveries(c, ui), Folds = new FoldStore(null), Capabilities = () => c.Capabilities, Host = c });
+    Machine Build(string key, HostConnection c, IUiDispatcher? deliveries = null) =>
+        new(key, c, new CardContext { Deliveries = new Deliveries(c, deliveries ?? ui), Folds = new FoldStore(null), Capabilities = () => c.Capabilities, Host = c });
 
     public async Task DisposeAsync()
     {
@@ -366,6 +449,45 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         Assert.Equal("", launch.Prompt);
         // What became of it is shown whichever machine is picked now.
         Assert.Equal("Session started.", launch.StatusText);
+    }
+
+    [Fact]
+    public async Task A_launch_that_failed_just_before_its_machine_left_says_so_and_another_can_go()
+    {
+        remoteHost.On(LaunchProtocol.Launch, _ => throw new InvalidOperationException("the launcher could not be found"));
+        var launch = new LaunchViewModel(main, ui);
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
+        // Its notices wait in the queue: the failure is in before the page hears of it.
+        remoteUi.Hold();
+        var remote = main.MachineOf("remote-id")!;
+        ui.Post(launch.Launch);
+        await Wait.UntilAsync(() => remote.Deliveries.Get("launch")?.State == DeliveryState.Failed, "the failure");
+
+        link.Set(FleetState.Connected);
+
+        await Wait.UntilAsync(() => launch.State == "failed", "the failure shown");
+        Assert.StartsWith("Couldn't send it on Build server: ", launch.StatusText);
+        await Wait.UntilAsync(() => launch.CanLaunch, "another launch to be possible");
+        remoteUi.Release();
+    }
+
+    [Fact]
+    public async Task A_machine_that_drops_out_for_a_moment_comes_back_with_what_was_picked_on_it()
+    {
+        var launch = new LaunchViewModel(main, ui);
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
+        ui.Post(() => { launch.Workspace = launch.Workspaces.Single(w => w.Value == "there-2"); launch.Permissions = launch.PermissionChoices.Single(c => c.Value == LaunchProtocol.AllowAll); });
+
+        link.Set(FleetState.Connected);
+        await Wait.UntilAsync(() => launch.Machines.Count == 1, "the machine to leave");
+        link.Set(FleetState.Connected, ("remote-id", "Build server"));
+
+        await Wait.UntilAsync(() => launch.SelectedMachine?.Value == "remote-id" && launch.ShowForm, "the machine to come back");
+        Assert.Equal(("there-2", LaunchProtocol.AllowAll), (launch.Workspace!.Value, launch.Permissions!.Value));
     }
 
     [Fact]

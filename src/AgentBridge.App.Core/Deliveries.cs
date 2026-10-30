@@ -29,6 +29,9 @@ public sealed record Delivery
     // Whether busy on a resend is the first copy still being delivered (answers, replies) rather
     // than an outcome of its own (a launch: the host answers a resend with the first's result).
     public bool ResendOnBusy { get; init; } = true;
+    // The host process the op last went to, kept with the entry so a Try again after a failure
+    // goes only to that process too, for an op never replayed after a restart.
+    public string? SentTo { get; init; }
 }
 
 // Sends answers, replies and stops (session.answer, session.reply, session.stop), each to
@@ -105,8 +108,9 @@ public sealed class Deliveries
         var started = time.GetUtcNow();
         var busy = 0;
         var attempts = entry.Attempts;
-        // The host the op itself last went to, if it went: files sent ahead are not the op.
-        string? sentTo = null;
+        // The host the op itself last went to, if it went: files sent ahead are not the op. Carried
+        // over from an earlier run of this request (a resend after it failed).
+        var sentTo = entry.SentTo;
         while (true)
         {
             if (time.GetUtcNow() - started > GiveUp)
@@ -127,7 +131,7 @@ public sealed class Deliveries
                 // after a restart waits until that host is known, and goes again only to the same one.
                 var call = host.CallAsync(op, data(entry.Request), entry.Timeout, knownHost: !entry.ReplayAfterRestart,
                     onlyTo: entry.ReplayAfterRestart ? null : sentTo, out var to);
-                sentTo = to;
+                if (to != sentTo) { sentTo = to; Update(entry.Key, e => e with { SentTo = to }); }
                 result = await call;
             }
             catch (HostRestartedException)

@@ -13,9 +13,6 @@ public interface IClientChannel : IProtocolChannel, IAsyncDisposable
     ChannelReader<ChannelEvent> Events { get; }
     Exception? CloseReason { get; }
     Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default);
-    // Which host process this reaches, when the carrier knows: another machine's host by when it
-    // joined the relay. Null over the pipe, where the host says so itself (host.subscribe).
-    string? Instance => null;
 }
 
 // A channel this device opened through the relay, as a client holds it: disposing it closes
@@ -23,7 +20,6 @@ public interface IClientChannel : IProtocolChannel, IAsyncDisposable
 public sealed class RelayClientChannel(ChannelHub hub, SecureChannel channel) : IClientChannel
 {
     public SecureChannel Channel => channel;
-    public string? Instance { get; init; }
     public string PeerId => channel.PeerId;
     public string PeerName => channel.PeerName;
     public string PeerKind => channel.PeerKind;

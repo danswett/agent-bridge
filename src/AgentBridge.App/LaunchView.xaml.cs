@@ -16,9 +16,18 @@ public sealed partial class LaunchView : UserControl
         get => viewModel!;
         set
         {
+            if (viewModel is not null) { viewModel.PropertyChanged -= OnChanged; }
             viewModel = value;
+            viewModel.PropertyChanged += OnChanged;
             Bindings.Update();
         }
+    }
+
+    // A launch's progress and outcome come long after the press: a screen reader hears each one.
+    void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(LaunchViewModel.StatusText) || string.IsNullOrEmpty(viewModel?.StatusText)) { return; }
+        DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.FromElement(StatusLine)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
     }
 
     public static Brush NoteBrush(bool warns) => warns ? Ui.Brush("AbWarningText") : Ui.Brush("AbMuted");

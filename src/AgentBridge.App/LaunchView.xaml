@@ -90,25 +90,29 @@
                         Text="{x:Bind ViewModel.CountText, Mode=OneWay}"
                         Foreground="{x:Bind local:LaunchView.NoteBrush(ViewModel.CountTooLong), Mode=OneWay}"
                         Visibility="{x:Bind local:Ui.Some(ViewModel.CountText), Mode=OneWay}" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button
-                            Style="{StaticResource AccentButtonStyle}" Content="Launch"
-                            AutomationProperties.AutomationId="LaunchButton"
-                            IsEnabled="{x:Bind ViewModel.CanLaunch, Mode=OneWay}" Click="OnLaunch" />
-                        <Button
-                            Content="Try again" AutomationProperties.AutomationId="LaunchResend"
-                            Visibility="{x:Bind local:Ui.Show(ViewModel.ShowResend), Mode=OneWay}" Click="OnResend" />
-                        <Button
-                            Content="Open session" AutomationProperties.AutomationId="LaunchOpen"
-                            Visibility="{x:Bind local:Ui.Show(ViewModel.ShowOpen), Mode=OneWay}" Click="OnOpen" />
-                    </StackPanel>
+                    <Button
+                        Style="{StaticResource AccentButtonStyle}" Content="Launch"
+                        AutomationProperties.AutomationId="LaunchButton"
+                        IsEnabled="{x:Bind ViewModel.CanLaunch, Mode=OneWay}" Click="OnLaunch" />
                 </StackPanel>
+                <!-- The last launch's outcome and what can be done about it: outside the form, which a
+                     failed reload of the choices hides. Announced as it changes. -->
                 <TextBlock
+                    x:Name="StatusLine"
                     AutomationProperties.AutomationId="LaunchStatus"
+                    AutomationProperties.LiveSetting="Polite"
                     TextWrapping="Wrap" IsTextSelectionEnabled="True"
                     Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
                     Foreground="{x:Bind local:Ui.ToneBrush(ViewModel.StatusTone), Mode=OneWay}"
                     Visibility="{x:Bind local:Ui.Some(ViewModel.StatusText), Mode=OneWay}" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button
+                        Content="Try again" AutomationProperties.AutomationId="LaunchResend"
+                        Visibility="{x:Bind local:Ui.Show(ViewModel.ShowResend), Mode=OneWay}" Click="OnResend" />
+                    <Button
+                        Content="Open session" AutomationProperties.AutomationId="LaunchOpen"
+                        Visibility="{x:Bind local:Ui.Show(ViewModel.ShowOpen), Mode=OneWay}" Click="OnOpen" />
+                </StackPanel>
                 <Button
                     Content="Reload choices" AutomationProperties.AutomationId="LaunchReload"
                     IsEnabled="{x:Bind ViewModel.CanReload, Mode=OneWay}"

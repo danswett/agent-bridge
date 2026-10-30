@@ -271,6 +271,39 @@ public sealed class ConnectionTests : IAsyncLifetime
         }
     }
 
+    // An older host over the relay: no host.manage and no instance in its hello, so nothing names
+    // its run. Each connection counts as a new one: a lost reply is not confirmed, never sent again,
+    // even when it was the same process all along.
+    [Fact]
+    public async Task A_host_that_names_no_run_gets_a_lost_reply_only_once()
+    {
+        await using var remote = new FakeHost();
+        remote.Capabilities.Remove(HostOps.Capability);
+        remote.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "linux", "0.1.0"), [.. remote.Capabilities]));
+        remote.Sessions.Add(Make.Session("s1"));
+        remote.Start();
+        await using var link = remote.Connect();
+        await Wait.UntilAsync(() => link.State == LinkState.Connected && link.HostInstance is not null, "connected");
+        Assert.StartsWith("connection ", link.HostInstance);
+        var first = true;
+        var gate = new TaskCompletionSource();
+        remote.On(Ops.SessionReply, data =>
+        {
+            if (first) { first = false; gate.SetResult(); SpinWait.SpinUntil(() => remote.Channels.All(c => !c.IsOpen), FakeHost.Patience); }
+            return new ReplyResult(AnswerOutcome.Delivered);
+        });
+        var deliveries = new Deliveries(link, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+
+        var entry = deliveries.Submit("reply|s1", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, replayAfterRestart: false);
+        await gate.Task.WaitAsync(FakeHost.Patience);
+        await remote.StopAsync();
+        remote.Start();
+
+        await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Done, "an outcome");
+        Assert.Equal("unconfirmed", deliveries.Get(entry.Key)!.Outcome);
+        Assert.Single(remote.Sent(Ops.SessionReply));
+    }
+
     [Fact]
     public async Task A_busy_that_answers_our_own_resend_is_waited_out_and_never_shown()
     {
