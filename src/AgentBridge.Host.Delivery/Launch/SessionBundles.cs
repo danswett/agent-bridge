@@ -151,6 +151,13 @@ public static class SessionBundles
             {
                 throw new InvalidOperationException(Changed);
             }
+            // And the same files: one added since the walk (a saved file the transcript now mentions)
+            // would be missing from the bundle with every witness still matching.
+            var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            if (Find(kind, homes, id) is not { } again || !again.Files.ToHashSet(comparer).SetEquals(spec.Files))
+            {
+                throw new InvalidOperationException(Changed);
+            }
             byte[] sha;
             long bytes;
             cancellationToken.ThrowIfCancellationRequested();

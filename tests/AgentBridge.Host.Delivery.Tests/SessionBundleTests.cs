@@ -303,6 +303,22 @@ public sealed class SessionBundleTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(session, "files", Id)));
     }
     [Fact]
+    public void A_file_added_while_the_session_is_packed_refuses_the_bundle()
+    {
+        var dir = CopilotSession();
+        SessionBundles.BeforeOpen = file =>
+        {
+            if (Path.GetFileName(file) == "events.jsonl") { File.WriteAllText(Path.Combine(dir, "files", "plan.md"), "added after the walk"); }
+        };
+        try
+        {
+            Assert.Equal("that session changed while it was being packed; it is probably open somewhere",
+                Assert.Throws<InvalidOperationException>(() => SessionBundles.Pack(AgentKind.Copilot, source, Id, Zip, long.MaxValue)).Message);
+        }
+        finally { SessionBundles.BeforeOpen = null; }
+        Assert.False(File.Exists(Zip));
+    }
+    [Fact]
     public void Packing_stops_when_its_deadline_passes_and_leaves_no_bundle()
     {
         CopilotSession();
