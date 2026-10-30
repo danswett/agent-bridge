@@ -15,7 +15,7 @@ public sealed class LaunchTests : IAsyncLifetime
     MainViewModel main = null!;
     LaunchViewModel launch = null!;
     LaunchOptions options = Options();
-    Func<JsonElement, LaunchResult> outcome = r => new LaunchResult(LaunchOutcome.Started) { Session = "new-1", Launched = new LaunchedWith { Agent = "copilot", Permissions = "ask", Worktree = true } };
+    Func<JsonElement, object> outcome = r => new LaunchResult(LaunchOutcome.Started) { Session = "new-1", Launched = new LaunchedWith { Agent = "copilot", Permissions = "ask", Worktree = true } };
     int optionsAsked;
 
     static LaunchOptions Options() => new()
@@ -163,6 +163,59 @@ public sealed class LaunchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_resent_launch_that_comes_back_busy_was_not_launched_and_says_so()
+    {
+        var gate = new TaskCompletionSource();
+        var first = true;
+        outcome = _ =>
+        {
+            if (first) { first = false; gate.SetResult(); Thread.Sleep(200); return new LaunchResult(LaunchOutcome.Started) { Session = "never-seen" }; }
+            return new LaunchResult(LaunchOutcome.Busy, "Busy: Copilot in bridge is waiting for a person to answer whether to trust that folder");
+        };
+        ui.Post(launch.Launch);
+        await gate.Task.WaitAsync(FakeHost.Patience);
+        await host.StopAsync();
+        host.Start();
+
+        await Wait.UntilAsync(() => launch.State == "busy", "busy");
+        Assert.Equal(2, Sent().Length);
+    }
+
+    [Fact]
+    public async Task An_outcome_this_app_does_not_know_reads_as_unconfirmed()
+    {
+        outcome = _ => new { outcome = "queued" };
+        ui.Post(launch.Launch);
+
+        await Wait.UntilAsync(() => launch.State == "unconfirmed", "unconfirmed");
+        Assert.Equal("Launched, but not confirmed. Check at the machine.", launch.StatusText);
+    }
+
+    [Fact]
+    public async Task A_prompt_typed_while_a_launch_is_on_its_way_is_kept_when_it_starts()
+    {
+        var gate = new TaskCompletionSource();
+        outcome = _ => { gate.Task.Wait(FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "new-1" }; };
+        ui.Post(() => { launch.Prompt = "First."; launch.Launch(); });
+        await Wait.UntilAsync(() => Sent().Length == 1, "the launch to go");
+
+        ui.Post(() => launch.Prompt = "Next.");
+        gate.SetResult();
+
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        Assert.Equal("Next.", launch.Prompt);
+    }
+
+    [Fact]
+    public void A_prompt_too_long_once_sent_is_not_launched()
+    {
+        ui.Post(() => { launch.Prompt = new string('\\', 11000); launch.Launch(); });
+
+        Assert.StartsWith("Not launched: the prompt is too long once sent", launch.StatusText);
+        Assert.Empty(Sent());
+    }
+
+    [Fact]
     public async Task A_machine_with_no_approved_folder_says_how_to_approve_one_at_the_machine()
     {
         options = options with { Workspaces = [], Resumable = [] };
@@ -260,5 +313,28 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         await Wait.UntilAsync(() => launch.State == "started", "started");
         Assert.Equal("there", Assert.Single(remoteHost.Sent(LaunchProtocol.Launch)).GetProperty("workspace").GetString());
         Assert.Empty(localHost.Sent(LaunchProtocol.Launch));
+    }
+
+    [Fact]
+    public async Task A_launch_still_opens_its_session_after_switching_to_another_machine()
+    {
+        var gate = new TaskCompletionSource();
+        remoteHost.On(LaunchProtocol.Launch, _ => { gate.Task.Wait(FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "there-new" }; });
+        var opened = new List<string>();
+        main.OpenRequested += c => opened.Add(c.Id);
+        var launch = new LaunchViewModel(main, ui);
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
+        ui.Post(() => { launch.Prompt = "Go."; launch.Launch(); });
+        await Wait.UntilAsync(() => remoteHost.Sent(LaunchProtocol.Launch).Count == 1, "the launch to go");
+
+        ui.Post(() => launch.SelectedMachine = launch.Machines[0]);
+        await Wait.UntilAsync(() => launch.Workspace?.Value == "here", "this machine's choices");
+        gate.SetResult();
+        await remoteHost.SendAsync(Events.SessionUpsert, Make.Session("there-new", updated: Make.T0.AddMinutes(10)));
+
+        await Wait.UntilAsync(() => opened.Contains("there-new"), "the other machine's new session to open");
+        Assert.Equal("", launch.Prompt);
     }
 }

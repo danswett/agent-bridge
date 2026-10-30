@@ -460,6 +460,9 @@ public sealed class RelayFleetLinkTests
 
         Assert.Equal("Build server", link.Hosts.Single().Name);
         await using var ch = await link.OpenAsync(host.Id, default);
+        // The host process it reaches: when that host joined the relay, the same for every channel to it.
+        Assert.StartsWith($"{host.Id}@", ch.Instance);
+        await using (var again = await link.OpenAsync(host.Id, default)) { Assert.Equal(ch.Instance, again.Instance); }
         var hello = await ch.HelloAsync();
         Assert.Equal("Build server", hello.Machine.Name);
         await Wait.UntilAsync(() => host.Relay.Presence.Any(p => p.Id == link.DeviceId), "the app in the host's presence", Patience);

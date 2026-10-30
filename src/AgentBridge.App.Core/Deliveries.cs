@@ -26,6 +26,9 @@ public sealed record Delivery
     public bool ReplayAfterRestart { get; init; } = true;
     // How long one attempt waits for the host's outcome: a launch waits for its session to start.
     public TimeSpan Timeout { get; init; } = Deliveries.DefaultTimeout;
+    // Whether busy on a resend is the first copy still being delivered (answers, replies) rather
+    // than an outcome of its own (a launch: the host answers a resend with the first's result).
+    public bool ResendOnBusy { get; init; } = true;
 }
 
 // Sends answers, replies and stops (session.answer, session.reply, session.stop), each to
@@ -71,7 +74,7 @@ public sealed class Deliveries
     // stands, so doing it again sends nothing. before: work on the connection ahead of the op
     // (a reply's files), given a progress callback.
     public Delivery Submit(string key, string op, Func<string, object> data, Func<string, bool> final, object? payload = null,
-        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true, TimeSpan? timeout = null)
+        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true, TimeSpan? timeout = null, bool resendOnBusy = true)
     {
         Delivery entry;
         lock (gate)
@@ -81,7 +84,7 @@ public sealed class Deliveries
             {
                 return existing;
             }
-            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout };
+            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy };
         }
         Publish(entry);
         _ = RunAsync(entry, op, data, before, resend: false);
@@ -120,8 +123,9 @@ public sealed class Deliveries
                 {
                     await before((o, d, t) => host.CallAsync(o, d, t), (sent, total) => Update(entry.Key, e => e with { Progress = (sent, total) }));
                 }
-                var to = host.HostInstance;
-                var call = host.CallAsync(op, data(entry.Request), entry.Timeout);
+                // Which host it went to is read with the connection it goes on, and an op never
+                // replayed after a restart waits until that host is known.
+                var call = host.CallAsync(op, data(entry.Request), entry.Timeout, knownHost: !entry.ReplayAfterRestart, out var to);
                 sentTo = to;
                 result = await call;
             }
@@ -151,7 +155,7 @@ public sealed class Deliveries
             var reason = result.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
             // A resend can reach the host while it still delivers the first copy, which says
             // busy: that busy is our own, so ask again with the same request, a few times.
-            if (outcome == "busy" && (attempts > 1 || resend))
+            if (outcome == "busy" && entry.ResendOnBusy && (attempts > 1 || resend))
             {
                 if (++busy > MaxBusyResends)
                 {

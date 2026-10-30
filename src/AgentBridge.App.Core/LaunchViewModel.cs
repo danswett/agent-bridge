@@ -25,7 +25,9 @@ public sealed class LaunchViewModel : Observable
     // A launch waits for its session to register (60 s on the host) and, for Copilot, for its
     // window to be ready, as the PWA's launch does.
     static readonly TimeSpan LaunchTimeout = TimeSpan.FromSeconds(120);
-    static readonly TimeSpan OptionsTimeout = TimeSpan.FromSeconds(15);
+    // launch.options can take a minute on a slow machine: Agency's profiles are two commands of up
+    // to 20 s each, and listing resumable sessions another 20 s.
+    static readonly TimeSpan OptionsTimeout = TimeSpan.FromSeconds(90);
 
     readonly MainViewModel main;
     readonly IUiDispatcher ui;
@@ -38,6 +40,9 @@ public sealed class LaunchViewModel : Observable
     string scope = "";
     bool permissionsSet;
     string? handled;
+    // Every machine's launches are followed, not only the one on screen: one pressed before
+    // switching machines still opens its session when it starts.
+    readonly Dictionary<Machine, Action<Delivery>> watching = [];
     string prompt = "";
     (string Text, Tone Tone)? local;
 
@@ -129,7 +134,7 @@ public sealed class LaunchViewModel : Observable
     public bool ShowResend => Entry?.State == DeliveryState.Failed;
     public bool ShowOpen => Entry is { State: DeliveryState.Done } e && Result(e)?.Session is not null;
     // What the last launch came to, for tests and the self-test: none, sending, waiting, failed or its outcome.
-    public string State => Entry is not { } e ? "none" : e.State != DeliveryState.Done ? e.State.ToString().ToLowerInvariant() : e.Outcome ?? "unconfirmed";
+    public string State => Entry is not { } e ? "none" : e.State != DeliveryState.Done ? e.State.ToString().ToLowerInvariant() : OutcomeOf(e);
 
     Delivery? Entry => machine?.Deliveries.Get(Key);
     bool Pending => Entry?.State is DeliveryState.Sending or DeliveryState.Waiting;
@@ -145,6 +150,17 @@ public sealed class LaunchViewModel : Observable
 
     void MachinesUpdated()
     {
+        foreach (var m in main.AllMachines.Where(m => !watching.ContainsKey(m)).ToList())
+        {
+            void Watch(Delivery d) => OnDelivery(m, d);
+            watching[m] = Watch;
+            m.Deliveries.Changed += Watch;
+        }
+        foreach (var (m, watch) in watching.Where(p => !main.AllMachines.Contains(p.Key)).ToList())
+        {
+            m.Deliveries.Changed -= watch;
+            watching.Remove(m);
+        }
         var list = main.AllMachines.Where(m => m.Host.Can(LaunchProtocol.Capability))
             .OrderBy(m => m.IsLocal ? 0 : 1)
             .Select(m => new Choice(m.Key, m.IsLocal ? $"{m.Name} (this machine)" : m.Name)).ToList();
@@ -164,7 +180,6 @@ public sealed class LaunchViewModel : Observable
 
     void Target(Machine? next)
     {
-        if (machine is not null) { machine.Deliveries.Changed -= OnDelivery; }
         machine = next;
         options = null;
         error = null;
@@ -175,7 +190,6 @@ public sealed class LaunchViewModel : Observable
         loading = false;
         // Another machine's choices: nothing picked on the last one carries over but the prompt.
         resume = agent = workspace = profile = model = effort = context = permissions = null;
-        if (machine is not null) { machine.Deliveries.Changed += OnDelivery; }
         Raise(nameof(Title));
         Draw();
         if (machine is not null) { _ = RefreshAsync(); }
@@ -336,7 +350,10 @@ public sealed class LaunchViewModel : Observable
                 ? o.Workspaces.Count > 0 ? "pick a workspace" : $"no workspace is approved on this machine yet; approve one at the machine ({ApproveHint})"
                 : null)
             ?? LaunchProtocol.Check(launch with { Request = Guid.Empty.ToString() })
-            ?? (a?.NeedsPrompt == true && launch.Resume is null && launch.Prompt is null ? $"{a.Label} starts its session only on a first message; give it a prompt" : null);
+            ?? (a?.NeedsPrompt == true && launch.Resume is null && launch.Prompt is null ? $"{a.Label} starts its session only on a first message; give it a prompt" : null)
+            // The host measures the request as sent, where quotes and backslashes count twice.
+            ?? (JsonSerializer.SerializeToUtf8Bytes(launch with { Request = Guid.Empty.ToString() }, ProtocolJson.Options).Length > LaunchProtocol.MaxRequest
+                ? $"the prompt is too long once sent (over {LaunchProtocol.MaxRequest / 1024} KiB); shorten it, and send the rest once the session has started" : null);
         if (problem is not null)
         {
             local = ($"Not launched: {Sentence(problem)}", Tone.Bad);
@@ -346,7 +363,7 @@ public sealed class LaunchViewModel : Observable
         local = null;
         // No request is ever replayed to a host that restarted meanwhile: it remembers requests in
         // memory only, so a second copy could start a second session.
-        m.Deliveries.Submit(Key, LaunchProtocol.Launch, request => launch with { Request = request }, _ => false, payload: launch, replayAfterRestart: false, timeout: LaunchTimeout);
+        m.Deliveries.Submit(Key, LaunchProtocol.Launch, request => launch with { Request = request }, _ => false, payload: launch, replayAfterRestart: false, timeout: LaunchTimeout, resendOnBusy: false);
         Show();
     }
 
@@ -359,23 +376,34 @@ public sealed class LaunchViewModel : Observable
     // The new session's card, which may arrive after the outcome.
     public void OpenSession()
     {
-        if (machine is not null && Entry is { } e && Result(e)?.Session is { } id) { main.Open(machine.Key, id); }
+        if (machine is not null && Entry is { } e) { Open(machine, e); }
     }
 
-    void OnDelivery(Delivery d)
+    void Open(Machine m, Delivery e)
+    {
+        if (Result(e)?.Session is { } id) { main.Open(m.Key, id); }
+    }
+
+    void OnDelivery(Machine m, Delivery d)
     {
         if (d.Key != Key) { return; }
-        Show();
+        if (m == machine) { Show(); }
         if (d.State != DeliveryState.Done || handled == d.Request) { return; }
         handled = d.Request;
-        if (d.Outcome == "started")
+        var outcome = OutcomeOf(d);
+        if (outcome == "started")
         {
-            Prompt = "";
-            OpenSession();
+            // Only the prompt that went: one typed since for the next launch stays.
+            if (d.Payload is LaunchRequest sent && (string.IsNullOrWhiteSpace(prompt) ? null : prompt) == sent.Prompt) { Prompt = ""; }
+            Open(m, d);
         }
         // What it offers has changed: a resumed session is no longer resumable, a worktree counts.
-        if (d.Outcome is "started" or "unconfirmed") { _ = RefreshAsync(); }
+        if (m == machine && outcome is "started" or "unconfirmed") { _ = RefreshAsync(); }
     }
+
+    // An outcome this app does not know may still mean a session started, so it reads as
+    // unconfirmed: check before launching again.
+    static string OutcomeOf(Delivery e) => e.Outcome is "started" or "busy" or "refused" or "failed" or "unconfirmed" ? e.Outcome : "unconfirmed";
 
     static LaunchResult? Result(Delivery e)
     {
@@ -404,7 +432,7 @@ public sealed class LaunchViewModel : Observable
                 return ($"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad);
         }
         var how = Result(e)?.Launched?.Worktree == true ? " in a new worktree" : "";
-        return e.Outcome switch
+        return OutcomeOf(e) switch
         {
             "started" => ($"Session started{how}.", Tone.Ok),
             "unconfirmed" => ($"Launched{how}, but not confirmed{(e.Reason is { } r ? $": {Sentence(r)}" : ". Check at the machine.")}", Tone.Warn),
