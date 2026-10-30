@@ -329,6 +329,25 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_try_again_long_after_the_first_send_of_a_launch_or_reply_sends_nothing_more()
+    {
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        host.On(Ops.SessionReply, _ => throw new InvalidOperationException("the host failed after reading it"));
+        var clock = new FakeTimeProvider(Make.T0);
+        var deliveries = new Deliveries(connection, new LockedDispatcher(), clock) { GiveUp = TimeSpan.FromMinutes(9) };
+
+        deliveries.Submit("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" }, _ => false, replayAfterRestart: false);
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Failed, "the failure");
+        clock.Advance(TimeSpan.FromMinutes(10));
+        deliveries.Resend("k", Ops.SessionReply, r => new { id = "s1", request = r, text = "run the tests" });
+
+        await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
+        Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
+        Assert.StartsWith("too long has passed since it was first sent", deliveries.Get("k")!.Reason);
+        Assert.Single(host.Sent(Ops.SessionReply));
+    }
+
+    [Fact]
     public async Task An_answer_given_while_the_host_is_down_waits_and_gives_up_as_unconfirmed_only_after_the_limit()
     {
         await host.StopAsync();

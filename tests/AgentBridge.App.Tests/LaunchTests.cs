@@ -120,8 +120,8 @@ public sealed class LaunchTests : IAsyncLifetime
 
         ui.Post(launch.Launch);
 
-        Assert.Equal("Not launched: Codex starts its session only on a first message; give it a prompt.", launch.StatusText);
-        Assert.Equal(Tone.Bad, launch.StatusTone);
+        Assert.Equal("Not launched: Codex starts its session only on a first message; give it a prompt.", launch.Problem);
+        Assert.Equal("", launch.StatusText);
         Assert.Empty(Sent());
     }
 
@@ -212,7 +212,7 @@ public sealed class LaunchTests : IAsyncLifetime
     {
         ui.Post(() => { launch.Prompt = new string('\\', 11000); launch.Launch(); });
 
-        Assert.StartsWith("Not launched: the prompt is too long once sent", launch.StatusText);
+        Assert.StartsWith("Not launched: the prompt is too long once sent", launch.Problem);
         Assert.Empty(Sent());
     }
 
@@ -235,7 +235,9 @@ public sealed class LaunchTests : IAsyncLifetime
         ui.Post(launch.Launch);
         await Wait.UntilAsync(() => launch.ShowResend, "the failure");
         ui.Post(() => { launch.Agent = Pick(launch.Agents, "codex"); launch.Prompt = ""; launch.Launch(); });
-        Assert.StartsWith("Not launched: Codex", launch.StatusText);
+        // Said apart: the failure, and what Try again would send, stay as they were.
+        Assert.StartsWith("Not launched: Codex", launch.Problem);
+        Assert.Contains("Try again sends that same launch to Test PC: copilot in bridge, ask permission.", launch.StatusText);
 
         fail = false;
         ui.Post(launch.Resend);
@@ -349,7 +351,7 @@ public sealed class LaunchTests : IAsyncLifetime
         Assert.Equal("No folder on Test PC is approved for launching yet. At the machine, run: agent-bridge-host workspace add <folder>", launch.Note);
         Assert.True(launch.NoteWarns);
         ui.Post(launch.Launch);
-        Assert.Equal("Not launched: no workspace is approved on this machine yet; approve one at the machine (agent-bridge-host workspace add <folder>).", launch.StatusText);
+        Assert.Equal("Not launched: no workspace is approved on this machine yet; approve one at the machine (agent-bridge-host workspace add <folder>).", launch.Problem);
         Assert.Empty(Sent());
     }
 
@@ -484,7 +486,8 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         link.Set(FleetState.Connected);
 
         await Wait.UntilAsync(() => launch.State == "failed", "the failure shown");
-        Assert.StartsWith("Couldn't send it on Build server: ", launch.StatusText);
+        Assert.StartsWith("Build server returned an error: ", launch.StatusText);
+        Assert.Contains("The launch may have started", launch.StatusText);
         await Wait.UntilAsync(() => launch.CanLaunch, "another launch to be possible");
         remoteUi.Release();
     }
@@ -504,6 +507,34 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
 
         await Wait.UntilAsync(() => launch.SelectedMachine?.Value == "remote-id" && launch.ShowForm, "the machine to come back");
         Assert.Equal(("there-2", LaunchProtocol.AllowAll), (launch.Workspace!.Value, launch.Permissions!.Value));
+    }
+
+    [Fact]
+    public async Task What_was_picked_survives_a_failed_reload_and_the_machine_dropping_out_after_it()
+    {
+        var fail = false;
+        remoteHost.On(LaunchProtocol.Options, _ => fail ? throw new InvalidOperationException("the catalog could not be read") : new LaunchOptions
+        {
+            Agents = [new LaunchAgent { Id = "claude", Label = "Claude", Kind = AgentKind.Claude }],
+            Workspaces = [new LaunchWorkspace { Label = "there", Path = "/there" }, new LaunchWorkspace { Label = "there-2", Path = "/there-2" }],
+            Defaults = new LaunchDefaults { Agent = "claude", Workspace = "there", Permissions = LaunchProtocol.Ask },
+        });
+        var launch = new LaunchViewModel(main, ui);
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
+        ui.Post(() => launch.Workspace = launch.Workspaces.Single(w => w.Value == "there-2"));
+        fail = true;
+        await launch.RefreshAsync();
+        Assert.False(launch.ShowForm);
+        fail = false;
+
+        link.Set(FleetState.Connected);
+        await Wait.UntilAsync(() => launch.Machines.Count == 1, "the machine to leave");
+        link.Set(FleetState.Connected, ("remote-id", "Build server"));
+
+        await Wait.UntilAsync(() => launch.SelectedMachine?.Value == "remote-id" && launch.ShowForm, "the machine to come back");
+        Assert.Equal("there-2", launch.Workspace!.Value);
     }
 
     [Fact]

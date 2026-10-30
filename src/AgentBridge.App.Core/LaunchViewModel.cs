@@ -57,7 +57,9 @@ public sealed class LaunchViewModel : Observable
     readonly Dictionary<string, Picks> picked = new(StringComparer.Ordinal);
     sealed record Picks(Choice? Resume, Choice? Agent, Choice? Workspace, Choice? Profile, Choice? Model, Choice? Effort, Choice? Context, Choice? Permissions, bool PermissionsSet, string Scope);
     string prompt = "";
-    (string Text, Tone Tone)? local;
+    // What stops the form being launched now (no prompt for Codex, too long...): about the form,
+    // not the last launch, so it is said apart from that launch's outcome and its Try again.
+    string problem = "";
 
     public LaunchViewModel(MainViewModel main, IUiDispatcher ui)
     {
@@ -143,6 +145,14 @@ public sealed class LaunchViewModel : Observable
     public string Busy => options?.Busy is { Length: > 0 } b ? $"{Name} is busy: {Sentence(b)}" : "";
 
     public string StatusText { get; private set; } = "";
+    public string Problem => problem;
+
+    void SetProblem(string text)
+    {
+        if (problem == text) { return; }
+        problem = text;
+        Raise(nameof(Problem));
+    }
     public Tone StatusTone { get; private set; }
     public bool CanLaunch => options is not null && !Pending;
     // Try again: a launch that could not be sent goes again with the same request; one the machine
@@ -214,14 +224,15 @@ public sealed class LaunchViewModel : Observable
 
     void Target(Machine? next)
     {
-        if (machine is { } was && options is not null)
+        // Saved even after a failed reload, when the picks are still in place though not shown.
+        if (machine is { } was && new[] { resume, agent, workspace, profile, model, effort, context, permissions }.Any(c => c is not null))
         {
             picked[was.Key] = new Picks(resume, agent, workspace, profile, model, effort, context, permissions, permissionsSet, scope);
         }
         machine = next;
         options = null;
         error = null;
-        local = null;
+        SetProblem("");
         loads++;
         loading = false;
         // Another machine's choices: nothing picked on the last one carries over but the prompt.
@@ -405,11 +416,10 @@ public sealed class LaunchViewModel : Observable
                 ? $"the prompt is too long once sent (over {LaunchProtocol.MaxRequest / 1024} KiB); shorten it, and send the rest once the session has started" : null);
         if (problem is not null)
         {
-            local = ($"Not launched: {Sentence(problem)}", Tone.Bad);
-            Show();
+            SetProblem($"Not launched: {Sentence(problem)}");
             return;
         }
-        local = null;
+        SetProblem("");
         lost = null;
         lastMachine = m;
         lastName = m.Name;
@@ -431,7 +441,6 @@ public sealed class LaunchViewModel : Observable
     public void Resend()
     {
         if (!ShowResend || lastMachine is not { } m || last is not { Payload: LaunchRequest launch } e) { return; }
-        local = null;
         if (e.State == DeliveryState.Done) { Submit(m, launch); }
         else { m.Deliveries.Resend(Key, LaunchProtocol.Launch, request => launch with { Request = request }); }
     }
@@ -477,7 +486,7 @@ public sealed class LaunchViewModel : Observable
 
     void Show()
     {
-        var (text, tone) = local ?? (lost is not null ? (lost, Tone.Warn) : last is { } e ? Describe(e, lastName) : ("", Tone.None));
+        var (text, tone) = lost is not null ? (lost, Tone.Warn) : last is { } e ? Describe(e, lastName) : ("", Tone.None);
         // Only a change is news: the status line is announced to screen readers whenever it is
         // raised, and this runs on every update of any machine.
         if (text != StatusText || tone != StatusTone)
@@ -500,7 +509,8 @@ public sealed class LaunchViewModel : Observable
             case DeliveryState.Waiting:
                 return ($"Waiting for the connection to the machine{on}. The launch goes as soon as it is back.", Tone.Progress);
             case DeliveryState.Failed:
-                return ($"Couldn't send it{on}: {e.Reason ?? "the machine said no"}.", Tone.Bad);
+                // An error from the host does not say the launch never ran: the error can come after.
+                return ($"{NameOr(machineName)} returned an error: {Sentence(e.Reason ?? "no reason given")} The launch may have started: check at the machine before launching again.{Again(e, machineName)}", Tone.Warn);
         }
         var how = Result(e)?.Launched?.Worktree == true ? " in a new worktree" : "";
         return OutcomeOf(e) switch
@@ -509,8 +519,19 @@ public sealed class LaunchViewModel : Observable
             "unconfirmed" => ($"Launched{how}, but not confirmed{(e.Reason is { } r ? $": {Sentence(r)}" : ". Check at the machine.")}", Tone.Warn),
             "busy" => ($"Not launched: {Sentence(e.Reason ?? "the machine is busy with another launch")} Try again in a moment.", Tone.Warn),
             "refused" => ($"Not launched: {Sentence(e.Reason ?? "the machine refused it")}", Tone.Bad),
-            _ => ($"Couldn't launch{(e.Reason is { } f ? $": {Sentence(f)}" : ". Check at the machine.")}", Tone.Bad),
+            _ => ($"Couldn't launch{(e.Reason is { } f ? $": {Sentence(f)}" : ". Check at the machine.")}{Again(e, machineName)}", Tone.Bad),
         };
+    }
+
+    static string NameOr(string? name) => string.IsNullOrEmpty(name) ? "The machine" : name;
+
+    // What Try again sends: the launch as it was pressed, which the form may no longer show.
+    static string Again(Delivery e, string? machineName)
+    {
+        if (e.Payload is not LaunchRequest l) { return ""; }
+        var where = l.Resume is not null ? "resuming its session" : l.Workspace is { } w ? $"in {w}" : "";
+        var how = l.Permissions == LaunchProtocol.AllowAll ? "allow all" : "ask permission";
+        return $" Try again sends that same launch to {NameOr(machineName)}: {l.Agent}{(where.Length > 0 ? $" {where}" : "")}, {how}.";
     }
 
     static string Sentence(string s) => s.Length > 0 && !".!?".Contains(s[^1]) ? $"{s}." : s;

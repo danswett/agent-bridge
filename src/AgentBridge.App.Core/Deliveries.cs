@@ -32,6 +32,8 @@ public sealed record Delivery
     // The host process the op last went to, kept with the entry so a Try again after a failure
     // goes only to that process too, for an op never replayed after a restart.
     public string? SentTo { get; init; }
+    // When the request was first sent: the host remembers its id for only so long after that.
+    public DateTimeOffset FirstSent { get; init; }
 }
 
 // Sends answers, replies and stops (session.answer, session.reply, session.stop), each to
@@ -44,6 +46,7 @@ public sealed record Delivery
 public sealed class Deliveries
 {
     const string NoOutcome = "no outcome came back from the machine in time";
+    const string TooOld = "too long has passed since it was first sent for the machine to still recognise it; check at the machine";
     const string Restarted = "the Bridge Host restarted before saying whether it went";
     const int MaxBusyResends = 5;
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(90);
@@ -87,7 +90,7 @@ public sealed class Deliveries
             {
                 return existing;
             }
-            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy };
+            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy, FirstSent = time.GetUtcNow() };
         }
         Publish(entry);
         _ = RunAsync(entry, op, data, before, resend: false);
@@ -105,7 +108,10 @@ public sealed class Deliveries
 
     async Task RunAsync(Delivery entry, string op, Func<string, object> data, Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before, bool resend)
     {
-        var started = time.GetUtcNow();
+        // An op never replayed after a restart is counted from its first send, not from this Try
+        // again: once the host may have forgotten the request id, another copy could act twice.
+        var fromFirst = resend && !entry.ReplayAfterRestart;
+        var started = fromFirst ? entry.FirstSent : time.GetUtcNow();
         var busy = 0;
         var attempts = entry.Attempts;
         // The host the op itself last went to, if it went: files sent ahead are not the op. Carried
@@ -115,7 +121,7 @@ public sealed class Deliveries
         {
             if (time.GetUtcNow() - started > GiveUp)
             {
-                Update(entry.Key, e => e with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = NoOutcome });
+                Update(entry.Key, e => e with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = fromFirst && attempts == entry.Attempts ? TooOld : NoOutcome });
                 return;
             }
             attempts++;

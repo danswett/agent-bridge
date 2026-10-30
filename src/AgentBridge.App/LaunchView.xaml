@@ -94,6 +94,14 @@
                         Style="{StaticResource AccentButtonStyle}" Content="Launch"
                         AutomationProperties.AutomationId="LaunchButton"
                         IsEnabled="{x:Bind ViewModel.CanLaunch, Mode=OneWay}" Click="OnLaunch" />
+                    <!-- Why the form cannot go as it is: apart from the last launch's outcome below. -->
+                    <TextBlock
+                        AutomationProperties.AutomationId="LaunchProblem"
+                        AutomationProperties.LiveSetting="Assertive"
+                        TextWrapping="Wrap"
+                        Text="{x:Bind ViewModel.Problem, Mode=OneWay}"
+                        Foreground="{x:Bind local:LaunchView.ProblemBrush()}"
+                        Visibility="{x:Bind local:Ui.Some(ViewModel.Problem), Mode=OneWay}" />
                 </StackPanel>
                 <!-- The last launch's outcome and what can be done about it: outside the form, which a
                      failed reload of the choices hides. Announced as it changes. -->

@@ -32,6 +32,7 @@ public sealed partial class LaunchView : UserControl
         DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(StatusLine)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
     }
 
+    public static Brush ProblemBrush() => Ui.ToneBrush(Tone.Bad);
     public static Brush NoteBrush(bool warns) => warns ? Ui.Brush("AbWarningText") : Ui.Brush("AbMuted");
     public static bool Has(string? text) => !string.IsNullOrEmpty(text);
 

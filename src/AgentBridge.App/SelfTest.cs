@@ -130,7 +130,7 @@ static class SelfTest
             launch.Agent = launch.Agents.FirstOrDefault(a => a.Value == "codex");
             launch.Prompt = "";
             launch.Launch();
-            Check(launch.StatusText.StartsWith("Not launched: Codex starts its session only on a first message", StringComparison.Ordinal), "refuses to launch Codex on another machine without a first message");
+            Check(launch.Problem.StartsWith("Not launched: Codex starts its session only on a first message", StringComparison.Ordinal), "refuses to launch Codex on another machine without a first message");
 
             window.ShowPage("usage");
             await Task.Delay(500);
