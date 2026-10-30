@@ -689,6 +689,54 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Try_again_is_not_offered_through_a_loopback_an_account_switch_retired()
+    {
+        link.Sources.Add(Laptop());
+        link.Endpoints["host-id"] = localHost.Endpoint;
+        localHost.Capabilities.Add(TransferProtocol.Capability);
+        localHost.On(LaunchProtocol.Launch, _ => new LaunchResult(LaunchOutcome.Failed) { Reason = "the agent did not start" });
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered here");
+        ui.Post(() => { launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"); launch.Launch(); });
+        await Wait.UntilAsync(() => launch.State == "failed" && launch.ShowResend, "the failure");
+
+        link.Switch();
+
+        await Wait.UntilAsync(() => !launch.ShowResend, "Try again to go with the loopback");
+        Assert.Equal("failed", launch.State);
+        Assert.True(launch.CanLaunch);
+        ui.Post(launch.Resend);
+        Assert.Single(localHost.Sent(LaunchProtocol.Launch));
+    }
+
+    [Fact]
+    public async Task A_transfer_is_measured_with_the_command_it_carries_so_a_prompt_that_fits_goes()
+    {
+        link.Sources.Add(Laptop());
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
+        // Quotes count twice once sent: within the prompt limit, 100 bytes short of the request's
+        // with the command the fake link signs (a placeholder's would be far longer).
+        var bare = new LaunchRequest
+        {
+            Request = Guid.Empty.ToString(), Agent = "claude", Permissions = LaunchProtocol.Ask, Workspace = "there", Prompt = "",
+            Transfer = new LaunchTransfer { From = LaptopId, Session = Brought, Command = new SignedCommand { Body = "body1", By = "by", Mac = "mac" } },
+        };
+        var prompt = new string('"', (LaunchProtocol.MaxRequest - JsonSerializer.SerializeToUtf8Bytes(bare, ProtocolJson.Options).Length - 100) / 2);
+
+        ui.Post(() => { launch.Resume = launch.Resumes.Single(r => r.Value.StartsWith('@')); launch.Prompt = prompt; launch.Launch(); });
+
+        Assert.Equal("", launch.Problem);
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        Assert.Equal(prompt, Assert.Single(remoteHost.Sent(LaunchProtocol.Launch)).GetProperty("prompt").GetString());
+    }
+
+    [Fact]
     public async Task A_machine_that_leaves_with_a_launch_on_its_way_says_the_launch_is_not_confirmed()
     {
         var gate = new TaskCompletionSource();

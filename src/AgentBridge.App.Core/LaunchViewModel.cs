@@ -115,6 +115,8 @@ public sealed class LaunchViewModel : Observable
         }
         watchedLoopback = now;
         if (now is not null) { now.Deliveries.Changed += OnLoopback; }
+        // Try again goes only through the loopback in use (ShowResend).
+        Show();
     }
 
     void OnLoopback(Delivery d)
@@ -212,7 +214,10 @@ public sealed class LaunchViewModel : Observable
     // reports failed (the agent did not start) goes as a new one, since the machine keeps the
     // failure as that request's outcome.
     public bool ShowResend => lost is null && (last?.State == DeliveryState.Failed || last is { State: DeliveryState.Done } d && OutcomeOf(d) == "failed")
-        && lastMachine is { } m && main.AllMachines.Contains(m);
+        && lastMachine is { } m && main.AllMachines.Contains(m)
+        // Only through the machine's own connection or the loopback in use: one retired by an
+        // account switch is disposed, and a request sent through it would wait for ever.
+        && (lastVia is null || lastVia == m || lastVia == watchedLoopback);
     public bool ShowOpen => lost is null && last is { State: DeliveryState.Done } e && Result(e)?.Session is not null;
     // What the last launch came to, for tests and the self-test: none, sending, waiting, failed or its outcome.
     public string State => lost is not null ? "unconfirmed" : last is not { } e ? "none" : e.State != DeliveryState.Done ? e.State.ToString().ToLowerInvariant() : OutcomeOf(e);
@@ -535,12 +540,7 @@ public sealed class LaunchViewModel : Observable
             ?? (launch.Resume is null && launch.Workspace is null
                 ? o.Workspaces.Count > 0 ? "pick a workspace" : $"no workspace is approved on this machine yet; approve one at the machine ({ApproveHint})"
                 : null)
-            ?? (launch.Transfer is not null && !TakesTransfers(m) ? "this machine does not take sessions from other machines now" : null)
-            ?? LaunchProtocol.Check(launch with { Request = Guid.Empty.ToString(), Transfer = launch.Transfer is { } t0 ? t0 with { Command = Placeholder } : null })
-            ?? (a?.NeedsPrompt == true && launch.Resume is null && launch.Transfer is null && launch.Prompt is null ? $"{a.Label} starts its session only on a first message; give it a prompt" : null)
-            // The host measures the request as sent, where quotes and backslashes count twice.
-            ?? (JsonSerializer.SerializeToUtf8Bytes(launch with { Request = Guid.Empty.ToString(), Transfer = launch.Transfer is { } t1 ? t1 with { Command = Placeholder } : null }, ProtocolJson.Options).Length > LaunchProtocol.MaxRequest
-                ? $"the prompt is too long once sent (over {LaunchProtocol.MaxRequest / 1024} KiB); shorten it, and send the rest once the session has started" : null);
+            ?? (launch.Transfer is not null && !TakesTransfers(m) ? "this machine does not take sessions from other machines now" : null);
         if (problem is not null)
         {
             SetProblem($"Not launched: {Sentence(problem)}");
@@ -550,11 +550,24 @@ public sealed class LaunchViewModel : Observable
         var via = m;
         if (launch.Transfer is not null)
         {
+            // Signed before the request is measured: its command is part of what the host measures.
             from = Brought!.Value.From;
             if (m.IsLocal && watchedLoopback is null) { SetProblem("Not launched: this machine takes sessions from others only through the relay, which it is not connected to now."); return; }
             via = m.IsLocal ? watchedLoopback! : m;
             if (Signed(launch, from, m) is not { } signed) { SetProblem($"Not launched: couldn't sign the request for {from.MachineName}."); return; }
             launch = signed;
+        }
+        // Measured with a request id of the length Deliveries gives it.
+        var sized = launch with { Request = Guid.Empty.ToString() };
+        problem = LaunchProtocol.Check(sized)
+            ?? (a?.NeedsPrompt == true && launch.Resume is null && launch.Transfer is null && launch.Prompt is null ? $"{a.Label} starts its session only on a first message; give it a prompt" : null)
+            // The host measures the request as sent, where quotes and backslashes count twice.
+            ?? (JsonSerializer.SerializeToUtf8Bytes(sized, ProtocolJson.Options).Length > LaunchProtocol.MaxRequest
+                ? $"the prompt is too long once sent (over {LaunchProtocol.MaxRequest / 1024} KiB); shorten it, and send the rest once the session has started" : null);
+        if (problem is not null)
+        {
+            SetProblem($"Not launched: {Sentence(problem)}");
+            return;
         }
         SetProblem("");
         lost = null;
@@ -567,9 +580,6 @@ public sealed class LaunchViewModel : Observable
         // memory only, so a second copy could start a second session.
         Submit(via, launch);
     }
-
-    // Stands in for the command while the rest of the launch is checked: the same shape and size.
-    static readonly SignedCommand Placeholder = new() { Body = new string('A', 600), By = new string('A', 87), Mac = new string('A', 43) };
 
     // Signed once per press, for five minutes: a resend of that launch carries the same command,
     // which the machine the session is on acts on once.
