@@ -35,20 +35,25 @@ public sealed partial class HaConnector
         // A Send pressed at an empty box, waiting for the box's words (PendingSubmitAt).
         public string? PendingPress;
         public DateTimeOffset PendingSince;
-        // A reply being delivered: nothing else is read for this card until it is done, and then
-        // the card is read again at once, for anything sent meanwhile.
-        public bool Delivering;
+        // The card is read again at once after a delivery, for anything sent meanwhile.
         public bool ReadAgain;
         // When the last reply-card publish went in (LastPayloadDeliveredAt).
         public DateTimeOffset? PayloadDeliveredAt;
     }
 
-    sealed record ReplyDone(string SessionId, string Node, string Shown, bool Box, string? Text, IReadOnlyList<string> Images,
-        ReplyResult Result, bool Failed);
+    // Arm: the driver arm the reply made when it started, so what came of it touches that arm
+    // and never a newer one (an answer given meanwhile, say).
+    sealed record ReplyDone(long Delivery, string SessionId, string Shown, bool Box, string? Text, IReadOnlyList<string> Images,
+        DateTimeOffset? Arm, ReplyResult Result, bool Failed);
 
     readonly Func<HaReply, CancellationToken, Task<ReplyResult>>? reply;
     readonly ConcurrentQueue<ReplyDone> replies = new();
     readonly ConcurrentDictionary<Task, bool> delivering = new();
+    // The delivery each session has under way, by number: nothing else is read for that card until
+    // it is done. Kept by the connector, not with the card's state, which a pause rebuilds while
+    // a delivery may still be running.
+    readonly ConcurrentDictionary<string, long> underWay = new(StringComparer.Ordinal);
+    long deliveries;
     readonly CancellationTokenSource replyStop = new();
     DateTimeOffset nextReplySweep;
 
@@ -80,10 +85,14 @@ public sealed partial class HaConnector
         if (sweep) { nextReplySweep = now + options.ReplySweep; }
         lock (gate)
         {
-            foreach (var p in published.Values)
+            foreach (var (id, p) in published)
             {
-                if (p.Armed is not null || p.Reply.Delivering) { continue; }
-                if (sweep || p.Reply.ReadAgain || !p.Reply.Baselined || p.Reply.PendingPress is not null) { touched.TryAdd(p.Node, []); }
+                if (p.Armed is not null) { continue; }
+                // A card rebuilt while its delivery runs (after a pause) is baselined meanwhile,
+                // so what is sent after that is still new once the delivery is done.
+                if (!p.Reply.Baselined) { touched.TryAdd(p.Node, []); continue; }
+                if (underWay.ContainsKey(id)) { continue; }
+                if (sweep || p.Reply.ReadAgain || p.Reply.PendingPress is not null) { touched.TryAdd(p.Node, []); }
             }
         }
     }
@@ -99,7 +108,8 @@ public sealed partial class HaConnector
             else if (done.Result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { await DeleteImagesAsync(done.Images, ct); }
             // Only once said: a pass that fails part-way says it again rather than not at all.
             replies.TryDequeue(out _);
-            if (p is not null) { p.Reply.Delivering = false; p.Reply.ReadAgain = true; }
+            underWay.TryRemove(new KeyValuePair<string, long>(done.SessionId, done.Delivery));
+            if (p is not null) { p.Reply.ReadAgain = true; }
         }
     }
 
@@ -107,11 +117,13 @@ public sealed partial class HaConnector
     {
         var result = done.Result;
         var short8 = done.SessionId[..Math.Min(8, done.SessionId.Length)];
+        // Still the arm this reply made, not consumed by its turn nor replaced since.
+        var ours = done.Arm is { } arm && p.DriverPendingAt == arm;
         switch (result.Outcome)
         {
             case AnswerOutcome.Delivered:
                 // The arm's window starts when the words went in (Update-DaemonDriverPendingStamp).
-                if (p.DriverPendingAt is not null) { p.DriverPendingAt = now; }
+                if (ours) { p.DriverPendingAt = now; }
                 if (!done.Box) { p.Reply.PayloadDeliveredAt = now; }
                 await TransientAsync(p, "Reply sent", new JsonObject
                 {
@@ -127,7 +139,7 @@ public sealed partial class HaConnector
                 break;
             default:
                 // No turn is coming, so the arm would only mark whatever is typed next.
-                p.DriverPendingAt = null;
+                if (ours) { p.DriverPendingAt = null; }
                 var extra = new JsonObject { ["error"] = result.Reason ?? result.Outcome.ToString() };
                 // A failure to fetch or decode what came with it is the daemon's own sentence,
                 // with nothing tried; one the delivery refused names the words it did not send.
@@ -163,13 +175,14 @@ public sealed partial class HaConnector
         }
     }
 
-    // What the controls hold now is what was there before: never a reply. Kind unknown leaves it
-    // to be read again on a later pass.
+    // What the controls hold now is what was there before: never a reply. One that cannot be read,
+    // or reads unavailable, leaves it to a later pass: taken as empty, what it held would look new
+    // once it was back.
     async Task<bool> BaselineRepliesAsync(Published p, CancellationToken ct)
     {
         var payload = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
         var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
-        if ((payload.Kind == "unknown" && payload.Snapshot is null) || (submit.Kind == "unknown" && submit.Snapshot is null)) { return false; }
+        if (payload.Kind == "unknown" || submit.Kind == "unknown") { return false; }
         p.Reply.HandledStamp = payload.Present ? payload.Value : null;
         p.Reply.HandledPress = submit.Present ? submit.Value : null;
         p.Reply.PendingPress = null;
@@ -180,13 +193,13 @@ public sealed partial class HaConnector
     // A card with no question on it: its reply card's publish, else its reply box and Send.
     async Task ReplyAsync(string sessionId, Published p, DateTimeOffset now, CancellationToken ct)
     {
-        if (p.Reply.Delivering) { return; }
-        p.Reply.ReadAgain = false;
         if (!p.Reply.Baselined)
         {
             await BaselineRepliesAsync(p, ct);
             return;
         }
+        if (underWay.ContainsKey(sessionId)) { return; }
+        p.Reply.ReadAgain = false;
         if (await CardReplyAsync(sessionId, p, ct)) { return; }
         await BoxReplyAsync(sessionId, p, now, ct);
     }
@@ -241,6 +254,14 @@ public sealed partial class HaConnector
             p.Reply.HandledStamp = stamp;
             return true;
         }
+        // More than a reply carries is refused before anything is fetched, not after.
+        if (images.Count + files.Count > AttachmentLimits.PerReply)
+        {
+            p.DriverPendingAt = null;
+            await TransientAsync(p, "Reply NOT sent", new JsonObject { ["error"] = $"A reply carries at most {AttachmentLimits.PerReply} attachments; no reply was sent." }, ct);
+            p.Reply.HandledStamp = stamp;
+            return true;
+        }
         await TransientAsync(p, "Sending...", [], ct);
         p.Reply.HandledStamp = stamp;
         var shown = Preview(text, images.Count + files.Count);
@@ -251,8 +272,10 @@ public sealed partial class HaConnector
             foreach (var (id, name, type) in images)
             {
                 byte[]? bytes = null;
+                // Any failure but the host stopping, a timeout included, is an image not fetched:
+                // nothing was tried, so the originals stay in the store.
                 try { bytes = HaImageId.IsValid(id) ? await ha.DownloadImageAsync(id, options.ImageMaxBytes, token) : null; }
-                catch (Exception e) when (e is not OperationCanceledException) { log($"Home Assistant connector could not fetch image {id}: {Describe(e)}"); }
+                catch (Exception e) when (!token.IsCancellationRequested) { log($"Home Assistant connector could not fetch image {id}: {Describe(e)}"); }
                 if (bytes is not { Length: > 0 }) { return Failure("An image could not be staged privately; no reply was sent and source images were kept."); }
                 staged.Add(new HaReplyFile(string.IsNullOrWhiteSpace(name) ? $"{id}.png" : name, type, bytes));
             }
@@ -343,7 +366,9 @@ public sealed partial class HaConnector
     void Deliver(Published p, string sessionId, string shown, bool box, string? text, IReadOnlyList<string> images,
         Func<CancellationToken, Task<(ReplyResult Result, bool Failed)>> send)
     {
-        p.Reply.Delivering = true;
+        var number = Interlocked.Increment(ref deliveries);
+        underWay[sessionId] = number;
+        var arm = p.DriverPendingAt;
         var token = replyStop.Token;
         var task = Task.Run(async () =>
         {
@@ -351,7 +376,7 @@ public sealed partial class HaConnector
             try { outcome = await send(token); }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { outcome = (new ReplyResult(AnswerOutcome.Unconfirmed, "the host stopped while the reply was being delivered"), false); }
             catch (Exception e) { outcome = (new ReplyResult(AnswerOutcome.Unconfirmed, $"delivery failed: {e.GetType().Name}"), false); }
-            replies.Enqueue(new ReplyDone(sessionId, p.Node, shown, box, text, images, outcome.Result, outcome.Failed));
+            replies.Enqueue(new ReplyDone(number, sessionId, shown, box, text, images, arm, outcome.Result, outcome.Failed));
         }, CancellationToken.None);
         delivering[task] = true;
         task.ContinueWith(t => delivering.TryRemove(t, out _), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);

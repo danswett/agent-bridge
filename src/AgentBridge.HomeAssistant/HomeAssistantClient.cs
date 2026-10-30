@@ -219,21 +219,32 @@ public sealed class HomeAssistantClient : IHomeAssistant
     public async Task<byte[]?> DownloadImageAsync(string imageId, long maxBytes, CancellationToken cancellationToken = default)
     {
         if (!HaImageId.IsValid(imageId)) { throw new ArgumentException("not an image id", nameof(imageId)); }
-        using var request = Request(HttpMethod.Get, $"api/image/serve/{imageId}/original");
-        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        if (response.StatusCode == HttpStatusCode.NotFound) { return null; }
-        await EnsureAsync(response, "GET image", cancellationToken);
-        if (response.Content.Headers.ContentLength is { } length && length > maxBytes) { throw new InvalidDataException($"the image is larger than {maxBytes} bytes"); }
-        await using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var copy = new MemoryStream();
-        var buffer = new byte[81920];
-        int read;
-        while ((read = await body.ReadAsync(buffer, cancellationToken)) > 0)
+        // The client's timeout covers only the headers once they are read as they come, so the
+        // body is given the same deadline of its own: a response that stalls part-way fails.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (http.Timeout != Timeout.InfiniteTimeSpan) { deadline.CancelAfter(http.Timeout); }
+        try
         {
-            if (copy.Length + read > maxBytes) { throw new InvalidDataException($"the image is larger than {maxBytes} bytes"); }
-            copy.Write(buffer, 0, read);
+            using var request = Request(HttpMethod.Get, $"api/image/serve/{imageId}/original");
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+            if (response.StatusCode == HttpStatusCode.NotFound) { return null; }
+            await EnsureAsync(response, "GET image", deadline.Token);
+            if (response.Content.Headers.ContentLength is { } length && length > maxBytes) { throw new InvalidDataException($"the image is larger than {maxBytes} bytes"); }
+            await using var body = await response.Content.ReadAsStreamAsync(deadline.Token);
+            using var copy = new MemoryStream();
+            var buffer = new byte[81920];
+            int read;
+            while ((read = await body.ReadAsync(buffer, deadline.Token)) > 0)
+            {
+                if (copy.Length + read > maxBytes) { throw new InvalidDataException($"the image is larger than {maxBytes} bytes"); }
+                copy.Write(buffer, 0, read);
+            }
+            return copy.ToArray();
         }
-        return copy.ToArray();
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"GET image: Home Assistant did not send it within {http.Timeout.TotalSeconds:F0}s");
+        }
     }
 
     public async Task DeleteImageAsync(string imageId, CancellationToken cancellationToken = default)

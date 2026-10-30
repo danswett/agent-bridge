@@ -29,6 +29,8 @@ public sealed partial class ReplyTests : IDisposable
     readonly List<HaReply> replied = [];
     readonly List<AnswerRequest> answered = [];
     Func<HaReply, Task<ReplyResult>> outcome = _ => Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
+    // agent-ha-bridge, as the connector's G5 check finds it: running when set.
+    string? daemon;
 
     public void Dispose()
     {
@@ -45,7 +47,7 @@ public sealed partial class ReplyTests : IDisposable
         SelectDelay = TimeSpan.Zero,
         ReplyCommitWait = TimeSpan.Zero,
         ReplyStopWait = TimeSpan.FromMilliseconds(200),
-    }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } }, time: time,
+    }, ha, sessions, () => daemon, log: m => { lock (log) { log.Add(m); } }, time: time,
         answer: (r, _) =>
         {
             answered.Add(r);
@@ -552,6 +554,130 @@ public sealed partial class ReplyTests : IDisposable
 
         await c.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Contains(log, l => l.Contains("stopped with a reply still being delivered", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_pause_while_a_reply_is_delivering_neither_overlaps_it_nor_loses_what_is_sent_after()
+    {
+        var release = new TaskCompletionSource<ReplyResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        outcome = r =>
+        {
+            if (r.Text != "first") { return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered)); }
+            reached.TrySetResult();
+            return release.Task;
+        };
+        await using var c = await Ready();
+        c.Observe(ha.SendFromCard(Node, "first"));
+        await Pass(c);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // agent-ha-bridge runs for a moment: the connector pauses, and starts over once it stops.
+        daemon = "agent-ha-bridge is running";
+        await Pass(c);
+        daemon = null;
+        await Pass(c);
+        Assert.True(c.Started);
+
+        c.Observe(ha.SendFromCard(Node, "second"));
+        await Pass(c);
+        await Pass(c, 20);
+        Assert.Single(replied);
+
+        release.SetResult(new ReplyResult(AnswerOutcome.Delivered));
+        await c.DeliveredAsync();
+        await Pass(c);
+        await c.DeliveredAsync();
+        await Pass(c);
+        Assert.Equal(["first", "second"], replied.Select(r => r.Text));
+    }
+
+    [Fact]
+    public async Task A_reply_that_fails_after_an_agents_answer_leaves_the_answers_arm_alone()
+    {
+        var release = new TaskCompletionSource<ReplyResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        outcome = _ =>
+        {
+            reached.TrySetResult();
+            return release.Task;
+        };
+        await using var c = await Ready("agent-user");
+        c.Observe(ha.SendFromCard(Node, "a reply"));
+        await Pass(c);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // A question opens meanwhile, and an agent answers it from the card.
+        Idle(question: new Question { Id = "q1", Kind = QuestionKind.Form, Message = "What next?", AskedAt = FakeSessions.T0 });
+        await Pass(c);
+        // (Not Do: the reply is still being delivered, and Do waits for every delivery.)
+        c.Observe(ha.SendFromCard(Node, "Cut it", decisionId: "q1", driver: "agent"));
+        await Pass(c);
+        Assert.Single(answered);
+
+        release.SetResult(new ReplyResult(AnswerOutcome.Refused, "the console refused the keys"));
+        await c.DeliveredAsync();
+        await Pass(c);
+        Assert.Equal("Reply NOT sent", Activity);
+
+        Idle(turn: 2, message: "Cut it");
+        await Pass(c);
+        Assert.Equal("agent", Detail.GetProperty("driver").GetString());
+    }
+
+    [Fact]
+    public async Task More_attachments_than_a_reply_carries_are_refused_before_any_is_fetched()
+    {
+        await using var c = await Ready();
+        var images = new JsonArray([.. Enumerable.Range(0, AttachmentLimits.PerReply + 1).Select(i => (JsonNode)new JsonObject { ["id"] = $"img{i}", ["name"] = $"{i}.png" })]);
+
+        await Do(c, ha.SendFromCard(Node, "Too many", images: images));
+
+        Assert.Empty(replied);
+        Assert.Equal(0, ha.ImageFetches);
+        Assert.Equal("Reply NOT sent", Activity);
+        Assert.Equal($"A reply carries at most {AttachmentLimits.PerReply} attachments; no reply was sent.", Detail.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task An_image_fetch_that_times_out_sends_nothing_and_keeps_the_images()
+    {
+        var image = ha.Upload([1, 2, 3], "cccc3333");
+        ha.ImageFails = _ => true;
+        ha.ImageError = new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 15 seconds elapsing.");
+        await using var c = await Ready();
+
+        await Do(c, ha.SendFromCard(Node, "Look", images: [new JsonObject { ["id"] = image, ["name"] = "a.png" }]));
+
+        Assert.Empty(replied);
+        Assert.Equal("Reply NOT sent", Activity);
+        Assert.Equal("An image could not be staged privately; no reply was sent and source images were kept.", Detail.GetProperty("error").GetString());
+        Assert.Empty(ha.DeletedImages);
+    }
+
+    [Fact]
+    public async Task A_press_made_while_send_read_unavailable_is_not_taken_for_new_once_it_is_back()
+    {
+        Idle();
+        await using var c = Connector();
+        var submit = SessionEntities.Submit(Node);
+        // Send reads unavailable when the connector first looks, with a press already made on it.
+        ha.States[submit] = new HaState(submit, "unavailable", default);
+        await Pass(c);
+        ha.Type(SessionEntities.Reply(Node), "already sent by agent-ha-bridge");
+        ha.Press(submit);
+        await Pass(c);
+        await Pass(c, 20);
+
+        ha.States.Remove(submit);
+        await Pass(c);
+        await Pass(c, 20);
+        await c.DeliveredAsync();
+        await Pass(c);
+        Assert.Empty(replied);
+
+        await Do(c, ha.Press(submit));
+        Assert.Equal("already sent by agent-ha-bridge", Assert.Single(replied).Text);
     }
 
     [Fact]

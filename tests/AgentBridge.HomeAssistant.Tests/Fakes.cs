@@ -168,6 +168,9 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     public Dictionary<string, byte[]> Images { get; } = new(StringComparer.Ordinal);
     public List<string> DeletedImages { get; } = [];
     public Func<string, bool>? ImageFails { get; set; }
+    // What a failing fetch throws: a 500 unless said otherwise (a timeout, say).
+    public Exception? ImageError { get; set; }
+    public int ImageFetches { get; private set; }
 
     public string Upload(byte[] bytes, string? id = null)
     {
@@ -179,7 +182,8 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     public Task<byte[]?> DownloadImageAsync(string imageId, long maxBytes, CancellationToken cancellationToken = default)
     {
         if (!HaImageId.IsValid(imageId)) { throw new ArgumentException("not an image id", nameof(imageId)); }
-        if (ImageFails?.Invoke(imageId) == true) { throw new HttpRequestException("GET image: Home Assistant answered 500 Internal Server Error"); }
+        lock (gate) { ImageFetches++; }
+        if (ImageFails?.Invoke(imageId) == true) { throw ImageError ?? new HttpRequestException("GET image: Home Assistant answered 500 Internal Server Error"); }
         lock (gate)
         {
             if (!Images.TryGetValue(imageId, out var bytes)) { return Task.FromResult<byte[]?>(null); }
