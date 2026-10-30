@@ -123,11 +123,19 @@ public sealed class Deliveries
                 {
                     await before((o, d, t) => host.CallAsync(o, d, t), (sent, total) => Update(entry.Key, e => e with { Progress = (sent, total) }));
                 }
-                // Which host it went to is read with the connection it goes on, and an op never
-                // replayed after a restart waits until that host is known.
-                var call = host.CallAsync(op, data(entry.Request), entry.Timeout, knownHost: !entry.ReplayAfterRestart, out var to);
+                // Which host it went to is read with the connection it goes on. An op never replayed
+                // after a restart waits until that host is known, and goes again only to the same one.
+                var call = host.CallAsync(op, data(entry.Request), entry.Timeout, knownHost: !entry.ReplayAfterRestart,
+                    onlyTo: entry.ReplayAfterRestart ? null : sentTo, out var to);
                 sentTo = to;
                 result = await call;
+            }
+            catch (HostRestartedException)
+            {
+                // A replacement host has no memory of the request, so for a reply or a launch sending
+                // it again could do it twice: what became of it is the machine's to say.
+                Update(entry.Key, x => x with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = Restarted, Progress = null });
+                return;
             }
             catch (HostErrorException e)
             {
@@ -142,8 +150,8 @@ public sealed class Deliveries
                 try { await host.WhenConnectedAsync().WaitAsync(GiveUp, time); }
                 catch (TimeoutException) { }
                 await Task.Delay(RetryDelay);
-                // A replacement host has no memory of the request, so for a reply sending it
-                // again could type it twice: what became of it is the machine's to say.
+                // Seen early, before any files go again to a host that would not know them; the call
+                // itself checks again on the connection it goes on.
                 if (!entry.ReplayAfterRestart && sentTo is not null && host.HostInstance is { } now && now != sentTo)
                 {
                     Update(entry.Key, x => x with { State = DeliveryState.Done, Outcome = "unconfirmed", Reason = Restarted, Progress = null });

@@ -216,6 +216,17 @@ public sealed class LaunchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_reload_that_fails_says_so_rather_than_keeping_old_choices()
+    {
+        host.On(LaunchProtocol.Options, _ => throw new InvalidOperationException("the catalog could not be read"));
+        await launch.RefreshAsync();
+
+        Assert.False(launch.ShowForm);
+        Assert.StartsWith("Couldn't get the choices from Test PC", launch.Note);
+        Assert.True(launch.ShowReload);
+    }
+
+    [Fact]
     public async Task A_machine_with_no_approved_folder_says_how_to_approve_one_at_the_machine()
     {
         options = options with { Workspaces = [], Resumable = [] };
@@ -336,5 +347,24 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
 
         await Wait.UntilAsync(() => opened.Contains("there-new"), "the other machine's new session to open");
         Assert.Equal("", launch.Prompt);
+    }
+
+    [Fact]
+    public async Task A_machine_that_leaves_with_a_launch_on_its_way_says_the_launch_is_not_confirmed()
+    {
+        var gate = new TaskCompletionSource();
+        remoteHost.On(LaunchProtocol.Launch, _ => { gate.Task.Wait(FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "there-new" }; });
+        var launch = new LaunchViewModel(main, ui);
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
+        ui.Post(launch.Launch);
+        await Wait.UntilAsync(() => remoteHost.Sent(LaunchProtocol.Launch).Count == 1, "the launch to go");
+
+        link.Set(FleetState.Connected);
+
+        await Wait.UntilAsync(() => launch.StatusText.StartsWith("Not confirmed: Build server left", StringComparison.Ordinal), "the launch to be called unconfirmed");
+        Assert.Equal(Tone.Warn, launch.StatusTone);
+        gate.SetResult();
     }
 }

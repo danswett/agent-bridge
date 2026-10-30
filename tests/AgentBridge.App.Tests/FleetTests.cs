@@ -32,7 +32,7 @@ public sealed class FleetTests : IAsyncLifetime
     {
         localHost.Sessions.Add(Make.Session("here", updated: Make.T0));
         localHost.Start();
-        remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "windows", "0.1.0"),
+        remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "windows", "0.1.0", Instance: "run-7"),
             [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, UsageProtocol.Capability]));
         remoteHost.Sessions.Add(Make.Session("there", question: Make.Choice(), updated: Make.T0.AddMinutes(1)));
         remoteHost.Start();
@@ -205,6 +205,28 @@ public sealed class FleetTests : IAsyncLifetime
         link.Raise();
         ui.Post(() => after = main.MachineOf("remote-id"));
         Assert.Same(before, after);
+    }
+
+    [Fact]
+    public async Task Another_machines_host_is_known_by_the_run_it_names_and_sessions_opened_on_two_machines_both_open()
+    {
+        await BothMachinesAsync();
+        Machine? remote = null;
+        ui.Post(() => remote = main.MachineOf("remote-id"));
+        await Wait.UntilAsync(() => remote!.Host.HostInstance == "run-7", "the remote host's run");
+
+        // Two launches start, on two machines, before either card arrives.
+        var opened = new List<string>();
+        ui.Post(() =>
+        {
+            main.OpenRequested += c => opened.Add(c.Id);
+            main.Open("remote-id", "there-new");
+            main.Open(null, "here-new");
+        });
+        await remoteHost.SendAsync(Events.SessionUpsert, Make.Session("there-new", updated: Make.T0.AddMinutes(5)));
+        await localHost.SendAsync(Events.SessionUpsert, Make.Session("here-new", updated: Make.T0.AddMinutes(5)));
+
+        await Wait.UntilAsync(() => { lock (opened) { return opened.Count == 2; } }, "both sessions to open");
     }
 
     [Fact]

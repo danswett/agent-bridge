@@ -11,6 +11,9 @@ public enum LinkState { Connecting, Connected, NotRunning, Refused }
 // reconnects whenever the host restarts), says hello, and keeps three subscriptions running:
 // the sessions, the agents' usage and the host's own status. What it hears is applied on the
 // UI thread, so view models never see a change from anywhere else.
+// The host process a request went to has been replaced: it is not sent to the new one.
+public sealed class HostRestartedException() : Exception("the Bridge Host restarted");
+
 public sealed class HostConnection : IAsyncDisposable
 {
     readonly Func<CancellationToken, Task<IClientChannel>> connect;
@@ -73,16 +76,18 @@ public sealed class HostConnection : IAsyncDisposable
     // Sends a request on the current connection. Throws HostNotRunningException without one,
     // IOException when the connection goes under it, HostErrorException when the host fails it.
     public Task<JsonElement> CallAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
-        CallAsync(op, data, timeout, knownHost: false, out _, ct);
+        CallAsync(op, data, timeout, knownHost: false, onlyTo: null, out _, ct);
 
     // The same, saying which host process it went to (instance), read with the connection it
-    // went on. knownHost: send nothing until that process is known, for an op that must never
-    // reach a restarted host a second time.
-    public Task<JsonElement> CallAsync(string op, object? data, TimeSpan? timeout, bool knownHost, out string? instance, CancellationToken ct = default)
+    // goes on. knownHost: send nothing until that process is known, for an op that must never
+    // reach a restarted host a second time. onlyTo: send only to that process, else throw
+    // HostRestartedException, checked against the very connection the call would go on.
+    public Task<JsonElement> CallAsync(string op, object? data, TimeSpan? timeout, bool knownHost, string? onlyTo, out string? instance, CancellationToken ct = default)
     {
         var now = Volatile.Read(ref current);
         if (now is null || !now.Channel.IsOpen) { throw new HostNotRunningException("not connected to the Bridge Host"); }
         if (knownHost && now.Instance is null) { throw new HostNotRunningException("still connecting to the Bridge Host"); }
+        if (onlyTo is not null && now.Instance != onlyTo) { throw new HostRestartedException(); }
         instance = now.Instance;
         return now.Channel.CallAsync(op, data, timeout, ct);
     }

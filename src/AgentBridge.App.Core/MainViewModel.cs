@@ -238,7 +238,9 @@ public sealed class MainViewModel : Observable
 
     // A toast clicked with the app closed starts it before the host has sent its sessions; the
     // session asked for opens when it arrives.
-    (string Machine, string Session)? pendingOpen;
+    // Sessions asked to open before their cards arrived: several, since launches on two machines
+    // can both start before either card comes.
+    readonly HashSet<(string Machine, string Session)> pendingOpens = [];
 
     public void Open(string? sessionId) => Open(null, sessionId);
 
@@ -246,8 +248,8 @@ public sealed class MainViewModel : Observable
     {
         if (sessionId is null) { return; }
         var key = CardKey(machineKey ?? Machine.LocalKey, sessionId);
-        if (!byId.TryGetValue(key, out var card)) { pendingOpen = (machineKey ?? Machine.LocalKey, sessionId); return; }
-        pendingOpen = null;
+        if (!byId.TryGetValue(key, out var card)) { pendingOpens.Add((machineKey ?? Machine.LocalKey, sessionId)); return; }
+        pendingOpens.Remove((machineKey ?? Machine.LocalKey, sessionId));
         // A card the picker hides is shown: it is what was asked for.
         if (!Visible(card)) { SelectedMachine = Machines[0]; }
         card.Folded = false;
@@ -304,7 +306,7 @@ public sealed class MainViewModel : Observable
         }
         Raise(nameof(Waiting));
         Raise(nameof(Empty));
-        if (pendingOpen is { } p && p.Machine == m.Key && p.Session == s.Id) { Open(m.Key, s.Id); }
+        if (pendingOpens.Contains((m.Key, s.Id))) { Open(m.Key, s.Id); }
     }
 
     void OnRemoved(Machine m, string id)
@@ -327,7 +329,7 @@ public sealed class MainViewModel : Observable
         baselined.Add(m);
         m.Cards.Folds.Keep(owner.Where(p => p.Value == m).Select(p => p.Key.Id));
         // The session a toast asked for has ended since.
-        if (pendingOpen is { } p && p.Machine == m.Key && !byId.ContainsKey(CardKey(p.Machine, p.Session))) { pendingOpen = null; }
+        pendingOpens.RemoveWhere(p => p.Machine == m.Key && !byId.ContainsKey(CardKey(p.Machine, p.Session)));
         RefreshLabels();
     }
 

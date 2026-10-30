@@ -376,12 +376,15 @@ public sealed class RelayFleetLink : IFleetLink
     public async Task<IClientChannel> OpenAsync(string hostId, CancellationToken ct)
     {
         if (current is not { } c) { throw new HostNotRunningException("not connected to the relay"); }
-        if (c.Relay.Presence.FirstOrDefault(p => p.Id == hostId) is not { } peer) { throw new HostNotRunningException("the machine is offline"); }
+        if (!c.Relay.Presence.Any(p => p.Id == hostId)) { throw new HostNotRunningException("the machine is offline"); }
         try
         {
             var ch = await c.Hub.OpenAsync(hostId, TimeSpan.FromSeconds(15)).WaitAsync(ct);
-            // A host that restarts joins the relay again, so when it joined tells its processes apart.
-            return new RelayClientChannel(c.Hub, ch) { Instance = $"{hostId}@{peer.Since:O}" };
+            // For a host too old to name its run in hello: when it joined the relay, read after the
+            // handshake, since the relay announces a host before it can answer one. A restarted host
+            // joins again; so does one whose relay connection dropped, which only costs a resend.
+            var since = c.Relay.Presence.FirstOrDefault(p => p.Id == hostId)?.Since;
+            return new RelayClientChannel(c.Hub, ch) { Instance = since is { } s ? $"{hostId}@{s:O}" : null };
         }
         // Whatever ends a handshake (ChannelHub.EndsChannel: a malformed introduction too) is the
         // machine not answering for now; the connection loop tries again rather than stopping.

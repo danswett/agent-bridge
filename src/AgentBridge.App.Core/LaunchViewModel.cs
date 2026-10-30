@@ -156,15 +156,26 @@ public sealed class LaunchViewModel : Observable
             watching[m] = Watch;
             m.Deliveries.Changed += Watch;
         }
+        // A machine that left with a launch on its way takes the launch's outcome with it (a machine
+        // that comes back is a new one, with no memory of it): the session may have started.
+        string? lost = null;
         foreach (var (m, watch) in watching.Where(p => !main.AllMachines.Contains(p.Key)).ToList())
         {
             m.Deliveries.Changed -= watch;
             watching.Remove(m);
+            if (m.Deliveries.Get(Key) is { State: DeliveryState.Sending or DeliveryState.Waiting })
+            {
+                lost = $"Not confirmed: {m.Name} left before saying whether the launch started. Check at that machine before launching again.";
+            }
         }
         var list = main.AllMachines.Where(m => m.Host.Can(LaunchProtocol.Capability))
             .OrderBy(m => m.IsLocal ? 0 : 1)
             .Select(m => new Choice(m.Key, m.IsLocal ? $"{m.Name} (this machine)" : m.Name)).ToList();
-        if (list.SequenceEqual(Machines)) { return; }
+        if (list.SequenceEqual(Machines))
+        {
+            if (lost is not null) { local = (lost, Tone.Warn); Show(); }
+            return;
+        }
         Machines = list;
         filling = true;
         try { Raise(nameof(Machines)); }
@@ -176,6 +187,7 @@ public sealed class LaunchViewModel : Observable
         else { selectedMachine = keep; }
         Raise(nameof(SelectedMachine));
         Raise(nameof(Title));
+        if (lost is not null) { local = (lost, Tone.Warn); Show(); }
     }
 
     void Target(Machine? next)
@@ -220,7 +232,8 @@ public sealed class LaunchViewModel : Observable
             if (load == loads && m == machine)
             {
                 loading = false;
-                if (got is not null) { options = got; } else { error = failed; }
+                // A reload that fails says so, rather than leaving choices that may be out of date.
+                if (got is not null) { options = got; } else { options = null; error = failed; }
                 Draw();
             }
             done.SetResult();
