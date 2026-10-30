@@ -504,6 +504,30 @@ public sealed class LaunchFlowTests : IAsyncLifetime
         Assert.Empty(starter.Specs);
     }
 
+    [Fact]
+    public async Task A_session_found_and_its_hold_cleared_while_the_options_are_gathered_is_not_offered_for_resume()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999999";
+        Resumable(Id, app, "Ship it");
+        locator.Installed["agency"] = @"C:\fake\agency.exe";
+        // A Copilot nothing accounts for yet: that very session, about to be seen.
+        f.Processes.Run(AgentKind.Copilot, 950, "copilot", DateTimeOffset.UtcNow);
+        await source.RefreshAsync();
+        Assert.NotNull(source.Held);
+        agency.OnSessions = () =>
+        {
+            File.WriteAllText(Path.Combine(f.CopilotHome, "session-state", Id, "inuse.950.lock"), "");
+            source.RefreshAsync().GetAwaiter().GetResult();
+        };
+        var ch = await OpenAsync();
+
+        var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
+
+        Assert.Null(source.Held);
+        Assert.Equal(Id, Assert.Single(source.Snapshot()).Id);
+        Assert.DoesNotContain(options.GetProperty("resumable").EnumerateArray(), r => r.GetProperty("id").GetString() == Id);
+    }
+
     void Resumable(string id, string cwd, string summary)
     {
         var dir = Directory.CreateDirectory(Path.Combine(f.CopilotHome, "session-state", id)).FullName;
@@ -571,9 +595,15 @@ public sealed class LaunchFlowTests : IAsyncLifetime
     sealed class FakeRunner : ICommandRunner
     {
         public string Profiles = "No profiles configured.\n";
+        // Runs while the host waits for Agency's session list.
+        public Action? OnSessions;
 
-        public Task<CommandResult> RunAsync(string program, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken = default) =>
-            Task.FromResult(arguments[0] == "config" ? new CommandResult(true, false, 0, Profiles) : new CommandResult(true, false, 0, """{"sessions":[]}"""));
+        public Task<CommandResult> RunAsync(string program, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            if (arguments[0] == "config") { return Task.FromResult(new CommandResult(true, false, 0, Profiles)); }
+            OnSessions?.Invoke();
+            return Task.FromResult(new CommandResult(true, false, 0, """{"sessions":[]}"""));
+        }
     }
 
     // Plays the agent: on start, it writes the session an agent would register (a Copilot

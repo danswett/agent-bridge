@@ -288,8 +288,11 @@ public sealed partial class LaunchService : ISessionLauncher
         // An agent whose discovery is held may have a live session discovery could not see, and
         // offering it would put two CLIs on one transcript; none of its sessions is offered
         // until a complete pass (§6.3 invariants 6 and 10).
+        // The live list read after the hold, not the one taken before the awaits above: a session
+        // that discovery found meanwhile is listed before its hold is said to clear, so a clear
+        // hold here means it is in this snapshot.
         if (source.Held is { } held) { candidates = candidates.Where(e => !held.Agents.Contains(e.Agent)); }
-        var excluded = new HashSet<string>(live.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
+        var excluded = new HashSet<string>(live.Concat(source.Snapshot()).Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
         // And any a launch has started an agent on that has not registered yet.
         lock (pendingGate) { excluded.UnionWith(launchedOn.Where(x => starter.Running(x.Value)).Select(x => x.Key)); }
         var offered = new List<Offered>();

@@ -483,6 +483,29 @@ public class DiscoveryHoldTests
     }
 
     [Fact]
+    public async Task A_session_found_live_that_cannot_be_read_holds_its_agent_until_it_can()
+    {
+        using var f = new Fixture();
+        // A registration whose transcript path no file system takes: found, but not readable.
+        f.ClaudeRegistration(B, 500, "C:/work/\0/transcript.jsonl");
+        f.Processes.Run(AgentKind.Claude, 500);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+        Assert.Equal(new DiscoveryHeld("a claude session that could not be read", [AgentKind.Claude]), source.Held, HeldComparer.Instance);
+
+        var transcript = f.ClaudeTranscript(B);
+        Fixture.Append(transcript, Claude.User("hi", 1));
+        f.ClaudeRegistration(B, 500, transcript);
+        await source.RefreshAsync();
+
+        Assert.Equal(B, Assert.Single(source.Snapshot()).Id);
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
     public async Task A_linked_copilot_session_folder_holds_rather_than_being_read_or_ignored()
     {
         using var f = new Fixture();

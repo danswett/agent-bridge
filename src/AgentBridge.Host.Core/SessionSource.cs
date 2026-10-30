@@ -257,6 +257,7 @@ public sealed class SessionSource : ISessionSource
             lock (_gate) { found = [.. _entries.Values.Select(e => e.Tracker.Discovered)]; }
         }
 
+        var unread = new List<AgentKind>();
         foreach (var discovered in found.DistinctBy(f => f.Id))
         {
             Entry? entry;
@@ -267,12 +268,22 @@ public sealed class SessionSource : ISessionSource
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or ArgumentException)
             {
                 // One unreadable session must not stall every other; it is tried again
-                // next pass.
+                // next pass. One found live but never listed holds its agent meanwhile: it is
+                // running, and must not be offered for resume.
+                if (discover && entry is null) { unread.Add(discovered.Agent); }
                 continue;
             }
             Commit(entry ?? new Entry(tracker), full);
         }
+        if (unread.Count > 0) { (held, release) = (WithUnread(held, unread), true); }
         if (release) { SetHeld(held); }
+    }
+
+    static DiscoveryHeld WithUnread(DiscoveryHeld? held, List<AgentKind> unread)
+    {
+        var reasons = unread.Distinct().Select(a => $"a {a.ToString().ToLowerInvariant()} session that could not be read");
+        var text = Limits.KeepStart(string.Join(", ", held is null ? reasons : reasons.Prepend(held.Reason)), DiscoveryHeld.MaxReasonBytes)!;
+        return new DiscoveryHeld(text, [.. (held?.Agents ?? []).Union(unread).Order()]);
     }
 
     bool Releases(DiscoveryHeld? next)
