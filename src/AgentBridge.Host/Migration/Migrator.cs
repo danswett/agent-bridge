@@ -687,6 +687,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         // started a second time.
         var daemonRunning = runtime.Seen(record.InstallationId);
         var reenabled = new List<string>();
+        var alreadyOn = new List<string>();
         foreach (var task in tasks)
         {
             try
@@ -697,6 +698,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
                     runtime.SetEnabled(task.Name, true);
                     reenabled.Add(task.Name);
                 }
+                else { alreadyOn.Add(task.Name); }
                 var running = task.Name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal) ? daemonRunning : state is { Running: true };
                 if (!running) { runtime.Start(task.Name); }
             }
@@ -715,10 +717,13 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             if (await UntilAsync(() => runtime.Seen(record.InstallationId), options.StopTimeout, cancellationToken))
             {
                 var untouched = record.Tasks.Where(t => t.Enabled && t.Disabled == false).Select(t => t.Name).ToList();
-                var kept = untouched.Count > 0 ? untouched : [.. tasks.Select(t => t.Name).Except(reenabled)];
+                // Only tasks seen enabled: one whose enabling failed is reported above, and is not.
+                var kept = untouched.Count > 0 ? untouched : alreadyOn;
                 Say(reenabled.Count > 0
                     ? $"* Re-enabled {string.Join(" and ", reenabled)}; agent-ha-bridge is running again."
-                    : $"* {string.Join(" and ", kept)} {(kept.Count == 1 ? "was" : "were")} {(untouched.Count > 0 ? "never turned off" : "still enabled")}, and agent-ha-bridge is running.");
+                    : kept.Count > 0
+                        ? $"* {string.Join(" and ", kept)} {(kept.Count == 1 ? "was" : "were")} {(untouched.Count > 0 ? "never turned off" : "still enabled")}, and agent-ha-bridge is running."
+                        : "* agent-ha-bridge is running.");
             }
             else
             {

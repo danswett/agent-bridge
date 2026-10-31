@@ -1155,6 +1155,22 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_task_that_could_not_be_turned_back_on_is_never_reported_as_still_enabled()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        _f.Runtime_.Refused.Add(daemon);
+        _f.Runtime_.DaemonRunning = true;
+
+        var report = (await _f.Migrator().RollbackAsync(dryRun: false)).ToString();
+
+        Assert.Contains($"* {daemon} could not be turned back on", report);
+        Assert.DoesNotContain("still enabled", report);
+        Assert.DoesNotContain("Re-enabled", report);
+        Assert.NotNull(MigrationRecord.Load(_f.Profile).Record);
+    }
+
+    [Fact]
     public async Task A_record_says_which_tasks_the_migration_turned_off()
     {
         var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
