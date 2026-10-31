@@ -925,7 +925,9 @@ public sealed partial class LaunchService : ISessionLauncher
                 // can still be answered, and its answer seen, after the usual ten minutes.
                 var followFor = (RemoteFolderTrust && p.Question == StartupQuestion.Trust) || Volatile.Read(ref p.Answering) != 0
                     ? TimeSpan.FromTicks(Math.Max(options.FollowFor.Ticks, options.TrustFollowFor.Ticks)) : options.FollowFor;
-                if (now - p.At >= followFor)
+                // Never while an answer is being typed or its effect looked for: what it started is
+                // only seen by following, so stopping now would read a session that started as not.
+                if (now - p.At >= followFor && Volatile.Read(ref p.Answering) == 0)
                 {
                     log(p.RegisteredAt is null
                         ? $"launch {Short(p.Key)}: {label} (pid {p.Started.ProcessId}) did not register within {followFor.TotalMinutes:0} minutes; stopped watching"
