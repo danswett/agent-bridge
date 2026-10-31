@@ -21,7 +21,7 @@ public sealed class ShadowRunner(DaemonReader daemon, IShadowHost host, ShadowLe
         var d = daemon.Read();
         if (d.Available && h.Available)
         {
-            var ha = await (homeAssistant ?? new NoDaemonHomeAssistant()).ReadAsync(ct);
+            var ha = await (homeAssistant ?? new NoDaemonHomeAssistant()).ReadAsync(h.Usage, ct);
             d = d with { Usage = ha.Usage, UsageProblem = ha.UsageProblem, Resumable = ha.Resumable, ResumableProblem = ha.ResumableProblem };
         }
         var comparison = ShadowCompare.Compare(d, h, memory, (time ?? TimeProvider.System).GetUtcNow());
