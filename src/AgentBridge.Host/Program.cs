@@ -347,6 +347,8 @@ async Task<int> ServeAsync()
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log);
     var launcher = Launcher(source, attachments, transfers);
     transfers.Launcher = launcher;
+    // Folder-trust questions answered by a person from their devices, where config.json allows it.
+    var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log);
     // Before the connector, which launches from the card through it.
     // The host's own updates, from the machine's update entity: through the app's package, which
     // carries the host (Windows only: elsewhere nothing packages it yet). Installing ends this
@@ -364,6 +366,7 @@ async Task<int> ServeAsync()
         // Asked afresh, as the delivery services ask it for what hello offers: a cached answer
         // could say read-only beside actions offered, or offer none without saying why.
         ReadOnly = () => ReadOnlyReason() ?? (OperatingSystem.IsWindows() ? haProbe?.Active() : null),
+        TrustAnswers = trustAnswers,
     };
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
@@ -405,7 +408,7 @@ async Task<int> ServeAsync()
         Dev = IsDevBuild(),
         Elevated = PeerPolicy.SelfElevated(),
         Machine = machine,
-        Running = new HostSettingsView(settings.RemoteApproval, HostConfigFile.ReadName(identity.Folder)),
+        Running = new HostSettingsView(settings.RemoteApproval, HostConfigFile.ReadName(identity.Folder), settings.Launch.RemoteFolderTrust),
         LocalOnly = localOnly,
         Log = HostLog.FilePath,
         Account = () => identity.Account is { } a ? new HostAccount(a.Login, a.AccountId) : null,
@@ -484,6 +487,7 @@ async Task<int> ServeAsync()
             push?.Attach(new RelayPushSender(relay));
             relayBlobs.Attach(relay);
             transfers.Attach(relay, hub);
+            trustAnswers.Attach(relay);
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff = TimeSpan.FromSeconds(1);
@@ -525,6 +529,7 @@ async Task<int> ServeAsync()
             connection = null;
             relayBlobs.Attach(null);
             transfers.Attach(null, null);
+            trustAnswers.Attach(null);
         }
         reconnects++;
         // A sign-in during the wait goes straight to connecting.

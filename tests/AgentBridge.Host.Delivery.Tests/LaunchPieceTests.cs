@@ -502,6 +502,110 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Equal(StartupQuestion.None, StartupQuestions.Read(null));
     }
 
+    // Codex's question as 0.165 drew it on the test VM (2026-10-31), every row of the window.
+    static readonly string[] CodexAsks =
+    [
+        "",
+        "  Folder access",
+        "  C:\\Users\\me\\agent-tests\\claude-test",
+        "",
+        "  Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:",
+        "  c:\\users\\me\\agent-tests",
+        "",
+        "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings",
+        "  can run code automatically, even without a model request. Continue only if you trust these files. Your trust",
+        "  decision will be saved.",
+        "",
+        "› 1. Trust and continue",
+        "  2. Quit",
+        "",
+        "  enter continue · esc quit",
+    ];
+
+    // Claude's (2.x) and Copilot's (1.0.105), seen there the same day.
+    static readonly string[] ClaudeAsks =
+    [
+        "────────────────",
+        " Accessing workspace:",
+        "",
+        " C:\\Users\\me\\agent-tests\\untrusted-4",
+        "",
+        " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+        " project, or work from your team). If not, take a moment to review what's in this folder first.",
+        "",
+        " Claude Code'll be able to read, edit, and execute files here.",
+        "",
+        " Security guide",
+        "",
+        " > No, exit",
+        "   Yes, I trust this folder",
+        "",
+        " Enter to confirm · Esc to cancel",
+    ];
+
+    static readonly string[] CopilotAsks =
+    [
+        "╭────────────────╮",
+        "│ Confirm folder trust │",
+        "│ ╭──────────────╮ │",
+        "│ │ C:\\Users\\me\\agent-tests\\untrusted-4 │ │",
+        "│ ╰──────────────╯ │",
+        "│ │",
+        "│ Copilot can read files in this folder and, with your permission, edit them or run code and shell commands. It will │",
+        "│ remember your permissions for the rest of this session. │",
+        "│ │",
+        "│ Do you trust the files in this folder? │",
+        "│ │",
+        "│ ❯ 1. Yes │",
+        "│   2. Yes, and remember this folder for future sessions │",
+        "│   3. No (Esc) │",
+        "│ │",
+        "│ ↑/↓ to navigate · enter to select · esc to cancel │",
+        "╰────────────────╯",
+    ];
+
+    [Fact]
+    public void A_folder_trust_question_is_read_in_full_with_the_agents_own_words_and_where_its_highlight_is()
+    {
+        var codex = StartupQuestions.ReadTrust(AgentKind.Codex, CodexAsks, "C:\\Users\\me\\agent-tests\\claude-test")!;
+        Assert.Equal(("c:\\users\\me\\agent-tests", "Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:"), (codex.Root, codex.RootNote));
+        Assert.Equal("Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a model request. Continue only if you trust these files. Your trust decision will be saved.", codex.Warning);
+        Assert.Equal([11, 12], codex.Options);
+        Assert.Equal((0, 0), (codex.Selected, codex.TrustAt));
+        Assert.Equal([2, 11, 12], codex.Hold.Select(h => h.Row));
+        Assert.Equal("› 1. Trust and continue", codex.Hold[1].Text);
+
+        // Claude draws "No, exit" first, and highlights it.
+        var claude = StartupQuestions.ReadTrust(AgentKind.Claude, ClaudeAsks, "C:\\Users\\me\\agent-tests\\untrusted-4")!;
+        Assert.Equal((0, 1, (string?)null), (claude.Selected, claude.TrustAt, claude.Root));
+        Assert.Equal("Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this folder first.\nClaude Code'll be able to read, edit, and execute files here.", claude.Warning);
+
+        var copilot = StartupQuestions.ReadTrust(AgentKind.Copilot, CopilotAsks, "c:\\users\\me\\agent-tests\\untrusted-4")!;
+        Assert.Equal([11, 12, 13], copilot.Options);
+        Assert.Equal((0, 0), (copilot.Selected, copilot.TrustAt));
+        Assert.Equal("Copilot can read files in this folder and, with your permission, edit them or run code and shell commands. It will remember your permissions for the rest of this session.\nDo you trust the files in this folder?", copilot.Warning);
+
+        // A long folder, wrapped over two rows, is still the folder.
+        string[] wrapped = [.. CodexAsks[..2], "  C:\\Users\\me\\agent-tests\\clau", "  de-test", .. CodexAsks[3..]];
+        Assert.NotNull(StartupQuestions.ReadTrust(AgentKind.Codex, wrapped, "C:\\Users\\me\\agent-tests\\claude-test"));
+    }
+
+    [Fact]
+    public void A_trust_question_that_does_not_read_exactly_as_expected_is_left_for_the_machine()
+    {
+        // Another folder than the one launched in; another agent's question.
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Codex, CodexAsks, "C:\\Users\\me\\agent-tests\\other"));
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Claude, CodexAsks, "C:\\Users\\me\\agent-tests\\claude-test"));
+        // Claude's bypass-permissions warning is not a folder question.
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Claude, [" Bypass Permissions mode", " C:\\Users\\me\\agent-tests\\untrusted-4", " ❯ 1. No, exit", "   2. Yes, I accept"], "C:\\Users\\me\\agent-tests\\untrusted-4"));
+        // An option nobody knows, two highlights, or none.
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Codex, [.. CodexAsks[..13], "  3. Trust everything", .. CodexAsks[13..]], "C:\\Users\\me\\agent-tests\\claude-test"));
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Codex, [.. CodexAsks[..12], "› 2. Quit", .. CodexAsks[13..]], "C:\\Users\\me\\agent-tests\\claude-test"));
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Codex, [.. CodexAsks[..11], "  1. Trust and continue", .. CodexAsks[12..]], "C:\\Users\\me\\agent-tests\\claude-test"));
+        // A repository root it says trusting applies to, but does not show.
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Codex, [.. CodexAsks[..5], .. CodexAsks[6..]], "C:\\Users\\me\\agent-tests\\claude-test"));
+    }
+
     [Fact]
     public void Copilot_is_ready_once_its_input_box_or_key_footer_is_drawn_and_no_question_covers_it()
     {

@@ -78,7 +78,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null) => new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null) => new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
     {
         CopilotHome = f.CopilotHome,
         ClaudeHome = f.ClaudeHome,
@@ -90,6 +90,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         ScreenAfter = TimeSpan.Zero,
         ScreenEvery = TimeSpan.FromMilliseconds(25),
         ReadyWait = readyWait ?? TimeSpan.FromSeconds(5),
+        TrustConfirmWait = trustConfirm ?? TimeSpan.FromSeconds(5),
         ExitGrace = TimeSpan.FromMilliseconds(100),
         // The fixture's folders are under temp, which is a system folder to a real launch.
         IsSystemDirectory = _ => false,
@@ -763,11 +764,23 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
     {
         public volatile IReadOnlyList<string>? Rows = CopilotReady;
         public readonly List<int> Typed = [];
+        public readonly List<KeyPlan> Plans = [];
         public int Reads;
+        // What the agent does with keys that reached it (a folder-trust answer).
+        public Action<KeyPlan>? OnTyped;
+        public InjectionResult? Fails;
 
+        // As the worker does: nothing is typed unless the rows a send expects are still there.
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
         {
-            lock (Typed) { Typed.Add(processId); }
+            lock (Typed) { Typed.Add(processId); Plans.Add(plan); }
+            if (Fails is { } failed) { return Task.FromResult(failed); }
+            var rows = Rows ?? [];
+            foreach (var expect in plan.Sends.SelectMany(s => s.Expect ?? []))
+            {
+                if (expect.Row >= rows.Count || rows[expect.Row].TrimEnd() != expect.Text.TrimEnd()) { return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, "fail screen 0")); }
+            }
+            OnTyped?.Invoke(plan);
             return Task.FromResult(new InjectionResult(InjectionStatus.Typed, "ok"));
         }
 

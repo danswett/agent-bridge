@@ -110,7 +110,7 @@ public sealed class HostControl
     HostSettingsView Configured()
     {
         var (settings, _) = HostSettings.Load(options.Folder);
-        return new HostSettingsView(settings.RemoteApproval, HostConfigFile.ReadName(options.Folder));
+        return new HostSettingsView(settings.RemoteApproval, HostConfigFile.ReadName(options.Folder), settings.Launch.RemoteFolderTrust);
     }
 
     // The relay loop reports each change of its connection here.
@@ -162,8 +162,8 @@ public sealed class HostControl
     object Settings(SettingsRequest request)
     {
         if (request.Name is { } name && name.Length > 0 && HostConfigFile.CleanName(name) is null) { throw new ArgumentException("the name has no visible characters"); }
-        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name);
-        log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
+        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust);
+        log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.RemoteFolderTrust is { } t ? $"; folder trust from devices {(t ? "on" : "off")}" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
         var now = Configured();
         Changed();
         return new SettingsResult(now, now != options.Running);

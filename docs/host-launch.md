@@ -55,7 +55,7 @@ differences, each deliberate:
 | The request | A press of a shared button, with a payload slot for settings and the long prompt | One `session.launch`, with a request UUID: a resend gets the first outcome and starts nothing |
 | The prompt | Any length through the payload; line breaks become spaces | At most 16 KiB in the request; every control character becomes a space; one starting with `/` or `!` is refused (the agent would run it as a command, as for a reply); one too long for the command line is refused, not cut |
 | A batch-file agent (npm's `copilot.cmd`, `codex.cmd`) | Quoted for `CommandLineToArgvW` only, so `cmd.exe` acts on `&`, `|`, `%VAR%` in the prompt | `cmd.exe /e:ON /v:OFF /d /c` with each argument quoted as Rust's standard library does since CVE-2024-24576: `%` cannot expand and nothing can leave its quotes. Tested end to end through `cmd.exe` |
-| Folder trust | Answered by the bridge on a person's second press | **Never answered from here.** The outcome says the agent is asking, and only a person at the machine answers it. Copilot's own "Confirm folder trust" is recognised too. Launches are `busy` while it shows, for up to two minutes |
+| Folder trust | Answered by the bridge on a person's second press | **Never answered on its own.** The outcome says the agent is asking, with the question (folder, repository root, the agent's words), and a person answers it at the machine or, with `launch.remoteFolderTrust` on, from their phone, browser or Windows app with a command that device signs (`launch.trust.answer`, below). Never on a press of Launch, from Home Assistant, the MCP server or an agent. Copilot's own "Confirm folder trust" is recognised too. Launches are `busy` while it shows, for up to two minutes |
 | Followed | One launch at a time; a newer press stops following the last | Each launch is followed on its own; starting (worktree, process) is one at a time |
 | Codex binding | The first Codex registration written after the launch | A new Codex session whose process is the one started or runs under it (a process-tree walk, start times checked so a recycled id does not count). Timing alone only when the process cannot be traced and no other Codex launch could claim the session; a session is bound to one launch at most |
 | Resuming twice | Prevented by following one launch at a time | A session a launch started an agent on is not resumable while that agent runs, checked again under the start lock, so two presses from two devices start one agent |
@@ -103,8 +103,17 @@ differences, each deliberate:
    session's own window. Exited first (with 3 s for a launcher that hands over and exits):
    `failed`. A trust question: `unconfirmed`, and other launches are `busy` while it shows, up
    to two minutes. Codex's hook review: `unconfirmed`. Nothing in 60 s: `unconfirmed`. It is
-   followed for up to 10 minutes in all; its worktree lock is lifted once it registers, and
-   left for a person to look at if it never does.
+   followed for up to 10 minutes in all (30 while a trust question a person may answer from
+   their devices waits); its worktree lock is lifted once it registers, and left for a person
+   to look at if it never does.
+8. A trust question answered from a person's device (`launch.trust.answer`, with
+   `launch.remoteFolderTrust` on): the host checks the signed command and that its signer is a
+   person's device on the relay, reads the agent's window again, and types only into that
+   agent's own console while the folder and options read exactly as they did. Trust moves the
+   highlight to the trusting option (Claude highlights "No, exit" first), sees it there, and
+   presses Enter; Quit presses Esc. It answers `started` once the session registers (Copilot:
+   its window ready), `declined` once the agent closes, and otherwise `unconfirmed`, "Not
+   confirmed: answer at the machine", after 60 s. Nothing is typed twice.
 
 ## Isolation
 
@@ -217,7 +226,10 @@ launch 2b6e1f0a: started session 0f3c1a2b
 ```
 
 A trust question logs `… is asking whether to trust the folder; left for a person at the
-machine` and `…: unconfirmed session … (Copilot started, and is asking whether to trust …)`;
-a later press while it shows, `…: busy (Busy: …)`. At start the host logs whether launching
+machine` (or `a person can answer it here or from their devices`) and `…: unconfirmed session …
+(Copilot started, and is asking whether to trust …)`; a later press while it shows, `…: busy
+(Busy: …)`. An answer from a device logs `folder trust for pwa 1a2b3c4d: trust: enter (if the
+screen still shows it) -> Typed ok` and `folder-trust answer 5d0c9f3e from pwa 1a2b3c4d: started`;
+a refusal, `folder-trust answer refused from 1a2b3c4d: …`. At start the host logs whether launching
 is on and which workspaces are approved, and any problem in `config.json`'s `launch` section.
 Prompts and attachment names are never logged, only their length and count.

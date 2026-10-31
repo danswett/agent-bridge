@@ -1,3 +1,5 @@
+using AgentBridge.Protocol;
+
 namespace AgentBridge.Host.Delivery.Launch;
 
 // A question an agent can stop on at startup, before its session registers, which only a person
@@ -41,5 +43,131 @@ public static class StartupQuestions
             if (row.StartsWith('\u257B') && i + 1 < rows.Count && rows[i + 1].TrimStart().StartsWith('\u2503')) { return true; }
         }
         return false;
+    }
+
+    // A folder-trust question read in full, to show a person and to answer: the agent's own
+    // words, its options as they are drawn (rows of the window), which is highlighted, and which
+    // one trusts. Hold is what must still be on the screen, row for row, when a key is sent: the
+    // folder and every option, highlight included.
+    public sealed record TrustScreen(string? Root, string? RootNote, string? Warning, IReadOnlyList<int> Options, int Selected, int TrustAt, IReadOnlyList<ScreenRow> Hold);
+
+    // Each agent's options, as drawn after its highlight and number: the one that trusts, and
+    // every other it offers. Copilot's "Yes" trusts for this session only; remembering the folder
+    // for later sessions is left to a person at the machine.
+    static (string Trust, string[] All)? OptionsOf(AgentKind kind) => kind switch
+    {
+        AgentKind.Copilot => ("Yes", ["Yes", "Yes, and remember this folder for future sessions", "No (Esc)"]),
+        AgentKind.Claude => ("Yes, I trust this folder", ["Yes, I trust this folder", "No, exit"]),
+        AgentKind.Codex => ("Trust and continue", ["Trust and continue", "Quit"]),
+        _ => null,
+    };
+
+    // Links and footers drawn beside the question, which are not its words.
+    static readonly string[] NotWarning = ["Security guide"];
+
+    // The question in the window, when it is the folder-trust question for exactly this folder
+    // and every part of it reads as expected; otherwise null, and it is answered at the machine.
+    // Claude's bypass-permissions warning is not a folder question, and is never read as one.
+    public static TrustScreen? ReadTrust(AgentKind kind, IReadOnlyList<string>? rows, string folder)
+    {
+        if (rows is null || Read(rows) != StartupQuestion.Trust || OptionsOf(kind) is not { } known || folder.Length == 0) { return null; }
+        var clean = rows.Select(Clean).ToList();
+
+        // The options: one block of rows, each one the agent offers, exactly one highlighted.
+        var options = new List<int>();
+        var selected = -1;
+        var trustAt = -1;
+        for (var i = 0; i < clean.Count; i++)
+        {
+            if (Option(clean[i]) is not { } option) { continue; }
+            if (!known.All.Contains(option.Label, StringComparer.Ordinal))
+            {
+                // A numbered row that is not one of its options: the question is not the one known.
+                if (option.Numbered) { return null; }
+                continue;
+            }
+            if (options.Count > 0 && options[^1] != i - 1) { return null; }
+            if (option.Highlighted)
+            {
+                if (selected >= 0) { return null; }
+                selected = options.Count;
+            }
+            if (option.Label == known.Trust) { trustAt = options.Count; }
+            options.Add(i);
+        }
+        if (options.Count != known.All.Length || selected < 0 || trustAt < 0) { return null; }
+
+        // Paragraphs above the options: rows between blank ones.
+        var paragraphs = new List<(int First, int Last)>();
+        for (var i = 0; i < options[0]; i++)
+        {
+            if (clean[i].Length == 0) { continue; }
+            var first = i;
+            while (i + 1 < options[0] && clean[i + 1].Length > 0) { i++; }
+            paragraphs.Add((first, i));
+        }
+        // The folder, drawn whole on rows of its own (wrapped, if it is long), under its heading
+        // or apart from it.
+        var at = -1;
+        var from = -1;
+        for (var k = 0; k < paragraphs.Count && at < 0; k++)
+        {
+            for (var s = paragraphs[k].First; s <= paragraphs[k].Last; s++)
+            {
+                if (string.Equals(Joined(clean, s, paragraphs[k].Last), folder, StringComparison.OrdinalIgnoreCase)) { at = k; from = s; break; }
+            }
+        }
+        if (at < 0) { return null; }
+
+        string? root = null, note = null;
+        var warning = new List<string>();
+        for (var k = at + 1; k < paragraphs.Count; k++)
+        {
+            var (first, last) = paragraphs[k];
+            // Codex: "Note: ... Trusting will apply to the repository root:" and that folder.
+            var noteEnd = Enumerable.Range(first, last - first + 1).FirstOrDefault(r => clean[r].EndsWith("repository root:", StringComparison.Ordinal), -1);
+            if (noteEnd >= 0)
+            {
+                note = string.Join(' ', clean.Skip(first).Take(noteEnd - first + 1));
+                // The root is drawn under the note, in the same block; a note without it is not
+                // a question a person can be shown in full.
+                root = noteEnd < last ? Joined(clean, noteEnd + 1, last) : null;
+                if (root is not { Length: > 0 }) { return null; }
+                continue;
+            }
+            var words = string.Join(' ', clean.Skip(first).Take(last - first + 1));
+            if (!NotWarning.Contains(words, StringComparer.Ordinal)) { warning.Add(words); }
+        }
+        var text = warning.Count == 0 ? null : Limits.KeepStart(string.Join("\n", warning), TrustProtocol.MaxText);
+        var hold = Enumerable.Range(from, paragraphs[at].Last - from + 1).Concat(options)
+            .Select(r => new ScreenRow(r, rows[r].TrimEnd())).ToList();
+        return new TrustScreen(root, note, text, options, selected, trustAt, hold);
+    }
+
+    // A row without the frame some agents draw around the question, or the spaces around it.
+    static string Clean(string row)
+    {
+        var s = row.AsSpan().Trim();
+        while (s.Length > 0 && Frame.Contains(s[0])) { s = s[1..].TrimStart(); }
+        while (s.Length > 0 && Frame.Contains(s[^1])) { s = s[..^1].TrimEnd(); }
+        return s.ToString();
+    }
+
+    const string Frame = "│┃║╭╮╰╯─━═╻╹┌┐└┘";
+
+    // Rows of a wrapped line, as one: a path is drawn without spaces, and wrapping adds none.
+    static string Joined(List<string> clean, int first, int last) => string.Concat(clean.Skip(first).Take(last - first + 1));
+
+    // An option row: its highlight (› ❯ >), its number, and its label.
+    static (bool Highlighted, bool Numbered, string Label)? Option(string row)
+    {
+        var s = row.AsSpan();
+        var highlighted = s.Length > 0 && s[0] is '›' or '❯' or '>' or '▸';
+        if (highlighted) { s = s[1..].TrimStart(); }
+        var digits = 0;
+        while (digits < s.Length && char.IsAsciiDigit(s[digits])) { digits++; }
+        var numbered = digits > 0 && digits + 1 < s.Length && s[digits] == '.' && s[digits + 1] == ' ';
+        if (numbered) { s = s[(digits + 1)..].TrimStart(); }
+        return s.Length == 0 ? null : (highlighted, numbered, s.ToString());
     }
 }

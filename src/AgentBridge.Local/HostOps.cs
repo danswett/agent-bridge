@@ -45,7 +45,8 @@ public sealed record SignInStatus(SignInState State, string? UserCode = null, st
 
 // What the host's config.json says now. A change takes effect when the host restarts, which
 // RestartRequired on the status says.
-public sealed record HostSettingsView(bool RemoteApproval, string? Name = null);
+// RemoteFolderTrust: launch.remoteFolderTrust, folder-trust questions answered from a person's devices.
+public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false);
 
 public sealed record HostStatus
 {
@@ -73,6 +74,6 @@ public sealed record HostStatus
 public sealed record SignInRequest(string? Relay = null);
 
 // host.settings: any of these; absent ones are left as they are. Name "" clears it.
-public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name = null);
+public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name = null, bool? RemoteFolderTrust = null);
 
 public sealed record SettingsResult(HostSettingsView Settings, bool RestartRequired);
