@@ -584,6 +584,9 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Equal(a.Warning, b.Warning);
         Assert.False(StartupQuestions.SameQuestion(a, b));
         Assert.True(StartupQuestions.SameQuestion(a, StartupQuestions.ReadTrust(AgentKind.Claude, Asks("one"), "C:\\w")));
+
+        // Without the agent's words about what trusting lets it do, it is not the whole question.
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Claude, [" Accessing workspace:", "", " C:\\w", "", " > No, exit", "   Yes, I trust this folder"], "C:\\w"));
     }
 
     [Fact]

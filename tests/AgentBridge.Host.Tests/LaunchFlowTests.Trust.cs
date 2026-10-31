@@ -326,6 +326,24 @@ public sealed partial class LaunchFlowTests
     }
 
     [Fact]
+    public async Task A_question_that_changes_while_the_highlight_moves_never_gets_Enter()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        starter.Registers = false;
+        screens.Rows = ClaudeAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var id = (await LaunchTrustAsync(ch, new { agent = "claude", workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+
+        // The highlight lands on trust, but the words above it are no longer the ones shown.
+        screens.OnTyped = _ => screens.Rows = [.. ClaudeAsks(onYes: true).Select(r => r.Replace("execute files here", "execute anything here"))];
+        var answer = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key));
+
+        Assert.Equal(("unconfirmed", "Not confirmed: answer at the machine. The question in its window changed after the highlight moved, so Enter was not pressed.", null), answer);
+        Assert.False(Assert.Single(screens.Plans).Sends[0].Enter);
+    }
+
+    [Fact]
     public async Task Agent_ha_bridge_starting_after_the_highlight_moved_stops_the_answer_before_Enter()
     {
         locator.Installed["claude"] = @"C:\fake\claude.exe";

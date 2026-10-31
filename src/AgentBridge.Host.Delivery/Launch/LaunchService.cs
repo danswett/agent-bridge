@@ -1144,9 +1144,12 @@ public sealed partial class LaunchService : ISessionLauncher
                 log($"launch {Short(p.Key)}: folder trust for {by}: {Math.Abs(steps)} {(steps > 0 ? "down" : "up")} -> {moved.Status} {moved.Detail}");
                 if (moved.Status == InjectionStatus.NothingTyped) { return TrustRefused($"its window changed before anything was typed ({moved.Detail}); answer at the machine"); }
                 if (moved.Status != InjectionStatus.Typed) { return TrustUnconfirmed("the highlight may have moved, but whether it did is not known"); }
+                var asked = screen;
                 screen = await ReadTrustAsync(p, window);
                 if (screen is null || screen.Selected != screen.TrustAt) { return TrustUnconfirmed("the highlight was not seen on the option that trusts the folder, so Enter was not pressed"); }
-                if (!Shown(p, questionId, screen)) { return TrustUnconfirmed("the question in its window changed after the highlight moved, so Enter was not pressed"); }
+                // Enter's expectations come from this read, so it must be the question the command
+                // was signed for: the same as before the move, and still under that id.
+                if (!StartupQuestions.SameQuestion(screen, asked) || !Shown(p, questionId, screen)) { return TrustUnconfirmed("the question in its window changed after the highlight moved, so Enter was not pressed"); }
             }
             if (Stopped() is { } halt) { return wrote ? TrustUnconfirmed($"the highlight was moved, but Enter was not pressed: {halt}") : TrustRefused(AtMachine(null, null)!); }
             var plan = new KeyPlan([new KeySend(trust ? "" : KeyPlan.Escape, trust, 0, 0, screen.Hold)]);

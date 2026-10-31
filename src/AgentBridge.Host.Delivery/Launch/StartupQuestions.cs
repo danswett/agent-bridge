@@ -146,8 +146,11 @@ public static class StartupQuestions
             var para = string.Join(' ', clean.Skip(first).Take(last - first + 1));
             if (!NotWarning.Contains(para, StringComparer.Ordinal)) { warning.Add(para); }
         }
-        var words = warning.Count == 0 ? null : string.Join("\n", warning);
-        var text = words is null ? null : Limits.KeepStart(words, TrustProtocol.MaxText);
+        // Each of them says what trusting lets it do; a read without those words is not the whole
+        // question, and a person is not asked to answer part of one.
+        if (warning.Count == 0) { return null; }
+        var words = string.Join("\n", warning);
+        var text = Limits.KeepStart(words, TrustProtocol.MaxText);
         // Everything from the folder to the last option, blank rows too: the folder, the root, the
         // agent's words and every option, highlight included, as they were read.
         var hold = Enumerable.Range(from, options[^1] - from + 1).Select(r => new ScreenRow(r, rows[r].TrimEnd())).ToList();
