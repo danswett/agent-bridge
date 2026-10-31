@@ -848,28 +848,44 @@ if ($existing) {
 # them and SYSTEM, so no local user can swap the configuration the restrictions live in. Ownership
 # matters as much as the ACL: an owner keeps WRITE_DAC and could grant itself access back.
 function Invoke-Icacls { & icacls.exe @args | Out-Null; if ($LASTEXITCODE -ne 0) { throw "icacls $($args -join ' ') failed" } }
+# Replaces owner and DACL outright. icacls /grant:r only replaces the named principals' entries, so
+# anyone else's explicit grant would survive it.
+function Set-ExactAcl([string] $Path, [string[]] $Grants) {
+    $isDir = (Get-Item -LiteralPath $Path -Force).PSIsContainer
+    $acl = if ($isDir) { New-Object Security.AccessControl.DirectorySecurity } else { New-Object Security.AccessControl.FileSecurity }
+    $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544'))
+    $acl.SetAccessRuleProtection($true, $false)
+    $inherit = if ($isDir) { 'ContainerInherit, ObjectInherit' } else { 'None' }
+    foreach ($grant in $Grants) {
+        $sidText, $rights = $grant.Split('=')
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule (
+            (New-Object Security.Principal.SecurityIdentifier $sidText), [Security.AccessControl.FileSystemRights] $rights,
+            [Security.AccessControl.InheritanceFlags] $inherit, 'None', 'Allow')))
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+$adminOnly = 'S-1-5-18=FullControl', 'S-1-5-32-544=FullControl'
 New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
 # A host key someone else planted is not one to vouch for, so check owners before taking them over.
-foreach ($hostKeyFile in Get-ChildItem $sshDir -Filter 'ssh_host_*_key' -File) {
+$hostKeys = @(Get-ChildItem $sshDir -File -Force | Where-Object { $_.Name -like 'ssh_host_*_key' })
+foreach ($hostKeyFile in $hostKeys) {
     $owner = (Get-Acl $hostKeyFile.FullName).Owner
     if ($owner -notin 'NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators') { throw "$($hostKeyFile.Name) is owned by $owner; refusing to trust it" }
 }
-Invoke-Icacls $sshDir /setowner '*S-1-5-32-544'
-Invoke-Icacls $sshDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-11:(OI)(CI)RX'
-if (Get-ChildItem $sshDir -Force) {
-    Invoke-Icacls (Join-Path $sshDir '*') /setowner '*S-1-5-32-544' /T
-    # Files directly here drop any explicit grants and inherit the directory's ACL ...
-    foreach ($file in Get-ChildItem $sshDir -File -Force) { Invoke-Icacls $file.FullName /reset }
-    # ... except private host keys, which sshd requires be readable by SYSTEM and Administrators only,
-    foreach ($file in Get-ChildItem $sshDir -Filter 'ssh_host_*_key' -File) {
-        Invoke-Icacls $file.FullName /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'
-    }
-    # ... and sshd's logs, which stay private as the installer made them.
-    $logDir = Join-Path $sshDir 'logs'
-    if (Test-Path $logDir) {
-        Invoke-Icacls $logDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
-        if (Get-ChildItem $logDir -Force) { Invoke-Icacls (Join-Path $logDir '*') /reset /T }
-    }
+# Private host keys first, so no later step can expose them even briefly: sshd requires them to be
+# readable by SYSTEM and Administrators only.
+foreach ($hostKeyFile in $hostKeys) { Set-ExactAcl $hostKeyFile.FullName $adminOnly }
+Set-ExactAcl $sshDir ($adminOnly + 'S-1-5-11=ReadAndExecute')
+if (Get-ChildItem $sshDir -Force) { Invoke-Icacls (Join-Path $sshDir '*') /setowner '*S-1-5-32-544' /T }
+# Other files directly here drop any explicit grants and inherit the directory's ACL ...
+foreach ($file in Get-ChildItem $sshDir -File -Force | Where-Object { $_.Name -notlike 'ssh_host_*_key' }) {
+    Invoke-Icacls $file.FullName /reset
+}
+# ... and sshd's logs stay private, as the installer made them.
+$logDir = Join-Path $sshDir 'logs'
+if (Test-Path $logDir) {
+    Set-ExactAcl $logDir $adminOnly
+    if (Get-ChildItem $logDir -Force) { Invoke-Icacls (Join-Path $logDir '*') /reset /T }
 }
 
 $svc = Get-CimInstance Win32_Service -Filter "Name='sshd'"
@@ -907,8 +923,7 @@ $options = 'restrict,port-forwarding,permitopen="' + $target + '",no-pty,no-agen
 $keys = Join-Path $sshDir "${jumpUser}_authorized_keys"
 Remove-Item -Path $keys -Force -ErrorAction SilentlyContinue
 Set-Content -Path $keys -Value "$options $jumpKey" -Encoding ascii
-& icacls.exe $keys /inheritance:r /grant '*S-1-5-32-544:F' '*S-1-5-18:F' "*${sid}:R" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "icacls $keys failed" }
+Set-ExactAcl $keys ($adminOnly + "$sid=Read")
 
 $config = @"
 # Written by build/rehearsal-azure-vmw.ps1 -JumpVia: key-only, one account, one forward, no shell.
@@ -934,9 +949,8 @@ ForceCommand exit 1
 if (-not (Test-Path (Join-Path $sshDir 'ssh_host_ed25519_key'))) {
     & (Join-Path (Split-Path $sshd) 'ssh-keygen.exe') -A
     if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen -A failed' }
-    foreach ($file in Get-ChildItem $sshDir -Filter 'ssh_host_*_key' -File) {
-        Invoke-Icacls $file.FullName /setowner '*S-1-5-32-544'
-        Invoke-Icacls $file.FullName /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'
+    foreach ($file in Get-ChildItem $sshDir -File -Force | Where-Object { $_.Name -like 'ssh_host_*_key' }) {
+        Set-ExactAcl $file.FullName $adminOnly
     }
 }
 $candidate = Join-Path $sshDir 'sshd_config.candidate'
