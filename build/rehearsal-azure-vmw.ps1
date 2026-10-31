@@ -316,7 +316,8 @@ Host rehearsal-w $Ip
     ExitOnForwardFailure yes
     ServerAliveInterval 30
 "@
-    Set-Content -Path $SshConfigPath -Value $config -Encoding ascii
+    # UTF-8 without a BOM: the file names paths, which may not be ASCII, and ssh reads UTF-8.
+    Set-Content -Path $SshConfigPath -Value $config -Encoding utf8NoBOM
 }
 
 function Invoke-VmRunCommand {
@@ -877,6 +878,13 @@ PermitTTY no
 X11Forwarding no
 ForceCommand exit 1
 "@
+# A fresh install has no host keys until sshd first starts, and `sshd -t` checks them. Generate
+# them directly rather than starting the server under its permissive default configuration.
+New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+if (-not (Test-Path (Join-Path $sshDir 'ssh_host_ed25519_key'))) {
+    & (Join-Path (Split-Path $sshd) 'ssh-keygen.exe') -A
+    if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen -A failed' }
+}
 $candidate = Join-Path $sshDir 'sshd_config.candidate'
 Set-Content -Path $candidate -Value $config -Encoding ascii
 & $sshd -t -f $candidate
@@ -886,7 +894,8 @@ Set-Service sshd -StartupType Automatic
 Restart-Service sshd
 
 "firewall=$alias/$fwProfile from $allowedRemote"
-"HOSTKEY=$((Get-Content (Join-Path $sshDir 'ssh_host_ed25519_key.pub')).Trim())"
+# Algorithm and key only, the form -JumpHostKey accepts; the file's trailing comment is dropped.
+"HOSTKEY=$(((Get-Content (Join-Path $sshDir 'ssh_host_ed25519_key.pub')).Trim() -split '\s+')[0..1] -join ' ')"
 '@
 
 function Expand-Guest([string] $Script) {
