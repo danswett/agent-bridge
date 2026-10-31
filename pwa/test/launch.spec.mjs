@@ -366,6 +366,32 @@ test.describe('a folder-trust question', () => {
     await expect(card(page).getByRole('button', { name: 'Trust' })).toBeFocused();
   });
 
+  test('a machine that stops being read-only is asked again, and Trust is offered at once', async ({ page }) => {
+    await openDemo(page);
+    const reason = 'agent-ha-bridge is running for this user (AgentBridgeDaemon)';
+    await ask(page, { ...QUESTION, answerable: false, atMachine: `Answer at the machine: ${reason}.` });
+    await page.evaluate((why) => { const d = window.agentBridgeDemo; d.launchPanel.setTarget({ ...d.target(), transfers: null, trust: null, inspectOnly: true, readOnly: why }); }, reason);
+    await panel(page).getByRole('button', { name: 'Waiting on Demo machine' }).click();
+    await expect(card(page).locator('.trust-at-machine')).toHaveText(`Answer at the machine: ${reason}.`);
+
+    // agent-ha-bridge stopped: the machine answers again, and says the question can be answered.
+    await ask(page, QUESTION);
+    await page.evaluate(() => window.agentBridgeDemo.retarget());
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
+  });
+
+  test('a busy launch that names a question asks again, which may offer Trust now', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, { ...QUESTION, answerable: false, atMachine: 'Answer at the machine. No device is approved yet.' });
+    await openPanel(page);
+    await expect(card(page).locator('.trust-at-machine')).toBeVisible();
+    // Approved at the machine since: the busy launch's question, and the machine's list, say so.
+    await script(page, { outcome: 'busy', reason: 'a session this machine launched is waiting at its folder trust prompt', trust: QUESTION });
+    await field(page, 'prompt').fill('Go.');
+    await launchButton(page).tap();
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
+  });
+
   test('a machine where agent-ha-bridge runs shows a waiting question read-only, and nothing to launch', async ({ page }) => {
     await page.addInitScript(() => { window.__cspViolations = []; });
     await page.goto('?demo=1&static=1&ahb=1');

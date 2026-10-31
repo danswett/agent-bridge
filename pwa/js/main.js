@@ -246,6 +246,8 @@ async function startDemo() {
     host, client, store, view, answers, replies, stops, launches, launchPanel, book, blobs: blobStore,
     // The launch panel told about the same machine again, as presence updates tell it.
     retarget: () => launchPanel.setTarget(target()),
+    // The target as it is now, for a test to tell the panel about it with a change (read-only).
+    target,
     // A new usage report from the host, sent as usage.update.
     usage: (report) => host.setUsage(report),
     // The next answers' outcomes, in order: 'delivered' (the default once these run out),
@@ -474,7 +476,9 @@ function begin(account) {
     showSessionsFor(name);
     // While reconnecting the panel stays, with any launch still waiting to be resent; a machine
     // that comes back without sessions.launch hides it.
-    const launchable = hosts.phase === 'open' ? hosts.capabilities.includes(LAUNCH.capability) : launchPanel.hostId === hosts.targetId;
+    // While reconnecting, a machine shown read-only stays so: it never offered launching.
+    const wasInspect = launchPanel.hostId === hosts.targetId && launchPanel.inspectOnly;
+    const launchable = hosts.phase === 'open' ? hosts.capabilities.includes(LAUNCH.capability) : launchPanel.hostId === hosts.targetId && !wasInspect;
     const targetId = hosts.targetId;
     // The account's other machines' sessions, each signed for when picked: only where this one
     // takes them, and only what they hand on.
@@ -495,9 +499,10 @@ function begin(account) {
     const load = () => (hosts.client ? hosts.client.launchOptions() : Promise.reject(new Error('not connected')));
     // A machine that stopped taking launches (read-only, agent-ha-bridge) still shows a
     // folder-trust question waiting on it, read-only: only one that offered launching before.
-    const inspect = !launchable && hosts.phase === 'open' && !!hosts.machine?.readOnly;
+    const inspect = !launchable && (hosts.phase === 'open' ? !!hosts.machine?.readOnly : wasInspect);
+    const readOnly = hosts.phase === 'open' ? hosts.machine?.readOnly : launchPanel.readOnly;
     launchPanel.setTarget(launchable ? { hostId: targetId, machineName: name, load, transfers, trust }
-      : inspect ? { hostId: targetId, machineName: name, load, transfers: null, trust: null, inspectOnly: true, readOnly: hosts.machine.readOnly } : null);
+      : inspect ? { hostId: targetId, machineName: name, load, transfers: null, trust: null, inspectOnly: true, readOnly } : null);
     switch (hosts.phase) {
       case 'waiting': return setHostState(hosts.error || (hosts.targetOnline ? `Connecting to ${name}…` : `${name} is offline. Its sessions will show when it is back.`));
       case 'opening': return setHostState(`Opening an end-to-end encrypted channel to ${name}…`);

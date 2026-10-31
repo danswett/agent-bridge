@@ -164,6 +164,9 @@ export class LaunchPanel {
   get open() { return this.#open; }
 
   get hostId() { return this.#target?.hostId ?? null; }
+  // Whether the machine shown is shown read-only (it takes no launches now), and why.
+  get inspectOnly() { return !!this.#target?.inspectOnly; }
+  get readOnly() { return this.#target?.readOnly ?? null; }
 
   setOpen(open) {
     this.#open = open;
@@ -185,11 +188,13 @@ export class LaunchPanel {
   setTarget(target) {
     const same = target && this.#target && target.hostId === this.#target.hostId;
     if (same) {
-      const was = this.#target.inspectOnly;
+      const was = !!this.#target.inspectOnly;
       this.#target = target;
       this.#title();
       this.#draw();
-      if (target.inspectOnly && !was && !this.#loading) { this.refresh(); }
+      // Read-only begun or ended: what the machine says about its questions (answerable, why
+      // not) has changed, so it is asked again, superseding any answer still on its way.
+      if (!!target.inspectOnly !== was) { this.refresh(); }
       return;
     }
     this.#unwatch?.();
@@ -541,8 +546,10 @@ export class LaunchPanel {
     this.#drawTrust();
     if (entry?.state !== 'done') { return; }
     if (entry.outcome === 'started') { this.els.prompt.value = ''; this.#drawCount(); this.#openSession(false); }
-    // What it offers has changed: a resumed session is no longer resumable, a worktree counts.
-    if (['started', 'unconfirmed'].includes(entry.outcome)) { this.refresh(); }
+    // What it offers has changed: a resumed session is no longer resumable, a worktree counts. A
+    // busy that names a folder-trust question may name one that can be answered now, which the
+    // choices shown from before may still list as not.
+    if (['started', 'unconfirmed'].includes(entry.outcome) || (entry.outcome === 'busy' && entry.detail?.trust)) { this.refresh(); }
   }
 
   // Jumps to the new session's card, which may arrive (session.upsert) after the outcome.
