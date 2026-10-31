@@ -227,6 +227,37 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task A_check_that_finds_a_newer_release_after_one_that_found_none_is_no_longer_current()
+    {
+        await using var c = await Ready();
+        await Press(c, "check_updates");
+        await Pass(c);
+        Assert.Equal("current", Stage);
+        updates.Newer = Release();
+        await Press(c, "check_updates");
+        await Pass(c);
+        Assert.Equal("", Stage);
+        Assert.Equal("0.2.0", State["latest_version"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task An_update_that_cannot_be_recorded_is_not_handed_over()
+    {
+        // Something in the way of the connector's state file: the host that would come back could
+        // not tell how the update ended.
+        Directory.CreateDirectory(StateFile);
+        updates.Newer = Release();
+        await using var c = await Ready();
+        await Press(c, "install_update");
+        await Settle(c, () => ha.NotifiedNow().Count == 1);
+        var (_, data) = Assert.Single(ha.NotifiedNow());
+        Assert.Equal($"Bridge update failed on {Machine}", data["title"]!.GetValue<string>());
+        Assert.Contains("could not be recorded", data["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Empty(updates.Applied);
+        Assert.Equal("failed", Stage);
+    }
+
+    [Fact]
     public async Task A_press_from_before_the_host_started_is_history_not_an_instruction()
     {
         updates.Newer = Release();
@@ -402,6 +433,38 @@ public sealed class UpdateTests : IDisposable
         Assert.Equal($"Bridge update failed on {Machine}", data["title"]!.GetValue<string>());
         Assert.StartsWith("The bridge update to 0.2.0 did not complete: the host restarted on 0.1.0.", data["message"]!.GetValue<string>());
         Assert.Equal("failed", Stage);
+    }
+
+    [Fact]
+    public async Task An_outcome_is_told_even_after_update_checks_were_turned_off()
+    {
+        Attempt("0.2.0", FakeSessions.T0.AddMinutes(-1));
+        updates.Installed = "0.2.0";
+        await using var c = await Ready(check: false);
+        var (_, data) = Assert.Single(ha.NotifiedNow());
+        Assert.Equal($"Bridge installer completed on {Machine}", data["title"]!.GetValue<string>());
+        Assert.Equal("completed", Stage);
+        Assert.Null(JsonNode.Parse(File.ReadAllText(StateFile))!["update"]);
+        foreach (var button in HaContract.UpdateButtonConfigs(Slug, Machine)) { Assert.False(ha.Retained.ContainsKey(button.Topic), button.Topic); }
+        Assert.Equal(0, updates.Checks);
+    }
+
+    [Fact]
+    public async Task An_outcome_Home_Assistant_will_not_take_holds_up_no_press_and_is_told_once_it_will()
+    {
+        Attempt("0.2.0", FakeSessions.T0.AddMinutes(-1));
+        updates.Installed = "0.2.0";
+        ha.NotifyFailsFor = s => s == "persistent_notification.create";
+        await using var c = await Ready();
+        Assert.Empty(ha.NotifiedNow());
+        var checks = updates.Checks;
+        await Press(c, "check_updates");
+        await Pass(c);
+        Assert.Equal(checks + 1, updates.Checks);
+        ha.NotifyFailsFor = null;
+        await Pass(c, 16);
+        var (_, data) = Assert.Single(ha.NotifiedNow());
+        Assert.Equal($"Bridge installer completed on {Machine}", data["title"]!.GetValue<string>());
     }
 
     [Fact]

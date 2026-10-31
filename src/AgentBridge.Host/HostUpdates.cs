@@ -31,12 +31,12 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
     string AppFolder => Path.Combine(dataRoot, "app");
 
     // The app's feed.txt: a folder or URL holding releases.win.json, for a test VM or a private
-    // channel.
+    // channel. Absent is GitHub; one that is there but cannot be read is an error, as in the app,
+    // never GitHub: a press must not install from another channel than the one configured.
     string Feed()
     {
         var file = Path.Combine(AppFolder, "feed.txt");
-        try { return File.Exists(file) ? File.ReadAllText(file).Trim() : ""; }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return ""; }
+        return File.Exists(file) ? File.ReadAllText(file).Trim() : "";
     }
 
     // The app's "Include pre-releases" for this profile (AppPreferences.Prereleases, on unless
@@ -74,16 +74,29 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
         }
     }
 
+    // From the package alone, whatever the feed: a feed that cannot be read now is a check's
+    // problem, not a reason to stop serving the buttons.
     public string? Installed
     {
         get
         {
-            try { var m = Manager(); return m.IsInstalled ? m.CurrentVersion?.ToString() : null; }
+            try
+            {
+                var m = new UpdateManager(new SimpleFileSource(new DirectoryInfo(AppFolder)), null, VelopackLocator.CreateDefaultForPlatform());
+                return m.IsInstalled ? m.CurrentVersion?.ToString() : null;
+            }
             catch (Exception e) when (e is not OutOfMemoryException) { return null; }
         }
     }
 
-    public string? ReleasesUrl => Feed().Length == 0 ? $"{Repository}/releases" : null;
+    public string? ReleasesUrl
+    {
+        get
+        {
+            try { return Feed().Length == 0 ? $"{Repository}/releases" : null; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        }
+    }
 
     public async Task<UpdateRelease?> CheckAsync(CancellationToken cancellationToken)
     {

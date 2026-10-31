@@ -425,8 +425,8 @@ public sealed partial class HaConnector : IAsyncDisposable
         launchPressBaselined = false;
         launchOutcomesRestored = false;
         // The update buttons only where the host's updater can act on them.
-        updateInstalled = options.CheckForUpdates ? updates?.Installed : null;
-        updateServing = updateInstalled is not null;
+        updateInstalled = updates?.Installed;
+        updateServing = options.CheckForUpdates && updateInstalled is not null;
         foreach (var topic in Unserved()) { await ha.PublishAsync(topic, "", true, ct); }
 
         await UpdateStartupAsync(now, ct);
@@ -965,13 +965,14 @@ public sealed partial class HaConnector : IAsyncDisposable
     // too, and two saves sharing the temporary file could leave an older snapshot in place.
     readonly object ledgerSave = new();
 
-    void SaveLedger()
+    // Whether it was written (or there is nowhere to write it).
+    bool SaveLedger()
     {
-        if (options.StateFile is not { } path) { return; }
-        lock (ledgerSave) { WriteLedger(path); }
+        if (options.StateFile is not { } path) { return true; }
+        lock (ledgerSave) { return WriteLedger(path); }
     }
 
-    void WriteLedger(string path)
+    bool WriteLedger(string path)
     {
         string text;
         lock (gate)
@@ -990,10 +991,12 @@ public sealed partial class HaConnector : IAsyncDisposable
             var temp = path + ".tmp";
             File.WriteAllText(temp, text);
             File.Move(temp, path, overwrite: true);
+            return true;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             Problem("ledger", $"Home Assistant connector could not write {path}: {e.Message}");
+            return false;
         }
     }
 

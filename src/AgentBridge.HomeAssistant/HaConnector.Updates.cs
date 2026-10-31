@@ -69,8 +69,10 @@ public sealed partial class HaConnector
 
     string UpdateEntity(string key) => HaContract.MachineEntityId("button", key, Slug);
 
-    // Asked of the updater once per start: it reads the package's files.
+    // Asked of the updater once per start: it reads the package's files. Known whether or not
+    // checks are on, so an update's outcome is told even after they were turned off.
     string? updateInstalled;
+    DateTimeOffset nextOutcomeTry;
     string Installed => updateInstalled ?? options.Version;
 
     // A change the watch reported on the Install or Check button.
@@ -112,8 +114,26 @@ public sealed partial class HaConnector
 
     async Task UpdatesAsync(DateTimeOffset now, CancellationToken ct)
     {
-        if (!updateServing) { return; }
-        await UpdateOutcomeAsync(now, ct);
+        // The outcome answers an earlier press, not a check: told whatever the buttons are now, and
+        // on its own retry, so a notification Home Assistant keeps refusing holds up no new press.
+        if (updateInstalled is not null && now >= nextOutcomeTry)
+        {
+            try
+            {
+                await UpdateOutcomeAsync(now, ct);
+                Resolved("update-outcome");
+            }
+            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
+            {
+                nextOutcomeTry = now + options.ButtonsRetry;
+                Problem("update-outcome", $"Home Assistant connector could not tell how the update ended: {Describe(e)}; trying again");
+            }
+        }
+        if (!updateServing)
+        {
+            await PublishUpdateAsync(now, ct);
+            return;
+        }
         if (updateCheck is { IsCompleted: true } done)
         {
             updateCheck = null;
@@ -214,6 +234,8 @@ public sealed partial class HaConnector
             }
             else
             {
+                // "Already current" is no longer true.
+                if (updateVerdict is { Stage: "current" }) { updateVerdict = null; }
                 announce = updateLatest != release.Version;
                 updateLatest = release.Version;
                 updateNotes = release.Notes ?? "";
@@ -319,7 +341,11 @@ public sealed partial class HaConnector
                 updateAttempt = new UpdateAttempt(release.Version, Installed, time.GetUtcNow(), updateUrl);
                 updateAttemptHere = true;
             }
-            SaveLedger();
+            // Recorded, or not handed over: the host that comes back has nothing else to go on.
+            if (!SaveLedger())
+            {
+                throw new IOException($"the update could not be recorded in {options.StateFile}, so how it ended could not be told after the restart");
+            }
             await SayAsync(() => PublishUpdateAsync(time.GetUtcNow(), ct), "show the restart");
             log($"Home Assistant connector: self-update: restarting into {release.Version}");
             updates.ApplyAndRestart(release);
@@ -372,7 +398,7 @@ public sealed partial class HaConnector
         }
         else
         {
-            var installed = Installed;
+            var installed = updateInstalled!;
             var success = string.Equals(installed, attempt.Target, StringComparison.OrdinalIgnoreCase);
             var url = attempt.Url;
             string title, message, stage, detail;
@@ -425,6 +451,7 @@ public sealed partial class HaConnector
             {
                 if (updateVerdict is { } v && now >= v.Until) { updateVerdict = null; }
                 var running = updateServing && updateProgress is not null && (installing is { IsCompleted: false } || updateAttemptHere);
+                // Without the buttons the entity still says how an update ended (its outcome).
                 var (stage, proportion, detail) = running ? (updateProgress!.Value.Stage, updateProgress.Value.Proportion, "")
                     : updateVerdict is { } verdict ? (verdict.Stage, (double?)null, verdict.Detail) : ("", (double?)null, "");
                 state = updateServing

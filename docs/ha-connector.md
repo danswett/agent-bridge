@@ -588,11 +588,15 @@ looks nothing up.
   Home Assistant shows an update. A check that cannot reach the feed leaves `latest_version`
   out, with `The latest release could not be established: <why>` in the notes, and is tried
   again after five minutes: not `failed`, because a check that could not be made is not a
-  failed update (agent-ha-bridge #92). A press of Check that finds nothing newer says
-  `current`, `Checked just now; <version> is the latest release.` for ten minutes.
+  failed update (agent-ha-bridge #92). So does a configured `feed.txt` that cannot be read:
+  it is never taken for GitHub, which would be another channel. A press of Check that finds
+  nothing newer says `current`, `Checked just now; <version> is the latest release.` for ten
+  minutes, until a check finds a newer one.
 * **Install.** A press shows `checking` at once (`in_progress`, the spinner), then looks for the
   newest release again, downloads it (`downloading` with `update_percentage`), records the
-  attempt in the connector's state file, shows `restarting` and hands the release to Velopack,
+  attempt in the connector's state file (an attempt that cannot be recorded is not handed
+  over: the host that came back could not say how it ended), shows `restarting` and hands the
+  release to Velopack,
   which applies it once the host has exited; the host then stops as on Ctrl+C. Velopack starts
   the app again in the background for the host's profile, and the app starts the host. While an
   update runs a press of Check looks nothing up: the install found its release itself. A press with nothing newer says
@@ -606,7 +610,9 @@ looks nothing up.
   completed on `<machine>`**; on the old one, `failed` and **Bridge update failed on
   `<machine>`**. An attempt older than six hours is dropped unannounced, as the daemon drops an
   old outcome file. The host that recorded it never announces it: it is still on the old version
-  for the moment before it exits. Every notice is a `persistent_notification` with
+  for the moment before it exits. The outcome answers the press, not a check, so it is told
+  even when checks were turned off meanwhile, and a notification Home Assistant refuses is tried
+  again every 15 s without holding up a new press. Every notice is a `persistent_notification` with
   `notification_id: agent_bridge_update_<slug>`, so each replaces the last.
 * **Presses** are read from the buttons' states (press timestamps), on a watch hit or every
   five seconds; a press from before the connector started is history, not an instruction

@@ -28,4 +28,21 @@ public sealed class HostUpdatesTests : IDisposable
         File.WriteAllText(Path.Combine(root, "app", "feed.txt"), Path.Combine(root, "releases"));
         Assert.Null(updates.ReleasesUrl);
     }
+
+    [Fact]
+    public async Task A_feed_that_is_configured_but_cannot_be_read_fails_the_check_rather_than_falling_back_to_github()
+    {
+        // A file another process holds without sharing: Windows refuses the read; elsewhere such
+        // locks are only advisory.
+        if (!OperatingSystem.IsWindows()) { return; }
+        Directory.CreateDirectory(Path.Combine(root, "app"));
+        var feed = Path.Combine(root, "app", "feed.txt");
+        File.WriteAllText(feed, Path.Combine(root, "releases"));
+        var updates = new VelopackHostUpdates(root, "default", () => { }, _ => { });
+        using (new FileStream(feed, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            await Assert.ThrowsAsync<IOException>(() => updates.CheckAsync(CancellationToken.None));
+            Assert.Null(updates.ReleasesUrl);
+        }
+    }
 }
