@@ -356,6 +356,8 @@ function Get-StoredPassword([string] $Path) {
         return Get-Content -Path $Path | ConvertTo-SecureString
     }
     $secure = Get-RandomAdminPassword
+    $dir = Split-Path $Path
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $secure | ConvertFrom-SecureString | Set-Content -Path $Path -Encoding ascii
     Write-Step "password generated and stored DPAPI-protected at $Path"
     return $secure
@@ -555,8 +557,8 @@ function Get-OsDiskId {
     return (Invoke-Az vm show -g $ResourceGroup -n $VmName --query storageProfile.osDisk.managedDisk.id -o tsv).Trim()
 }
 
-function Test-VmRunning {
-    $codes = Invoke-Az vm get-instance-view -g $ResourceGroup -n $VmName --query 'instanceView.statuses[].code' -o tsv
+function Test-VmRunning([string] $Name = $VmName) {
+    $codes = Invoke-Az vm get-instance-view -g $ResourceGroup -n $Name --query 'instanceView.statuses[].code' -o tsv
     return @($codes -split "`n" | ForEach-Object { $_.Trim() }) -contains 'PowerState/running'
 }
 
@@ -566,6 +568,15 @@ function Get-SourceVm($Resource) {
     if (-not $tags -or -not $tags.Value) { return $null }
     $source = $tags.Value.PSObject.Properties['source-vm']
     if ($source) { return "$($source.Value)" } else { return $null }
+}
+
+function Set-VmMSshRule([string] $VmMPrivateIp) {
+    # VM-W's NSG admits SSH from VM-M's private address only, inside the shared network. `rule
+    # create` replaces a rule of the same name whole, so whatever it held before is gone.
+    if ($VmMPrivateIp -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { throw "unexpected VM-M private address '$VmMPrivateIp'" }
+    Invoke-Az network nsg rule create -g $ResourceGroup --nsg-name 'rehearsal-w-nsg' -n Allow-SSH-From-VM-M `
+        --priority 110 --direction Inbound --access Allow --protocol Tcp --source-address-prefixes "$VmMPrivateIp/32" `
+        --source-port-ranges '*' --destination-address-prefixes '*' --destination-port-ranges 22 -o none | Out-Null
 }
 
 function Get-VmPrivateIp([string] $Name) {
@@ -1004,7 +1015,11 @@ if ($LASTEXITCODE -ne 0) { throw "npm install exit $($LASTEXITCODE): $out" }
 foreach ($agent in 'copilot', 'claude', 'codex') {
     $cmd = Join-Path $prefix "$agent.cmd"
     if (-not (Test-Path $cmd)) { throw "$agent was not installed" }
-    "$agent=$((& $cmd --version 2>&1 | Out-String).Trim())"
+    $version = (& $cmd --version 2>&1 | Out-String).Trim()
+    # The job runs with ErrorActionPreference Continue, so a broken shim's error text would
+    # otherwise pass for a version.
+    if ($LASTEXITCODE -ne 0 -or -not $version) { throw "$agent --version failed (exit $LASTEXITCODE): $version" }
+    "$agent=$version"
 }
 '@
 
@@ -1416,6 +1431,9 @@ foreach ($keyPath in @($TunnelPublicKeyPath | Where-Object { $_ })) { if (-not (
 if ($Role -eq 'M') {
     # VM-M joins VM-W's network and is authorized on it, so VM-W comes first.
     if (-not (Test-AzResource @('vm', 'show', '-g', $ResourceGroup, '-n', 'rehearsal-w'))) { throw 'provision VM-W (-Role W) first' }
+    # VM-W's guest runs the authorization and answers the tunnel check, so it must be up; checked
+    # before anything is built rather than failing at the end.
+    if (-not (Test-VmRunning 'rehearsal-w')) { throw 'VM-W is not running; start it with -Role W -Start, then rerun' }
     if (-not (Test-Path $WriterKnownHostsPath)) { throw "$WriterKnownHostsPath (VM-W's pinned host key) is missing; provision VM-W from this machine first" }
 }
 if ($HyperloopDirectory -and -not (Test-Path (Join-Path $HyperloopDirectory 'Hyperloop-server.exe'))) {
@@ -1444,8 +1462,20 @@ Invoke-Az network nsg rule create -g $ResourceGroup --nsg-name "$VmName-nsg" -n 
 Invoke-Az network nsg rule create -g $ResourceGroup --nsg-name "$VmName-nsg" -n Deny-All-Other-Inbound `
     --priority 4096 --direction Inbound --access Deny --protocol '*' --source-address-prefixes '*' `
     --source-port-ranges '*' --destination-address-prefixes '*' --destination-port-ranges '*' -o none | Out-Null
+# VM-W's one other exception, VM-M's SSH, is rebuilt from what it must be rather than trusted by
+# name: TCP 22 from VM-M's current private /32 while VM-M exists, and gone otherwise. VM-M's own
+# NSG has no exception at all.
+$exempt = "name!='Allow-SSH-From-Corp-Egress'"
+if ($Role -eq 'W') {
+    if (Test-AzResource @('vm', 'show', '-g', $ResourceGroup, '-n', 'rehearsal-m')) {
+        Set-VmMSshRule (Get-VmPrivateIp 'rehearsal-m')
+        $exempt += " && name!='Allow-SSH-From-VM-M'"
+    } elseif (Test-AzResource @('network', 'nsg', 'rule', 'show', '-g', $ResourceGroup, '--nsg-name', "$VmName-nsg", '-n', 'Allow-SSH-From-VM-M')) {
+        Invoke-Az network nsg rule delete -g $ResourceGroup --nsg-name "$VmName-nsg" -n Allow-SSH-From-VM-M -o none | Out-Null
+    }
+}
 $extra = Invoke-Az network nsg rule list -g $ResourceGroup --nsg-name "$VmName-nsg" `
-    --query "[?direction=='Inbound' && access=='Allow' && name!='Allow-SSH-From-Corp-Egress' && name!='Allow-SSH-From-VM-M'].name" -o tsv
+    --query "[?direction=='Inbound' && access=='Allow' && $exempt].name" -o tsv
 if ($extra.Trim()) { throw "unexpected inbound allow rules on the NSG: $extra" }
 
 $vmExists = Test-AzResource @('vm', 'show', '-g', $ResourceGroup, '-n', $VmName)
@@ -1589,10 +1619,7 @@ if ($Role -eq 'W') {
     Set-Content -Path (Join-Path $StateDir 'rehearsal-m-tunnel.pub') -Value $vmmPub -Encoding ascii
     $authorize = (Expand-Guest $GuestAuthorizeVmM).Replace('__KEY_B64__', [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($vmmPub)))
     Invoke-VmRunCommand -Name 'rehearsal-w' -Script $authorize | Write-Verbose
-    # VM-W's NSG admits SSH from VM-M's private address only, inside the shared network.
-    Invoke-Az network nsg rule create -g $ResourceGroup --nsg-name 'rehearsal-w-nsg' -n Allow-SSH-From-VM-M `
-        --priority 110 --direction Inbound --access Allow --protocol Tcp --source-address-prefixes "$selfIp/32" `
-        --source-port-ranges '*' --destination-address-prefixes '*' --destination-port-ranges 22 -o none | Out-Null
+    Set-VmMSshRule $selfIp
     $tunnel = Invoke-VmAsDesktopUser -Script $GuestVmWCheck
     $tunnel | Write-Verbose
     if ($tunnel -notmatch 'sftp-exit=0' -or $tunnel -notmatch 'forward-listening=True') { throw "VM-M cannot reach VM-W: $tunnel" }
