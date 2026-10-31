@@ -207,6 +207,71 @@ The jump host's posture:
 `-Remove` deletes only `rg-agent-bridge-rehearsal`, and only if it carries the
 `purpose=rehearsal-39` tag.
 
+### VM-M in Azure
+
+Use this when VM-M's snapshots cannot be taken where it runs, for example when the host cannot
+make Hyper-V checkpoints. Phase G needs them. Build VM-W first; VM-M joins its network:
+
+```powershell
+./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Role M -AllowedSshCidr <your egress /24> `
+    -JumpVia vmjump@<jump ip> -HyperloopDirectory <folder with Hyperloop-server.exe>
+```
+
+It builds `REHEARSAL-M` like VM-W: same size, image, NSG rules, key-only sshd for
+`rehearsaladmin`, pinned host key, auto-shutdown and Hyperloop tunnel. The differences:
+
+* The console user is the checklist's standard user `rehearsal`. Autologon signs it in, and
+  Hyperloop's server runs in its session, so **Machine** and **App** steps run as it. Its
+  password is kept in a second DPAPI file, `-UserSecretFile`. It has no SSH access.
+* Node.js LTS (checked against nodejs.org's SHA-256 and its signature) is installed for all
+  users. Copilot CLI, Claude Code and Codex are installed for `rehearsal` from npm and are
+  **not signed in**: signing in is a person's part of A-03, at the console through Hyperloop.
+  Git and PowerShell 7 as on VM-W; no WSL or Docker.
+* For A-04, `rehearsal` gets a key and an ssh config in which `VM-W` is an alias for VM-W's
+  private address. VM-W's host key is pinned from this machine's own pin. The checklist's
+  `ssh -N -L 8123:127.0.0.1:8123 rehearsal@VM-W` runs as written. The key is authorized for
+  VM-W's `rehearsal`, and saved as `rehearsal-m-tunnel.pub` beside the password files. Pass it
+  in `-TunnelPublicKeyPath` (which takes several) if you re-provision VM-W, or rerun `-Role M`.
+* VM-W's NSG gains one rule, `Allow-SSH-From-VM-M`: TCP 22 from VM-M's private address only.
+  Nothing else between the VMs or from the internet is opened.
+
+Hyperloop's tunnel uses local port 4852, so both VMs can be open at once. Through the jump
+host, rerun `-JumpHostSetup` after VM-M exists, because it permits every rehearsal VM that
+has an address. The ssh config for VM-M is `~/.ssh/config-agentbridge-rehearsal-m`:
+
+```powershell
+ssh -F ~/.ssh/config-agentbridge-rehearsal-m -N -L 127.0.0.1:4852:127.0.0.1:4850 rehearsal-m
+hyperloop servers add rehearsal-m --scheme tcp --authority 127.0.0.1:4852
+```
+
+**Snapshots** stand in for checkpoints: A-05's and B-07's, and G-01's restore.
+
+```powershell
+./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Role M -Snapshot -SnapshotName S1          # B-07
+./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Role M -ListSnapshots
+./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Role M -RestoreSnapshot -SnapshotName S1   # G-01 (2)
+```
+
+* `-Snapshot` deallocates a running VM first, so the snapshot holds a cleanly shut-down
+  Windows, takes an incremental snapshot of the OS disk, and starts the VM again. A name is
+  never reused.
+* `-RestoreSnapshot` makes a new disk from the snapshot, swaps it in as the OS disk, boots,
+  and waits for `rehearsal`'s session and Hyperloop. The NIC, addresses and host key are
+  unchanged, so tunnels and pins still work. The replaced disk is deleted unless
+  `-KeepReplacedDisk`, so copy run 1's evidence to VM-W first, as G-01 (1) says.
+* Azure Run Command keeps its last script in the VM's model, and a restored disk runs it
+  again at first boot. In testing, that rewrote the very file the restore had just
+  brought back. `-RestoreSnapshot` therefore runs a harmless script just before the swap
+  (starting the VM if it must), so the replay is that script.
+* A snapshot can be restored only to the VM it was taken from, so VM-W's disk can never become VM-M's.
+* Both stop VM-M, so every SSH connection to or from it ends: A-04's
+  `ssh -N -L 8123:127.0.0.1:8123 rehearsal@VM-W` window on VM-M, and this machine's Hyperloop
+  tunnel. When the command returns, start the Hyperloop tunnel again, then A-04's window
+  through Hyperloop, before the next step that needs Home Assistant on VM-M's loopback.
+
+`-Deallocate` and `-Start` take `-Role M` too. **Cost** is another $0.40 an hour or so while
+running, plus a few cents a day per snapshot.
+
 ## Conventions
 
 On each machine, once per PowerShell window:
@@ -255,7 +320,7 @@ $base = 'C:\rehearsal\evidence\baseline-S1.json'
 | **A-02** | | VM-W | Rename the computer `REHEARSAL-W`. Set up Docker with the compose file, onboarding, MQTT integration and long-lived token from ha-connector.md › Validation plan, using the live instance's HA version. Write the token to `C:\rehearsal\ha.token` | `/api/states` answers with that token | `agent-bridge-rehearsal ha --token-file $ha --step A-02` | |
 | **A-03** | | VM-M | Rename the computer `REHEARSAL-M`. Create user `rehearsal` (standard user). Install Copilot CLI, Claude Code and Codex, each signed in. Create `$repo` as a clone of a small local bare repository, so `origin` can be fetched | `copilot --version`, `claude --version`, `codex --version` and `git -C $repo fetch` succeed | `agent-bridge-rehearsal note --step A-03 --result pass --detail "<versions>"` | |
 | **A-04** | | VM-M | Start the tunnel `ssh -N -L 8123:127.0.0.1:8123 rehearsal@VM-W` in its own window, and copy the token file across | Home Assistant answers on VM-M's loopback | `agent-bridge-rehearsal ha --token-file $ha --step A-04` | |
-| **A-05** | | Both | Snapshot both VMs: **S0** | Snapshots listed in Hyperloop | `agent-bridge-rehearsal note --step A-05 --result pass --detail "S0 taken"` | |
+| **A-05** | | Both | Snapshot both VMs: **S0** (in Azure: `-Snapshot -SnapshotName S0` per role, [VM-M in Azure](#vm-m-in-azure)) | Snapshots listed in Hyperloop, or by `-ListSnapshots` | `agent-bridge-rehearsal note --step A-05 --result pass --detail "S0 taken"` | |
 
 ## Phase B: agent-ha-bridge, as the machines run it today
 
@@ -267,7 +332,7 @@ $base = 'C:\rehearsal\evidence\baseline-S1.json'
 | **B-04** | | Machine, HA | In `$repo`, start `copilot` from a normal (unelevated) terminal and type prompt **P1**: agent-ha-bridge will not type into an elevated one (`attach-failed:5:elevated`). Then run `$cp = agent-bridge-rehearsal newest copilot` (from the transcripts: no host is installed yet) and `agent-bridge-rehearsal mark $cp`. Answer **rehearsal-old** from the HA card | The old bridge delivers the answer and Copilot records it | `agent-bridge-rehearsal expect answer $cp --text rehearsal-old --step B-04` | |
 | **B-05** | | Machine, HA | Launch from the HA launch card into **Rehearsal** with prompt **P11**, then `/exit` both sessions at their terminals | An isolated worktree marked by agent-ha-bridge | `agent-bridge-rehearsal worktrees $repo --expect-old-trees 1 --step B-05` | |
 | **B-06** | | Tool (VM-M) | With no session running, hash what agent-ha-bridge installed | The baseline is written; the tool prints file and task counts per category | `agent-bridge-rehearsal baseline save --out $base --step B-06` | |
-| **B-07** | | VM-M | Snapshot VM-M: **S1** (agent-ha-bridge installed, baseline taken) | | `agent-bridge-rehearsal note --step B-07 --result pass --detail "S1 taken"` | |
+| **B-07** | | VM-M | Snapshot VM-M: **S1** (agent-ha-bridge installed, baseline taken; in Azure: `-Role M -Snapshot -SnapshotName S1`) | | `agent-bridge-rehearsal note --step B-07 --result pass --detail "S1 taken"` | |
 
 On the first run, compare the baseline again after five idle minutes:
 `agent-bridge-rehearsal baseline compare --baseline $base --step B-08`.
@@ -489,7 +554,7 @@ That also marks the host log, which `log` then reads from.
 
 | Step | Rows | Actor | Do | Expect | Evidence | Needs |
 |---|---|---|---|---|---|---|
-| **G-01** | | VM-M, VM-W | (1) On VM-M, write run 1's report, then copy `C:\rehearsal\evidence\run-1` to VM-W (`scp -r`): restoring S1 erases everything written since it was taken. (2) Restore **S1** on VM-M. (3) Set `$env:AGENT_BRIDGE_REHEARSAL_EVIDENCE` to `C:\rehearsal\evidence\run-2` and run Phases C to F again. (4) Write run 2's report and copy it across the same way | Every step passes as in run 1, and both runs' evidence is on VM-W | (1) `agent-bridge-rehearsal report --checklist docs\parity-checklist.md --step G-01`; (4) `agent-bridge-rehearsal report --checklist docs\parity-checklist.md --step G-01b` | |
+| **G-01** | | VM-M, VM-W | (1) On VM-M, write run 1's report, then copy `C:\rehearsal\evidence\run-1` to VM-W (`scp -r`): restoring S1 erases everything written since it was taken. (2) Restore **S1** on VM-M (in Azure: `-Role M -RestoreSnapshot -SnapshotName S1`). (3) Set `$env:AGENT_BRIDGE_REHEARSAL_EVIDENCE` to `C:\rehearsal\evidence\run-2` and run Phases C to F again. (4) Write run 2's report and copy it across the same way | Every step passes as in run 1, and both runs' evidence is on VM-W | (1) `agent-bridge-rehearsal report --checklist docs\parity-checklist.md --step G-01`; (4) `agent-bridge-rehearsal report --checklist docs\parity-checklist.md --step G-01b` | |
 | **G-02** | | Person | Copy both runs' `report` output into the design doc's Progress section. Move the rows that passed to `Verified` in parity.md, citing "Live: rehearsal run 1/2" | parity.md updated through a PR | `agent-bridge-rehearsal note --step G-02 --result pass --detail "PR #…"` | |
 
 ## Prompts

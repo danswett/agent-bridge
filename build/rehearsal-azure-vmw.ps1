@@ -1,8 +1,8 @@
 #Requires -Version 7.3
 <#
 .SYNOPSIS
-    Provisions VM-W for the migration rehearsal (docs/parity-checklist.md) as an Azure VM, or
-    starts, deallocates or removes it.
+    Provisions VM-W, or with -Role M VM-M, for the migration rehearsal (docs/parity-checklist.md)
+    as an Azure VM; starts, deallocates, snapshots, restores or removes them.
 
 .DESCRIPTION
     Idempotent: every step checks what is already there, so a rerun after a failure, or against a
@@ -23,6 +23,13 @@
 
     It never starts Home Assistant: that is checklist step A-02.
 
+    With -Role M it builds VM-M (REHEARSAL-M) the same way, in the same network as VM-W, except:
+    the console user is the standard user `rehearsal`, who runs Hyperloop and has Node.js LTS,
+    Copilot CLI, Claude Code and Codex installed but not signed in; `rehearsal` has no SSH access;
+    and instead of Docker it gets a key and ssh config whose `ssh rehearsal@VM-W` reaches VM-W's
+    private address, authorized for VM-W's `rehearsal` and admitted by VM-W's NSG from VM-M's
+    private address only. -Snapshot and -RestoreSnapshot stand in for Hyper-V checkpoints.
+
     Everything inside the VM is done through `az vm run-command`, Azure's control plane, not SSH.
     A network that proxies outbound SSH (Entra Global Secure Access, for one) can leave the
     operator's own SSH arriving from outside -AllowedSshCidr even when its web traffic does not.
@@ -38,6 +45,10 @@
 .PARAMETER Subscription
     The Azure subscription id. Always passed explicitly: the CLI's default may be another.
 
+.PARAMETER Role
+    W (the default) for VM-W, M for VM-M. Every action applies to that VM only, except -Remove,
+    which deletes the whole group, and -JumpHostSetup, which covers every VM that exists.
+
 .PARAMETER AllowedSshCidr
     The only source range allowed to reach TCP 22. Ranges wider than /16 are refused.
 
@@ -45,10 +56,15 @@
     Private key (ed25519) for the admin account. Created, without a passphrase, if missing.
 
 .PARAMETER TunnelPublicKeyPath
-    Public key that VM-M uses as `rehearsal`. Optional; without it `rehearsal` has no key.
+    Public keys that VM-M uses as `rehearsal` on VM-W. Optional; without them `rehearsal` has no
+    key. -Role M authorizes its own key directly and saves it as rehearsal-m-tunnel.pub beside
+    -SecretFile, so pass that file too when re-provisioning VM-W.
 
 .PARAMETER SecretFile
-    The DPAPI file holding the admin password. Created if missing.
+    The DPAPI file holding the admin password. Created if missing. Defaults to one per role.
+
+.PARAMETER UserSecretFile
+    -Role M: the DPAPI file holding `rehearsal`'s password, which autologon needs. Created if missing.
 
 .PARAMETER HyperloopDirectory
     A folder holding Hyperloop-server.exe and its sibling worker Hyperloop.exe. Optional; without it
@@ -81,6 +97,20 @@
     For -JumpHostSetup: the only source allowed to reach the jump host's sshd, normally this
     machine's Hyper-V switch subnet.
 
+.PARAMETER Snapshot
+    Take an incremental snapshot of the VM's OS disk, named <vm>-<SnapshotName>. A running VM is
+    deallocated first, for a clean disk, and started again afterwards. Never overwrites one.
+
+.PARAMETER RestoreSnapshot
+    Replace the VM's OS disk with a new disk made from <vm>-<SnapshotName>, then boot it. Everything
+    written since the snapshot is lost, and the replaced disk is deleted unless -KeepReplacedDisk.
+
+.PARAMETER SnapshotName
+    The snapshot's name after the VM's, such as S1.
+
+.PARAMETER ListSnapshots
+    The snapshots taken of this VM.
+
 .EXAMPLE
     ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -AllowedSshCidr 203.0.113.0/24 `
         -TunnelPublicKeyPath .\rehearsal-m-tunnel.pub -HyperloopDirectory <Hyperloop.Tools folder>
@@ -91,6 +121,16 @@
 
 .EXAMPLE
     ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Start -JumpVia vmjump@<VM-M ip> -JumpHostKey 'ssh-ed25519 AAAA...'
+
+.EXAMPLE
+    ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Role M -AllowedSshCidr 203.0.113.0/24 `
+        -JumpVia vmjump@<jump ip> -HyperloopDirectory <Hyperloop.Tools folder>
+
+.EXAMPLE
+    ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Role M -Snapshot -SnapshotName S1
+
+.EXAMPLE
+    ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Role M -RestoreSnapshot -SnapshotName S1
 
 .EXAMPLE
     ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Deallocate
@@ -107,6 +147,10 @@ param(
     [ValidatePattern('^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$')]
     [string] $Subscription,
 
+    # Before every parameter whose default depends on it.
+    [ValidateSet('W', 'M')]
+    [string] $Role = 'W',
+
     [Parameter(Mandatory, ParameterSetName = 'Provision')]
     [ValidatePattern('^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$')]
     [string] $AllowedSshCidr,
@@ -116,10 +160,13 @@ param(
     [string] $AdminKeyPath = (Join-Path $HOME '.ssh/agentbridge-rehearsal'),
 
     [Parameter(ParameterSetName = 'Provision')]
-    [string] $TunnelPublicKeyPath,
+    [string[]] $TunnelPublicKeyPath,
 
     [Parameter(ParameterSetName = 'Provision')]
-    [string] $SecretFile = (Join-Path $HOME '.agentbridge-rehearsal/rehearsal-w-admin.dpapi'),
+    [string] $SecretFile = (Join-Path $HOME ".agentbridge-rehearsal/rehearsal-$($Role.ToLowerInvariant())-admin.dpapi"),
+
+    [Parameter(ParameterSetName = 'Provision')]
+    [string] $UserSecretFile = (Join-Path $HOME '.agentbridge-rehearsal/rehearsal-m-user.dpapi'),
 
     [Parameter(ParameterSetName = 'Provision')]
     [string] $HyperloopDirectory,
@@ -168,7 +215,24 @@ param(
     [switch] $Start,
 
     [Parameter(Mandatory, ParameterSetName = 'Remove')]
-    [switch] $Remove
+    [switch] $Remove,
+
+    [Parameter(Mandatory, ParameterSetName = 'Snapshot')]
+    [switch] $Snapshot,
+
+    [Parameter(Mandatory, ParameterSetName = 'RestoreSnapshot')]
+    [switch] $RestoreSnapshot,
+
+    [Parameter(Mandatory, ParameterSetName = 'Snapshot')]
+    [Parameter(Mandatory, ParameterSetName = 'RestoreSnapshot')]
+    [ValidatePattern('^[A-Za-z0-9_-]{1,40}$')]
+    [string] $SnapshotName,
+
+    [Parameter(ParameterSetName = 'RestoreSnapshot')]
+    [switch] $KeepReplacedDisk,
+
+    [Parameter(Mandatory, ParameterSetName = 'ListSnapshots')]
+    [switch] $ListSnapshots
 )
 
 Set-StrictMode -Version Latest
@@ -177,10 +241,17 @@ $ErrorActionPreference = 'Stop'
 # Fixed rather than parameters: -Remove deletes this group and nothing else, whatever it is given.
 $ResourceGroup = 'rg-agent-bridge-rehearsal'
 $Location = 'westus2'
-$VmName = 'rehearsal-w'
-$ComputerName = 'REHEARSAL-W'
+# VM-W (the publication writer, Home Assistant in Docker) or VM-M (the machine being migrated).
+$VmName = "rehearsal-$($Role.ToLowerInvariant())"
+$ComputerName = "REHEARSAL-$Role"
 $AdminUser = 'rehearsaladmin'
+# On VM-W, `rehearsal` is the SFTP-only account VM-M's tunnel signs in as. On VM-M it is the
+# checklist's one standard user: signed in at the console, it runs the agents and Hyperloop.
 $TunnelUser = 'rehearsal'
+$DesktopUser = if ($Role -eq 'M') { $TunnelUser } else { $AdminUser }
+# Both VMs share one network, so VM-M reaches VM-W's sshd at its private address and nothing else
+# is opened to the internet. The name predates VM-M.
+$VnetName = 'rehearsal-w-vnet'
 $Image = 'MicrosoftWindowsDesktop:windows-11:win11-24h2-pro:latest'
 # D4s_v5 runs nested virtualization (WSL2 needs it); D4as_v5 is the fallback. Standard security
 # type: nothing here needs Trusted Launch, and it is what the CLI chose for this image.
@@ -188,24 +259,32 @@ $Sizes = @('Standard_D4s_v5', 'Standard_D4as_v5')
 $SecurityType = 'Standard'
 $AutoShutdownUtc = '0800'
 $HyperloopPort = 4850
+# This machine's end of the Hyperloop tunnel, distinct per VM so both can be open at once.
+$HyperloopLocalPort = if ($Role -eq 'M') { 4852 } else { 4851 }
 $Tags = @('purpose=rehearsal-39', 'owner=danswett', 'lifetime=delete-after-rehearsal')
-$KnownHostsPath = Join-Path $HOME '.ssh/known_hosts_agentbridge-rehearsal'
+# VM-W's names predate -Role and are kept, so an existing VM-W's pins and config stay valid.
+$RoleSuffix = if ($Role -eq 'M') { '-m' } else { '' }
+$KnownHostsPath = Join-Path $HOME ".ssh/known_hosts_agentbridge-rehearsal$RoleSuffix"
+$WriterKnownHostsPath = Join-Path $HOME '.ssh/known_hosts_agentbridge-rehearsal'
 $JumpKnownHostsPath = Join-Path $HOME '.ssh/known_hosts_agentbridge-vm01-jump'
-$SshConfigPath = Join-Path $HOME '.ssh/config-agentbridge-rehearsal'
+$SshConfigPath = Join-Path $HOME ".ssh/config-agentbridge-rehearsal$RoleSuffix"
 $JumpUser, $JumpHost = if ($JumpVia) { $JumpVia.Split('@', 2) } else { $null, $null }
 # Windows OpenSSH matches AllowUsers against lowercase names, so an uppercase one would lock out.
 if ($JumpUser) { $JumpUser = $JumpUser.ToLowerInvariant() }
 # Relative paths resolve against the current location, so Split-Path always finds a parent.
-foreach ($name in 'SecretFile', 'AdminKeyPath', 'TunnelPublicKeyPath', 'HyperloopDirectory', 'AzureConfigDir', 'JumpKeyPath') {
+foreach ($name in 'SecretFile', 'UserSecretFile', 'AdminKeyPath', 'TunnelPublicKeyPath', 'HyperloopDirectory', 'AzureConfigDir', 'JumpKeyPath') {
     $value = Get-Variable -Name $name -ValueOnly
-    if ($value) { Set-Variable -Name $name -Value $PSCmdlet.GetUnresolvedProviderPathFromPSPath($value) -WhatIf:$false -Confirm:$false }
+    if ($value) {
+        $resolved = foreach ($v in @($value)) { $PSCmdlet.GetUnresolvedProviderPathFromPSPath($v) }
+        Set-Variable -Name $name -Value $(if ($value -is [array]) { @($resolved) } else { $resolved }) -WhatIf:$false -Confirm:$false
+    }
 }
 $StateDir = Split-Path $SecretFile
 
 $env:AZURE_CONFIG_DIR = $AzureConfigDir
 
 function Write-Step([string] $Message) {
-    Write-Information "[rehearsal-w] $Message" -InformationAction Continue
+    Write-Information "[$VmName] $Message" -InformationAction Continue
 }
 
 function Invoke-Az {
@@ -229,8 +308,8 @@ function Test-AzResource([string[]] $ShowArgs) {
     throw "az $($ShowArgs -join ' ') failed: $($text.Trim())"
 }
 
-function Get-VmPublicIp {
-    return (Invoke-Az network public-ip show -g $ResourceGroup -n "$VmName-pip" --query ipAddress -o tsv).Trim()
+function Get-VmPublicIp([string] $Name = $VmName) {
+    return (Invoke-Az network public-ip show -g $ResourceGroup -n "$Name-pip" --query ipAddress -o tsv).Trim()
 }
 
 function Get-TunnelCommand([string] $Ip) {
@@ -238,14 +317,21 @@ function Get-TunnelCommand([string] $Ip) {
         "ssh -i `"$AdminKeyPath`" -o IdentitiesOnly=yes -o UserKnownHostsFile=`"$KnownHostsPath`" -o StrictHostKeyChecking=yes"
     }
     $hostKey = if (Test-Path $KnownHostsPath) { (Get-Content $KnownHostsPath -Raw).Trim() } else { '<run a provision first>' }
-    return [pscustomobject]@{
-        HyperloopTunnel = "$ssh -N -L 127.0.0.1:4851:127.0.0.1:${HyperloopPort} $AdminUser@$Ip"
-        HyperloopServer = 'hyperloop servers add rehearsal-w --scheme tcp --authority 127.0.0.1:4851'
+    $result = [ordered]@{
+        HyperloopTunnel = "$ssh -N -L 127.0.0.1:${HyperloopLocalPort}:127.0.0.1:${HyperloopPort} $AdminUser@$Ip"
+        HyperloopServer = "hyperloop servers add $VmName --scheme tcp --authority 127.0.0.1:$HyperloopLocalPort"
         AdminShell      = "$ssh $AdminUser@$Ip"
-        # VM-M must not trust on first use: append KnownHostsLine to its ~/.ssh/known_hosts first.
-        KnownHostsLine  = $hostKey
-        VmMTunnel       = "ssh -i <VM-M key> -o StrictHostKeyChecking=yes -N -L 8123:127.0.0.1:8123 $TunnelUser@$Ip"
     }
+    if ($Role -eq 'W') {
+        # VM-M must not trust on first use: append KnownHostsLine to its ~/.ssh/known_hosts first.
+        $result.KnownHostsLine = $hostKey
+        $result.VmMTunnel = "ssh -i <VM-M key> -o StrictHostKeyChecking=yes -N -L 8123:127.0.0.1:8123 $TunnelUser@$Ip"
+    } else {
+        # Provisioning VM-M writes its rehearsal user's ~/.ssh/config, so the checklist's command
+        # runs as written: VM-W is the alias, at its private address, with its host key pinned.
+        $result.VmMTunnel = "ssh -N -L 8123:127.0.0.1:8123 $TunnelUser@VM-W   (on VM-M, as $TunnelUser)"
+    }
+    return [pscustomobject] $result
 }
 
 function Get-RandomAdminPassword {
@@ -265,13 +351,15 @@ function Get-RandomAdminPassword {
     return $secure
 }
 
-function Get-AdminPassword {
-    if (Test-Path $SecretFile) {
-        return Get-Content -Path $SecretFile | ConvertTo-SecureString
+function Get-StoredPassword([string] $Path) {
+    if (Test-Path $Path) {
+        return Get-Content -Path $Path | ConvertTo-SecureString
     }
     $secure = Get-RandomAdminPassword
-    $secure | ConvertFrom-SecureString | Set-Content -Path $SecretFile -Encoding ascii
-    Write-Step "admin password generated and stored DPAPI-protected at $SecretFile"
+    $dir = Split-Path $Path
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $secure | ConvertFrom-SecureString | Set-Content -Path $Path -Encoding ascii
+    Write-Step "password generated and stored DPAPI-protected at $Path"
     return $secure
 }
 
@@ -304,7 +392,7 @@ function Write-JumpSshConfig([string] $Ip) {
         throw "the jump host's key is not pinned in $JumpKnownHostsPath; pass -JumpHostKey with the HOSTKEY that -JumpHostSetup's script printed"
     }
     $config = @"
-# Written by build/rehearsal-azure-vmw.ps1 -JumpVia. Use with: ssh -F "$SshConfigPath" rehearsal-w
+# Written by build/rehearsal-azure-vmw.ps1 -JumpVia. Use with: ssh -F "$SshConfigPath" $VmName
 Host vm01-jump $JumpHost
     HostName $JumpHost
     User $JumpUser
@@ -317,7 +405,7 @@ Host vm01-jump $JumpHost
     # The jump hop never needs a prompt; without this, a scripted call could stop at one.
     BatchMode yes
 
-Host rehearsal-w $Ip
+Host $VmName $Ip
     HostName $Ip
     User $AdminUser
     IdentityFile "$AdminKeyPath"
@@ -337,7 +425,7 @@ function Invoke-VmRunCommand {
     Runs a script on the VM as SYSTEM through Azure's control plane. Only non-secret text may go
     in: run-command keeps the script in the VM's extension settings.
     #>
-    param([string] $Script)
+    param([string] $Script, [string] $Name = $VmName)
     # Every staging folder lives under Program Files, where only administrators can create, and
     # is re-ACLed regardless: one in ProgramData could be pre-created, and so owned, by
     # `rehearsal`, letting it swap a script or installer before SYSTEM or the admin runs it.
@@ -358,7 +446,7 @@ function Get-ProtectedDirectory([string] $Leaf) {
     $file = Join-Path $StateDir "guest-$([guid]::NewGuid().ToString('n')).ps1"
     Set-Content -Path $file -Value $body -Encoding utf8
     try {
-        $json = Invoke-Az vm run-command invoke -g $ResourceGroup -n $VmName --command-id RunPowerShellScript `
+        $json = Invoke-Az vm run-command invoke -g $ResourceGroup -n $Name --command-id RunPowerShellScript `
             --scripts "@$file" -o json
     } finally {
         Remove-Item $file -ErrorAction SilentlyContinue
@@ -374,26 +462,28 @@ function Get-ProtectedDirectory([string] $Leaf) {
     return $stdout
 }
 
-function Wait-AdminSession([int] $TimeoutSeconds = 900) {
-    # After a restart, autologon signs the admin in at the console; the logon tasks start then.
+function Wait-DesktopSession([int] $TimeoutSeconds = 900) {
+    # After a restart, autologon signs the desktop user in at the console; the logon tasks start then.
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
         try {
             $q = Invoke-VmRunCommand -Script 'quser 2>&1 | Out-String'
-            if ($q -match "$AdminUser\s+console\s+\d+\s+Active") { return }
+            if ($q -match "$DesktopUser\s+console\s+\d+\s+Active") { return }
         } catch {
             Write-Verbose "waiting for the VM: $_"
         }
         Start-Sleep -Seconds 15
     }
-    throw "the admin was not signed in at the console within $TimeoutSeconds s (autologon?)"
+    throw "$DesktopUser was not signed in at the console within $TimeoutSeconds s (autologon?)"
 }
 
-function Invoke-VmAsAdmin {
+function Invoke-VmAsDesktopUser {
     <#
-    Runs a script as the admin, elevated, inside the autologon desktop session: a one-shot
-    scheduled task started from run-command, whose output comes back through a log file. WSL
-    distributions are per user, so they cannot be installed as SYSTEM. The job runs with
+    Runs a script as the desktop user inside its autologon session: a one-shot scheduled task
+    started from run-command, whose output comes back through a log file. Elevated when that user
+    is the admin (VM-W); unelevated as `rehearsal` on VM-M, which is a standard user. WSL
+    distributions and npm's global packages are per user, so neither can be installed as SYSTEM.
+    The job runs with
     ErrorActionPreference Continue because Windows PowerShell turns a native command's redirected
     stderr into a terminating error under Stop; the scripts check exit codes and throw themselves.
     #>
@@ -407,8 +497,18 @@ $inner = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__B64__'))
 $wrapped = "`$ErrorActionPreference = 'Continue'`r`n`$ProgressPreference = 'SilentlyContinue'`r`ntry {`r`n& {`r`n$inner`r`n} *>&1 | Out-File -FilePath '$log' -Encoding utf8 -Append`r`nAdd-Content -Path '$log' -Value 'JOB-DONE'`r`n} catch { Add-Content -Path '$log' -Value ('JOB-ERROR: ' + (`$_ | Out-String)) }"
 Set-Content -Path $job -Value $wrapped -Encoding utf8
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$job`""
-$principal = New-ScheduledTaskPrincipal -UserId '__ADMIN_USER__' -LogonType Interactive -RunLevel Highest
+$principal = New-ScheduledTaskPrincipal -UserId '__DESKTOP_USER__' -LogonType Interactive -RunLevel __RUN_LEVEL__
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::FromMinutes(__TIMEOUT__))
+# The job and its log sit in a folder only administrators can write; a standard desktop user
+# needs to write its log, so it gets this one job's files and nothing else (opening them by path
+# needs no right on the folder, which stays unlistable to it).
+if ('__RUN_LEVEL__' -eq 'Limited') {
+    Set-Content -Path $log -Value '' -Encoding utf8
+    & icacls.exe $log /grant '__DESKTOP_USER__:M' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls $log failed" }
+    & icacls.exe $job /grant '__DESKTOP_USER__:RX' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls $job failed" }
+}
 Register-ScheduledTask -TaskName "Rehearsal job $id" -Action $action -Principal $principal -Settings $settings -Force | Out-Null
 try {
     Start-ScheduledTask -TaskName "Rehearsal job $id"
@@ -429,14 +529,16 @@ try {
     Remove-Item $job, $log -ErrorAction SilentlyContinue
 }
 '@
-    $runner = $runner.Replace('__B64__', $b64).Replace('__ADMIN_USER__', $AdminUser).Replace('__TIMEOUT__', "$TimeoutMinutes")
+    $runLevel = if ($DesktopUser -eq $AdminUser) { 'Highest' } else { 'Limited' }
+    $runner = $runner.Replace('__B64__', $b64).Replace('__DESKTOP_USER__', $DesktopUser).Replace('__RUN_LEVEL__', $runLevel).
+        Replace('__TIMEOUT__', "$TimeoutMinutes")
     return Invoke-VmRunCommand -Script $runner
 }
 
 function Invoke-VmRestart {
     Write-Step 'restarting the VM'
     Invoke-Az vm restart -g $ResourceGroup -n $VmName -o none | Out-Null
-    Wait-AdminSession
+    Wait-DesktopSession
 }
 
 function Get-SshArgument([string] $Ip) {
@@ -451,11 +553,43 @@ function Test-Ssh([string] $Ip) {
     return $LASTEXITCODE -eq 0
 }
 
+function Get-OsDiskId {
+    return (Invoke-Az vm show -g $ResourceGroup -n $VmName --query storageProfile.osDisk.managedDisk.id -o tsv).Trim()
+}
+
+function Test-VmRunning([string] $Name = $VmName) {
+    $codes = Invoke-Az vm get-instance-view -g $ResourceGroup -n $Name --query 'instanceView.statuses[].code' -o tsv
+    return @($codes -split "`n" | ForEach-Object { $_.Trim() }) -contains 'PowerState/running'
+}
+
+function Get-SourceVm($Resource) {
+    # The VM a snapshot or disk was made from, recorded in its tags when it was created here.
+    $tags = $Resource.PSObject.Properties['tags']
+    if (-not $tags -or -not $tags.Value) { return $null }
+    $source = $tags.Value.PSObject.Properties['source-vm']
+    if ($source) { return "$($source.Value)" } else { return $null }
+}
+
+function Set-VmMSshRule([string] $VmMPrivateIp) {
+    # VM-W's NSG admits SSH from VM-M's private address only, inside the shared network. `rule
+    # create` replaces a rule of the same name whole, so whatever it held before is gone.
+    if ($VmMPrivateIp -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { throw "unexpected VM-M private address '$VmMPrivateIp'" }
+    Invoke-Az network nsg rule create -g $ResourceGroup --nsg-name 'rehearsal-w-nsg' -n Allow-SSH-From-VM-M `
+        --priority 110 --direction Inbound --access Allow --protocol Tcp --source-address-prefixes "$VmMPrivateIp/32" `
+        --source-port-ranges '*' --destination-address-prefixes '*' --destination-port-ranges 22 -o none | Out-Null
+}
+
+function Get-VmPrivateIp([string] $Name) {
+    return (Invoke-Az vm list-ip-addresses -g $ResourceGroup -n $Name `
+            --query '[0].virtualMachine.network.privateIpAddresses[0]' -o tsv).Trim()
+}
+
 # ---------------------------------------------------------------------------------------------
 # Guest scripts. Placeholders are replaced before sending; keys travel as base64 so no key text
 # meets a quoting layer.
 # ---------------------------------------------------------------------------------------------
 $GuestBootstrap = @'
+$role = '__ROLE__'
 $adminUser = '__ADMIN_USER__'
 $tunnelUser = '__TUNNEL_USER__'
 $adminKey = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('__ADMIN_KEY_B64__')).Trim()
@@ -488,7 +622,7 @@ if (-not (Get-LocalUser -Name $tunnelUser -ErrorAction SilentlyContinue)) {
     $bytes = New-Object byte[] 24; $rng.GetBytes($bytes)
     $pw = ConvertTo-SecureString ('Aa1-' + [Convert]::ToBase64String($bytes)) -AsPlainText -Force
     New-LocalUser -Name $tunnelUser -Password $pw -PasswordNeverExpires -AccountNeverExpires `
-        -Description 'Rehearsal: VM-M tunnel to Home Assistant' | Out-Null
+        -Description $(if ($role -eq 'M') { 'Rehearsal: the migrated machine''s user' } else { 'Rehearsal: VM-M tunnel to Home Assistant' }) | Out-Null
     Add-LocalGroupMember -Group 'Users' -Member $tunnelUser -ErrorAction SilentlyContinue
     $pw = $null
 }
@@ -501,17 +635,24 @@ function Set-KeyFile([string] $Path, [string] $Content, [string] $ReaderSid) {
     if ($LASTEXITCODE -ne 0) { throw "icacls $Path failed" }
 }
 Set-KeyFile (Join-Path $sshDir 'administrators_authorized_keys') $adminKey $null
-# Written even when empty, so dropping -TunnelPublicKeyPath on a rerun revokes the old key.
 $sid = (Get-LocalUser -Name $tunnelUser).SID.Value
-Set-KeyFile (Join-Path $sshDir "${tunnelUser}_authorized_keys") $tunnelKey $sid
+if ($role -eq 'W') {
+    # Written even when empty, so dropping -TunnelPublicKeyPath on a rerun revokes the old key.
+    Set-KeyFile (Join-Path $sshDir "${tunnelUser}_authorized_keys") $tunnelKey $sid
 
-# The only folder `rehearsal` sees (sshd chroots its SFTP here), so it cannot plant or read files
-# anywhere else on C:\. Files it exchanges, such as A-04's token, go through here.
-$drop = 'C:\RehearsalDrop'
-New-Item -ItemType Directory -Path $drop -Force | Out-Null
-& icacls.exe $drop /setowner '*S-1-5-32-544' /T /C | Out-Null
-& icacls.exe $drop /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' "*${sid}:(OI)(CI)M" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "icacls $drop failed" }
+    # The only folder `rehearsal` sees (sshd chroots its SFTP here), so it cannot plant or read
+    # files anywhere else on C:\. Files it exchanges, such as A-04's token, go through here.
+    $drop = 'C:\RehearsalDrop'
+    New-Item -ItemType Directory -Path $drop -Force | Out-Null
+    & icacls.exe $drop /setowner '*S-1-5-32-544' /T /C | Out-Null
+    & icacls.exe $drop /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' "*${sid}:(OI)(CI)M" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls $drop failed" }
+    $allowUsers = "$adminUser $tunnelUser"
+} else {
+    # On VM-M `rehearsal` works at the console and never signs in over SSH.
+    Remove-Item (Join-Path $sshDir "${tunnelUser}_authorized_keys") -Force -ErrorAction SilentlyContinue
+    $allowUsers = $adminUser
+}
 
 $config = @"
 # Written by build/rehearsal-azure-vmw.ps1. Key-only; the rehearsal user may only forward to HA and use SFTP.
@@ -523,7 +664,7 @@ PermitEmptyPasswords no
 AllowAgentForwarding no
 GatewayPorts no
 PermitTunnel no
-AllowUsers $adminUser $tunnelUser
+AllowUsers $allowUsers
 AuthorizedKeysFile .ssh/authorized_keys
 Subsystem sftp sftp-server.exe
 
@@ -622,18 +763,23 @@ public static class RehearsalLsa {
     }
 }
 "@
+# On VM-M the desktop user is not the admin: its throwaway password becomes this one, kept only in
+# the DPAPI file that encrypted it here.
+if ('__DESKTOP_USER__' -ne '__ADMIN_USER__') {
+    Set-LocalUser -Name '__DESKTOP_USER__' -Password (ConvertTo-SecureString $secret -AsPlainText -Force)
+}
 [RehearsalLsa]::Store('DefaultPassword', $secret)
 $secret = $null
 $wl = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 Set-ItemProperty -Path $wl -Name AutoAdminLogon -Value '1'
-Set-ItemProperty -Path $wl -Name DefaultUserName -Value '__ADMIN_USER__'
+Set-ItemProperty -Path $wl -Name DefaultUserName -Value '__DESKTOP_USER__'
 Set-ItemProperty -Path $wl -Name DefaultDomainName -Value $env:COMPUTERNAME
 Remove-ItemProperty -Path $wl -Name DefaultPassword -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path $wl -Name AutoLogonCount -ErrorAction SilentlyContinue
 'autologon=configured'
 '@
 
-# Hyperloop's server in the admin's desktop session, visible in a console window. tcp mode with no
+# Hyperloop's server in the desktop user's session, visible in a console window. tcp mode with no
 # PIN: the NSG and Windows Firewall keep its port to loopback, i.e. to the SSH tunnel. --no-setup
 # so it changes nothing on the machine (no firewall openings) by itself.
 $GuestHyperloopTask = @'
@@ -648,11 +794,11 @@ Start-Process "`$env:SystemRoot\System32\cmd.exe" -ArgumentList '/k ""C:\Tools\h
 $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($launcher))
 $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
     -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encoded"
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User '__ADMIN_USER__'
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User '__DESKTOP_USER__'
 # Started at the instant of logon, the server accepted TCP but never completed a TLS handshake;
 # a short delay lets the session settle first.
 $trigger.Delay = 'PT45S'
-$principal = New-ScheduledTaskPrincipal -UserId '__ADMIN_USER__' -LogonType Interactive -RunLevel Limited
+$principal = New-ScheduledTaskPrincipal -UserId '__DESKTOP_USER__' -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
 Register-ScheduledTask -TaskName 'Rehearsal Hyperloop Server' -Action $action -Trigger $trigger `
     -Principal $principal -Settings $settings -Force | Out-Null
@@ -821,6 +967,166 @@ for ($i = 0; $i -lt 30 -and $code -ne 200; $i++) {
 "windows-loopback-18123=$code"
 '@
 
+# VM-M: Node.js LTS machine-wide, for the agents' npm packages. The MSI must match nodejs.org's
+# published SHA-256 and carry a valid Authenticode signature before it runs.
+$GuestNode = @'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+if (-not (Test-Path "$env:ProgramFiles\nodejs\node.exe")) {
+    $dl = Get-ProtectedDirectory 'downloads'
+    # Windows PowerShell hands Invoke-RestMethod's JSON array down a pipeline as one object, so it
+    # is enumerated explicitly; otherwise every version lands in the URL at once.
+    $index = Invoke-RestMethod 'https://nodejs.org/dist/index.json'
+    $lts = @($index) | Where-Object { $_.lts } | Select-Object -First 1
+    if (-not $lts -or "$($lts.version)" -notmatch '^v\d+\.\d+\.\d+$') { throw "no Node.js LTS version in nodejs.org's index" }
+    $name = "node-$($lts.version)-x64.msi"
+    $path = Join-Path $dl $name
+    if (-not (Test-Path $path)) {
+        Invoke-WebRequest "https://nodejs.org/dist/$($lts.version)/$name" -OutFile "$path.partial" -UseBasicParsing
+        Move-Item "$path.partial" $path -Force
+    }
+    $sums = (Invoke-WebRequest "https://nodejs.org/dist/$($lts.version)/SHASUMS256.txt" -UseBasicParsing).Content
+    $expected = (($sums -split "`n") | Where-Object { $_ -match "\s$([regex]::Escape($name))$" } | Select-Object -First 1) -replace '\s.*$', ''
+    $sig = Get-AuthenticodeSignature $path
+    if (-not $expected -or (Get-FileHash $path -Algorithm SHA256).Hash -ne $expected.ToUpperInvariant() -or $sig.Status -ne 'Valid') {
+        Remove-Item $path -Force
+        throw "$name failed its checksum or signature ($($sig.Status)); deleted so a rerun downloads it again"
+    }
+    $p = Start-Process msiexec.exe -ArgumentList @('/i', "`"$path`"", '/qn', '/norestart') -Wait -PassThru
+    if ($p.ExitCode -notin 0, 3010) { throw "Node.js MSI exit $($p.ExitCode)" }
+    Remove-Item $dl -Recurse -Force -ErrorAction SilentlyContinue
+}
+"node=$(& "$env:ProgramFiles\nodejs\node.exe" --version)"
+'@
+
+# VM-M, as `rehearsal`: Copilot CLI, Claude Code and Codex from npm, per user like a person's own
+# install, and deliberately not signed in. Signing in is a person's step (A-03), done at the
+# console through Hyperloop.
+$GuestAgents = @'
+$npm = "$env:ProgramFiles\nodejs\npm.cmd"
+$prefix = Join-Path $env:APPDATA 'npm'
+# The Node MSI adds npm's global folder to the PATH of whoever ran it, which was SYSTEM.
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (@("$userPath".Split(';')) -notcontains $prefix) {
+    [Environment]::SetEnvironmentVariable('Path', ((@("$userPath".Split(';')) + $prefix | Where-Object { $_ }) -join ';'), 'User')
+}
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+$out = & $npm install --global --no-fund --no-audit '@github/copilot' '@anthropic-ai/claude-code' '@openai/codex' 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { throw "npm install exit $($LASTEXITCODE): $out" }
+foreach ($agent in 'copilot', 'claude', 'codex') {
+    $cmd = Join-Path $prefix "$agent.cmd"
+    if (-not (Test-Path $cmd)) { throw "$agent was not installed" }
+    $version = (& $cmd --version 2>&1 | Out-String).Trim()
+    # The job runs with ErrorActionPreference Continue, so a broken shim's error text would
+    # otherwise pass for a version.
+    if ($LASTEXITCODE -ne 0 -or -not $version) { throw "$agent --version failed (exit $LASTEXITCODE): $version" }
+    "$agent=$version"
+}
+# The checklist types `copilot`, `claude` and `codex` in an ordinary PowerShell window, where npm's
+# .ps1 shims win over its .cmd ones. Windows PowerShell's client default, Restricted, refuses them
+# (Azure's image happens to ship Unrestricted). So where local scripts are refused, this user gets
+# RemoteSigned, PowerShell 7's own default; otherwise the image's policy is left as it is.
+# Everything below runs without the Bypass this job was started with, which -ExecutionPolicy hands
+# to child processes through this variable; in this process it would also turn the policy change
+# into an override error.
+Remove-Item Env:PSExecutionPolicyPreference -ErrorAction SilentlyContinue
+$winps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+$effective = (& $winps -NoProfile -Command 'Get-ExecutionPolicy' | Out-String).Trim()
+if ($effective -in 'Restricted', 'AllSigned', 'Undefined') {
+    & $winps -NoProfile -Command 'Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force'
+}
+"execution-policy=$((& $winps -NoProfile -Command 'Get-ExecutionPolicy' | Out-String).Trim()) (was $effective)"
+# Checked the way a person runs them: unqualified, in both shells.
+foreach ($shell in "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe", "$env:ProgramFiles\PowerShell\7\pwsh.exe") {
+    foreach ($agent in 'copilot', 'claude', 'codex') {
+        $text = (& $shell -NoProfile -Command "$agent --version" 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $text -or $text -match 'running scripts is disabled') {
+            throw "$agent does not run in $(Split-Path $shell -Leaf): $text"
+        }
+    }
+    "shell-ok=$(Split-Path $shell -Leaf)"
+}
+'@
+
+# VM-M, as `rehearsal`: the key and ssh config for the checklist's `ssh -N -L 8123:127.0.0.1:8123
+# rehearsal@VM-W`. VM-W is an alias for its private address, and its host key, taken from this
+# machine's pin, is the only one trusted for it.
+$GuestVmWClient = @'
+$sshDir = Join-Path $env:USERPROFILE '.ssh'
+New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+$key = Join-Path $sshDir 'id_ed25519'
+if (-not (Test-Path $key)) {
+    # Through Start-Process so -N gets a real empty passphrase; Windows PowerShell drops ''.
+    $p = Start-Process "$env:SystemRoot\System32\OpenSSH\ssh-keygen.exe" -Wait -PassThru -NoNewWindow `
+        -ArgumentList @('-t', 'ed25519', '-N', '""', '-C', 'rehearsal@REHEARSAL-M', '-f', "`"$key`"", '-q')
+    if ($p.ExitCode -ne 0) { throw "ssh-keygen exit $($p.ExitCode)" }
+}
+Set-Content -Path (Join-Path $sshDir 'known_hosts_vm-w') -Value '__W_PRIVATE_IP__ __W_HOST_KEY__' -Encoding ascii
+$block = @"
+# >>> rehearsal VM-W (build/rehearsal-azure-vmw.ps1 -Role M)
+Host VM-W vm-w
+    HostName __W_PRIVATE_IP__
+    User __TUNNEL_USER__
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+    UserKnownHostsFile ~/.ssh/known_hosts_vm-w
+    StrictHostKeyChecking yes
+    ExitOnForwardFailure yes
+    ServerAliveInterval 30
+# Back to every host, so what follows keeps its meaning.
+Host *
+# <<< rehearsal VM-W
+"@
+# First, because ssh takes the first value it finds for each option: an earlier global
+# `StrictHostKeyChecking no` or another known-hosts file would otherwise beat the pin. UTF-8 without
+# a BOM both ways, so paths in the rest of the file survive.
+$config = Join-Path $sshDir 'config'
+$utf8 = New-Object System.Text.UTF8Encoding $false
+$text = if (Test-Path $config) { [IO.File]::ReadAllText($config, $utf8) } else { '' }
+$text = [regex]::Replace($text, '(?s)# >>> rehearsal VM-W.*?# <<< rehearsal VM-W\r?\n?', '')
+[IO.File]::WriteAllText($config, $block + "`r`n" + $text.TrimStart(), $utf8)
+"PUBKEY=$((Get-Content "$key.pub" -Raw).Trim())"
+'@
+
+# VM-W, as SYSTEM: VM-M's key joins any already authorized for `rehearsal`, keeping the file's ACL.
+$GuestAuthorizeVmM = @'
+$file = Join-Path $env:ProgramData 'ssh\__TUNNEL_USER___authorized_keys'
+if (-not (Test-Path $file)) { throw "$file does not exist; provision VM-W first" }
+$key = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('__KEY_B64__')).Trim()
+if (@(Get-Content $file | ForEach-Object { $_.Trim() }) -notcontains $key) { Add-Content -Path $file -Value $key -Encoding ascii }
+'vm-m-key=authorized'
+'@
+
+# VM-M, as `rehearsal`: the tunnel works end to end. SFTP proves the key, the pinned host key and
+# the NSG. A request through `ssh -W` proves VM-W opens the forwarding channel itself, which a
+# local `-L` listener cannot: that listens even when VM-W refuses every channel. Home Assistant
+# may not be running yet (A-02 starts it), so a refused connection behind an opened channel
+# still passes, and its HTTP status is only reported.
+$GuestVmWCheck = @'
+$batch = Join-Path $env:TEMP 'rehearsal-sftp.txt'
+Set-Content -Path $batch -Value 'pwd' -Encoding ascii
+$sftp = & "$env:SystemRoot\System32\OpenSSH\sftp.exe" -b $batch -o BatchMode=yes -o ConnectTimeout=15 VM-W 2>&1 | Out-String
+"sftp-exit=$LASTEXITCODE"
+Remove-Item $batch -ErrorAction SilentlyContinue
+$in = Join-Path $env:TEMP 'rehearsal-fwd-in.txt'; $out = Join-Path $env:TEMP 'rehearsal-fwd-out.txt'; $err = Join-Path $env:TEMP 'rehearsal-fwd-err.txt'
+[IO.File]::WriteAllText($in, "GET / HTTP/1.0`r`nHost: 127.0.0.1:8123`r`n`r`n")
+$ssh = Start-Process "$env:SystemRoot\System32\OpenSSH\ssh.exe" -PassThru -WindowStyle Hidden `
+    -RedirectStandardInput $in -RedirectStandardOutput $out -RedirectStandardError $err `
+    -ArgumentList @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-W', '127.0.0.1:8123', 'VM-W')
+if (-not $ssh.WaitForExit(45000)) { $ssh.Kill() }
+$reply = (Get-Content $out -Raw -ErrorAction SilentlyContinue) + ''
+$why = (Get-Content $err -Raw -ErrorAction SilentlyContinue) + ''
+Remove-Item $in, $out, $err -ErrorAction SilentlyContinue
+if ($reply -match '^HTTP/1\.\d (\d{3})') {
+    'forward=opened'; "home-assistant-http=$($Matches[1])"
+} elseif ($why -match 'administratively prohibited') {
+    'forward=denied'
+} elseif ($why -match 'connect failed|Connection refused') {
+    'forward=opened'; 'home-assistant-http=none (nothing listening on VM-W:8123 yet)'
+} else {
+    "forward=unknown: $($why.Trim())"
+}
+'@
+
 # The jump host (VM-M), for an operator whose SSH egress the NSG does not accept. It runs there,
 # elevated, by whatever means the operator has (VM-M is driven through Hyperloop), and prints the
 # host key to pin. It needs sshd installed first: the OpenSSH.Server capability, or the signed
@@ -830,7 +1136,8 @@ $JumpHostSetupScript = @'
 $ErrorActionPreference = 'Stop'
 $jumpUser = '__JUMP_USER__'
 $allowedRemote = '__ALLOWED_REMOTE__'
-$target = '__TARGET__'
+# Every rehearsal VM's sshd, and nothing else.
+$targets = @('__TARGETS__'.Split(' ') | Where-Object { $_ })
 $jumpKey = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('__JUMP_KEY_B64__')).Trim()
 $sshDir = Join-Path $env:ProgramData 'ssh'
 
@@ -952,7 +1259,8 @@ if (-not $existing) {
 $sid = (Get-LocalUser -Name $jumpUser).SID.Value
 
 # The key's own options repeat sshd_config's limits, so either alone keeps it to one forward.
-$options = 'restrict,port-forwarding,permitopen="' + $target + '",no-pty,no-agent-forwarding,no-X11-forwarding,command="exit 1"'
+$permits = ($targets | ForEach-Object { 'permitopen="' + $_ + '"' }) -join ','
+$options = 'restrict,port-forwarding,' + $permits + ',no-pty,no-agent-forwarding,no-X11-forwarding,command="exit 1"'
 $keys = Join-Path $sshDir "${jumpUser}_authorized_keys"
 Remove-Item -Path $keys -Force -ErrorAction SilentlyContinue
 Set-Content -Path $keys -Value "$options $jumpKey" -Encoding ascii
@@ -970,7 +1278,7 @@ AuthorizedKeysFile __PROGRAMDATA__/ssh/${jumpUser}_authorized_keys
 AllowAgentForwarding no
 AllowStreamLocalForwarding no
 AllowTcpForwarding local
-PermitOpen $target
+PermitOpen $($targets -join ' ')
 GatewayPorts no
 PermitTunnel no
 PermitTTY no
@@ -1005,7 +1313,8 @@ if ($LASTEXITCODE -ne 0 -or "$derived" -notmatch '^ssh-ed25519 ') { throw 'could
 '@
 
 function Expand-Guest([string] $Script) {
-    return $Script.Replace('__ADMIN_USER__', $AdminUser).Replace('__TUNNEL_USER__', $TunnelUser).Replace('__HL_PORT__', "$HyperloopPort")
+    return $Script.Replace('__ADMIN_USER__', $AdminUser).Replace('__TUNNEL_USER__', $TunnelUser).Replace('__HL_PORT__', "$HyperloopPort").
+        Replace('__DESKTOP_USER__', $DesktopUser).Replace('__ROLE__', $Role)
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1034,23 +1343,29 @@ if ($Remove) {
         return
     }
     if ($PSCmdlet.ShouldProcess($ResourceGroup, 'Delete the resource group and everything in it') -and
-        $PSCmdlet.ShouldContinue("Delete $ResourceGroup and every resource in it (VM, disk, IP, NSG, network)?", 'Remove VM-W')) {
+        $PSCmdlet.ShouldContinue("Delete $ResourceGroup and every resource in it (both VMs, disks, snapshots, IPs, NSGs, network)?", 'Remove the rehearsal VMs')) {
         Invoke-Az group delete -n $ResourceGroup --yes -o none | Out-Null
         Write-Step "$ResourceGroup deleted. The DPAPI password file and keys on this machine were left in place."
     }
     return
 }
 
-if (($Deallocate -or $Start -or $JumpHostSetup) -and -not $groupExists) { throw "$ResourceGroup does not exist; provision first" }
+if (($Deallocate -or $Start -or $JumpHostSetup -or $Snapshot -or $RestoreSnapshot -or $ListSnapshots) -and -not $groupExists) {
+    throw "$ResourceGroup does not exist; provision first"
+}
 
 if ($JumpHostSetup) {
     if (-not $PSCmdlet.ShouldProcess($JumpKeyPath, 'Create the jump key if missing and print the jump host setup')) { return }
     Initialize-SshKey -Path $JumpKeyPath -Comment 'agentbridge-rehearsal-jump'
     $jumpPub = (Get-Content "$JumpKeyPath.pub" -Raw).Trim()
-    $ip = Get-VmPublicIp
-    Write-Step "run this elevated on $JumpHost, then pass its HOSTKEY to -JumpHostKey"
+    # The jump account may reach every rehearsal VM that exists now; rerun after creating another.
+    $targets = foreach ($name in 'rehearsal-w', 'rehearsal-m') {
+        if (Test-AzResource @('network', 'public-ip', 'show', '-g', $ResourceGroup, '-n', "$name-pip")) { "$(Get-VmPublicIp $name):22" }
+    }
+    if (-not $targets) { throw "no rehearsal VM in $ResourceGroup has a public IP yet" }
+    Write-Step "run this elevated on $JumpHost, then pass its HOSTKEY to -JumpHostKey (it permits $($targets -join ', '))"
     return $JumpHostSetupScript.Replace('__JUMP_USER__', $JumpUser).Replace('__ALLOWED_REMOTE__', $JumpAllowedCidr).
-        Replace('__TARGET__', "${ip}:22").Replace('__JUMP_KEY_B64__', [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($jumpPub)))
+        Replace('__TARGETS__', ($targets -join ' ')).Replace('__JUMP_KEY_B64__', [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($jumpPub)))
 }
 
 if ($Deallocate) {
@@ -1064,13 +1379,84 @@ if ($Deallocate) {
 if ($Start) {
     if ($PSCmdlet.ShouldProcess($VmName, 'Start')) {
         Invoke-Az vm start -g $ResourceGroup -n $VmName -o none | Out-Null
-        Wait-AdminSession
+        Wait-DesktopSession
         Invoke-VmRunCommand -Script (Expand-Guest $GuestHyperloopCheck) | Write-Verbose
         $ip = Get-VmPublicIp
         if ($JumpVia) { Write-JumpSshConfig $ip }
         Write-Step "$VmName is running at $ip with the admin signed in"
         Get-TunnelCommand $ip
     }
+    return
+}
+
+if ($ListSnapshots) {
+    $all = @(Invoke-Az snapshot list -g $ResourceGroup -o json | ConvertFrom-Json)
+    return @($all | Where-Object { (Get-SourceVm $_) -eq $VmName } | Select-Object name, timeCreated, incremental, diskSizeGB)
+}
+
+if ($Snapshot) {
+    $name = "$VmName-$SnapshotName"
+    if (Test-AzResource @('snapshot', 'show', '-g', $ResourceGroup, '-n', $name)) {
+        throw "$name already exists; a snapshot is never overwritten. Choose another -SnapshotName."
+    }
+    if (-not $PSCmdlet.ShouldProcess($VmName, "Snapshot the OS disk as $name (the VM is stopped meanwhile)")) { return }
+    # Deallocated first, so the snapshot holds a cleanly shut-down Windows rather than a
+    # crash-consistent disk that restores into a dirty boot.
+    $wasRunning = Test-VmRunning
+    if ($wasRunning) {
+        Write-Step 'deallocating for a consistent snapshot'
+        Invoke-Az vm deallocate -g $ResourceGroup -n $VmName -o none | Out-Null
+    }
+    try {
+        Invoke-Az snapshot create -g $ResourceGroup -n $name -l $Location --source (Get-OsDiskId) --incremental true `
+            --tags @Tags "source-vm=$VmName" -o none | Out-Null
+        Write-Step "$name taken"
+    } finally {
+        if ($wasRunning) {
+            Invoke-Az vm start -g $ResourceGroup -n $VmName -o none | Out-Null
+            Wait-DesktopSession
+        }
+    }
+    return
+}
+
+if ($RestoreSnapshot) {
+    $name = "$VmName-$SnapshotName"
+    if (-not (Test-AzResource @('snapshot', 'show', '-g', $ResourceGroup, '-n', $name))) { throw "$name does not exist" }
+    $snap = Invoke-Az snapshot show -g $ResourceGroup -n $name -o json | ConvertFrom-Json
+    # The other VM's snapshot would boot as a second copy of that machine.
+    if ((Get-SourceVm $snap) -ne $VmName) { throw "$name was not taken from $VmName; refusing to restore it here" }
+    if (-not $PSCmdlet.ShouldProcess($VmName, "Replace the OS disk with a copy of $name; everything written since it was taken is lost")) { return }
+    # Run Command's last script stays in the VM's model, and a restored disk's guest agent has not
+    # seen it, so it runs again at the first boot: a restore once rewrote the very file it had just
+    # restored. The last script is made a harmless one first, which needs the VM running.
+    if (-not (Test-VmRunning)) {
+        Write-Step 'starting the VM to clear its last Run Command script'
+        Invoke-Az vm start -g $ResourceGroup -n $VmName -o none | Out-Null
+    }
+    Invoke-VmRunCommand -Script "'run-command cleared before a restore'" | Write-Verbose
+    $oldDisk = Get-OsDiskId
+    $sku = (Invoke-Az disk show --ids $oldDisk --query sku.name -o tsv).Trim()
+    $newDisk = "$VmName-osdisk-$SnapshotName-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))"
+    Write-Step "creating $newDisk from $name"
+    $newId = (Invoke-Az disk create -g $ResourceGroup -n $newDisk -l $Location --source $snap.id --sku $sku `
+            --tags @Tags "source-vm=$VmName" --query id -o tsv).Trim()
+    Write-Step 'deallocating and swapping the OS disk'
+    Invoke-Az vm deallocate -g $ResourceGroup -n $VmName -o none | Out-Null
+    Invoke-Az vm update -g $ResourceGroup -n $VmName --os-disk $newId -o none | Out-Null
+    Invoke-Az vm start -g $ResourceGroup -n $VmName -o none | Out-Null
+    Wait-DesktopSession
+    Invoke-VmRunCommand -Script (Expand-Guest $GuestHyperloopCheck) | Write-Verbose
+    $oldName = Split-Path $oldDisk -Leaf
+    if ($KeepReplacedDisk) {
+        Write-Step "the replaced disk $oldName was kept; delete it with az disk delete when done"
+    } elseif ($oldDisk -match "/resourceGroups/$([regex]::Escape($ResourceGroup))/providers/Microsoft\.Compute/disks/") {
+        Invoke-Az disk delete --ids $oldDisk --yes -o none | Out-Null
+        Write-Step "the replaced disk $oldName was deleted"
+    } else {
+        Write-Warning "the replaced disk $oldDisk is outside $ResourceGroup and was left alone"
+    }
+    Write-Step "$VmName restored from $name"
     return
 }
 
@@ -1081,22 +1467,31 @@ if ($Start) {
 if (-not $IsWindows) { throw 'provisioning stores the admin password with DPAPI, so it runs only on Windows' }
 $prefix = [int]($AllowedSshCidr.Split('/')[1])
 if ($prefix -lt 16) { throw "-AllowedSshCidr $AllowedSshCidr is wider than /16; refusing to open SSH that far" }
-if ($TunnelPublicKeyPath -and -not (Test-Path $TunnelPublicKeyPath)) { throw "$TunnelPublicKeyPath not found" }
+foreach ($keyPath in @($TunnelPublicKeyPath | Where-Object { $_ })) { if (-not (Test-Path $keyPath)) { throw "$keyPath not found" } }
+if ($Role -eq 'M') {
+    # VM-M joins VM-W's network and is authorized on it, so VM-W comes first.
+    if (-not (Test-AzResource @('vm', 'show', '-g', $ResourceGroup, '-n', 'rehearsal-w'))) { throw 'provision VM-W (-Role W) first' }
+    # VM-W's guest runs the authorization and answers the tunnel check, so it must be up; checked
+    # before anything is built rather than failing at the end.
+    if (-not (Test-VmRunning 'rehearsal-w')) { throw 'VM-W is not running; start it with -Role W -Start, then rerun' }
+    if (-not (Test-Path $WriterKnownHostsPath)) { throw "$WriterKnownHostsPath (VM-W's pinned host key) is missing; provision VM-W from this machine first" }
+}
 if ($HyperloopDirectory -and -not (Test-Path (Join-Path $HyperloopDirectory 'Hyperloop-server.exe'))) {
     throw "Hyperloop-server.exe not found in $HyperloopDirectory"
 }
-if (-not $PSCmdlet.ShouldProcess("$ResourceGroup/$VmName", 'Provision VM-W')) { return }
+if (-not $PSCmdlet.ShouldProcess("$ResourceGroup/$VmName", "Provision VM-$Role")) { return }
 if (-not (Test-Path $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
 
 Initialize-SshKey -Path $AdminKeyPath -Comment 'agentbridge-rehearsal-admin'
 $adminPub = (Get-Content "$AdminKeyPath.pub" -Raw).Trim()
-$tunnelPub = if ($TunnelPublicKeyPath) { (Get-Content $TunnelPublicKeyPath -Raw).Trim() } else { '' }
+# Several keys may be authorized for VM-W's `rehearsal`: VM-M's own, and a local VM-M's.
+$tunnelPub = (@($TunnelPublicKeyPath | Where-Object { $_ } | ForEach-Object { (Get-Content $_ -Raw).Trim() }) -join "`r`n")
 
 Write-Step "resource group $ResourceGroup"
 # Safe only because the tag was checked above: `group create` would retag a foreign group.
 Invoke-Az group create -n $ResourceGroup -l $Location --tags @Tags -o none | Out-Null
 
-Write-Step 'network security group'
+Write-Step "network security group $VmName-nsg"
 if (-not (Test-AzResource @('network', 'nsg', 'show', '-g', $ResourceGroup, '-n', "$VmName-nsg"))) {
     Invoke-Az network nsg create -g $ResourceGroup -n "$VmName-nsg" -l $Location --tags @Tags -o none | Out-Null
 }
@@ -1107,17 +1502,34 @@ Invoke-Az network nsg rule create -g $ResourceGroup --nsg-name "$VmName-nsg" -n 
 Invoke-Az network nsg rule create -g $ResourceGroup --nsg-name "$VmName-nsg" -n Deny-All-Other-Inbound `
     --priority 4096 --direction Inbound --access Deny --protocol '*' --source-address-prefixes '*' `
     --source-port-ranges '*' --destination-address-prefixes '*' --destination-port-ranges '*' -o none | Out-Null
+# VM-W's one other exception, VM-M's SSH, is rebuilt from what it must be rather than trusted by
+# name: TCP 22 from VM-M's current private /32 while VM-M exists, and gone otherwise. VM-M's own
+# NSG has no exception at all.
+$exempt = "name!='Allow-SSH-From-Corp-Egress'"
+if ($Role -eq 'W') {
+    if (Test-AzResource @('vm', 'show', '-g', $ResourceGroup, '-n', 'rehearsal-m')) {
+        Set-VmMSshRule (Get-VmPrivateIp 'rehearsal-m')
+        $exempt += " && name!='Allow-SSH-From-VM-M'"
+    } elseif (Test-AzResource @('network', 'nsg', 'rule', 'show', '-g', $ResourceGroup, '--nsg-name', "$VmName-nsg", '-n', 'Allow-SSH-From-VM-M')) {
+        Invoke-Az network nsg rule delete -g $ResourceGroup --nsg-name "$VmName-nsg" -n Allow-SSH-From-VM-M -o none | Out-Null
+    }
+}
 $extra = Invoke-Az network nsg rule list -g $ResourceGroup --nsg-name "$VmName-nsg" `
-    --query "[?direction=='Inbound' && access=='Allow' && name!='Allow-SSH-From-Corp-Egress'].name" -o tsv
+    --query "[?direction=='Inbound' && access=='Allow' && $exempt].name" -o tsv
 if ($extra.Trim()) { throw "unexpected inbound allow rules on the NSG: $extra" }
 
 $vmExists = Test-AzResource @('vm', 'show', '-g', $ResourceGroup, '-n', $VmName)
-if ($vmExists -and -not (Test-Path $SecretFile)) {
-    # A new password would not match the account the VM was created with, and autologon would
-    # then fail at the next restart.
-    throw "$VmName exists but $SecretFile does not. Restore the original DPAPI file (same Windows user and machine) or -Remove and start again."
+# The desktop user's password is the admin's on VM-W, and its own on VM-M.
+$desktopSecret = if ($Role -eq 'M') { $UserSecretFile } else { $SecretFile }
+foreach ($file in @($SecretFile, $desktopSecret) | Select-Object -Unique) {
+    if ($vmExists -and -not (Test-Path $file)) {
+        # A new password would not match the account the VM was created with, and autologon would
+        # then fail at the next restart.
+        throw "$VmName exists but $file does not. Restore the original DPAPI file (same Windows user and machine) or -Remove and start again."
+    }
 }
-$password = Get-AdminPassword
+$password = Get-StoredPassword $SecretFile
+$desktopPassword = Get-StoredPassword $desktopSecret
 if (-not $vmExists) {
     $created = $false
     foreach ($size in $Sizes) {
@@ -1126,7 +1538,7 @@ if (-not $vmExists) {
         try {
             Invoke-Az vm create -g $ResourceGroup -n $VmName -l $Location --computer-name $ComputerName `
                 --image $Image --size $size --security-type $SecurityType --admin-username $AdminUser `
-                --admin-password $plain --license-type Windows_Client --vnet-name "$VmName-vnet" --subnet default `
+                --admin-password $plain --license-type Windows_Client --vnet-name $VnetName --subnet default `
                 --public-ip-address "$VmName-pip" --public-ip-sku Standard --public-ip-address-allocation static `
                 --nsg "$VmName-nsg" --storage-sku StandardSSD_LRS --tags @Tags -o none | Out-Null
             $created = $true
@@ -1161,13 +1573,13 @@ if (-not (Test-Path $khDir)) { New-Item -ItemType Directory -Path $khDir -Force 
 Set-Content -Path $KnownHostsPath -Value "$ip $hostKey" -Encoding ascii
 if ($JumpVia) { Write-JumpSshConfig $ip }
 
-Write-Step 'autologon for the admin'
+Write-Step "autologon for $DesktopUser"
 $envelope = Invoke-VmRunCommand -Script $GuestEnvelopeKey
 $pubXml = ($envelope -split "`n" | Where-Object { $_ -like 'PUBKEY=*' } | Select-Object -First 1).Substring(7).Trim()
 $rsa = [System.Security.Cryptography.RSA]::Create()
 try {
     $rsa.FromXmlString($pubXml)
-    $plainBytes = [Text.Encoding]::UTF8.GetBytes((ConvertTo-PlainText $password))
+    $plainBytes = [Text.Encoding]::UTF8.GetBytes((ConvertTo-PlainText $desktopPassword))
     $cipher = [Convert]::ToBase64String($rsa.Encrypt($plainBytes, [System.Security.Cryptography.RSAEncryptionPadding]::OaepSHA1))
     [Array]::Clear($plainBytes, 0, $plainBytes.Length)
 } finally {
@@ -1203,22 +1615,55 @@ Invoke-VmRunCommand -Script (Expand-Guest $GuestHyperloopTask) | Write-Verbose
 
 Invoke-VmRestart
 
-Write-Step 'WSL'
-$wsl = Invoke-VmAsAdmin -Script $GuestWslInstall
-$wsl | Write-Verbose
-if ($wsl -match 'restart-needed') { Invoke-VmRestart }
+if ($Role -eq 'W') {
+    Write-Step 'WSL'
+    $wsl = Invoke-VmAsDesktopUser -Script $GuestWslInstall
+    $wsl | Write-Verbose
+    if ($wsl -match 'restart-needed') { Invoke-VmRestart }
 
-Write-Step 'Ubuntu and Docker Engine in WSL'
-Invoke-VmAsAdmin -Script (Expand-Guest $GuestUbuntuDocker) -TimeoutMinutes 45 | Write-Verbose
+    Write-Step 'Ubuntu and Docker Engine in WSL'
+    Invoke-VmAsDesktopUser -Script (Expand-Guest $GuestUbuntuDocker) -TimeoutMinutes 45 | Write-Verbose
 
-# Restart once more so the check below proves dockerd comes up by itself at logon.
-Invoke-VmRestart
-Start-Sleep -Seconds 60
-Write-Step 'checking Docker'
-$check = Invoke-VmAsAdmin -Script $GuestDockerCheck
-$check | Write-Verbose
-if ($check -notmatch 'docker-task=Running' -or $check -notmatch 'compose=\d' -or $check -notmatch 'hello-world=True' -or $check -notmatch 'windows-loopback-18123=200') {
-    throw "Docker check failed: $check"
+    # Restart once more so the check below proves dockerd comes up by itself at logon.
+    Invoke-VmRestart
+    Start-Sleep -Seconds 60
+    Write-Step 'checking Docker'
+    $check = Invoke-VmAsDesktopUser -Script $GuestDockerCheck
+    $check | Write-Verbose
+    if ($check -notmatch 'docker-task=Running' -or $check -notmatch 'compose=\d' -or $check -notmatch 'hello-world=True' -or $check -notmatch 'windows-loopback-18123=200') {
+        throw "Docker check failed: $check"
+    }
+} else {
+    Write-Step 'Node.js LTS'
+    Invoke-VmRunCommand -Script $GuestNode | Write-Verbose
+
+    Write-Step "Copilot CLI, Claude Code and Codex for $DesktopUser (installed, not signed in)"
+    $agents = Invoke-VmAsDesktopUser -Script $GuestAgents -TimeoutMinutes 20
+    $agents | Write-Verbose
+    foreach ($agent in 'copilot', 'claude', 'codex') {
+        if ($agents -notmatch "(?m)^$agent=\S") { throw "$agent did not report a version: $agents" }
+    }
+
+    Write-Step "VM-W's Home Assistant tunnel for $DesktopUser"
+    $writerIp = Get-VmPrivateIp 'rehearsal-w'
+    $selfIp = Get-VmPrivateIp $VmName
+    # VM-W's key as this machine pinned it from VM-W's own run-command output: never trusted on use.
+    $writerKey = ((Get-Content $WriterKnownHostsPath -Raw).Trim() -split '\s+')[1..2] -join ' '
+    $clientScript = (Expand-Guest $GuestVmWClient).Replace('__W_PRIVATE_IP__', $writerIp).Replace('__W_HOST_KEY__', $writerKey)
+    $client = Invoke-VmAsDesktopUser -Script $clientScript
+    $pubLine = ($client -split "`n" | Where-Object { $_ -like 'PUBKEY=*' } | Select-Object -First 1)
+    if (-not $pubLine) { throw "VM-M did not report its tunnel key: $client" }
+    $vmmPub = $pubLine.Substring(7).Trim()
+    # Kept beside the password files, so a rerun of -Role W can authorize it again
+    # (-TunnelPublicKeyPath takes several).
+    Set-Content -Path (Join-Path $StateDir 'rehearsal-m-tunnel.pub') -Value $vmmPub -Encoding ascii
+    $authorize = (Expand-Guest $GuestAuthorizeVmM).Replace('__KEY_B64__', [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($vmmPub)))
+    Invoke-VmRunCommand -Name 'rehearsal-w' -Script $authorize | Write-Verbose
+    Set-VmMSshRule $selfIp
+    $tunnel = Invoke-VmAsDesktopUser -Script $GuestVmWCheck
+    $tunnel | Write-Verbose
+    if ($tunnel -notmatch 'sftp-exit=0' -or $tunnel -notmatch 'forward=opened') { throw "VM-M cannot reach VM-W: $tunnel" }
+    Write-Step "VM-M reaches VM-W at $writerIp ($(($tunnel -split "`n" | Where-Object { $_ -like 'home-assistant-http=*' }) -join ''))"
 }
 
 Write-Step 'checking Hyperloop'
