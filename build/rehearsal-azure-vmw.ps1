@@ -185,10 +185,12 @@ $KnownHostsPath = Join-Path $HOME '.ssh/known_hosts_agentbridge-rehearsal'
 $JumpKnownHostsPath = Join-Path $HOME '.ssh/known_hosts_agentbridge-vm01-jump'
 $SshConfigPath = Join-Path $HOME '.ssh/config-agentbridge-rehearsal'
 $JumpUser, $JumpHost = if ($JumpVia) { $JumpVia.Split('@', 2) } else { $null, $null }
+# Windows OpenSSH matches AllowUsers against lowercase names, so an uppercase one would lock out.
+if ($JumpUser) { $JumpUser = $JumpUser.ToLowerInvariant() }
 # Relative paths resolve against the current location, so Split-Path always finds a parent.
 foreach ($name in 'SecretFile', 'AdminKeyPath', 'TunnelPublicKeyPath', 'HyperloopDirectory', 'AzureConfigDir', 'JumpKeyPath') {
     $value = Get-Variable -Name $name -ValueOnly
-    if ($value) { Set-Variable -Name $name -Value $PSCmdlet.GetUnresolvedProviderPathFromPSPath($value) }
+    if ($value) { Set-Variable -Name $name -Value $PSCmdlet.GetUnresolvedProviderPathFromPSPath($value) -WhatIf:$false -Confirm:$false }
 }
 $StateDir = Split-Path $SecretFile
 
@@ -304,6 +306,8 @@ Host vm01-jump $JumpHost
     StrictHostKeyChecking yes
     ForwardAgent no
     RequestTTY no
+    # The jump hop never needs a prompt; without this, a scripted call could stop at one.
+    BatchMode yes
 
 Host rehearsal-w $Ip
     HostName $Ip
@@ -821,6 +825,8 @@ $allowedRemote = '__ALLOWED_REMOTE__'
 $target = '__TARGET__'
 $jumpKey = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('__JUMP_KEY_B64__')).Trim()
 $sshDir = Join-Path $env:ProgramData 'ssh'
+# A fresh install may not have created it yet; the authorized-keys file is written before sshd runs.
+New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
 
 $svc = Get-CimInstance Win32_Service -Filter "Name='sshd'"
 if (-not $svc) { throw 'sshd is not installed: add the OpenSSH.Server capability, or the signed Win32-OpenSSH MSI where Windows Update is unavailable' }
@@ -880,7 +886,6 @@ ForceCommand exit 1
 "@
 # A fresh install has no host keys until sshd first starts, and `sshd -t` checks them. Generate
 # them directly rather than starting the server under its permissive default configuration.
-New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
 if (-not (Test-Path (Join-Path $sshDir 'ssh_host_ed25519_key'))) {
     & (Join-Path (Split-Path $sshd) 'ssh-keygen.exe') -A
     if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen -A failed' }
@@ -938,6 +943,7 @@ if ($Remove) {
 if (($Deallocate -or $Start -or $JumpHostSetup) -and -not $groupExists) { throw "$ResourceGroup does not exist; provision first" }
 
 if ($JumpHostSetup) {
+    if (-not $PSCmdlet.ShouldProcess($JumpKeyPath, 'Create the jump key if missing and print the jump host setup')) { return }
     Initialize-SshKey -Path $JumpKeyPath -Comment 'agentbridge-rehearsal-jump'
     $jumpPub = (Get-Content "$JumpKeyPath.pub" -Raw).Trim()
     $ip = Get-VmPublicIp
