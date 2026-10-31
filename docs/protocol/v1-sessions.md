@@ -26,7 +26,7 @@ the channel go through the relay's blob store (`sessions.attach.blob`, in
   bytes of text. Clients must read both forms.
 * **Clients ignore fields and enum values they don't know.** An unknown value reads as:
   `agent` → `unknown` (shown generically), `status` → `idle`, tool `status` → `done`,
-  question `kind` → `form`, field `type` → `text`. Hosts never remove or rename a field
+  question `kind` → `form`, field `type` → `text`, `driver` → `person`. Hosts never remove or rename a field
   within a protocol version.
 * Times are UTC with milliseconds and a `Z`, always in this exact form:
   `2026-10-28T04:22:43.182Z`. Clients can compare them as strings.
@@ -674,6 +674,36 @@ open a channel and read `sessions.list`, so `push` gives it nothing more.
 | `processId` | number? | The agent's process, when known |
 | `activity` | Activity | |
 | `question` | Question? | The question the agent is waiting on, if any |
+| `driver` | `"person"` \| `"agent"`? | Who drives the current turn ([Driver](#driver)). Absent means `person`, and a host sends it only as `agent`. A client that does not know a value reads it as `person` |
+| `driverPrincipal` | string? | With `driver` `agent`, which agent, when the host knows: at most 128 bytes, plain text, shown as secondary detail only. Absent otherwise |
+
+### Driver
+
+Whether a person or an agent is driving the session: agent-ha-bridge's purple edge. A client
+draws an agent-driven session with purple in place of its state's colour: a steady purple edge
+while it is idle, so a session left under an agent's control still says so, and the same
+breathing glow as working or waiting, in purple, while it works or waits (held still for a viewer
+who asked for reduced motion). It says so in words too ("Driven by an agent"), never by colour
+alone.
+
+* **Set** by the principal of an answer, a reply or a launch made through the host. The session
+  shows as the agent's at once, and the next turn to start within 600 s is the agent's. An agent's
+  launch makes its opening turn the agent's.
+* **Taken back** by the person: an answer or reply from any of the person's devices (or a press by
+  a person on the Home Assistant card) shows the session as the person's at once, and a turn that
+  starts with nobody's arm waiting for it, or after the arm lapsed, is typed at the machine and so
+  is the person's.
+* **Who is an agent.** Agents have no principal of their own on the pipe or relay yet (design
+  §5.5; the pipe refuses them anything but reading, #44), so today the only agent principal a host
+  sees is a press, answer, reply or launch on its Home Assistant cards made by an account listed
+  in `homeAssistant.agentUserIds` ([ha-connector.md](../ha-connector.md)), or a reply-card publish
+  that names `driver: agent`. `driverPrincipal` is then `homeassistant:<user id>` for the account
+  (absent for a publish, which names no account). Once agents have their own principal (#45), it
+  is set from theirs the same way.
+* It is kept in memory, as agent-ha-bridge keeps it: a host that restarts, and a session that goes
+  and comes back, starts again as the person's.
+* A change of driver is something a client shows, so it moves `updatedAt` and sends an upsert. It
+  is never trimmed by the session budget.
 
 ### Activity
 

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.HomeAssistant;
+using AgentBridge.Host.Core;
 using AgentBridge.Protocol;
 using Xunit;
 
@@ -39,6 +40,7 @@ public sealed class LiveHomeAssistantTests : IDisposable
     readonly HomeAssistantClient ha;
     readonly FakeSessions sessions = new();
     readonly List<AnswerRequest> answered = [];
+    readonly SessionDrivers drivers = new();
     readonly List<HaReply> replied = [];
     readonly List<StopRequest> stopped = [];
     readonly List<LaunchRequest> launched = [];
@@ -65,6 +67,7 @@ public sealed class LiveHomeAssistantTests : IDisposable
         Reconcile = TimeSpan.FromSeconds(2),
         RetireGrace = TimeSpan.FromSeconds(2),
         AgentUserIds = agents,
+        Drivers = drivers,
         Notify = notify,
     }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } }, answer: (r, _) =>
     {
@@ -219,6 +222,8 @@ public sealed class LiveHomeAssistantTests : IDisposable
         Ask(id, null, turn: 2);
         await Until(SessionEntities.Activity(node), s => s.Attributes.TryGetProperty("driver", out var d) && d.GetString() == "agent");
         await Until(SessionEntities.Decision(node), s => s.State == HaDecision.Idle);
+        // The host's own clients show the same edge, naming the account Home Assistant recorded.
+        Assert.Equal((DriverKind.Agent, "homeassistant:" + me), drivers.Shown(id));
     }
 
     [HomeAssistantFact]

@@ -28,6 +28,9 @@ public sealed class SessionSource : ISessionSource
     readonly Dictionary<string, CodexLockHolding> _codexLockHolders = new(StringComparer.OrdinalIgnoreCase);
     // Sessions the host is ending, and since when. Under _gate.
     readonly Dictionary<string, DateTimeOffset> _ending = new(StringComparer.Ordinal);
+    // Who drives each session (Session.Driver), shared with the Home Assistant connector; null for
+    // a source that does not say.
+    readonly SessionDrivers? _drivers;
     readonly List<FileSystemWatcher> _watchers = [];
     readonly CancellationTokenSource _stop = new();
     readonly Task _dispatch;
@@ -64,12 +67,14 @@ public sealed class SessionSource : ISessionSource
         public bool Dirty;
     }
 
-    public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null)
+    public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null)
     {
         _options = options;
         _processes = processes ?? new SystemProcessInspector();
         _time = time ?? TimeProvider.System;
         _unaccounted = new Unaccounted(_time, Log);
+        _drivers = drivers;
+        if (_drivers is not null) { _drivers.Changed += OnDriverChanged; }
         _dispatch = Task.Run(DispatchAsync);
     }
 
@@ -489,6 +494,35 @@ public sealed class SessionSource : ISessionSource
         finally { _pass.Release(); }
     }
 
+    // A press armed a session's driver: shown at once, as the ending override is, and dated, since
+    // it is something a client shows.
+    void OnDriverChanged(string id) => _ = RecommitDriverAsync(id);
+
+    async Task RecommitDriverAsync(string id)
+    {
+        try
+        {
+            await _pass.WaitAsync(_stop.Token).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is OperationCanceledException or ObjectDisposedException) { return; }
+        try
+        {
+            Entry? entry;
+            lock (_gate)
+            {
+                if (!_entries.TryGetValue(id, out entry)) { return; }
+                entry.Touched = _time.GetUtcNow();
+            }
+            Commit(entry, entry.Full);
+        }
+        finally
+        {
+            // The source may have been disposed meanwhile; nothing waits on the pass then.
+            try { _pass.Release(); }
+            catch (ObjectDisposedException) { }
+        }
+    }
+
     void Commit(Entry entry, Session full)
     {
         entry.Full = full;
@@ -496,6 +530,13 @@ public sealed class SessionSource : ISessionSource
         lock (_gate) { endingSince = _ending.TryGetValue(full.Id, out var at) ? at : null; }
         var shown = entry.Touched is { } touched && touched > full.UpdatedAt ? full with { UpdatedAt = touched } : full;
         if (endingSince is { } since) { shown = shown with { Status = SessionStatus.Ending, StatusSince = since }; }
+        if (_drivers is not null)
+        {
+            // From what the transcript says, not the ending override: a new turn decides who drives it.
+            _drivers.For(full.Id).Observe(full, _time.GetUtcNow(), _drivers.Arm);
+            var (driver, principal) = _drivers.Shown(full.Id);
+            shown = shown with { Driver = driver, DriverPrincipal = principal };
+        }
         var getForm = SessionBudget.Fit(shown);
         var listForm = SessionBudget.Fit(shown.WithoutHistory());
         var json = JsonSerializer.Serialize(getForm, ProtocolJson.Options);
@@ -552,6 +593,7 @@ public sealed class SessionSource : ISessionSource
         {
             if (!_entries.Remove(id, out var entry)) { return; }
             _ending.Remove(id);
+            _drivers?.Forget(id);
             entry.Timer?.Dispose();
             entry.Timer = null;
             _revision++;
@@ -619,6 +661,7 @@ public sealed class SessionSource : ISessionSource
 
     public async ValueTask DisposeAsync()
     {
+        if (_drivers is not null) { _drivers.Changed -= OnDriverChanged; }
         await _stop.CancelAsync().ConfigureAwait(false);
         if (_loop is not null) { await _loop.ConfigureAwait(false); }
         List<SessionSubscription> subscribers;

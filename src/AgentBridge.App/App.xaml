@@ -14,6 +14,7 @@
                     <SolidColorBrush x:Key="AbPrimary" Color="#0969da" />
                     <SolidColorBrush x:Key="AbWarning" Color="#bf8700" />
                     <SolidColorBrush x:Key="AbWarningText" Color="#8a5a00" />
+                    <SolidColorBrush x:Key="AbAgent" Color="#8250df" />
                     <SolidColorBrush x:Key="AbDanger" Color="#cf222e" />
                     <SolidColorBrush x:Key="AbOk" Color="#1a7f37" />
                     <SolidColorBrush x:Key="AbMuted" Color="#59636e" />
@@ -25,6 +26,7 @@
                     <SolidColorBrush x:Key="AbPrimary" Color="#4493f8" />
                     <SolidColorBrush x:Key="AbWarning" Color="#d29922" />
                     <SolidColorBrush x:Key="AbWarningText" Color="#e3b341" />
+                    <SolidColorBrush x:Key="AbAgent" Color="#ab7df8" />
                     <SolidColorBrush x:Key="AbDanger" Color="#f85149" />
                     <SolidColorBrush x:Key="AbOk" Color="#3fb950" />
                     <SolidColorBrush x:Key="AbMuted" Color="#9ea7b3" />
@@ -36,6 +38,7 @@
                     <SolidColorBrush x:Key="AbPrimary" Color="{ThemeResource SystemColorHighlightColor}" />
                     <SolidColorBrush x:Key="AbWarning" Color="{ThemeResource SystemColorHighlightColor}" />
                     <SolidColorBrush x:Key="AbWarningText" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="AbAgent" Color="{ThemeResource SystemColorHighlightColor}" />
                     <SolidColorBrush x:Key="AbDanger" Color="{ThemeResource SystemColorWindowTextColor}" />
                     <SolidColorBrush x:Key="AbOk" Color="{ThemeResource SystemColorWindowTextColor}" />
                     <SolidColorBrush x:Key="AbMuted" Color="{ThemeResource SystemColorGrayTextColor}" />

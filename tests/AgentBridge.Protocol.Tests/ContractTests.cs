@@ -33,6 +33,18 @@ public class ContractTests
     }
 
     [Fact]
+    public void A_session_is_sent_as_the_persons_by_leaving_the_driver_out_and_an_unknown_driver_reads_as_the_persons()
+    {
+        var person = new Session { Id = "x", Agent = AgentKind.Copilot, Status = SessionStatus.Idle, StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, Activity = new Activity() };
+        Assert.DoesNotContain("driver", JsonSerializer.Serialize(person, ProtocolJson.Options), StringComparison.Ordinal);
+
+        var json = JsonSerializer.Serialize(person with { Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:0f1e2d3c" }, ProtocolJson.Options);
+        Assert.Contains("\"driver\":\"agent\",\"driverPrincipal\":\"homeassistant:0f1e2d3c\"", json, StringComparison.Ordinal);
+        var newer = JsonSerializer.Deserialize<Session>(json.Replace("\"driver\":\"agent\"", "\"driver\":\"robot\"", StringComparison.Ordinal), ProtocolJson.Options)!;
+        Assert.Equal(DriverKind.Person, newer.Driver);
+    }
+
+    [Fact]
     public void An_emoji_is_escaped_as_a_surrogate_pair_so_only_the_session_budget_bounds_the_json()
     {
         // 4,096 emoji are exactly the 16 KiB response limit as text, and 48 KiB as JSON.

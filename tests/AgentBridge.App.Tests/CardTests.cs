@@ -450,6 +450,21 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_session_an_agent_drives_says_so_with_its_principal_until_the_person_takes_it_back()
+    {
+        var card = new SessionCardViewModel(Make.Session(), Context());
+        Assert.Equal((false, "", (string?)null), (card.Driven, card.DriverText, card.DriverPrincipal));
+
+        card.Update(Make.Session() with { Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:0f1e2d3c" });
+        Assert.Equal((true, "Driven by an agent", "homeassistant:0f1e2d3c"), (card.Driven, card.DriverText, card.DriverPrincipal));
+        // The state it shows is unchanged: only the colour is the agent's.
+        Assert.Equal("idle", card.View);
+
+        card.Update(Make.Session());
+        Assert.Equal((false, "", (string?)null), (card.Driven, card.DriverText, card.DriverPrincipal));
+    }
+
+    [Fact]
     public void A_folded_card_stays_folded_across_restarts_until_a_new_question_opens_it_once()
     {
         var card = new SessionCardViewModel(Make.Session(), Context()) { Folded = true };

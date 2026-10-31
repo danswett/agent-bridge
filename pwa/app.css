@@ -1,6 +1,7 @@
 /* Agent Bridge PWA. Mobile first (an iPhone on the Home Screen), fine on a desktop.
    Colours follow the old Home Assistant cards: blue while working, amber while waiting
-   on you, calm when idle, and a still blue edge while idle but delegating. Both schemes keep body text at 7:1 and secondary text above
+   on you, calm when idle, a still blue edge while idle but delegating, and purple in place of
+   the colour while an agent drives the session. Both schemes keep body text at 7:1 and secondary text above
    4.5:1. No inline styles anywhere, so the CSP can say style-src 'self'. */
 
 :root {
@@ -15,6 +16,7 @@
   --primary-text: #ffffff;
   --warning: #bf8700;
   --warning-text: #8a5a00;
+  --agent: #8250df;
   --danger: #cf222e;
   --ok: #1a7f37;
   --code-bg: #eff2f5;
@@ -38,6 +40,7 @@
     --primary-text: #0d1117;
     --warning: #d29922;
     --warning-text: #e3b341;
+    --agent: #ab7df8;
     --danger: #f85149;
     --ok: #3fb950;
     --code-bg: #0d1117;
@@ -194,6 +197,12 @@ a { color: var(--primary); }
    as on the old dashboard, but still and dashed, so it can't be mistaken for working at a
    glance and doesn't read as finished either. */
 .frame.delegating { border-color: var(--primary); border-style: dashed; }
+/* Driven by an agent rather than by you (agent-ha-bridge's card): the same shapes, with purple
+   in place of the colour. A steady purple edge while idle, so a session left under an agent's
+   control still says so; while it works or waits, the same breathing glow, in purple. */
+.frame.agent { border-color: var(--agent); }
+.frame.agent.working,
+.frame.agent.waiting { border-color: var(--agent); box-shadow: 0 0 6px 0 var(--agent); }
 
 /* The halo is its own layer with a shadow that never changes, faded by opacity. Animating
    box-shadow on the card itself repaints the whole card on the main thread every frame;
@@ -207,6 +216,8 @@ a { color: var(--primary); }
 .frame.waiting ~ .glow { animation: glow 1.6s ease-in-out infinite; will-change: opacity; }
 .frame.working ~ .glow { box-shadow: 0 0 16px 2px var(--primary); }
 .frame.waiting ~ .glow { box-shadow: 0 0 18px 3px var(--warning); }
+.frame.agent.working ~ .glow,
+.frame.agent.waiting ~ .glow { box-shadow: 0 0 18px 3px var(--agent); }
 @keyframes glow { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
 
 .head { padding-top: 6px; }
@@ -249,6 +260,8 @@ a { color: var(--primary); }
 .session[data-status="waiting"] .status-text { color: var(--warning-text); }
 .session[data-view="delegating"] .dot { background: transparent; box-shadow: inset 0 0 0 2px var(--primary); }
 .session[data-view="delegating"] .status-text { color: var(--primary); }
+.driver { color: var(--agent); font-weight: 600; }
+.status-line .driver::before { content: "·"; margin: 0 6px; color: var(--muted); font-weight: 400; }
 
 .tool-line { margin: 4px 0 0; font-size: .88rem; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
 .tool-line .tool-name { font-weight: 600; font-family: ui-monospace, monospace; }

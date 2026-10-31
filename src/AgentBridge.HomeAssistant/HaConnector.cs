@@ -51,6 +51,9 @@ public sealed record HaConnectorOptions
     // An arm left by a press stops counting for the next turn after this long
     // (DriverArmSeconds): the turn it was for is not coming.
     public TimeSpan DriverArm { get; init; } = TimeSpan.FromSeconds(600);
+    // Who drives each session, shared with the host's session source so its own clients show the
+    // same purple edge as the cards. A connector given none keeps its own.
+    public SessionDrivers? Drivers { get; init; }
     // How often a card with an open question is read even though the watch reported nothing, so
     // a press made while the watch was reconnecting is not lost; the watch makes it immediate.
     public TimeSpan AnswerSweep { get; init; } = TimeSpan.FromSeconds(5);
@@ -152,6 +155,7 @@ public sealed partial class HaConnector : IAsyncDisposable
     readonly Action<string> log;
     readonly TimeProvider time;
     readonly object gate = new();
+    readonly SessionDrivers drivers;
     readonly HashSet<string> dirty = new(StringComparer.Ordinal);
     readonly Dictionary<string, Published> published = new(StringComparer.Ordinal);
     // Sessions whose first publication has begun but not finished: they already have retained
@@ -211,55 +215,19 @@ public sealed partial class HaConnector : IAsyncDisposable
         // Phone notifications (HaConnector.Notify.cs).
         public NotifyState Notify = new();
         // Who is driving the session's turn, and an arm left by a press for the next one
-        // (Set-DaemonDriverPending): consumed by the turn it was armed for, or lapsed.
-        public string Driver = "human";
-        public DateTimeOffset? DriverPendingAt;
-        public string? TurnKey;
-
-        public void ArmDriver(string driver, DateTimeOffset now)
+        // (Set-DaemonDriverPending): consumed by the turn it was armed for, or lapsed. Kept in the
+        // host's SessionDrivers, so the host's own clients show the same driver (Session.Driver).
+        public required SessionDriver Drive { get; init; }
+        public string Driver => Drive.Driver;
+        public DateTimeOffset? DriverPendingAt
         {
-            Driver = driver;
-            DriverPendingAt = now;
+            get => Drive.PendingAt;
+            set => Drive.PendingAt = value;
         }
 
-        // An agent's launch: its opening turn, the prompt it launched with, is the agent's, and
-        // the arm is for that turn alone. The opening turn may be here already (the session
-        // registered before its launch was reported), so it is looked for as well as waited for;
-        // the turn after it is whoever's it is. Without a prompt there is no opening turn, and
-        // the arm waits for the first, as a press's does.
-        string? openingPrompt;
-        bool openingResumed;
+        public void ArmDriver(string driver, DateTimeOffset now, string? principal = null) => Drive.ArmDriver(driver, now, principal);
 
-        public void ArmLaunch(DateTimeOffset at, string? prompt, bool resumed)
-        {
-            ArmDriver("agent", at);
-            openingPrompt = prompt is { Length: > 0 } ? Collapse(prompt) : null;
-            openingResumed = resumed;
-        }
-
-        // The current turn, seen: when it is the launch's opening turn, the arm is spent on it.
-        public void TurnSeen(Activity activity)
-        {
-            if (openingPrompt is not { } opening) { return; }
-            var message = activity.UserMessage is { } m ? Collapse(m) : "";
-            var head = opening[..Math.Min(80, opening.Length)];
-            if (message.StartsWith(head, StringComparison.Ordinal) || (!openingResumed && activity.TurnCount >= 1))
-            {
-                DriverPendingAt = null;
-                openingPrompt = null;
-            }
-        }
-
-        static string Collapse(string text) => System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
-
-        // A new turn: the press that armed it drives it, or nobody did and the person at the
-        // machine is.
-        public void TurnStarted(DateTimeOffset now, TimeSpan arm)
-        {
-            if (DriverPendingAt is not { } at || now - at >= arm) { Driver = "human"; }
-            DriverPendingAt = null;
-            openingPrompt = null;
-        }
+        public void ArmLaunch(DateTimeOffset at, string? prompt, bool resumed, string? principal) => Drive.ArmLaunch(at, prompt, resumed, principal);
         // Which of the reply and the reasoning changed last. The host keeps the previous turn's
         // reply when a new turn starts, so "no reply yet" cannot say the newest line is a thought.
         public bool Seen;
@@ -298,6 +266,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         HaLauncher? launch = null, IHostUpdates? updates = null)
     {
         this.options = options;
+        drivers = options.Drivers ?? new SessionDrivers { Arm = options.DriverArm };
         launcher = launch;
         this.updates = updates;
         this.answer = answer;
@@ -721,7 +690,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             // while it is down, still retires what that write left behind.
             SaveLedger();
             await PublishEntitiesAsync(t, name, now, ct);
-            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent), PublishedAt = now };
+            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent), PublishedAt = now, Drive = drivers.For(s.Id) };
             lock (gate)
             {
                 starting.Remove(s.Id);
@@ -786,10 +755,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         }
 
         // A new turn (a new message from the person or an agent) decides who drives it.
-        var turn = $"{full.Activity.TurnCount}\n{full.Activity.UserMessage}";
-        if (p.TurnKey is not null && p.TurnKey != turn) { p.TurnStarted(now, options.DriverArm); }
-        else { p.TurnSeen(full.Activity); }
-        p.TurnKey = turn;
+        p.Drive.Observe(full, now, options.DriverArm);
 
         var status = HaPayloads.Status(s);
         var statusAttributes = HaPayloads.StatusAttributes(s, name, options.MachineName, now);

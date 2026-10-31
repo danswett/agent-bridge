@@ -285,7 +285,11 @@ session no longer asks, is cleared too.
 
 **Driver.** A press whose `context.user_id` is in `homeAssistant.agentUserIds`, or a reply
 payload saying `driver: agent`, makes the next turn agent-driven (the purple edge), if that
-turn starts within 600 s (`DriverArmSeconds`); otherwise it reads `human`.
+turn starts within 600 s (`DriverArmSeconds`); otherwise it reads `human`. The host keeps it in
+one record (`SessionDrivers`) for the cards and its own clients alike, so the phone and the app
+show the same edge (`Session.driver`, with `driverPrincipal` `homeassistant:<user id>` for the
+account that pressed), and a person's answer or reply from either takes it back as one on the
+card does.
 
 Where stage 2 knowingly differs from the daemon:
 

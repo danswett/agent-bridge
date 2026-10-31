@@ -39,6 +39,12 @@ public sealed class SessionService
     // design G5), or null: said in hello, beside the capabilities it takes away.
     public Func<string?>? ReadOnly { get; init; }
 
+    // Who drives each session (Session.Driver). Every device that reaches this service is a
+    // person's (agents on the pipe are refused before it, design §5.5), so an answer or reply that
+    // may have arrived takes the session back from an agent at once, as one typed at the machine.
+    public SessionDrivers? Drivers { get; init; }
+    public TimeProvider Time { get; init; } = TimeProvider.System;
+
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
         UsageService? usage = null, ISessionLauncher? launcher = null, SessionTransfers? transfers = null)
@@ -185,7 +191,11 @@ public sealed class SessionService
         if (answers is null) { return new AnswerResult(AnswerOutcome.Refused, "this host does not take answers; answer at the machine"); }
         var result = await answers.AnswerAsync(request);
         // Typed from this device: it needs no notification that the question was answered.
-        if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { push?.Answered(channel.PeerId, request.Id, request.Question); }
+        if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
+        {
+            push?.Answered(channel.PeerId, request.Id, request.Question);
+            Drivers?.ArmPerson(request.Id, Time.GetUtcNow());
+        }
         return result;
     }
 
@@ -221,7 +231,9 @@ public sealed class SessionService
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.reply needs an id, a request and text"); }
         var request = data.Deserialize<ReplyRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.reply needs an id, a request and text");
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
-        return await replies.ReplyAsync(request, channel.PeerId);
+        var result = await replies.ReplyAsync(request, channel.PeerId);
+        if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { Drivers?.ArmPerson(request.Id, Time.GetUtcNow()); }
+        return result;
     }
 
     // Only this machine's own pipe is direct: anything through the relay keeps the 256 KiB cap

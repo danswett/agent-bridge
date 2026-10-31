@@ -42,6 +42,9 @@ export const readStatus = tolerant(['working', 'waiting', 'idle', 'ending'], 'id
 export const readToolStatus = tolerant(['running', 'done', 'failed'], 'done');
 export const readQuestionKind = tolerant(['form', 'approval'], 'form');
 export const readFieldType = tolerant(['choice', 'multi', 'boolean', 'text', 'number'], 'text');
+// Who drives the session's turn. Absent, and anything unknown, is the person: a wrong purple
+// edge is worse than none.
+export const readDriver = tolerant(['person', 'agent'], 'person');
 // An outcome from a newer host is unconfirmed: never delivered, and never a reason to
 // answer again.
 export const readOutcome = tolerant(Outcomes, 'unconfirmed');
@@ -138,6 +141,9 @@ export function readSession(raw) {
     startedAt: str(s.startedAt),
     updatedAt: str(s.updatedAt) ?? '',
     processId: num(s.processId),
+    driver: readDriver(s.driver),
+    // Which agent, when the host knows; only ever with an agent driving.
+    driverPrincipal: readDriver(s.driver) === 'agent' ? str(s.driverPrincipal) : null,
     activity: {
       response: str(a.response),
       responseTruncated: a.responseTruncated === true,

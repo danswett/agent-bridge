@@ -53,9 +53,9 @@ public sealed partial class HaConnector
     readonly List<JsonObject> launchOutcomes = [];
     Dictionary<string, (string Id, string Launcher)> resumeByLabel = new(StringComparer.Ordinal);
     // Sessions an agent's press launched, to show as the agent's from the moment they appear.
-    readonly Dictionary<string, (DateTimeOffset At, string? Prompt, bool Resumed)> launchedByAgent = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (DateTimeOffset At, string? Prompt, bool Resumed, string? Principal)> launchedByAgent = new(StringComparer.Ordinal);
 
-    sealed record LaunchDone(LaunchRequest Request, string? RequestId, string Pressed, string Driver, JsonObject? Launched, Consumed? Prompt, LaunchResult Result);
+    sealed record LaunchDone(LaunchRequest Request, string? RequestId, string Pressed, string Driver, string? Principal, JsonObject? Launched, Consumed? Prompt, LaunchResult Result);
 
     // What a card launch took its prompt from: the box as it read, and the payload's at stamp.
     sealed record Consumed(string? Box, string? PayloadAt);
@@ -254,6 +254,7 @@ public sealed partial class HaConnector
         launchPressHandled = press.Value;
         if (!DateTimeOffset.TryParse(press.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var pressedAt)) { return; }
         var driver = DriverOf(press.Snapshot?.UserId);
+        var principal = PrincipalOf(press.Snapshot?.UserId);
         var pressed = Instant(pressedAt);
 
         var read = ReadLaunchRequest(payload, pressedAt);
@@ -290,7 +291,7 @@ public sealed partial class HaConnector
                 log("Home Assistant connector: Launch pressed while a launch is still starting; nothing more launched");
                 return;
             }
-            await LaunchFromCardAsync(pressed, payloadSkip ? null : payload, driver, now, ct);
+            await LaunchFromCardAsync(pressed, payloadSkip ? null : payload, driver, principal, now, ct);
             return;
         }
 
@@ -328,11 +329,11 @@ public sealed partial class HaConnector
             return;
         }
         await LaunchNoteAsync(StartingNote(launched!), ct);
-        Dispatch(request, id, pressed, driver, launched, null);
+        Dispatch(request, id, pressed, driver, principal, launched, null);
     }
 
     // A person's press, or an agent's without a request: everything from the card.
-    async Task LaunchFromCardAsync(string pressed, HaState? payload, string driver, DateTimeOffset now, CancellationToken ct)
+    async Task LaunchFromCardAsync(string pressed, HaState? payload, string driver, string? principal, DateTimeOffset now, CancellationToken ct)
     {
         var offered = launchOptions!;
         var agentName = (await StateOrNullAsync(LaunchEntity("select", "new_agent"), ct))?.State;
@@ -416,7 +417,7 @@ public sealed partial class HaConnector
         };
         var launched = Launched(offered, request, resumeLabel);
         await LaunchNoteAsync(StartingNote(launched), ct);
-        Dispatch(request, null, pressed, driver, launched, prompt.Length > 0 ? new Consumed(box, PayloadStamp(payload)) : null);
+        Dispatch(request, null, pressed, driver, principal, launched, prompt.Length > 0 ? new Consumed(box, PayloadStamp(payload)) : null);
     }
 
     // Get-DaemonLaunchPrompt: the payload's whole prompt when it has one, else the box's; and
@@ -621,7 +622,7 @@ public sealed partial class HaConnector
     }
 
     // The launch, beside the passes: the host follows it to registration, up to a minute.
-    void Dispatch(LaunchRequest request, string? requestId, string pressed, string driver, JsonObject? launched, Consumed? prompt)
+    void Dispatch(LaunchRequest request, string? requestId, string pressed, string driver, string? principal, JsonObject? launched, Consumed? prompt)
     {
         launchBusy = true;
         launchInFlight = requestId;
@@ -633,7 +634,7 @@ public sealed partial class HaConnector
             try { result = await launcher!.Launch(request, cancel); }
             catch (OperationCanceledException) when (cancel.IsCancellationRequested) { result = new LaunchResult(LaunchOutcome.Unconfirmed, "the host stopped while the launch was starting; check the machine"); }
             catch (Exception e) { result = new LaunchResult(LaunchOutcome.Failed, $"Launch failed: {e.GetType().Name}"); }
-            launchesDone.Enqueue(new LaunchDone(request, requestId, pressed, driver, launched, prompt, result));
+            launchesDone.Enqueue(new LaunchDone(request, requestId, pressed, driver, principal, launched, prompt, result));
         }, CancellationToken.None));
     }
 
@@ -681,7 +682,7 @@ public sealed partial class HaConnector
                 if (done.Prompt is { } consumed) { await ClearPromptsAsync(consumed, ct); }
                 // The selectors were re-read on the next refresh: what is resumable has changed.
                 launchOptionsAt = DateTimeOffset.MinValue;
-                if (done.Driver == "agent" && result.Session is { Length: > 0 } session) { ArmLaunchedDriver(session, now, done.Request); }
+                if (done.Driver == "agent" && result.Session is { Length: > 0 } session) { ArmLaunchedDriver(session, now, done.Request, done.Principal); }
             }
             launchesDone.TryDequeue(out _);
             launchBusy = false;
@@ -690,14 +691,14 @@ public sealed partial class HaConnector
         }
     }
 
-    void ArmLaunchedDriver(string sessionId, DateTimeOffset now, LaunchRequest request)
+    void ArmLaunchedDriver(string sessionId, DateTimeOffset now, LaunchRequest request, string? principal)
     {
         lock (gate)
         {
             // Already published, as a launch that registered before it was reported is: its
             // activity is published again with the agent as its driver.
-            if (published.TryGetValue(sessionId, out var p)) { p.ArmLaunch(now, request.Prompt, request.Resume is not null); dirty.Add(sessionId); return; }
-            launchedByAgent[sessionId] = (now, request.Prompt, request.Resume is not null);
+            if (published.TryGetValue(sessionId, out var p)) { p.ArmLaunch(now, request.Prompt, request.Resume is not null, principal); dirty.Add(sessionId); return; }
+            launchedByAgent[sessionId] = (now, request.Prompt, request.Resume is not null, principal);
         }
     }
 
@@ -715,7 +716,7 @@ public sealed partial class HaConnector
     // Called under gate when a session is first published.
     void ApplyLaunchedDriver(string sessionId, Published p, DateTimeOffset now)
     {
-        if (launchedByAgent.Remove(sessionId, out var arm) && now - arm.At < options.DriverArm) { p.ArmLaunch(arm.At, arm.Prompt, arm.Resumed); }
+        if (launchedByAgent.Remove(sessionId, out var arm) && now - arm.At < options.DriverArm) { p.ArmLaunch(arm.At, arm.Prompt, arm.Resumed, arm.Principal); }
     }
 
     // Set-CopilotMqttNewSessionResult. Best effort where a press has been taken already: a note

@@ -469,7 +469,7 @@ The same runs, and review, found six host bugs, all fixed:
 | Usage with no current reading of the account | A figure here older than the daemon's own pace allows (`usage.idleIntervalSeconds`, plus its re-assert, plus a minute) is one this machine's daemon has stopped reading, usually because another machine reads the account. The account reader's figure stands in for it ("Home Assistant reads"). When no machine the daemon names has a current one, the sample counts toward `notComparedWhy` ("usage: no current reading of the account, …"), not `usageCompared` |
 | Titles | agent-ha-bridge names sessions for Home Assistant ("Copilot: …") |
 | Reasoning and tool history | Bounded differently and shown differently (§1) |
-| Driver, the purple edge | Missing here (#46) |
+| Driver, the purple edge | Set by the presses on the cards, which only the daemon reads while it runs: beside it, the host takes none, so its own would always read as the person's (#46) |
 | Notifications | Not state |
 
 Every report lists these under `notCompared`, so a clean week is never read as covering them.

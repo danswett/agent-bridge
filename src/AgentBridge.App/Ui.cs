@@ -33,6 +33,10 @@ public static class Ui
         _ => Brush("AbBorder"),
     };
 
+    // The edge and glow: purple in place of the state's colour while an agent drives the session
+    // (pwa/app.css .frame.agent).
+    public static Brush EdgeBrush(string view, bool agent) => agent ? Brush("AbAgent") : StateBrush(view);
+
     public static DoubleCollection StateDash(string view) => view switch
     {
         "delegating" => [4, 3],

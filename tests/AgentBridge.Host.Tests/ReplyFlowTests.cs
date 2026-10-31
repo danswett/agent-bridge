@@ -24,6 +24,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     readonly FakeProbe probe = new();
     readonly FakeInjector injector = new();
     readonly DeliveryGate gate = new();
+    readonly SessionDrivers drivers = new();
     TestRelay relay = null!;
     SessionSource source = null!;
     Device host = null!;
@@ -36,7 +37,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         events = f.CopilotSession(Id, 100, name: "Replying session");
         Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
         f.Processes.Run(AgentKind.Copilot, 100);
-        source = new SessionSource(f.Options(), f.Processes, TimeProvider.System);
+        source = new SessionSource(f.Options(), f.Processes, TimeProvider.System, drivers);
         await source.RefreshAsync();
         // With the in-process blob store, for files too large for the channel.
         relay = await TestRelay.StartAsync(o => o.Blobs.Backend = "local");
@@ -78,7 +79,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
     void Serve(ISessionAnswerer? answers, ISessionReplier? replies, AttachmentStore? attachments = null)
     {
-        served = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: answers, replies: replies, attachments: attachments);
+        served = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: answers, replies: replies, attachments: attachments) { Drivers = drivers };
         host.Hub.Handler = served.HandleAsync;
     }
 
@@ -131,6 +132,42 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Serve(null, null);
         Assert.Equal(("refused", "this host does not take replies; reply at the machine"), await ReplyAsync(ch, "hello"));
         Assert.Empty(injector.Plans);
+    }
+
+    async Task<DriverKind?> DriverAsync(DriverKind? wanted)
+    {
+        for (var i = 0; i < 500 && source.Get(Id)?.Driver != wanted; i++) { await Task.Delay(10); }
+        return source.Get(Id)?.Driver;
+    }
+
+    [Fact]
+    public async Task An_answer_or_reply_from_a_device_takes_the_session_back_from_an_agent_and_one_refused_leaves_it_with_the_agent()
+    {
+        var ch = await OpenAsync();
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, DateTimeOffset.UtcNow, "homeassistant:0f1e2d3c");
+        Assert.Equal(DriverKind.Agent, await DriverAsync(DriverKind.Agent));
+        Assert.Equal("homeassistant:0f1e2d3c", source.Get(Id)!.DriverPrincipal);
+
+        probe.Reason = "agent-ha-bridge is running for this user";
+        Assert.Equal("refused", (await ReplyAsync(ch, "not now")).Outcome);
+        probe.Reason = null;
+        await source.RefreshAsync();
+        Assert.Equal(DriverKind.Agent, source.Get(Id)!.Driver);
+
+        Assert.Equal("delivered", (await ReplyAsync(ch, "I'll take it from here")).Outcome);
+        Assert.Null(await DriverAsync(null));
+        Assert.Null(source.Get(Id)!.DriverPrincipal);
+
+        // An answer, the same.
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, DateTimeOffset.UtcNow, "homeassistant:0f1e2d3c");
+        Fixture.Append(events, Ask("q1", second++));
+        await source.RefreshAsync();
+        Assert.Equal(DriverKind.Agent, await DriverAsync(DriverKind.Agent));
+        injector.OnInject = _ => Fixture.Append(events, Copilot.Event("human_response.recorded",
+            new { toolCallId = "q1", requestId = "r", actor = "human_response", response = new { responseKind = "ask_user", content = new { pick = "b" } } }, second++));
+        var answered = await ch.RequestAsync(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), fields = new { pick = "b" } });
+        Assert.Equal("delivered", answered.GetProperty("result").GetProperty("outcome").GetString());
+        Assert.Null(await DriverAsync(null));
     }
 
     [Fact]

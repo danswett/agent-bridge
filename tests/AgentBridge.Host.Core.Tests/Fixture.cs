@@ -46,8 +46,8 @@ internal sealed class Fixture : IDisposable
     };
 
     public SessionSource Source(long tailBytes = 4 * 1024 * 1024, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true,
-        Action<string>? log = null, Action<string>? afterRegistrationRead = null) =>
-        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval, log: log, afterRegistrationRead: afterRegistrationRead), Processes, Time);
+        Action<string>? log = null, Action<string>? afterRegistrationRead = null, SessionDrivers? drivers = null) =>
+        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval, log: log, afterRegistrationRead: afterRegistrationRead), Processes, Time, drivers);
 
     // session-state/<id>/ with workspace.yaml and, optionally, inuse.<pid>.lock. Returns
     // the events.jsonl path (not created).

@@ -301,9 +301,12 @@ async Task<int> ServeAsync()
 
     using var stop = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
+    // Who drives each session (the purple edge): one record for the host's own clients and the
+    // Home Assistant cards, so both show the same.
+    var drivers = new SessionDrivers();
     // One source for the life of the process: reconnecting to the relay neither rescans the
     // machine nor loses a change, and every new channel subscribes to the same state.
-    await using var source = new SessionSource(options);
+    await using var source = new SessionSource(options, drivers: drivers);
     await source.StartAsync(stop.Token);
     // Files over 256 KiB come from the relay's blob store, through whichever connection is up.
     using var relayBlobs = new RelayBlobs();
@@ -352,9 +355,10 @@ async Task<int> ServeAsync()
     var hostUpdates = VelopackHostUpdates.For(ReadOnlyReason(), OperatingSystem.IsWindows(),
         () => new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, profile, () => stop.Cancel(), Log));
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
-        HaReplies.For(replies, attachments), stops, launcher, hostUpdates);
+        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log), launcher, transfers)
     {
+        Drivers = drivers,
         // What takes answering, replying, ending and launching away while it runs (design G5),
         // said in hello so a phone shows the machine read-only and why.
         // Asked afresh, as the delivery services ask it for what hello offers: a cached answer

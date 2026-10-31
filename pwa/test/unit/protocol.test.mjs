@@ -50,6 +50,17 @@ test('only an idle session with background work reads as delegating, naming agen
   assert.deepEqual(cardState(s('paused', { agents: 1 })), { view: 'delegating', text: 'Waiting for background agents' });
 });
 
+test('a session is the person\'s unless the host says an agent drives it, and only then has a principal', () => {
+  // An older host sends no driver at all.
+  assert.deepEqual([readSession({ id: 'x' }).driver, readSession({ id: 'x' }).driverPrincipal], ['person', null]);
+  assert.equal(readSession({ id: 'x', driver: 'robot' }).driver, 'person');
+  assert.equal(readSession({ id: 'x', driver: 3 }).driver, 'person');
+  const agent = readSession({ id: 'x', driver: 'agent', driverPrincipal: 'homeassistant:0f1e2d3c' });
+  assert.deepEqual([agent.driver, agent.driverPrincipal], ['agent', 'homeassistant:0f1e2d3c']);
+  assert.equal(readSession({ id: 'x', driver: 'person', driverPrincipal: 'homeassistant:0f1e2d3c' }).driverPrincipal, null);
+  assert.equal(readSession({ id: 'x', driver: 'agent', driverPrincipal: 7 }).driverPrincipal, null);
+});
+
 test('unknown enum values read as the C# reader reads them', () => {
   const s = readSession({
     id: 'x', agent: 'gemini', status: 'thinking', updatedAt: '',

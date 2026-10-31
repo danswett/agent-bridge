@@ -377,8 +377,8 @@ public sealed partial class HaConnector
         if (!press.Present || press.Value == p.Reply.HandledPress) { return; }
         var first = press.Value != p.Reply.PendingPress;
         // The arm as it was before this press, which arming for it replaces.
-        var before = (Pending: p.DriverPendingAt, p.Driver);
-        if (first) { p.ArmDriver(DriverOf(press.Snapshot?.UserId), now); }
+        var before = p.Drive.Save();
+        if (first) { p.ArmDriver(DriverOf(press.Snapshot?.UserId), now, PrincipalOf(press.Snapshot?.UserId)); }
         var box = await ObserveAsync(SessionEntities.Reply(p.Node), ct);
         if (box.Kind == "unknown" && box.Snapshot is null) { return; }
         // The tap on Send is what commits the box, so the press usually arrives first: give its
@@ -398,8 +398,7 @@ public sealed partial class HaConnector
                 if (before.Pending is { } at && now - at < options.DriverArm && before.Driver == "agent"
                     && p.Reply.PayloadDeliveredAt is { } went && now - went < options.DriverArm)
                 {
-                    p.Driver = before.Driver;
-                    p.DriverPendingAt = at;
+                    p.Drive.Restore(before);
                     p.Reply.HandledPress = press.Value;
                     p.Reply.PendingPress = null;
                     log($"Home Assistant connector: send for {sessionId[..Math.Min(8, sessionId.Length)]} had an empty box because its payload had already gone; its arm kept as it was");
@@ -427,7 +426,7 @@ public sealed partial class HaConnector
         var text = box.Value;
         // A press that waited for its words is armed again now: something else (an agent's
         // publish, say) may have armed the next turn meanwhile, and these words are the press's.
-        if (!first) { p.ArmDriver(DriverOf(press.Snapshot?.UserId), now); }
+        if (!first) { p.ArmDriver(DriverOf(press.Snapshot?.UserId), now, PrincipalOf(press.Snapshot?.UserId)); }
         await TransientAsync(p, "Sending...", [], ct);
         p.Reply.HandledPress = press.Value;
         p.Reply.PendingPress = null;

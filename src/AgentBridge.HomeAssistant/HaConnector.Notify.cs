@@ -318,7 +318,7 @@ public sealed partial class HaConnector
         // failure) once its answer has been given: never a second answer.
         if (armed.PhoneTaps.Contains(pending.Key)) { return; }
         pending.Attempt = armed.Attempts;
-        if (PhoneAnswer(choice, armed, pending.Key, DriverOf(tap.UserId)) is not { } read)
+        if (PhoneAnswer(choice, armed, pending.Key, DriverOf(tap.UserId), PrincipalOf(tap.UserId)) is not { } read)
         {
             log($"Home Assistant connector: an answer button for {who} names no answer this question takes; ignored");
             return;
@@ -340,7 +340,7 @@ public sealed partial class HaConnector
     }
 
     // What a tap answers, or null: an option by its button's index, or words typed at the text action.
-    Read? PhoneAnswer(TapChoice choice, Armed armed, string tap, string driver)
+    Read? PhoneAnswer(TapChoice choice, Armed armed, string tap, string driver, string? principal)
     {
         var plan = armed.Plan;
         var sessionId = choice.SessionId;
@@ -351,19 +351,19 @@ public sealed partial class HaConnector
         if (!string.IsNullOrWhiteSpace(choice.ReplyText))
         {
             var text = choice.ReplyText.Trim();
-            if (plan.Fields.Count == 0) { return Answer(sessionId, armed, null, text, text, null, press, driver); }
+            if (plan.Fields.Count == 0) { return Answer(sessionId, armed, null, text, text, null, press, driver, principal); }
             if (plan.Fields.Count != 1) { return null; }
             var field = plan.Fields[0];
             var name = field.Source!.Name;
             if (TypedField(field))
             {
-                if (field.Source.Type != FieldType.Number) { return Answer(sessionId, armed, new Dictionary<string, JsonElement> { [name] = JsonSerializer.SerializeToElement(text) }, null, text, null, press, driver); }
+                if (field.Source.Type != FieldType.Number) { return Answer(sessionId, armed, new Dictionary<string, JsonElement> { [name] = JsonSerializer.SerializeToElement(text) }, null, text, null, press, driver, principal); }
                 var number = ExactNumber(text) ?? (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) && double.IsFinite(d) ? JsonSerializer.SerializeToElement(d) : null);
-                return number is { } n ? Answer(sessionId, armed, new Dictionary<string, JsonElement> { [name] = n }, null, text, null, press, driver) : null;
+                return number is { } n ? Answer(sessionId, armed, new Dictionary<string, JsonElement> { [name] = n }, null, text, null, press, driver, principal) : null;
             }
             // Through the prompt's own "Other" entry, where it has one.
             return plan.TakesTypedAnswer
-                ? Answer(sessionId, armed, new Dictionary<string, JsonElement> { [name] = JsonSerializer.SerializeToElement(new { other = text }) }, null, text, null, press, driver)
+                ? Answer(sessionId, armed, new Dictionary<string, JsonElement> { [name] = JsonSerializer.SerializeToElement(new { other = text }) }, null, text, null, press, driver, principal)
                 : null;
         }
         var (from, indexes) = HaNotify.OptionSources(HaNotify.Marker(plan));
@@ -383,7 +383,7 @@ public sealed partial class HaConnector
             _ when lone.MultiSelect => JsonSerializer.SerializeToElement(new[] { source.Options![index].Value }),
             _ => JsonSerializer.SerializeToElement(source.Options![index].Value),
         };
-        return Answer(sessionId, armed, new Dictionary<string, JsonElement> { [source.Name] = value }, null, label, null, press, driver);
+        return Answer(sessionId, armed, new Dictionary<string, JsonElement> { [source.Name] = value }, null, label, null, press, driver, principal);
     }
 
     // A finished turn, by turn and reply: the same words ending a later turn are that turn's own.

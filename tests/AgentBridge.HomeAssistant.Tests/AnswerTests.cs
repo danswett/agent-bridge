@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.HomeAssistant;
+using AgentBridge.Host.Core;
 using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
@@ -26,12 +27,16 @@ public sealed class AnswerTests : IDisposable
         if (Directory.Exists(folder)) { Directory.Delete(folder, true); }
     }
 
+    // Shared with the host's session source in the host itself, which shows the same driver.
+    readonly SessionDrivers drivers = new();
+
     HaConnector Connector(params string[] agents) => new(new HaConnectorOptions
     {
         MachineName = Machine,
         Version = "0.1.0",
         StateFile = Path.Combine(folder, "ha-connector.json"),
         AgentUserIds = agents,
+        Drivers = drivers,
         FieldPinDelay = TimeSpan.Zero,
         SelectDelay = TimeSpan.Zero,
     }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } }, time: time, answer: (r, _) =>
@@ -239,6 +244,8 @@ public sealed class AnswerTests : IDisposable
         await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut the release now", "agent-user"));
         await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
         Assert.Single(answered);
+        // The host's own clients see it at once, with the account that pressed.
+        Assert.Equal((DriverKind.Agent, "homeassistant:agent-user"), drivers.Shown(A));
 
         Ask(null, turn: 2, message: "the agent's answer");
         await Pass(c);
@@ -248,6 +255,7 @@ public sealed class AnswerTests : IDisposable
         Ask(null, turn: 3, message: "typed in the terminal");
         await Pass(c);
         Assert.Equal("human", Detail.GetProperty("driver").GetString());
+        Assert.Equal((null, null), drivers.Shown(A));
     }
 
     [Fact]
@@ -258,6 +266,7 @@ public sealed class AnswerTests : IDisposable
         await Pass(c);
         await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut the release now", "person"));
         await Do(c, ha.Press(SessionEntities.Submit(Node), "person"));
+        Assert.Equal((null, null), drivers.Shown(A));
         Ask(null, turn: 2, message: "next");
         await Pass(c);
         Assert.Equal("human", Detail.GetProperty("driver").GetString());
