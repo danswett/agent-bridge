@@ -1048,12 +1048,18 @@ Host VM-W vm-w
     StrictHostKeyChecking yes
     ExitOnForwardFailure yes
     ServerAliveInterval 30
+# Back to every host, so what follows keeps its meaning.
+Host *
 # <<< rehearsal VM-W
 "@
+# First, because ssh takes the first value it finds for each option: an earlier global
+# `StrictHostKeyChecking no` or another known-hosts file would otherwise beat the pin. UTF-8 without
+# a BOM both ways, so paths in the rest of the file survive.
 $config = Join-Path $sshDir 'config'
-$text = if (Test-Path $config) { Get-Content $config -Raw } else { '' }
-$text = [regex]::Replace("$text", '(?s)# >>> rehearsal VM-W.*?# <<< rehearsal VM-W\r?\n?', '')
-Set-Content -Path $config -Value ($text.TrimEnd() + "`r`n" + $block).TrimStart() -Encoding ascii
+$utf8 = New-Object System.Text.UTF8Encoding $false
+$text = if (Test-Path $config) { [IO.File]::ReadAllText($config, $utf8) } else { '' }
+$text = [regex]::Replace($text, '(?s)# >>> rehearsal VM-W.*?# <<< rehearsal VM-W\r?\n?', '')
+[IO.File]::WriteAllText($config, $block + "`r`n" + $text.TrimStart(), $utf8)
 "PUBKEY=$((Get-Content "$key.pub" -Raw).Trim())"
 '@
 
