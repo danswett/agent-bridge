@@ -154,8 +154,22 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   await opened.click('#signin-button');
   await expect(opened.locator('#conn')).toHaveText('Connected', { timeout: 30000 });
   await expect(opened.locator('[data-device-name="fixture-host"] button')).toBeVisible();
-  await expect(opened.locator('#sessions')).toBeHidden();
-  await expect(opened.locator('.session')).toHaveCount(0);
+  // The new sign-in starts where one with nothing remembered does, at every machine, not at
+  // the machine the last one chose.
+  await expect(opened.locator('[data-device-id="all"] button')).toHaveAttribute('aria-current', 'true');
+  await expect(opened.locator('[data-device-name="fixture-host"] button')).not.toHaveAttribute('aria-current', 'true');
+  await expect(opened.locator('#sessions-h')).toHaveText('Sessions on all machines');
+});
+
+test('with every machine shown, a machine\'s sessions come over its own channel, labelled, and one that can\'t show them says so beside them', async ({ page }) => {
+  await signIn(page);
+  await expect(page.locator('[data-device-id="all"] button')).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('#sessions-h')).toHaveText('Sessions on all machines');
+  await expect(page.locator('.session').first()).toBeVisible({ timeout: 30000 });
+  await expect(page.locator(`.session[data-host-id="${host.deviceId}"]`).first().locator('.machine-label')).toHaveText('fixture-host');
+  // The S4 demo host predates the sessions protocol: it says so, and the fixture host's sessions stay.
+  await expect(page.locator('#host-state')).toContainText("demo-host: This machine doesn't support Agent Bridge sessions yet", { timeout: 30000 });
+  await expect(page.locator(`.session:not([data-host-id="${host.deviceId}"])`)).toHaveCount(0);
 });
 
 test('a phone answers a question through the relay, and an answer in flight when the socket drops is resent and typed once', async ({ page, context }) => {
@@ -347,12 +361,15 @@ test('every machine shows its sessions and version, and its agents\' usage, merg
   const at = (ms) => new Date(Date.now() + ms).toISOString();
   const copilot = (percent) => ({ agents: [{ agent: 'copilot', label: 'GitHub Copilot', account: 'octo', plan: 'enterprise', source: 'api', measuredAt: at(0), windows: [{ key: 'plan', label: 'Plan', percent, startsAt: at(-10 * 86400000), resetsAt: at(20 * 86400000) }] }] });
   const t = at(0);
+  await signIn(page);
+  // One machine shown on its own (one that shows nothing), so a machine that comes online is
+  // looked at in passing rather than shown.
+  await page.click('[data-device-name="demo-host"] button');
   const usageHost = await startFixtureHost({
     base: relayUrl, name: 'usage-host', usage: copilot(40),
     sessions: [{ id: 'u-1', agent: 'copilot', title: 'One', status: 'idle', statusSince: t, updatedAt: t, activity: {} }, { id: 'u-2', agent: 'claude', title: 'Two', status: 'idle', statusSince: t, updatedAt: t, activity: {} }],
   });
   try {
-    await signIn(page);
     // Not viewed: a short channel tells the list what it is and the panel what it has spent.
     const row = page.locator('[data-device-name="usage-host"]');
     await expect(row.locator('.machine-status')).toHaveText(' · 2 sessions · 0.0.0-fixture (dev)', { timeout: 30000 });

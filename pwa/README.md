@@ -12,14 +12,15 @@ It shows sessions, their activity and their pending questions, answers those que
 (`session.answer`), replies to sessions (`session.reply`) with files and images
 (`attachment.*`), ends them (`session.stop`), starts and resumes them (`session.launch`),
 notifies the phone when a session asks or finishes, even with the app closed (Web Push), and
-shows each agent's usage and each machine's status, per
+shows each agent's usage and each machine's status, for one machine or for every machine at
+once, per
 [docs/protocol/v1-sessions.md](../docs/protocol/v1-sessions.md),
 [v1-launch.md](../docs/protocol/v1-launch.md) and [v1-usage.md](../docs/protocol/v1-usage.md).
 Larger files come next.
 
-| Light | Dark | Answering | A permission request |
-|---|---|---|---|
-| ![Demo mode, light](docs/demo-light.png) | ![Demo mode, dark](docs/demo-dark.png) | ![Answering the worked example's question](docs/answer.png) | ![An approval, answered with a tap](docs/approval.png) |
+| Light | Dark | Answering | A permission request | All machines |
+|---|---|---|---|---|
+| ![Demo mode, light](docs/demo-light.png) | ![Demo mode, dark](docs/demo-dark.png) | ![Answering the worked example's question](docs/answer.png) | ![An approval, answered with a tap](docs/approval.png) | ![Every machine's sessions at once, each card naming its machine](docs/all-machines.png) |
 
 ## Modules
 
@@ -34,7 +35,7 @@ Larger files come next.
 | `js/noise-p256.js` | Vendored copy of `spikes/s2-noise-interop/web/noise-p256.js` |
 | `js/protocol.js` | Op and event names, and the tolerant reader: unknown fields dropped, unknown enum values read as the C# reader reads them |
 | `js/host-client.js` | The sessions protocol over any transport: requests by `id`/`re`, events by `ev`, `seq` checking, the subscription snapshot |
-| `js/host-session.js` | Which host is shown, and keeping a subscription to it across reconnects; remembers the last host; honours `?host=` |
+| `js/host-session.js` | Which machines are shown, one or all (`ALL`), each with a channel and store of its own kept across reconnects; remembers the choice; honours `?host=`; `route(hostId)`, the only way to a machine's channel for what a card sends |
 | `js/sessions-store.js` | The live sessions, most recently updated first |
 | `js/answers.js` | An answer as the form holds it, as the request sends it, and checked first: `checkAnswer` mirrors the C# `Answers.Check` case for case, with its wording |
 | `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect |
@@ -47,12 +48,13 @@ Larger files come next.
 | `js/launch-service.js` | Starting sessions: `answer-service.js` with `session.launch`, one launch on its way per machine, resent with the same request until it has an outcome |
 | `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
 | `js/usage.js` | Agent usage: the tolerant reader, merging every machine's reports into one row per allowance (a reading beats a failure, then the freshest wins), and the card's words: colours at 75% and 90%, pace, resets, ages |
-| `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`) and usage: the viewed machine's on its channel (`usage.subscribe`), every other online machine's by a short channel (`hello`, `usage.get`) once a minute while the app is in front |
+| `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`) and usage: each machine shown on its own channel (`usage.subscribe`), every other online machine by a short channel (`hello`, `usage.get`) once a minute while the app is in front |
 | `js/forget.js` | Forgetting an offline machine ([roster.md](../docs/protocol/roster.md)): two presses, the first arming for 5 seconds; an arm goes with a machine that comes back; the relay's refusals in words |
 | `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
+| `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each card's answers, replies, files, End session and the launch panel to the machine it is for; the heading, count, empty state and a line per machine that can't be reached |
 | `js/ui/*` | Session cards, the question and its answer form, the reply box, End session, the Start a session panel (agent-ha-bridge's launch card, without its 255-character prompt), machines list (offline machines after the online ones, with when each was last seen and Forget), the usage panel, fold state, relative times |
-| `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering, replying, ending and launching sessions and usage included |
+| `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering, replying, ending and launching sessions and usage included; `?machines=2` adds a second machine, Laptop, and `?machines=3` a read-only shadow, DEV-VM1 (shadow), behind a simulated relay (`DemoConnection`) |
 | `tools/build-site.mjs` | Assembles the site for Pages: `config.js` with the relay, CSP in the page, and `sw.js` stamped with a hash of everything served, so any change reaches an open app as an update (the app then offers Reload) |
 
 ### Connecting a host
@@ -65,7 +67,9 @@ connection.openChannel(hostDeviceId)        // channels.js: Noise through the re
 host frames -> Channel.onmessage -> HostClient -> SessionsStore -> SessionListView
 ```
 
-`HostSession.select(deviceId)` does all of that and redoes it after every reconnect. A
+`HostSession.select(deviceId)` does all of that and redoes it after every reconnect;
+`HostSession.select(ALL)` does it for every online machine, each with its own channel and
+store (see [Every machine at once](#every-machine-at-once)). A
 host needs only to answer `hello` and `sessions.subscribe` and send `session.upsert`,
 `session.remove` and `sessions.synced` event frames on the channel; `session.get` feeds
 the tool history, `session.answer` (with `sessions.answer` in `hello`) takes answers, and
@@ -78,6 +82,45 @@ signed by this device.
 The client resubscribes when `seq` skips, repeats or goes backwards, and replaces its
 list with the snapshot when `sessions.synced` arrives; until then the previous list stays
 on screen. Unknown events still count for `seq`.
+
+### Every machine at once
+
+As the Windows app's **All machines**, the **Machines** panel lists **All machines** first
+once more than one machine is online, and shows every online machine's sessions in one list.
+It is what the app shows when nothing has been chosen; picking one machine shows that one
+alone, as before; and the choice, one machine or All, is remembered on the device. A
+notification's link (`?host=`) shows its machine among the others when All was chosen, and
+alone otherwise. Folded, the panel reads "Viewing all · 4 online".
+
+* **The list.** Every machine's sessions together, most recently updated first (ties by
+  session id, then machine), as the app sorts them. Each card names its machine ahead of
+  its agent, as the app's cards do; the heading reads "Sessions on all machines" and the count
+  "7 live on 3 machines". With one machine online, All shows it as that machine.
+* **One machine at a time, still.** Each machine has its own channel, store, hello, retries
+  and read-only state. A machine that can't be reached, is still connecting or does not
+  support sessions gets a line of its own above the cards ("Couldn't reach Laptop: the
+  handshake timed out. Trying again."), its cards stay while it reconnects, and the others
+  carry on. A machine that leaves presence leaves the list with its sessions. "No live
+  sessions on any of your machines." shows only once every machine has said what it has.
+* **What a card sends goes to its own machine.** Answers, replies, files (through the
+  channel, or through the relay's blob store for that machine), End session and launches are
+  each given for one machine and go only through `HostSession.route(hostId)`, that machine's
+  open channel; one waiting for a machine that is away is resent to that machine when it is
+  back, and never to a session of the same id on another. What a card offers comes from its
+  own machine's hello, so a read-only shadow such as "DSWETT-DEV-VM1 (shadow)" shows its
+  sessions read-only, saying why, beside machines that take answers.
+* **Connections.** A machine is connected to only while it is shown: one channel per
+  machine, at most three handshakes under way at once, each machine retried on its own after
+  a failure (5 s, doubling to a minute) and reopened a second after its channel closes. A
+  relay drop keeps every machine's cards and reopens them all when it is back. Machines not
+  shown are looked at by `fleet.js`'s short once-a-minute channel, as before; with All there
+  are none. Ten machines are ten channels, well inside the relay's per-account bounds (32
+  devices, 200 frames a second a socket).
+* **Starting a session.** With All, the launch panel asks which machine to launch on,
+  listing the machines that can (`sessions.launch`), as the app's launch page does. It starts
+  from the machine last launched on or picked there, remembered on the device.
+* **Notifications** are as before: each machine opened registers this device. With All, that
+  is every machine shown.
 
 ### Answering
 
@@ -222,10 +265,10 @@ scripts outcomes).
 
 **Turn on notifications** (under the sessions) asks for permission, which browsers allow
 only from a tap, then subscribes with the relay's VAPID key (`GET /v1/push/key`) and
-registers the subscription with the machine shown (`push.subscribe`). From then on the
+registers the subscription with the machines shown (`push.subscribe`). From then on the
 app registers again on every channel it opens to a machine that offers `push`, so each
 machine viewed on this device notifies it, and one that lost the subscription, or a
-browser that renewed it, is caught up. **Turn off notifications** tells the machine shown
+browser that renewed it, is caught up. **Turn off notifications** tells a machine shown
 (`push.unsubscribe`) and unsubscribes the browser; other machines learn it from the push
 service (410) at their next push. Signing out unsubscribes too, so an account's machines
 never notify a device signed in as someone else.
@@ -260,8 +303,8 @@ when it resets and how old the reading is. Folded, it is one line of figures in 
 colours; whether it is folded is remembered. It shows once any machine offers `usage`.
 Each machine in the list says how many sessions it has, its version, and `(dev)` for a
 build from a working copy. The **Machines** panel folds the same way, to one line naming
-the machine being viewed and how many are online; it starts open, and whether it is folded
-is remembered. Demo mode has usage too (`window.agentBridgeDemo.usage(report)`
+the machine being viewed ("Viewing all" with every machine) and how many are online; it
+starts open, and whether it is folded is remembered. Demo mode has usage too (`window.agentBridgeDemo.usage(report)`
 sends a new one; `?usage=0` plays a host without it).
 
 ### Markdown
@@ -315,6 +358,18 @@ running another checkout's tests at the same time.
   then gone), a working or delegating one only on a second press that carries the first's
   token, a lapsed window asking again, refusals and failures, an unknown outcome as failed,
   a resend after a lost response, 44 px, and no End session without `sessions.stop`.
+* `test/machines.spec.mjs`, in demo mode with three machines (`?machines=3`): All machines
+  first and chosen at first, every machine's sessions newest first with each card naming its
+  machine, the count and the folded summary; one machine picked, and the choice remembered
+  across a reload, as All is; an answer, a reply with a small file and a large one through
+  the blob store, and End session from a Laptop card reaching Laptop only; the shadow
+  machine's cards read-only beside answerable ones; a machine that can't be reached saying
+  so in its own line while the others carry on; a machine leaving and coming back; and the
+  launch panel asking which machine, launching there, and starting from it after a reload.
+  `test/unit/host-session.test.mjs` covers the same with two machines below the page: a
+  channel and store each, the remembered choice, three handshakes at once, retries with a
+  growing wait, a machine leaving, a relay drop, and every kind of action routed to its own
+  machine (`route`) and resent there after it was away.
 * `test/ui.spec.mjs`, in demo mode: every field type and status from the worked example,
   glow per status, the delegating state (idle with `background` work), reduced motion,
   Markdown, an XSS payload in every text field, unknown
@@ -324,7 +379,8 @@ running another checkout's tests at the same time.
   sign-in, key proof, presence, a Noise channel to a Node fixture host, the snapshot, live
   upserts and removes, `session.get`, recovery after the socket drops (a session that
   ended meanwhile disappears), returning to the last host, `?host=` links, the S4
-  demo host reported as not supporting sessions, and answering: delivered, an answer in
+  demo host reported as not supporting sessions, alone and in its own line beside the
+  fixture host's labelled cards with every machine shown, and answering: delivered, an answer in
   flight when the socket drops resent with the same request and typed once, and the
   fixture host's own validation (stale and refused); and replying, the same way, with a
   reply refused while the session asks a question. Notifications, with the browser's

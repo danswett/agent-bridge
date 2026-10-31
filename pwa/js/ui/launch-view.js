@@ -7,6 +7,9 @@
 //
 // Unlike the card, the prompt has no 255-character limit: it goes whole, up to 16 KiB.
 //
+// With every machine shown, the panel first asks which one to launch on, as the Windows app's
+// launch page does, starting from the one last launched on or picked here.
+//
 // Where the machine takes sessions from the account's other machines (sessions.transfer), Resume
 // also lists the sessions they offer (sessions.transfer.serve), by machine. Picking one brings
 // its transcript here as a new session, in the workspace picked here, with a command this device
@@ -75,10 +78,10 @@ export class LaunchPanel {
   // Counts changes of the machine picked, which presence updates for the same one do not.
   #selection = 0;
 
-  // root: the #launch section. service: a LaunchService. jump(sessionId): shows a session's
-  // card, true once it is on screen.
-  constructor(root, { service, jump = () => false }) {
-    Object.assign(this, { root, service, jump });
+  // root: the #launch section. service: a LaunchService. jump(sessionId, hostId): shows a
+  // session's card, true once it is on screen. pick(hostId): another machine was picked.
+  constructor(root, { service, jump = () => false, pick = () => {} }) {
+    Object.assign(this, { root, service, jump, pick });
     this.#build();
   }
 
@@ -88,6 +91,8 @@ export class LaunchPanel {
     e.body = this.root.querySelector('.launch-body');
     e.toggle.addEventListener('click', () => this.setOpen(!this.#open));
     const field = (label, control, hint = null) => h('label', { class: 'launch-field' }, h('span', { class: 'launch-label' }, label), control, hint);
+    e.machine = h('select', { name: 'machine', class: 'text-input', onchange: () => this.pick(e.machine.value) });
+    e.machineField = h('label', { class: 'launch-field launch-machine', hidden: true }, h('span', { class: 'launch-label' }, 'Machine'), e.machine);
     e.resume = h('select', { name: 'resume', onchange: () => this.#draw() });
     e.agent = h('select', { name: 'agent', onchange: () => this.#draw() });
     e.workspace = h('select', { name: 'workspace' });
@@ -122,7 +127,7 @@ export class LaunchPanel {
         e.open = h('button', { type: 'button', class: 'button secondary launch-open', hidden: true, onclick: () => this.#openSession(true) }, 'Open session')));
     e.reload = h('button', { type: 'button', class: 'button secondary launch-reload', hidden: true, onclick: () => this.refresh() }, 'Reload choices');
     e.status = h('p', { class: 'answer-status launch-status', role: 'status', 'aria-live': 'polite' });
-    e.body.replaceChildren(e.note, e.busy, e.form, e.status, h('div', { class: 'row' }, e.reload));
+    e.body.replaceChildren(e.machineField, e.note, e.busy, e.form, e.status, h('div', { class: 'row' }, e.reload));
   }
 
   get open() { return this.#open; }
@@ -135,6 +140,21 @@ export class LaunchPanel {
     this.els.body.hidden = !open;
     // Every time it opens: a workspace approved or a session ended since.
     if (open && this.#target && !this.#loading) { this.refresh(); }
+  }
+
+  // The machines it can launch on, when there is a choice: [{ hostId, name }], or null; picked:
+  // the one whose choices are shown (setTarget). Outside the form, so another can be picked
+  // while one's choices are still coming, or could not be had.
+  setMachines(list, picked) {
+    const e = this.els;
+    const choices = list?.length > 1 ? list : [];
+    e.machineField.hidden = choices.length === 0;
+    const key = JSON.stringify(choices.map((m) => [m.hostId, m.name]));
+    if (e.machine.dataset.list !== key) {
+      e.machine.replaceChildren(...choices.map((m) => h('option', { value: m.hostId }, m.name)));
+      e.machine.dataset.list = key;
+    }
+    if (choices.length) { e.machine.value = picked; }
   }
 
   // The machine shown, or null when it can't launch: { hostId, machineName, load, transfers }
@@ -369,10 +389,11 @@ export class LaunchPanel {
     if (!id) { return; }
     if (!pressed && this.#jumped === entry.request) { return; }
     this.#jumped = entry.request;
-    if (this.jump(id)) { return; }
+    const hostId = entry.hostId;
+    if (this.jump(id, hostId)) { return; }
     const until = Date.now() + 15000;
     const timer = setInterval(() => {
-      if (this.jump(id) || Date.now() > until) { clearInterval(timer); }
+      if (this.jump(id, hostId) || Date.now() > until) { clearInterval(timer); }
     }, 250);
   }
 

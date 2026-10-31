@@ -1,11 +1,12 @@
 // What each machine is to the app beside its name, and every machine's agent usage
 // (docs/protocol/v1-usage.md):
-//   * the machine being viewed: its hello, its live session count, and a usage subscription
-//     on the channel already open to it;
+//   * each machine shown (the one chosen, or every one with All): its hello, its live session
+//     count, and a usage subscription on the channel already open to it;
 //   * every other online machine: a short channel (hello, usage.get, close) once a minute
 //     each while the app is in front, and never more often, so the list says
 //     "3 sessions · 0.1.0 (dev)" for each and usage is merged across machines as
-//     agent-ha-bridge's card merged them.
+//     agent-ha-bridge's card merged them. With every machine shown there are none of these:
+//     one channel per machine is all it takes.
 import { HostClient } from './host-client.js';
 import { USAGE, machineStatus } from './usage.js';
 
@@ -16,18 +17,21 @@ export class FleetStatus {
   #epochs = new Map();
   #queue = Promise.resolve();
   #queued = new Set();
-  #viewed = null;
-  // When the machine being viewed was last asked for its hello again.
-  #viewedAt = 0;
+  // Each machine shown: the client its usage is followed on, and when it was last asked for its
+  // hello again.
+  #viewed = new Map();
+  #viewedAt = new Map();
   #timer = null;
   #started = false;
 
-  constructor({ connection, hosts, store, book, me, probeEveryMs = 60000, now = () => Date.now(), doc = globalThis.document, makeClient = (ch) => new HostClient(ch) }) {
-    Object.assign(this, { connection, hosts, store, book, me, probeEveryMs, now, doc, makeClient });
+  // hosts: a HostSession (host-session.js): links() for the machines shown, link(id), shows(id)
+  // and refresh(id).
+  constructor({ connection, hosts, book, me, probeEveryMs = 60000, now = () => Date.now(), doc = globalThis.document, makeClient = (ch) => new HostClient(ch) }) {
+    Object.assign(this, { connection, hosts, book, me, probeEveryMs, now, doc, makeClient });
     connection.on('presence', () => this.probe());
     connection.on('ready', () => this.probe());
     hosts.onChange(() => this.#onHosts());
-    store.onChange(() => this.#emit());
+    hosts.sessions.onChange(() => this.#emit());
     doc?.addEventListener?.('visibilitychange', () => {
       if (doc.visibilityState === 'hidden') { this.#stopTimer(); return; }
       this.probe();
@@ -60,9 +64,10 @@ export class FleetStatus {
   status(id) {
     const m = this.#machines.get(id);
     if (!m) { return ''; }
-    // The viewed machine's count is live once its snapshot is in.
-    const live = id === this.hosts.targetId && this.hosts.phase === 'open' && this.hosts.client?.synced;
-    return machineStatus({ ...m, sessions: live ? this.store.size : m.sessions, held: live ? this.store.held?.reason : null });
+    // A machine shown has its count live once its snapshot is in.
+    const link = this.hosts.shows(id) ? this.hosts.link(id) : null;
+    const live = link?.phase === 'open' && link.client?.synced;
+    return machineStatus({ ...m, sessions: live ? link.store.size : m.sessions, held: live ? link.store.held?.reason : null });
   }
 
   // Settles when every look asked for so far is done.
@@ -83,23 +88,32 @@ export class FleetStatus {
     this.#stopTimer();
     this.#machines.clear();
     this.#queued.clear();
-    this.#viewed = null;
+    this.#viewed.clear();
+    this.#viewedAt.clear();
     this.book.clear();
     this.#emit();
   }
 
   #onHosts() {
-    const { client, targetId: id } = this.hosts;
-    // What the viewed machine says now, refreshed hellos included (read-only, say).
-    if (this.hosts.phase === 'open' && client && client === this.#viewed) { this.#note(id, this.hosts.machine); }
-    if (this.hosts.phase === 'open' && client && client !== this.#viewed) {
-      this.#viewed = client;
-      this.#viewedAt = this.now();
-      this.#note(id, this.hosts.machine);
-      if (this.hosts.capabilities.includes(USAGE.capability)) {
-        client.on('usage', (r) => { if (this.#viewed === client) { this.book.set(id, r); } });
-        client.subscribeUsage().then((r) => { if (this.#viewed === client) { this.book.set(id, r); } }, () => {});
+    const shown = new Set();
+    for (const link of this.hosts.links()) {
+      const { id, client } = link;
+      shown.add(id);
+      if (link.phase !== 'open' || !client) { continue; }
+      // What the machine says now, refreshed hellos included (read-only, say).
+      this.#note(id, link.machine);
+      if (this.#viewed.get(id) === client) { continue; }
+      this.#viewed.set(id, client);
+      this.#viewedAt.set(id, this.now());
+      const mine = () => this.#viewed.get(id) === client;
+      if (link.capabilities.includes(USAGE.capability)) {
+        client.on('usage', (r) => { if (mine()) { this.book.set(id, r); } });
+        client.subscribeUsage().then((r) => { if (mine()) { this.book.set(id, r); } }, () => {});
       } else { this.book.delete(id); }
+    }
+    // A machine no longer shown is looked at as the others are; its last report stays until then.
+    for (const id of [...this.#viewed.keys()]) {
+      if (!shown.has(id)) { this.#viewed.delete(id); this.#viewedAt.delete(id); }
     }
     this.#emit();
     this.probe();
@@ -110,19 +124,19 @@ export class FleetStatus {
     this.#machines.set(id, { hostVersion: machine.hostVersion ?? null, dev: machine.dev === true, sessions: machine.sessions ?? null, readOnly: machine.readOnly ?? null, at: this.now() });
   }
 
-  // Looks at every online machine not being viewed that has not been looked at for a minute.
-  // One at a time: a phone opening the app should not start a handshake with every machine
-  // at once.
+  // Looks at every online machine not shown that has not been looked at for a minute. One at
+  // a time: a phone opening the app should not start a handshake with every machine at once.
   probe() {
     if (!this.connection.ready || this.doc?.visibilityState === 'hidden') { return; }
-    // The machine being viewed is asked again on its own channel, as often: it may have become
+    // Each machine shown is asked again on its own channel, as often: it may have become
     // read-only, or stopped being, with nothing else to say so.
-    if (this.hosts.phase === 'open' && this.hosts.client && this.now() - this.#viewedAt >= this.probeEveryMs) {
-      this.#viewedAt = this.now();
-      this.hosts.refresh?.().catch(() => {});
+    for (const link of this.hosts.links()) {
+      if (link.phase !== 'open' || !link.client || this.now() - (this.#viewedAt.get(link.id) ?? 0) < this.probeEveryMs) { continue; }
+      this.#viewedAt.set(link.id, this.now());
+      this.hosts.refresh?.(link.id)?.catch(() => {});
     }
     for (const d of this.connection.presence) {
-      if (d.kind !== 'host' || d.id === this.me || d.id === this.hosts.targetId || this.#queued.has(d.id)) { continue; }
+      if (d.kind !== 'host' || d.id === this.me || this.hosts.shows(d.id) || this.#queued.has(d.id)) { continue; }
       const seen = this.#machines.get(d.id);
       if (seen && this.now() - seen.at < this.probeEveryMs) { continue; }
       this.#queued.add(d.id);
@@ -131,7 +145,7 @@ export class FleetStatus {
   }
 
   async #probeOne(id) {
-    if (!this.connection.ready || id === this.hosts.targetId || !this.connection.presence.some((d) => d.id === id)) { return; }
+    if (!this.connection.ready || this.hosts.shows(id) || !this.connection.presence.some((d) => d.id === id)) { return; }
     let channel = null;
     let client = null;
     const epoch = this.#epochs.get(id) ?? 0;
@@ -139,10 +153,10 @@ export class FleetStatus {
     try {
       channel = await this.connection.openChannel(id, { timeoutMs: 10000 });
       client = this.makeClient(channel);
-      // Each answer is dropped if the machine has been chosen for viewing meanwhile: its own
-      // channel then has newer figures, and the book keeps one report per machine. And if it
-      // has been forgotten meanwhile: nothing about it is kept.
-      const viewed = () => id === this.hosts.targetId;
+      // Each answer is dropped if the machine has been shown meanwhile: its own channel then
+      // has newer figures, and the book keeps one report per machine. And if it has been
+      // forgotten meanwhile: nothing about it is kept.
+      const viewed = () => this.hosts.shows(id);
       const hello = await client.hello();
       if (viewed() || forgotten()) { return; }
       this.#note(id, hello.machine);

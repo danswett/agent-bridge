@@ -13,7 +13,7 @@ const SHELL = [
   './js/host-session.js', './js/sessions-store.js', './js/markdown.js', './js/demo.js', './js/push.js',
   './js/answers.js', './js/answer-service.js', './js/replies.js', './js/reply-service.js', './js/attachments.js', './js/blobs.js', './js/stop-service.js',
   './js/ui/dom.js', './js/ui/time.js', './js/ui/fold-store.js', './js/ui/question-view.js',
-  './js/ui/reply-view.js', './js/ui/stop-view.js', './js/ui/session-card.js', './js/ui/views.js', './fixtures/sessions-list.json',
+  './js/ui/reply-view.js', './js/ui/stop-view.js', './js/ui/session-card.js', './js/ui/views.js', './js/ui/sessions-page.js', './fixtures/sessions-list.json',
   './js/usage.js', './js/fleet.js', './js/forget.js', './js/ui/usage-view.js',
   './js/launch.js', './js/launch-service.js', './js/ui/launch-view.js', './js/transfer.js',
 ];

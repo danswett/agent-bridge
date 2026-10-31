@@ -27,6 +27,12 @@
 // second machine, Studio PC, offers two ended sessions to bring over (transfer.js): the launch
 // carries a command this page signs with a key of its own for Studio PC's, which the demo host
 // reads as the target would and Studio PC would check.
+//
+// ?machines=2 adds a second machine to the account, Laptop, with sessions of its own;
+// ?machines=3 adds a third, DEV-VM1 (shadow), which watches only, as a machine where
+// agent-ha-bridge still runs does. Each is its own DemoHost behind DemoConnection, the relay's
+// presence and channels in the page, so the app shows them as it shows real ones: one at a
+// time, or every machine at once.
 import { checkAnswer } from './answers.js';
 import { checkReply, typedForm } from './replies.js';
 import { readQuestion } from './protocol.js';
@@ -55,6 +61,57 @@ class DemoTransport {
   }
   deliver(message) { setTimeout(() => this.onmessage?.(clone(message)), 0); }
   close() { this.host.transports.delete(this); }
+}
+
+// The relay connection, in the page: presence lists the demo's machines, and a channel to one
+// is a DemoTransport to its DemoHost. Tests take a machine offline (setOnline) or make its
+// channels fail to open (DemoHost.failOpen), as a machine that can't be reached would.
+export class DemoConnection {
+  ready = true;
+  #listeners = new Map();
+
+  constructor(hosts, { known = null } = {}) {
+    this.hosts = new Map(hosts.map((h) => [h.machine.id, h]));
+    this.presence = hosts.map((h) => ({ id: h.machine.id, name: h.machine.name, kind: 'host' }));
+    this.known = known;
+  }
+
+  on(type, fn) {
+    if (!this.#listeners.has(type)) { this.#listeners.set(type, new Set()); }
+    this.#listeners.get(type).add(fn);
+    return () => this.#listeners.get(type)?.delete(fn);
+  }
+
+  emit(type, detail) {
+    for (const fn of this.#listeners.get(type) ?? []) {
+      try { fn(detail); } catch (e) { console.error(e); }
+    }
+  }
+
+  async openChannel(id) {
+    const host = this.hosts.get(id);
+    await new Promise((r) => { setTimeout(r, 0); });
+    if (!host || !this.presence.some((d) => d.id === id)) { throw new Error('the machine is offline'); }
+    if (host.failOpen) { throw new Error(host.failOpen); }
+    const t = host.connect();
+    t.peerName = host.machine.name;
+    return t;
+  }
+
+  // A machine leaves presence (its channels end with it) or comes back.
+  setOnline(id, online) {
+    const host = this.hosts.get(id);
+    if (!host) { return; }
+    const listed = this.presence.some((d) => d.id === id);
+    if (online && !listed) {
+      const order = [...this.hosts.keys()];
+      this.presence = [...this.presence, { id, name: host.machine.name, kind: 'host' }].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+    } else if (!online && listed) {
+      this.presence = this.presence.filter((d) => d.id !== id);
+      host.disconnect();
+    } else { return; }
+    this.emit('presence', this.presence);
+  }
 }
 
 export class DemoHost {
@@ -107,8 +164,8 @@ export class DemoHost {
   // a busy session waits for its second. usage: false plays a host from before usage.get;
   // launching: false, one that can't launch sessions; transferring: false, one that takes no
   // sessions from other machines. readOnly: why it takes nothing from the phone, as hello says.
-  constructor(fixture, { readOnly = null, machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching } = {}) {
-    this.machine = { id: 'demo', name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true, ...(readOnly ? { readOnly } : {}) };
+  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching } = {}) {
+    this.machine = { id: machineId, name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true, ...(readOnly ? { readOnly } : {}) };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
@@ -122,6 +179,14 @@ export class DemoHost {
     const t = new DemoTransport(this);
     this.transports.add(t);
     return t;
+  }
+
+  // Every channel to this machine ends, as when it goes offline or restarts.
+  disconnect() {
+    for (const t of [...this.transports]) {
+      this.transports.delete(t);
+      setTimeout(() => t.onclose?.(new Error('the host closed the channel')), 0);
+    }
   }
 
   receive(t, { id, op, data }) {
@@ -643,6 +708,52 @@ export class DemoBlobStore {
     this.log.push({ op: 'delete' });
     return this.stored.delete(String(ticket).split('.')[0]);
   }
+}
+
+// The demo's other machines, after the first (?machines=): Laptop, with a session to reply to
+// and one asking a question, and DEV-VM1 (shadow), which takes nothing from the phone.
+export function demoMachines(count, { answerDelayMs = 700, stopWindowMs = 10000 } = {}) {
+  const at = (ms) => new Date(Date.now() - ms).toISOString();
+  const machines = [];
+  if (count >= 2) {
+    machines.push(new DemoHost({
+      revision: 1,
+      sessions: [
+        {
+          id: 'laptop-copilot-1', agent: 'copilot', title: 'Tidy the laptop dotfiles', repository: 'danswett/dotfiles', branch: 'main', model: 'claude-sonnet-5',
+          cwd: 'C:\\Users\\demo\\dotfiles', status: 'idle', statusSince: at(300000), startedAt: at(3600000), updatedAt: at(240000), processId: 7120,
+          activity: { response: 'Moved the PowerShell profile under `profile/` and updated the links.', turnCount: 4 },
+        },
+        {
+          id: 'laptop-ask-1', agent: 'copilot', title: 'Rotate the test certificates', repository: 'danswett/agent-bridge', branch: 'chore/certs', model: 'gpt-6-sol',
+          cwd: 'C:\\Users\\demo\\repos\\agent-bridge', status: 'waiting', statusSince: at(60000), startedAt: at(900000), updatedAt: at(60000), processId: 7344,
+          activity: { response: 'The new certificates are ready.', turnCount: 2 },
+          question: {
+            id: 'toolu_laptop_q1', kind: 'form', message: 'Replace the certificates **now**?', askedAt: at(60000),
+            fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'now', label: 'Yes, now' }, { value: 'later', label: 'Later' }] }],
+          },
+        },
+      ],
+    }, { machineId: 'demo-laptop', machineName: 'Laptop', answerDelayMs, stopWindowMs }));
+  }
+  if (count >= 3) {
+    machines.push(new DemoHost({
+      revision: 1,
+      sessions: [{
+        id: 'shadow-ask-1', agent: 'copilot', title: 'Migrate the VM to the new host', repository: 'danswett/agent-ha-bridge', branch: 'main', model: 'claude-opus-5.5',
+        cwd: 'C:\\Users\\demo\\repos\\agent-ha-bridge', status: 'waiting', statusSince: at(120000), startedAt: at(1800000), updatedAt: at(120000), processId: 9001,
+        activity: { response: 'Ready to switch over.', turnCount: 6 },
+        question: {
+          id: 'toolu_shadow_q1', kind: 'form', message: 'Switch the VM over now?', askedAt: at(120000),
+          fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }] }],
+        },
+      }],
+    }, {
+      machineId: 'demo-shadow', machineName: 'DEV-VM1 (shadow)', answerDelayMs, stopWindowMs, answering: false,
+      readOnly: 'agent-ha-bridge is running for this user (AgentBridgeDaemon); answer at the machine or through it',
+    }));
+  }
+  return machines;
 }
 
 export function runScript(host, { tickMs = 4000 } = {}) {

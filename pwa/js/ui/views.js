@@ -1,22 +1,30 @@
-// The two lists on screen: online machines, and the connected machine's sessions.
+// The two lists on screen: online machines, and the sessions of the machines shown.
 import { h, icon } from './dom.js';
+import { ALL } from '../host-session.js';
 import { SessionCard } from './session-card.js';
 import { FoldStore } from './fold-store.js';
 import { ago } from './time.js';
 
-// Keeps one card per session, in store order (most recently updated first), updating
-// cards in place so an open disclosure, scroll position or focus survives an upsert.
+// Keeps one card per session, from every machine shown, in the order given (most recently
+// updated first), updating cards in place so an open disclosure, scroll position or focus
+// survives an upsert. A card is its machine's and session's: two machines may each have a
+// session of the same id, and each card acts only on its own machine.
 export class SessionListView {
   #cards = new Map();
   #scheduled = false;
 
-  // answering() -> { service, hostId, capabilities } | null, for answering questions.
-  constructor(container, store, { fetchDetail, machineName = () => '', folds = new FoldStore(), answering = () => null } = {}) {
-    Object.assign(this, { container, store, fetchDetail, machineName, folds, answering });
-    store.onChange(() => this.schedule());
+  // sessions: { list() -> [{ hostId, session }], onChange } (HostSession.sessions).
+  // fetchDetail(hostId, id) -> Promise<Session|null>; machine(hostId) -> { name, show }: what to
+  // call the machine, and whether its cards say so (with every machine shown).
+  // answering(hostId) -> { service, replies, stops, hostId, capabilities, readOnly } | null.
+  constructor(container, sessions, { fetchDetail, machine = () => ({ name: '', show: false }), folds = new FoldStore(), answering = () => null } = {}) {
+    Object.assign(this, { container, sessions, fetchDetail, machine, folds, answering });
+    sessions.onChange(() => this.schedule());
     // Relative times move on without any event from the host.
     this.ticker = setInterval(() => { for (const c of this.#cards.values()) { c.refreshTimes(); } }, 15000);
   }
+
+  static key(hostId, id) { return `${hostId}\n${id}`; }
 
   // Bursts of events (a snapshot is one upsert per session) render once.
   schedule() {
@@ -26,19 +34,24 @@ export class SessionListView {
   }
 
   render() {
-    const sessions = this.store.list();
+    const entries = this.sessions.list();
     const live = new Set();
     // Moving a card takes focus out of it, and a card being answered moves when its
     // session updates: the text box being typed in keeps focus and the caret.
     const focused = this.container.contains(document.activeElement) ? document.activeElement : null;
     const caret = focused && typeof focused.selectionStart === 'number' ? [focused.selectionStart, focused.selectionEnd] : null;
     let prev = null;
-    for (const s of sessions) {
-      live.add(s.id);
-      let card = this.#cards.get(s.id);
+    for (const { hostId, session: s } of entries) {
+      const key = SessionListView.key(hostId, s.id);
+      live.add(key);
+      let card = this.#cards.get(key);
       if (!card) {
-        card = new SessionCard(s, { folds: this.folds, fetchDetail: this.fetchDetail, machineName: this.machineName(), answering: this.answering });
-        this.#cards.set(s.id, card);
+        const m = this.machine(hostId);
+        card = new SessionCard(s, {
+          hostId, folds: this.folds, fetchDetail: (id) => this.fetchDetail(hostId, id),
+          machineName: m.name, labelled: m.show, answering: () => this.answering(hostId),
+        });
+        this.#cards.set(key, card);
       } else if (card.session !== s) {
         card.update(s);
       }
@@ -47,21 +60,33 @@ export class SessionListView {
       if (want !== card.element) { this.container.insertBefore(card.element, want); }
       prev = card.element;
     }
-    for (const [id, card] of this.#cards) {
-      if (!live.has(id)) { card.dispose(); card.element.remove(); this.#cards.delete(id); }
+    for (const [key, card] of this.#cards) {
+      if (!live.has(key)) { card.dispose(); card.element.remove(); this.#cards.delete(key); }
     }
     if (focused && focused.isConnected && document.activeElement !== focused) {
       focused.focus({ preventScroll: true });
       if (caret) { try { focused.setSelectionRange(...caret); } catch { /* not a text control */ } }
     }
-    this.onRender?.(sessions.length);
+    this.onRender?.(entries.length);
   }
 
-  // Whether the machine takes answers may have changed: every question is drawn again,
-  // keeping what was typed.
-  refreshQuestions() { for (const c of this.#cards.values()) { c.refreshQuestion(); } }
+  // Whether a machine takes answers may have changed: every question of its cards (of every
+  // card, without one) is drawn again, keeping what was typed.
+  refreshQuestions(hostId = null) {
+    for (const c of this.#cards.values()) { if (hostId === null || c.hostId === hostId) { c.refreshQuestion(); } }
+  }
 
-  card(id) { return this.#cards.get(id) ?? null; }
+  // A machine's name, or whether cards name their machine, may have changed.
+  refreshMachines() {
+    for (const c of this.#cards.values()) { const m = this.machine(c.hostId); c.setMachine(m.name, m.show); }
+  }
+
+  // A machine's session's card; without a machine, the first card for that session.
+  card(hostId, id) {
+    if (hostId) { return this.#cards.get(SessionListView.key(hostId, id)) ?? null; }
+    for (const c of this.#cards.values()) { if (c.id === id) { return c; } }
+    return null;
+  }
 }
 
 // The Machines panel folds to one line, as the usage panel does: with several machines the
@@ -88,7 +113,8 @@ export class MachinesFold {
     this.render();
   }
 
-  // count: machines listed; viewing: the name of the one whose sessions are shown, if any.
+  // count: machines listed; viewing: the name of the one whose sessions are shown, or 'all'
+  // with every machine's, if any.
   update(count, viewing) {
     this.#count = count;
     this.#viewing = viewing ?? null;
@@ -110,19 +136,33 @@ export function offlineMachines({ presence, known, me }) {
   return (known ?? []).filter((k) => k && typeof k.id === 'string' && k.id !== me && k.kind === 'host' && !presence.some((d) => d.id === k.id));
 }
 
+// current: the machine chosen, or ALL. With more than one machine online, All machines is listed
+// first, as the Windows app's picker lists it; allStatus says what it shows. With one, that one
+// is the one viewed when every machine is.
 // status(id) -> "3 sessions · 0.1.0 (dev)", or '' while nothing is known (fleet.js).
 // known: the account's machines that are offline (connection.known), each listed after the
 // online ones with when it was last seen and a two-press Forget (forget.js); null lists none.
 // Returns how many are online.
-export function renderMachines(list, { presence, me, current, onSelect, status = () => '', known = null, forget = null, now = Date.now() }) {
+export function renderMachines(list, { presence, me, current, onSelect, status = () => '', known = null, forget = null, now = Date.now(), allStatus = '' }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
+  const all = current === ALL;
   const offline = offlineMachines({ presence, known, me });
   // Every change redraws the list, so the button that had focus is replaced: Forget's first
   // press redraws it armed, and a keyboard's second press must land on the new one.
   const active = list.ownerDocument?.activeElement;
   const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button'].find((c) => active.classList.contains(c)) } : null;
-  list.replaceChildren(...hosts.map((d) => {
-    const selected = d.id === current;
+  const everyMachine = hosts.length > 1 ? [h('li', { class: 'machine all-machines', dataset: { deviceId: ALL, deviceName: 'All machines' } },
+    h('button', {
+      type: 'button', class: `machine-button${all ? ' selected' : ''}`,
+      'aria-current': all ? 'true' : null,
+      onclick: () => onSelect(ALL),
+    },
+    icon('machine'),
+    h('span', { class: 'machine-name' }, 'All machines'),
+    h('span', { class: 'machine-sub' }, allStatus || `Sessions from all ${hosts.length} machines together`),
+    h('span', { class: 'machine-state' }, all ? 'Viewing' : '')))] : [];
+  list.replaceChildren(...everyMachine, ...hosts.map((d) => {
+    const selected = d.id === current || (all && hosts.length === 1);
     const said = status(d.id);
     return h('li', { class: 'machine', dataset: { deviceId: d.id, deviceName: d.name } },
       h('button', {

@@ -49,12 +49,13 @@ export class SessionCard {
   #stop = null;
   #stopHost = null;
 
+  // hostId: the machine the session is on, which everything the card sends goes to.
   // fetchDetail(id) -> Promise<Session|null>, for the tool history (session.get).
   // answering() -> { service, replies, stops, hostId, capabilities } | null: who answers
-  // questions, sends replies and ends sessions, and whether the connected machine takes
-  // each at all.
-  constructor(session, { folds, fetchDetail, machineName, answering = () => null }) {
-    Object.assign(this, { folds, fetchDetail, machineName, answering });
+  // questions, sends replies and ends sessions, and whether the card's machine takes each at
+  // all. labelled: whether the card names its machine, as it does with every machine shown.
+  constructor(session, { hostId = null, folds, fetchDetail, machineName, labelled = false, answering = () => null }) {
+    Object.assign(this, { hostId, folds, fetchDetail, machineName, labelled, answering });
     const n = ++seq;
     this.ids = { title: `s${n}-title`, body: `s${n}-body` };
     this.#build();
@@ -121,6 +122,7 @@ export class SessionCard {
     const e = this.els;
     const root = this.element;
     root.dataset.id = s.id;
+    if (this.hostId) { root.dataset.hostId = this.hostId; }
     root.dataset.status = s.status;
     root.dataset.agent = s.agent;
     const state = cardState(s);
@@ -141,8 +143,9 @@ export class SessionCard {
     }
     e.titleText.textContent = s.title || 'Untitled session';
 
-    if (this.#changed('meta', [s.agent, s.repository, s.branch, s.model, s.cwd])) {
-      const bits = [e.agentName];
+    if (this.#changed('meta', [s.agent, s.repository, s.branch, s.model, s.cwd, this.labelled ? this.machineName : null])) {
+      // The machine first, as the Windows app's cards name it, once more than one is shown.
+      const bits = [...(this.labelled && this.machineName ? [h('span', { class: 'machine-label' }, this.machineName)] : []), e.agentName];
       const where = s.repository ?? lastSegment(s.cwd);
       if (where) { bits.push(h('span', { class: 'repo' }, where)); }
       if (s.branch) { bits.push(h('span', { class: 'branch' }, s.branch)); }
@@ -194,6 +197,15 @@ export class SessionCard {
 
     // An open history follows the session: refetched (at most every 2 s) as it changes.
     if (!first && e.history.open && this.#changed('historyAt', s.updatedAt)) { this.#scheduleHistory(); }
+  }
+
+  // What the card's machine is called, and whether the card says so. What is sent from the
+  // card from now on says it too.
+  setMachine(name, labelled) {
+    if (name === this.machineName && labelled === this.labelled) { return; }
+    this.machineName = name;
+    this.labelled = labelled;
+    if (this.#s) { this.update(this.#s); }
   }
 
   // The card is going: its session ended or another machine is shown.

@@ -95,7 +95,7 @@ export class ReplyService extends AnswerService {
   // nothing waits on it.
   discard(hostId, attachment, blob = null) {
     if (blob) { this.#blobs?.()?.delete(blob).catch(() => {}); }
-    const cur = this.#current();
+    const cur = this.#current(hostId);
     if (!cur?.client || cur.client.closed || cur.hostId !== hostId || typeof cur.client.attachmentDiscard !== 'function') { return; }
     cur.client.attachmentDiscard(attachment).catch(() => {});
   }
