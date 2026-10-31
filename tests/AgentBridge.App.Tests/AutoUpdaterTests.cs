@@ -23,6 +23,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     string? agentHaBridge;
     string? others;
     int? othersAskedFor;
+    Func<string?>? othersProbe;
 
     sealed class Updater : IUpdater
     {
@@ -75,7 +76,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(50),
             Elevated = () => false,
         };
-        auto = new AutoUpdater(updater, connection, manager, () => prefs, p => prefs = p, log.Add, () => agentHaBridge, pid => { othersAskedFor = pid; return others; }, time);
+        auto = new AutoUpdater(updater, connection, manager, () => prefs, p => prefs = p, log.Add, () => agentHaBridge, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Status is not null && connection.Sessions.All.Count == sessions.Length && connection.Sessions.Complete, "the connection");
     }
 
@@ -319,6 +320,19 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await auto.TickAsync();
         Assert.Equal(checks, updater.Checks);
         Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    public async Task Turning_it_off_while_it_asks_the_host_one_last_time_stops_the_install()
+    {
+        await StartAsync();
+        // The last of the checks before stopping the host, during which the switch goes off.
+        othersProbe = () => { prefs = prefs with { AutoUpdate = false }; return null; };
+
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
     }
 
     [Fact]

@@ -118,7 +118,8 @@ public sealed class AutoUpdater
             // Asked again now, not as last reported: the host's status and G5 by this app's own probe
             // (agent-ha-bridge may have started during the download), and the other processes.
             if (Refused(await WhyNotNowAsync())) { return; }
-            if (!Due(time.GetUtcNow())) { return; }
+            // Those took time: the switch turned off, or the host gone, meanwhile, counts too.
+            if (Refused(WhyNot()) || !Due(time.GetUtcNow())) { return; }
             await InstallAsync(Idle ? "no session is busy" : $"it has waited {WaitAtMost.TotalHours:0} hours");
         }
         // A check that cannot reach the network, a download cut off: tried again at the next check.
