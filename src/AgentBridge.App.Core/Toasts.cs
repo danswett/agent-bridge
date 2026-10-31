@@ -244,6 +244,14 @@ public static partial class ToastXml
         return b.ToString();
     }
 
+    // The first start after an update (AutoUpdater.Announce): what changed, from the release's
+    // notes. A click opens the app.
+    public static string Updated(string version, string from, string? notes)
+    {
+        var body = Plain(notes, 300);
+        return Start(Args(("action", "open")), $"Agent Bridge updated to {version}", $"from {from}", body.Length > 0 ? body : null).Append("</toast>").ToString();
+    }
+
     // What became of an answer given on a toast, replacing that toast.
     public static string Outcome(string sessionId, string title, string text, string? machineKey = null) =>
         Start(Args(machineKey, ("action", "open"), ("session", sessionId)), title, text, null).Append("<audio silent=\"true\"/></toast>").ToString();

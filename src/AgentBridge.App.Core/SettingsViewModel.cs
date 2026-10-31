@@ -9,6 +9,8 @@ public interface IUpdater
     // Null when this copy was not installed by Velopack (a build folder): no updates then.
     string? InstalledVersion { get; }
     Task<string?> CheckAsync();
+    // The release notes of the release the last check found, when it has any.
+    string? PendingNotes => null;
     Task DownloadAsync(Action<int> progress);
     // Exits the app, replaces it, and starts the new version.
     void ApplyAndRestart();
@@ -121,6 +123,8 @@ public sealed class SettingsViewModel : Observable
     public bool ShowDetail { get => prefs().ShowDetail; set { if (value != ShowDetail) { Save(prefs() with { ShowDetail = value }); } } }
     public bool Toasts { get => prefs().Toasts; set { if (value != Toasts) { Save(prefs() with { Toasts = value }); } } }
     public bool FinishedToasts { get => prefs().FinishedToasts; set { if (value != FinishedToasts) { Save(prefs() with { FinishedToasts = value }); } } }
+    public bool Prereleases { get => prefs().Prereleases; set { if (value != Prereleases) { Save(prefs() with { Prereleases = value }); } } }
+    public bool AutoUpdate { get => prefs().AutoUpdate; set { if (value != AutoUpdate) { Save(prefs() with { AutoUpdate = value }); } } }
 
     public string? Error { get => error; private set { if (Set(ref error, value)) { Raise(nameof(HasError)); } } }
     public bool HasError => error is not null;
@@ -193,6 +197,7 @@ public sealed class SettingsViewModel : Observable
         UpdateStatus = "Stopping the host to update it…";
         await manager.StopAsync();
         UpdateStatus = "Restarting…";
+        AutoUpdater.Record(prefs, savePrefs, updater);
         updater.ApplyAndRestart();
     });
 

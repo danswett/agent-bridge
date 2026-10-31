@@ -86,6 +86,12 @@ public sealed record AppPreferences
     public bool FinishedToasts { get; init; } = true;
     // Include pre-releases when checking for updates.
     public bool Prereleases { get; init; } = true;
+    // Install updates without being asked (AutoUpdater).
+    public bool AutoUpdate { get; init; } = true;
+    // Set just before an update is applied, and cleared by the new version's first start, which
+    // announces it: the version updated from, and the new one's release notes.
+    public string? UpdatedFrom { get; init; }
+    public string? UpdateNotes { get; init; }
     public string? Relay { get; init; }
     // The installed app's first run turned on starting at sign-in (the host's logon task and
     // the app's Run entry); after that they are the person's to turn off and stay off.
