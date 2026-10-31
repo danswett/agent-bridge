@@ -459,6 +459,8 @@ function begin(account) {
   fleet.onChange(drawMachines);
   fleet.start();
   forgets.onChange(drawMachines);
+  // "last seen 5m ago" moves on with nothing else to redraw the list: every machine may be offline.
+  setInterval(() => { if (document.visibilityState !== 'hidden' && connection.known?.length) { drawMachines(); } }, 30000);
 
   connection.on('presence', () => {
     const now = connection.known ? offlineNow() : null;

@@ -99,6 +99,7 @@ public sealed class OfflineMachineViewModel : Observable
         "rate-limited" => "Too many machines forgotten just now. Try again in a minute.",
         "not-allowed" => "The relay refused: only a person's device can forget a machine.",
         "unsupported" or "disabled" => "The relay cannot forget machines yet.",
+        "unavailable" => "The relay cannot reach its list of machines just now. Try again in a minute.",
         "unreachable" => "The relay did not answer. Try again when connected.",
         _ => $"The relay refused: {why}.",
     };

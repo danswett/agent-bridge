@@ -184,9 +184,11 @@ public sealed class Fleet : IAsyncDisposable
         var now = link.Account;
         var state = link.State;
         var present = link.Hosts;
+        // Inside the same reading: one taken after the recheck could be a dropped link's null
+        // with the state still read as Connected, and clear the list it should keep.
+        var offline = link.Offline;
         var hosts = present.Where(h => h.Id != me).ToDictionary(h => h.Id, StringComparer.Ordinal);
         if (link.Account != now || link.State != state) { return; }
-        var offline = link.Offline;
         var presence = string.Join(',', present.Select(h => h.Id).Order(StringComparer.Ordinal));
         if (presence != Presence) { Presence = presence; PresenceChanged?.Invoke(); }
         foreach (var (id, h) in hosts)

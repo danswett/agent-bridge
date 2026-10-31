@@ -13,6 +13,7 @@ const REASONS = {
   'not-allowed': "The relay refused: only a person's device can forget a machine.",
   unsupported: 'The relay cannot forget machines yet.',
   disabled: 'The relay cannot forget machines yet.',
+  unavailable: 'The relay cannot reach its list of machines just now. Try again in a minute.',
   unreachable: 'The relay did not answer. Try again when connected.',
 };
 
@@ -33,13 +34,14 @@ export function forgetReason(code) {
 export class ForgetControl {
   armed = null;
   busy = null;
+  #armedUntil = 0;
   #errors = new Map();
   #timer = null;
   #listeners = new Set();
 
   // onForgotten(id): once the relay has forgotten it, for what this app keeps about it.
-  constructor({ connection, onForgotten = () => {}, confirmMs = CONFIRM_MS, timers = globalThis }) {
-    Object.assign(this, { connection, onForgotten, confirmMs, timers });
+  constructor({ connection, onForgotten = () => {}, confirmMs = CONFIRM_MS, timers = globalThis, now = () => Date.now() }) {
+    Object.assign(this, { connection, onForgotten, confirmMs, timers, now });
   }
 
   onChange(fn) { this.#listeners.add(fn); return () => this.#listeners.delete(fn); }
@@ -53,9 +55,13 @@ export class ForgetControl {
 
   async press(id) {
     if (this.busy) { return; }
+    // A background tab's timers are held back, so the one that lapses an arm may not have run:
+    // a press after the deadline arms again whatever it says.
+    if (this.armed && this.now() >= this.#armedUntil) { this.#disarm(); }
     if (this.armed !== id) {
       this.#disarm();
       this.armed = id;
+      this.#armedUntil = this.now() + this.confirmMs;
       this.#errors.delete(id);
       this.#timer = this.timers.setTimeout(() => { if (this.armed === id) { this.armed = null; this.#emit(); } }, this.confirmMs);
       this.#emit();

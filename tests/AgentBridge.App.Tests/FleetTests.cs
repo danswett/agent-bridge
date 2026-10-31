@@ -569,6 +569,14 @@ public sealed class FleetTests : IAsyncLifetime
         await Task.Delay(200);
         Assert.Single(Offline());
 
+        // A drop between reading the state and reading the list is the same.
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
+        link.BeforeOfflineRead = () => link.Quietly(FleetState.Connecting, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        link.Raise();
+        await Task.Delay(200);
+        Assert.Single(Offline());
+
         // An older relay keeps no roster: nothing listed, and nothing to forget.
         link.Known = null;
         link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
@@ -587,7 +595,18 @@ public sealed class FleetTests : IAsyncLifetime
     {
         // The relay's roster: offline machines, null for a relay without one.
         public IReadOnlyList<KnownMachine>? Known { get; set; }
-        public IReadOnlyList<KnownMachine>? Offline => State == FleetState.Connected ? Known : null;
+        // Runs once, as the next read of the offline machines starts: a drop just before it.
+        public Action? BeforeOfflineRead { get; set; }
+        public IReadOnlyList<KnownMachine>? Offline
+        {
+            get
+            {
+                var then = BeforeOfflineRead;
+                BeforeOfflineRead = null;
+                then?.Invoke();
+                return State == FleetState.Connected ? Known : null;
+            }
+        }
         public string? Refusal { get; set; }
         public Exception? Throw { get; set; }
         public List<string> Forgotten { get; } = [];

@@ -20,12 +20,14 @@ function control({ outcome = null } = {}) {
   const asked = [];
   const forgotten = [];
   const timers = fakeTimers();
+  const clock = { t: 1000 };
   const c = new ForgetControl({
     connection: { forget: async (id) => { asked.push(id); if (outcome instanceof Error) { throw outcome; } return outcome; } },
     onForgotten: (id) => forgotten.push(id),
     timers,
+    now: () => clock.t,
   });
-  return { c, asked, forgotten, timers };
+  return { c, asked, forgotten, timers, clock };
 }
 
 test('the first press arms for a few seconds and asks nothing; the second asks the relay for that machine', async () => {
@@ -52,6 +54,19 @@ test('an arm lapses, and the next press arms again rather than forgetting', asyn
 
   assert.deepEqual(asked, []);
   assert.equal(c.stateOf('a').armed, true);
+});
+
+test('a press after the deadline arms again even when a held-back timer has not lapsed the arm', async () => {
+  const { c, asked, clock } = control();
+  await c.press('a');
+  clock.t += CONFIRM_MS;
+
+  await c.press('a');
+
+  assert.deepEqual(asked, []);
+  assert.equal(c.stateOf('a').armed, true);
+  await c.press('a');
+  assert.deepEqual(asked, ['a']);
 });
 
 test('pressing another machine moves the arm to it, so one press there never forgets the first', async () => {
@@ -84,6 +99,7 @@ test('a refusal is said and the machine is kept; a relay that cannot be reached 
     ['online', 'It is back online, so it was not forgotten.'],
     ['not-allowed', "The relay refused: only a person's device can forget a machine."],
     ['unsupported', 'The relay cannot forget machines yet.'],
+    ['unavailable', 'The relay cannot reach its list of machines just now. Try again in a minute.'],
     [new Error('the relay did not answer'), 'The relay did not answer. Try again when connected.'],
   ]) {
     const { c, forgotten } = control({ outcome });

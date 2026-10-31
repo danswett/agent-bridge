@@ -425,7 +425,8 @@ public class RosterTests
         roster.Changed = account => { lock (told) { told.Add(account); } return Task.CompletedTask; };
         store.Down = true;
         await roster.ConnectedAsync("1", Id(), "phone", "pwa");
-        Assert.Empty(roster.Known("1", _ => false)!);
+        // Not an empty list, which a device would take as every offline machine forgotten.
+        Assert.Null(roster.Known("1", _ => false));
         await roster.FlushAsync();
         Assert.Empty(told);
 
@@ -457,11 +458,49 @@ public class RosterTests
             o.Roster.FlushEvery = TimeSpan.FromMilliseconds(100);
         });
         var phone = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "phone", "pwa");
-        Assert.Empty(phone.Relay.Known!);
+        Assert.Null(phone.Relay.Known);
 
         store.Down = false;
 
         await UntilKnownAsync(phone, host);
+    }
+
+    [Fact]
+    public async Task A_write_cut_short_by_shutdown_is_made_by_the_final_flush()
+    {
+        var store = new FlakyStore();
+        var (roster, _) = Replica(store, Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)), configure: o => o.StoreTimeout = TimeSpan.FromSeconds(30));
+        var host = Id();
+        await roster.ConnectedAsync("1", Id(), "phone", "pwa");
+        await roster.ConnectedAsync("1", host, "desk", "host");
+        roster.Disconnected("1", host, "host");
+        store.HoldWrites = true;
+        using var stopping = new CancellationTokenSource();
+
+        var periodic = roster.FlushAsync(ct: stopping.Token);
+        await Wait.UntilAsync(() => store.WritesHeld > 0, "a write under way");
+        stopping.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => periodic);
+        store.HoldWrites = false;
+        await roster.FlushAsync(all: true);
+
+        Assert.Equal([host], Read(store.Inner, roster, "1").Machines.Select(m => m.Id));
+    }
+
+    [Fact]
+    public async Task Reconnecting_does_not_buy_a_fresh_allowance_of_forgets()
+    {
+        var (roster, _) = Replica(new MemoryRosterStore(), Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)), configure: o => o.MaxForgetsPerMinute = 2);
+        var nobody = Id();
+        await roster.ConnectedAsync("1", "phone", "phone", "pwa");
+        Assert.Equal("not-found", roster.Forget("1", nobody, _ => false));
+        Assert.Equal("not-found", roster.Forget("1", nobody, _ => false));
+        roster.Disconnected("1", "phone", "pwa");
+        await roster.FlushAsync();
+
+        await roster.ConnectedAsync("1", "phone", "phone", "pwa");
+
+        Assert.Equal("rate-limited", roster.Forget("1", nobody, _ => false));
     }
 
     [Fact]
@@ -483,6 +522,9 @@ public class RosterTests
     {
         public readonly MemoryRosterStore Inner = new();
         public volatile bool Down;
+        // Writes wait, until cancelled, while this is set.
+        public volatile bool HoldWrites;
+        public int WritesHeld;
 
         public async Task<StoredRoster?> ReadAsync(string name, CancellationToken ct)
         {
@@ -490,8 +532,15 @@ public class RosterTests
             return await Inner.ReadAsync(name, ct);
         }
 
-        public Task<string?> WriteAsync(string name, byte[] body, string? etag, CancellationToken ct) =>
-            Down ? throw new IOException("down") : Inner.WriteAsync(name, body, etag, ct);
+        public async Task<string?> WriteAsync(string name, byte[] body, string? etag, CancellationToken ct)
+        {
+            if (HoldWrites)
+            {
+                Interlocked.Increment(ref WritesHeld);
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+            return Down ? throw new IOException("down") : await Inner.WriteAsync(name, body, etag, ct);
+        }
 
         public Task<bool> DeleteAsync(string name, string etag, CancellationToken ct) =>
             Down ? throw new IOException("down") : Inner.DeleteAsync(name, etag, ct);

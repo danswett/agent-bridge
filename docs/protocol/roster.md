@@ -50,8 +50,12 @@ are **not** connected now, most recently seen first.
 | `lastSeen` | When it was last connected (ISO 8601, UTC) |
 
 A relay without a roster (an older one, or one configured with `Relay:Roster:Backend` `off`)
-sends no `known`, and a client then lists only what is online and offers no Forget. A client
-that predates the roster reads `devices` and ignores `known`.
+sends no `known`, and a client then lists only what is online and offers no Forget. Nor does a
+relay that has not yet read the account's stored roster (the store was down when the device
+connected): `known` is absent, never an empty list a client would take as every offline machine
+forgotten, and arrives in a later `presence` once read. A client infers that a machine was
+forgotten (from another device) only from two `known` lists in a row. A client that predates the
+roster reads `devices` and ignores `known`.
 
 ## `forget` and `forget-result`
 
@@ -70,7 +74,8 @@ to every device of the account, without the machine in `known`.
 | `online` | The machine is connected now. It can only be forgotten while it is gone |
 | `not-found` | The account has no such machine (or it was already forgotten, or it is another account's) |
 | `bad-request` | `machine` is not a device id |
-| `rate-limited` | More than 10 forget requests in a minute on the account, from all its devices together |
+| `rate-limited` | More than 10 forget requests in a minute on the account, from all its devices together, however often they reconnect |
+| `unavailable` | The relay has not been able to read the account's stored roster yet |
 | `disabled` | The relay keeps no roster |
 
 A forgotten machine that connects again is the account's again, and is listed as offline the

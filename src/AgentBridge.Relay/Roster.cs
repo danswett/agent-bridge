@@ -301,14 +301,16 @@ public sealed class MachineRoster
         }
     }
 
-    // The account's machines that are not online, most recently seen first; null without a
-    // roster, so presence then says nothing about it.
+    // The account's machines that are not online, most recently seen first. Null without a
+    // roster, and while the account's stored roster has not been read (the store was down at
+    // admission): presence then says nothing, rather than an empty list a device would take as
+    // every offline machine forgotten.
     public IReadOnlyList<RosterMachine>? Known(string accountId, Func<string, bool> online)
     {
-        if (!Enabled) { return null; }
-        if (!accounts.TryGetValue(accountId, out var a)) { return []; }
+        if (!Enabled || !accounts.TryGetValue(accountId, out var a)) { return null; }
         lock (a)
         {
+            if (!a.Loaded) { return null; }
             return [.. a.Machines.Values.Where(m => !online(m.Id) && !a.Online.ContainsKey(m.Id)).OrderByDescending(m => m.LastSeen)];
         }
     }
@@ -327,6 +329,7 @@ public sealed class MachineRoster
             while (a.Forgets.Count > 0 && now - a.Forgets.Peek() > 60_000) { a.Forgets.Dequeue(); }
             if (a.Forgets.Count >= o.MaxForgetsPerMinute) { return Outcome("rate-limited"); }
             a.Forgets.Enqueue(now);
+            if (!a.Loaded) { return Outcome("unavailable"); }
             if (online(id) || a.Online.ContainsKey(id)) { return Outcome("online"); }
             if (!a.Machines.Remove(id)) { return Outcome("not-found"); }
             a.Forgotten[id] = Now;
@@ -375,9 +378,11 @@ public sealed class MachineRoster
             else if (unread) { await ReadAgainAsync(id, a, token); }
             lock (a)
             {
-                // Not before the write interval is up: letting go sooner would let a host that
-                // keeps reconnecting, alone on its account, write every pass.
-                if (a.Connections <= 0 && !a.Dirty && !a.Evicted && Now - a.WrittenAt >= o.WriteInterval)
+                // Not before the write interval is up, nor while its forgets still count against
+                // the minute: letting go sooner would let a host that keeps reconnecting, alone on
+                // its account, write every pass, or a device reconnect for a fresh allowance.
+                if (a.Connections <= 0 && !a.Dirty && !a.Evicted && Now - a.WrittenAt >= o.WriteInterval
+                    && (a.Forgets.Count == 0 || Environment.TickCount64 - a.Forgets.Max() > 60_000))
                 {
                     a.Evicted = true;
                     accounts.TryRemove(new KeyValuePair<string, AccountRoster>(id, a));
@@ -489,6 +494,13 @@ public sealed class MachineRoster
             metrics.Roster("write", e is OperationCanceledException ? "timeout" : "error");
             log.LogWarning("roster write failed: {Type}", e.GetType().Name);
             lock (a) { a.Dirty = true; }
+        }
+        // Stopping: what this write was taking to storage is still to be written, by the final
+        // flush (RosterWriter.StopAsync).
+        catch (OperationCanceledException)
+        {
+            lock (a) { a.Dirty = true; }
+            throw;
         }
         finally
         {
