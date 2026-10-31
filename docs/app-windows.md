@@ -139,9 +139,11 @@ into one folder with one version. An app update is a host update, so they never 
   ([ha-connector.md](ha-connector.md), stage 6) for a machine driven from the dashboard. It
   uses the same feed and the app's "Include pre-releases" for its profile
   (`<profile>-settings.json` beside `feed.txt`), downloads, calls
-  `WaitExitThenApplyUpdates` (silent, restarting the app with `--background`) and stops as on
-  Ctrl+C. Update.exe applies the release once the host has exited, stops the app if it runs,
-  and starts it again in the background, which starts the host. Update.exe outlives the host
+  `WaitExitThenApplyUpdates` (silent, restarting the app with `--background --profile
+  <the host's profile>`) and stops as on Ctrl+C. Update.exe applies the release once the host
+  has exited, stops the app if it runs, and starts it again in the background for that profile,
+  which starts the host. Another profile's host, stopped by the update too, comes back as after
+  an update from the app: at its next start. Update.exe outlives the host
   that started it, so the update hooks may find their ancestry incomplete and leave the host
   alone (`LifecycleGuard`); the app's own start brings it back either way.
 * Uninstall (`OnBeforeUninstallFastCallback`) stops the host and removes the logon task,

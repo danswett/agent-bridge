@@ -15,15 +15,18 @@ namespace AgentBridge.Host;
 //
 // Applying: Velopack's Update.exe waits for this process to exit, stops whatever else runs from
 // the package (the app, whose update hook stops the host it manages), replaces the version, and
-// starts the app again in the background, which starts the host. So handing the release over is
-// followed by this host stopping, as serve does on Ctrl+C.
+// starts the app again in the background for this host's profile, which starts this host. So
+// handing the release over is followed by this host stopping, as serve does on Ctrl+C.
 sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, Action<string> log) : IHostUpdates
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
     readonly object gate = new();
     UpdateManager? manager;
     string? source;
-    UpdateInfo? found;
+    // Each release a check has found, with the manager that found it, by version: a check made
+    // while one is being installed (or a feed changed in between) must not take away the release
+    // the install downloads and applies.
+    readonly Dictionary<string, (UpdateManager Manager, UpdateInfo Info)> found = new(StringComparer.Ordinal);
 
     string AppFolder => Path.Combine(dataRoot, "app");
 
@@ -65,7 +68,6 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
                     ? new SimpleWebSource(feed)
                     : new SimpleFileSource(new DirectoryInfo(feed));
             source = key;
-            found = null;
             // The platform's own locator rather than VelopackLocator.Current, which only
             // VelopackApp.Build().Run() sets: that is the app's entry point, and the host has none.
             return manager = new UpdateManager(from, null, VelopackLocator.CreateDefaultForPlatform());
@@ -87,28 +89,35 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
     {
         var m = Manager();
         var info = await m.CheckForUpdatesAsync().WaitAsync(cancellationToken);
-        lock (gate) { found = info; }
         if (info is null) { return null; }
         var target = info.TargetFullRelease;
-        return new UpdateRelease(target.Version.ToString(), target.NotesMarkdown, ReleasesUrl);
+        var version = target.Version.ToString();
+        lock (gate) { found[version] = (m, info); }
+        return new UpdateRelease(version, target.NotesMarkdown, ReleasesUrl);
     }
 
-    UpdateInfo Found(UpdateRelease release)
+    (UpdateManager Manager, UpdateInfo Info) Found(UpdateRelease release)
     {
         lock (gate)
         {
-            return found is { } info && info.TargetFullRelease.Version.ToString() == release.Version
-                ? info
-                : throw new InvalidOperationException($"{release.Version} is not the release last found");
+            return found.TryGetValue(release.Version, out var f) ? f : throw new InvalidOperationException($"{release.Version} was not found by a check here");
         }
     }
 
-    public Task DownloadAsync(UpdateRelease release, Action<int> progress, CancellationToken cancellationToken) =>
-        Manager().DownloadUpdatesAsync(Found(release), progress, cancellationToken);
+    public Task DownloadAsync(UpdateRelease release, Action<int> progress, CancellationToken cancellationToken)
+    {
+        var (m, info) = Found(release);
+        return m.DownloadUpdatesAsync(info, progress, cancellationToken);
+    }
+
+    // What the app is started with after the update: in the background, for this host's profile
+    // (the app starts the host of the profile it opens, and defaults to "default").
+    internal static string[] RestartArguments(string profile) => ["--background", "--profile", profile];
 
     public void ApplyAndRestart(UpdateRelease release)
     {
-        Manager().WaitExitThenApplyUpdates(Found(release).TargetFullRelease, silent: true, restart: true, ["--background"]);
+        var (m, info) = Found(release);
+        m.WaitExitThenApplyUpdates(info.TargetFullRelease, silent: true, restart: true, RestartArguments(profile));
         log($"updating to {release.Version}: Velopack applies it once this host has exited, and starts the app again, which starts the host");
         stop();
     }

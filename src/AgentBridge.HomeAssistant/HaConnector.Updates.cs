@@ -135,7 +135,8 @@ public sealed partial class HaConnector
         if (await PressedAsync("check_updates", checkPressSeen, ct) is { } check)
         {
             checkPressSeen = check.Value;
-            if (check.Fresh)
+            // Not while an update runs: it has looked for itself, and says what it found.
+            if (check.Fresh && !UpdateBusy)
             {
                 log("Home Assistant connector: update check requested from Home Assistant");
                 StartCheck(now, pressed: true);

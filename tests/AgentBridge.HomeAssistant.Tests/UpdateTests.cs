@@ -292,6 +292,11 @@ public sealed class UpdateTests : IDisposable
         Assert.Equal(busy["data"]!["notification_id"]!.GetValue<string>(), data["notification_id"]!.GetValue<string>());
         Assert.Equal("This press did not start an update: an update to 0.2.0 is already downloading here. That update reports here when it finishes.", data["message"]!.GetValue<string>());
         Assert.Single(updates.Downloaded);
+        // Nor does Check look while the update runs: the install found its release itself.
+        var checks = updates.Checks;
+        await Press(c, "check_updates");
+        await Pass(c);
+        Assert.Equal(checks, updates.Checks);
         updates.DownloadGate.SetResult();
         await Settle(c, () => updates.Applied.Count == 1);
         // Handed over and waiting for the host to exit: still busy.

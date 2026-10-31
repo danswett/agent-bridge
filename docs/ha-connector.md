@@ -594,7 +594,8 @@ looks nothing up.
   newest release again, downloads it (`downloading` with `update_percentage`), records the
   attempt in the connector's state file, shows `restarting` and hands the release to Velopack,
   which applies it once the host has exited; the host then stops as on Ctrl+C. Velopack starts
-  the app again in the background, and the app starts the host. A press with nothing newer says
+  the app again in the background for the host's profile, and the app starts the host. While an
+  update runs a press of Check looks nothing up: the install found its release itself. A press with nothing newer says
   `current` and notifies **No newer bridge release on `<machine>`**; one whose download or
   hand-over fails says `failed` with the reason, notifies **Bridge update failed on
   `<machine>`**, and leaves Install usable. A press while an update runs, or while the host waits

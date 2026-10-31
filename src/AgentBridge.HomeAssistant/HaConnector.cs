@@ -961,9 +961,18 @@ public sealed partial class HaConnector : IAsyncDisposable
         }
     }
 
+    // Taken by whoever saves, from the snapshot to the rename: the update beside the passes saves
+    // too, and two saves sharing the temporary file could leave an older snapshot in place.
+    readonly object ledgerSave = new();
+
     void SaveLedger()
     {
         if (options.StateFile is not { } path) { return; }
+        lock (ledgerSave) { WriteLedger(path); }
+    }
+
+    void WriteLedger(string path)
+    {
         string text;
         lock (gate)
         {
