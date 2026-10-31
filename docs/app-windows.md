@@ -185,6 +185,10 @@ installs an update unasked.
   `AgentBridgeApp-win-Setup.exe`, `AgentBridgeApp-win-Portable.zip`, `releases.win.json`
   (this version's packages), `RELEASES` and `assets.win.json`, as on the first release
   (`v0.1.583`, published by hand) plus the delta.
+* **Release notes:** `build/release-notes.ps1` lists the commits since the latest release, newest
+  first (GitHub's compare API; the commit alone when that cannot be read), and `pack-app.ps1
+  -ReleaseNotes` packs them (`vpk pack --releaseNotes`), so they are in the feed's
+  `NotesMarkdown` for an installed copy to show after it updates.
 * **Deltas:** `pack-app.ps1 -DeltaFrom` empties its releases folder, downloads the latest
   release's full package (`vpk download github --pre`) and, if it is older, puts it there, so
   `vpk pack` builds a delta from it. Another merge may publish between that pack and this one's

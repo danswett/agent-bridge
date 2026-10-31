@@ -172,10 +172,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         # -DeltaFrom: a delta from the latest release, so an installed copy downloads what changed
-        # rather than the whole ~100 MB package. Signing goes here too, when there is a
+        # rather than the whole ~100 MB package. -ReleaseNotes: the commits since that release,
+        # which an installed copy shows after it updates. Signing goes here too, when there is a
         # certificate: -SignParams or -AzureTrustedSignFile from a secret, for pushes to main only,
         # since a pull request from a fork gets no secrets (docs/app-windows.md, Signing).
-        run: ./build/pack-app.ps1 -Version $env:APP_VERSION -Release:($env:APP_RELEASE -eq 'true') -DeltaFrom "https://github.com/${{ github.repository }}"
+        run: |
+          ./build/release-notes.ps1 -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -Out out/app/notes.md
+          ./build/pack-app.ps1 -Version $env:APP_VERSION -Release:($env:APP_RELEASE -eq 'true') -DeltaFrom "https://github.com/${{ github.repository }}" -ReleaseNotes out/app/notes.md
       - name: Only the publish path builds a release host
         # The packed host is a release build exactly when this run publishes: dev here on a pull
         # request. And the property the publish path sets does make one, on this commit.

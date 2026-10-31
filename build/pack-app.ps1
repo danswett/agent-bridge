@@ -24,7 +24,10 @@ param(
     # The signing hook, passed to vpk pack as they are: signtool arguments, or an Azure Trusted
     # Signing metadata.json. vpk signs every executable in the package and Setup.exe.
     [string]$SignParams,
-    [string]$AzureTrustedSignFile
+    [string]$AzureTrustedSignFile,
+    # Markdown the package carries as its release notes (build/release-notes.ps1): what an
+    # installed copy's toast says changed after it updates.
+    [string]$ReleaseNotes
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -94,9 +97,10 @@ if ($DeltaFrom) {
     }
 }
 
-$sign = @()
-if ($SignParams) { $sign += @('--signParams', $SignParams) }
-if ($AzureTrustedSignFile) { $sign += @('--azureTrustedSignFile', $AzureTrustedSignFile) }
-& vpk pack -u $packId -v $Version -p $publish -e AgentBridge.exe -o $releases --packTitle 'Agent Bridge' --icon (Join-Path $publish 'Assets\AgentBridge.ico') @sign
+$more = @()
+if ($SignParams) { $more += @('--signParams', $SignParams) }
+if ($AzureTrustedSignFile) { $more += @('--azureTrustedSignFile', $AzureTrustedSignFile) }
+if ($ReleaseNotes) { $more += @('--releaseNotes', [IO.Path]::GetFullPath($ReleaseNotes)) }
+& vpk pack -u $packId -v $Version -p $publish -e AgentBridge.exe -o $releases --packTitle 'Agent Bridge' --icon (Join-Path $publish 'Assets\AgentBridge.ico') @more
 if ($LASTEXITCODE) { throw 'vpk pack failed' }
 Write-Host "packed $Version to $releases"

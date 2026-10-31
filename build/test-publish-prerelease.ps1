@@ -41,6 +41,7 @@ $global:PpTags = [Collections.Generic.List[string]]::new()
 $global:PpCalls = [Collections.Generic.List[string]]::new()
 $global:PpNextId = 1000
 $global:PpDownload = $null
+$global:PpCompare = @()
 $global:PpPackSaw = $null
 
 function global:New-PpRelease([string]$tag, [bool]$prerelease = $true, [bool]$draft = $false) {
@@ -66,6 +67,13 @@ function global:gh {
         $r = $global:PpReleases | Where-Object id -EQ $id
         if ($a -contains 'draft=false') { $r.draft = $false; $global:PpTags.Add("refs/tags/$($r.tag_name)") }
     } elseif ($a[0] -eq 'release' -and $a[1] -eq 'upload') {
+    } elseif ($a[0] -eq 'release' -and $a[1] -eq 'list') {
+        $global:PpReleases | Where-Object { -not $_.draft } | Select-Object -Last 1 | ForEach-Object tag_name
+    } elseif ($a[0] -eq 'api' -and $a[1] -like "repos/$repo/compare/*") {
+        if ($global:PpCompare -eq 'fail') { $global:LASTEXITCODE = 1; return }
+        $global:PpCompare
+    } elseif ($a[0] -eq 'api' -and $a[1] -like "repos/$repo/commits/*") {
+        'The commit being built (#200)'
     } else { throw "stand-in gh: unexpected $($a -join ' ')" }
 }
 
@@ -125,7 +133,7 @@ function global:dotnet {
 # --- Fixtures.
 function Reset([int]$prereleases = 0) {
     $global:PpReleases.Clear(); $global:PpTags.Clear(); $global:PpCalls.Clear()
-    $global:PpDownload = $null; $global:PpPackSaw = $null; $global:PpIgnoreRelease = $false
+    $global:PpDownload = $null; $global:PpPackSaw = $null; $global:PpIgnoreRelease = $false; $global:PpCompare = @()
     for ($i = 1; $i -le $prereleases; $i++) { New-PpRelease "v0.1.$(500 + $i)" }
     if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
 }
@@ -349,6 +357,23 @@ Check 'A package left in the output folder by an earlier pack is not a delta bas
     $global:PpDownload = 'fail'
     Invoke-Pack '0.1.600'
     Assert ($null -ne $global:PpPackSaw -and @($global:PpPackSaw).Count -eq 0) "vpk pack saw: $($global:PpPackSaw)"
+}
+
+# --- The release notes a package carries, which an installed copy's toast shows after it updates.
+Check 'Release notes list the commits since the latest release, newest first' {
+    Reset 3
+    $global:PpCompare = @('Older change (#198)', 'Newer change (#199)')
+    $notes = Join-Path $scratch 'notes.md'
+    & (Join-Path $PSScriptRoot 'release-notes.ps1') -Repository $repo -Commit $commit -Out $notes 6>$null
+    Assert (((Get-Content $notes) -join "`n") -eq "- Newer change (#199)`n- Older change (#198)") "notes: $(Get-Content $notes -Raw)"
+}
+
+Check 'Release notes that cannot be compared with the latest release name the commit itself' {
+    Reset 3
+    $global:PpCompare = 'fail'
+    $notes = Join-Path $scratch 'notes.md'
+    & (Join-Path $PSScriptRoot 'release-notes.ps1') -Repository $repo -Commit $commit -Out $notes 6>$null
+    Assert (((Get-Content $notes) -join "`n") -eq '- The commit being built (#200)') "notes: $(Get-Content $notes -Raw)"
 }
 
 # --- The build identity pack-app.ps1 gives the host.
