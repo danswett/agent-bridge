@@ -250,7 +250,12 @@ public sealed partial class HaConnector
         armed.Boundary = Interlocked.Read(ref hitSeq);
         // A Send read after a failure is compared with what Send shows now, not before the loss.
         if (armed.SubmitAtFailure is not null) { armed.SubmitAtFailure = submit; }
-        armed.AwaitTap = armed.Plan.AnswerOnTap && !await ShowsWaitingAsync(p.Node, armed.Question.Id, ct);
+        var waiting = await ShowsWaitingAsync(p.Node, armed.Question.Id, ct);
+        armed.AwaitTap = armed.Plan.AnswerOnTap && !waiting;
+        // An approval whose tap reached nothing, seen waiting again: the same option may be tapped
+        // again, as it may once the selector is read waiting after a failure. (One whose tap may
+        // have reached the terminal is Settled, and never read again.)
+        if (waiting && armed.UsedPress?.StartsWith("tap:", StringComparison.Ordinal) == true) { armed.UsedPress = null; }
         armed.StaleSlots = await StaleSlotsAsync(armed.Plan, p.Node, unset, ct);
         armed.Rearm = false;
         p.ArmedSlots = armed.Plan.UsesFieldSlots ? armed.Plan.Fields.Count : 0;

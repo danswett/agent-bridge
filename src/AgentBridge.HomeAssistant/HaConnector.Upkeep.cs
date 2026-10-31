@@ -221,22 +221,29 @@ public sealed partial class HaConnector
             var shortId = id[..Math.Min(8, id.Length)];
             if (state is null)
             {
-                int attempt;
-                lock (gate)
-                {
-                    attempt = restores.TryGetValue(id, out var was) ? was + 1 : 1;
-                    restores[id] = attempt;
-                    p.Lost = true;
-                    dirty.Add(id);
-                }
-                if (attempt == 1) { log($"Home Assistant connector: the entities of {shortId} ({p.Name}) are gone from Home Assistant while it runs here; publishing them again"); }
-                else if (attempt % 10 == 0) { log($"Home Assistant connector: still publishing the entities of {shortId} ({p.Name}) again after {attempt} attempts"); }
+                Lose(id, p);
                 continue;
             }
-            // Seen back: a session torn down again starts its count afresh.
-            lock (gate) { restores.Remove(id); }
             if (ServesAnswers) { await RePrimeAsync(id, p, state, ct); }
+            // Seen back: a session torn down again starts its count afresh.
+            else { lock (gate) { restores.Remove(id); } }
         }
+    }
+
+    // Restore-DaemonSessionEntities' trigger: published again whole on the next pass.
+    void Lose(string id, Published p)
+    {
+        int attempt;
+        lock (gate)
+        {
+            attempt = restores.TryGetValue(id, out var was) ? was + 1 : 1;
+            restores[id] = attempt;
+            p.Lost = true;
+            dirty.Add(id);
+        }
+        var shortId = id[..Math.Min(8, id.Length)];
+        if (attempt == 1) { log($"Home Assistant connector: the entities of {shortId} ({p.Name}) are gone from Home Assistant while it runs here; publishing them again"); }
+        else if (attempt % 10 == 0) { log($"Home Assistant connector: still publishing the entities of {shortId} ({p.Name}) again after {attempt} attempts"); }
     }
 
     async Task RePrimeAsync(string id, Published p, HaState reply, CancellationToken ct)
@@ -244,9 +251,19 @@ public sealed partial class HaConnector
         var lost = Unset(reply.State);
         if (!lost)
         {
-            try { lost = Unset((await ha.GetStateAsync(SessionEntities.Decision(p.Node), ct))?.State); }
+            HaState? decision;
+            try { decision = await ha.GetStateAsync(SessionEntities.Decision(p.Node), ct); }
             catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { return; }
+            // The selector gone on its own, the reply box still there: the set goes again, as when
+            // the box is gone, since a selector is published and pinned with the rest.
+            if (decision is null)
+            {
+                Lose(id, p);
+                return;
+            }
+            lost = Unset(decision.State);
         }
+        lock (gate) { restores.Remove(id); }
         if (!lost) { return; }
         var shortId = id[..Math.Min(8, id.Length)];
         await ResetReplyBoxAsync(p.Node, ct);

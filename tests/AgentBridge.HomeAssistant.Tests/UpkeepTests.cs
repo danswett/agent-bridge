@@ -385,6 +385,56 @@ public sealed class UpkeepTests : IDisposable
         Assert.Single(answered);
     }
 
+    // A tap that reached nothing can be made again on the card put back; one that may have reached
+    // the terminal cannot.
+    [Theory]
+    [InlineData(AnswerOutcome.Busy, 2)]
+    [InlineData(AnswerOutcome.Unconfirmed, 1)]
+    public async Task An_approval_tapped_before_the_card_was_put_back_is_answerable_again_only_if_nothing_landed(AnswerOutcome first, int delivered)
+    {
+        answerOutcome = first;
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with
+        {
+            Agent = AgentKind.Codex,
+            Question = new Question
+            {
+                Id = "a1", Kind = QuestionKind.Approval, Message = "Codex wants to run git push", AskedAt = FakeSessions.T0,
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
+            },
+        });
+        await using var c = Connector(answers: true);
+        await Run(c, 5);
+        c.Observe(ha.Choose(SessionEntities.Decision(NodeA), "Approve"));
+        await Run(c, 1);
+        Assert.Single(answered);
+
+        // Home Assistant restarts before the card is read waiting again: put back, it waits.
+        ha.ForgetOptimistic();
+        await Run(c, 80);
+        Assert.Equal(HaDecision.Awaiting, (await ha.GetStateAsync(SessionEntities.Decision(NodeA)))!.State);
+        answerOutcome = AnswerOutcome.Delivered;
+        c.Observe(ha.Choose(SessionEntities.Decision(NodeA), "Approve"));
+        await Run(c, 1);
+        Assert.Equal(delivered, answered.Count);
+    }
+
+    [Fact]
+    public async Task A_selector_removed_on_its_own_is_published_again_with_its_question()
+    {
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 5);
+        var decision = SessionEntities.Decision(NodeA);
+        await ha.PublishAsync(HaContract.DecisionConfig(HaContract.Topics(NodeA), "x", Machine, [HaDecision.Idle], true).Topic, "", true);
+        Assert.Null(await ha.GetStateAsync(decision));
+        Assert.NotNull(await ha.GetStateAsync(SessionEntities.Reply(NodeA)));
+        await Run(c, 80);
+        var armed = (await ha.GetStateAsync(decision))!;
+        Assert.Equal(HaDecision.Awaiting, armed.State);
+        Assert.Equal("q1", armed.Attributes.GetProperty("decision_id").GetString());
+    }
+
     [Fact]
     public async Task A_machine_published_again_while_its_host_runs_keeps_what_its_sessions_were_showing()
     {

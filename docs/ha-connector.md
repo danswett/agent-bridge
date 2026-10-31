@@ -705,7 +705,11 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
     screen again with fresh baselines. When there is no question, the selector is parked on Idle.
   * In both cases the question keeps what it has been through: answered, its attempts, what was
     used. An answer that may have reached the terminal is never typed again because the card was
-    put back (`An_answer_that_may_have_landed_is_not_given_again_once_the_card_is_put_back`).
+    put back (`An_answer_that_may_have_landed_is_not_given_again_once_the_card_is_put_back`). An
+    approval's tap that reached nothing may be tapped again once the card waits again, as after
+    any failure.
+  * A selector removed on its own, with the reply box still there, is treated like the box: the
+    set goes again.
 
 **Forgetting a machine.** The machine row's X is the generated status card's own: two taps on
 the row of a machine that is offline and not part-way through an update. Those taps publish an
