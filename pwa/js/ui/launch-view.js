@@ -104,8 +104,10 @@ export class LaunchPanel {
   #signing = false;
   // Counts changes of the machine picked, which presence updates for the same one do not.
   #selection = 0;
-  // Folder-trust answers pressed here, by question id: { question, choice, state, data, result,
-  // reason }. A question answered stays shown, with its outcome, after the machine stops listing it.
+  // Folder-trust answers pressed here, by machine and then question id: { hostId, question,
+  // choice, state, data, result, reason, trust }. Kept across machines picked, so a signed answer
+  // whose response was lost can still be resent, and one that may have typed is never offered
+  // again. A question answered stays shown, with its outcome, after the machine stops listing it.
   #trustAnswers = new Map();
 
   // root: the #launch section. service: a LaunchService. jump(sessionId): shows a session's
@@ -189,7 +191,9 @@ export class LaunchPanel {
     this.#asking = null;
     this.#error = null;
     this.#loading = null;
-    this.#trustAnswers = new Map();
+    // The last machine's questions go at once: their buttons must never act on this one.
+    this.els.trust.replaceChildren();
+    this.els.trust.hidden = true;
     // Another machine's choices: nothing picked on the last one carries over but the prompt.
     for (const s of this.els.form.querySelectorAll('select')) { delete s.dataset.scope; }
     this.root.hidden = !target;
@@ -271,6 +275,8 @@ export class LaunchPanel {
       e.note.textContent = this.#error ? `Couldn't get the choices from ${name}: ${sentence(this.#error)}` : `Getting the choices from ${name}…`;
       e.note.className = `note launch-note${this.#error ? ' warn' : ''}`;
       e.busy.hidden = true;
+      e.trust.replaceChildren();
+      e.trust.hidden = true;
       return;
     }
 
@@ -395,8 +401,14 @@ export class LaunchPanel {
     for (const q of this.#options?.trust ?? []) { add(q); }
     const entry = this.#target ? this.service.get(this.#target.hostId) : null;
     if (entry?.state === 'done') { add(entry.detail?.trust); }
-    for (const a of this.#trustAnswers.values()) { add(a.question); }
+    for (const a of this.#answersFor(this.#target?.hostId).values()) { add(a.question); }
     return [...seen.values()];
+  }
+
+  #answersFor(hostId) {
+    let answers = this.#trustAnswers.get(hostId);
+    if (!answers) { answers = new Map(); this.#trustAnswers.set(hostId, answers); }
+    return answers;
   }
 
   #drawTrust() {
@@ -407,13 +419,17 @@ export class LaunchPanel {
   }
 
   #trustCard(q) {
-    const answer = this.#trustAnswers.get(q.id);
+    const hostId = this.#target?.hostId;
+    const answer = this.#answersFor(hostId).get(q.id);
     const name = this.#target?.machineName || 'the machine';
     // Once something may have been typed, it is never offered again from here: the machine then
     // refuses another answer anyway, and a person at the machine finishes it.
     const settled = answer?.state === 'done' && ['started', 'declined', 'unconfirmed'].includes(answer.result?.outcome);
     const pending = answer && ['signing', 'sending'].includes(answer.state);
-    const canAnswer = q.answerable && !!this.#target?.trust && !settled;
+    // Sent, and its response lost: only that same command again, which the machine answers with
+    // its first outcome, whether or not the question can still be answered afresh.
+    const retry = answer?.state === 'failed' && !!answer.data;
+    const canAnswer = q.answerable && !!this.#target?.trust && !settled && !retry;
     const shown = answer ? describeTrust(answer, q) : null;
     return h('section', { class: 'trust-question', dataset: { question: q.id, trust: answer ? (answer.state === 'done' ? answer.result.outcome : answer.state) : 'waiting' }, 'aria-label': `${q.label} folder trust` },
       h('h3', { class: 'trust-title' }, `${q.label} on ${name} is asking whether to trust a folder`),
@@ -423,9 +439,10 @@ export class LaunchPanel {
       canAnswer
         ? h('div', { class: 'row' },
           h('button', { type: 'button', class: 'button trust-yes', disabled: pending, onclick: () => this.#answerTrust(q, TRUST.trust) }, 'Trust'),
-          h('button', { type: 'button', class: 'button secondary trust-no', disabled: pending, onclick: () => this.#answerTrust(q, TRUST.quit) }, 'Quit'),
-          answer?.state === 'failed' ? h('button', { type: 'button', class: 'button secondary trust-resend', onclick: () => this.#sendTrust(q.id) }, 'Try again') : null)
-        : settled ? null : h('p', { class: 'note warn trust-at-machine' }, q.atMachine ?? (q.answerable ? `Answer at the machine: this app cannot answer it on ${name}.` : 'Answer at the machine.')),
+          h('button', { type: 'button', class: 'button secondary trust-no', disabled: pending, onclick: () => this.#answerTrust(q, TRUST.quit) }, 'Quit'))
+        : retry
+          ? h('div', { class: 'row' }, h('button', { type: 'button', class: 'button secondary trust-resend', onclick: () => this.#sendTrust(hostId, q.id) }, 'Try again'))
+          : settled ? null : h('p', { class: 'note warn trust-at-machine' }, q.atMachine ?? (q.answerable ? `Answer at the machine: this app cannot answer it on ${name}.` : 'Answer at the machine.')),
       shown ? h('p', { class: `answer-status trust-status ${shown.tone}`, role: 'status', 'aria-live': 'polite' }, shown.text) : null);
   }
 
@@ -433,43 +450,44 @@ export class LaunchPanel {
   // which the machine answers with the first outcome rather than typing again.
   async #answerTrust(q, choice) {
     const target = this.#target;
-    const known = this.#trustAnswers.get(q.id);
-    if (!target?.trust || (known && ['signing', 'sending'].includes(known.state))) { return; }
-    const answer = { question: q, choice, state: 'signing', data: null, result: null, reason: null };
-    this.#trustAnswers.set(q.id, answer);
+    const answers = this.#answersFor(target?.hostId);
+    const known = answers.get(q.id);
+    if (!target?.trust || (known && (['signing', 'sending'].includes(known.state) || (known.state === 'failed' && known.data)))) { return; }
+    const answer = { hostId: target.hostId, question: q, choice, state: 'signing', data: null, result: null, reason: null, trust: target.trust };
+    answers.set(q.id, answer);
     this.#drawTrust();
     try {
-      answer.data = { question: q.id, choice, command: await target.trust.sign(q.id, choice) };
+      answer.data = { question: q.id, choice, command: await answer.trust.sign(q.id, choice) };
     } catch (e) {
       Object.assign(answer, { state: 'failed', reason: `couldn't sign the answer: ${e?.message ?? String(e)}`, data: null });
-      this.#drawTrust();
+      if (this.#target?.hostId === answer.hostId) { this.#drawTrust(); }
       return;
     }
-    await this.#sendTrust(q.id);
+    await this.#sendTrust(answer.hostId, q.id);
   }
 
-  async #sendTrust(id) {
-    const target = this.#target;
-    const answer = this.#trustAnswers.get(id);
-    if (!target?.trust || !answer) { return; }
-    if (!answer.data) { await this.#answerTrust(answer.question, answer.choice); return; }
+  // Sends an answer's signed command, to the machine it was signed for, however the machine shown
+  // has changed meanwhile.
+  async #sendTrust(hostId, id) {
+    const answer = this.#answersFor(hostId).get(id);
+    if (!answer?.data || answer.state === 'sending') { return; }
+    const trust = (this.#target?.hostId === hostId ? this.#target.trust : null) ?? answer.trust;
     answer.state = 'sending';
-    this.#drawTrust();
+    if (this.#target?.hostId === hostId) { this.#drawTrust(); }
     try {
-      answer.result = await target.trust.answer(answer.data);
+      answer.result = await trust.answer(answer.data);
       answer.state = 'done';
     } catch (e) {
       answer.state = 'failed';
       answer.reason = e?.reason ?? e?.message ?? String(e);
     }
-    if (this.#target !== target && this.#target?.hostId !== target.hostId) { return; }
+    if (this.#target?.hostId !== hostId) { return; }
     this.#drawTrust();
     if (answer.state !== 'done') { return; }
     if (answer.result.outcome === 'started' && answer.result.session) { this.#jumpTo(answer.result.session); }
     // The machine's list, and whether it is still busy, have changed.
     this.refresh();
   }
-
   #local(shown) {
     const e = this.els;
     e.status.textContent = shown.text;

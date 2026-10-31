@@ -305,5 +305,25 @@ test.describe('a folder-trust question', () => {
     await expect(card(page).locator('.trust-status')).toHaveText('Not confirmed: answer at the machine. The question is still in Codex\'s window.');
     await expect(card(page).getByRole('button')).toHaveCount(0);
     expect(await trustLog(page)).toHaveLength(1);
+    // Shown again after another machine, or none, was picked: still not offered.
+    await page.evaluate(() => window.agentBridgeDemo.launchPanel.setTarget(null));
+    await page.evaluate(() => window.agentBridgeDemo.retarget());
+    await expect(card(page).locator('.trust-status')).toHaveText('Not confirmed: answer at the machine. The question is still in Codex\'s window.');
+    await expect(card(page).getByRole('button')).toHaveCount(0);
   });
-});
+
+  test('an answer whose response was lost offers only that same command again, which gets the first outcome', async ({ page }) => {
+    await openDemo(page, '&timeout=1000');
+    await ask(page, QUESTION);
+    await page.evaluate(() => window.agentBridgeDemo.scriptTrust({ outcome: 'started', drop: true }));
+    await openPanel(page);
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).getByRole('button', { name: 'Try again' })).toBeVisible({ timeout: 10000 });
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toHaveCount(0);
+    await expect(card(page).getByRole('button', { name: 'Quit' })).toHaveCount(0);
+    await card(page).getByRole('button', { name: 'Try again' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
+    const sent = await trustLog(page);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+  });});
