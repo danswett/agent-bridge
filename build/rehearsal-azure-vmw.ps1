@@ -653,6 +653,9 @@ $bash = @"
 set -e
 export DEBIAN_FRONTEND=noninteractive
 grep -q '^systemd=true' /etc/wsl.conf 2>/dev/null || printf '[boot]\nsystemd=true\n' >> /etc/wsl.conf
+# Finish whatever an interrupted run left: apt refuses every install while dpkg is mid-transaction.
+dpkg --configure -a
+apt-get -f install -y -qq >/dev/null
 if [ ! -s /etc/apt/sources.list.d/docker.list ]; then
   apt-get update -qq
   apt-get install -y -qq ca-certificates curl >/dev/null
