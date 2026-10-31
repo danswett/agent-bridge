@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
+using System.Security.Claims;
 using System.Security.Principal;
 
 namespace AgentBridge.Host.Migration;
@@ -20,8 +21,10 @@ public static class TaskAccess
     const int GenericAll = 0x10000000, GenericExecute = 0x20000000, GenericWrite = 0x40000000, GenericRead = unchecked((int)0x80000000);
     const int FileAllAccess = 0x1F01FF, FileGenericRead = 0x120089, FileGenericWrite = 0x120116, FileGenericExecute = 0x1200A0;
 
-    // Null when the descriptor cannot be read as one.
-    public static bool? CanModify(string sddl, SecurityIdentifier user, IEnumerable<SecurityIdentifier> groups)
+    // Null when the descriptor cannot be read as one. Groups are those enabled in the token;
+    // denyOnly are those it holds for denial alone (an unelevated administrator's
+    // Administrators), which Windows matches against deny entries but never allow ones.
+    public static bool? CanModify(string sddl, SecurityIdentifier user, IEnumerable<SecurityIdentifier> groups, IEnumerable<SecurityIdentifier>? denyOnly = null)
     {
         RawSecurityDescriptor descriptor;
         try { descriptor = new RawSecurityDescriptor(sddl); }
@@ -29,25 +32,28 @@ public static class TaskAccess
         // No discretionary list at all grants everyone everything.
         if (descriptor.DiscretionaryAcl is not { } acl) { return true; }
         var who = new HashSet<SecurityIdentifier>(groups) { user };
+        var denied = new HashSet<SecurityIdentifier>(who);
+        denied.UnionWith(denyOnly ?? []);
         int granted = 0, refused = 0;
         foreach (var entry in acl)
         {
-            if (entry is not CommonAce ace || ace.AceFlags.HasFlag(AceFlags.InheritOnly) || !who.Contains(ace.SecurityIdentifier)) { continue; }
+            if (entry is not CommonAce ace || ace.AceFlags.HasFlag(AceFlags.InheritOnly)) { continue; }
             var mask = Map(ace.AccessMask);
-            if (ace.AceQualifier == AceQualifier.AccessDenied) { refused |= mask & ~granted; }
-            else if (ace.AceQualifier == AceQualifier.AccessAllowed) { granted |= mask & ~refused; }
+            if (ace.AceQualifier == AceQualifier.AccessDenied && denied.Contains(ace.SecurityIdentifier)) { refused |= mask & ~granted; }
+            else if (ace.AceQualifier == AceQualifier.AccessAllowed && who.Contains(ace.SecurityIdentifier)) { granted |= mask & ~refused; }
         }
         return (granted & FileWriteData) != 0;
     }
 
-    // The current user's answer, from the groups enabled in this process's token (an unelevated
-    // token's Administrators membership is deny-only, so it is not among them).
+    // The current user's answer, from this process's token: Groups holds only the enabled
+    // groups, and the deny-only ones come as DenyOnlySid claims.
     public static bool? CanModify(string sddl)
     {
         using var identity = WindowsIdentity.GetCurrent();
         if (identity.User is not { } user) { return null; }
         var groups = identity.Groups?.OfType<SecurityIdentifier>() ?? [];
-        return CanModify(sddl, user, groups);
+        var denyOnly = identity.Claims.Where(c => c.Type == ClaimTypes.DenyOnlySid).Select(c => new SecurityIdentifier(c.Value)).ToList();
+        return CanModify(sddl, user, groups, denyOnly);
     }
 
     static int Map(int mask)

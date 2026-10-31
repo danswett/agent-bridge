@@ -270,9 +270,10 @@ snapshot to roll back by hand, rather than skipping a file or a task and deletin
    (`AgentBridgeDaemon_<id>`) seen, since a probe that cannot tell, a supervisor or task running
    while the daemon fails to start, or another installation's daemon would otherwise pass for it,
    and the record and snapshot would go with nothing running. A task that was disabled before stays disabled.
-   A task still enabled is left alone: a migration the scheduler refused before it could
-   disable one left it so, and enabling it again needs the same write access, so asking failed
-   every rollback and kept the record for good (#114).
+   Only what the migration turned off is put back: the record marks each task as it is
+   disabled, and one the scheduler refused to disable is neither enabled nor started, since
+   with read access alone both fail and every rollback would keep the record (#114). In a
+   record from an older build, which does not say, a task still enabled is left alone.
 6. Deletes `migration.json` and the snapshot. If anything above went wrong they are kept, and
    the report says what to do. A migration cut short (`migration status` says "part-way") is
    rolled back the same way.

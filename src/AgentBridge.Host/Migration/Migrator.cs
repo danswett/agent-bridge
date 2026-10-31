@@ -226,7 +226,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             foreach (var path in Checked(install)) { record.Checked.Add(new(path, MigrationRecord.Hash(path))); }
             foreach (var name in new[] { install.TaskName, install.DevBoxTaskName })
             {
-                if (runtime.Task(name) is { } task) { record.Tasks.Add(new(name, task.Enabled)); }
+                if (runtime.Task(name) is { } task) { record.Tasks.Add(new(name, task.Enabled) { Disabled = false }); }
             }
             record.Save(options.ProfileFolder);
         }
@@ -241,8 +241,21 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
 
         try
         {
-            // Turn over: the task first, so nothing restarts what is stopped next.
-            foreach (var task in record.Tasks.Where(t => t.Enabled)) { runtime.SetEnabled(task.Name, false); }
+            // Turn over: the task first, so nothing restarts what is stopped next. Each is recorded as
+            // turned off before it is, so a migration cut short there still turns it back on;
+            // one the scheduler refuses is recorded as untouched again, for the undo to leave.
+            foreach (var task in record.Tasks.Where(t => t.Enabled))
+            {
+                task.Disabled = true;
+                record.Save(options.ProfileFolder);
+                try { runtime.SetEnabled(task.Name, false); }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    task.Disabled = false;
+                    record.Save(options.ProfileFolder);
+                    throw;
+                }
+            }
             runtime.Stop(install);
             if (!await UntilAsync(() => runtime.Active() is null, options.StopTimeout, cancellationToken))
             {
@@ -637,7 +650,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             }
         }
 
-        var tasks = record.Tasks.Where(t => t.Enabled).ToList();
+        var tasks = record.Tasks.Where(t => t.Enabled && t.Disabled != false).ToList();
         if (dryRun)
         {
             Say("* Hook registrations, once the host has let go of the hook spool:");
@@ -667,10 +680,11 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             return new(false, lines);
         }
         Restore(registrations);
-        // Only what the migration turned off is put back. A task still enabled needs nothing: a
-        // migration that failed before it could disable one (Task Scheduler refused, #114) left it
-        // so, and enabling it again needs that same write access, so asking failed every rollback
-        // and kept the record for good. A daemon still running is not started a second time.
+        // Only what the migration turned off is put back (#114). One the scheduler refused to
+        // disable was never touched, and enabling or starting it needs the same access: asking
+        // failed every rollback and kept the record for good. A record from an older build does
+        // not say, so a task of it still enabled is left as it is. A daemon still running is not
+        // started a second time.
         var daemonRunning = runtime.Seen(record.InstallationId);
         var reenabled = new List<string>();
         foreach (var task in tasks)
@@ -692,21 +706,26 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
                 Say($"* {task.Name} could not be turned back on ({e.Message}); run agent-ha-bridge configure.");
             }
         }
-        var daemonTask = tasks.FirstOrDefault(t => t.Name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal));
+        // Waited for whether or not the migration turned its task off: the daemon must be running.
+        var daemonTask = record.Tasks.FirstOrDefault(t => t.Enabled && t.Name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal));
         if (daemonTask is not null)
         {
             // Seen, not merely uncheckable: a probe that cannot tell would otherwise pass for a daemon
             // back, and the record and snapshot be deleted with nothing running.
             if (await UntilAsync(() => runtime.Seen(record.InstallationId), options.StopTimeout, cancellationToken))
             {
+                var untouched = record.Tasks.Where(t => t.Enabled && t.Disabled == false).Select(t => t.Name).ToList();
+                var kept = untouched.Count > 0 ? untouched : [.. tasks.Select(t => t.Name).Except(reenabled)];
                 Say(reenabled.Count > 0
                     ? $"* Re-enabled {string.Join(" and ", reenabled)}; agent-ha-bridge is running again."
-                    : $"* {string.Join(" and ", tasks.Select(t => t.Name))} {(tasks.Count == 1 ? "was" : "were")} never turned off, and agent-ha-bridge is running.");
+                    : $"* {string.Join(" and ", kept)} {(kept.Count == 1 ? "was" : "were")} {(untouched.Count > 0 ? "never turned off" : "still enabled")}, and agent-ha-bridge is running.");
             }
             else
             {
                 ok = false;
-                Say($"* Re-enabled {daemonTask.Name}, but agent-ha-bridge was not seen running within {options.StopTimeout.TotalSeconds:0} s; check agent-ha-bridge status.");
+                Say(reenabled.Contains(daemonTask.Name)
+                    ? $"* Re-enabled {daemonTask.Name}, but agent-ha-bridge was not seen running within {options.StopTimeout.TotalSeconds:0} s; check agent-ha-bridge status."
+                    : $"* agent-ha-bridge was not seen running within {options.StopTimeout.TotalSeconds:0} s; check agent-ha-bridge status.");
             }
         }
 

@@ -1134,6 +1134,57 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Equal([$"enable {daemon}", $"start {daemon}"], _f.Runtime_.Calls);
     }
 
+    [Fact]
+    public async Task A_keep_awake_task_the_scheduler_refused_to_disable_is_neither_enabled_nor_started_by_the_undo()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        _f.Runtime_.Refused.Add(keepAwake);
+        _f.Runtime_.RefusalVisible = false;
+        var listing = _f.Listing();
+
+        var report = (await _f.Migrator().MigrateAsync(dryRun: false)).ToString();
+
+        Assert.Contains("Access is denied", report);
+        Assert.Contains($"* Re-enabled {daemon}; agent-ha-bridge is running again.", report);
+        Assert.Contains("Rolled back.", report);
+        Assert.Equal([$"disable {daemon}", $"disable {keepAwake}", $"enable {daemon}"], _f.Runtime_.Calls);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+        Assert.Equal(listing, _f.Listing());
+    }
+
+    [Fact]
+    public async Task A_record_says_which_tasks_the_migration_turned_off()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (false, false);
+
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        var record = MigrationRecord.Load(_f.Profile).Record!;
+        Assert.True(record.Tasks.Single(t => t.Name == daemon).Disabled);
+        Assert.False(record.Tasks.Single(t => t.Name == keepAwake).Disabled);
+    }
+
+    [Fact]
+    public async Task A_record_from_a_build_that_did_not_say_which_tasks_it_turned_off_still_rolls_back()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var path = MigrationRecord.PathIn(_f.Profile);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        foreach (var t in json["tasks"]!.AsArray()) { t!.AsObject().Remove("disabled"); }
+        File.WriteAllText(path, json.ToJsonString());
+        _f.Runtime_.Calls.Clear();
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.Equal([$"enable {daemon}", $"start {daemon}"], _f.Runtime_.Calls);
+    }
+
     [Theory]
     [InlineData(" Claude ", "claude", false)]
     [InlineData("gemini", "auto", true)]

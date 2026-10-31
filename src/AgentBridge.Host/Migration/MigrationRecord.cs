@@ -29,7 +29,14 @@ public sealed class MigrationRecord
     public List<CheckedFile> Checked { get; init; } = [];
     public HookRecord? Hook { get; set; }
 
-    public sealed record TaskRecord(string Name, bool Enabled);
+    public sealed record TaskRecord(string Name, bool Enabled)
+    {
+        // Whether this migration turned it off. A task the scheduler refused to disable was never
+        // touched, and a rollback must neither enable nor start it (#114): with read access alone
+        // both fail, and every rollback would keep the record. Null in a record from a build
+        // that did not say, where a rollback judges by the task's state now.
+        public bool? Disabled { get; set; }
+    }
 
     // A file migration rewrote. Changes is empty for the profile's own config.json, which is
     // restored whole or not at all.
@@ -72,7 +79,7 @@ public sealed class MigrationRecord
             ["bridgeHome"] = BridgeHome,
             ["startedAt"] = StartedAt.ToString("o"),
             ["migratedAt"] = MigratedAt?.ToString("o"),
-            ["tasks"] = new JsonArray(Tasks.Select(t => (JsonNode)new JsonObject { ["name"] = t.Name, ["enabled"] = t.Enabled }).ToArray()),
+            ["tasks"] = new JsonArray(Tasks.Select(t => (JsonNode)new JsonObject { ["name"] = t.Name, ["enabled"] = t.Enabled, ["disabled"] = t.Disabled }).ToArray()),
             ["files"] = new JsonArray(Files.Select(f => (JsonNode)new JsonObject
             {
                 ["role"] = f.Role,
@@ -125,7 +132,7 @@ public sealed class MigrationRecord
                 BridgeHome = S(o["bridgeHome"]),
                 StartedAt = DateTimeOffset.Parse(S(o["startedAt"]), System.Globalization.CultureInfo.InvariantCulture),
                 MigratedAt = Present(o, "migratedAt") is { } m ? DateTimeOffset.Parse((string)m!, System.Globalization.CultureInfo.InvariantCulture) : null,
-                Tasks = [.. Objects(o["tasks"], "tasks").Select(t => new TaskRecord(S(t["name"]), B(t["enabled"])))],
+                Tasks = [.. Objects(o["tasks"], "tasks").Select(t => new TaskRecord(S(t["name"]), B(t["enabled"])) { Disabled = (bool?)t["disabled"] })],
                 Files = [.. Objects(o["files"], "files").Select(f => new FileRecord
                 {
                     Role = S(f["role"]),

@@ -50,6 +50,24 @@ public class TaskAccessTests
     }
 
     [Fact]
+    public void A_denial_to_a_group_held_for_denial_only_still_refuses()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        // An unelevated administrator: Administrators is deny-only, so it matches the denial
+        // though the user is granted full access after it.
+        const string sddl = "D:(D;;GW;;;BA)(A;;FA;;;S-1-5-21-1-2-3-1000)";
+        Assert.False(TaskAccess.CanModify(sddl, User, [], [Administrators]));
+        Assert.True(TaskAccess.CanModify(sddl, User, [], []));
+    }
+
+    [Fact]
+    public void A_group_held_for_denial_only_never_grants()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.False(TaskAccess.CanModify(FromElevatedPrompt, User, [], [Administrators]));
+    }
+
+    [Fact]
     public void A_descriptor_that_cannot_be_read_leaves_the_answer_unknown()
     {
         if (!OperatingSystem.IsWindows()) { return; }
