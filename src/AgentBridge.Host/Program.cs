@@ -347,8 +347,10 @@ async Task<int> ServeAsync()
     // Before the connector, which launches from the card through it.
     // The host's own updates, from the machine's update entity: through the app's package, which
     // carries the host (Windows only: elsewhere nothing packages it yet). Installing ends this
-    // serve as Ctrl+C would, once the release is handed to the updater.
-    var hostUpdates = OperatingSystem.IsWindows() ? new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, profile, () => stop.Cancel(), Log) : null;
+    // serve as Ctrl+C would, once the release is handed to the updater. None on a read-only host
+    // (delivery.readOnly), which acts on nothing from another device: the buttons are withdrawn.
+    var hostUpdates = VelopackHostUpdates.For(ReadOnlyReason(), OperatingSystem.IsWindows(),
+        () => new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, profile, () => stop.Cancel(), Log));
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
         HaReplies.For(replies, attachments), stops, launcher, hostUpdates);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log), launcher, transfers)

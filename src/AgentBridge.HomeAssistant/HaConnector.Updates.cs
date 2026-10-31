@@ -214,18 +214,28 @@ public sealed partial class HaConnector
             if (install.Fresh)
             {
                 lock (gate) { updatePressNews = true; }
-                await InstallPressedAsync(now, ct);
+                // Design §6.3 invariant 13: no agent stops or restarts its host. An update does both,
+                // and Velopack stops every profile's host running from the package as it applies it,
+                // so a press made with an agent's account (homeAssistant.agentUserIds) is refused.
+                // Beyond parity: agent-ha-bridge's daemon does not ask who pressed.
+                if (install.Driver == "agent")
+                {
+                    log("Home Assistant connector: install press refused: it was made by an agent (homeAssistant.agentUserIds)");
+                    await TellAsync($"Bridge update not started on {options.MachineName}",
+                        "This press did not start an update: it was made by an agent, and an agent may not update the host, which stops and restarts it. A person must press Install.", ct);
+                }
+                else { await InstallPressedAsync(now, ct); }
             }
         }
     }
 
     // A press not seen before, and whether it was made since this connector started.
-    async Task<(string Value, bool Fresh)?> PressedAsync(string key, string? seen, CancellationToken ct)
+    async Task<(string Value, bool Fresh, string Driver)?> PressedAsync(string key, string? seen, CancellationToken ct)
     {
         var press = await ObserveAsync(UpdateEntity(key), ct);
         if (!press.Present || press.Value == seen) { return null; }
         var fresh = DateTimeOffset.TryParse(press.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at) && at > updateStartedAt;
-        return (press.Value, fresh);
+        return (press.Value, fresh, DriverOf(press.Snapshot?.UserId));
     }
 
     // Get-BridgeUpdateStatus, forced or on the interval. Run beside the passes: a release feed

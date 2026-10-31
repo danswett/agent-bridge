@@ -13,6 +13,17 @@ public sealed class HostUpdatesTests : IDisposable
     }
 
     [Fact]
+    public void A_read_only_host_is_given_no_updater_and_so_serves_no_update_buttons()
+    {
+        var made = 0;
+        IHostUpdates Make() { made++; return new VelopackHostUpdates(root, "default", () => { }, _ => { }); }
+        Assert.Null(VelopackHostUpdates.For(HostSettings.ReadOnlyReason, windows: true, Make));
+        Assert.Null(VelopackHostUpdates.For(null, windows: false, Make));
+        Assert.Equal(0, made);
+        Assert.NotNull(VelopackHostUpdates.For(null, windows: true, Make));
+    }
+
+    [Fact]
     public void The_app_is_restarted_for_the_profile_of_the_host_that_installed_the_update()
     {
         Assert.Equal(["--background", "--profile", "work"], VelopackHostUpdates.RestartArguments("work"));

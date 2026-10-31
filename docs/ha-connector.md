@@ -578,7 +578,8 @@ its "Include pre-releases" setting. `latest_version` on a migrated machine is th
 agent-bridge version, never agent-ha-bridge's. A copy its updater did not install (a build
 folder, or a platform it does not package yet) serves no buttons and reports its own version as
 current, as stage 1 did; so does a host with `homeAssistant.updates.checkForUpdates` off, which
-looks nothing up.
+looks nothing up, and a read-only host (`delivery.readOnly`), which acts on nothing from another
+device.
 
 * **Checks.** At start, every `homeAssistant.updates.checkHours` (0.5, as the daemon's
   `updates.checkHours`; at least 0.1), and on a press of Check, beside the passes so a slow feed
@@ -600,8 +601,12 @@ looks nothing up.
   attempt in the connector's state file (an attempt that cannot be recorded is not handed
   over: the host that came back could not say how it ended), shows `restarting` and hands the
   release to Velopack,
-  which applies it once the host has exited; the host then stops as on Ctrl+C. Velopack starts
-  the app again in the background for the host's profile, and the app starts the host. While an
+  which applies it once the host has exited; the host then stops as on Ctrl+C. Velopack
+  force-stops everything else running from the package folder (the app, and every other
+  profile's host, with their sessions' delivery), starts the app again in the background for the
+  host's profile, and the app starts the host. A press made with an agent's account
+  (`agentUserIds`) is refused with **Bridge update not started on `<machine>`**: a person must
+  press it (below). While an
   update runs a press of Check looks nothing up: the install found its release itself. A press with nothing newer says
   `current` and notifies **No newer bridge release on `<machine>`**; one whose download or
   hand-over fails says `failed` with the reason, notifies **Bridge update failed on
@@ -635,7 +640,8 @@ Where stage 6 knowingly differs from the daemon:
 | No check is forced because another machine's entity reports a newer `latest_version` (`Test-DaemonPeerUpdateNotice`) | Machines on agent-ha-bridge report agent-ha-bridge versions on the same entity; comparing across products would be wrong both ways. A daemon reading a host's lower version does nothing with it |
 | The outcome is the host seeing its own version after the restart, not an updater's outcome file | Velopack applies the update out of process and leaves no outcome; the version the host comes back on is the evidence. Its notice says the host restarted on it, which the daemon could not observe |
 | Install checks the feed itself rather than an `agent-ha-bridge update` child, and refuses a second press from the host's own state | One host per machine and user (its mutex), so the host knows whether it is updating; there is no lock file to share |
-| Agents may press Install, as on the daemon | The update replaces the host's own files; it touches no session, and the app restarts the host |
+| An agent may not press Install: a press made with an account in `agentUserIds` starts nothing and gets **Bridge update not started on `<machine>`**, saying a person must press it. Check is still an agent's to press | Design §6.3 invariant 13: no agent stops or restarts its host. An update does both, and Velopack stops every profile's host running from the package folder while it applies it. The daemon (`Sync-DaemonUpdateStatus`) does not ask who pressed |
+| A read-only host (`delivery.readOnly`) serves neither button, as a copy its updater did not install | It acts on nothing from another device, and an update restarts it |
 
 ### The shadow: comparing with a running daemon
 

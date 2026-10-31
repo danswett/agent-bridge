@@ -32,13 +32,18 @@ public sealed class UpdateTests : IDisposable
 
     string StateFile => Path.Combine(folder, "ha-connector.json");
 
+    const string AgentUser = "agent-user";
+    // No updater at all: what serve passes for a read-only host.
+    bool noUpdater;
+
     HaConnector Connector(bool check = true, IHostUpdates? updater = null) => new(new HaConnectorOptions
     {
         MachineName = Machine,
         Version = "0.0.9-host",
         StateFile = StateFile,
         CheckForUpdates = check,
-    }, ha, sessions, () => daemon, log: m => { lock (log) { log.Add(m); } }, time: time, updates: updater ?? updates);
+        AgentUserIds = [AgentUser],
+    }, ha, sessions, () => daemon, log: m => { lock (log) { log.Add(m); } }, time: time, updates: noUpdater ? null : updater ?? updates);
 
     async Task Pass(HaConnector c, double seconds = 1)
     {
@@ -144,6 +149,42 @@ public sealed class UpdateTests : IDisposable
         Assert.Equal("0.0.9-host", State["installed_version"]!.GetValue<string>());
         Assert.Equal(0, updates.Checks);
         Assert.DoesNotContain(c.WatchedEntities(), e => e.Contains("update", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_read_only_host_given_no_updater_withdraws_both_buttons_and_looks_nothing_up()
+    {
+        foreach (var button in HaContract.UpdateButtonConfigs(Slug, Machine)) { ha.Seed(button.Topic, HaContract.Serialize(button.Config)); }
+        noUpdater = true;
+        await using var c = await Ready();
+        foreach (var button in HaContract.UpdateButtonConfigs(Slug, Machine)) { Assert.False(ha.Retained.ContainsKey(button.Topic), button.Topic); }
+        Assert.Equal("0.0.9-host", State["latest_version"]!.GetValue<string>());
+        Assert.Equal(0, updates.Checks);
+    }
+
+    [Fact]
+    public async Task An_agents_press_of_Install_starts_nothing_and_says_a_person_must_press_it()
+    {
+        updates.Newer = Release();
+        await using var c = await Ready();
+        c.Observe(ha.Press(Button("install_update"), AgentUser));
+        await Pass(c, 0.01);
+        await Pass(c);
+        var (_, data) = Assert.Single(ha.NotifiedNow());
+        Assert.Equal($"Bridge update not started on {Machine}", data["title"]!.GetValue<string>());
+        Assert.Contains("A person must press Install", data["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal($"agent_bridge_update_{Slug}", data["notification_id"]!.GetValue<string>());
+        Assert.Equal(1, updates.Checks);
+        Assert.Empty(updates.Downloaded);
+        Assert.Empty(updates.Applied);
+        Assert.Equal("", Stage);
+        // An agent may still ask for a check; and a person's press goes ahead.
+        c.Observe(ha.Press(Button("check_updates"), AgentUser));
+        await Pass(c, 0.01);
+        await Pass(c);
+        Assert.Equal(2, updates.Checks);
+        await Press(c, "install_update");
+        await Settle(c, () => updates.Applied.Count == 1);
     }
 
     [Fact]

@@ -128,6 +128,12 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
         found.Downloaded = true;
     }
 
+    // The updater serve hands the connector: none on a read-only host, which may be driven from no
+    // other device (an update would restart it, and every other profile's host in the package),
+    // nor where nothing packages the host.
+    internal static IHostUpdates? For(string? readOnlyReason, bool windows, Func<IHostUpdates> make) =>
+        readOnlyReason is null && windows ? make() : null;
+
     // What the app is started with after the update: in the background, for this host's profile
     // (the app starts the host of the profile it opens, and defaults to "default").
     internal static string[] RestartArguments(string profile) => ["--background", "--profile", profile];
