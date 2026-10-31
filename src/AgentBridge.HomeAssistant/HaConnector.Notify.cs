@@ -31,11 +31,17 @@ public sealed partial class HaConnector
     // withdrawn from a phone when its clear failed, it missed the question that replaced it, or the
     // host stopped first. Kept in the ledger.
     readonly Dictionary<string, Dictionary<string, string>> onPhones = new(StringComparer.Ordinal);
-    // Taps the listener has taken, waiting for a pass, each with the attempt it was first read
-    // against once it has been: a tap tried again after a failure is the same answer, not a new one.
+    // Taps the listener has taken, waiting for a pass. Each is known by the event Home Assistant
+    // fired for it (its context id), so the same event, however often it is read, is one tap, and a
+    // new tap of the same button is a new one, whatever was remembered of the last (a refusal the
+    // host keeps for a quarter of an hour, across a resume that re-arms the question). The attempt
+    // it was first read against is kept with it: a tap tried again after a failure is the same
+    // answer, not a new one.
     sealed class PendingTap(HaEvent e)
     {
         public HaEvent Event { get; } = e;
+        // An event with no id of its own (none seen from Home Assistant) is still one tap.
+        public string Key { get; } = e.Id is { Length: > 0 } id ? id : "local-" + Guid.NewGuid().ToString("N");
         public int? Attempt;
     }
     readonly ConcurrentQueue<PendingTap> taps = new();
@@ -299,14 +305,24 @@ public sealed partial class HaConnector
             log($"Home Assistant connector: an answer button for {who} was refused already; ignored");
             return;
         }
+        // The same event again (Home Assistant delivering it twice, or a tap read again after a
+        // failure) once its answer has been given: never a second answer.
+        if (armed.PhoneTaps.Contains(pending.Key)) { return; }
         pending.Attempt = armed.Attempts;
-        if (PhoneAnswer(choice, armed, pending.Attempt.Value, DriverOf(tap.UserId)) is not { } read)
+        if (PhoneAnswer(choice, armed, pending.Key, DriverOf(tap.UserId)) is not { } read)
         {
             log($"Home Assistant connector: an answer button for {who} names no answer this question takes; ignored");
             return;
         }
         if (read.Press == armed.UsedPress) { return; }
-        var delivered = await DeliverAsync(choice.SessionId, p, armed, read, read.Request!, now, ct);
+        AnswerOutcome? delivered;
+        try { delivered = await DeliverAsync(choice.SessionId, p, armed, read, read.Request!, now, ct); }
+        finally
+        {
+            // Given to the host (the press is marked used just before): this event is spent, even
+            // if saying what came of it failed.
+            if (armed.UsedPress == read.Press) { armed.PhoneTaps.Add(pending.Key); }
+        }
         if (delivered == AnswerOutcome.Delivered)
         {
             log($"Home Assistant connector: answered from a phone for {who}");
@@ -315,15 +331,14 @@ public sealed partial class HaConnector
     }
 
     // What a tap answers, or null: an option by its button's index, or words typed at the text action.
-    Read? PhoneAnswer(TapChoice choice, Armed armed, int attempt, string driver)
+    Read? PhoneAnswer(TapChoice choice, Armed armed, string tap, string driver)
     {
         var plan = armed.Plan;
         var sessionId = choice.SessionId;
-        // One tap, however often it arrives: the same button, or the same words, for the attempt it
-        // was first read against. A delivery the host refused counts an attempt, so the same button
-        // tapped again after one is a new answer, while the refused tap, read again after a failure
-        // to say so, is still the one already used.
-        var press = $"phone:{attempt}:{choice.Index}:{choice.ReplyText}";
+        // One tap, however often it arrives, and only that tap: its event's id makes the request
+        // id the host remembers outcomes by, so a new tap of the same button after a refusal is
+        // tried again rather than answered from the refusal.
+        var press = $"phone:{tap}:{choice.Index}:{choice.ReplyText}";
         if (!string.IsNullOrWhiteSpace(choice.ReplyText))
         {
             var text = choice.ReplyText.Trim();

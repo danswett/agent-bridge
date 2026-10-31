@@ -95,7 +95,8 @@ public sealed class NotifyTests : IDisposable
 
     static string ActionOf(JsonObject buttons, int i) => buttons["data"]!["actions"]![i]!["action"]!.GetValue<string>();
 
-    void Tap(HaConnector c, string action, string? reply = null, string decision = "q1", string session = A, string? user = "person")
+    // A tap, as Home Assistant fires it: each a new event unless one is given.
+    void Tap(HaConnector c, string action, string? reply = null, string decision = "q1", string session = A, string? user = "person", string? id = null)
     {
         var data = new JsonObject
         {
@@ -103,7 +104,7 @@ public sealed class NotifyTests : IDisposable
             ["action_data"] = new JsonObject { ["bridge"] = "decision", ["session"] = session, ["decision"] = decision },
         };
         if (reply is not null) { data["reply_text"] = reply; }
-        c.Tapped(new HaEvent(HaNotify.ActionEvent, JsonSerializer.SerializeToElement(data), user));
+        c.Tapped(new HaEvent(HaNotify.ActionEvent, JsonSerializer.SerializeToElement(data), user, id ?? Guid.NewGuid().ToString("N")));
     }
 
     static NotifyMarker MarkerOf(JsonNode m) => new(
@@ -790,6 +791,59 @@ public sealed class NotifyTests : IDisposable
         Tap(c, "BRIDGE_q1_1");
         await Pass(c);
         Assert.Equal(["b"], Assert.Single(answered).Fields!["pick"].EnumerateArray().Select(e => e.GetString()));
+    }
+
+    [Fact]
+    public async Task A_button_refused_before_a_resume_and_tapped_again_after_it_is_delivered()
+    {
+        // The host remembers what came of each request for a while, refusals included
+        // (OutcomeMemory): a new tap must not be answered from what an earlier one was told.
+        var remembered = new Dictionary<string, AnswerResult>(StringComparer.Ordinal);
+        var refuse = true;
+        outcome = r => remembered.TryGetValue(r.Request, out var known) ? known
+            : remembered[r.Request] = refuse ? new AnswerResult(AnswerOutcome.Refused, "agent-ha-bridge is running") : new AnswerResult(AnswerOutcome.Delivered);
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        Tap(c, "BRIDGE_q1_0");
+        await Pass(c);
+        Assert.Equal("Answer NOT sent", ha.Retained[HaContract.Topics(Node).ActivityState]);
+
+        daemon = "agent-ha-bridge's daemon (pid 4242)";
+        await Pass(c);
+        daemon = null;
+        refuse = false;
+        await Pass(c);
+        Assert.Equal(2, Buttons().Count);
+        Tap(c, "BRIDGE_q1_0");
+        await Pass(c);
+        Assert.Equal(2, answered.Count);
+        Assert.NotEqual(answered[0].Request, answered[1].Request);
+        Assert.Equal("Answer sent", ha.Retained[HaContract.Topics(Node).ActivityState]);
+    }
+
+    [Fact]
+    public async Task The_same_tap_event_delivered_twice_is_answered_once()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        Tap(c, "BRIDGE_q1_0", id: "event-1");
+        Tap(c, "BRIDGE_q1_0", id: "event-1");
+        await Pass(c);
+        Assert.Single(answered);
+
+        // Refused, then another tap refused, then the first event again: still only the two.
+        Ask(Form("q2", Release));
+        await Pass(c);
+        outcome = _ => new AnswerResult(AnswerOutcome.Refused, "busy");
+        Tap(c, "BRIDGE_q2_0", decision: "q2", id: "event-2");
+        await Pass(c);
+        Tap(c, "BRIDGE_q2_1", decision: "q2", id: "event-3");
+        await Pass(c);
+        Tap(c, "BRIDGE_q2_0", decision: "q2", id: "event-2");
+        await Pass(c);
+        Assert.Equal(3, answered.Count);
     }
 
     [Fact]

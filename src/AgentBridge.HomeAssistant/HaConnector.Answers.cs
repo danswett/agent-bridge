@@ -30,6 +30,8 @@ public sealed partial class HaConnector
         public string? SpentPress;
         // A press or a publish already used, so it is never delivered twice.
         public string? UsedPress;
+        // The phone taps (by event) already given to the host for this question.
+        public readonly HashSet<string> PhoneTaps = new(StringComparer.Ordinal);
         public string? UsedStamp;
         // An answer reached, or may have reached, the terminal: never typed again.
         public bool Settled;

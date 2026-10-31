@@ -187,6 +187,8 @@ public class ClientTests
             """), HaNotify.ActionEvent);
         Assert.NotNull(tap);
         Assert.Equal("u-phone", tap.UserId);
+        Assert.Equal("c", tap.Id);
+        Assert.Equal("fired:2026-10-31T04:00:00.000000+00:00", HomeAssistantClient.Event(Message("""{"id":1,"type":"event","event":{"event_type":"mobile_app_notification_action","data":{},"time_fired":"2026-10-31T04:00:00.000000+00:00"}}"""), HaNotify.ActionEvent)!.Id);
         Assert.Equal("BRIDGE_q1_0", tap.Data.GetProperty("action").GetString());
         Assert.Null(HomeAssistantClient.Event(Message("""{"id":1,"type":"event","event":{"event_type":"mobile_app_notification_action","data":{},"context":{"user_id":null}}}"""), HaNotify.ActionEvent)!.UserId);
         Assert.Null(HomeAssistantClient.Event(Message("""{"id":1,"type":"event","event":{"event_type":"state_changed","data":{}}}"""), HaNotify.ActionEvent));

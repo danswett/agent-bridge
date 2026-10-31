@@ -520,7 +520,10 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   `agent`-driven when the tapping account is in `agentUserIds`. A tap for a session that is not
   live, for an earlier question, or after the question was answered, answers nothing, and so does
   an action the notification does not offer (another action ending in a number, or a button past
-  `maxButtons`). The same button tapped again after the host refused the answer is tried again.
+  `maxButtons`). Each tap is known by its Home Assistant event (`context.id`), which is part of
+  the request id the host remembers outcomes by: the same event read twice is one answer, and the
+  same button tapped again after a refusal, even after a resume re-arms the question, is tried
+  again rather than answered from the remembered refusal.
 * **Withdrawn** (`clear_notification` by tag, at every phone that has it) once a tap is
   delivered, when the question is answered anywhere else or replaced, and when the session ends.
   A phone that could not be reached, or that missed the question replacing the one it shows, is

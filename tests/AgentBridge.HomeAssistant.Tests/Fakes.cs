@@ -176,8 +176,8 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     }
 
     // A phone's tap, as Home Assistant fires it.
-    public void Fire(string eventType, JsonObject data, string? userId = "person") =>
-        events.Writer.TryWrite(new HaEvent(eventType, JsonSerializer.SerializeToElement(data), userId));
+    public void Fire(string eventType, JsonObject data, string? userId = "person", string? id = null) =>
+        events.Writer.TryWrite(new HaEvent(eventType, JsonSerializer.SerializeToElement(data), userId, id ?? Guid.NewGuid().ToString("N")));
 
     public async IAsyncEnumerable<HaEvent> EventsAsync(string eventType, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {

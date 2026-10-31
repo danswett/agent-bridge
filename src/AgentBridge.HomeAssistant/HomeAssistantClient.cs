@@ -72,8 +72,9 @@ public static class HaImageId
 // the clock its press timestamps are on too; LastUpdated when its state or attributes last did.
 public sealed record HaState(string EntityId, string State, JsonElement Attributes, string? UserId = null, DateTimeOffset? LastChanged = null, DateTimeOffset? LastUpdated = null);
 
-// One event, with the account behind it (context.user_id) when there was one.
-public sealed record HaEvent(string EventType, JsonElement Data, string? UserId);
+// One event, with the account behind it (context.user_id) when there was one, and what tells it
+// from every other event: its context id, or the time it was fired when it has none.
+public sealed record HaEvent(string EventType, JsonElement Data, string? UserId, string? Id = null);
 
 // One change a watch reported. A removed entity is not a change (Get-BridgeStateTriggerHit).
 public sealed record HaTrigger(string EntityId, HaState State);
@@ -382,7 +383,11 @@ public sealed class HomeAssistantClient : IHomeAssistant
         {
             return null;
         }
-        return new HaEvent(eventType, data.Clone(), UserId(e));
+        string? id = null;
+        if (e.TryGetProperty("context", out var context) && context.ValueKind == JsonValueKind.Object
+            && context.TryGetProperty("id", out var cid) && cid.ValueKind == JsonValueKind.String && cid.GetString() is { Length: > 0 } c) { id = c; }
+        else if (e.TryGetProperty("time_fired", out var fired) && fired.ValueKind == JsonValueKind.String && fired.GetString() is { Length: > 0 } f) { id = "fired:" + f; }
+        return new HaEvent(eventType, data.Clone(), UserId(e), id);
     }
 
     public async Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default)
