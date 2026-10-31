@@ -130,7 +130,12 @@ $AutoShutdownUtc = '0800'
 $HyperloopPort = 4850
 $Tags = @('purpose=rehearsal-39', 'owner=danswett', 'lifetime=delete-after-rehearsal')
 $KnownHostsPath = Join-Path $HOME '.ssh/known_hosts_agentbridge-rehearsal'
-$StateDir = if ($SecretFile) { Split-Path $SecretFile } else { Join-Path $HOME '.agentbridge-rehearsal' }
+# Relative paths resolve against the current location, so Split-Path always finds a parent.
+foreach ($name in 'SecretFile', 'AdminKeyPath', 'TunnelPublicKeyPath', 'HyperloopDirectory', 'AzureConfigDir') {
+    $value = Get-Variable -Name $name -ValueOnly
+    if ($value) { Set-Variable -Name $name -Value $PSCmdlet.GetUnresolvedProviderPathFromPSPath($value) }
+}
+$StateDir = Split-Path $SecretFile
 
 $env:AZURE_CONFIG_DIR = $AzureConfigDir
 
@@ -514,8 +519,17 @@ Remove-ItemProperty -Path $wl -Name AutoLogonCount -ErrorAction SilentlyContinue
 # PIN: the NSG and Windows Firewall keep its port to loopback, i.e. to the SSH tunnel. --no-setup
 # so it changes nothing on the machine (no firewall openings) by itself.
 $GuestHyperloopTask = @'
-$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" `
-    -Argument '/k ""C:\Tools\hyperloop-server.exe" --mode tcp:__HL_PORT__ --no-auth --no-setup"'
+# Every logon checks both binaries are validly signed by Microsoft before the server starts.
+$launcher = @"
+foreach (`$f in 'C:\Tools\hyperloop.exe', 'C:\Tools\hyperloop-server.exe') {
+    `$s = Get-AuthenticodeSignature `$f
+    if (`$s.Status -ne 'Valid' -or `$s.SignerCertificate.Subject -notmatch '^CN=Microsoft Corporation,') { exit 1 }
+}
+Start-Process "`$env:SystemRoot\System32\cmd.exe" -ArgumentList '/k ""C:\Tools\hyperloop-server.exe" --mode tcp:__HL_PORT__ --no-auth --no-setup"'
+"@
+$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($launcher))
+$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+    -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encoded"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User '__ADMIN_USER__'
 # Started at the instant of logon, the server accepted TCP but never completed a TLS handshake;
 # a short delay lets the session settle first.
@@ -842,6 +856,12 @@ Invoke-VmRunCommand -Script $GuestTools | Write-Verbose
 
 Write-Step 'Hyperloop server at logon'
 if ($HyperloopDirectory) {
+    foreach ($exe in 'Hyperloop-server.exe', 'Hyperloop.exe') {
+        $sig = Get-AuthenticodeSignature (Join-Path $HyperloopDirectory $exe)
+        if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch '^CN=Microsoft Corporation,') {
+            throw "$exe in $HyperloopDirectory is not a valid Microsoft-signed binary ($($sig.Status))"
+        }
+    }
     if (Test-Ssh $ip) {
         foreach ($pair in @(@('Hyperloop-server.exe', 'hyperloop-server.exe'), @('Hyperloop.exe', 'hyperloop.exe'))) {
             & scp @(Get-SshArgument $ip) -q (Join-Path $HyperloopDirectory $pair[0]) "${AdminUser}@${ip}:C:/Tools/$($pair[1])"
