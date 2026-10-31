@@ -1016,6 +1016,34 @@ public sealed class ShadowTests : IDisposable
         Assert.Equal([.. reader.Entities.Select(e => "/api/states/" + e)], inner.Seen.Select(r => r.Path));
     }
 
+    // Found in review (#105): an empty sensor of this daemon's own cleared the history of the
+    // reader's figure standing in for it, so that figure never held from one read to the next.
+    [Fact]
+    public async Task The_readers_unchanged_figure_holds_across_reads_where_the_daemons_own_sensor_is_empty()
+    {
+        var now = f.Time.GetUtcNow();
+        var measured = now;
+        var inner = new FakeHomeAssistant(entity => entity switch
+        {
+            "sensor.agent_bridge_fixture_usage_copilot_2" => new JsonObject
+            {
+                ["entity_id"] = entity,
+                ["state"] = "unknown",
+                ["attributes"] = new JsonObject { ["client"] = "copilot", ["machine_slug"] = "fixture" },
+            }.ToJsonString(),
+            "select.agent_bridge_fixture_new_resume" => ResumeState("Agency on OTHER-PC: Shared from there (abcdef12)"),
+            "sensor.agent_bridge_other_pc_usage_copilot_2" => UsageState("copilot", 52, measured, account: "second-login", slug: "other_pc"),
+            _ => null,
+        });
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        Config();
+        var host = new Dictionary<string, ShadowUsage> { ["copilot_2"] = Reading(52, now, "second-login") };
+        Assert.Equal(52d, (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!, host)).Usage!["copilot_2"].Windows["monthly"]);
+        f.Time.Advance(TimeSpan.FromMinutes(4));
+        measured = f.Time.GetUtcNow();
+        Assert.Equal(now, (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!, host)).Usage!["copilot_2"].HeldSince);
+    }
+
     [Fact]
     public async Task A_named_machine_that_cannot_be_read_leaves_the_daemons_lapsed_figure_not_compared_and_the_rest_compared()
     {

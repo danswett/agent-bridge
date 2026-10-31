@@ -232,7 +232,8 @@ public sealed class DaemonHaReader : IDisposable
         {
             var readAt = clock.GetUtcNow();
             var usage = new Dictionary<string, ShadowUsage>(StringComparer.Ordinal);
-            var absent = new List<string>();
+            // Places with no reading of this daemon's own: no sensor, or one with no figure.
+            var absent = new Dictionary<string, ShadowUsage?>(StringComparer.Ordinal);
             foreach (var (client, entity) in usageEntities)
             {
                 if (await GetAsync(access, entity, ct) is { } state && Usage(state) is var u)
@@ -240,24 +241,30 @@ public sealed class DaemonHaReader : IDisposable
                     // A lapsed figure keeps no history: the account reader's, which stands in for it
                     // (ReadersAsync), keeps it under the same agent, and alternating the two would
                     // start the reader's afresh at every read.
-                    usage[client] = access.UsagePace.Lapsed(u.MeasuredAt, readAt)
-                        ? u with { Lapsed = true }
-                        : Stood(client, u with { ConfirmedAt = access.UsagePace.ConfirmedAt(u.MeasuredAt, readAt) }, readAt);
+                    // An empty one is held back until the readers are looked at: put through Stood
+                    // first, it cleared the history of the reader's figure that stands in for it, so
+                    // that figure never held from one read to the next (found in review, #105).
+                    if (access.UsagePace.Lapsed(u.MeasuredAt, readAt)) { usage[client] = u with { Lapsed = true }; }
+                    else if (!u.Reading) { absent[client] = u; }
+                    else { usage[client] = Stood(client, u with { ConfirmedAt = access.UsagePace.ConfirmedAt(u.MeasuredAt, readAt) }, readAt); }
                 }
-                else { absent.Add(client); }
+                else { absent[client] = null; }
             }
             var resume = await GetAsync(access, resumeEntity, ct);
             var wanted = usage.Where(u => u.Value.Lapsed).Select(u => (u.Key, Account: AccountOf(u.Value)))
-                .Concat(usageEntities.Select(u => u.Client)
-                    .Where(c => !usage.TryGetValue(c, out var own) || !own.Reading)
-                    .Select(c => (Key: c, Account: host?.GetValueOrDefault(c) is { Reading: true } h ? AccountOf(h) : null)))
+                .Concat(absent.Keys.Select(c => (Key: c, Account: host?.GetValueOrDefault(c) is { Reading: true } h ? AccountOf(h) : null)))
                 .Where(w => w.Account is { Length: > 0 })
                 .Select(w => (w.Key, w.Account!))
                 .DistinctBy(w => w.Key, StringComparer.Ordinal)
                 .ToList();
             if (wanted.Count > 0) { await ReadersAsync(access, wanted, usage, resume, readAt, ct); }
-            // A place with nothing of its own and no reader's figure either starts afresh next time.
-            foreach (var client in absent.Where(c => !usage.ContainsKey(c))) { standing.Remove(client); }
+            // A place with nothing of its own and no reader's figure either starts afresh next time,
+            // and shows what its own sensor has, if anything.
+            foreach (var (client, own) in absent.Where(a => !usage.ContainsKey(a.Key)))
+            {
+                standing.Remove(client);
+                if (own is not null) { usage[client] = own; }
+            }
             return resume is not { } r
                 ? new(usage, null, null, "the daemon has not published a resume list")
                 : new(usage, null, Labels(r), null);
