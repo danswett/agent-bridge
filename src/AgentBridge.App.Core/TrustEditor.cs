@@ -55,18 +55,22 @@ public sealed class TrustEditor
     {
         Interlocked.Increment(ref pending);
         await slot.WaitAsync();
+        HostSettingsView saved;
         try
         {
             var now = (await host.CallAsync<HostStatus>(HostOps.Status)).Settings;
-            var saved = change(now) is { } request ? (await host.CallAsync<SettingsResult>(HostOps.Settings, request)).Settings : now;
+            saved = change(now) is { } request ? (await host.CallAsync<SettingsResult>(HostOps.Settings, request)).Settings : now;
             Acknowledge(saved);
-            return saved;
         }
         finally
         {
             Interlocked.Decrement(ref pending);
             slot.Release();
         }
+        // A status that came while this was on its way was not checked then; the reply may be
+        // older than it (a change at the terminal in between).
+        Check();
+        return saved;
     }
 
     void Acknowledge(HostSettingsView saved)

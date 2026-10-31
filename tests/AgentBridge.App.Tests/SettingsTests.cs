@@ -206,6 +206,34 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_status_that_arrives_while_a_change_is_on_its_way_is_checked_once_the_change_is_in()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        host.On(HostOps.Settings, d =>
+        {
+            var saved = new HostSettingsView(true, RemoteFolderTrust: true,
+                RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]);
+            // Saved, then this app revoked at the machine's terminal before the reply went: that
+            // status arrives first.
+            host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [b]) };
+            host.SendAsync(HostOps.StatusEvent, host.Status).GetAwaiter().GetResult();
+            return new SettingsResult(saved, false);
+        });
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
+        await Connected();
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+
+        settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "the phone approved");
+        await Wait.UntilAsync(() => !settings.TrustDevices.Single(d => d.Id == a).Approved && settings.TrustDevices.Single(d => d.Id == b).Approved, "what the host has now");
+    }
+
+    [Fact]
     public async Task A_device_ticked_and_unticked_quickly_ends_unapproved_and_so_does_the_switch()
     {
         const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
