@@ -11,16 +11,22 @@ namespace AgentBridge.App.Core;
 // ApplyUpdatesAndRestart, whose new version starts the host again. The new version's first start
 // shows a toast saying what changed (Announce).
 //
-// Never for a read-only host (delivery.readOnly, which may be driven from no other device), where
-// agent-ha-bridge runs for this user (G5), or while another profile's app or host runs from this
+// A read-only host (delivery.readOnly) and one beside a running agent-ha-bridge (G5) update too:
+// those rules guard what other devices may do to this machine (the Home Assistant connector's
+// Install button among them), and replacing this app and its host touches neither the sessions'
+// consoles nor agent-ha-bridge. Never while another profile's app or host runs from this
 // installation (Velopack stops every process in the package, busy or not, and restarts only this
-// profile): those are the person's to update from Settings. And never when the host cannot say
-// which it is (not running, or its sessions not yet read in full). Only this app's timer starts
-// it: nothing an agent can reach does.
+// profile), or while the host cannot say what its sessions are doing (not running, or its
+// sessions not yet read in full). Only this app's timer starts it: nothing an agent can reach
+// does.
 public sealed class AutoUpdater
 {
     public static readonly TimeSpan CheckEvery = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan WaitAtMost = TimeSpan.FromHours(6);
+    // How long the host must have been idle, seen at every tick and every session change, before
+    // it counts: long past the moment a snapshot is replaced (sessions.subscribe again after a gap),
+    // whose upserts arrive within seconds even if an earlier sessions.synced closed it early.
+    public static readonly TimeSpan IdleFor = TimeSpan.FromMinutes(2);
 
     readonly IUpdater updater;
     readonly HostConnection host;
@@ -28,19 +34,18 @@ public sealed class AutoUpdater
     readonly Func<AppPreferences> prefs;
     readonly Action<AppPreferences> save;
     readonly Action<string> log;
-    readonly Func<string?> agentHaBridge;
     readonly Func<int?, string?> othersInPackage;
     readonly TimeProvider time;
     DateTimeOffset? checkedAt;
     DateTimeOffset foundAt;
+    DateTimeOffset? idleSince;
     string? lastWhyNot;
     int busy;
 
-    // agentHaBridge: G5 asked now, by this app itself, rather than as the host last reported it.
     // othersInPackage(this host's pid): another profile's app or host running from this
     // installation, which an update would stop; null when there is none.
     public AutoUpdater(IUpdater updater, HostConnection host, HostManager manager, Func<AppPreferences> prefs, Action<AppPreferences> save, Action<string> log,
-        Func<string?> agentHaBridge, Func<int?, string?> othersInPackage, TimeProvider? time = null)
+        Func<int?, string?> othersInPackage, TimeProvider? time = null)
     {
         this.updater = updater;
         this.host = host;
@@ -48,9 +53,10 @@ public sealed class AutoUpdater
         this.prefs = prefs;
         this.save = save;
         this.log = log;
-        this.agentHaBridge = agentHaBridge;
         this.othersInPackage = othersInPackage;
         this.time = time ?? TimeProvider.System;
+        // A turn starting or a question arriving between ticks starts the idle wait again.
+        host.Sessions.Upserted += s => { if (Busy(s)) { idleSince = null; } };
     }
 
     // The release found and downloaded, waiting to be installed.
@@ -61,25 +67,27 @@ public sealed class AutoUpdater
     {
         if (!prefs().AutoUpdate) { return "Install updates automatically is off"; }
         if (updater.InstalledVersion is null) { return "this is a development copy"; }
-        if (host.State != LinkState.Connected || host.Status is not { } status)
+        if (host.State != LinkState.Connected || host.Status is null)
         {
-            return "the host is not running, so whether it is read-only or agent-ha-bridge's cannot be told";
+            return "the host is not running, so whether its sessions are busy cannot be told";
         }
-        return Refusal(status);
+        return null;
     }
 
-    static string? Refusal(HostStatus status) =>
-        status.Machine.ReadOnly is { } readOnly ? $"the host is read-only ({readOnly})"
-        : status.AgentHaBridge is { } running ? $"agent-ha-bridge runs for this user (G5): {running}"
-        : null;
+    static bool Busy(Session s) => s.Question is not null || s.Status is SessionStatus.Working or SessionStatus.Waiting;
 
     // No turn running and no question waiting on this machine's host, as its whole snapshot says:
     // a list still being read may be missing the busy session. Another machine's sessions are its
     // own host's: an update here restarts only this one.
-    public bool Idle => host.Sessions.Complete
-        && host.Sessions.All.All(s => s.Question is null && s.Status is not (SessionStatus.Working or SessionStatus.Waiting));
+    public bool Idle => host.Sessions.Complete && !host.Sessions.All.Any(Busy);
 
-    bool Due(DateTimeOffset now) => Idle || now - foundAt >= WaitAtMost;
+    // Idle now and for IdleFor without a break, or waited six hours.
+    bool Due(DateTimeOffset now)
+    {
+        if (!Idle) { idleSince = null; }
+        else { idleSince ??= now; }
+        return (idleSince is { } since && now - since >= IdleFor) || now - foundAt >= WaitAtMost;
+    }
 
     // The app calls this on start and every minute. Checks when one is due, and installs when it may.
     public async Task TickAsync()
@@ -87,8 +95,9 @@ public sealed class AutoUpdater
         if (Interlocked.Exchange(ref busy, 1) == 1) { return; }
         try
         {
-            if (Refused(WhyNot())) { return; }
+            if (Refused(WhyNot())) { idleSince = null; return; }
             var now = time.GetUtcNow();
+            Due(now);
             if (checkedAt is null || now - checkedAt >= CheckEvery)
             {
                 checkedAt = now;
@@ -109,8 +118,8 @@ public sealed class AutoUpdater
             // Settings shares the updater: a check there, or a change of feed, may have replaced
             // the release downloaded here. Then it is found and downloaded again first.
             if (Stale()) { return; }
-            // Asked again now, not as last reported: the host's status and G5 by this app's own probe
-            // (agent-ha-bridge may have started during the download), and the other processes.
+            // Asked again now: the host still there (its own status, not the last report) and no
+            // other profile's app or host running from the package.
             if (Refused(await WhyNotNowAsync())) { return; }
             // Those took time: the switch turned off, or the host gone, meanwhile, counts too.
             if (Refused(WhyNot()) || !Due(time.GetUtcNow())) { return; }
@@ -118,7 +127,7 @@ public sealed class AutoUpdater
             // feed): still the release downloaded, or nothing is stopped. Should it change even
             // while the host stops, ApplyAndRestart refuses it and the host is started again.
             if (Stale()) { return; }
-            await InstallAsync(Idle ? "no session is busy" : $"it has waited {WaitAtMost.TotalHours:0} hours");
+            await InstallAsync(idleSince is not null ? "no session is busy" : $"it has waited {WaitAtMost.TotalHours:0} hours");
         }
         // A check that cannot reach the network, a download cut off: tried again at the next check.
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
@@ -138,8 +147,6 @@ public sealed class AutoUpdater
         {
             return $"the host's status could not be read: {e.Message}";
         }
-        if (Refusal(fresh) is { } refused) { return refused; }
-        if (await Task.Run(agentHaBridge) is { } running) { return $"agent-ha-bridge runs for this user (G5): {running}"; }
         if (await Task.Run(() => othersInPackage(fresh.ProcessId)) is { } others) { return others; }
         return null;
     }
@@ -167,6 +174,9 @@ public sealed class AutoUpdater
         Record(prefs, save, updater);
         try
         {
+            // Marked first: should the app quit before the update is applied, it starts the host
+            // again on the way out (and its next start would anyway).
+            manager.StoppedForUpdate = true;
             await manager.StopAsync();
             updater.ApplyAndRestart();
         }
@@ -180,6 +190,7 @@ public sealed class AutoUpdater
             log($"auto-update: installing {to} failed: {e.Message}");
             try { await manager.StartAsync(); }
             catch (Exception again) when (again is not (OutOfMemoryException or StackOverflowException)) { log($"auto-update: the host did not start again: {again.Message}"); }
+            manager.StoppedForUpdate = false;
         }
     }
 

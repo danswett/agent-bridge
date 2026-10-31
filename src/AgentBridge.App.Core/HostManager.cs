@@ -166,6 +166,9 @@ public sealed class HostManager
     public Func<bool> Elevated { get; init; } = PeerPolicy.SelfElevated;
 
     public InstallLayout Layout => layout;
+    // Set while the host is stopped for an update that has not been applied yet (Settings' Update
+    // and restart, AutoUpdater): an app quitting meanwhile starts the host again on its way out.
+    public bool StoppedForUpdate { get; set; }
     public string TaskName => LogonTaskXml.TaskName(layout.Profile, userSid);
     public bool HostInstalled => File.Exists(layout.HostExe) && File.Exists(layout.LauncherExe);
     public bool StartsAtSignIn => tasks.Exists(TaskName);
@@ -205,6 +208,17 @@ public sealed class HostManager
         else if (Elevated()) { throw new InvalidOperationException("this app is running as administrator, so it will not start the host; turn on starting the host at sign-in, or open the app normally"); }
         else { processes.Start(layout.LauncherExe, layout.ServeArguments); }
         await WaitAsync(running: true, StartTimeout, ct);
+    }
+
+    // The app quitting while its host is stopped for an update not yet applied (StoppedForUpdate):
+    // the host comes back rather than staying down until the next sign-in or app start. Bounded,
+    // since it runs on the way out.
+    public void StartIfStoppedForUpdate(TimeSpan wait, Action<string> log)
+    {
+        if (!StoppedForUpdate) { return; }
+        try { Task.Run(() => StartAsync()).Wait(wait); }
+        catch (Exception e) when (e is not OutOfMemoryException) { log($"the host stopped for an update did not start again: {e.GetBaseException().Message}"); }
+        StoppedForUpdate = false;
     }
 
     // Asks the host to stop and waits for its pipe to go; a host that will not go is ended. One

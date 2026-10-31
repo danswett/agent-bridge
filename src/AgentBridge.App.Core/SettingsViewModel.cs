@@ -205,17 +205,22 @@ public sealed class SettingsViewModel : Observable
             throw new InvalidOperationException("the update found has changed since; check for updates again");
         }
         UpdateStatus = "Stopping the host to update it…";
-        await manager.StopAsync();
-        UpdateStatus = "Restarting…";
         AutoUpdater.Record(prefs, savePrefs, updater);
-        try { updater.ApplyAndRestart(); }
+        manager.StoppedForUpdate = true;
+        try
+        {
+            await manager.StopAsync();
+            UpdateStatus = "Restarting…";
+            updater.ApplyAndRestart();
+        }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
             // Still this version: the host stopped for it comes back, and the failure is shown.
             savePrefs(prefs() with { UpdatedFrom = null, UpdateNotes = null });
             updateVersion = null;
             UpdateStatus = "";
-            await manager.StartAsync();
+            try { await manager.StartAsync(); }
+            finally { manager.StoppedForUpdate = false; }
             throw;
         }
     });

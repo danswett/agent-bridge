@@ -185,8 +185,7 @@ public partial class App : Application
         if (!options.Demo && updater.InstalledVersion is not null)
         {
             AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write);
-            var probe = new AgentBridge.Host.Delivery.Windows.AgentHaBridgeProbe();
-            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, probe.Active, PackageProcesses.Others);
+            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others);
             updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
             updateTimer.Tick += (_, _) => _ = autoUpdater.TickAsync();
             updateTimer.Start();
@@ -326,6 +325,9 @@ public partial class App : Application
         quitting = true;
         timer?.Stop();
         updateTimer?.Stop();
+        // Quit between the host stopping for an update and the update being applied: the host
+        // comes back now, not at the next sign-in. (Killed instead, the app's next start does it.)
+        manager?.StartIfStoppedForUpdate(TimeSpan.FromSeconds(25), AppLog.Write);
         showWait?.Unregister(null);
         tray?.Dispose();
         tray = null;

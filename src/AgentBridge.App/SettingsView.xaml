@@ -118,7 +118,7 @@
                 <ToggleSwitch Header="Install updates automatically" AutomationProperties.AutomationId="AutoUpdate" IsOn="{x:Bind ViewModel.AutoUpdate, Mode=TwoWay}" />
                 <TextBlock
                     Style="{StaticResource AbSecondaryText}"
-                    Text="Checked every half hour. An update waits until no session here has a turn running or a question waiting, for at most six hours, then restarts the app and the host. Never on a read-only host, while agent-ha-bridge runs for you, or while another profile runs from this installation." />
+                    Text="Checked every half hour. An update waits until no session here has had a turn running or a question waiting for two minutes, for at most six hours, then restarts the app and the host. Read-only hosts and hosts beside agent-ha-bridge update too; never while another profile runs from this installation." />
                 <TextBlock Text="{x:Bind local:SettingsView.AppLine(ViewModel.AppVersion, ViewModel.InstalledText), Mode=OneWay}" Style="{StaticResource AbSecondaryText}" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <Button Content="Check for updates" AutomationProperties.AutomationId="CheckUpdates" Click="OnCheckUpdates" IsEnabled="{x:Bind local:Ui.Not(ViewModel.Busy), Mode=OneWay}" />

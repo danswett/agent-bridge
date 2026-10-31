@@ -5,8 +5,9 @@ using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // Updates without being asked, over a host on a real pipe: when an update waits (a turn running,
-// a question waiting), when it goes anyway (six hours), and the hosts it never touches (read-only,
-// agent-ha-bridge's, one that cannot say). Velopack and Task Scheduler are fakes.
+// a question waiting), when it goes anyway (six hours), what it never does (stop another profile's
+// host, apply what it did not download, leave the host down), and that a read-only host beside
+// agent-ha-bridge updates like any other. Velopack and Task Scheduler are fakes.
 public sealed class AutoUpdaterTests : IAsyncLifetime
 {
     readonly FakeHost host = new();
@@ -20,7 +21,6 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     HostConnection connection = null!;
     HostManager manager = null!;
     AutoUpdater auto = null!;
-    string? agentHaBridge;
     string? others;
     int? othersAskedFor;
     Func<string?>? othersProbe;
@@ -76,7 +76,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(50),
             Elevated = () => false,
         };
-        auto = new AutoUpdater(updater, connection, manager, () => prefs, p => prefs = p, log.Add, () => agentHaBridge, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time);
+        auto = new AutoUpdater(updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Status is not null && connection.Sessions.All.Count == sessions.Length && connection.Sessions.Complete, "the connection");
     }
 
@@ -87,42 +87,97 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Directory.Delete(app, recursive: true);
     }
 
-    static HostStatus ReadOnly() => FakeHost.StatusOf() with { Machine = new MachineInfo("host-id", "Test PC", "windows", "0.1.0", ReadOnly: "delivery.readOnly is set") };
-
-    [Fact]
-    public async Task An_update_found_when_no_session_is_busy_stops_the_host_then_installs()
+    // Idle at one tick, and still at the next once IdleFor has passed.
+    async Task TwoIdleTicksAsync()
     {
-        await StartAsync(null, Make.Session("s1", SessionStatus.Idle), Make.Session("s2", SessionStatus.Ending));
-        var stoppedFirst = false;
-        updater.OnApply = () => stoppedFirst = host.Sent(HostOps.Stop).Count == 1;
-
         await auto.TickAsync();
+        time.Advance(AutoUpdater.IdleFor);
+        await auto.TickAsync();
+    }
 
-        Assert.True(updater.Applied);
-        Assert.True(stoppedFirst);
-        Assert.Equal("0.1.0", prefs.UpdatedFrom);
-        Assert.Equal("What 0.2.0 changes", prefs.UpdateNotes);
+    async Task GoIdleAsync(string id)
+    {
+        await host.SendAsync(Events.SessionUpsert, Make.Session(id, SessionStatus.Idle));
+        await Wait.UntilAsync(() => connection.Sessions.Get(id)?.Status == SessionStatus.Idle, "the session going idle");
     }
 
     [Fact]
-    public async Task A_turn_running_holds_the_update_until_the_session_is_idle()
+    public async Task An_update_found_while_no_session_is_busy_installs_once_the_host_has_stayed_idle_a_while()
     {
-        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle), Make.Session("s2", SessionStatus.Ending));
+        var stoppedFirst = false;
+        var marked = false;
+        updater.OnApply = () => (stoppedFirst, marked) = (host.Sent(HostOps.Stop).Count == 1, manager.StoppedForUpdate);
 
         await auto.TickAsync();
         Assert.Equal("0.2.0", auto.Pending);
         Assert.False(updater.Applied);
 
-        time.Advance(TimeSpan.FromMinutes(1));
+        time.Advance(AutoUpdater.IdleFor);
+        await auto.TickAsync();
+
+        Assert.True(updater.Applied);
+        Assert.True(stoppedFirst);
+        Assert.True(marked);
+        Assert.Equal("0.1.0", prefs.UpdatedFrom);
+        Assert.Equal("What 0.2.0 changes", prefs.UpdateNotes);
+    }
+
+    [Fact]
+    public async Task A_read_only_host_beside_a_running_agent_ha_bridge_updates_when_idle_like_any_other()
+    {
+        var status = FakeHost.StatusOf(agentHaBridge: "agent-ha-bridge's daemon is running") with
+        {
+            Machine = new MachineInfo("host-id", "Test PC", "windows", "0.1.0", ReadOnly: "delivery.readOnly is set"),
+        };
+        await StartAsync(status);
+        Assert.Null(auto.WhyNot());
+
+        await TwoIdleTicksAsync();
+
+        Assert.True(updater.Applied);
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    public async Task A_turn_running_holds_the_update_until_the_session_has_been_idle_a_while()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.IdleFor);
+        await auto.TickAsync();
+        Assert.Equal("0.2.0", auto.Pending);
+        Assert.False(updater.Applied);
+
+        await GoIdleAsync("s1");
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.IdleFor - TimeSpan.FromSeconds(1));
         await auto.TickAsync();
         Assert.False(updater.Applied);
 
-        await host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Idle));
-        await Wait.UntilAsync(() => connection.Sessions.Get("s1")?.Status == SessionStatus.Idle, "the session going idle");
-        time.Advance(TimeSpan.FromMinutes(1));
+        time.Advance(TimeSpan.FromSeconds(1));
         await auto.TickAsync();
         Assert.True(updater.Applied);
         Assert.Equal(1, updater.Downloads);
+    }
+
+    [Fact]
+    public async Task A_turn_that_starts_and_ends_between_ticks_starts_the_idle_wait_again()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.IdleFor - TimeSpan.FromSeconds(10));
+
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Working));
+        await Wait.UntilAsync(() => connection.Sessions.Get("s1")?.Status == SessionStatus.Working, "the turn starting");
+        await GoIdleAsync("s1");
+        time.Advance(TimeSpan.FromSeconds(10));
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+
+        time.Advance(AutoUpdater.IdleFor);
+        await auto.TickAsync();
+        Assert.True(updater.Applied);
     }
 
     [Fact]
@@ -131,7 +186,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await StartAsync(null, Make.Session("s1") with { Status = SessionStatus.Idle, Question = Make.Approval() });
         Assert.False(auto.Idle);
 
-        await auto.TickAsync();
+        await TwoIdleTicksAsync();
 
         Assert.Equal("0.2.0", auto.Pending);
         Assert.False(updater.Applied);
@@ -169,63 +224,6 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_read_only_host_is_never_updated_however_long_it_waits()
-    {
-        await StartAsync(ReadOnly());
-
-        await auto.TickAsync();
-        time.Advance(AutoUpdater.WaitAtMost + TimeSpan.FromHours(1));
-        await auto.TickAsync();
-
-        Assert.Equal(0, updater.Checks);
-        Assert.False(updater.Applied);
-        Assert.Empty(host.Sent(HostOps.Stop));
-        Assert.Contains("read-only", auto.WhyNot());
-    }
-
-    [Fact]
-    public async Task A_host_whose_machine_agent_ha_bridge_owns_is_never_updated()
-    {
-        await StartAsync(FakeHost.StatusOf(agentHaBridge: "agent-ha-bridge's daemon is running"));
-
-        await auto.TickAsync();
-        time.Advance(AutoUpdater.WaitAtMost + TimeSpan.FromHours(1));
-        await auto.TickAsync();
-
-        Assert.Equal(0, updater.Checks);
-        Assert.False(updater.Applied);
-        Assert.Contains("G5", auto.WhyNot());
-    }
-
-    [Fact]
-    public async Task A_host_that_turns_read_only_while_an_update_waits_is_not_updated()
-    {
-        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
-        await auto.TickAsync();
-        Assert.Equal("0.2.0", auto.Pending);
-
-        await host.SendAsync(HostOps.StatusEvent, ReadOnly());
-        await Wait.UntilAsync(() => connection.Status?.Machine.ReadOnly is not null, "the read-only status");
-        time.Advance(AutoUpdater.WaitAtMost);
-        await auto.TickAsync();
-
-        Assert.False(updater.Applied);
-    }
-
-    [Fact]
-    public async Task Without_a_running_host_to_say_what_it_is_nothing_is_installed()
-    {
-        await StartAsync();
-        await host.StopAsync();
-        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the host gone");
-
-        await auto.TickAsync();
-
-        Assert.Equal(0, updater.Checks);
-        Assert.False(updater.Applied);
-    }
-
-    [Fact]
     public async Task A_host_whose_sessions_are_not_yet_read_in_full_is_not_idle()
     {
         await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
@@ -234,35 +232,21 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         connection.Sessions.BeginSnapshot();
 
         Assert.False(auto.Idle);
-        await auto.TickAsync();
+        await TwoIdleTicksAsync();
         Assert.False(updater.Applied);
     }
 
     [Fact]
-    public async Task Agent_ha_bridge_starting_during_the_download_stops_the_install()
+    public async Task Without_a_running_host_to_say_what_its_sessions_are_doing_nothing_is_installed()
     {
         await StartAsync();
-        agentHaBridge = "agent-ha-bridge's daemon is running";
+        await host.StopAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the host gone");
 
-        await auto.TickAsync();
+        await TwoIdleTicksAsync();
 
-        Assert.Equal("0.2.0", auto.Pending);
+        Assert.Equal(0, updater.Checks);
         Assert.False(updater.Applied);
-        Assert.Empty(host.Sent(HostOps.Stop));
-        Assert.Contains(log, l => l.Contains("G5"));
-    }
-
-    [Fact]
-    public async Task A_host_read_only_by_its_status_now_is_not_updated_though_the_last_report_said_otherwise()
-    {
-        await StartAsync();
-        // What host.status answers now; the connection has not heard of it yet.
-        host.Status = ReadOnly();
-
-        await auto.TickAsync();
-
-        Assert.False(updater.Applied);
-        Assert.Empty(host.Sent(HostOps.Stop));
     }
 
     [Fact]
@@ -271,7 +255,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await StartAsync();
         others = "another profile's host (pid 77) runs from this installation";
 
-        await auto.TickAsync();
+        await TwoIdleTicksAsync();
 
         Assert.False(updater.Applied);
         Assert.Equal(4242, othersAskedFor);
@@ -287,31 +271,45 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         // Settings checked meanwhile and found another release, not yet downloaded.
         updater.Ready = null;
-        await host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Idle));
-        await Wait.UntilAsync(() => connection.Sessions.Get("s1")?.Status == SessionStatus.Idle, "the session going idle");
-        await auto.TickAsync();
+        await GoIdleAsync("s1");
+        await TwoIdleTicksAsync();
 
         Assert.False(updater.Applied);
         Assert.Empty(host.Sent(HostOps.Stop));
         Assert.Null(auto.Pending);
 
-        // The next tick checks and downloads again, then installs.
-        await auto.TickAsync();
+        // Then checked and downloaded again, and installed once the host has stayed idle.
+        await TwoIdleTicksAsync();
         Assert.True(updater.Applied);
+    }
+
+    [Fact]
+    public async Task A_release_replaced_during_the_last_checks_does_not_stop_the_host()
+    {
+        await StartAsync();
+        // Settings checks during the last of the checks and finds another release.
+        othersProbe = () => { updater.Ready = null; return null; };
+
+        await TwoIdleTicksAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Null(auto.Pending);
     }
 
     [Fact]
     public async Task A_failed_install_brings_the_host_back_and_waits_for_the_next_check()
     {
         await StartAsync();
-        // The host the failed install stopped is started again, as its logon task would.
-        tasks.OnRun = () => host.Start();
+        // The host the failed install stopped is started again, as its launcher would.
         processes.OnStart = () => host.Start();
         updater.ApplyFails = new InvalidOperationException("Update.exe is missing");
 
-        await auto.TickAsync();
+        await TwoIdleTicksAsync();
 
         Assert.Single(host.Sent(HostOps.Stop));
+        Assert.Single(processes.Started);
+        Assert.False(manager.StoppedForUpdate);
         Assert.Null(auto.Pending);
         Assert.Null(prefs.UpdatedFrom);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Complete, "the host back");
@@ -323,30 +321,42 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Quitting_after_the_host_stopped_for_an_update_but_before_it_was_applied_starts_the_host_again()
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        // What App.Quit does on its way out, at the worst moment: the host stopped, nothing applied.
+        updater.OnApply = () => manager.StartIfStoppedForUpdate(TimeSpan.FromSeconds(10), log.Add);
+
+        await TwoIdleTicksAsync();
+
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.Single(processes.Started);
+        Assert.False(manager.StoppedForUpdate);
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the host back");
+    }
+
+    [Fact]
+    public async Task Quitting_with_no_update_under_way_starts_nothing()
+    {
+        await StartAsync();
+
+        manager.StartIfStoppedForUpdate(TimeSpan.FromSeconds(10), log.Add);
+
+        Assert.Empty(processes.Started);
+    }
+
+    [Fact]
     public async Task Turning_it_off_while_it_asks_the_host_one_last_time_stops_the_install()
     {
         await StartAsync();
         // The last of the checks before stopping the host, during which the switch goes off.
         othersProbe = () => { prefs = prefs with { AutoUpdate = false }; return null; };
 
-        await auto.TickAsync();
+        await TwoIdleTicksAsync();
 
         Assert.False(updater.Applied);
         Assert.Empty(host.Sent(HostOps.Stop));
-    }
-
-    [Fact]
-    public async Task A_release_replaced_during_the_last_checks_does_not_stop_the_host()
-    {
-        await StartAsync();
-        // Settings checks during the last of the checks and finds another release.
-        othersProbe = () => { updater.Ready = null; return null; };
-
-        await auto.TickAsync();
-
-        Assert.False(updater.Applied);
-        Assert.Empty(host.Sent(HostOps.Stop));
-        Assert.Null(auto.Pending);
     }
 
     [Fact]
@@ -355,7 +365,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         prefs = prefs with { AutoUpdate = false };
         await StartAsync();
 
-        await auto.TickAsync();
+        await TwoIdleTicksAsync();
 
         Assert.Equal(0, updater.Checks);
         Assert.False(updater.Applied);
