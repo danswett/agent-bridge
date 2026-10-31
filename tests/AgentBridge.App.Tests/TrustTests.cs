@@ -170,6 +170,22 @@ public sealed class TrustTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_refused_answer_to_a_question_that_has_since_gone_is_not_offered_again()
+    {
+        answer = _ => new TrustAnswerResult(TrustAnswerOutcome.Refused, "that question is no longer waiting: it was answered, or the agent closed");
+        var (page, card) = await OnRemoteAsync();
+        // Answered at the machine meanwhile: it is no longer listed.
+        remoteTrust = [];
+        ui.Post(card.Trust);
+        await Wait.UntilAsync(() => card.State == "refused", "refused");
+        await page.RefreshAsync();
+
+        Assert.False(card.CanAnswer);
+        Assert.StartsWith("Not answered: that question is no longer waiting", card.StatusText);
+        Assert.Equal("Build server no longer lists this question as waiting.", card.AtMachine);
+    }
+
+    [Fact]
     public async Task A_machine_that_takes_nothing_from_devices_now_is_listed_only_to_show_its_question_read_only()
     {
         remoteReadOnly = "agent-ha-bridge is running for this user";

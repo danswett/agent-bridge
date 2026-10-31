@@ -117,7 +117,9 @@ public sealed class SettingsTests : IAsyncLifetime
         link.PeopleNow.Add(new FleetHost(link.DeviceId!, "This app, as the relay lists it"));
         var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
         await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
-        host.On(HostOps.Settings, _ => new SettingsResult(new HostSettingsView(true), false));
+        // The host answers with what it saved.
+        host.On(HostOps.Settings, d => new SettingsResult(new HostSettingsView(true, RemoteFolderTrust: true,
+            RemoteFolderTrustDevices: d.TryGetProperty("remoteFolderTrustDevices", out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : null), false));
         await Connected();
         Assert.False(settings.RemoteFolderTrust);
         Assert.False(settings.ShowTrustDevices);
@@ -127,7 +129,9 @@ public sealed class SettingsTests : IAsyncLifetime
         var first = host.Sent(HostOps.Settings)[0];
         Assert.True(first.GetProperty("remoteFolderTrust").GetBoolean());
         Assert.Equal([link.DeviceId], first.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()));
+        await Wait.UntilAsync(() => !settings.Busy, "the change made");
 
+        // Another device approved at the machine's terminal since.
         host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [link.DeviceId!, gone]) };
         await host.SendAsync(HostOps.StatusEvent, host.Status);
         await Wait.UntilAsync(() => settings.ShowTrustDevices && settings.TrustDevices.Count == 3, "the devices");
@@ -168,6 +172,34 @@ public sealed class SettingsTests : IAsyncLifetime
         var sent = host.Sent(HostOps.Settings).Select(s => s.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()).ToList()).ToList();
         Assert.Equal([], sent[0]);
         Assert.Equal([b], sent[1]);
+    }
+
+    [Fact]
+    public async Task A_device_ticked_and_unticked_quickly_ends_unapproved_and_so_does_the_switch()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        host.On(HostOps.Settings, d => new SettingsResult(new HostSettingsView(true,
+            RemoteFolderTrust: d.TryGetProperty("remoteFolderTrust", out var t) && t.GetBoolean(),
+            RemoteFolderTrustDevices: d.TryGetProperty("remoteFolderTrustDevices", out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : [a]), false));
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
+        await Connected();
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+
+        var phone = settings.TrustDevices.Single(d => d.Id == b);
+        phone.Approved = true;
+        phone.Approved = false;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2, "both clicks");
+        Assert.Equal([a], host.Sent(HostOps.Settings)[1].GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()));
+        Assert.False(phone.Approved);
+
+        settings.RemoteFolderTrust = false;
+        settings.RemoteFolderTrust = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 4, "both switches");
+        Assert.True(host.Sent(HostOps.Settings)[3].GetProperty("remoteFolderTrust").GetBoolean());
     }
 
     [Fact]
