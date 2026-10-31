@@ -74,6 +74,14 @@ foreach ($type in 'Full', 'Installer', 'Portable') {
 }
 $fullPath = Join-Path $ReleasesDir $expected.Full
 $deltaPath = Join-Path $ReleasesDir $expected.Delta
+# Only a release build may go out: installed copies take it, and a dev build's Home Assistant
+# connector refuses a real Home Assistant (G6). A pull request's dry run is a dev build, as it
+# should be, and only says so.
+$identity = & (Join-Path $PSScriptRoot 'host-identity.ps1') $fullPath
+if ($identity -ne 'release') {
+    if (-not $DryRun) { throw "$($expected.Full) holds a $identity build of the host; only a release build (pack-app.ps1 -Release) is published" }
+    Write-Plan "the host is a $identity build; the publish path packs a release build (pack-app.ps1 -Release)"
+}
 
 # --- Whether to publish: once per version, and never a version older than one already out.
 $releases = Get-Release
@@ -143,7 +151,7 @@ if ($publishing) {
     # vpk upload github sends the build's assets, a releases.win.json and RELEASES of this
     # version alone; assets.win.json goes up too, as on the first release published by hand.
     $uploads = @($assets.RelativeFileName) + 'releases.win.json', 'RELEASES', 'assets.win.json'
-    Write-Plan "$tag from ${Commit}, ${size}: $($uploads -join ', ')"
+    Write-Plan "$tag ($identity build) from ${Commit}, ${size}: $($uploads -join ', ')"
 }
 
 if ($DryRun) {

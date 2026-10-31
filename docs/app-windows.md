@@ -208,9 +208,26 @@ installs an update unasked.
   read it into a scratch feed (`vpk upload local`),
   and prints what it would upload, publish and prune against the real releases (in the job
   summary too), writing nothing.
-* A pre-release is unsigned (below), and is packed without `-Release`, so its host reports
-  itself as `dev`: its Home Assistant connector still writes only to a disposable Home Assistant
-  (G6, [ha-connector.md](ha-connector.md)).
+* **Release builds only.** The app job packs with `pack-app.ps1 -Release` exactly when the run
+  publishes (`APP_RELEASE`: a push to `danswett/agent-bridge`'s main), which builds the host with
+  `-p:AgentBridgeRelease=true`, so it carries the assembly metadata `AgentBridgeRelease=true`.
+  Every pull request and fork packs a dev host. Three checks hold that: `pack-app.ps1` reads the
+  host it published (`build/host-identity.ps1`) and stops if it is not the build asked for; the
+  app job asserts the packed host is a release build exactly when the run publishes, and that
+  the property makes one; and `publish-prerelease.ps1` refuses to publish a package whose host
+  is a dev build (a dry run only says so). What a release build changes, all keyed off the host's
+  `IsDevBuild()`:
+  * The Home Assistant connector may write to a Home Assistant not marked
+    `homeAssistant.disposable` (`HaGate`, design G6). Everything else in its gate still holds:
+    enabled, a base URL and token, and agent-ha-bridge not running for this user (G5).
+  * hello's `machine.dev` is left out, so the PWA's and app's machine status and the app's
+    Settings show the version without "(dev)"; the local API's status `dev` is false.
+  * The connector's capabilities attribute `dev` is false.
+  * The shadow ledger records `hostDev` false (`ha shadow` reports it), and `ha status` no
+    longer gives the G6 refusal.
+
+  Nothing else reads it: not updates, delivery, migration or the relay.
+* A pre-release is unsigned (below).
 
 To install the latest, download `AgentBridgeApp-win-Setup.exe` from the newest pre-release at
 <https://github.com/danswett/agent-bridge/releases> and run it (SmartScreen: More info, then Run
@@ -342,7 +359,8 @@ reaches the real host or its profile.
   -DryRun`) and uploads `Setup.exe` and the packages as an artifact, which the `publish` job
   publishes for a push to main.
 * `build/test-publish-prerelease.ps1` (the `product` job, on Windows): publishing and pruning,
-  and the delta base `pack-app.ps1` picks, against stand-ins for gh, vpk and dotnet.
+  refusing a dev build, and the delta base and build identity `pack-app.ps1` gives the package,
+  against stand-ins for gh, vpk and dotnet.
 * Live checks run by the coordinator on a disposable VM (the checklist in the pull
   request).
 

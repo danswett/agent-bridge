@@ -15,6 +15,10 @@ env:
   # workflow starts the count again at 1: below every release, which installed copies would
   # never take (docs/app-windows.md, "Releases and updates").
   APP_VERSION: 0.1.${{ github.run_number }}
+  # 'true' exactly when this run's package is published (the publish-gate job's condition): only
+  # then is the host a release build, whose Home Assistant connector may write to a real Home
+  # Assistant (design G6). Every pull request and fork builds a dev host.
+  APP_RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' }}
 
 jobs:
   product:
@@ -171,7 +175,21 @@ jobs:
         # rather than the whole ~100 MB package. Signing goes here too, when there is a
         # certificate: -SignParams or -AzureTrustedSignFile from a secret, for pushes to main only,
         # since a pull request from a fork gets no secrets (docs/app-windows.md, Signing).
-        run: ./build/pack-app.ps1 -Version $env:APP_VERSION -DeltaFrom "https://github.com/${{ github.repository }}"
+        run: ./build/pack-app.ps1 -Version $env:APP_VERSION -Release:($env:APP_RELEASE -eq 'true') -DeltaFrom "https://github.com/${{ github.repository }}"
+      - name: Only the publish path builds a release host
+        # The packed host is a release build exactly when this run publishes: dev here on a pull
+        # request. And the property the publish path sets does make one, on this commit.
+        shell: pwsh
+        run: |
+          $packed = ./build/host-identity.ps1 out/app/publish/agent-bridge-host.dll
+          $wanted = if ($env:APP_RELEASE -eq 'true') { 'release' } else { 'dev' }
+          Write-Output "packed host: $packed build (APP_RELEASE=$env:APP_RELEASE)"
+          if ($packed -ne $wanted) { Write-Error "the packed host is a $packed build; this run wants a $wanted build"; exit 1 }
+          dotnet build src/AgentBridge.Host -c Release --nologo -v q -p:AgentBridgeRelease=true -o "$env:RUNNER_TEMP/release-host"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $release = ./build/host-identity.ps1 "$env:RUNNER_TEMP/release-host/agent-bridge-host.dll"
+          Write-Output "-p:AgentBridgeRelease=true host: $release build"
+          if ($release -ne 'release') { Write-Error "-p:AgentBridgeRelease=true built a $release host"; exit 1 }
       - name: The published app draws the demo's cards and answers one
         shell: pwsh
         run: |

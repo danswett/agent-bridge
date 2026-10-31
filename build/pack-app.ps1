@@ -55,7 +55,12 @@ Publish 'src/AgentBridge.App/AgentBridge.App.csproj' @()
 $required = 'AgentBridge.exe', 'AgentBridge.pri', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe', 'Assets\AgentBridge.ico', 'Assets\AgentBridge.png'
 $missing = $required | Where-Object { -not (Test-Path (Join-Path $publish $_)) }
 if ($missing) { throw "missing from the publish folder: $($missing -join ', ')" }
-Write-Host "published $Version to $publish"
+# The build identity decides whether the host's Home Assistant connector may write to a real
+# Home Assistant (G6). It must be what was asked for, whatever the build cache held.
+$identity = & (Join-Path $PSScriptRoot 'host-identity.ps1') (Join-Path $publish 'agent-bridge-host.dll')
+$wanted = if ($Release) { 'release' } else { 'dev' }
+if ($identity -ne $wanted) { throw "the host was built as a $identity build, not a $wanted build" }
+Write-Host "published $Version ($identity build) to $publish"
 
 if ($NoPack) { return }
 

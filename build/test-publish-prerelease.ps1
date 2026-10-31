@@ -1,11 +1,12 @@
-# Checks build/publish-prerelease.ps1 and the delta base build/pack-app.ps1 picks, against
-# stand-ins for gh, vpk and dotnet: nothing is built, uploaded, published or deleted, and the
-# folders are under out/test-publish-prerelease.
+# Checks build/publish-prerelease.ps1, and the delta base and build identity build/pack-app.ps1
+# gives the package, against stand-ins for gh, vpk and dotnet: nothing is built, uploaded,
+# published or deleted, and the folders are under out/test-publish-prerelease.
 #
 #   pwsh build/test-publish-prerelease.ps1
 #
 # What it guards: a merge publishes exactly one pre-release of its own version, never a second
-# copy, never one older than what is out, and the pruning never reaches a full release or a tag.
+# copy, never one older than what is out, never a dev build, and the pruning never reaches a full
+# release or a tag.
 #Requires -Version 7
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -13,10 +14,25 @@ Set-StrictMode -Version Latest
 $publishScript = Join-Path $PSScriptRoot 'publish-prerelease.ps1'
 $packScript = Join-Path $PSScriptRoot 'pack-app.ps1'
 $scratch = Join-Path $PSScriptRoot '..' 'out' 'test-publish-prerelease'
+$fixtures = Join-Path $PSScriptRoot '..' 'out' 'test-publish-prerelease-hosts'
 $repo = 'danswett/agent-bridge'
 $commit = '0123456789abcdef0123456789abcdef01234567'
 $env:GH_TOKEN = 'stand-in-token'
-Remove-Item Env:GITHUB_STEP_SUMMARY, Env:GITHUB_RUN_ID -ErrorAction SilentlyContinue
+Remove-Item Env:GITHUB_STEP_SUMMARY, Env:GITHUB_RUN_ID, Env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+
+# Two real assemblies standing in for the host: one with the release metadata a
+# -p:AgentBridgeRelease=true build carries, one without, as host-identity.ps1 reads them.
+if (Test-Path $fixtures) { Remove-Item $fixtures -Recurse -Force }
+$global:PpHost = @{}
+foreach ($kind in 'dev', 'release') {
+    $dir = Join-Path $fixtures $kind
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    $global:PpHost[$kind] = Join-Path $dir 'agent-bridge-host.dll'
+    $metadata = if ($kind -eq 'release') { '[assembly: System.Reflection.AssemblyMetadata("AgentBridgeRelease", "true")]' } else { '[assembly: System.Reflection.AssemblyMetadata("Other", "true")]' }
+    Add-Type -TypeDefinition "$metadata public class StandInHost$kind {}" -OutputAssembly $global:PpHost[$kind]
+}
+$global:PpIgnoreRelease = $false
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 # --- Stand-ins. Functions come before programs, so the scripts under test find these. What they
 # record is global: $script: in them would be the script under test's.
@@ -74,16 +90,16 @@ function global:vpk {
             Set-Content (Join-Path (Arg '-o') "AgentBridgeApp-$($global:PpDownload)-full.nupkg") "full $($global:PpDownload)"
         }
     } elseif ($a[0] -eq 'delta' -and $a[1] -eq 'generate') {
-        # A stand-in delta names the two packages it lies between.
+        # A stand-in delta names the two versions it lies between.
         $global:PpCalls.Add('vpk delta generate')
         $from = (Get-Content (Arg '--base')) -replace '^full ', ''
-        $to = (Get-Content (Arg '--new')) -replace '^full ', ''
+        $to = (Split-Path (Arg '--new') -Leaf) -replace '^AgentBridgeApp-(.+)-full\.nupkg$', '$1'
         Set-Content (Arg '--output') "delta $from->$to"
     } elseif ($a[0] -eq 'delta' -and $a[1] -eq 'patch') {
-        # Rebuilds the new package only from the base the delta was made from, as vpk does.
+        # Rebuilds the new package, byte for byte, only from the base the delta was made from.
         $base = (Get-Content (Arg '--base')) -replace '^full ', ''
         if ((Get-Content (Arg '--patch')) -notmatch '^delta (.+)->(.+)$' -or $Matches[1] -ne $base) { $global:LASTEXITCODE = 1; return }
-        Set-Content (Arg '--output') "full $($Matches[2])"
+        Copy-Item (Join-Path (Split-Path (Arg '--patch')) "AgentBridgeApp-$($Matches[2])-full.nupkg") (Arg '--output')
     } elseif ($a[0] -eq 'pack') {
         $global:PpPackSaw = @(Get-ChildItem (Arg '-o') -Filter *.nupkg -ErrorAction SilentlyContinue | ForEach-Object Name)
     } else { throw "stand-in vpk: unexpected $($a -join ' ')" }
@@ -98,17 +114,33 @@ function global:dotnet {
         New-Item -ItemType Directory -Force (Split-Path $path) | Out-Null
         Set-Content $path 'stand-in'
     }
+    # The host project's build carries the release metadata exactly when asked for, unless a test
+    # stands in for a build cache that ignored the property.
+    if ($a[1] -like '*AgentBridge.Host.csproj') {
+        $release = $a -contains '-p:AgentBridgeRelease=true' -and -not $global:PpIgnoreRelease
+        Copy-Item $global:PpHost[$(if ($release) { 'release' } else { 'dev' })] (Join-Path $out 'agent-bridge-host.dll') -Force
+    }
 }
 
 # --- Fixtures.
 function Reset([int]$prereleases = 0) {
     $global:PpReleases.Clear(); $global:PpTags.Clear(); $global:PpCalls.Clear()
-    $global:PpDownload = $null; $global:PpPackSaw = $null
+    $global:PpDownload = $null; $global:PpPackSaw = $null; $global:PpIgnoreRelease = $false
     for ($i = 1; $i -le $prereleases; $i++) { New-PpRelease "v0.1.$(500 + $i)" }
     if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
 }
 
-function New-Folder([string]$version, [string]$DeltaFrom, [string[]]$Skip = @()) {
+function New-Package([string]$path, [string]$kind) {
+    # A full package as vpk packs it, as far as host-identity.ps1 reads one: the host under lib/app.
+    $stage = Join-Path $scratch 'stage'
+    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+    New-Item -ItemType Directory -Force (Join-Path $stage 'lib' 'app') | Out-Null
+    Copy-Item $global:PpHost[$kind] (Join-Path $stage 'lib' 'app' 'agent-bridge-host.dll')
+    [IO.Compression.ZipFile]::CreateFromDirectory($stage, $path)
+    Remove-Item $stage -Recurse -Force
+}
+
+function New-Folder([string]$version, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild) {
     # As vpk pack leaves it: with -DeltaFrom, a delta from that version and its full package beside.
     $dir = Join-Path $scratch 'releases'
     New-Item -ItemType Directory -Force $dir | Out-Null
@@ -121,15 +153,20 @@ function New-Folder([string]$version, [string]$DeltaFrom, [string[]]$Skip = @())
         Set-Content (Join-Path $dir "AgentBridgeApp-$DeltaFrom-full.nupkg") "full $DeltaFrom"
     }
     foreach ($a in $assets) {
-        $content = switch ($a.Type) { 'Full' { "full $version" } 'Delta' { "delta $DeltaFrom->$version" } default { 'stand-in' } }
-        if ($a.RelativeFileName -notin $Skip) { Set-Content (Join-Path $dir $a.RelativeFileName) $content }
+        $path = Join-Path $dir $a.RelativeFileName
+        if ($a.RelativeFileName -in $Skip) { continue }
+        switch ($a.Type) {
+            'Full' { New-Package $path $(if ($DevBuild) { 'dev' } else { 'release' }) }
+            'Delta' { Set-Content $path "delta $DeltaFrom->$version" }
+            default { Set-Content $path 'stand-in' }
+        }
     }
     ConvertTo-Json @($assets) -Compress | Set-Content (Join-Path $dir 'assets.win.json')
     $dir
 }
 
-function Invoke-Publish([string]$version, [switch]$DryRun, [string]$DeltaFrom, [string[]]$Skip = @()) {
-    $dir = New-Folder $version -DeltaFrom $DeltaFrom -Skip $Skip
+function Invoke-Publish([string]$version, [switch]$DryRun, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild) {
+    $dir = New-Folder $version -DeltaFrom $DeltaFrom -Skip $Skip -DevBuild:$DevBuild
     & $publishScript -Version $version -ReleasesDir $dir -Repository $repo -Commit $commit -DryRun:$DryRun 6>$null
 }
 
@@ -206,6 +243,23 @@ Check "A folder of another version's packages is refused" {
     $dir = New-Folder '0.1.599'
     try { & $publishScript -Version '0.1.600' -ReleasesDir $dir -Repository $repo -Commit $commit 6>$null } catch { $threw = $true }
     Assert $threw 'a 0.1.599 folder was published as 0.1.600'
+    Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
+}
+
+# --- Only a release build goes out.
+Check 'A dev build of the host is refused before anything is uploaded' {
+    Reset 3
+    $threw = $false
+    try { Invoke-Publish '0.1.600' -DevBuild } catch { $threw = $_.Exception.Message -like '*dev build*' }
+    Assert $threw 'a dev build was not refused'
+    Assert ($global:PpCalls.Count -eq 0) "calls: $($global:PpCalls -join '; ')"
+}
+
+Check "A pull request's dry run of a dev build says so and writes nothing" {
+    Reset 3
+    $dir = New-Folder '0.1.600' -DevBuild -DeltaFrom '0.1.503'
+    $plan = & $publishScript -Version '0.1.600' -ReleasesDir $dir -Repository $repo -Commit $commit -DryRun 6>&1 | Out-String
+    Assert ($plan -match 'the host is a dev build') "plan: $plan"
     Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
 }
 
@@ -297,7 +351,32 @@ Check 'A package left in the output folder by an earlier pack is not a delta bas
     Assert ($null -ne $global:PpPackSaw -and @($global:PpPackSaw).Count -eq 0) "vpk pack saw: $($global:PpPackSaw)"
 }
 
+# --- The build identity pack-app.ps1 gives the host.
+Check 'A pack without -Release, as a pull request packs, holds a dev host' {
+    Reset
+    Invoke-Pack '0.1.600'
+    $identity = & (Join-Path $PSScriptRoot 'host-identity.ps1') (Join-Path $scratch 'publish' 'agent-bridge-host.dll')
+    Assert ($identity -eq 'dev') "identity: $identity"
+}
+
+Check 'A pack with -Release, as the publish path packs, holds a release host' {
+    Reset
+    & $packScript -Version '0.1.600' -Out $scratch -Release 6>$null 3>$null
+    $identity = & (Join-Path $PSScriptRoot 'host-identity.ps1') (Join-Path $scratch 'publish' 'agent-bridge-host.dll')
+    Assert ($identity -eq 'release') "identity: $identity"
+}
+
+Check 'A pack whose host is not the build asked for stops before packing' {
+    Reset
+    $global:PpIgnoreRelease = $true
+    $threw = $false
+    try { & $packScript -Version '0.1.600' -Out $scratch -Release 6>$null 3>$null } catch { $threw = $_.Exception.Message -like '*dev build, not a release build*' }
+    Assert $threw 'a dev host was packed as a release'
+    Assert ($null -eq $global:PpPackSaw) 'vpk pack ran'
+}
+
 if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
+if (Test-Path $fixtures) { Remove-Item $fixtures -Recurse -Force }
 Remove-Item Env:GH_TOKEN
 if ($failures) { Write-Output "$failures failed"; exit 1 }
 Write-Output 'all passed'
