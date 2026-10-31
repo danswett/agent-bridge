@@ -46,7 +46,12 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
 
     public async Task<string?> CheckAsync()
     {
-        var found = await Manager().CheckForUpdatesAsync();
+        var from = Manager();
+        var found = await from.CheckForUpdatesAsync();
+        // The feed or the pre-release choice changed while this check ran (one by Settings, one
+        // automatic, may overlap): its answer is the old source's, and must not undo the change by
+        // becoming pending again. What the current source has found stands.
+        if (!ReferenceEquals(from, Manager())) { return pending?.TargetFullRelease.Version.ToString(); }
         // The same release found again stays the one downloaded.
         if (found?.TargetFullRelease.Version.ToString() != pending?.TargetFullRelease.Version.ToString()) { pending = found; downloaded = null; }
         return pending?.TargetFullRelease.Version.ToString();
@@ -69,9 +74,10 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
 
     public async Task DownloadAsync(Action<int> progress)
     {
+        var from = Manager();
         if (pending is not { } release) { return; }
-        await Manager().DownloadUpdatesAsync(release, p => ui.Post(() => progress(p)));
-        if (ReferenceEquals(pending, release)) { downloaded = release; }
+        await from.DownloadUpdatesAsync(release, p => ui.Post(() => progress(p)));
+        if (ReferenceEquals(from, Manager()) && ReferenceEquals(pending, release)) { downloaded = release; }
     }
 
     // Back in the background for this app's profile, as the host's own updates restart it

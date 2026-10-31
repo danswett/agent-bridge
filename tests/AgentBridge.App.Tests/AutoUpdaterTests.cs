@@ -107,7 +107,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await StartAsync(null, Make.Session("s1", SessionStatus.Idle), Make.Session("s2", SessionStatus.Ending));
         var stoppedFirst = false;
         var marked = false;
-        updater.OnApply = () => (stoppedFirst, marked) = (host.Sent(HostOps.Stop).Count == 1, manager.StoppedForUpdate);
+        updater.OnApply = () => (stoppedFirst, marked) = (host.Sent(HostOps.Stop).Count == 1, manager.UpdateUnderWay);
 
         await auto.TickAsync();
         Assert.Equal("0.2.0", auto.Pending);
@@ -234,6 +234,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.False(auto.Idle);
         await TwoIdleTicksAsync();
         Assert.False(updater.Applied);
+        // Nor six hours on: an update that no longer waits for idle still waits for the whole list.
+        time.Advance(AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
     }
 
     [Fact]
@@ -309,7 +314,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Single(host.Sent(HostOps.Stop));
         Assert.Single(processes.Started);
-        Assert.False(manager.StoppedForUpdate);
+        Assert.False(manager.UpdateUnderWay);
         Assert.Null(auto.Pending);
         Assert.Null(prefs.UpdatedFrom);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Complete, "the host back");
@@ -321,29 +326,64 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Quitting_after_the_host_stopped_for_an_update_but_before_it_was_applied_starts_the_host_again()
+    public async Task Quitting_while_the_host_stops_for_an_update_applies_nothing_and_starts_the_host_again_once_it_has_stopped()
     {
         await StartAsync();
         processes.OnStart = () => host.Start();
-        // What App.Quit does on its way out, at the worst moment: the host stopped, nothing applied.
-        updater.OnApply = () => manager.StartIfStoppedForUpdate(TimeSpan.FromSeconds(10), log.Add);
+        // A host slow to go: its pipe still answers for a while after it was asked to stop.
+        var stopAsked = new TaskCompletionSource();
+        host.On(HostOps.Stop, data =>
+        {
+            stopAsked.TrySetResult();
+            _ = Task.Run(async () => { await Task.Delay(400); await host.StopAsync(); });
+            return new { stopping = true };
+        });
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.IdleFor);
 
-        await TwoIdleTicksAsync();
+        var tick = Task.Run(auto.TickAsync);
+        await stopAsked.Task;
+        // What App.Quit does on its way out, at the worst moment (off the test's own context, which
+        // the fake host's pipe loops run on).
+        await Task.Run(() => manager.Quit(TimeSpan.FromSeconds(10), log.Add));
+        await tick;
 
+        Assert.False(updater.Applied);
+        Assert.True(processes.Started.Count == 1, string.Join("\n", log));
         Assert.Single(host.Sent(HostOps.Stop));
-        Assert.Single(processes.Started);
-        Assert.False(manager.StoppedForUpdate);
+        Assert.False(manager.UpdateUnderWay);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the host back");
     }
 
     [Fact]
-    public async Task Quitting_with_no_update_under_way_starts_nothing()
+    public async Task Quitting_after_the_host_stopped_for_an_update_but_before_it_was_applied_starts_the_host_again()
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        // Quit from another thread just as the update is applied, which then fails: the host comes
+        // back once, not twice.
+        updater.OnApply = () => _ = Task.Run(() => manager.Quit(TimeSpan.FromSeconds(10), log.Add));
+        updater.ApplyFails = new InvalidOperationException("Update.exe is missing");
+
+        await TwoIdleTicksAsync();
+
+        Assert.Single(host.Sent(HostOps.Stop));
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the host back");
+        Assert.Single(processes.Started);
+        Assert.False(manager.UpdateUnderWay);
+    }
+
+    [Fact]
+    public async Task Quitting_with_no_update_under_way_starts_nothing_and_no_update_stops_the_host_afterwards()
     {
         await StartAsync();
 
-        manager.StartIfStoppedForUpdate(TimeSpan.FromSeconds(10), log.Add);
+        manager.Quit(TimeSpan.FromSeconds(10), log.Add);
+        await TwoIdleTicksAsync();
 
         Assert.Empty(processes.Started);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.False(updater.Applied);
     }
 
     [Fact]

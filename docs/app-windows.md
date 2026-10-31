@@ -147,7 +147,8 @@ into one folder with one version. An app update is a host update, so they never 
   finds at once. It installs it once this machine's host has been idle (no session with a turn
   running or a question waiting) for two minutes without a break, seen at every minute's tick
   and every session change, or six hours after it first found one, whatever the sessions are
-  doing. The path is that of "Update and restart": the host stopped over the pipe, then
+  doing (though still only once they are read in full, so not in the middle of a reconnect).
+  The path is that of "Update and restart": the host stopped over the pipe, then
   `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
   host again. The new version's first start shows a toast: the version it came from, and the
   release's notes.
@@ -163,11 +164,13 @@ into one folder with one version. An app update is a host update, so they never 
   * Settings and the automatic updates share one updater, and only the release actually
     downloaded is applied (`IUpdater.Ready`), checked again immediately before the host stops: a
     release replaced since (a check from Settings, or "Include pre-releases" or `feed.txt`
-    changed, which drops the downloaded release) is checked for and downloaded again first.
-  * The host is never left down: an install that fails starts it again and waits for the next
-    check; quitting the app while the host is stopped for an update not yet applied
-    (`HostManager.StoppedForUpdate`) starts it on the way out; and an app killed meanwhile starts
-    it at its next start, as every start does, with the host's logon task at sign-in behind that.
+    changed, which drops the downloaded release, and any check still running against the old
+    source finds nothing) is checked for and downloaded again first.
+  * The host is never left down (`HostManager.StopAndApplyAsync`): an install that fails starts
+    it again and waits for the next check; quitting the app while the host is stopping for an
+    update, or stopped and not yet updated, waits for the stop to finish, applies nothing, and
+    starts the host on the way out; and an app killed meanwhile starts it at its next start, as
+    every start does, with the host's logon task at sign-in behind that.
   * Only the app's own timer starts it, so nothing an agent can reach does. A development copy
     and the demo never update.
 * The host can start an update too: the Home Assistant connector's Install button

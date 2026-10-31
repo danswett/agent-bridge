@@ -81,11 +81,13 @@ public sealed class AutoUpdater
     // own host's: an update here restarts only this one.
     public bool Idle => host.Sessions.Complete && !host.Sessions.All.Any(Busy);
 
-    // Idle now and for IdleFor without a break, or waited six hours.
+    // Idle now and for IdleFor without a break, or waited six hours. Either way only over a whole
+    // snapshot: six hours on, an update still waits out a reconnect's sessions being read again.
     bool Due(DateTimeOffset now)
     {
         if (!Idle) { idleSince = null; }
         else { idleSince ??= now; }
+        if (!host.Sessions.Complete) { return false; }
         return (idleSince is { } since && now - since >= IdleFor) || now - foundAt >= WaitAtMost;
     }
 
@@ -172,25 +174,16 @@ public sealed class AutoUpdater
         var to = Pending!;
         log($"auto-update: installing {to}, as {because}");
         Record(prefs, save, updater);
-        try
-        {
-            // Marked first: should the app quit before the update is applied, it starts the host
-            // again on the way out (and its next start would anyway).
-            manager.StoppedForUpdate = true;
-            await manager.StopAsync();
-            updater.ApplyAndRestart();
-        }
+        // The host comes back from a failed install, or from the app quitting mid-way (HostManager).
+        try { await manager.StopAndApplyAsync(updater.ApplyAndRestart); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            // Still this version: nothing to announce, and the host it stopped comes back. Tried
-            // again only after the next check finds and downloads a release, not every minute.
+            // Still this version: nothing to announce. Tried again only after the next check finds
+            // and downloads a release, not every minute.
             save(prefs() with { UpdatedFrom = null, UpdateNotes = null });
             Pending = null;
             checkedAt = time.GetUtcNow();
             log($"auto-update: installing {to} failed: {e.Message}");
-            try { await manager.StartAsync(); }
-            catch (Exception again) when (again is not (OutOfMemoryException or StackOverflowException)) { log($"auto-update: the host did not start again: {again.Message}"); }
-            manager.StoppedForUpdate = false;
         }
     }
 

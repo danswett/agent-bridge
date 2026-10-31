@@ -325,9 +325,10 @@ public partial class App : Application
         quitting = true;
         timer?.Stop();
         updateTimer?.Stop();
-        // Quit between the host stopping for an update and the update being applied: the host
-        // comes back now, not at the next sign-in. (Killed instead, the app's next start does it.)
-        manager?.StartIfStoppedForUpdate(TimeSpan.FromSeconds(25), AppLog.Write);
+        // Quit while an update stops the host, or before it is applied: the host comes back now, not
+        // at the next sign-in, and no update stops it from here on. (Killed instead, the app's next
+        // start does it.)
+        manager?.Quit(TimeSpan.FromSeconds(25), AppLog.Write);
         showWait?.Unregister(null);
         tray?.Dispose();
         tray = null;

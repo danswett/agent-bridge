@@ -206,21 +206,21 @@ public sealed class SettingsViewModel : Observable
         }
         UpdateStatus = "Stopping the host to update it…";
         AutoUpdater.Record(prefs, savePrefs, updater);
-        manager.StoppedForUpdate = true;
         try
         {
-            await manager.StopAsync();
-            UpdateStatus = "Restarting…";
-            updater.ApplyAndRestart();
+            await manager.StopAndApplyAsync(() =>
+            {
+                UpdateStatus = "Restarting…";
+                updater.ApplyAndRestart();
+            });
         }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            // Still this version: the host stopped for it comes back, and the failure is shown.
+            // Still this version: the host stopped for it is back (HostManager), and the failure is
+            // shown.
             savePrefs(prefs() with { UpdatedFrom = null, UpdateNotes = null });
             updateVersion = null;
             UpdateStatus = "";
-            try { await manager.StartAsync(); }
-            finally { manager.StoppedForUpdate = false; }
             throw;
         }
     });

@@ -166,9 +166,6 @@ public sealed class HostManager
     public Func<bool> Elevated { get; init; } = PeerPolicy.SelfElevated;
 
     public InstallLayout Layout => layout;
-    // Set while the host is stopped for an update that has not been applied yet (Settings' Update
-    // and restart, AutoUpdater): an app quitting meanwhile starts the host again on its way out.
-    public bool StoppedForUpdate { get; set; }
     public string TaskName => LogonTaskXml.TaskName(layout.Profile, userSid);
     public bool HostInstalled => File.Exists(layout.HostExe) && File.Exists(layout.LauncherExe);
     public bool StartsAtSignIn => tasks.Exists(TaskName);
@@ -210,15 +207,85 @@ public sealed class HostManager
         await WaitAsync(running: true, StartTimeout, ct);
     }
 
-    // The app quitting while its host is stopped for an update not yet applied (StoppedForUpdate):
-    // the host comes back rather than staying down until the next sign-in or app start. Bounded,
-    // since it runs on the way out.
-    public void StartIfStoppedForUpdate(TimeSpan wait, Action<string> log)
+    // An update between the host stopping for it and being applied (Settings' Update and restart,
+    // AutoUpdater), which the app quitting must not strand: the stop, and the start after a failed
+    // apply, are kept here for Quit to finish. Once quitting, no update stops the host.
+    readonly object updating = new();
+    Task? updateStop;
+    Task? updateRestart;
+    bool quitting;
+
+    public bool UpdateUnderWay { get { lock (updating) { return updateStop is not null; } } }
+
+    // Stops the host, then applies an update, which ends this process into the new version, whose
+    // start brings the host back. Should applying throw, or the app begin quitting meanwhile, the
+    // host is started again (by Quit, if quitting) and the error rethrown.
+    public async Task StopAndApplyAsync(Action apply)
     {
-        if (!StoppedForUpdate) { return; }
-        try { Task.Run(() => StartAsync()).Wait(wait); }
+        Task stop;
+        lock (updating)
+        {
+            if (quitting) { throw new OperationCanceledException("the app is quitting"); }
+            // On the thread pool, so Quit can wait for it from the UI thread.
+            stop = updateStop = Task.Run(() => StopAsync());
+        }
+        try
+        {
+            await stop;
+            // Held while applying, so a Quit on another thread waits for it rather than finding the
+            // host stopped and starting it under the update.
+            lock (updating)
+            {
+                if (quitting) { throw new OperationCanceledException("the app is quitting"); }
+                apply();
+            }
+        }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            Task? restart;
+            lock (updating)
+            {
+                updateStop = null;
+                restart = quitting ? null : updateRestart = Task.Run(() => StartAsync());
+            }
+            if (restart is null) { throw; }
+            try { await restart; }
+            catch (Exception again) when (again is not (OutOfMemoryException or StackOverflowException))
+            {
+                throw new InvalidOperationException($"{e.Message}; and the host did not start again: {again.Message}", e);
+            }
+            finally { lock (updating) { updateRestart = null; } }
+            throw;
+        }
+    }
+
+    // The app quitting: an update that had stopped the host, or was stopping it, and not applied,
+    // leaves it running again rather than down until the next sign-in or app start. Waits for the
+    // stop to finish first: until then the old host still answers, and starting it would do
+    // nothing. Bounded, since it runs on the way out.
+    public void Quit(TimeSpan wait, Action<string> log)
+    {
+        Task? stop, restart;
+        lock (updating)
+        {
+            quitting = true;
+            (stop, restart) = (updateStop, updateRestart);
+            updateStop = null;
+        }
+        if (stop is null && restart is null) { return; }
+        try
+        {
+            var back = Task.Run(async () =>
+            {
+                if (restart is not null) { await restart; return; }
+                // A stop that failed or was refused still leaves the host to be started, or running.
+                try { await stop!; }
+                catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { }
+                await StartAsync();
+            }).Wait(wait);
+            if (!back) { log($"the host stopped for an update was not back within {wait.TotalSeconds:0} s"); }
+        }
         catch (Exception e) when (e is not OutOfMemoryException) { log($"the host stopped for an update did not start again: {e.GetBaseException().Message}"); }
-        StoppedForUpdate = false;
     }
 
     // Asks the host to stop and waits for its pipe to go; a host that will not go is ended. One
