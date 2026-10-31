@@ -241,11 +241,12 @@ public sealed class DaemonHaReader : IDisposable
                     // A lapsed figure keeps no history: the account reader's, which stands in for it
                     // (ReadersAsync), keeps it under the same agent, and alternating the two would
                     // start the reader's afresh at every read.
-                    // An empty one is held back until the readers are looked at: put through Stood
-                    // first, it cleared the history of the reader's figure that stands in for it, so
-                    // that figure never held from one read to the next (found in review, #105).
-                    if (access.UsagePace.Lapsed(u.MeasuredAt, readAt)) { usage[client] = u with { Lapsed = true }; }
-                    else if (!u.Reading) { absent[client] = u; }
+                    // An empty one is held back until the readers are looked at, however old its
+                    // measured_at: put through Stood first, it cleared the history of the reader's
+                    // figure that stands in for it, and taken as lapsed, its reader was looked for by
+                    // its own account, not the host's (both found in review, #105).
+                    if (!u.Reading) { absent[client] = u; }
+                    else if (access.UsagePace.Lapsed(u.MeasuredAt, readAt)) { usage[client] = u with { Lapsed = true }; }
                     else { usage[client] = Stood(client, u with { ConfirmedAt = access.UsagePace.ConfirmedAt(u.MeasuredAt, readAt) }, readAt); }
                 }
                 else { absent[client] = null; }

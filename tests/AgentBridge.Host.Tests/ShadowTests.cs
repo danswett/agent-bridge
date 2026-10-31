@@ -1017,9 +1017,12 @@ public sealed class ShadowTests : IDisposable
     }
 
     // Found in review (#105): an empty sensor of this daemon's own cleared the history of the
-    // reader's figure standing in for it, so that figure never held from one read to the next.
-    [Fact]
-    public async Task The_readers_unchanged_figure_holds_across_reads_where_the_daemons_own_sensor_is_empty()
+    // reader's figure standing in for it, so that figure never held from one read to the next; and
+    // with an old measured_at, its reader was looked for by its own account, here none.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_readers_unchanged_figure_holds_across_reads_where_the_daemons_own_sensor_is_empty(bool stale)
     {
         var now = f.Time.GetUtcNow();
         var measured = now;
@@ -1029,7 +1032,9 @@ public sealed class ShadowTests : IDisposable
             {
                 ["entity_id"] = entity,
                 ["state"] = "unknown",
-                ["attributes"] = new JsonObject { ["client"] = "copilot", ["machine_slug"] = "fixture" },
+                ["attributes"] = stale
+                    ? new JsonObject { ["client"] = "copilot", ["machine_slug"] = "fixture", ["measured_at"] = (now - TimeSpan.FromHours(11)).ToString("o") }
+                    : new JsonObject { ["client"] = "copilot", ["machine_slug"] = "fixture" },
             }.ToJsonString(),
             "select.agent_bridge_fixture_new_resume" => ResumeState("Agency on OTHER-PC: Shared from there (abcdef12)"),
             "sensor.agent_bridge_other_pc_usage_copilot_2" => UsageState("copilot", 52, measured, account: "second-login", slug: "other_pc"),
