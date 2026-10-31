@@ -155,8 +155,13 @@ function Invoke-Az {
 }
 
 function Test-AzResource([string[]] $ShowArgs) {
-    & az @ShowArgs --subscription $Subscription --only-show-errors -o none 2>$null
-    return $LASTEXITCODE -eq 0
+    $out = & az @ShowArgs --subscription $Subscription --only-show-errors -o none 2>&1
+    if ($LASTEXITCODE -eq 0) { return $true }
+    # Only a definite "not found" means absent. A timeout, throttling or denied read must not
+    # look like absence: provisioning would then skip the tag check and retag a foreign group.
+    $text = ($out | Out-String)
+    if ($text -match 'ResourceGroupNotFound|ResourceNotFound|NotFound|could not be found|was not found') { return $false }
+    throw "az $($ShowArgs -join ' ') failed: $($text.Trim())"
 }
 
 function Get-VmPublicIp {
