@@ -653,18 +653,21 @@ $bash = @"
 set -e
 export DEBIAN_FRONTEND=noninteractive
 grep -q '^systemd=true' /etc/wsl.conf 2>/dev/null || printf '[boot]\nsystemd=true\n' >> /etc/wsl.conf
-if ! command -v dockerd >/dev/null; then
+if [ ! -s /etc/apt/sources.list.d/docker.list ]; then
   apt-get update -qq
   apt-get install -y -qq ca-certificates curl >/dev/null
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   chmod a+r /etc/apt/keyrings/docker.asc
   echo "deb [arch=`$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu `$(. /etc/os-release && echo `$VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
-  apt-get update -qq
-  apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
 fi
+# Every run, not only when dockerd is missing: apt-get install is idempotent, and it completes
+# a set left half-installed by an interrupted run (Compose included).
+apt-get update -qq
+apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
 systemctl enable docker >/dev/null 2>&1 || true
 echo docker=`$(docker --version)
+echo compose=`$(docker compose version --short)
 "@
 $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bash.Replace("`r`n", "`n")))
 & wsl.exe -d Ubuntu -u root -- bash -c "echo $b64 | base64 -d | bash" 2>&1 | Out-String
@@ -691,6 +694,7 @@ $env:WSL_UTF8 = '1'
 # Read before anything below starts WSL itself: the logon task is what should have started it.
 "docker-task=$((Get-ScheduledTask -TaskName 'Rehearsal WSL Docker').State)"
 "dockerd=$((& wsl.exe -d Ubuntu -u root -- systemctl is-active docker) -join '')"
+"compose=$((& wsl.exe -d Ubuntu -u root -- docker compose version --short) -join '')"
 $hello = & wsl.exe -d Ubuntu -u root -- docker run --rm hello-world 2>&1 | Out-String
 "hello-world=$($hello -match 'Hello from Docker!')"
 & wsl.exe -d Ubuntu -u root -- docker rm -f rehearsal-probe 2>&1 | Out-Null
@@ -905,7 +909,7 @@ Start-Sleep -Seconds 60
 Write-Step 'checking Docker'
 $check = Invoke-VmAsAdmin -Script $GuestDockerCheck
 $check | Write-Verbose
-if ($check -notmatch 'docker-task=Running' -or $check -notmatch 'hello-world=True' -or $check -notmatch 'windows-loopback-18123=200') {
+if ($check -notmatch 'docker-task=Running' -or $check -notmatch 'compose=\d' -or $check -notmatch 'hello-world=True' -or $check -notmatch 'windows-loopback-18123=200') {
     throw "Docker check failed: $check"
 }
 
