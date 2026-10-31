@@ -244,7 +244,9 @@ public sealed partial class HaConnector
         }
         var armedSlots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
         var unset = await RunAsync(HaDecision.Arm(armed.Plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow()), p.Node, ct);
-        armed.PayloadBaseline = payload;
+        // Reply-card words held for a press of Send (HeldStamp) are still there to be sent: the
+        // baseline stays the one before them, or they would read as nothing new.
+        if (!(armed.HeldStamp is { } held && payload.Present && payload.Value == held)) { armed.PayloadBaseline = payload; }
         armed.SubmitBaseline = submit;
         armed.ReplyBaseline = reply;
         armed.Boundary = Interlocked.Read(ref hitSeq);

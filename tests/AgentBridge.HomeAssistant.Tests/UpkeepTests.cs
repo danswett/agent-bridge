@@ -385,6 +385,33 @@ public sealed class UpkeepTests : IDisposable
         Assert.Single(answered);
     }
 
+    [Fact]
+    public async Task Reply_card_words_held_after_a_refusal_are_still_sent_on_a_press_once_the_card_is_put_back()
+    {
+        answerOutcome = AnswerOutcome.Busy;
+        var note = new Field { Name = "note", Title = "Note", Type = FieldType.Text };
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release, note] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 5);
+        c.Observe(ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix"));
+        await Run(c, 1);
+        c.Observe(ha.SendFromCard(NodeA, "after the hotfix", "q1"));
+        await Run(c, 1);
+        Assert.Single(answered);
+
+        // Home Assistant restarts: the choices are gone, the card's retained words are not.
+        ha.ForgetOptimistic();
+        await Run(c, 80);
+        answerOutcome = AnswerOutcome.Delivered;
+        c.Observe(ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix"));
+        await Run(c, 1);
+        c.Observe(ha.Press(SessionEntities.Submit(NodeA)));
+        await Run(c, 2);
+        Assert.Equal(2, answered.Count);
+        Assert.Equal("after the hotfix", answered[1].Fields!["note"].GetString());
+    }
+
     // A tap that reached nothing can be made again on the card put back; one that may have reached
     // the terminal cannot.
     [Theory]
