@@ -167,6 +167,18 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Null(WindowsAgentHaBridgeRuntime.CountRunning(observed with { Known = false }, null, pid => false));
     }
 
+    [Fact]
+    public void Another_users_agent_executable_is_not_counted_as_running_but_an_unreadable_one_in_this_session_is()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var theirs = new AgentBridge.Host.Core.Processes.AgentProcess(30, null, null);
+        var mine = new AgentBridge.Host.Core.Processes.AgentProcess(40, null, "codex.exe");
+        var observed = new AgentBridge.Host.Core.Processes.AgentProcessObservation([theirs, mine], true);
+
+        Assert.Equal(1, WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => pid != 30));
+        Assert.Equal(2, WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => true));
+    }
+
     [Theory]
     [InlineData("{\"authority\":\"home\",\"participant\":\"laptop\"}")]
     [InlineData("\"desk\"")]

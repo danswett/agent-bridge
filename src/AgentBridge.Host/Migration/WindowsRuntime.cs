@@ -36,12 +36,14 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
         CountRunning(new SystemProcessInspector().Observe(agent), startedBefore, InThisSession);
 
     // A runtime (node, bun) whose command line could not be read may be one of the agent's, so
-    // it leaves the answer unknown; but only one in this Windows session. Another user's node is
-    // always unreadable to a standard user, and counting those refused every migrate on a machine
-    // where anyone else was signed in with an agent running (#39 rehearsal, a second user).
+    // it leaves the answer unknown; but only one in this Windows session. Another user's
+    // processes are always unreadable to a standard user, node and the agent's own executable
+    // alike, and counting those refused every migrate on a machine where anyone else was signed
+    // in with an agent running (#140). So an unreadable process in another session is not ours.
     internal static int? CountRunning(AgentProcessObservation observed, DateTimeOffset? startedBefore, Func<int, bool> inThisSession) =>
         observed.Known && !observed.Unidentified.Any(p => inThisSession(p.Id))
-            ? observed.Processes.Count(p => startedBefore is not { } before || p.StartedAt is not { } started || started < before)
+            ? observed.Processes.Count(p => (p.CommandLine is not null || inThisSession(p.Id))
+                && (startedBefore is not { } before || p.StartedAt is not { } started || started < before))
             : null;
 
     // The session id comes with the process list, so it is known even for a process this user
