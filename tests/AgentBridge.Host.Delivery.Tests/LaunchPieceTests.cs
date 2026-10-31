@@ -572,8 +572,9 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Equal("Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a model request. Continue only if you trust these files. Your trust decision will be saved.", codex.Warning);
         Assert.Equal([11, 12], codex.Options);
         Assert.Equal((0, 0), (codex.Selected, codex.TrustAt));
-        Assert.Equal([2, 11, 12], codex.Hold.Select(h => h.Row));
-        Assert.Equal("› 1. Trust and continue", codex.Hold[1].Text);
+        // Everything from the folder to the last option, as read: root, words, blanks, highlight.
+        Assert.Equal(Enumerable.Range(2, 11), codex.Hold.Select(h => h.Row));
+        Assert.Equal(("  c:\\users\\me\\agent-tests", "› 1. Trust and continue"), (codex.Hold[3].Text, codex.Hold[^2].Text));
 
         // Claude draws "No, exit" first, and highlights it.
         var claude = StartupQuestions.ReadTrust(AgentKind.Claude, ClaudeAsks, "C:\\Users\\me\\agent-tests\\untrusted-4")!;
@@ -602,6 +603,9 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Null(StartupQuestions.ReadTrust(AgentKind.Codex, [.. CodexAsks[..13], "  3. Trust everything", .. CodexAsks[13..]], "C:\\Users\\me\\agent-tests\\claude-test"));
         Assert.Null(StartupQuestions.ReadTrust(AgentKind.Codex, [.. CodexAsks[..12], "› 2. Quit", .. CodexAsks[13..]], "C:\\Users\\me\\agent-tests\\claude-test"));
         Assert.Null(StartupQuestions.ReadTrust(AgentKind.Codex, [.. CodexAsks[..11], "  1. Trust and continue", .. CodexAsks[12..]], "C:\\Users\\me\\agent-tests\\claude-test"));
+        // Claude's options with one it never offers highlighted, or one of its own twice.
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Claude, [.. ClaudeAsks[..12], "   No, exit", "   Yes, I trust this folder", " > Yes, I accept", .. ClaudeAsks[14..]], "C:\\Users\\me\\agent-tests\\untrusted-4"));
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Claude, [.. ClaudeAsks[..12], " > Yes, I trust this folder", "   Yes, I trust this folder", .. ClaudeAsks[14..]], "C:\\Users\\me\\agent-tests\\untrusted-4"));
         // A repository root it says trusting applies to, but does not show.
         Assert.Null(StartupQuestions.ReadTrust(AgentKind.Codex, [.. CodexAsks[..5], .. CodexAsks[6..]], "C:\\Users\\me\\agent-tests\\claude-test"));
     }

@@ -863,7 +863,14 @@ public sealed partial class LaunchService : ISessionLauncher
                     p.Ready = p.Launcher.RegistersBeforeReady && StartupQuestions.CopilotReady(screen.Rows);
                     // Read again on every look while it waits: what is shown to a person is what
                     // the window shows now.
-                    if (question == StartupQuestion.Trust) { p.TrustScreen = StartupQuestions.ReadTrust(p.Launcher.Kind, screen.Rows, p.Launched.Cwd ?? ""); }
+                    if (question == StartupQuestion.Trust)
+                    {
+                        var read = StartupQuestions.ReadTrust(p.Launcher.Kind, screen.Rows, p.Launched.Cwd ?? "");
+                        // A question whose folder, root or words change is another question: a
+                        // command signed for the one shown must not answer it.
+                        if (p.TrustId is not null && !StartupQuestions.SameQuestion(read, p.TrustScreen)) { p.TrustId = Guid.NewGuid().ToString(); }
+                        p.TrustScreen = read;
+                    }
                     if (question != p.Question)
                     {
                         p.Question = question;
@@ -1069,15 +1076,21 @@ public sealed partial class LaunchService : ISessionLauncher
         if (Interlocked.CompareExchange(ref p.Answering, 1, 0) != 0) { return TrustRefused("that question is being answered from another device"); }
         var label = p.Launcher.Label;
         var choice = trust ? "trust" : "quit";
+        // Whether a key of this answer may have reached the window: from then on nothing reads as
+        // refused, which says nothing was typed.
+        var wrote = false;
         try
         {
             // Never a second time: once a key may have reached its window, whatever it did is for
             // a person at the machine to see and finish.
             if (p.TrustTyped) { return TrustRefused("an answer was already typed into its window; answer at the machine"); }
-            if (!starter.Running(p.Started)) { return TrustRefused($"{label} has closed"); }
+            if (!AgentAlive(p)) { return TrustRefused($"{label} has closed"); }
             var window = p.Window ?? p.Started.ProcessId;
             var screen = await ReadTrustAsync(p, window);
             if (screen is null) { return TrustRefused("its window does not show that question in full now, so nothing was typed; answer at the machine"); }
+            // The question the command was signed for, folder, root and words: one that changed is
+            // another question, under another id.
+            if (p.TrustId != questionId || !StartupQuestions.SameQuestion(screen, p.TrustScreen)) { return TrustRefused("the question in its window has changed since it was shown; look at it again"); }
 
             // Trust: the highlight is moved to the option that trusts, the move is seen, and only
             // then is Enter pressed. Quit: Esc, which each of these agents reads as no.
@@ -1085,8 +1098,10 @@ public sealed partial class LaunchService : ISessionLauncher
             {
                 var steps = screen.TrustAt - screen.Selected;
                 var move = string.Concat(Enumerable.Repeat(steps > 0 ? KeyPlan.Down : KeyPlan.Up, Math.Abs(steps)));
+                wrote = true;
                 var moved = await injector.InjectAsync(window, new KeyPlan([new KeySend(move, false, 0, TrustKeyPauseMs, screen.Hold)]));
-                p.TrustTyped |= moved.Status != InjectionStatus.NothingTyped;
+                wrote = moved.Status != InjectionStatus.NothingTyped;
+                p.TrustTyped |= wrote;
                 log($"launch {Short(p.Key)}: folder trust for {by}: {Math.Abs(steps)} {(steps > 0 ? "down" : "up")} -> {moved.Status} {moved.Detail}");
                 if (moved.Status == InjectionStatus.NothingTyped) { return TrustRefused($"its window changed before anything was typed ({moved.Detail}); answer at the machine"); }
                 if (moved.Status != InjectionStatus.Typed) { return TrustUnconfirmed("the highlight may have moved, but whether it did is not known"); }
@@ -1094,13 +1109,29 @@ public sealed partial class LaunchService : ISessionLauncher
                 if (screen is null || screen.Selected != screen.TrustAt) { return TrustUnconfirmed("the highlight was not seen on the option that trusts the folder, so Enter was not pressed"); }
             }
             var plan = new KeyPlan([new KeySend(trust ? "" : KeyPlan.Escape, trust, 0, 0, screen.Hold)]);
+            var before = wrote;
+            wrote = true;
             var typed = await injector.InjectAsync(window, plan);
-            p.TrustTyped |= typed.Status != InjectionStatus.NothingTyped;
+            wrote = before || typed.Status != InjectionStatus.NothingTyped;
+            p.TrustTyped |= wrote;
             log($"launch {Short(p.Key)}: folder trust for {by}: {choice}: {plan.Describe()} -> {typed.Status} {typed.Detail}");
-            if (typed.Status == InjectionStatus.NothingTyped) { return TrustRefused($"its window changed before anything was typed ({typed.Detail}); answer at the machine"); }
+            if (typed.Status == InjectionStatus.NothingTyped)
+            {
+                return before
+                    ? TrustUnconfirmed("the highlight was moved, but its window changed before Enter, so Enter was not pressed")
+                    : TrustRefused($"its window changed before anything was typed ({typed.Detail}); answer at the machine");
+            }
             if (typed.Status != InjectionStatus.Typed) { return TrustUnconfirmed($"the {choice} may not have reached {label}"); }
             if (!trust) { p.Declined = by; }
             return await ConfirmTrustAsync(p, trust);
+        }
+        catch (Exception e)
+        {
+            // A worker that failed part way may have typed: settled, so a resend gets this too.
+            if (!wrote) { return TrustRefused($"nothing was typed ({e.Message}); answer at the machine"); }
+            p.TrustTyped = true;
+            log($"launch {Short(p.Key)}: folder trust for {by}: {choice} failed part way: {e.Message}");
+            return TrustUnconfirmed($"the {choice} may not have reached {label} ({e.Message})");
         }
         finally { Volatile.Write(ref p.Answering, 0); }
     }
@@ -1108,6 +1139,15 @@ public sealed partial class LaunchService : ISessionLauncher
     const int TrustKeyPauseMs = 300;
 
     static TrustAnswerResult TrustUnconfirmed(string what) => new(TrustAnswerOutcome.Unconfirmed, $"Not confirmed: answer at the machine. {char.ToUpperInvariant(what[0])}{what[1..]}.");
+
+    // The agent's own process: the launcher's, or, once that handed the session on and exited,
+    // the session's own, by its start time where discovery knows it.
+    bool AgentAlive(Pending p)
+    {
+        if (!p.HandedOn) { return starter.Running(p.Started); }
+        if (p.LiveId is not { } id || source.ProcessOf(id) is not { } owner) { return false; }
+        return owner.StartedAt is not { } at || starter.Running(new Started(owner.Id, at));
+    }
 
     async Task<StartupQuestions.TrustScreen?> ReadTrustAsync(Pending p, int window)
     {
@@ -1134,6 +1174,8 @@ public sealed partial class LaunchService : ISessionLauncher
         while (options.Time.GetElapsedTime(started) < options.TrustConfirmWait)
         {
             await Task.Delay(options.PollInterval, options.Time);
+            // Discovery runs on its own every second; looking here does not wait a pass.
+            try { await source.RefreshAsync(); } catch (Exception) { }
             if (trust)
             {
                 // Registered, and for Copilot its window ready: then the question is gone, which
@@ -1142,9 +1184,9 @@ public sealed partial class LaunchService : ISessionLauncher
                 {
                     return new TrustAnswerResult(TrustAnswerOutcome.Started) { Session = id };
                 }
-                if (!starter.Running(p.Started) && p.LiveId is null) { return TrustUnconfirmed($"{label} closed after the answer, before its session was seen"); }
+                if (p.LiveId is null && !AgentAlive(p)) { return TrustUnconfirmed($"{label} closed after the answer, before its session was seen"); }
             }
-            else if (!starter.Running(p.Started))
+            else if (!AgentAlive(p))
             {
                 return new TrustAnswerResult(TrustAnswerOutcome.Declined, $"{label} was not trusted with {p.Where}, and closed; nothing was launched");
             }
@@ -1153,7 +1195,6 @@ public sealed partial class LaunchService : ISessionLauncher
             ? p.Question == StartupQuestion.Trust ? $"the question is still in {label}'s window" : $"{label}'s session was not seen to start within {options.TrustConfirmWait.TotalSeconds:0} s"
             : $"{label} was not seen to close within {options.TrustConfirmWait.TotalSeconds:0} s");
     }
-
     sealed class Pending(Guid key, Launcher launcher, string sessionId, Started started, string where, DateTimeOffset at, HashSet<string> codexBefore,
         string? worktree, string? reservation, LaunchedWith launched)
     {

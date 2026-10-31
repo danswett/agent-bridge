@@ -769,11 +769,13 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         // What the agent does with keys that reached it (a folder-trust answer).
         public Action<KeyPlan>? OnTyped;
         public InjectionResult? Fails;
+        public Exception? Throws;
 
         // As the worker does: nothing is typed unless the rows a send expects are still there.
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
         {
             lock (Typed) { Typed.Add(processId); Plans.Add(plan); }
+            if (Throws is { } broken) { throw broken; }
             if (Fails is { } failed) { return Task.FromResult(failed); }
             var rows = Rows ?? [];
             foreach (var expect in plan.Sends.SelectMany(s => s.Expect ?? []))
@@ -840,7 +842,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         public Started Start(StartSpec spec)
         {
             int pid;
-            lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } }
+            lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } if (HandsOn) { running.Add(pid + 3000); } }
             if (Registers) { Register(spec, HandsOn ? pid + 3000 : pid); }
             return new Started(pid, DateTimeOffset.UtcNow);
         }
