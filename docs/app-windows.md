@@ -191,9 +191,9 @@ into one folder with one version. An app update is a host update, so they never 
 
 CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` a GitHub
 pre-release, `v0.1.<n>`, of the whole package. Installed copies include pre-releases by
-default: Settings, **Check for updates**, offers the newest and **Install** applies it (as does
-the Home Assistant connector's Install button on a machine the dashboard drives). Nothing
-installs an update unasked.
+default and install them by themselves once their host is idle (Automatic updates, above);
+Settings, **Check for updates** and **Install**, does it at once, as does the Home Assistant
+connector's Install button on a machine the dashboard drives.
 
 * **Version** `0.1.<CI run number>`. The number is the CI workflow's own count, shared by pull
   requests and pushes, so main's versions only rise, with gaps; a re-run keeps its number.
@@ -273,9 +273,9 @@ gh release download $tag -R danswett/agent-bridge -p AgentBridgeApp-win-Setup.ex
 ```
 
 (`gh release download` without a tag takes the latest full release, and there is none yet.)
-From then on, Settings, **Check for updates**, then **Install**, takes it to the newest
-pre-release; turning off "Include pre-releases" in Settings stops it finding them until there
-are full releases.
+From then on it keeps itself on the newest pre-release ("Install updates automatically"), or
+Settings, **Check for updates**, then **Install**, takes it there at once; turning off "Include
+pre-releases" in Settings stops it finding them until there are full releases.
 
 ### Signing (later)
 
