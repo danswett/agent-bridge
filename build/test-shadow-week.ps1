@@ -44,7 +44,7 @@ function Get-ScheduledTaskInfo { [CmdletBinding()] param([string]$TaskName) [psc
 function Register-ScheduledTask {
     [CmdletBinding()] param([string]$TaskName, [string]$Xml, [switch]$Force)
     $global:SwCalls.Add("register $TaskName")
-    if ($global:SwFail['register'] -and $TaskName -like $global:SwFail['register'] -and $Xml -notlike 'PREVIOUS*') { throw "stand-in: registering $TaskName failed" }
+    if ($global:SwFail['register'] -and $TaskName -like $global:SwFail['register'] -and $Xml -notmatch 'PREVIOUS') { throw "stand-in: registering $TaskName failed" }
     $global:SwTasks[$TaskName] = @{ Xml = $Xml; State = 'Ready' }
 }
 function Unregister-ScheduledTask { [CmdletBinding()] param([string]$TaskName, [switch]$Confirm) $global:SwCalls.Add("unregister $TaskName"); $global:SwTasks.Remove($TaskName) }
@@ -103,6 +103,10 @@ function Assert([bool]$Condition, [string]$Claim) {
 }
 
 $hostTask = $null; $runTask = $null
+# A previous install's task as exported: marked, and running the launcher in $Folder.
+function PreviousXml([string]$Task, [string]$Folder = $bin) {
+    "<!-- PREVIOUS $Task --><Task xmlns=`"http://schemas.microsoft.com/windows/2004/02/mit/task`"><Actions Context=`"Author`"><Exec><Command>`"$Folder\agent-bridge-hostw.exe`"</Command></Exec></Actions></Task>"
+}
 function Reset-World([switch]$Previous) {
     Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $ahb, $profileFolder | Out-Null
@@ -115,7 +119,7 @@ function Reset-World([switch]$Previous) {
         New-Item -ItemType Directory -Force $bin | Out-Null
         Set-Content (Join-Path $bin 'agent-bridge-host.exe') 'PREVIOUS'
         Set-Content $profileConfig 'PREVIOUS CONFIG'
-        foreach ($t in $script:hostTask, $script:runTask) { $global:SwTasks[$t] = @{ Xml = "PREVIOUS $t"; State = 'Running' } }
+        foreach ($t in $script:hostTask, $script:runTask) { $global:SwTasks[$t] = @{ Xml = (PreviousXml $t); State = 'Running' } }
     }
 }
 function Invoke-Update([hashtable]$Extra = @{}) {
@@ -131,7 +135,7 @@ function Test-PreviousUntouched {
     Assert ((Get-Content -Raw $profileConfig).Trim() -eq 'PREVIOUS CONFIG') "the profile's config is as it was"
     Assert (-not (Test-Path "$bin.new") -and -not (Test-Path "$bin.previous")) 'nothing is left beside it'
     foreach ($t in $script:hostTask, $script:runTask) {
-        Assert ($global:SwTasks[$t].Xml -eq "PREVIOUS $t" -and $global:SwTasks[$t].State -eq 'Running') "$t is the previous one, running"
+        Assert ($global:SwTasks[$t].Xml -eq (PreviousXml $t) -and $global:SwTasks[$t].State -eq 'Running') "$t is the previous one, running"
     }
 }
 
@@ -155,7 +159,7 @@ $err = Invoke-Install
 Assert ($null -eq $err) "it succeeds ($err)"
 Assert ((Get-Content (Join-Path $bin 'agent-bridge-host.exe')) -eq 'NEW') 'the new build is in place'
 Assert (-not (Test-Path "$bin.previous")) 'the previous build is dropped once the new one serves'
-foreach ($t in $script:hostTask, $script:runTask) { Assert ($global:SwTasks[$t].Xml -ne "PREVIOUS $t" -and $global:SwTasks[$t].State -eq 'Running') "$t is the new one, running" }
+foreach ($t in $script:hostTask, $script:runTask) { Assert ($global:SwTasks[$t].Xml -ne (PreviousXml $t) -and $global:SwTasks[$t].State -eq 'Running') "$t is the new one, running" }
 
 Reset-World -Previous
 Write-Output 'A refused config change fails before anything is stopped'
@@ -195,7 +199,7 @@ Write-Output 'Only the tasks that were running are started again'
 $global:SwFail['register'] = 'AgentBridgeShadowRun_*'
 $null = Invoke-Install
 Assert ($global:SwTasks[$script:hostTask].State -eq 'Running') 'the host, which was running, runs'
-Assert ($global:SwTasks[$script:runTask].State -eq 'Ready' -and $global:SwTasks[$script:runTask].Xml -eq "PREVIOUS $script:runTask") 'the run, which was not, is back as it was and not started'
+Assert ($global:SwTasks[$script:runTask].State -eq 'Ready' -and $global:SwTasks[$script:runTask].Xml -eq (PreviousXml $script:runTask)) 'the run, which was not, is back as it was and not started'
 
 Reset-World
 Write-Output 'A first install that fails in the swap leaves no task behind'
@@ -325,7 +329,7 @@ $err = Invoke-Update
 Assert ($null -eq $err) "it succeeds ($err)"
 Assert ((Get-Content (Join-Path $bin 'agent-bridge-host.exe')) -eq 'NEW') 'the new build is in place'
 Assert (-not (Test-Path "$bin.new") -and -not (Test-Path "$bin.previous")) 'nothing is left beside it'
-foreach ($t in $script:hostTask, $script:runTask) { Assert ($global:SwTasks[$t].Xml -eq "PREVIOUS $t" -and $global:SwTasks[$t].State -eq 'Running') "$t is as it was registered, running" }
+foreach ($t in $script:hostTask, $script:runTask) { Assert ($global:SwTasks[$t].Xml -eq (PreviousXml $t) -and $global:SwTasks[$t].State -eq 'Running') "$t is as it was registered, running" }
 Assert (-not ($global:SwCalls -match '^(register|unregister) |^host ')) 'no task was registered and the host was not asked to change anything'
 Assert ((Get-Content -Raw $profileConfig).Trim() -eq 'PREVIOUS CONFIG') "the profile's config is as it was"
 
@@ -334,6 +338,14 @@ Write-Output '-Update when agent-bridge-host refuses config changes still works:
 $global:SwFail['config'] = 'config set*'
 $err = Invoke-Update
 Assert ($null -eq $err) "it succeeds ($err)"
+
+Reset-World -Previous
+Write-Output '-Update refuses tasks that run a build in another folder, and changes nothing'
+foreach ($t in $script:hostTask, $script:runTask) { $global:SwTasks[$t].Xml = PreviousXml $t (Join-Path $scratch 'elsewhere') }
+$err = Invoke-Update
+Assert ($err -match 'does not run' -and $err -match 'nothing was changed') "it refuses, saying why ($err)"
+Assert ($global:SwCalls.Count -eq 0) 'nothing was published, stopped or started'
+Assert ((Get-Content (Join-Path $bin 'agent-bridge-host.exe')) -eq 'PREVIOUS') 'the build is as it was'
 
 Reset-World
 Write-Output '-Update with nothing installed changes nothing'

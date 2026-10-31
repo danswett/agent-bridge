@@ -415,6 +415,13 @@ function Assert-ShadowTaskRunning {
     }
 }
 
+# The program a registered task runs, from its exported XML; $null when it names none.
+function Get-ShadowTaskCommand([string]$Xml) {
+    try { $command = ([xml]$Xml).Task.Actions.Exec.Command } catch { return $null }
+    if ($command -isnot [string] -or -not $command.Trim('"', ' ')) { return $null }
+    [IO.Path]::GetFullPath($command.Trim('"', ' '))
+}
+
 # Moved with a few tries: a process just ended may hold its files a moment longer.
 function Move-ShadowFolder([string]$From, [string]$To) {
     for ($i = 1; ; $i++) {
@@ -434,8 +441,18 @@ if ($Install -or $Update) {
     # install here, with nothing touched.
     $previous = @(Get-ShadowTaskState)
     # -Update replaces a build under tasks that exist; what they run is -Install's to decide.
-    if ($Update -and (@($previous | Where-Object { -not $_.Xml }).Count -or -not (Test-Path -LiteralPath $exe))) {
-        throw "nothing to update: $hostTask and $runTask, and a build in $Bin, come from -Install first (nothing was changed)"
+    if ($Update) {
+        if (@($previous | Where-Object { -not $_.Xml }).Count -or -not (Test-Path -LiteralPath $exe)) {
+            throw "nothing to update: $hostTask and $runTask, and a build in $Bin, come from -Install first (nothing was changed)"
+        }
+        # And they must run the build in $Bin. Installed to another folder since, they would go on
+        # running that one, and its log and running tasks would pass for the new build serving
+        # (found in review, #108).
+        foreach ($t in $previous) {
+            if ((Get-ShadowTaskCommand $t.Xml) -ne [IO.Path]::GetFullPath($launcher)) {
+                throw "$($t.Name) does not run $launcher, so -Update -Bin $Bin would not reach it; give the -Bin it was installed with, or run -Install (nothing was changed)"
+            }
+        }
     }
     $config = if ($Install) { Save-ShadowConfig } else { $null }
     if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
