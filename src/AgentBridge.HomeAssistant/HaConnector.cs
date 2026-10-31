@@ -650,18 +650,22 @@ public sealed partial class HaConnector : IAsyncDisposable
         foreach (var (id, node) in gone)
         {
             Published? was;
-            lock (gate) { published.TryGetValue(id, out was); }
-            // Its question went with it: withdrawn from the phones (Clear-DaemonAnswerButtons).
-            await ClearButtonsAsync(id, was?.Notify, forget: true, ct);
+            // Waiting for retirement, and on disk, before anything is sent: a host stopped or paused
+            // while the phones are being cleared would otherwise remember the session nowhere, and
+            // the next start would leave its retained entities for the orphan sweep alone to find.
             lock (gate)
             {
-                published.Remove(id);
+                published.Remove(id, out was);
                 starting.Remove(id);
                 retiring.TryAdd(node, new Retiring());
             }
+            SaveLedger();
             log($"Home Assistant connector: session {id[..Math.Min(8, id.Length)]} ended; its entities go once its card has left the dashboard");
+            // Its question went with it: withdrawn from the phones (Clear-DaemonAnswerButtons). A
+            // phone this does not reach stays on record and the stale sweep tries it again.
+            await ClearButtonsAsync(id, was?.Notify, forget: true, ct);
         }
-        if (gone.Count > 0) { SaveLedger(); WatchSetChanged(); }
+        if (gone.Count > 0) { WatchSetChanged(); }
         for (var i = 0; i < work.Count; i++)
         {
             try { await SessionAsync(live[work[i]], now, ct); }
