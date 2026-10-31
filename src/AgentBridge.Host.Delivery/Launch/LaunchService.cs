@@ -23,11 +23,14 @@ public interface ISessionLauncher
 
     // launch.trust.answer, for a person whose signed command the caller has checked: answers a
     // folder-trust question a launched agent is waiting on (trust, or quit).
-    Task<TrustAnswerResult> AnswerTrustAsync(Guid request, string question, bool trust, string by, CancellationToken cancellationToken = default) =>
+    Task<TrustAnswerResult> AnswerTrustAsync(Guid request, string question, bool trust, string device, string by, CancellationToken cancellationToken = default) =>
         Task.FromResult(new TrustAnswerResult(TrustAnswerOutcome.Refused, "this machine does not answer folder-trust questions from other devices; answer at the machine"));
 
     // Whether it takes launch.trust.answer at all (hello's launch.trust).
     bool AnswersTrust => false;
+
+    // The devices approved at the machine to answer from (LaunchService.TrustDevices).
+    IReadOnlyCollection<string> TrustDevices => [];
 }
 
 public sealed class LaunchServiceOptions
@@ -158,6 +161,7 @@ public sealed partial class LaunchService : ISessionLauncher
         requests = new OutcomeMemory<LaunchResult>(options.Time, options.RememberFor);
         trustAnswers = new OutcomeMemory<TrustAnswerResult>(options.Time, options.RememberFor);
         remoteFolderTrust = options.Config.RemoteFolderTrust;
+        TrustDevices = options.Config.RemoteFolderTrustDevices;
     }
 
     LaunchConfig Config => options.Config;
@@ -184,6 +188,18 @@ public sealed partial class LaunchService : ISessionLauncher
     }
 
     bool remoteFolderTrust;
+
+    // The devices a person approved at the machine to answer folder-trust questions from
+    // (launch.remoteFolderTrustDevices), by device id. The relay's kind for a device is what it
+    // says it is, and any device of the account can say "pwa", so this list, not the kind, is
+    // what lets one answer. Live from the app, as RemoteFolderTrust.
+    public IReadOnlyCollection<string> TrustDevices
+    {
+        get => Volatile.Read(ref trustDevices);
+        set => Volatile.Write(ref trustDevices, new HashSet<string>(value, StringComparer.Ordinal));
+    }
+
+    IReadOnlyCollection<string> trustDevices = new HashSet<string>(StringComparer.Ordinal);
 
     // ---- launch.options ----
 
@@ -877,10 +893,11 @@ public sealed partial class LaunchService : ISessionLauncher
                     if (question == StartupQuestion.Trust)
                     {
                         var read = StartupQuestions.ReadTrust(p.Launcher.Kind, screen.Rows, p.Launched.Cwd ?? "");
-                        // A question whose folder, root or words change is another question: a
-                        // command signed for the one shown must not answer it.
-                        if (p.TrustId is not null && !StartupQuestions.SameQuestion(read, p.TrustScreen)) { p.TrustId = Guid.NewGuid().ToString(); }
-                        p.TrustScreen = read;
+                        // A question whose root or words change is another question, under a new
+                        // id: a command signed for the one shown must not answer it. The id and what
+                        // it names are one value, so nobody ever sees one with the other's words.
+                        var was = p.Trust;
+                        p.Trust = was is not null && StartupQuestions.SameQuestion(read, was.Screen) ? was with { Screen = read } : new TrustSnapshot(Guid.NewGuid().ToString(), read);
                     }
                     if (question != p.Question)
                     {
@@ -888,7 +905,6 @@ public sealed partial class LaunchService : ISessionLauncher
                         if (question == StartupQuestion.Trust)
                         {
                             p.TrustAt ??= now;
-                            p.TrustId ??= Guid.NewGuid().ToString();
                             log($"launch {Short(p.Key)}: {label} in {p.Where} is asking whether to trust the folder; {(RemoteFolderTrust ? "a person can answer it here or from their devices" : "left for a person at the machine")}");
                             p.Decided.TrySetResult(new LaunchResult(LaunchOutcome.Unconfirmed,
                                 RemoteFolderTrust
@@ -907,7 +923,7 @@ public sealed partial class LaunchService : ISessionLauncher
                 }
                 // A question a person may answer from their devices is followed for longer, so it
                 // can still be answered, and its answer seen, after the usual ten minutes.
-                var followFor = RemoteFolderTrust && (p.Question == StartupQuestion.Trust || Volatile.Read(ref p.Answering) != 0)
+                var followFor = (RemoteFolderTrust && p.Question == StartupQuestion.Trust) || Volatile.Read(ref p.Answering) != 0
                     ? TimeSpan.FromTicks(Math.Max(options.FollowFor.Ticks, options.TrustFollowFor.Ticks)) : options.FollowFor;
                 if (now - p.At >= followFor)
                 {
@@ -1029,13 +1045,13 @@ public sealed partial class LaunchService : ISessionLauncher
     public IReadOnlyList<TrustQuestion> TrustQuestions()
     {
         List<Pending> waiting;
-        lock (pendingGate) { waiting = [.. pending.Where(x => x.Question == StartupQuestion.Trust && x.TrustId is not null).OrderByDescending(x => x.TrustAt)]; }
+        lock (pendingGate) { waiting = [.. pending.Where(x => x.Question == StartupQuestion.Trust && x.Trust is not null).OrderByDescending(x => x.TrustAt)]; }
         return [.. waiting.Take(MostTrustQuestions).Select(Question)];
     }
 
     // Why a folder-trust question cannot be answered from a person's device now, and what would
     // change that; null when it can.
-    string? AtMachine(StartupQuestions.TrustScreen? screen)
+    string? AtMachine(Pending? p, StartupQuestions.TrustScreen? screen)
     {
         if (!RemoteFolderTrust)
         {
@@ -1043,17 +1059,25 @@ public sealed partial class LaunchService : ISessionLauncher
                 + "or run agent-bridge-host config set launch.remoteFolderTrust true there and restart the host.";
         }
         if (probe.Active() is { } off) { return $"Answer at the machine: {off}."; }
+        if (TrustDevices.Count == 0)
+        {
+            return "Answer at the machine. No device is approved yet to answer these from: approve yours in the Agent Bridge app's Settings on that machine, "
+                + "or add its id to launch.remoteFolderTrustDevices there.";
+        }
+        if (p is { TrustTyped: true }) { return "Answer at the machine: an answer was already typed into its window, and what it did is for a person there to see and finish."; }
+        if (p is not null && Volatile.Read(ref p.Answering) != 0) { return "It is being answered from a device now."; }
         if (screen is null) { return "Answer at the machine: its window could not be read in full, so nothing is typed into it from here."; }
         return null;
     }
 
     TrustQuestion Question(Pending p)
     {
-        var screen = p.TrustScreen;
-        var why = AtMachine(screen);
+        var shown = p.Trust;
+        var screen = shown?.Screen;
+        var why = AtMachine(p, screen);
         return new TrustQuestion
         {
-            Id = p.TrustId ?? "",
+            Id = shown?.Id ?? "",
             Agent = p.Launcher.Id,
             Kind = p.Launcher.Kind,
             Label = p.Launcher.Label,
@@ -1073,17 +1097,18 @@ public sealed partial class LaunchService : ISessionLauncher
     // the question it read, and then waits to see the session start (trust) or the agent close
     // (quit). Nothing is ever typed twice: a key that did not have its effect is reported, and
     // the question is left for the machine. By request, so a resend gets the first outcome.
-    public Task<TrustAnswerResult> AnswerTrustAsync(Guid request, string questionId, bool trust, string by, CancellationToken cancellationToken = default) =>
-        trustAnswers.Once(request, () => AnswerTrustOnceAsync(questionId, trust, by), r => log($"folder-trust answer {Short(request)} from {by}: {r.Outcome.ToString().ToLowerInvariant()}{(r.Reason is { } why ? $" ({why})" : "")}"));
+    public Task<TrustAnswerResult> AnswerTrustAsync(Guid request, string questionId, bool trust, string device, string by, CancellationToken cancellationToken = default) =>
+        trustAnswers.Once(request, () => AnswerTrustOnceAsync(questionId, trust, device, by), r => log($"folder-trust answer {Short(request)} from {by}: {r.Outcome.ToString().ToLowerInvariant()}{(r.Reason is { } why ? $" ({why})" : "")}"));
 
     static TrustAnswerResult TrustRefused(string reason) => new(TrustAnswerOutcome.Refused, reason);
 
-    async Task<TrustAnswerResult> AnswerTrustOnceAsync(string questionId, bool trust, string by)
+    async Task<TrustAnswerResult> AnswerTrustOnceAsync(string questionId, bool trust, string device, string by)
     {
         Pending? p;
-        lock (pendingGate) { p = pending.FirstOrDefault(x => x.TrustId == questionId); }
+        lock (pendingGate) { p = pending.FirstOrDefault(x => x.Trust?.Id == questionId); }
         if (p is null || p.Question != StartupQuestion.Trust) { return TrustRefused("that question is no longer waiting: it was answered, or the agent closed"); }
-        if (!RemoteFolderTrust || probe.Active() is not null) { return TrustRefused(AtMachine(null)!); }
+        if (!RemoteFolderTrust || probe.Active() is not null || TrustDevices.Count == 0) { return TrustRefused(AtMachine(null, null)!); }
+        if (!TrustDevices.Contains(device)) { return TrustRefused(NotApproved(device)); }
         if (Interlocked.CompareExchange(ref p.Answering, 1, 0) != 0) { return TrustRefused("that question is being answered from another device"); }
         var label = p.Launcher.Label;
         var choice = trust ? "trust" : "quit";
@@ -1101,7 +1126,7 @@ public sealed partial class LaunchService : ISessionLauncher
             if (screen is null) { return TrustRefused("its window does not show that question in full now, so nothing was typed; answer at the machine"); }
             // The question the command was signed for, folder, root and words: one that changed is
             // another question, under another id.
-            if (p.TrustId != questionId || !StartupQuestions.SameQuestion(screen, p.TrustScreen)) { return TrustRefused("the question in its window has changed since it was shown; look at it again"); }
+            if (!Shown(p, questionId, screen)) { return TrustRefused("the question in its window has changed since it was shown; look at it again"); }
 
             // Trust: the highlight is moved to the option that trusts, the move is seen, and only
             // then is Enter pressed. Quit: Esc, which each of these agents reads as no.
@@ -1109,6 +1134,9 @@ public sealed partial class LaunchService : ISessionLauncher
             {
                 var steps = screen.TrustAt - screen.Selected;
                 var move = string.Concat(Enumerable.Repeat(steps > 0 ? KeyPlan.Down : KeyPlan.Up, Math.Abs(steps)));
+                // Asked again at every key: agent-ha-bridge starting, or the setting turned off,
+                // while the window was read stops it there.
+                if (Stopped() is not null) { return TrustRefused(AtMachine(null, null)!); }
                 wrote = true;
                 var moved = await injector.InjectAsync(window, new KeyPlan([new KeySend(move, false, 0, TrustKeyPauseMs, screen.Hold)]));
                 wrote = moved.Status != InjectionStatus.NothingTyped;
@@ -1118,7 +1146,9 @@ public sealed partial class LaunchService : ISessionLauncher
                 if (moved.Status != InjectionStatus.Typed) { return TrustUnconfirmed("the highlight may have moved, but whether it did is not known"); }
                 screen = await ReadTrustAsync(p, window);
                 if (screen is null || screen.Selected != screen.TrustAt) { return TrustUnconfirmed("the highlight was not seen on the option that trusts the folder, so Enter was not pressed"); }
+                if (!Shown(p, questionId, screen)) { return TrustUnconfirmed("the question in its window changed after the highlight moved, so Enter was not pressed"); }
             }
+            if (Stopped() is { } halt) { return wrote ? TrustUnconfirmed($"the highlight was moved, but Enter was not pressed: {halt}") : TrustRefused(AtMachine(null, null)!); }
             var plan = new KeyPlan([new KeySend(trust ? "" : KeyPlan.Escape, trust, 0, 0, screen.Hold)]);
             var before = wrote;
             wrote = true;
@@ -1148,6 +1178,19 @@ public sealed partial class LaunchService : ISessionLauncher
     }
 
     const int TrustKeyPauseMs = 300;
+
+    // Whether the window still shows the question that id named when it was shown: one value, read
+    // once, so an id is never checked against another read's words.
+    static bool Shown(Pending p, string questionId, StartupQuestions.TrustScreen screen) =>
+        p.Trust is { } now && now.Id == questionId && StartupQuestions.SameQuestion(screen, now.Screen);
+
+    // Why no key may go now, asked just before each one.
+    string? Stopped() =>
+        probe.Active() ?? (!RemoteFolderTrust ? "answering from devices was turned off at the machine" : TrustDevices.Count == 0 ? "no device is approved to answer from any more" : null);
+
+    // For a device not approved: what a person at the machine does to approve it.
+    public static string NotApproved(string device) =>
+        $"Answer at the machine, or approve this device ({device[..Math.Min(8, device.Length)]}) to answer folder-trust questions in the Agent Bridge app's Settings on that machine.";
 
     static TrustAnswerResult TrustUnconfirmed(string what) => new(TrustAnswerOutcome.Unconfirmed, $"Not confirmed: answer at the machine. {char.ToUpperInvariant(what[0])}{what[1..]}.");
 
@@ -1206,6 +1249,9 @@ public sealed partial class LaunchService : ISessionLauncher
             ? p.Question == StartupQuestion.Trust ? $"the question is still in {label}'s window" : $"{label}'s session was not seen to start within {options.TrustConfirmWait.TotalSeconds:0} s"
             : $"{label} was not seen to close within {options.TrustConfirmWait.TotalSeconds:0} s");
     }
+    // A waiting folder-trust question as last read: its id and what it names, together.
+    sealed record TrustSnapshot(string Id, StartupQuestions.TrustScreen? Screen);
+
     sealed class Pending(Guid key, Launcher launcher, string sessionId, Started started, string where, DateTimeOffset at, HashSet<string> codexBefore,
         string? worktree, string? reservation, LaunchedWith launched)
     {
@@ -1224,8 +1270,7 @@ public sealed partial class LaunchService : ISessionLauncher
         public DateTimeOffset? TrustAt { get; set; }
         // While a folder-trust question waits: its id, and what its window last showed (null
         // when that could not be read in full). Answering is 1 while an answer is being typed.
-        public volatile string? TrustId;
-        public volatile StartupQuestions.TrustScreen? TrustScreen;
+        public volatile TrustSnapshot? Trust;
         public int Answering;
         // Whether a key of an answer from a device may have reached its window: then no other is.
         public volatile bool TrustTyped;

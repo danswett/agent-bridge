@@ -108,7 +108,7 @@ differences, each deliberate:
    to look at if it never does.
 8. A trust question answered from a person's device (`launch.trust.answer`, with
    `launch.remoteFolderTrust` on): the host checks the signed command and that its signer is a
-   person's device on the relay, reads the agent's window again, and types only into that
+   person's device on the relay that was approved at the machine (`launch.remoteFolderTrustDevices`), reads the agent's window again, and types only into that
    agent's own console while the folder and options read exactly as they did. Trust moves the
    highlight to the trusting option (Claude highlights "No, exit" first), sees it there, and
    presses Enter; Quit presses Esc. It answers `started` once the session registers (Copilot:

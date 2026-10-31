@@ -30,7 +30,7 @@ public static class ConfigCommands
         "permissions.remoteApproval", "push.enabled", "delivery.readOnly",
         "launch.enabled", "launch.defaultWorkspace", "launch.defaultAgent", "launch.permissions",
         "launch.worktrees.root", "launch.worktrees.limit", "launch.worktrees.idleHours",
-        "launch.profiles", "launch.defaultProfile", "launch.resumeCount", "launch.remoteFolderTrust",
+        "launch.profiles", "launch.defaultProfile", "launch.resumeCount", "launch.remoteFolderTrust", "launch.remoteFolderTrustDevices",
         "homeAssistant.enabled", "homeAssistant.baseUrl", "homeAssistant.dashboardUrlPath", "homeAssistant.detailedActivity",
         "homeAssistant.machineName", "homeAssistant.disposable", "homeAssistant.agentUserIds",
         "usage.publish", "usage.intervalSeconds", "usage.idleIntervalSeconds", "usage.copilotAccounts",

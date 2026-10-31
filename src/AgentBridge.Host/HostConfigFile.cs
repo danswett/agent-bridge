@@ -36,10 +36,10 @@ public static class HostConfigFile
         return clean.TrimEnd();
     }
 
-    // Sets permissions.remoteApproval, launch.remoteFolderTrust and name (an empty name removes
+    // Sets permissions.remoteApproval, launch.remoteFolderTrust(Devices) and name (an empty name removes
     // it). A file that is not valid JSON is left alone and the change refused, rather than
     // replaced by one that has lost whatever the person meant it to say.
-    public static void Patch(string folder, bool? remoteApproval, string? name, bool? remoteFolderTrust = null)
+    public static void Patch(string folder, bool? remoteApproval, string? name, bool? remoteFolderTrust = null, IReadOnlyList<string>? remoteFolderTrustDevices = null)
     {
         var path = Path.Combine(folder, HostSettings.FileName);
         JsonObject root;
@@ -67,14 +67,15 @@ public static class HostConfigFile
             }
             permissions["remoteApproval"] = approve;
         }
-        if (remoteFolderTrust is { } trust)
+        if (remoteFolderTrust is not null || remoteFolderTrustDevices is not null)
         {
             if (root["launch"] is not JsonObject launch)
             {
                 if (root["launch"] is not null) { throw new InvalidOperationException($"launch in {path} is not an object; fix it by hand first"); }
                 root["launch"] = launch = [];
             }
-            launch["remoteFolderTrust"] = trust;
+            if (remoteFolderTrust is { } trust) { launch["remoteFolderTrust"] = trust; }
+            if (remoteFolderTrustDevices is { } devices) { launch["remoteFolderTrustDevices"] = new JsonArray([.. devices.Select(d => (JsonNode)JsonValue.Create(d))]); }
         }
         if (name is not null)
         {

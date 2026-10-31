@@ -178,7 +178,7 @@ A pending folder-trust question, in `launch.options`' `trust` and a launch resul
 | `root`, `rootNote` | When trusting applies to an enclosing repository instead (Codex): that folder, and the agent's note saying so |
 | `warning` | The agent's own words, from its window (paragraphs separated by `\n`), at most 2 KiB. Absent when its window could not be read in full |
 | `askedAt` | When it was first seen |
-| `answerable` | Whether `launch.trust.answer` can answer it now. When not, `atMachine` says why, and how to change that where a person can: the machine's setting is off (the default), the machine is read-only or agent-ha-bridge runs there, or its window could not be read in full |
+| `answerable` | Whether `launch.trust.answer` from **this** device can answer it now. When not, `atMachine` says why, and how to change that where a person can: the machine's setting is off (the default), no device or not this one is approved there, the machine is read-only or agent-ha-bridge runs there, an answer was already typed or one is being typed, or its window could not be read in full. Always false on a host's own pipe |
 
 A client that does not know these fields ignores them, as it ignores any; old hosts send none.
 
@@ -211,16 +211,25 @@ A host acts on it only if all of these hold, and otherwise answers `refused` and
   that device as a person's (`pwa` or `app`), not a machine. A host's own pipe (agents, the MCP
   server) and the Home Assistant connector cannot send it at all, and no Home Assistant entity,
   notification button or launch payload answers one;
+* a person approved that device at the machine: its id is in `launch.remoteFolderTrustDevices`,
+  set the same way as the setting. The relay's kind is what a device says it is, and anything
+  holding the account's token can make a key and connect as `pwa`, so the kind alone is not
+  enough. With the setting on and no device approved, nobody can answer from a device;
 * the command verifies for this machine, choice and question, within its lifetime;
 * the question still waits, nobody else is answering it, and no earlier answer has typed into its
   window (whatever that did is for a person at the machine to see and finish).
+
+The setting, the approved devices, read-only and agent-ha-bridge are asked again before each key,
+so a change at the machine stops an answer part way: before any key it is `refused`, and after
+Trust moved the highlight it is `unconfirmed` with Enter not pressed.
 
 The answer goes only into that agent's own console, by its process, as replies do. **Trust**
 moves the highlight to the option that trusts (Copilot "Yes", this session only; Claude "Yes, I
 trust this folder"; Codex "Trust and continue"), reads the window to see it there, and presses
 Enter. **Quit** presses Esc, which each of them reads as no. Every key goes only while the
 folder and every option, highlight included, still read exactly as they did, and nothing is
-ever typed twice.
+ever typed twice. A question whose root or words change, in full and not only the 2 KiB shown,
+is another question under a new `id`, and a command for the first does not answer it.
 
 Result: `{ "outcome", "reason", "session" }`:
 

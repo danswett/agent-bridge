@@ -565,6 +565,28 @@ public sealed class LaunchPieceTests : IDisposable
     ];
 
     [Fact]
+    public void Two_trust_questions_that_differ_only_past_what_is_shown_are_still_two_questions()
+    {
+        string[] Asks(string tail) =>
+        [
+            " Accessing workspace:",
+            "",
+            " C:\\w",
+            "",
+            " " + new string('x', TrustProtocol.MaxText + 10) + tail,
+            "",
+            " > No, exit",
+            "   Yes, I trust this folder",
+        ];
+        var a = StartupQuestions.ReadTrust(AgentKind.Claude, Asks("one"), "C:\\w")!;
+        var b = StartupQuestions.ReadTrust(AgentKind.Claude, Asks("two"), "C:\\w")!;
+        // What is shown is cut, and reads the same; the words in full do not.
+        Assert.Equal(a.Warning, b.Warning);
+        Assert.False(StartupQuestions.SameQuestion(a, b));
+        Assert.True(StartupQuestions.SameQuestion(a, StartupQuestions.ReadTrust(AgentKind.Claude, Asks("one"), "C:\\w")));
+    }
+
+    [Fact]
     public void A_folder_trust_question_is_read_in_full_with_the_agents_own_words_and_where_its_highlight_is()
     {
         var codex = StartupQuestions.ReadTrust(AgentKind.Codex, CodexAsks, "C:\\Users\\me\\agent-tests\\claude-test")!;
