@@ -78,10 +78,16 @@ public sealed partial class HaConnector
     // updateAttempt, so an install pressed meanwhile that fails does not take it away. The ledger
     // holds one: an install handed over records its own, whose outcome the next host tells.
     UpdateAttempt? updateOutcome;
-    // A notice Home Assistant did not take, tried again until it does or a newer one replaces it
-    // (they share one notification_id, so only the newest means anything).
-    (string Title, string Message)? noticePending;
+    // The newest notice answering a press, until Home Assistant has taken it: tried again until it
+    // does or a newer one replaces it. They share one notification_id, so only the newest means
+    // anything, and they are sent one at a time so an older one never lands after a newer one.
+    long noticeSeq;
+    (long Seq, string Title, string Message)? noticePending;
     DateTimeOffset nextNoticeTry;
+    readonly SemaphoreSlim noticeSend = new(1, 1);
+    // A press acted on since this host started: its answer on the entity is newer than an earlier
+    // host's outcome, which must not be laid over it.
+    bool updatePressNews;
     string? updateSignature;
 
     sealed record UpdateAttempt(string Target, string Before, DateTimeOffset At, string? Url);
@@ -153,9 +159,9 @@ public sealed partial class HaConnector
                 Problem("update-outcome", $"Home Assistant connector could not tell how the update ended: {Describe(e)}; trying again");
             }
         }
-        (string Title, string Message)? retry;
-        lock (gate) { retry = now >= nextNoticeTry ? noticePending : null; }
-        if (retry is { } n) { await TellAsync(n.Title, n.Message, ct); }
+        bool retry;
+        lock (gate) { retry = now >= nextNoticeTry && noticePending is not null; }
+        if (retry) { await SendNoticeAsync(ct); }
         if (!updateServing)
         {
             await PublishUpdateAsync(now, ct);
@@ -187,6 +193,7 @@ public sealed partial class HaConnector
         if (await PressedAsync("check_updates", checkPressSeen, ct) is { } check)
         {
             checkPressSeen = check.Value;
+            if (check.Fresh) { lock (gate) { updatePressNews = true; } }
             // Not while an update runs: it has looked for itself, and says what it found.
             if (check.Fresh && !UpdateBusy)
             {
@@ -197,7 +204,11 @@ public sealed partial class HaConnector
         if (await PressedAsync("install_update", installPressSeen, ct) is { } install)
         {
             installPressSeen = install.Value;
-            if (install.Fresh) { await InstallPressedAsync(now, ct); }
+            if (install.Fresh)
+            {
+                lock (gate) { updatePressNews = true; }
+                await InstallPressedAsync(now, ct);
+            }
         }
     }
 
@@ -447,10 +458,23 @@ public sealed partial class HaConnector
                 title = $"Bridge update failed on {options.MachineName}";
                 message = $"The bridge update to {attempt.Target} did not complete: the host restarted on {installed}. Currently recorded version: {installed}. The installation may be partially changed; no rollback is claimed.";
             }
-            // The verdict alone: what the checks found since stays as they found it.
-            lock (gate) { updateVerdict = (stage, detail, now + options.UpdateOutcomeShown); }
-            await PublishUpdateAsync(now, ct);
-            await NoticeAsync(title, message, ct);
+            // The verdict alone: what the checks found since stays as they found it. Neither it nor
+            // the notice goes over the answer to a press made since: that is newer news.
+            bool show;
+            lock (gate)
+            {
+                show = !updatePressNews;
+                if (show) { updateVerdict = (stage, detail, now + options.UpdateOutcomeShown); }
+            }
+            if (show) { await PublishUpdateAsync(now, ct); }
+            await noticeSend.WaitAsync(ct);
+            try
+            {
+                bool superseded;
+                lock (gate) { superseded = noticeSeq > 0; }
+                if (!superseded) { await NoticeAsync(title, message, ct); }
+            }
+            finally { noticeSend.Release(); }
             log($"Home Assistant connector: self-update {(success ? $"completed for {attempt.Target}" : $"to {attempt.Target} FAILED: the host restarted on {installed}")}");
         }
         lock (gate) { if (ReferenceEquals(updateOutcome, attempt)) { updateOutcome = null; } }
@@ -462,19 +486,34 @@ public sealed partial class HaConnector
     // for the connector stopping.
     async Task TellAsync(string title, string message, CancellationToken ct)
     {
-        lock (gate) { noticePending = (title, message); }
+        lock (gate) { noticePending = (++noticeSeq, title, message); }
+        await SendNoticeAsync(ct);
+    }
+
+    // Sends whichever notice is newest when its turn comes, so one queued behind a newer one is
+    // never sent after it.
+    async Task SendNoticeAsync(CancellationToken ct)
+    {
+        await noticeSend.WaitAsync(ct);
         try
         {
-            await NoticeAsync(title, message, ct);
-            lock (gate) { if (noticePending == (title, message)) { noticePending = null; } }
-            Resolved("update-notice");
+            (long Seq, string Title, string Message)? pending;
+            lock (gate) { pending = noticePending; }
+            if (pending is not { } n) { return; }
+            try
+            {
+                await NoticeAsync(n.Title, n.Message, ct);
+                lock (gate) { if (noticePending?.Seq == n.Seq) { noticePending = null; } }
+                Resolved("update-notice");
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception e)
+            {
+                lock (gate) { nextNoticeTry = time.GetUtcNow() + options.ButtonsRetry; }
+                Problem("update-notice", $"Home Assistant connector could not send \"{n.Title}\": {Describe(e)}; trying again");
+            }
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception e)
-        {
-            lock (gate) { nextNoticeTry = time.GetUtcNow() + options.ButtonsRetry; }
-            Problem("update-notice", $"Home Assistant connector could not send \"{title}\": {Describe(e)}; trying again");
-        }
+        finally { noticeSend.Release(); }
     }
 
     // The update notices all replace one another (notification_id agent_bridge_update_<slug>).

@@ -609,7 +609,7 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
-    public async Task An_install_that_fails_before_an_earlier_outcome_is_told_leaves_that_outcome_to_be_told()
+    public async Task An_earlier_outcome_still_untold_gives_way_to_a_newer_press_answer_and_is_never_laid_over_it()
     {
         Attempt("0.2.0", FakeSessions.T0.AddMinutes(-1));
         updates.Installed = "0.2.0";
@@ -622,10 +622,30 @@ public sealed class UpdateTests : IDisposable
         Assert.Equal("0.2.0", JsonNode.Parse(File.ReadAllText(StateFile))!["update"]!["target"]!.GetValue<string>());
         ha.NotifyFailsFor = null;
         await Pass(c, 16);
-        // Both told, the newer last: they share one notification, which ends up saying the newer.
-        Assert.Equal([$"Bridge installer completed on {Machine}", $"Bridge update failed on {Machine}"],
-            ha.NotifiedNow().Select(n => n.Data["title"]!.GetValue<string>()));
+        await Pass(c, 16);
+        // They share one notification: the newer answer is what it says, and the older outcome is
+        // not sent after it, nor its verdict laid over the newer one.
+        var (_, data) = Assert.Single(ha.NotifiedNow());
+        Assert.Equal($"Bridge update failed on {Machine}", data["title"]!.GetValue<string>());
+        Assert.Equal("failed", Stage);
         Assert.Null(JsonNode.Parse(File.ReadAllText(StateFile))!["update"]);
+    }
+
+    [Fact]
+    public async Task An_earlier_outcome_told_after_a_press_of_Check_leaves_the_checks_answer_on_the_entity()
+    {
+        Attempt("0.2.0", FakeSessions.T0.AddMinutes(-1));
+        updates.Installed = "0.2.0";
+        ha.NotifyFailsFor = s => s == "persistent_notification.create";
+        await using var c = await Ready();
+        await Press(c, "check_updates");
+        await Pass(c);
+        Assert.Equal("current", Stage);
+        ha.NotifyFailsFor = null;
+        await Pass(c, 16);
+        var (_, data) = Assert.Single(ha.NotifiedNow());
+        Assert.Equal($"Bridge installer completed on {Machine}", data["title"]!.GetValue<string>());
+        Assert.Equal("current", Stage);
     }
 
     [Fact]

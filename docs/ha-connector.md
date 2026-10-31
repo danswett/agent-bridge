@@ -607,7 +607,8 @@ looks nothing up.
   `<machine>`**, and leaves Install usable. A press while an update runs, or while the host waits
   to exit into one, is not acted on and gets the daemon's **Bridge update already running on
   `<machine>`** notice. A notice Home Assistant does not take is tried again every 15 s until it
-  does or a newer one replaces it. What is downloaded and applied is exactly the release the
+  does or a newer one replaces it; notices go one at a time, newest first, so an older one never
+  lands after a newer one. What is downloaded and applied is exactly the release the
   install's own check found, from the feed that found it. A host stopped part-way through leaves the last stage retained, as the
   daemon does, and the next start republishes the entity without it.
 * **The outcome.** The host that comes back reads the attempt and says how it ended, once: on
@@ -617,8 +618,10 @@ looks nothing up.
   old outcome file. The host that recorded it never announces it: it is still on the old version
   for the moment before it exits. The outcome answers the press, not a check, so it is told
   even when checks were turned off meanwhile, and a notification Home Assistant refuses is tried
-  again every 15 s without holding up a new press; an install pressed meanwhile that fails leaves
-  it to be told. Every notice is a `persistent_notification` with
+  again every 15 s without holding up a new press. It is older news than any press this host has
+  answered: its verdict is not laid over a press's answer, and its notice is not sent once a
+  press's notice has been (they share one notification, which would then say the older). Every
+  notice is a `persistent_notification` with
   `notification_id: agent_bridge_update_<slug>`, so each replaces the last.
 * **Presses** are read from the buttons' states (press timestamps), on a watch hit or every
   five seconds; a press from before the connector started is history, not an instruction

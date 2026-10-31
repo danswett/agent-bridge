@@ -1045,6 +1045,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         passes.Dispose();
         updateCancel.Dispose();
         updatePublish.Dispose();
+        noticeSend.Dispose();
     }
 
     // agent-ha-bridge is running for this user: the message says how it was found.
