@@ -237,7 +237,11 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     S.Model = Text.NonBlank(Json.Str(data, "model")) ?? S.Model;
                     if (Text.NonBlank(Json.Str(data, "reasoningText")) is { } reasoning) { S.Reasoning = reasoning; }
                     if (Text.NonBlank(Json.Str(data, "content")) is { } content) { S.Response = content; }
-                    if (Json.Arr(data, "toolRequests") is { } requests && requests.GetArrayLength() > 0) { _turnAskedForTools = true; }
+                    // The turn's latest reply decides whether it goes on to run tools. Copilot answers an
+                    // agent_idle notification inside the turn it starts: a read_agent request, its
+                    // result, then the reply with nothing more to run. Kept from the first, the session
+                    // read working until its next prompt, idle for hours (#40, DSWETT-DEV-VM1).
+                    _turnAskedForTools = Json.Arr(data, "toolRequests") is { } requests && requests.GetArrayLength() > 0;
                     S.SetStatus(SessionStatus.Working);
                     S.Activity(at);
                     break;
