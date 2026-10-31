@@ -715,8 +715,9 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
     is therefore read once with the baselines it was armed with before new ones are taken. An
     answer given on it in the meantime is delivered rather than taken for the new baseline, and a
     question answered that way is not put on screen again. Only a read that could see every
-    control counts: one that could not read Send, say, cannot tell a press from none, so the card
-    is read again on the next pass before anything is re-armed. A card whose entities were published
+    control counts: one that could not read Send, say, or found the selector or a choice
+    `unavailable`, cannot tell an answer from none, so the card is read again on the next pass
+    before anything is re-armed. A card whose entities were published
     again from nothing is armed at once, since there is nothing on it to read.
   * In both cases the question keeps what it has been through: answered, its attempts, what was
     used. An answer that may have reached the terminal is never typed again because the card was

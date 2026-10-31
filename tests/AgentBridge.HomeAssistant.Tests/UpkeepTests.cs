@@ -498,6 +498,31 @@ public sealed class UpkeepTests : IDisposable
     }
 
     [Fact]
+    public async Task An_approval_tapped_on_a_restored_card_is_not_armed_over_while_its_selector_is_unavailable()
+    {
+        var question = new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "rm -rf build", AskedAt = FakeSessions.T0 };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Agent = AgentKind.Codex, Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 70);
+        Assert.Equal(HaDecision.Awaiting, (await ha.GetStateAsync(SessionEntities.Decision(NodeA)))!.State);
+
+        // A restart: the box comes back empty, and Approve is tapped on the selector Home Assistant
+        // kept, which then reads unavailable for a while (its integration reloading, say).
+        ha.ForgetOptimistic(SessionEntities.Reply(NodeA));
+        ha.Choose(SessionEntities.Decision(NodeA), "Approve");
+        ha.Unavailable.Add(SessionEntities.Decision(NodeA));
+        for (var i = 0; i < 30 && (await ha.GetStateAsync(SessionEntities.Reply(NodeA)))!.State != HaDecision.ReplyBlank; i++) { await Run(c, 1); }
+        await Run(c, 10);
+        Assert.Empty(answered);
+        Assert.Equal(0, Logged("armed " + NodeA + " again"));
+
+        ha.Unavailable.Clear();
+        await Run(c, 10);
+        var given = Assert.Single(answered);
+        Assert.Equal("approve", given.Fields!.Values.Single().GetString());
+    }
+
+    [Fact]
     public async Task A_forms_words_kept_in_the_box_through_a_selector_only_loss_are_still_its_answer()
     {
         var note = new Field { Name = "note", Title = "Note", Type = FieldType.Text };

@@ -724,6 +724,8 @@ public sealed partial class HaConnector
         var fresh = since.Any(h => h.EntityId == SessionEntities.Submit(node) || h.EntityId == SessionEntities.Reply(node))
             || await PressedSinceFailureAsync(node, armed, ct);
         var decision = await ha.GetStateAsync(SessionEntities.Decision(node), ct);
+        // Unavailable says nothing about a tap on it: not determinate, so no re-arm follows this read.
+        if (decision?.State == "unavailable") { Interlocked.Increment(ref indeterminate); }
         if (decision?.State == HaDecision.Cancel)
         {
             // The host has no way to withdraw a question; the selector goes back to waiting.
@@ -824,6 +826,7 @@ public sealed partial class HaConnector
                 continue;
             }
             var slot = (await ha.GetStateAsync(SessionEntities.Field(node, i + 1), ct))?.State ?? "";
+            if (slot == "unavailable") { Interlocked.Increment(ref indeterminate); }
             if (armed.StaleSlots.TryGetValue(i + 1, out var stale))
             {
                 if (stale.Stale is not null && slot != stale.Stale) { armed.StaleSlots.Remove(i + 1); }

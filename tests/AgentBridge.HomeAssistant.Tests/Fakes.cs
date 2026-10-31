@@ -34,6 +34,8 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     public Func<string, bool>? GetFailsFor { get; set; }
     // Entities a Home Assistant still starting answers 404 for: registered, not loaded yet.
     public HashSet<string> Loading { get; } = new(StringComparer.Ordinal);
+    // Entities Home Assistant reports unavailable, whatever they hold.
+    public HashSet<string> Unavailable { get; } = new(StringComparer.Ordinal);
     public int RegistryLists { get; private set; }
 
     public Task PublishAsync(string topic, string payload, bool retain, CancellationToken cancellationToken = default)
@@ -122,6 +124,14 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         lock (gate) { reads[entityId] = reads.GetValueOrDefault(entityId) + 1; }
         if (GetFailsFor?.Invoke(entityId) == true) { throw new HttpRequestException($"{entityId}: Home Assistant answered 502 Bad Gateway"); }
         if (Loading.Contains(entityId)) { return Task.FromResult<HaState?>(null); }
+        if (Unavailable.Contains(entityId))
+        {
+            lock (gate)
+            {
+                var held = States.TryGetValue(entityId, out var s) ? s : Derived(entityId);
+                return Task.FromResult<HaState?>(held is null ? null : held with { State = "unavailable" });
+            }
+        }
         lock (gate) { return Task.FromResult(States.TryGetValue(entityId, out var s) ? s : Derived(entityId)); }
     }
 
