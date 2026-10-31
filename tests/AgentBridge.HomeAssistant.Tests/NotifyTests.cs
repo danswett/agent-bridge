@@ -776,6 +776,23 @@ public sealed class NotifyTests : IDisposable
     }
 
     [Fact]
+    public async Task A_tapped_button_answers_its_own_option_when_two_share_a_label()
+    {
+        var twins = new Field
+        {
+            Name = "pick", Title = "Pick", Type = FieldType.Multi,
+            Options = [new Option("a", "Same"), new Option("b", "Same"), new Option("c", "Other one")],
+        };
+        Ask(Form("q1", twins));
+        await using var c = Connector();
+        await Pass(c);
+        Assert.Equal(["Same", "Same", "Other one"], Buttons()[0]["data"]!["actions"]!.AsArray().Select(a => a!["title"]!.GetValue<string>()).Take(3));
+        Tap(c, "BRIDGE_q1_1");
+        await Pass(c);
+        Assert.Equal(["b"], Assert.Single(answered).Fields!["pick"].EnumerateArray().Select(e => e.GetString()));
+    }
+
+    [Fact]
     public async Task A_tap_the_host_refused_can_be_made_again()
     {
         var refusals = 1;

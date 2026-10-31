@@ -149,13 +149,22 @@ public static partial class HaNotify
     // Get-BridgeAnswerButtonOptions: the labels a question can be answered with by tapping, or none.
     public static IReadOnlyList<string> Options(NotifyMarker marker)
     {
-        if (marker.TerminalOnly || marker.Mode != "multiple_choice" || marker.Fields.Count > 1) { return []; }
-        var choices = marker.Choices.Where(c => !string.IsNullOrWhiteSpace(c)).ToList();
-        if (choices.Count == 0 && marker.Fields.Count == 1 && !marker.Fields[0].IsText)
+        var (from, indexes) = OptionSources(marker);
+        return [.. indexes.Select(i => from[i])];
+    }
+
+    // Which entries the buttons are, in order: positions in the question's choices, or in its lone
+    // field's options when it has no choices. A tap names a button by position, and labels need
+    // not be unique, so the answer is found by this, never by looking its label up.
+    public static (IReadOnlyList<string> From, IReadOnlyList<int> Indexes) OptionSources(NotifyMarker marker)
+    {
+        if (marker.TerminalOnly || marker.Mode != "multiple_choice" || marker.Fields.Count > 1) { return ([], []); }
+        IReadOnlyList<string> from = marker.Choices;
+        if (!from.Any(c => !string.IsNullOrWhiteSpace(c)))
         {
-            choices = [.. marker.Fields[0].Options.Where(c => !string.IsNullOrWhiteSpace(c))];
+            from = marker.Fields.Count == 1 && !marker.Fields[0].IsText ? marker.Fields[0].Options : [];
         }
-        return [.. choices.Where(c => !OtherEntry().IsMatch(c))];
+        return (from, [.. from.Select((c, i) => (c, i)).Where(x => !string.IsNullOrWhiteSpace(x.c) && !OtherEntry().IsMatch(x.c)).Select(x => x.i)]);
     }
 
     [GeneratedRegex(@"^\s*other\s*\(type your answer\)\s*$", RegexOptions.IgnoreCase)]

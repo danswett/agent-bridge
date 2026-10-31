@@ -342,13 +342,16 @@ public sealed partial class HaConnector
                 ? Answer(sessionId, armed, new Dictionary<string, JsonElement> { [name] = JsonSerializer.SerializeToElement(new { other = text }) }, null, text, null, press, driver)
                 : null;
         }
-        var options = HaNotify.Options(HaNotify.Marker(plan));
-        if (choice.Index < 0 || choice.Index >= options.Count || plan.Fields.Count != 1) { return null; }
-        var label = options[choice.Index];
+        var (from, indexes) = HaNotify.OptionSources(HaNotify.Marker(plan));
+        if (choice.Index < 0 || choice.Index >= indexes.Count || plan.Fields.Count != 1) { return null; }
         var lone = plan.Fields[0];
         var source = lone.Source!;
-        var index = lone.Options.ToList().IndexOf(label);
-        if (lone.IsText || index < 0 || (source.Options is null && source.Type != FieldType.Boolean)) { return null; }
+        // By position: two options may share a label, and the tapped one is the one meant. The
+        // buttons are the lone field's own options, so a position in one is a position in the other.
+        var index = indexes[choice.Index];
+        var label = from[index];
+        if (lone.IsText || !from.SequenceEqual(lone.Options)
+            || (source.Options is null && source.Type != FieldType.Boolean)) { return null; }
         JsonElement value = source.Type switch
         {
             FieldType.Boolean => JsonSerializer.SerializeToElement(index == 0),
