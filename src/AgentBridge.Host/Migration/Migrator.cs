@@ -662,13 +662,20 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         // An older record does not say which tasks the migration turned off. One found disabled
         // now was, and is recorded so before it is turned back on: a retry after this attempt
         // fails finds it enabled, and must still start it rather than leave it as one the
-        // scheduler refused.
-        void TurnedOff(MigrationRecord.TaskRecord task)
+        // scheduler refused. One that cannot be recorded is not turned on, so a retry finds it
+        // as this attempt did.
+        bool TurnedOff(MigrationRecord.TaskRecord task)
         {
-            if (task.Disabled is not null) { return; }
+            if (task.Disabled is not null) { return true; }
             task.Disabled = true;
-            try { record.Save(options.ProfileFolder); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            try { record.Save(options.ProfileFolder); return true; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                task.Disabled = null;
+                ok = false;
+                Say($"* {task.Name} was left disabled: the record could not say it is being turned back on ({e.Message}); run rollback again.");
+                return false;
+            }
         }
         if (dryRun)
         {
@@ -690,7 +697,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             {
                 try
                 {
-                    if (runtime.Task(task.Name) is not { Enabled: true }) { TurnedOff(task); runtime.SetEnabled(task.Name, true); }
+                    if (runtime.Task(task.Name) is not { Enabled: true } && TurnedOff(task)) { runtime.SetEnabled(task.Name, true); }
                 }
                 catch (Exception e) when (e is not OperationCanceledException) { Say($"* {task.Name} could not be turned back on ({e.Message}); run agent-ha-bridge configure."); }
             }
@@ -718,7 +725,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
                 var daemon = task.Name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal);
                 if (state is not { Enabled: true })
                 {
-                    TurnedOff(task);
+                    if (!TurnedOff(task)) { continue; }
                     runtime.SetEnabled(task.Name, true);
                     reenabled.Add(task.Name);
                 }

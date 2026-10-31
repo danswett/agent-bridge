@@ -1291,6 +1291,30 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_older_records_task_whose_turning_back_on_cannot_be_recorded_is_left_disabled_for_a_retry()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var path = MigrationRecord.PathIn(_f.Profile);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        foreach (var t in json["tasks"]!.AsArray()) { t!.AsObject().Remove("disabled"); }
+        File.WriteAllText(path, json.ToJsonString());
+        File.SetAttributes(path, FileAttributes.ReadOnly);
+        _f.Runtime_.Calls.Clear();
+        try
+        {
+            var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+            Assert.False(report.Ok);
+            Assert.Contains($"* {daemon} was left disabled", report.ToString());
+            Assert.DoesNotContain($"enable {daemon}", _f.Runtime_.Calls);
+            Assert.False(_f.Runtime_.Tasks[daemon].Enabled);
+        }
+        finally { File.SetAttributes(path, FileAttributes.Normal); }
+    }
+
+    [Fact]
     public async Task An_older_records_task_still_enabled_is_not_started_by_a_rollback_unless_it_is_the_daemon()
     {
         var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
