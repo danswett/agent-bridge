@@ -239,7 +239,7 @@ public sealed partial class HaConnector
     async Task SessionUpkeepAsync(DateTimeOffset now, CancellationToken ct)
     {
         List<(string Id, Published P)> due;
-        lock (gate) { due = [.. published.Where(p => !p.Value.Lost && now - p.Value.PublishedAt >= options.EntityRestore).Select(p => (p.Key, p.Value))]; }
+        lock (gate) { due = [.. published.Where(p => !p.Value.Lost && !p.Value.SelectorLost && now - p.Value.PublishedAt >= options.EntityRestore).Select(p => (p.Key, p.Value))]; }
         foreach (var (id, p) in due)
         {
             var sentinel = ServesAnswers ? SessionEntities.Reply(p.Node) : SessionEntities.Status(p.Node);
@@ -267,7 +267,7 @@ public sealed partial class HaConnector
 
     // Restore-DaemonSessionEntities' trigger: published again whole on the next pass, once they have
     // been gone for EntityRestore.
-    void Lose(string id, Published p, DateTimeOffset now)
+    void Lose(string id, Published p, DateTimeOffset now, bool selectorOnly = false)
     {
         int attempt;
         lock (gate)
@@ -281,7 +281,8 @@ public sealed partial class HaConnector
             absentSince.Remove(id);
             attempt = restores.TryGetValue(id, out var was) ? was + 1 : 1;
             restores[id] = attempt;
-            p.Lost = true;
+            if (selectorOnly) { p.SelectorLost = true; }
+            else { p.Lost = true; }
             dirty.Add(id);
         }
         var shortId = id[..Math.Min(8, id.Length)];
@@ -302,11 +303,12 @@ public sealed partial class HaConnector
             HaState? decision;
             try { decision = await ha.GetStateAsync(SessionEntities.Decision(p.Node), ct); }
             catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { return; }
-            // The selector gone on its own, the reply box still there: the set goes again, as when
-            // the box is gone, since a selector is published and pinned with the rest.
+            // The selector gone on its own, the reply box still there: it alone is declared again.
+            // The rest of the card, choices included, is still there and is left as it is: published
+            // again, its choice slots would get the first publication's options.
             if (decision is null)
             {
-                Lose(id, p, now);
+                Lose(id, p, now, selectorOnly: true);
                 return;
             }
             selectorLost = Unset(decision.State);

@@ -188,6 +188,8 @@ public sealed partial class HaConnector : IAsyncDisposable
         public DateTimeOffset PublishedAt;
         // Home Assistant has lost them: published again on the next pass (SessionUpkeepAsync).
         public bool Lost;
+        // Home Assistant has lost only the selector: it alone is declared again on the next pass.
+        public bool SelectorLost;
         public required string Name;
         public required string Kind;
         public string? Status;
@@ -753,6 +755,27 @@ public sealed partial class HaConnector : IAsyncDisposable
             }
             p.ArmedSlots = -1;
             p.Cleared = false;
+        }
+        else if (p.SelectorLost)
+        {
+            // The selector removed on its own: declared again and pinned, the rest of the card left
+            // as it is. Its question is armed again (read first), or it is parked on Idle.
+            var (decisionTopic, decisionConfig) = HaContract.DecisionConfig(t, name, options.MachineName, [HaDecision.Idle], enabledByDefault: false);
+            await PublishAsync(decisionTopic, decisionConfig, true, ct);
+            await Task.Delay(options.FieldPinDelay, time, ct);
+            await PinNowAsync(HaContract.SessionControlIds(node).Where(x => x.Value == SessionEntities.Decision(node)).ToDictionary(x => x.Key, x => x.Value), now, ct);
+            p.SelectorLost = false;
+            p.PublishedAt = now;
+            if (p.Armed is { } armed)
+            {
+                armed.Rearm = true;
+                armed.ReadFirst = ServesAnswers && options.ConsumeAnswers;
+            }
+            else
+            {
+                await SelectAsync(SessionEntities.Decision(node), HaDecision.Idle, ct);
+                p.Cleared = true;
+            }
         }
         else if (p.Name != name)
         {

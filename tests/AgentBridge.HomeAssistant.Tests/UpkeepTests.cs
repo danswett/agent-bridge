@@ -491,7 +491,6 @@ public sealed class UpkeepTests : IDisposable
         await Run(c, 30);
         ha.BeforePublish = null;
         Assert.True(pressed);
-        Assert.Equal(1, Logged("armed " + NodeA + " again"));
         var given = Assert.Single(answered);
         Assert.Equal("wait", given.Fields!["release"].GetString());
     }
@@ -522,6 +521,89 @@ public sealed class UpkeepTests : IDisposable
         c.Observe(ha.Press(SessionEntities.Submit(NodeA)));
         await Run(c, 5);
         Assert.Single(answered);
+    }
+
+    [Fact]
+    public async Task A_choice_and_Send_both_made_while_the_question_is_armed_again_are_delivered()
+    {
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 90);
+
+        // The selector loses its value; while the question is armed again, after its slot is
+        // declared and before it would be reset, the choice is made and Send pressed.
+        ha.ForgetOptimistic(SessionEntities.Decision(NodeA));
+        var slot = HaContract.FieldConfig(HaContract.Topics(NodeA), "", "", 1, "", []).Topic;
+        var given = false;
+        ha.BeforePublish = t =>
+        {
+            if (t != slot || given || Logged("goes on screen again") == 0) { return; }
+            given = true;
+            ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
+            ha.Press(SessionEntities.Submit(NodeA));
+        };
+        await Run(c, 30);
+        ha.BeforePublish = null;
+        Assert.True(given);
+        var request = Assert.Single(answered);
+        Assert.Equal("wait", request.Fields!["release"].GetString());
+    }
+
+    [Fact]
+    public async Task An_approval_tapped_while_its_question_is_armed_again_is_delivered_not_set_waiting_over()
+    {
+        var question = new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "rm -rf build", AskedAt = FakeSessions.T0 };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Agent = AgentKind.Codex, Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 90);
+
+        // The selector loses its value; Approve is tapped as the question's attributes go out again.
+        ha.ForgetOptimistic(SessionEntities.Decision(NodeA));
+        var tapped = false;
+        ha.BeforePublish = t =>
+        {
+            if (t != HaContract.Topics(NodeA).DecisionAttributes || tapped || Logged("goes on screen again") == 0) { return; }
+            tapped = true;
+            ha.Choose(SessionEntities.Decision(NodeA), "Approve");
+        };
+        await Run(c, 30);
+        ha.BeforePublish = null;
+        Assert.True(tapped);
+        var request = Assert.Single(answered);
+        Assert.Equal("approve", request.Fields!.Values.Single().GetString());
+    }
+
+    [Fact]
+    public async Task A_selector_removed_on_its_own_is_declared_again_alone_and_a_Send_made_meanwhile_keeps_its_choice()
+    {
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 90);
+        ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
+
+        // Only the selector goes; Send is pressed as it is declared again.
+        var selector = HaContract.DecisionConfig(HaContract.Topics(NodeA), "", "", [], false).Topic;
+        await ha.PublishAsync(selector, "", true);
+        var before = ha.Log.Count;
+        var pressed = false;
+        ha.BeforePublish = t =>
+        {
+            if (t != selector || pressed) { return; }
+            pressed = true;
+            ha.Press(SessionEntities.Submit(NodeA));
+        };
+        await Run(c, 150);
+        ha.BeforePublish = null;
+        Assert.True(pressed);
+        Assert.True(ha.Exists(SessionEntities.Decision(NodeA)));
+        var request = Assert.Single(answered);
+        Assert.Equal("wait", request.Fields!["release"].GetString());
+        // The rest of the card was left as it was: no choice slot declared again with Idle options.
+        Assert.DoesNotContain(ha.Log.Skip(before), m => m.Topic == HaContract.FieldConfig(HaContract.Topics(NodeA), "", "", 1, "", []).Topic
+            && m.Payload.Contains(HaDecision.Idle, StringComparison.Ordinal) && !m.Payload.Contains("Wait for the fix", StringComparison.Ordinal));
+        Assert.DoesNotContain(ha.Log.Skip(before), m => m.Topic.EndsWith($"/{NodeA}/status/config", StringComparison.Ordinal));
     }
 
     [Fact]

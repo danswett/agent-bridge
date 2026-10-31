@@ -730,17 +730,22 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
       is read again on the next pass before anything is re-armed. A Send made while a choice
       reads `unavailable` is not refused as incomplete either; it waits for a read that can see
       the choice.
-    * Arming again keeps a choice slot that still holds a choice of this question: its options
-      are this question's, as they were, and a Send made while the arm runs (it waits for the
-      slots to register) still finds the choice it was made with. A slot still showing the last
-      question's choice is reset as usual.
+    * Arming again keeps what came through on the card: a choice slot holding a choice of this
+      question (its options are this question's, as they were), and a selector holding a tap
+      under it not yet used. This is decided as each would be reset, after the arm's wait for
+      the slots to register, so a choice made during that wait is kept too. A slot still showing
+      the last question's choice is reset as usual. Anything given while the arm runs (a Send,
+      words, a publish, a tap) stops it before new baselines are taken, the event boundary moves
+      or the selector is set waiting, and the next pass reads it with the old baselines.
   * In both cases the question keeps what it has been through: answered, its attempts, what was
     used. An answer that may have reached the terminal is never typed again because the card was
     put back (`An_answer_that_may_have_landed_is_not_given_again_once_the_card_is_put_back`). An
     approval's tap that reached nothing may be tapped again once the card waits again, as after
     any failure.
-  * A selector removed on its own, with the reply box still there, is treated like the box: the
-    set goes again.
+  * A selector removed on its own, with the reply box still there, is declared again alone and
+    pinned, after the same 60 s of absence. The rest of the card is left as it is, choices
+    included (published again, its choice slots would get the first publication's options), and
+    the question is armed again as above, read first.
 
 **Forgetting a machine.** The machine row's X is the generated status card's own: two taps on
 the row of a machine that is offline and not part-way through an update. Those taps publish an
@@ -796,6 +801,7 @@ Where stage 7 knowingly differs from the daemon:
 | The reply box is primed, and put back to `' '` after a restart, only when it holds no value; the daemon blanks it at every session add and every repair | Words in the box are somebody's reply, not yet sent. A machine published again around a card that stayed, or a selector that lost its value on its own, leaves them |
 | A reply box or selector that reads `unavailable` is not repaired; the daemon repairs `unavailable` as it repairs `unknown` | `unavailable` is Home Assistant still starting, or an availability lapse, not a lost value. Repairing it would re-arm a question over a choice being made and blank words not yet sent, for an entity that comes back holding both |
 | After a restart, a question is armed again only when its selector lost its value, never for the reply box alone, and an answered question's selector is put back on `Awaiting answer...` without arming; a choice slot still holding this question's choice keeps it. The daemon re-arms whenever either lost its value (`Restore-DaemonSessionQuestion`) | Arming resets the choices: re-arming a question still on screen would only reset choices somebody may be making, and lose a Send made while it ran |
+| A selector removed on its own is declared again alone; the daemon publishes the session's whole set again | The rest of the card is still there: published again, its choice slots would get the first publication's options, and a choice made on them would read as none |
 | A switch present but with no state yet is not waited for; it is named and left | The daemon only warns. There is nothing to do until Home Assistant finishes starting, and waiting would hold every start for four seconds |
 ### The shadow: comparing with a running daemon
 

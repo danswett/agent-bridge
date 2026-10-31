@@ -267,18 +267,24 @@ public sealed partial class HaConnector
         // read first on the next pass, not armed over: arming resets the choices it would need.
         if (seen is not null && !Same(seen, await SeeCardAsync(p.Node, ct))) { return; }
         var armedSlots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
-        IEnumerable<DecisionStep> steps = HaDecision.Arm(armed.Plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow());
+        // Controls that came through the loss keep what is on them: a choice slot holding a choice
+        // of this question, and a selector holding a tap under it. Decided as each would be reset,
+        // after the arm's wait for the slots to register, so what is given during it is kept too.
+        Func<string, Task<bool>>? keep = seen is null ? null : entity => HoldsAnswerAsync(armed, p.Node, entity, ct);
+        var unset = await RunAsync(HaDecision.Arm(armed.Plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow()), p.Node, ct, keep);
         if (seen is not null)
         {
-            // Controls that came through the loss: a choice slot still holding a choice keeps it.
-            // Its options are this question's, as they were, and a Send made while the arm runs (it
-            // waits for the slots to register) still finds the choice it was made with.
-            var kept = await ChosenSlotsAsync(armed.Plan, p.Node, ct);
-            // Not one still showing the last question's choice: that is no choice of this one's.
-            foreach (var stale in armed.StaleSlots.Keys) { kept.Remove(SessionEntities.Field(p.Node, stale)); }
-            steps = steps.Where(s => s is not SelectStep select || !kept.Contains(select.EntityId));
+            // Anything given while it ran (a Send, words, a publish, a tap) is read on the next pass
+            // with the baselines the card was armed with, before any are taken anew, the boundary
+            // moved past it or the selector set waiting over it.
+            var after = await SeeCardAsync(p.Node, ct);
+            if (!Same(seen.Payload, after.Payload) || !Same(seen.Submit, after.Submit) || !Same(seen.Reply, after.Reply)
+                || UnusedTap(armed, after.Decision))
+            {
+                lock (gate) { dirty.Add(full.Id); }
+                return;
+            }
         }
-        var unset = await RunAsync([.. steps], p.Node, ct);
         // Reply-card words held for a press of Send (HeldStamp) are still there to be sent: the
         // baseline stays the one before them, or they would read as nothing new.
         if (!(armed.HeldStamp is { } held && payload.Present && payload.Value == held)) { armed.PayloadBaseline = payload; }
@@ -303,21 +309,30 @@ public sealed partial class HaConnector
         log($"Home Assistant connector armed {p.Node} again for its question{(armed.Settled ? " (already answered: check the terminal)" : "")}");
     }
 
-    // The choice slots of this question that hold a choice, not a placeholder or nothing.
-    async Task<HashSet<string>> ChosenSlotsAsync(DecisionPlan plan, string node, CancellationToken ct)
+    // Whether a control holds an answer to this question that arming would reset: a choice slot
+    // with a choice (not a placeholder, nothing, or the last question's choice it could not reset),
+    // or a selector with a tap under this question not yet used.
+    async Task<bool> HoldsAnswerAsync(Armed armed, string node, string entityId, CancellationToken ct)
     {
-        var chosen = new HashSet<string>(StringComparer.Ordinal);
-        if (!plan.UsesFieldSlots) { return chosen; }
-        for (var i = 1; i <= plan.Fields.Count; i++)
+        if (entityId == SessionEntities.Decision(node))
         {
-            if (plan.Fields[i - 1].IsText) { continue; }
-            var slot = SessionEntities.Field(node, i);
-            var shown = (await ha.GetStateAsync(slot, ct))?.State;
-            if (shown is null or HaDecision.Choose or HaDecision.Idle or "unknown" or Unavailable or "") { continue; }
-            chosen.Add(slot);
+            if (!armed.Plan.AnswerOnTap) { return false; }
+            var decision = await ha.GetStateAsync(entityId, ct);
+            return UnusedTap(armed, decision?.State) && DecisionIdOf(decision) == armed.Question.Id;
         }
-        return chosen;
+        if (!armed.Plan.UsesFieldSlots) { return false; }
+        for (var i = 1; i <= armed.Plan.Fields.Count; i++)
+        {
+            if (entityId != SessionEntities.Field(node, i)) { continue; }
+            if (armed.Plan.Fields[i - 1].IsText || armed.StaleSlots.ContainsKey(i)) { return false; }
+            var shown = (await ha.GetStateAsync(entityId, ct))?.State;
+            return shown is not (null or HaDecision.Choose or HaDecision.Idle or "unknown" or Unavailable or "");
+        }
+        return false;
     }
+
+    static bool UnusedTap(Armed armed, string? state) =>
+        armed.Plan.AnswerOnTap && state is "Approve" or "Deny" && "tap:" + state != armed.UsedPress;
 
     // Whether the selector waits under this question; if it shows a choice, it is set waiting again.
     async Task<bool> ShowsWaitingAsync(string node, string questionId, CancellationToken ct)
@@ -383,7 +398,7 @@ public sealed partial class HaConnector
 
     // The steps in order; returns the selects Home Assistant would not set, with what they were
     // to show.
-    async Task<Dictionary<string, string>> RunAsync(IReadOnlyList<DecisionStep> steps, string node, CancellationToken ct)
+    async Task<Dictionary<string, string>> RunAsync(IReadOnlyList<DecisionStep> steps, string node, CancellationToken ct, Func<string, Task<bool>>? keep = null)
     {
         var unset = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var step in steps)
@@ -398,6 +413,7 @@ public sealed partial class HaConnector
                     await PinNowAsync(Enumerable.Range(1, f.Slots).ToDictionary(i => $"{node}_f{i}", i => SessionEntities.Field(node, i)), time.GetUtcNow(), ct);
                     break;
                 case SelectStep s:
+                    if (keep is not null && await keep(s.EntityId)) { break; }
                     if (!await SelectAsync(s.EntityId, s.Option, ct)) { unset[s.EntityId] = s.Option; }
                     break;
             }
