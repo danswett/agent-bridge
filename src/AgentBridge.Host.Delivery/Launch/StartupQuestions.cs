@@ -73,8 +73,10 @@ public static class StartupQuestions
         if (rows is null || Read(rows) != StartupQuestion.Trust || OptionsOf(kind) is not { } known || folder.Length == 0) { return null; }
         var clean = rows.Select(Clean).ToList();
 
-        // The options: one block of rows, each one the agent offers, exactly one highlighted.
+        // The options: one block of rows, each one the agent offers exactly once, exactly one
+        // highlighted.
         var options = new List<int>();
+        var labels = new HashSet<string>(StringComparer.Ordinal);
         var selected = -1;
         var trustAt = -1;
         for (var i = 0; i < clean.Count; i++)
@@ -82,10 +84,12 @@ public static class StartupQuestions
             if (Option(clean[i]) is not { } option) { continue; }
             if (!known.All.Contains(option.Label, StringComparer.Ordinal))
             {
-                // A numbered row that is not one of its options: the question is not the one known.
-                if (option.Numbered) { return null; }
+                // A numbered or highlighted row that is not one of its options: the question is
+                // not the one known.
+                if (option.Numbered || option.Highlighted) { return null; }
                 continue;
             }
+            if (!labels.Add(option.Label)) { return null; }
             if (options.Count > 0 && options[^1] != i - 1) { return null; }
             if (option.Highlighted)
             {
@@ -139,10 +143,16 @@ public static class StartupQuestions
             if (!NotWarning.Contains(words, StringComparer.Ordinal)) { warning.Add(words); }
         }
         var text = warning.Count == 0 ? null : Limits.KeepStart(string.Join("\n", warning), TrustProtocol.MaxText);
-        var hold = Enumerable.Range(from, paragraphs[at].Last - from + 1).Concat(options)
-            .Select(r => new ScreenRow(r, rows[r].TrimEnd())).ToList();
+        // Everything from the folder to the last option, blank rows too: the folder, the root, the
+        // agent's words and every option, highlight included, as they were read.
+        var hold = Enumerable.Range(from, options[^1] - from + 1).Select(r => new ScreenRow(r, rows[r].TrimEnd())).ToList();
         return new TrustScreen(root, note, text, options, selected, trustAt, hold);
     }
+
+    // Whether two reads are the same question to a person: the same repository root, note and
+    // words (the folder is the launch's own). Where the highlight is does not matter.
+    public static bool SameQuestion(TrustScreen? a, TrustScreen? b) =>
+        a is not null && b is not null && a.Root == b.Root && a.RootNote == b.RootNote && a.Warning == b.Warning;
 
     // A row without the frame some agents draw around the question, or the spaces around it.
     static string Clean(string row)

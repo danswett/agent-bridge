@@ -152,8 +152,8 @@ public sealed partial class LaunchFlowTests
         var typed = Assert.Single(screens.Plans);
         var send = Assert.Single(typed.Sends);
         Assert.Equal(("", true), (send.Text, send.Enter));
-        // Only while the folder and the options read exactly as they were, highlight and all.
-        Assert.Equal([2, 11, 12], send.Expect!.Select(e => e.Row));
+        // Only while the folder, root, words and options read exactly as they were, highlight and all.
+        Assert.Equal(Enumerable.Range(2, 11), send.Expect!.Select(e => e.Row));
         Assert.Equal(starter.Pids[0], Assert.Single(screens.Typed));
         await WaitAsync(async () =>
         {
@@ -281,6 +281,82 @@ public sealed partial class LaunchFlowTests
         Assert.Equal(stuck, await AnswerAsync(ch, Answer(ch, id, "trust", client.Key, request: request)));
         Assert.Equal(("refused", "an answer was already typed into its window; answer at the machine", null), await AnswerAsync(ch, Answer(ch, id, "quit", client.Key)));
         Assert.Equal(2, screens.Plans.Count);
+    }
+
+    [Fact]
+    public async Task A_Copilot_that_handed_its_session_on_is_answered_in_the_sessions_own_window_and_seen_to_close()
+    {
+        starter.ExitsAtOnce = true;
+        starter.HandsOn = true;
+        // Only the session's own window can be read; the launcher's went with it.
+        screens.Unreadable = pid => starter.Pids.Contains(pid);
+        screens.Rows = CopilotAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var q = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust");
+        await WaitAsync(async () => (await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("trust")[0].GetProperty("answerable").GetBoolean());
+
+        screens.OnTyped = _ => starter.Exit(starter.Pids[0] + 3000);
+        var answer = await AnswerAsync(ch, Answer(ch, (await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("trust")[0].GetProperty("id").GetString()!, "quit", client.Key));
+
+        Assert.Equal("declined", answer.Outcome);
+        Assert.Equal(starter.Pids[0] + 3000, Assert.Single(screens.Typed));
+    }
+
+    [Fact]
+    public async Task A_question_whose_words_change_is_another_question_and_a_command_for_the_first_does_not_answer_it()
+    {
+        locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        starter.Registers = false;
+        var root = Path.GetDirectoryName(app)!.ToLowerInvariant();
+        screens.Rows = CodexAsks(root);
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var first = (await LaunchTrustAsync(ch, new { agent = "codex", workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+
+        // Now it says trusting applies to a wider folder.
+        screens.Rows = CodexAsks(Path.GetDirectoryName(root)!);
+        await WaitAsync(async () => (await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("trust")[0].GetProperty("id").GetString() != first);
+
+        var answer = await AnswerAsync(ch, Answer(ch, first, "trust", client.Key));
+        Assert.Equal("refused", answer.Outcome);
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task A_highlight_moved_whose_Enter_could_not_go_or_a_worker_that_failed_part_way_is_unconfirmed_never_refused()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        starter.Registers = false;
+        screens.Rows = ClaudeAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var id = (await LaunchTrustAsync(ch, new { agent = "claude", workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+
+        screens.OnTyped = _ =>
+        {
+            screens.Rows = ClaudeAsks(onYes: true);
+            screens.Fails = new InjectionResult(InjectionStatus.NothingTyped, "fail screen 0");
+        };
+        var moved = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key));
+        Assert.Equal(("unconfirmed", "Not confirmed: answer at the machine. The highlight was moved, but its window changed before Enter, so Enter was not pressed.", null), moved);
+
+        // Another launch, whose worker dies typing: the same press again gets the same outcome.
+        starter.Exit(starter.Pids[0]);
+        screens.Rows = ClaudeAsks(onYes: true);
+        screens.Fails = null;
+        screens.OnTyped = null;
+        await WaitAsync(async () => !(await RequestAsync(ch, LaunchProtocol.Options, new { })).TryGetProperty("trust", out _));
+        await LaunchTrustAsync(ch, new { agent = "claude", workspace = "App", prompt = "again" });
+        screens.Rows = ClaudeAsks(onYes: true);
+        await WaitAsync(async () => (await RequestAsync(ch, LaunchProtocol.Options, new { })).TryGetProperty("trust", out _));
+        var other = (await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("trust")[0].GetProperty("id").GetString()!;
+        screens.Throws = new IOException("the worker went away");
+        var request = Guid.NewGuid().ToString();
+        var broken = await AnswerAsync(ch, Answer(ch, other, "trust", client.Key, request: request));
+        Assert.Equal("unconfirmed", broken.Outcome);
+        Assert.Contains("the worker went away", broken.Reason);
+        Assert.Equal(broken, await AnswerAsync(ch, Answer(ch, other, "trust", client.Key, request: request)));
     }
 
     // A channel on this machine's pipe, as an agent or the MCP server would open one.
