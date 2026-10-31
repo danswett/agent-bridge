@@ -7,7 +7,7 @@
 // it is an in-process fake. Nothing here knows which.
 import { Events, Ops, readAnswerResult, readAttachmentState, readDiscoveryHeld, readHello, readSession, readStopResult } from './protocol.js';
 import { USAGE, readUsage } from './usage.js';
-import { LAUNCH, readLaunchOptions, readLaunchResult } from './launch.js';
+import { LAUNCH, TRUST, readLaunchOptions, readLaunchResult, readTrustResult } from './launch.js';
 
 export class HostError extends Error {
   // fromHost: the host answered with ok:false. Otherwise the request never got an answer
@@ -151,6 +151,13 @@ export class HostClient {
   // and resend, long before.
   async launch(data, { timeoutMs = data?.transfer ? this.#transferTimeoutMs : this.#launchTimeoutMs } = {}) {
     return readLaunchResult(await this.request(LAUNCH.launch, data, { timeoutMs }));
+  }
+
+  // Answers a launched agent's folder-trust question: { question, choice, command }, the command
+  // signed by this device for that choice. The machine answers once it has seen the session start
+  // or the agent close, which it waits up to a minute for.
+  async answerTrust(data, { timeoutMs = this.#launchTimeoutMs } = {}) {
+    return readTrustResult(await this.request(TRUST.answer, data, { timeoutMs }));
   }
 
   // Starts (or restarts) the subscription. The host answers {revision, count}, then sends

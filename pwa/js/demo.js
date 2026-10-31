@@ -11,6 +11,8 @@
 //   relay's blob store and storage, in the page) for the large ones,
 //   scriptStops(...outcomes) for the next presses of End session,
 //   scriptLaunches(...outcomes) for the next launches, host.launchOptions for what it offers,
+//   askTrust(question) for a launched agent asking whether to trust its folder, scriptTrust(...)
+//   for the next answers to one, host.trustLog for every launch.trust.answer received,
 //   host.holdResponses() and host.releaseResponses() to keep responses back until a test has
 //   looked
 //
@@ -31,8 +33,8 @@ import { checkAnswer } from './answers.js';
 import { checkReply, typedForm } from './replies.js';
 import { readQuestion } from './protocol.js';
 import { USAGE } from './usage.js';
-import { LAUNCH, checkLaunch, flattenPrompt } from './launch.js';
-import { TRANSFER, signTransfer } from './transfer.js';
+import { LAUNCH, TRUST, checkLaunch, flattenPrompt, trustAction } from './launch.js';
+import { TRANSFER, signTransfer, signTrust } from './transfer.js';
 import { P256KeyPair } from './noise-p256.js';
 import { deviceIdOf } from './identity.js';
 import { fromUtf8 } from './bytes.js';
@@ -98,6 +100,12 @@ export class DemoHost {
   remote = { hostId: 'demo-studio', machineName: 'Studio PC', resumable: demoRemoteResumable() };
   // How long Studio PC takes to say what it offers, for a test of a slow machine.
   remoteDelayMs = 0;
+  // launch.trust.answer: outcomes by request, every request as received, and the next outcomes.
+  trustAnswers = new Map();
+  trustLog = [];
+  #trustScript = [];
+  // This machine's static key, which a folder-trust answer is signed for.
+  key = null;
 
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
   // replying: false, one that can't reply; attaching: false, one that takes no files; large:
@@ -107,12 +115,12 @@ export class DemoHost {
   // a busy session waits for its second. usage: false plays a host from before usage.get;
   // launching: false, one that can't launch sessions; transferring: false, one that takes no
   // sessions from other machines. readOnly: why it takes nothing from the phone, as hello says.
-  constructor(fixture, { readOnly = null, machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching } = {}) {
+  constructor(fixture, { readOnly = null, machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching } = {}) {
     this.machine = { id: 'demo', name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true, ...(readOnly ? { readOnly } : {}) };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : [])];
     this.sessions = new Map();
     for (const s of fixture.sessions ?? []) { this.sessions.set(s.id, s); }
     this.revision = fixture.revision ?? 1;
@@ -169,6 +177,9 @@ export class DemoHost {
       case LAUNCH.launch:
         if (!this.capabilities.includes(LAUNCH.capability)) { break; }
         return this.#launch(data, reply);
+      case TRUST.answer:
+        if (!this.capabilities.includes(TRUST.capability)) { break; }
+        return this.#answerTrust(data, reply);
       default:
         return t.deliver({ re: id, ok: false, error: `unknown op ${op}` });
     }
@@ -255,6 +266,53 @@ export class DemoHost {
 
   scriptLaunches(outcomes) { this.#launchScript.push(...outcomes); }
 
+  scriptTrust(outcomes) { this.#trustScript.push(...outcomes); }
+
+  // A launched agent asking whether to trust its folder, listed in launch.options until answered.
+  askTrust(question) {
+    const q = { agent: 'codex', kind: 'codex', label: 'Codex', askedAt: now(), answerable: true, ...question };
+    this.launchOptions = { ...this.launchOptions, trust: [q, ...(this.launchOptions.trust ?? []).filter((x) => x.id !== q.id)] };
+    return q;
+  }
+
+  #answerTrust(data, reply) {
+    this.trustLog.push(clone(data ?? null));
+    const request = (() => { try { return JSON.parse(fromUtf8.decode(fromBase64url(data?.command?.body ?? ''))).request; } catch { return ''; } })();
+    const known = this.trustAnswers.get(request);
+    if (known) { known.result.then(reply); return; }
+    const step = this.#trustScript.shift() ?? null;
+    const scripted = typeof step === 'string' ? { outcome: step } : step;
+    const result = this.#after(() => this.#decideTrust(data ?? {}, scripted));
+    this.trustAnswers.set(request, { result });
+    result.then((r) => { if (!scripted?.drop) { reply(r); } });
+  }
+
+  // As a host decides: the command must be this device's, for this machine, question and choice;
+  // the question must still wait and be answerable. Trust starts its session; Quit closes it.
+  #decideTrust(data, scripted) {
+    let body = null;
+    try { body = JSON.parse(fromUtf8.decode(fromBase64url(data.command?.body ?? ''))); } catch { body = null; }
+    if (!body || body.action !== trustAction(data.choice) || body.target?.session !== data.question || body.to !== this.machine.id || body.target?.machine !== this.machine.id) {
+      return { outcome: 'refused', reason: 'the command is not for this answer' };
+    }
+    const q = (this.launchOptions.trust ?? []).find((x) => x.id === data.question);
+    if (!q) { return { outcome: 'refused', reason: 'that question is no longer waiting: it was answered, or the agent closed' }; }
+    if (!q.answerable) { return { outcome: 'refused', reason: q.atMachine ?? 'Answer at the machine.' }; }
+    if (scripted && !['started', 'declined'].includes(scripted.outcome)) {
+      const reasons = {
+        unconfirmed: `Not confirmed: answer at the machine. The question is still in ${q.label}'s window.`,
+        refused: 'its window changed before anything was typed (fail screen 0); answer at the machine',
+      };
+      return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host' };
+    }
+    this.launchOptions = { ...this.launchOptions, trust: this.launchOptions.trust.filter((x) => x.id !== q.id) };
+    if (data.choice !== TRUST.trust) { return { outcome: 'declined', reason: `${q.label} was not trusted with ${q.workspace ?? q.folder}, and closed; nothing was launched` }; }
+    const id = crypto.randomUUID();
+    const at = now();
+    this.upsert({ id, agent: q.kind, title: 'New session', cwd: q.folder, status: 'idle', statusSince: at, startedAt: at, updatedAt: at, processId: 4100, activity: { turnCount: 0 } });
+    return { outcome: 'started', session: id };
+  }
+
   // Holds every response not yet sent until releaseResponses(), so a state that lasts only
   // while a request is on its way (Sending…) stays to be looked at however slowly the browser
   // runs: a test that polled for it inside the answer delay missed it on a busy CI runner.
@@ -289,7 +347,7 @@ export class DemoHost {
         unconfirmed: "the session started, but it is asking whether to trust its folder; answer that at the machine",
         failed: 'the agent could not be started (The system cannot find the file specified.)',
       };
-      return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host' };
+      return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host', ...(scripted.trust ? { trust: this.askTrust(scripted.trust) } : {}) };
     }
     const problem = checkLaunch(data);
     if (problem) { return { outcome: 'refused', reason: problem }; }
@@ -577,6 +635,24 @@ function demoRemoteResumable() {
     { id: '2b4e6f80-1a3c-4d5e-8f70-9a0b1c2d3e4f', agent: 'copilot', launcher: 'copilot', title: 'Draft the transfer docs', cwd: 'D:\\src\\agent-bridge', workspace: 'agent-bridge', updatedAt: '2026-10-27T16:40:00.000Z', bytes: 3 * 1024 * 1024 + 123456 },
     { id: '5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f', agent: 'codex', launcher: 'codex', title: 'Profile the relay under load', cwd: 'D:\\src\\relay', workspace: 'relay', updatedAt: '2026-10-26T22:15:00.000Z', bytes: 812345 },
   ];
+}
+
+// Answering this machine's folder-trust questions, with commands signed by a key this page makes
+// for itself for the demo machine's.
+export async function demoTrust(host, client) {
+  const me = await P256KeyPair.generate();
+  host.key ??= await P256KeyPair.generate();
+  const deviceId = await deviceIdOf(me.public);
+  const machinePublic = host.key.public;
+  return {
+    sign: async (question, choice) => {
+      const command = await signTrust({ key: me, deviceId, machinePublic, question, choice });
+      // The demo machine's id is not its key's: the body names it as the host would read it.
+      const body = JSON.parse(fromUtf8.decode(fromBase64url(command.body)));
+      return { ...command, body: toBase64url(new TextEncoder().encode(JSON.stringify({ ...body, target: { ...body.target, machine: host.machine.id }, to: host.machine.id }))) };
+    },
+    answer: (data) => client.answerTrust(data),
+  };
 }
 
 // The other machine, as the launch panel sees it: its sessions and a key, and commands signed

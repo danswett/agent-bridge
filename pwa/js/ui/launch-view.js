@@ -12,8 +12,13 @@
 // its transcript here as a new session, in the workspace picked here, with a command this device
 // signs for the machine it is on (../transfer.js, docs/protocol/v1-transfer.md); the original
 // stays where it was.
+//
+// A launched agent asking whether to trust its folder (launch.trust) is shown here in full: the
+// agent, the whole folder path, the repository root it applies to, and the agent's own warning.
+// Where the machine allows it, Trust and Quit answer it with a command this device signs for that
+// choice (../transfer.js); otherwise it says to answer at the machine, and how to allow it.
 import { h } from './dom.js';
-import { ASK, ALLOW_ALL, MAX_PROMPT, checkLaunch } from '../launch.js';
+import { ASK, ALLOW_ALL, MAX_PROMPT, TRUST, checkLaunch } from '../launch.js';
 
 export const APPROVE_HINT = 'agent-bridge-host workspace add <folder>';
 const AGENT_DEFAULT = '';
@@ -52,6 +57,31 @@ export function describeLaunch(entry, { machineName } = {}) {
   }
 }
 
+// What a folder-trust answer's progress or outcome says. tone: progress | ok | warn | bad.
+export function describeTrust(answer, question) {
+  const label = question?.label ?? 'The agent';
+  switch (answer.state) {
+    case 'signing':
+    case 'sending':
+      return { text: answer.choice === TRUST.trust ? `Trusting the folder and waiting for ${label} to start… This takes up to a minute.` : `Telling ${label} not to trust the folder…`, tone: 'progress' };
+    case 'failed':
+      return { text: `Couldn't send it: ${sentence(answer.reason ?? 'the machine did not answer')} Nothing was typed if the machine never got it; try again.`, tone: 'bad' };
+    default:
+      break;
+  }
+  const r = answer.result ?? {};
+  switch (r.outcome) {
+    case 'started':
+      return { text: `Trusted. ${label} started.`, tone: 'ok' };
+    case 'declined':
+      return { text: `Not trusted. ${sentence(r.reason ?? `${label} closed; nothing was launched`)}`, tone: 'ok' };
+    case 'refused':
+      return { text: `Not answered: ${sentence(r.reason ?? 'the machine refused it')}`, tone: 'bad' };
+    default:
+      return { text: sentence(r.reason ?? 'Not confirmed: answer at the machine.'), tone: 'warn' };
+  }
+}
+
 // The choices for a model, effort or context: the agent's own default first, then what the
 // machine offers, with its configured default among them.
 function tuning(values, preferred) {
@@ -74,6 +104,9 @@ export class LaunchPanel {
   #signing = false;
   // Counts changes of the machine picked, which presence updates for the same one do not.
   #selection = 0;
+  // Folder-trust answers pressed here, by question id: { question, choice, state, data, result,
+  // reason }. A question answered stays shown, with its outcome, after the machine stops listing it.
+  #trustAnswers = new Map();
 
   // root: the #launch section. service: a LaunchService. jump(sessionId): shows a session's
   // card, true once it is on screen.
@@ -114,6 +147,7 @@ export class LaunchPanel {
     };
     e.note = h('p', { class: 'note launch-note', role: 'status' });
     e.busy = h('p', { class: 'note warn launch-busy', role: 'status', hidden: true });
+    e.trust = h('div', { class: 'launch-trust', hidden: true });
     e.form = h('form', { class: 'launch-form', novalidate: true, onsubmit: (ev) => { ev.preventDefault(); this.#press(); } },
       Object.values(e.fields),
       h('div', { class: 'row' },
@@ -122,7 +156,7 @@ export class LaunchPanel {
         e.open = h('button', { type: 'button', class: 'button secondary launch-open', hidden: true, onclick: () => this.#openSession(true) }, 'Open session')));
     e.reload = h('button', { type: 'button', class: 'button secondary launch-reload', hidden: true, onclick: () => this.refresh() }, 'Reload choices');
     e.status = h('p', { class: 'answer-status launch-status', role: 'status', 'aria-live': 'polite' });
-    e.body.replaceChildren(e.note, e.busy, e.form, e.status, h('div', { class: 'row' }, e.reload));
+    e.body.replaceChildren(e.note, e.busy, e.trust, e.form, e.status, h('div', { class: 'row' }, e.reload));
   }
 
   get open() { return this.#open; }
@@ -137,10 +171,12 @@ export class LaunchPanel {
     if (open && this.#target && !this.#loading) { this.refresh(); }
   }
 
-  // The machine shown, or null when it can't launch: { hostId, machineName, load, transfers }
-  // where load() is launch.options from it, and transfers, when it takes sessions from the
-  // account's other machines, is { remotes(), sign(remote, session) }: what they offer, and a
-  // signed command for one (../transfer.js).
+  // The machine shown, or null when it can't launch: { hostId, machineName, load, transfers,
+  // trust } where load() is launch.options from it, and transfers, when it takes sessions from
+  // the account's other machines, is { remotes(), sign(remote, session) }: what they offer, and a
+  // signed command for one (../transfer.js). trust, when it takes launch.trust.answer, is
+  // { sign(question, choice), answer(data) }: a command this device signs for that choice on that
+  // machine, and launch.trust.answer sent with it.
   setTarget(target) {
     const same = target && this.#target && target.hostId === this.#target.hostId;
     if (same) { this.#target = target; this.#title(); this.#draw(); return; }
@@ -153,6 +189,7 @@ export class LaunchPanel {
     this.#asking = null;
     this.#error = null;
     this.#loading = null;
+    this.#trustAnswers = new Map();
     // Another machine's choices: nothing picked on the last one carries over but the prompt.
     for (const s of this.els.form.querySelectorAll('select')) { delete s.dataset.scope; }
     this.root.hidden = !target;
@@ -274,6 +311,7 @@ export class LaunchPanel {
     e.note.hidden = !e.note.textContent;
     e.busy.textContent = o.busy ? `${name} is busy: ${sentence(o.busy)}` : '';
     e.busy.hidden = !o.busy;
+    this.#drawTrust();
     this.#drawCount();
     this.#show(this.#target ? this.service.get(this.#target.hostId) : null);
   }
@@ -347,6 +385,91 @@ export class LaunchPanel {
 
   #resend() { if (this.#target) { this.service.resend(this.#target.hostId); } }
 
+  // ---- folder trust ----
+
+  // The questions to show: what the machine lists now, the one the last launch met, and any
+  // answered from here since, newest first.
+  #trustQuestions() {
+    const seen = new Map();
+    const add = (q) => { if (q && !seen.has(q.id)) { seen.set(q.id, q); } };
+    for (const q of this.#options?.trust ?? []) { add(q); }
+    const entry = this.#target ? this.service.get(this.#target.hostId) : null;
+    if (entry?.state === 'done') { add(entry.detail?.trust); }
+    for (const a of this.#trustAnswers.values()) { add(a.question); }
+    return [...seen.values()];
+  }
+
+  #drawTrust() {
+    const e = this.els;
+    const questions = this.#trustQuestions();
+    e.trust.hidden = questions.length === 0;
+    e.trust.replaceChildren(...questions.map((q) => this.#trustCard(q)));
+  }
+
+  #trustCard(q) {
+    const answer = this.#trustAnswers.get(q.id);
+    const name = this.#target?.machineName || 'the machine';
+    // Once something may have been typed, it is never offered again from here: the machine then
+    // refuses another answer anyway, and a person at the machine finishes it.
+    const settled = answer?.state === 'done' && ['started', 'declined', 'unconfirmed'].includes(answer.result?.outcome);
+    const pending = answer && ['signing', 'sending'].includes(answer.state);
+    const canAnswer = q.answerable && !!this.#target?.trust && !settled;
+    const shown = answer ? describeTrust(answer, q) : null;
+    return h('section', { class: 'trust-question', dataset: { question: q.id, trust: answer ? (answer.state === 'done' ? answer.result.outcome : answer.state) : 'waiting' }, 'aria-label': `${q.label} folder trust` },
+      h('h3', { class: 'trust-title' }, `${q.label} on ${name} is asking whether to trust a folder`),
+      h('p', { class: 'trust-line' }, h('span', { class: 'launch-label' }, 'Folder'), h('code', { class: 'trust-path trust-folder' }, q.folder)),
+      q.root ? h('p', { class: 'trust-line' }, h('span', { class: 'trust-root-note' }, q.rootNote ?? 'Trusting applies to the repository root:'), h('code', { class: 'trust-path trust-root' }, q.root)) : null,
+      q.warning ? h('p', { class: 'trust-warning' }, q.warning) : null,
+      canAnswer
+        ? h('div', { class: 'row' },
+          h('button', { type: 'button', class: 'button trust-yes', disabled: pending, onclick: () => this.#answerTrust(q, TRUST.trust) }, 'Trust'),
+          h('button', { type: 'button', class: 'button secondary trust-no', disabled: pending, onclick: () => this.#answerTrust(q, TRUST.quit) }, 'Quit'),
+          answer?.state === 'failed' ? h('button', { type: 'button', class: 'button secondary trust-resend', onclick: () => this.#sendTrust(q.id) }, 'Try again') : null)
+        : settled ? null : h('p', { class: 'note warn trust-at-machine' }, q.atMachine ?? (q.answerable ? `Answer at the machine: this app cannot answer it on ${name}.` : 'Answer at the machine.')),
+      shown ? h('p', { class: `answer-status trust-status ${shown.tone}`, role: 'status', 'aria-live': 'polite' }, shown.text) : null);
+  }
+
+  // A press: signed once, for this choice; Try again resends that same command and request,
+  // which the machine answers with the first outcome rather than typing again.
+  async #answerTrust(q, choice) {
+    const target = this.#target;
+    const known = this.#trustAnswers.get(q.id);
+    if (!target?.trust || (known && ['signing', 'sending'].includes(known.state))) { return; }
+    const answer = { question: q, choice, state: 'signing', data: null, result: null, reason: null };
+    this.#trustAnswers.set(q.id, answer);
+    this.#drawTrust();
+    try {
+      answer.data = { question: q.id, choice, command: await target.trust.sign(q.id, choice) };
+    } catch (e) {
+      Object.assign(answer, { state: 'failed', reason: `couldn't sign the answer: ${e?.message ?? String(e)}`, data: null });
+      this.#drawTrust();
+      return;
+    }
+    await this.#sendTrust(q.id);
+  }
+
+  async #sendTrust(id) {
+    const target = this.#target;
+    const answer = this.#trustAnswers.get(id);
+    if (!target?.trust || !answer) { return; }
+    if (!answer.data) { await this.#answerTrust(answer.question, answer.choice); return; }
+    answer.state = 'sending';
+    this.#drawTrust();
+    try {
+      answer.result = await target.trust.answer(answer.data);
+      answer.state = 'done';
+    } catch (e) {
+      answer.state = 'failed';
+      answer.reason = e?.reason ?? e?.message ?? String(e);
+    }
+    if (this.#target !== target && this.#target?.hostId !== target.hostId) { return; }
+    this.#drawTrust();
+    if (answer.state !== 'done') { return; }
+    if (answer.result.outcome === 'started' && answer.result.session) { this.#jumpTo(answer.result.session); }
+    // The machine's list, and whether it is still busy, have changed.
+    this.refresh();
+  }
+
   #local(shown) {
     const e = this.els;
     e.status.textContent = shown.text;
@@ -356,6 +479,7 @@ export class LaunchPanel {
 
   #settled(entry) {
     this.#show(entry);
+    if (this.#options) { this.#drawTrust(); }
     if (entry?.state !== 'done') { return; }
     if (entry.outcome === 'started') { this.els.prompt.value = ''; this.#drawCount(); this.#openSession(false); }
     // What it offers has changed: a resumed session is no longer resumable, a worktree counts.
@@ -369,6 +493,10 @@ export class LaunchPanel {
     if (!id) { return; }
     if (!pressed && this.#jumped === entry.request) { return; }
     this.#jumped = entry.request;
+    this.#jumpTo(id);
+  }
+
+  #jumpTo(id) {
     if (this.jump(id)) { return; }
     const until = Date.now() + 15000;
     const timer = setInterval(() => {

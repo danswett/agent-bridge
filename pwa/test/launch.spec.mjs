@@ -222,3 +222,88 @@ test.describe('bringing a session from another machine', () => {
     await expect(field(page, 'resume').locator('option')).toHaveText(['New session', 'Fix the flaky relay test · agent-bridge']);
   });
 });
+
+// A launched agent asking whether to trust its folder (launch.trust): shown in full, and answered
+// from here with a command this device signs, only where the machine allows it.
+test.describe('a folder-trust question', () => {
+  test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
+
+  const LONG = 'C:\\Users\\demo\\repos\\a-rather-long-folder-name-that-will-not-fit-on-one-phone-line\\and-a-subfolder\\web';
+  const QUESTION = {
+    id: '5d0c9f3e-2b1a-4c8d-9e7f-6a5b4c3d2e1f', agent: 'codex', kind: 'codex', label: 'Codex', workspace: 'agent-bridge', folder: LONG,
+    root: 'c:\\users\\demo\\repos\\a-rather-long-folder-name-that-will-not-fit-on-one-phone-line',
+    rootNote: 'Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:',
+    warning: 'Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a model request. Continue only if you trust these files. Your trust decision will be saved.',
+    answerable: true,
+  };
+  const card = (page) => panel(page).locator('.trust-question');
+  const trustLog = (page) => page.evaluate(() => window.agentBridgeDemo.host.trustLog);
+  const ask = (page, q) => page.evaluate((x) => window.agentBridgeDemo.askTrust(x), q);
+
+  test('a launch that meets one shows the agent, the whole folder, its repository root and its own words, and Trust starts the session', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: QUESTION });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+
+    await expect(card(page)).toHaveCount(1);
+    await expect(card(page).locator('h3')).toHaveText('Codex on Demo machine is asking whether to trust a folder');
+    await expect(card(page).locator('.trust-folder')).toHaveText(LONG);
+    await expect(card(page).locator('.trust-root')).toHaveText(QUESTION.root);
+    await expect(card(page).locator('.trust-root-note')).toHaveText(QUESTION.rootNote);
+    await expect(card(page).locator('.trust-warning')).toHaveText(QUESTION.warning);
+    // The whole path is on screen, wrapped, never cut short.
+    const fits = await card(page).locator('.trust-folder').evaluate((e) => e.scrollWidth <= e.clientWidth + 1);
+    expect(fits).toBe(true);
+
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toHaveCount(0);
+    const [sent] = await trustLog(page);
+    expect(sent.question).toBe(QUESTION.id);
+    expect(sent.choice).toBe('trust');
+    const body = JSON.parse(Buffer.from(sent.command.body, 'base64url').toString('utf8'));
+    expect(body).toMatchObject({ v: 1, action: 'launch.trust:trust', principal: { kind: 'user' }, target: { session: QUESTION.id } });
+  });
+
+  test('Quit says the agent was not trusted and closed', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, { ...QUESTION, warning: null, root: null, rootNote: null });
+    await openPanel(page);
+    await expect(card(page).locator('.trust-root')).toHaveCount(0);
+    await card(page).getByRole('button', { name: 'Quit' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText('Not trusted. Codex was not trusted with agent-bridge, and closed; nothing was launched.');
+    expect((await trustLog(page))[0].choice).toBe('quit');
+  });
+
+  test('where the machine does not allow it, it is shown to answer at the machine, with how to allow it', async ({ page }) => {
+    await openDemo(page);
+    const atMachine = 'Answer at the machine. To answer from your devices, turn on "Answer folder-trust questions from my devices" in the Agent Bridge app\'s Settings on that machine, or run agent-bridge-host config set launch.remoteFolderTrust true there and restart the host.';
+    await ask(page, { ...QUESTION, answerable: false, atMachine });
+    await openPanel(page);
+    await expect(card(page).locator('.trust-folder')).toHaveText(LONG);
+    await expect(card(page).locator('.trust-at-machine')).toHaveText(atMachine);
+    await expect(card(page).getByRole('button')).toHaveCount(0);
+  });
+
+  test('a machine from before launch.trust shows it read-only', async ({ page }) => {
+    await openDemo(page, '&trust=0');
+    await ask(page, QUESTION);
+    await openPanel(page);
+    await expect(card(page).locator('.trust-at-machine')).toHaveText('Answer at the machine: this app cannot answer it on Demo machine.');
+    await expect(card(page).getByRole('button')).toHaveCount(0);
+  });
+
+  test('an answer whose effect the machine could not see says to answer at the machine, and is not sent again', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, QUESTION);
+    await page.evaluate(() => window.agentBridgeDemo.scriptTrust('unconfirmed'));
+    await openPanel(page);
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText('Not confirmed: answer at the machine. The question is still in Codex\'s window.');
+    await expect(card(page).getByRole('button')).toHaveCount(0);
+    expect(await trustLog(page)).toHaveLength(1);
+  });
+});
