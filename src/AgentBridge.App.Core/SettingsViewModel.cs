@@ -52,6 +52,8 @@ public sealed class SettingsViewModel : Observable
         this.savePrefs = savePrefs;
         AppVersion = appVersion;
         relayUrl = prefs().Relay ?? defaultRelay;
+        trust = TrustEditor.For(host);
+        trust.Changed += Refresh;
         host.Changed += Refresh;
         Refresh();
     }
@@ -115,45 +117,33 @@ public sealed class SettingsViewModel : Observable
 
     public bool RemoteFolderTrust
     {
-        get => trustWanted ?? Status?.Settings.RemoteFolderTrust ?? false;
+        get => trustWanted ?? trust.Settings?.RemoteFolderTrust ?? false;
         set
         {
             if (Status is null || RemoteFolderTrust == value) { return; }
             trustWanted = value;
-            _ = TrustSettingsAsync(devices => new SettingsRequest(RemoteFolderTrust: value,
-                RemoteFolderTrustDevices: value && devices.Count == 0 && fleet?.DeviceId is { } me ? [me] : null));
+            _ = TrustSettingsAsync(now => new SettingsRequest(RemoteFolderTrust: value,
+                RemoteFolderTrustDevices: value && (now.RemoteFolderTrustDevices ?? []).Count == 0 && fleet?.DeviceId is { } me ? [me] : null));
         }
     }
 
-    // Changes to who may answer go one at a time, each from what the host said after the last:
-    // the host replaces the whole list, so two made from the same status would undo each other
-    // (revoking A and approving B before the first is in would put A back).
-    readonly SemaphoreSlim trustEdits = new(1, 1);
-    IReadOnlyList<string>? confirmedDevices;
+    // Changes to who may answer go one at a time through the editor the Launch page uses too, each
+    // made from the host's list as it is then (TrustEditor).
+    readonly TrustEditor trust;
     int pendingEdits;
 
-    async Task TrustSettingsAsync(Func<IReadOnlyList<string>, SettingsRequest?> change)
+    async Task TrustSettingsAsync(Func<HostSettingsView, SettingsRequest?> change)
     {
         Interlocked.Increment(ref pendingEdits);
-        await trustEdits.WaitAsync();
         try
         {
-            var now = confirmedDevices ?? Status?.Settings.RemoteFolderTrustDevices ?? [];
-            if (change(now) is not { } request) { return; }
-            await RunAsync(async () =>
-            {
-                var result = await host.CallAsync<SettingsResult>(HostOps.Settings, request);
-                confirmedDevices = result.Settings.RemoteFolderTrustDevices ?? [];
-            });
+            await RunAsync(() => trust.EditAsync(change));
             // Not made: the switch shows what the host has again.
             if (Error is not null) { trustWanted = null; }
         }
         finally
         {
-            // The last one made: the host sends its status after each change (whichever arrives
-            // first), so from here its status is the word again.
-            if (Interlocked.Decrement(ref pendingEdits) == 0) { confirmedDevices = null; trustWanted = null; }
-            trustEdits.Release();
+            if (Interlocked.Decrement(ref pendingEdits) == 0) { trustWanted = null; }
         }
     }
 
@@ -175,7 +165,7 @@ public sealed class SettingsViewModel : Observable
 
     void DrawDevices()
     {
-        var approved = confirmedDevices ?? Status?.Settings.RemoteFolderTrustDevices ?? [];
+        var approved = trust.Settings?.RemoteFolderTrustDevices ?? [];
         var me = fleet?.DeviceId;
         var rows = new List<(string Id, string Label)>();
         if (me is not null) { rows.Add((me, $"This app ({Environment.MachineName})")); }
@@ -190,7 +180,7 @@ public sealed class SettingsViewModel : Observable
         if (next.Count == TrustDevices.Count && next.Zip(TrustDevices).All(p => p.First.Id == p.Second.Id && p.First.Label == p.Second.Label))
         {
             // While changes are on their way, the boxes show what was asked for, not a status from before.
-            if (Volatile.Read(ref pendingEdits) == 0) { foreach (var (row, d) in next.Zip(TrustDevices)) { d.Show(row.Approved); } }
+            if (Volatile.Read(ref pendingEdits) == 0 && !trust.Pending) { foreach (var (row, d) in next.Zip(TrustDevices)) { d.Show(row.Approved); } }
         }
         else
         {
@@ -204,8 +194,9 @@ public sealed class SettingsViewModel : Observable
     {
         if (Status is not null)
         {
-            await TrustSettingsAsync(devices =>
+            await TrustSettingsAsync(now =>
             {
+                var devices = now.RemoteFolderTrustDevices ?? [];
                 if (devices.Contains(device.Id) == on) { return null; }
                 return new SettingsRequest(RemoteFolderTrustDevices: on ? [.. devices, device.Id] : [.. devices.Where(d => d != device.Id)]);
             });
@@ -251,8 +242,7 @@ public sealed class SettingsViewModel : Observable
     public void Refresh()
     {
         if (!nameEdited) { machineName = Status?.Settings.Name ?? Status?.Machine.Name ?? ""; }
-        // A status with no change of ours on its way is the host's word again.
-        if (Volatile.Read(ref pendingEdits) == 0) { confirmedDevices = null; trustWanted = null; }
+        if (Volatile.Read(ref pendingEdits) == 0) { trustWanted = null; }
         DrawDevices();
         RaiseAll();
     }

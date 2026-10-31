@@ -71,6 +71,15 @@ public sealed class SettingsTests : IAsyncLifetime
 
     Task Connected() => Wait.UntilAsync(() => settings.HostRunning && connection.Status is not null, "the connection");
 
+    // As the host does: answers host.settings with what it saved, which its status says from then
+    // on when read; its status event is sent only when a test sends it.
+    void Saves(Func<System.Text.Json.JsonElement, HostSettingsView> save) => host.On(HostOps.Settings, d =>
+    {
+        var saved = save(d);
+        host.Status = host.Status with { Settings = saved };
+        return new SettingsResult(saved, false);
+    });
+
     [Fact]
     public async Task Signing_in_asks_the_host_through_the_relay_named_and_shows_the_code_it_reports()
     {
@@ -115,9 +124,8 @@ public sealed class SettingsTests : IAsyncLifetime
         link.PeopleNow.Add(new FleetHost(link.DeviceId!, "This app, as the relay lists it"));
         var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
         await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
-        // The host answers with what it saved.
-        host.On(HostOps.Settings, d => new SettingsResult(new HostSettingsView(true, RemoteFolderTrust: true,
-            RemoteFolderTrustDevices: d.TryGetProperty("remoteFolderTrustDevices", out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : null), false));
+        Saves(d => new HostSettingsView(true, RemoteFolderTrust: true,
+            RemoteFolderTrustDevices: d.TryGetProperty("remoteFolderTrustDevices", out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : null));
         await Connected();
         Assert.False(settings.RemoteFolderTrust);
         Assert.False(settings.ShowTrustDevices);
@@ -155,9 +163,8 @@ public sealed class SettingsTests : IAsyncLifetime
         link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
         var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
         await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
-        // The host answers with what it saved; its status event comes only later.
-        host.On(HostOps.Settings, d => new SettingsResult(new HostSettingsView(true, RemoteFolderTrust: true,
-            RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]), false));
+        Saves(d => new HostSettingsView(true, RemoteFolderTrust: true,
+            RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]));
         host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
         await Connected();
         await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
@@ -173,6 +180,32 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_change_made_after_the_last_is_in_but_before_its_status_event_keeps_what_the_last_one_did()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        Saves(d => new HostSettingsView(true, RemoteFolderTrust: true,
+            RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]));
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
+        await Connected();
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+
+        // Revoked, and the host's reply is in; its status event is not.
+        settings.TrustDevices.Single(d => d.Id == a).Approved = false;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "the revocation made");
+        Assert.Equal([a], connection.Status!.Settings.RemoteFolderTrustDevices!);
+        // Shown as the host acknowledged it, not as the status from before says.
+        Assert.False(settings.TrustDevices.Single(d => d.Id == a).Approved);
+
+        settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2, "the phone approved");
+        Assert.Equal([b], host.Sent(HostOps.Settings)[1].GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()));
+    }
+
+    [Fact]
     public async Task A_device_ticked_and_unticked_quickly_ends_unapproved_and_so_does_the_switch()
     {
         const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
@@ -180,9 +213,9 @@ public sealed class SettingsTests : IAsyncLifetime
         link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
         var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
         await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
-        host.On(HostOps.Settings, d => new SettingsResult(new HostSettingsView(true,
-            RemoteFolderTrust: d.TryGetProperty("remoteFolderTrust", out var t) && t.GetBoolean(),
-            RemoteFolderTrustDevices: d.TryGetProperty("remoteFolderTrustDevices", out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : [a]), false));
+        Saves(d => new HostSettingsView(true,
+            RemoteFolderTrust: d.TryGetProperty("remoteFolderTrust", out var t) ? t.GetBoolean() : host.Status.Settings.RemoteFolderTrust,
+            RemoteFolderTrustDevices: d.TryGetProperty("remoteFolderTrustDevices", out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : host.Status.Settings.RemoteFolderTrustDevices));
         host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
         await Connected();
         await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");

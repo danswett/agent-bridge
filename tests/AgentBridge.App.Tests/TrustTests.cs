@@ -249,6 +249,80 @@ public sealed class TrustTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Allowing_it_here_adds_this_app_to_the_list_the_host_has_now_not_one_from_before_a_device_was_revoked()
+    {
+        const string phone = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", me = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+        localTrust = [Question(answerable: false, atMachine: "Answer at the machine.") with { Workspace = "here" }];
+        localHost.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [phone]) };
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        // The host saves each change; its status event is not sent.
+        localHost.On(HostOps.Settings, d =>
+        {
+            var saved = localHost.Status.Settings with
+            {
+                RemoteFolderTrust = d.TryGetProperty("remoteFolderTrust", out var on) ? on.GetBoolean() : localHost.Status.Settings.RemoteFolderTrust,
+                RemoteFolderTrustDevices = d.TryGetProperty("remoteFolderTrustDevices", out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : localHost.Status.Settings.RemoteFolderTrustDevices,
+            };
+            localHost.Status = localHost.Status with { Settings = saved };
+            return new SettingsResult(saved, false);
+        });
+        var page = LaunchPage.Open(main, ui);
+        await Wait.UntilAsync(() => page.TrustQuestions.Count == 1 && page.TrustQuestions[0].ShowAllowHere, "Allow answering from this app");
+
+        // The phone revoked on the Settings page, which edits through the same editor; the status
+        // this app holds still lists it.
+        await TrustEditor.For(local).EditAsync(_ => new SettingsRequest(RemoteFolderTrustDevices: []));
+        Assert.Equal([phone], local.Status!.Settings.RemoteFolderTrustDevices!);
+        await page.TrustQuestions[0].AllowHereAsync();
+
+        var sent = localHost.Sent(HostOps.Settings);
+        Assert.Equal(2, sent.Count);
+        Assert.Equal([me], sent[1].GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()));
+    }
+
+    [Fact]
+    public async Task A_question_a_launch_returned_counts_only_until_the_listing_after_it_says_whether_it_still_waits()
+    {
+        remoteTrust = [];
+        remoteHost.On(LaunchProtocol.Launch, _ => new LaunchResult(LaunchOutcome.Busy, "Codex in there is waiting for a person to answer whether to trust that folder") { Trust = Question() });
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var page = LaunchPage.Open(main, ui);
+        await Wait.UntilAsync(() => page.Machines.Count == 2, "both machines");
+        ui.Post(() => page.SelectedMachine = page.Machines.Single(m => m.Value == "remote-id"));
+        await Wait.UntilAsync(() => page.CanLaunch, "the form");
+        ui.Post(() => page.Prompt = "fix the build");
+
+        ui.Post(page.Launch);
+        await Wait.UntilAsync(() => page.State == "busy", "busy");
+
+        // Listed again after the outcome: answered at the machine meanwhile, so it is gone, never
+        // offered from the outcome alone.
+        await Wait.UntilAsync(() => remoteHost.Sent(LaunchProtocol.Options).Count >= 2 && page.TrustQuestions.Count == 0, "the question to go");
+        Assert.Empty(remoteHost.Sent(TrustProtocol.Answer));
+    }
+
+    [Fact]
+    public async Task A_busy_launch_here_naming_a_question_lists_it_through_the_relay_so_Trust_is_offered_without_a_reload()
+    {
+        link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        // As the pipe gives it: never answerable there.
+        localHost.On(LaunchProtocol.Launch, _ => new LaunchResult(LaunchOutcome.Busy, "Codex in here is waiting for a person to answer whether to trust that folder")
+        {
+            Trust = Question(answerable: false, atMachine: "Answer at the machine, or from a phone, browser or Windows app through the relay.") with { Workspace = "here" },
+        });
+        localHost.On(TrustProtocol.Answer, d => answer(d));
+        var page = LaunchPage.Open(main, ui);
+        await Wait.UntilAsync(() => page.CanLaunch, "the form");
+        Assert.Empty(page.TrustQuestions);
+        localTrust = [Question() with { Workspace = "here" }];
+        ui.Post(() => page.Prompt = "fix the build");
+
+        ui.Post(page.Launch);
+
+        await Wait.UntilAsync(() => page.State == "busy" && page.TrustQuestions.Count == 1 && page.TrustQuestions[0].CanAnswer, "Trust offered");
+    }
+
+    [Fact]
     public async Task This_machines_question_is_answered_through_the_relay_as_its_host_lists_it_there()
     {
         localTrust = [Question() with { Workspace = "here" }];

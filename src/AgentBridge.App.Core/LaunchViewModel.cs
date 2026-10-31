@@ -414,7 +414,7 @@ public sealed partial class LaunchViewModel : Observable
                 loading = false;
                 localTrust = trust;
                 // A reload that fails says so, rather than leaving choices that may be out of date.
-                if (got is not null) { options = got; } else { options = null; error = failed; }
+                if (got is not null) { options = got; Listed(m, load); } else { options = null; error = failed; }
                 Draw();
             }
             done.SetResult();
@@ -734,6 +734,7 @@ public sealed partial class LaunchViewModel : Observable
         if (m == lastMachine && (via ?? m) == lastVia && (last is null || d.Request == last.Request)) { last = d; Show(); }
         if (d.State != DeliveryState.Done || handled == d.Request) { return; }
         handled = d.Request;
+        if (m == lastMachine) { SeenResult(m, d); }
         var outcome = OutcomeOf(d);
         if (outcome == "started")
         {
@@ -742,7 +743,9 @@ public sealed partial class LaunchViewModel : Observable
             Open(m, d);
         }
         // What it offers has changed: a resumed session is no longer resumable, a worktree counts.
-        if (m == machine && shown && outcome is "started" or "unconfirmed") { _ = RefreshAsync(); }
+        // An outcome naming a folder-trust question (a busy one, say) is listed again too: whether
+        // this app may answer it is the machine's listing's word, for this machine through the relay.
+        if (m == machine && shown && (outcome is "started" or "unconfirmed" || Result(d)?.Trust is not null)) { _ = RefreshAsync(); }
     }
 
     // An outcome this app does not know may still mean a session started, so it reads as
