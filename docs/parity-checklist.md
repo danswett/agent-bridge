@@ -90,6 +90,90 @@ PR:
 | **#62** | Codex discovery | Codex sessions run with `--no-daemon` found from their thread lock |
 | **Cl/Cx live** | Claude and Codex live tests | The Claude and Codex answer and end paths, verified live by their own slice |
 
+### VM-W in Azure
+
+Use this when VM-W cannot be a local Hyper-V VM, for example when the host's Hyper-V
+permissions are not usable. VM-M stays local. `build/rehearsal-azure-vmw.ps1` builds VM-W in
+Azure and is idempotent, so a rerun picks up where a failed one stopped:
+
+```powershell
+./build/rehearsal-azure-vmw.ps1 -Subscription <id> -AllowedSshCidr <your egress /24> `
+    -TunnelPublicKeyPath <VM-M's public key> -HyperloopDirectory <folder with Hyperloop-server.exe>
+```
+
+It creates only the resource group `rg-agent-bridge-rehearsal` (westus2, tagged
+`purpose=rehearsal-39`). That group holds a Windows 11 Pro VM `REHEARSAL-W` (Standard_D4s_v5,
+which runs nested virtualization for WSL2, with Standard_D4as_v5 as the fallback), a static
+public IP and an NSG. It refuses to run if `az` is signed in as anyone other than
+`-ExpectedAzureUser`, or if an existing group of that name lacks the tag. It needs Windows
+(the password file is DPAPI) and PowerShell 7.3 or later.
+
+Everything inside the VM is done through `az vm run-command`, not SSH. A proxied network can
+send SSH out from addresses other than its web traffic. Entra Global Secure Access does this,
+for example. So the machine that runs the script may not be able to SSH to VM-W even when
+`-AllowedSshCidr` is its web egress. The script copies Hyperloop's binaries over SSH when it
+can, and otherwise warns. In that case copy them from a machine that VM-W does accept, such as
+VM-M with `scp` as `rehearsal` into its drop folder (below). Then move them into `C:\Tools`
+with `az vm run-command`. Only Microsoft-signed binaries are started.
+
+**Security posture:**
+
+* The NSG allows TCP 22 from `-AllowedSshCidr` only and denies all other inbound traffic.
+  There is no RDP rule; the desktop is reached through Hyperloop.
+* sshd is key-only. The host key is pinned from the VM's own run-command output into
+  `~/.ssh/known_hosts_agentbridge-rehearsal`, so it is never trusted on first use.
+* The admin, `rehearsaladmin`, signs in with `~/.ssh/agentbridge-rehearsal`. The standard
+  user `rehearsal` has only VM-M's key. That key may forward only to `127.0.0.1:8123` and
+  use SFTP, so `ssh -N -L` and `scp` work, for A-04 and G-01. It gets no shell
+  (`ForceCommand internal-sftp`), because a process it ran could reach Hyperloop, which has no
+  PIN, on loopback, where `PermitOpen` does not apply. Its SFTP is confined to
+  `C:\RehearsalDrop`, which it sees as `/`, so it cannot plant or read files anywhere else.
+  Files it exchanges go through there. For A-04, the admin copies the token to
+  `C:\RehearsalDrop\ha.token`, and VM-M fetches it with
+  `scp rehearsal@<ip>:/ha.token C:\rehearsal\ha.token`. For G-01, VM-M runs
+  `scp -r <run folder> rehearsal@<ip>:/`.
+* Hyperloop's server, Home Assistant and Mosquitto are also blocked inbound by Windows
+  Firewall. They are reached only through a tunnel.
+* The admin password exists only as a DPAPI-protected file on the machine that ran the
+  script (`-SecretFile`). It reaches the VM encrypted to a one-time key that the VM generates
+  and then deletes. Autologon keeps it in the LSA secret, not in the registry.
+* `C:\Tools`, where Hyperloop runs from, is writable only by administrators and the admin.
+* Docker Engine runs inside WSL (Ubuntu, docker-ce from Docker's repository). It is not
+  Docker Desktop. A logon task starts it, and its published `127.0.0.1` ports answer on
+  Windows' `127.0.0.1`.
+
+**Cost** is about $0.40 an hour while running. The VM shuts down at 08:00 UTC every day; start
+it again with `-Start`. A deallocated VM bills only its disk and IP.
+
+**Tunnels:**
+
+```powershell
+# This host: Hyperloop to VM-W's interactive desktop
+ssh -i ~/.ssh/agentbridge-rehearsal -o UserKnownHostsFile=~/.ssh/known_hosts_agentbridge-rehearsal `
+    -o StrictHostKeyChecking=yes `
+    -N -L 4851:127.0.0.1:4850 rehearsaladmin@<ip>
+hyperloop servers add rehearsal-w --scheme tcp --authority 127.0.0.1:4851
+
+# VM-M (A-04): Home Assistant on VM-M's loopback. Append the KnownHostsLine the script
+# prints to VM-M's ~/.ssh/known_hosts first, so the host key is never trusted on first use.
+ssh -o StrictHostKeyChecking=yes -N -L 8123:127.0.0.1:8123 rehearsal@<ip>
+```
+
+If the operator's own SSH arrives from outside `-AllowedSshCidr`, the first tunnel cannot be
+made from that machine. Do not widen the NSG to fix it; agree on the range with the owner
+first. `-Start` (below) still checks Hyperloop from inside the VM through `run-command`.
+
+**Pause or remove it:**
+
+```powershell
+./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Deallocate   # stop paying for compute
+./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Start        # start, then print the tunnels
+./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Remove       # delete the resource group, after confirmation
+```
+
+`-Remove` deletes only `rg-agent-bridge-rehearsal`, and only if it carries the
+`purpose=rehearsal-39` tag.
+
 ## Conventions
 
 On each machine, once per PowerShell window:
