@@ -413,7 +413,9 @@ function begin(account) {
       status: (id) => fleet.status(id),
     });
     $('machines-empty').hidden = n !== 0 || !connection.ready;
-    machinesFold.update(n, n ? nameOf(hosts.targetId) : null);
+    // The machine whose sessions are on screen stays named after it drops out of presence,
+    // as the sessions heading keeps it: the host session holds on to its metadata.
+    machinesFold.update(n, hosts.targetId ? (hosts.machine?.name ?? nameOf(hosts.targetId)) : null);
   };
   fleet.onChange(drawMachines);
   fleet.start();
