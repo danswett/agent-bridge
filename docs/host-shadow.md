@@ -85,6 +85,13 @@ own token. Enforced in code (`Shadow/HaReader.cs`), and tested:
   once a pass, and the handler allows it for that one request only. Never a listing of states
   or a pattern. A sensor that cannot be read is skipped. With no current reading found, the
   lapsed figure stands and usage is **not compared** (see "Not compared").
+
+  The same goes for a place where this machine's daemon has **no** reading and the host has
+  one, matched on the host's account: typically a further Copilot login the host is given
+  (`usage.copilotAccounts`) and this machine's agent-ha-bridge is not, because another
+  machine reads it. Found as `usage.missingOnDaemon` on `copilot_2` for hours on DEV-VM1
+  (2026-10-30), while DSWETT-HOME, the daemon's dashboard writer, read that login. With no
+  named machine reading it, the daemon has no reading, and that is still a mismatch.
 * **The token.** `homeAssistant.baseUrl` and `homeAssistant.token` are read from
   `~/.agent-ha-bridge/config.json` at the moment of each read (so a rotated token is the one
   used), sent in that request's `Authorization` header, and dropped. Never logged, written

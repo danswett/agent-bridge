@@ -213,17 +213,26 @@ public sealed class DaemonHaReader : IDisposable
     // its dashboard.publication.writer) and the reader found last, at most MaxReaders of them, each
     // by its one exact entity, allowed for that read only. Nothing found, or nothing readable, and
     // the daemon's own lapsed figure stands: not compared.
+    //
+    // The same for a place where this machine's daemon has no reading at all and the host has one:
+    // a further Copilot login the host is given (usage.copilotAccounts) and this machine's daemon is
+    // not, because another machine reads it for the account. That machine's sensor, of the host's
+    // login, is the daemon's figure; with none, the daemon has no reading, a mismatch. Seen on
+    // DEV-VM1 as usage.missingOnDaemon on copilot_2 for hours while DSWETT-HOME read it (#40).
     public IReadOnlyCollection<string> ReaderEntities => readerEntities;
     volatile HashSet<string> readerEntities = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> lastReader = new(StringComparer.Ordinal);
     const int MaxReaders = 8;
 
-    public async Task<DaemonHaReading> ReadAsync(HomeAssistantAccess access, CancellationToken ct = default)
+    // host: the host's readings, by place, whose logins are looked for where this machine's daemon
+    // has none.
+    public async Task<DaemonHaReading> ReadAsync(HomeAssistantAccess access, IReadOnlyDictionary<string, ShadowUsage>? host = null, CancellationToken ct = default)
     {
         try
         {
             var readAt = clock.GetUtcNow();
             var usage = new Dictionary<string, ShadowUsage>(StringComparer.Ordinal);
+            var absent = new List<string>();
             foreach (var (client, entity) in usageEntities)
             {
                 if (await GetAsync(access, entity, ct) is { } state && Usage(state) is var u)
@@ -235,10 +244,20 @@ public sealed class DaemonHaReader : IDisposable
                         ? u with { Lapsed = true }
                         : Stood(client, u with { ConfirmedAt = access.UsagePace.ConfirmedAt(u.MeasuredAt, readAt) }, readAt);
                 }
-                else { standing.Remove(client); }
+                else { absent.Add(client); }
             }
             var resume = await GetAsync(access, resumeEntity, ct);
-            if (usage.Any(u => u.Value.Lapsed)) { await ReadersAsync(access, usage, resume, readAt, ct); }
+            var wanted = usage.Where(u => u.Value.Lapsed).Select(u => (u.Key, Account: AccountOf(u.Value)))
+                .Concat(usageEntities.Select(u => u.Client)
+                    .Where(c => !usage.TryGetValue(c, out var own) || !own.Reading)
+                    .Select(c => (Key: c, Account: host?.GetValueOrDefault(c) is { Reading: true } h ? AccountOf(h) : null)))
+                .Where(w => w.Account is { Length: > 0 })
+                .Select(w => (w.Key, w.Account!))
+                .DistinctBy(w => w.Key, StringComparer.Ordinal)
+                .ToList();
+            if (wanted.Count > 0) { await ReadersAsync(access, wanted, usage, resume, readAt, ct); }
+            // A place with nothing of its own and no reader's figure either starts afresh next time.
+            foreach (var client in absent.Where(c => !usage.ContainsKey(c))) { standing.Remove(client); }
             return resume is not { } r
                 ? new(usage, null, null, "the daemon has not published a resume list")
                 : new(usage, null, Labels(r), null);
@@ -250,7 +269,10 @@ public sealed class DaemonHaReader : IDisposable
         }
     }
 
-    async Task ReadersAsync(HomeAssistantAccess access, Dictionary<string, ShadowUsage> usage, JsonElement? resume, DateTimeOffset readAt, CancellationToken ct)
+    static string? AccountOf(ShadowUsage u) => u.AccountKey is { Length: > 0 } ? u.AccountKey : u.Account;
+
+    // wanted: each place to find the account's reader for, and the account.
+    async Task ReadersAsync(HomeAssistantAccess access, IReadOnlyList<(string Key, string Account)> wanted, Dictionary<string, ShadowUsage> usage, JsonElement? resume, DateTimeOffset readAt, CancellationToken ct)
     {
         var names = new List<string>();
         if (resume is { } r && r.TryGetProperty("attributes", out var a) && a.ValueKind == JsonValueKind.Object && a.TryGetProperty("options", out var o) && o.ValueKind == JsonValueKind.Array)
@@ -260,13 +282,10 @@ public sealed class DaemonHaReader : IDisposable
                 if (x.ValueKind == JsonValueKind.String && RemoteMachine.Match(x.GetString()!) is { Success: true } m) { names.Add(m.Groups[1].Value); }
             }
         }
-        var lapsed = usage.Where(u => u.Value.Lapsed).Select(u => u.Key).ToList();
-        // Each sensor read once a pass, however many lapsed sensors look at it.
+        // Each sensor read once a pass, however many places look at it.
         var read = new Dictionary<string, JsonElement?>(StringComparer.Ordinal);
-        foreach (var key in lapsed)
+        foreach (var (key, account) in wanted)
         {
-            var own = usage[key];
-            if ((own.AccountKey is { Length: > 0 } ? own.AccountKey : own.Account) is not { Length: > 0 } account) { continue; }
             // The agent the sensor is for: a further Copilot login's (copilot_2 to _4) is Copilot's,
             // and the reader may carry that login on any of its own Copilot sensors.
             var client = key.StartsWith("copilot_", StringComparison.Ordinal) ? "copilot" : key;
@@ -426,7 +445,8 @@ public sealed class DaemonHaReader : IDisposable
 // What the comparison asks of the daemon's Home Assistant side each sample.
 public interface IDaemonHomeAssistant
 {
-    Task<DaemonHaReading> ReadAsync(CancellationToken ct = default);
+    // host: the host's usage readings this sample, when it has them.
+    Task<DaemonHaReading> ReadAsync(IReadOnlyDictionary<string, ShadowUsage>? host = null, CancellationToken ct = default);
 }
 
 // Reads at most once a minute and gives the last reading in between: the daemon publishes usage
@@ -439,13 +459,13 @@ public sealed class CachedDaemonHomeAssistant(AgentHaBridgePaths paths, DaemonHa
     DateTimeOffset? read;
     DaemonHaReading last = new(null, "not read yet", null, "not read yet");
 
-    public async Task<DaemonHaReading> ReadAsync(CancellationToken ct = default)
+    public async Task<DaemonHaReading> ReadAsync(IReadOnlyDictionary<string, ShadowUsage>? host = null, CancellationToken ct = default)
     {
         var now = time.GetUtcNow();
         if (read is { } at && now - at < every) { return last; }
         read = now;
         var (access, problem) = AgentHaBridgeConfig.Read(paths);
-        last = access is null ? new(null, problem, null, problem) : await reader.ReadAsync(access, ct);
+        last = access is null ? new(null, problem, null, problem) : await reader.ReadAsync(access, host, ct);
         return last;
     }
 }
@@ -454,5 +474,5 @@ public sealed class CachedDaemonHomeAssistant(AgentHaBridgePaths paths, DaemonHa
 public sealed class NoDaemonHomeAssistant : IDaemonHomeAssistant
 {
     const string Why = "Home Assistant is not read (--no-home-assistant)";
-    public Task<DaemonHaReading> ReadAsync(CancellationToken ct = default) => Task.FromResult(new DaemonHaReading(null, Why, null, Why));
+    public Task<DaemonHaReading> ReadAsync(IReadOnlyDictionary<string, ShadowUsage>? host = null, CancellationToken ct = default) => Task.FromResult(new DaemonHaReading(null, Why, null, Why));
 }

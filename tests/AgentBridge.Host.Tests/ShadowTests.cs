@@ -675,7 +675,10 @@ public sealed class ShadowTests : IDisposable
             ],
             c.Differences.Select(d => (d.Kind, d.Session, d.Detail)).OrderBy(x => x.Kind, StringComparer.Ordinal).ToList());
         // Read once a minute, not each sample; and not until five minutes is any of it a mismatch.
-        Assert.Equal(6 * 7, inner.Seen.Count);
+        // Each read is this machine's seven entities and, for Codex, which the host reads and this
+        // daemon has no sensor for, the one machine its resume list names.
+        Assert.Equal(6 * 8, inner.Seen.Count);
+        Assert.Equal(6, inner.Seen.Count(r => r.Path == "/api/states/sensor.agent_bridge_other_pc_usage_codex"));
         // Copilot's 40 against 55 is one pair of readings, never confirmed by a second.
         Assert.Equal(5, ledger.Today!.Mismatches.Count);
         Assert.Equal((6, 6), (ledger.Today.UsageCompared, ledger.Today.ResumableCompared));
@@ -971,6 +974,46 @@ public sealed class ShadowTests : IDisposable
         Config();
         var second = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!)).Usage!["copilot_2"];
         Assert.Equal((52d, false, (DateTimeOffset?)null), (second.Windows["monthly"], second.Lapsed, second.ConfirmedAt));
+    }
+
+    // Seen on DEV-VM1 (#40): the host was given a further Copilot login this machine's daemon was not,
+    // so the daemon published no copilot_2 here, while DSWETT-HOME read that login. Its sensor, of the
+    // host's login, is the daemon's figure; a login no named machine reads is still missing.
+    [Fact]
+    public async Task A_place_the_daemon_has_no_sensor_for_is_compared_by_the_named_machine_reading_the_hosts_login()
+    {
+        var now = f.Time.GetUtcNow();
+        var inner = new FakeHomeAssistant(entity => entity switch
+        {
+            "sensor.agent_bridge_fixture_usage_copilot" => UsageState("copilot", 40, now),
+            "select.agent_bridge_fixture_new_resume" => ResumeState("Agency on OTHER-PC: Shared from there (abcdef12)"),
+            "sensor.agent_bridge_other_pc_usage_copilot_2" => UsageState("copilot", 52, now - TimeSpan.FromMinutes(1), account: "second-login", slug: "other_pc"),
+            _ => null,
+        });
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        Config();
+        async Task<ShadowComparison> Compare(string login)
+        {
+            var host = new Dictionary<string, ShadowUsage> { ["copilot"] = Reading(40, now), ["copilot_2"] = Reading(52, now, login) };
+            var daemon = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!, host)).Usage;
+            return ShadowCompare.Compare(new ShadowView { Usage = daemon, Resumable = [] }, new ShadowView { SeesAgentHaBridge = true, Usage = host, Resumable = [] });
+        }
+
+        var compared = await Compare("SECOND-LOGIN");
+        Assert.Equal(["copilot", "copilot_2"], compared.UsageFresh.Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(compared.Differences, d => d.Kind.StartsWith("usage.", StringComparison.Ordinal));
+        Assert.All(inner.Seen, r => Assert.Equal(HttpMethod.Get, r.Method));
+        Assert.Empty(reader.ReaderEntities);
+
+        f.Time.Advance(TimeSpan.FromMinutes(1));
+        var unread = await Compare("third-login");
+        Assert.Contains(unread.Differences, d => d.Kind == ShadowKinds.UsageMissingOnDaemon && d.Session == ShadowHash.Token("copilot_2"));
+
+        // Without the host's reading, nobody else's sensor is read for a place this daemon has none.
+        f.Time.Advance(TimeSpan.FromMinutes(1));
+        inner.Seen.Clear();
+        await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!);
+        Assert.Equal([.. reader.Entities.Select(e => "/api/states/" + e)], inner.Seen.Select(r => r.Path));
     }
 
     [Fact]
