@@ -962,6 +962,10 @@ Assistant itself rather than a fake:
 * a machine forgotten as the row's X forgets it (an empty retained message on every topic of
   `Get-BridgeMachineForgetTopic`) while its host runs, with the beat shortened, is published
   again whole: online, sessions, update and its session's card, showing what the session does;
+* Home Assistant restarted through `homeassistant.restart` while a question waits on a card: once
+  it is back, the reply box holds a value again, the question is armed on the card again, a
+  choice and a Send press reach the host's answerer, and the session's entity ids are exactly
+  those it had before (nothing made again under a new id);
 * with no dashboard at all, an ended session is retired, and nothing it published is left
   retained;
 * the shadow, against the daemon's own recorded publications seeded into the broker, reports

@@ -547,6 +547,67 @@ public sealed class LiveHomeAssistantTests : IDisposable
         Assert.Contains(log.ToArray(), l => l.Contains("publishing the machine again", StringComparison.Ordinal));
     }
 
+    // This restarts the one Home Assistant every live test shares. The live tests are one class, so
+    // none runs beside it, and it finishes only once Home Assistant has this machine's MQTT entities
+    // back, so a test after it still finds a working one.
+    [HomeAssistantFact]
+    public async Task After_Home_Assistant_restarts_the_card_is_put_back_on_the_same_ids_and_its_question_still_answers()
+    {
+        var id = Session();
+        var node = HaContract.NodeId(id);
+        Ask(id, Form("q1", Release));
+        var slug = HaContract.MachineSlug("CI-RESTART");
+        var online = HaContract.MachineEntityId("binary_sensor", "online", slug);
+        await using var c = new HaConnector(new HaConnectorOptions
+        {
+            MachineName = "CI-RESTART", Version = "0.1.0", Dev = true,
+            Tick = TimeSpan.FromMilliseconds(250), Reconcile = TimeSpan.FromSeconds(2), RetireGrace = TimeSpan.FromSeconds(2),
+            EntityRestore = TimeSpan.FromSeconds(10),
+        }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } }, answer: (r, _) =>
+        {
+            lock (answered) { answered.Add(r); }
+            return Task.FromResult(new AnswerResult(AnswerOutcome.Delivered));
+        });
+        c.Start();
+        await Until(SessionEntities.Field(node, 1), s => s.State == HaDecision.Choose);
+        await Until(SessionEntities.Reply(node), _ => true);
+        await Until(online, s => s.State == "on");
+        var before = (await ha.ListEntityRegistryAsync()).Select(e => e.EntityId).Where(e => e.Contains(node, StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList();
+
+        // Restarted as Settings > Restart does it. The call itself may not survive the restart.
+        try { await ha.CallServiceAsync("homeassistant", "restart", new JsonObject()); }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { }
+        await Until(() =>
+        {
+            try { return ha.GetStateAsync(online).GetAwaiter().GetResult() is null; }
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { return true; }
+        }, "Home Assistant never went down", 120);
+
+        // Back, with the reply box holding a value again and the question on the card again.
+        async Task<HaState> Back(string entityId, Func<HaState, bool> condition, int seconds = 240)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(seconds);
+            while (true)
+            {
+                try { return await Until(entityId, condition, 15); }
+                catch (Exception e) when (DateTime.UtcNow < deadline && e is HttpRequestException or TaskCanceledException or Xunit.Sdk.FailException) { }
+            }
+        }
+        await Back(online, s => s.State == "on");
+        await Back(SessionEntities.Reply(node), s => s.State != "unknown" && s.State != "unavailable");
+        await Back(SessionEntities.Decision(node), s => s.State == HaDecision.Awaiting
+            && s.Attributes.TryGetProperty("decision_id", out var d) && d.GetString() == "q1");
+        await Back(SessionEntities.Field(node, 1), s => s.State == HaDecision.Choose);
+
+        // And it still answers, through the same ids the dashboard draws.
+        await ha.CallServiceAsync("select", "select_option", new JsonObject { ["entity_id"] = SessionEntities.Field(node, 1), ["option"] = "Wait for the fix" });
+        await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = SessionEntities.Submit(node) });
+        await Until(() => { lock (answered) { return answered.Count == 1; } }, "the answer never arrived");
+        Assert.Equal("wait", answered[0].Fields!["release"].GetString());
+        var after = (await ha.ListEntityRegistryAsync()).Select(e => e.EntityId).Where(e => e.Contains(node, StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList();
+        Assert.Equal(before, after);
+    }
+
     sealed record Notification(string Title, string Message);
 
     async Task<Notification> UntilNotified(Func<Notification, bool> match, int skip, int seconds = 60)
