@@ -164,6 +164,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         drivers.For(Id).ArmDriver(SessionDrivers.Agent, DateTimeOffset.UtcNow, "homeassistant:0f1e2d3c");
         Assert.Equal(DriverKind.Agent, await DriverAsync(DriverKind.Agent));
         Assert.Equal("delivered", (await ReplyAsync(ch, "I'll take it from here", mine)).Outcome);
+        // However its UUID is spelt: the delivery knows it as the same request.
+        Assert.Equal("delivered", (await ReplyAsync(ch, "I'll take it from here", mine.ToUpperInvariant())).Outcome);
         Assert.Single(injector.Plans);
         await Task.Delay(200);
         Assert.Equal(DriverKind.Agent, source.Get(Id)!.Driver);
@@ -177,6 +179,24 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var answered = await ch.RequestAsync(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), fields = new { pick = "b" } });
         Assert.Equal("delivered", answered.GetProperty("result").GetProperty("outcome").GetString());
         Assert.Null(await DriverAsync(null));
+    }
+
+    [Fact]
+    public async Task A_persons_reply_confirmed_only_after_an_agent_drove_the_session_meanwhile_leaves_it_with_the_agent()
+    {
+        var ch = await OpenAsync();
+        // The keys go in; before the session records them, an agent's input arrives through the
+        // Home Assistant card and arms the session.
+        injector.OnInject = plan =>
+        {
+            drivers.For(Id).ArmDriver(SessionDrivers.Agent, DateTimeOffset.UtcNow, "homeassistant:0f1e2d3c");
+            Fixture.Append(events, Prompt(plan.Sends[0].Text));
+        };
+
+        Assert.Equal("delivered", (await ReplyAsync(ch, "mine came first")).Outcome);
+        await Task.Delay(200);
+        await source.RefreshAsync();
+        Assert.Equal(DriverKind.Agent, source.Get(Id)!.Driver);
     }
 
     [Fact]

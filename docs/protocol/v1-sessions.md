@@ -694,7 +694,10 @@ alone.
   starts with nobody's arm waiting for it, or after the arm lapsed, is typed at the machine and so
   is the person's. A resend of the same request, which the host answers from the outcome it
   remembers without typing anything, takes nothing back. An agent's turn finishing is not a new
-  turn: the session stays the agent's while it is idle.
+  turn: the session stays the agent's while it is idle. A turn is a prompt started; an answer continues the turn it was asked
+  in, so an answer typed at the machine does not take the session back until the next prompt, as on
+  agent-ha-bridge (#134). A person's answer or reply confirmed only after an agent armed the session
+  meanwhile leaves it with the agent, whose input came later.
 * **Who is an agent.** Agents have no principal of their own on the pipe or relay yet (design
   §5.5; the pipe refuses them anything but reading, #44), so today the only agent principal a host
   sees is a press, answer, reply or launch on its Home Assistant cards made by an account listed

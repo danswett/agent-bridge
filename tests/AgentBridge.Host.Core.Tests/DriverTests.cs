@@ -22,6 +22,44 @@ public class DriverTests
 
     static (DriverKind?, string?) Driver(Session s) => (s.Driver, s.DriverPrincipal);
 
+    static Session At(int? turns, SessionStatus status, string? message) => new()
+    {
+        Id = Id, Agent = AgentKind.Codex, Status = status, StatusSince = Fixture.T0, UpdatedAt = Fixture.T0,
+        Activity = new Activity { TurnCount = turns, UserMessage = message },
+    };
+
+    [Fact]
+    public void A_prompt_whose_text_is_read_after_its_count_is_one_turn_not_two()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        d.Observe(At(1, SessionStatus.Idle, "first"), Fixture.T0, drivers.Arm);
+        d.ArmDriver(SessionDrivers.Agent, Fixture.T0, Principal);
+
+        // Codex counts the prompt at task_started; its text follows in a record of its own, and a
+        // read can fall between them.
+        d.Observe(At(1, SessionStatus.Working, "first"), Fixture.T0, drivers.Arm);
+        d.Observe(At(1, SessionStatus.Working, "the agent's prompt"), Fixture.T0, drivers.Arm);
+
+        Assert.Equal((DriverKind.Agent, Principal), d.Shown);
+    }
+
+    [Fact]
+    public void A_launch_whose_opening_turn_a_listening_source_already_has_spends_its_arm_on_it()
+    {
+        var drivers = new SessionDrivers();
+        var opening = At(0, SessionStatus.Working, "Fix the build");
+        drivers.For(Id).Observe(opening, Fixture.T0, drivers.Arm);
+        // A source observes as soon as it hears of a change, as the host's does.
+        drivers.Changed += id => drivers.For(id).Observe(opening, Fixture.T0, drivers.Arm);
+
+        drivers.For(Id).ArmLaunch(Fixture.T0, "Fix the build", resumed: false, Principal);
+
+        // Spent on the opening turn, so the person's next prompt is theirs.
+        Assert.Null(drivers.For(Id).PendingAt);
+        Assert.Equal((DriverKind.Agent, Principal), drivers.For(Id).Shown);
+    }
+
     [Fact]
     public async Task An_agents_press_shows_at_once_with_its_principal_its_turn_is_the_agents_and_a_turn_typed_at_the_machine_is_the_persons()
     {

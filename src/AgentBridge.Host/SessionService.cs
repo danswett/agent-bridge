@@ -44,22 +44,27 @@ public sealed class SessionService
     // may have arrived takes the session back from an agent at once, as one typed at the machine.
     public SessionDrivers? Drivers { get; init; }
     public TimeProvider Time { get; init; } = TimeProvider.System;
-    // Requests that have taken their session back, and when. A resend of one is answered from the
-    // outcome the delivery remembers, with nothing typed, so it must not take back a session an
-    // agent has driven since.
+    // Requests that have taken their session back, and when, by the request as the deliveries
+    // remember it (its UUID, however it is spelt, and whatever session a resend names). A resend is
+    // answered from the outcome the delivery remembers, with nothing typed, so it must not take
+    // back a session an agent has driven since.
     readonly ConcurrentDictionary<string, DateTimeOffset> takenBack = new(StringComparer.Ordinal);
     static readonly TimeSpan TakenBackKept = TimeSpan.FromHours(1);
 
-    void TakeBack(string sessionId, string request)
+    // The person's input took the session back, unless something armed it while the delivery was
+    // under way (generation): a delivery waits to be confirmed after its keys went in, and an
+    // agent's input meanwhile came after the person's.
+    void TakeBack(string sessionId, string request, long generation)
     {
         if (Drivers is null) { return; }
         var now = Time.GetUtcNow();
-        if (!takenBack.TryAdd($"{sessionId}\n{request}", now)) { return; }
+        var key = Guid.TryParse(request, out var g) ? g.ToString("N") : request;
+        if (!takenBack.TryAdd(key, now)) { return; }
         if (takenBack.Count > 1024)
         {
-            foreach (var (key, at) in takenBack) { if (now - at > TakenBackKept) { takenBack.TryRemove(key, out _); } }
+            foreach (var (k, at) in takenBack) { if (now - at > TakenBackKept) { takenBack.TryRemove(k, out _); } }
         }
-        Drivers.ArmPerson(sessionId, now);
+        Drivers.ArmPerson(sessionId, now, generation);
     }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
@@ -206,12 +211,13 @@ public sealed class SessionService
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.answer needs an id, a question and a request"); }
         var request = data.Deserialize<AnswerRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.answer needs an id, a question and a request");
         if (answers is null) { return new AnswerResult(AnswerOutcome.Refused, "this host does not take answers; answer at the machine"); }
+        var generation = Drivers?.GenerationOf(request.Id) ?? 0;
         var result = await answers.AnswerAsync(request);
         // Typed from this device: it needs no notification that the question was answered.
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {
             push?.Answered(channel.PeerId, request.Id, request.Question);
-            TakeBack(request.Id, request.Request);
+            TakeBack(request.Id, request.Request, generation);
         }
         return result;
     }
@@ -248,8 +254,9 @@ public sealed class SessionService
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.reply needs an id, a request and text"); }
         var request = data.Deserialize<ReplyRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.reply needs an id, a request and text");
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
+        var generation = Drivers?.GenerationOf(request.Id) ?? 0;
         var result = await replies.ReplyAsync(request, channel.PeerId);
-        if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { TakeBack(request.Id, request.Request); }
+        if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { TakeBack(request.Id, request.Request, generation); }
         return result;
     }
 

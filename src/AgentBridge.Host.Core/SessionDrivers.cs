@@ -43,6 +43,17 @@ public sealed class SessionDrivers
     // The driver as Session.Driver carries it: Agent with its principal, or null for the person.
     public (DriverKind? Kind, string? Principal) Shown(string id) => drivers.TryGetValue(id, out var d) ? d.Shown : (null, null);
 
+    // How many times the session has been armed: a result that comes back after another arm is
+    // older than it, and must not replace it. Zero for a session with no record, which this never
+    // creates (the id may be anything a device sent).
+    public long GenerationOf(string id) => drivers.TryGetValue(id, out var d) ? d.Generation : 0;
+
+    // A person answered or replied from a device, if nothing armed the session since `generation`.
+    public void ArmPerson(string id, DateTimeOffset now, long generation)
+    {
+        if (GenerationOf(id) == generation) { For(id).ArmDriver(Human, now); }
+    }
+
     // A person answered or replied from a device: the turn is theirs, as if typed at the machine.
     public void ArmPerson(string id, DateTimeOffset now) => For(id).ArmDriver(Human, now);
 
@@ -80,6 +91,7 @@ public sealed class SessionDriver
     // as a press's does.
     string? openingPrompt;
     bool openingResumed;
+    long generation;
 
     internal SessionDriver(SessionDrivers owner, string id)
     {
@@ -88,6 +100,8 @@ public sealed class SessionDriver
     }
 
     public string Driver { get { lock (gate) { return driver; } } }
+
+    public long Generation { get { lock (gate) { return generation; } } }
 
     public string? Principal { get { lock (gate) { return principal; } } }
 
@@ -105,7 +119,14 @@ public sealed class SessionDriver
 
     (DriverKind?, string?) ShownLocked() => driver == SessionDrivers.Agent ? (DriverKind.Agent, principal) : (null, null);
 
-    public void ArmDriver(string by, DateTimeOffset now, string? agentPrincipal = null)
+    public void ArmDriver(string by, DateTimeOffset now, string? agentPrincipal = null) => Arm(by, now, agentPrincipal, null, false);
+
+    // The whole launch, opening turn included, before anyone hears of it: a source told first
+    // would observe an opening turn already here without spending the arm on it.
+    public void ArmLaunch(DateTimeOffset at, string? prompt, bool resumed, string? agentPrincipal = null) =>
+        Arm(SessionDrivers.Agent, at, agentPrincipal, prompt is { Length: > 0 } ? Collapse(prompt) : null, resumed);
+
+    void Arm(string by, DateTimeOffset now, string? agentPrincipal, string? opening, bool resumed)
     {
         bool changed;
         lock (gate)
@@ -114,19 +135,12 @@ public sealed class SessionDriver
             driver = by;
             principal = by == SessionDrivers.Agent ? agentPrincipal : null;
             pendingAt = now;
+            openingPrompt = opening;
+            openingResumed = resumed;
+            generation++;
             changed = before != ShownLocked();
         }
         if (changed) { owner.Raise(id); }
-    }
-
-    public void ArmLaunch(DateTimeOffset at, string? prompt, bool resumed, string? agentPrincipal = null)
-    {
-        ArmDriver(SessionDrivers.Agent, at, agentPrincipal);
-        lock (gate)
-        {
-            openingPrompt = prompt is { Length: > 0 } ? Collapse(prompt) : null;
-            openingResumed = resumed;
-        }
     }
 
     // The driver and its arm as they are, to be put back when an arm turns out to be for nothing.
@@ -141,6 +155,7 @@ public sealed class SessionDriver
         {
             var before = ShownLocked();
             (driver, principal, pendingAt) = (saved.Driver, saved.Principal, saved.Pending);
+            generation++;
             changed = before != ShownLocked();
         }
         if (changed) { owner.Raise(id); }
@@ -152,10 +167,13 @@ public sealed class SessionDriver
     // driver changed; it raises nothing, since whoever observes is about to show the session.
     public bool Observe(Session full, DateTimeOffset now, TimeSpan arm)
     {
-        // The prompts started, not finished: TurnCount counts those whose turn has finished, one
-        // fewer while one is in progress, so an agent's turn ending must not read as a new turn.
-        var turns = full.Activity.TurnCount is { } n ? n + (full.Status is SessionStatus.Working or SessionStatus.Waiting ? 1 : 0) : (int?)null;
-        var turn = $"{turns}\n{full.Activity.UserMessage}";
+        // A turn is a prompt started: TurnCount counts those whose turn has finished, one fewer
+        // while one is in progress, so an agent's turn ending is no new turn. The count alone: its
+        // text can come in a record of its own after it (Codex's task_started, then user_message),
+        // and must not read as a second prompt. Text only where there is no count.
+        var turn = full.Activity.TurnCount is { } n
+            ? (n + (full.Status is SessionStatus.Working or SessionStatus.Waiting ? 1 : 0)).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "\n" + full.Activity.UserMessage;
         lock (gate)
         {
             var before = ShownLocked();
