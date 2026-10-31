@@ -53,19 +53,21 @@ public sealed class FolderTrustAnswers(P256KeyPair key, ISessionLauncher launche
         // make a key and sign with it, so the MAC alone says nothing about who pressed.
         if (c.Principal.Device != peer) { return Refused(peer, "the command must come from the device that signed it"); }
         if (c.Principal.Device == me) { return Refused(peer, "this machine cannot answer for a person"); }
-        if (NotAPerson(peer, devices) is { } who) { return Refused(peer, who); }
-        var signer = devices().First(d => d.Id == peer);
+        // One reading of the relay's list, which it replaces as devices come and go: the device
+        // checked is the device named.
+        var signer = devices().FirstOrDefault(d => d.Id == peer);
+        if (NotAPerson(signer) is { } who) { return Refused(peer, who); }
 
-        return await launcher.AnswerTrustAsync(Guid.Parse(c.Request), request.Question, request.Choice == TrustProtocol.Trust, peer, $"{signer.Kind} {peer[..8]}");
+        return await launcher.AnswerTrustAsync(Guid.Parse(c.Request), request.Question, request.Choice == TrustProtocol.Trust, peer, $"{signer!.Kind} {peer[..8]}");
     }
 
     // Why this device cannot answer by what the relay lists it as, or null for a person's device
     // connected now: shared with the questions each device is shown, so none is offered buttons
     // that would only be refused.
-    public string? NotAPerson(string peer) => Volatile.Read(ref presence) is { } devices ? NotAPerson(peer, devices) : "this machine is not connected to the relay now";
+    public string? NotAPerson(string peer) => Volatile.Read(ref presence) is { } devices ? NotAPerson(devices().FirstOrDefault(d => d.Id == peer)) : "this machine is not connected to the relay now";
 
-    static string? NotAPerson(string peer, Func<IReadOnlyList<PresenceEntry>> devices) =>
-        devices().FirstOrDefault(d => d.Id == peer) is not { } d ? "the device that signed the command is not connected to the relay now"
+    static string? NotAPerson(PresenceEntry? d) =>
+        d is null ? "the device that signed the command is not connected to the relay now"
         : !PersonKinds.Contains(d.Kind) ? "only a person's phone, browser or Windows app can answer a folder-trust question" : null;
 
     TrustAnswerResult Refused(string peer, string why)
