@@ -268,7 +268,9 @@ public sealed class QuestionView : StackPanel
         var box = new TextBox { PlaceholderText = placeholder, TextWrapping = TextWrapping.Wrap, AcceptsReturn = multiline, MinHeight = multiline ? 64 : 0, MaxHeight = 240 };
         box.GotFocus += (_, _) => editing(true);
         box.LostFocus += (_, _) => editing(false);
-        box.KeyDown += (_, e) =>
+        // Preview: a multi-line TextBox handles Enter itself and marks KeyDown handled, so a
+        // KeyDown handler never saw Ctrl+Enter, and it inserted a line instead of sending (#119).
+        box.PreviewKeyDown += (_, e) =>
         {
             var ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
             if (e.Key == VirtualKey.Enter && (ctrl || !multiline))

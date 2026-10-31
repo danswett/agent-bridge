@@ -143,7 +143,7 @@
                             GotFocus="OnEditing"
                             LostFocus="OnNotEditing"
                             Paste="OnPaste"
-                            KeyDown="OnReplyKey" />
+                            PreviewKeyDown="OnReplyKey" />
                         <ItemsControl ItemsSource="{x:Bind Card.Reply.Attachments, Mode=OneWay}" IsTabStop="False">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="core:ReplyAttachment">

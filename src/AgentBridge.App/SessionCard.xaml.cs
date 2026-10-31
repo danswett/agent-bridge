@@ -138,6 +138,8 @@ public sealed partial class SessionCard : UserControl
     void OnEditing(object sender, RoutedEventArgs e) => Editing(true);
     void OnNotEditing(object sender, RoutedEventArgs e) => Editing(false);
 
+    // Wired to PreviewKeyDown: this multi-line TextBox handles Enter itself and marks KeyDown
+    // handled, so on KeyDown Ctrl+Enter inserted a line and never sent (#119).
     void OnReplyKey(object sender, KeyRoutedEventArgs e)
     {
         if (e.Key != VirtualKey.Enter) { return; }
