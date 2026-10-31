@@ -50,6 +50,9 @@ export function hostNote(link, name, { online, named = false }) {
 
 export class SessionsPage {
   #shownCaps = new Map();
+  // The machine last launched on or picked to launch on: kept here, and on the device as far as
+  // its storage allows, so a picker never depends on a write that may fail.
+  #launchHost = null;
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
@@ -64,11 +67,11 @@ export class SessionsPage {
     this.stops = new StopService({ current, ...timing });
     this.launches = new LaunchService({ current, ...timing });
     // A launch is remembered by the machine it went to: the next one starts there.
-    this.launches.onAny((e) => { if (e.state === 'sending') { this.#write(LAUNCH_HOST, e.hostId); } });
+    this.launches.onAny((e) => { if (e.state === 'sending') { this.#rememberLaunch(e.hostId); } });
     this.launchPanel = new LaunchPanel($('launch'), {
       service: this.launches,
       jump: (id, hostId) => this.showSession(id, hostId),
-      pick: (hostId) => { this.#write(LAUNCH_HOST, hostId); this.#drawLaunch(); },
+      pick: (hostId) => { this.#rememberLaunch(hostId); this.#drawLaunch(); },
     });
     this.view = new SessionListView($('session-list'), hosts.sessions, {
       fetchDetail: (hostId, id) => {
@@ -198,7 +201,7 @@ export class SessionsPage {
     if (hosts.selection === null) { panel.setMachines(null); panel.setTarget(null); return; }
     const can = hosts.links().filter((l) => l.capabilities.includes(LAUNCH.capability) && (l.phase === 'open' || l.id === panel.hostId));
     const has = (id) => !!id && can.some((l) => l.id === id);
-    const pick = hosts.all ? [this.#read(LAUNCH_HOST), panel.hostId].find(has) ?? can[0]?.id ?? null : can[0]?.id ?? null;
+    const pick = hosts.all ? [this.#launchHost, this.#read(LAUNCH_HOST), panel.hostId].find(has) ?? can[0]?.id ?? null : can[0]?.id ?? null;
     panel.setMachines(hosts.all ? can.map((l) => ({ hostId: l.id, name: hosts.nameOf(l.id) ?? l.id.slice(0, 8) })) : null, pick);
     panel.setTarget(pick ? this.#launchTarget(pick) : null);
   }
@@ -235,6 +238,11 @@ export class SessionsPage {
       : hosts.all ? (ids.length > 1 ? 'all' : ids.length ? hosts.nameOf(ids[0]) : null)
         : hosts.nameOf(hosts.targetId);
     this.machinesFold.update(n, viewing);
+  }
+
+  #rememberLaunch(hostId) {
+    this.#launchHost = hostId;
+    this.#write(LAUNCH_HOST, hostId);
   }
 
   #read(key) { try { return this.storage?.getItem(key) ?? null; } catch { return null; } }

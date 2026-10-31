@@ -188,3 +188,25 @@ test('with every machine shown, the launch panel asks which machine to launch on
   await expect(page.locator('#launch select[name="machine"]')).toBeHidden();
   await expect(page.locator('#launch .launch-title')).toHaveText('Start a session on Demo machine');
 });
+
+test('a card\'s fold is remembered for its machine and session, so a session of the same id elsewhere keeps its own', async ({ page }) => {
+  await openDemo(page);
+  await card(page, LAPTOP, 'laptop-copilot-1').locator('.fold').click();
+  const folds = await page.evaluate(() => Object.fromEntries(Object.keys(localStorage).filter((k) => k.startsWith('agent-bridge.app.fold.')).map((k) => [k.slice(22), JSON.parse(localStorage.getItem(k))])));
+  expect(folds['demo-laptop/laptop-copilot-1']).toEqual({ folded: true });
+  // Every card's record, its question's included, is its machine's.
+  expect(Object.keys(folds).every((k) => /^demo(-laptop|-shadow)?\//.test(k))).toBe(true);
+});
+
+test('the launch machine picked holds even where the device cannot store it', async ({ page }) => {
+  await page.addInitScript(() => {
+    const set = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (k, v) { if (String(k).endsWith('launchHost')) { throw new DOMException('full', 'QuotaExceededError'); } return set.call(this, k, v); };
+  });
+  await openDemo(page);
+  const panel = page.locator('#launch');
+  await panel.locator('.launch-toggle').click();
+  await panel.locator('select[name="machine"]').selectOption(LAPTOP);
+  await expect(panel.locator('select[name="machine"]')).toHaveValue(LAPTOP);
+  await expect(panel.locator('.launch-title')).toHaveText('Start a session on Laptop');
+});

@@ -53,6 +53,8 @@ export class HostSession {
   #openListeners = new Set();
   #links = new Map();
   #opening = 0;
+  // A notification's machine, shown with every other, until presence says whether it is online.
+  #linked = null;
   // null (nothing shown: signed out), ALL, or one machine's device id.
   selection = null;
 
@@ -178,9 +180,12 @@ export class HostSession {
 
   // fromLink: the machine a notification's link names. It is shown with every other machine
   // when every machine is what was last chosen, or nothing was; otherwise it is chosen.
+  // A machine that turns out to be offline is shown on its own, as a link to it always was,
+  // without changing what is remembered.
   restoreTarget(fromLink) {
     const saved = this.#read(LAST_HOST);
     this.selection = saved === null || saved === ALL ? ALL : fromLink ?? saved;
+    this.#linked = this.selection === ALL ? fromLink : null;
     this.#reconcile();
     this.#emit();
   }
@@ -190,6 +195,7 @@ export class HostSession {
   forget() {
     for (const id of [...this.#links.keys()]) { this.#drop(id); }
     this.selection = null;
+    this.#linked = null;
     try { this.storage?.removeItem(LAST_HOST); } catch { /* a nicety */ }
     this.#emit();
   }
@@ -205,12 +211,16 @@ export class HostSession {
       return;
     }
     this.selection = choice;
+    this.#linked = null;
     this.#write(LAST_HOST, choice);
     this.#reconcile();
     this.#emit();
   }
 
   #onPresence() {
+    const linked = this.#linked;
+    this.#linked = null;
+    if (linked && this.selection === ALL && !this.isOnline(linked)) { this.selection = linked; }
     this.#reconcile();
     const single = this.#single;
     if (single && !this.isOnline(single.id) && (single.client || single.attempt)) {
@@ -306,8 +316,11 @@ export class HostSession {
       link.client = client;
       client.on('close', () => {
         if (link.client !== client) { return; }
+        const wasOpen = link.phase === 'open';
         link.client = null;
         link.channel = null;
+        // One closing while it is being set up fails that attempt, which retries it once.
+        if (!wasOpen) { return; }
         this.#set(link, 'waiting', 'The channel to this machine closed; reopening.');
         // A close without a relay drop (the host restarted) reopens as soon as it can.
         this.#later(link, this.reopenMs);
@@ -325,12 +338,12 @@ export class HostSession {
         return;
       }
       await client.subscribe();
-      if (link.client === client && !stale()) {
-        link.failures = 0;
-        this.#set(link, 'open');
-        for (const fn of this.#openListeners) {
-          try { fn(link.id); } catch (e) { console.error(e); }
-        }
+      if (stale()) { client.close(); return; }
+      if (link.client !== client) { throw new Error('the channel closed'); }
+      link.failures = 0;
+      this.#set(link, 'open');
+      for (const fn of this.#openListeners) {
+        try { fn(link.id); } catch (e) { console.error(e); }
       }
     } catch (e) {
       if (stale()) { client?.close(); return; }

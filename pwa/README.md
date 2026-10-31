@@ -90,12 +90,14 @@ once more than one machine is online, and shows every online machine's sessions 
 It is what the app shows when nothing has been chosen; picking one machine shows that one
 alone, as before; and the choice, one machine or All, is remembered on the device. A
 notification's link (`?host=`) shows its machine among the others when All was chosen, and
-alone otherwise. Folded, the panel reads "Viewing all · 4 online".
+alone otherwise, or when its machine turns out to be offline. Folded, the panel reads
+"Viewing all · 4 online".
 
 * **The list.** Every machine's sessions together, most recently updated first (ties by
   session id, then machine), as the app sorts them. Each card names its machine ahead of
   its agent, as the app's cards do; the heading reads "Sessions on all machines" and the count
-  "7 live on 3 machines". With one machine online, All shows it as that machine.
+  "7 live on 3 machines". With one machine online, All shows it as that machine. A card's
+  fold is remembered by machine and session.
 * **One machine at a time, still.** Each machine has its own channel, store, hello, retries
   and read-only state. A machine that can't be reached, is still connecting or does not
   support sessions gets a line of its own above the cards ("Couldn't reach Laptop: the

@@ -386,25 +386,27 @@ function begin(account) {
   notices.onChange(drawNotify);
   // The Settings app can change the permission while this is in the background.
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { drawNotify(); } });
+  // Each machine registers on its own, so one that fails says so and holds up none of the others.
+  const registerOn = (l) => {
+    registered.add(l.client);
+    notices.register(l.client, l.capabilities).catch((e) => {
+      notices.error = `Couldn't register for notifications from ${nameOf(l)}: ${e.message}`;
+      drawNotify();
+    });
+  };
   $('notify-toggle').onclick = () => {
-    const [first, ...rest] = openLinks();
-    // Not awaited before asking: enable() asks for permission first, inside this tap. The
-    // other machines shown register once it is on.
-    const done = notices.enabled
-      ? notices.disable(first?.client ?? null)
-      : notices.enable(first?.client ?? null, first?.capabilities ?? []).then(() => Promise.all(rest.map((l) => notices.register(l.client, l.capabilities))));
-    for (const l of [first, ...rest]) { if (l) { registered.add(l.client); } }
-    done.catch((e) => console.warn('notifications:', e.message));
+    const open = openLinks();
+    if (notices.enabled) {
+      notices.disable(open[0]?.client ?? null).catch((e) => console.warn('notifications:', e.message));
+      return;
+    }
+    // Not awaited before asking: enable() asks for permission first, inside this tap. Each
+    // machine's registration is queued behind it, and goes only once notifications are on.
+    notices.enable().catch((e) => console.warn('notifications:', e.message));
+    for (const l of open) { registerOn(l); }
   };
   const registerHere = () => {
-    for (const l of openLinks()) {
-      if (registered.has(l.client)) { continue; }
-      registered.add(l.client);
-      notices.register(l.client, l.capabilities).catch((e) => {
-        notices.error = `Couldn't register for notifications from ${nameOf(l)}: ${e.message}`;
-        drawNotify();
-      });
-    }
+    for (const l of openLinks()) { if (!registered.has(l.client)) { registerOn(l); } }
   };
   // A question answered here needs no notification; and one answered anywhere else must not
   // stay on the lock screen looking unanswered once this app has seen it go.

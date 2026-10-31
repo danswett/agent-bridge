@@ -63,6 +63,10 @@ export class SessionCard {
   }
 
   get id() { return this.#s.id; }
+
+  // Where the card's fold is remembered: by machine and session, as two machines may each have
+  // a session of the same id.
+  get #foldKey() { return this.hostId ? `${this.hostId}/${this.#s.id}` : this.#s.id; }
   get session() { return this.#s; }
 
   #build() {
@@ -192,8 +196,8 @@ export class SessionCard {
 
     // A new question opens a folded card: it is waiting on you, and must not stay folded
     // away unseen.
-    const reopened = this.folds.noteQuestion(s.id, s.question?.id ?? null);
-    if (first || reopened) { this.#applyFolded(this.folds.isFolded(s.id)); }
+    const reopened = this.folds.noteQuestion(this.#foldKey, s.question?.id ?? null);
+    if (first || reopened) { this.#applyFolded(this.folds.isFolded(this.#foldKey)); }
 
     // An open history follows the session: refetched (at most every 2 s) as it changes.
     if (!first && e.history.open && this.#changed('historyAt', s.updatedAt)) { this.#scheduleHistory(); }
@@ -350,7 +354,7 @@ export class SessionCard {
   get folded() { return this.els.frame.classList.contains('collapsed'); }
 
   setFolded(folded) {
-    this.folds.setFolded(this.#s.id, folded);
+    this.folds.setFolded(this.#foldKey, folded);
     this.#applyFolded(folded);
   }
 

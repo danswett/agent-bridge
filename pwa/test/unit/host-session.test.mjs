@@ -333,6 +333,51 @@ test('the relay dropping keeps every machine\'s sessions on screen, and each mac
   assert.ok(s.links().every((l) => l.phase === 'open'));
 });
 
+test('a notification for a machine that turns out to be offline shows that machine alone, without changing what is remembered', () => {
+  const connection = fakeConnection([]);
+  const storage = memory({ 'agent-bridge.app.lastHost': ALL });
+  const s = new HostSession({ connection, storage, makeClient: (ch) => fakeClient(ch) });
+  s.restoreTarget('gone');
+  assert.equal(s.selection, ALL, 'shown with every machine until presence says otherwise');
+  connection.presence = hosts('a');
+  connection.emit('presence');
+  assert.deepEqual([s.selection, s.phase], ['gone', 'waiting']);
+  assert.equal(storage.saved['agent-bridge.app.lastHost'], ALL);
+
+  const online = new HostSession({ connection, storage, makeClient: (ch) => fakeClient(ch) });
+  online.restoreTarget('a');
+  connection.emit('presence');
+  assert.equal(online.selection, ALL, 'one that is online stays among the others');
+});
+
+test('a channel that closes while it is being set up is retried once, after the first wait, not twice as long', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const connection = fakeConnection(hosts('a'));
+  const s = new HostSession({
+    connection, storage: null, retryMs: 5000,
+    makeClient: (ch) => {
+      const closers = [];
+      const c = { ...fakeClient(ch), on: (type, fn) => { if (type === 'close') { closers.push(fn); } } };
+      c.hello = async () => {
+        for (const fn of closers) { fn(new Error('closed')); }
+        throw new HostError('hello', 'the channel closed');
+      };
+      return c;
+    },
+  });
+  s.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  for (let i = 0; i < 4; i++) { await flush(); }
+  assert.equal(s.phase, 'failed');
+  t.mock.timers.tick(4999);
+  await flush();
+  assert.equal(connection.opens.length, 1);
+  t.mock.timers.tick(1);
+  await flush();
+  assert.equal(connection.opens.length, 2);
+});
+
 // ---- two machines, each card's actions to its own ----
 
 const delay = (ms) => new Promise((r) => { setTimeout(r, ms); });
