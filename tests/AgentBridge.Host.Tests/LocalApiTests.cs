@@ -227,6 +227,10 @@ public sealed class LocalApiTests : IAsyncLifetime
         var phone = new string('a', 32);
         var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { remoteFolderTrustDevices = new[] { "phone" } }));
         Assert.Contains("'phone' is not a device id", refused.Message);
+        Assert.Contains("a device id is missing", (await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { remoteFolderTrustDevices = new[] { phone, null } }))).Message);
+        var many = Enumerable.Range(0, LaunchProtocol.MaxChoices + 1).Select(i => i.ToString("x32")).ToArray();
+        Assert.Contains($"at most {LaunchProtocol.MaxChoices} devices", (await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { remoteFolderTrustDevices = many }))).Message);
+        Assert.Empty(approved);
         var devices = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrustDevices = new[] { phone, phone } });
         Assert.Equal([phone], devices.Settings.RemoteFolderTrustDevices!);
         Assert.Equal([phone], Assert.Single(approved));

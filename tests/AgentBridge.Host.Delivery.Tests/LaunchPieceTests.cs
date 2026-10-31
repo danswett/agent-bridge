@@ -573,7 +573,9 @@ public sealed class LaunchPieceTests : IDisposable
             "",
             " C:\\w",
             "",
-            " " + new string('x', TrustProtocol.MaxText + 10) + tail,
+            " Quick safety check: " + new string('x', TrustProtocol.MaxText + 10) + tail,
+            "",
+            " Claude Code'll be able to read, edit, and execute files here.",
             "",
             " > No, exit",
             "   Yes, I trust this folder",
@@ -587,6 +589,19 @@ public sealed class LaunchPieceTests : IDisposable
 
         // Without the agent's words about what trusting lets it do, it is not the whole question.
         Assert.Null(StartupQuestions.ReadTrust(AgentKind.Claude, [" Accessing workspace:", "", " C:\\w", "", " > No, exit", "   Yes, I trust this folder"], "C:\\w"));
+    }
+
+    [Fact]
+    public void A_trust_question_missing_any_of_the_agents_safety_warning_is_not_answerable()
+    {
+        // Copilot's, with its permission paragraph gone: "Do you trust the files…" alone is not it.
+        var cut = CopilotAsks.Where(r => !r.Contains("Copilot can read files", StringComparison.Ordinal) && !r.Contains("remember your permissions", StringComparison.Ordinal)).ToArray();
+        Assert.NotNull(StartupQuestions.ReadTrust(AgentKind.Copilot, CopilotAsks, "c:\\users\\me\\agent-tests\\untrusted-4"));
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Copilot, cut, "c:\\users\\me\\agent-tests\\untrusted-4"));
+        // Claude's, with what it will be able to do gone.
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Claude, [.. ClaudeAsks.Where(r => !r.Contains("execute files here", StringComparison.Ordinal))], "C:\\Users\\me\\agent-tests\\untrusted-4"));
+        // Codex's, cut to its first sentence's end.
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Codex, [.. CodexAsks.Select(r => r.Replace("Trust this folder? Codex can read, edit, and run files here", "Trust this folder?"))], "C:\\Users\\me\\agent-tests\\claude-test"));
     }
 
     [Fact]

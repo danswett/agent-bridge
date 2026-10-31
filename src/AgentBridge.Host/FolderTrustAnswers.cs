@@ -53,12 +53,20 @@ public sealed class FolderTrustAnswers(P256KeyPair key, ISessionLauncher launche
         // make a key and sign with it, so the MAC alone says nothing about who pressed.
         if (c.Principal.Device != peer) { return Refused(peer, "the command must come from the device that signed it"); }
         if (c.Principal.Device == me) { return Refused(peer, "this machine cannot answer for a person"); }
-        var signer = devices().FirstOrDefault(d => d.Id == c.Principal.Device);
-        if (signer is null) { return Refused(peer, "the device that signed the command is not connected to the relay now"); }
-        if (!PersonKinds.Contains(signer.Kind)) { return Refused(peer, "only a person's phone, browser or Windows app can answer a folder-trust question"); }
+        if (NotAPerson(peer, devices) is { } who) { return Refused(peer, who); }
+        var signer = devices().First(d => d.Id == peer);
 
         return await launcher.AnswerTrustAsync(Guid.Parse(c.Request), request.Question, request.Choice == TrustProtocol.Trust, peer, $"{signer.Kind} {peer[..8]}");
     }
+
+    // Why this device cannot answer by what the relay lists it as, or null for a person's device
+    // connected now: shared with the questions each device is shown, so none is offered buttons
+    // that would only be refused.
+    public string? NotAPerson(string peer) => Volatile.Read(ref presence) is { } devices ? NotAPerson(peer, devices) : "this machine is not connected to the relay now";
+
+    static string? NotAPerson(string peer, Func<IReadOnlyList<PresenceEntry>> devices) =>
+        devices().FirstOrDefault(d => d.Id == peer) is not { } d ? "the device that signed the command is not connected to the relay now"
+        : !PersonKinds.Contains(d.Kind) ? "only a person's phone, browser or Windows app can answer a folder-trust question" : null;
 
     TrustAnswerResult Refused(string peer, string why)
     {

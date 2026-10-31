@@ -66,6 +66,17 @@ public static class StartupQuestions
         _ => null,
     };
 
+    // What each agent says trusting lets it do, as it draws it: a read without all of it is not
+    // the whole question, and a person is not asked to answer part of one. An agent that changes
+    // its words leaves its question to be answered at the machine until this learns them.
+    static string[] WarningOf(AgentKind kind) => kind switch
+    {
+        AgentKind.Copilot => ["Copilot can read files in this folder and, with your permission, edit them or run code and shell commands.", "Do you trust the files in this folder?"],
+        AgentKind.Claude => ["Quick safety check:", "be able to read, edit, and execute files here."],
+        AgentKind.Codex => ["Trust this folder? Codex can read, edit, and run files here"],
+        _ => [],
+    };
+
     // Links and footers drawn beside the question, which are not its words.
     static readonly string[] NotWarning = ["Security guide"];
 
@@ -146,10 +157,8 @@ public static class StartupQuestions
             var para = string.Join(' ', clean.Skip(first).Take(last - first + 1));
             if (!NotWarning.Contains(para, StringComparer.Ordinal)) { warning.Add(para); }
         }
-        // Each of them says what trusting lets it do; a read without those words is not the whole
-        // question, and a person is not asked to answer part of one.
-        if (warning.Count == 0) { return null; }
         var words = string.Join("\n", warning);
+        if (warning.Count == 0 || WarningOf(kind).Any(w => !words.Contains(w, StringComparison.Ordinal))) { return null; }
         var text = Limits.KeepStart(words, TrustProtocol.MaxText);
         // Everything from the folder to the last option, blank rows too: the folder, the root, the
         // agent's words and every option, highlight included, as they were read.

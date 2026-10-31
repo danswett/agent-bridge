@@ -178,7 +178,7 @@ A pending folder-trust question, in `launch.options`' `trust` and a launch resul
 | `root`, `rootNote` | When trusting applies to an enclosing repository instead (Codex): that folder, and the agent's note saying so |
 | `warning` | The agent's own words, from its window (paragraphs separated by `\n`), at most 2 KiB. Absent when its window could not be read in full |
 | `askedAt` | When it was first seen |
-| `answerable` | Whether `launch.trust.answer` from **this** device can answer it now. When not, `atMachine` says why, and how to change that where a person can: the machine's setting is off (the default), no device or not this one is approved there, the machine is read-only or agent-ha-bridge runs there, an answer was already typed or one is being typed, or its window could not be read in full. Always false on a host's own pipe |
+| `answerable` | Whether `launch.trust.answer` from **this** device can answer it now. When not, `atMachine` says why, and how to change that where a person can: the machine's setting is off (the default), no device or not this one is approved there, this device is not a person's (`host`), the machine is read-only or agent-ha-bridge runs there, an answer was already typed or one is being typed, or its window could not be read in full. Always false on a host's own pipe |
 
 A client that does not know these fields ignores them, as it ignores any; old hosts send none.
 
@@ -219,9 +219,12 @@ A host acts on it only if all of these hold, and otherwise answers `refused` and
 * the question still waits, nobody else is answering it, and no earlier answer has typed into its
   window (whatever that did is for a person at the machine to see and finish).
 
-The setting, the approved devices, read-only and agent-ha-bridge are asked again before each key,
-so a change at the machine stops an answer part way: before any key it is `refused`, and after
-Trust moved the highlight it is `unconfirmed` with Enter not pressed.
+The setting, whether this device is still approved, read-only and agent-ha-bridge are asked again
+before each key, and again once the injector holds the typing slot (another delivery may have held
+it), so a change at the machine stops an answer part way: before any key it is `refused`, and
+after Trust moved the highlight it is `unconfirmed` with Enter not pressed. A question is
+answerable only when the agent's own warning about what trusting lets it do was read in full;
+otherwise it is shown read-only, to answer at the machine.
 
 The answer goes only into that agent's own console, by its process, as replies do. **Trust**
 moves the highlight to the option that trusts (Copilot "Yes", this session only; Claude "Yes, I

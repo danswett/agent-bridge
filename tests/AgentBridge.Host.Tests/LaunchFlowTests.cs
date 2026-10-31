@@ -770,6 +770,11 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         public Action<KeyPlan>? OnTyped;
         public InjectionResult? Fails;
         public Exception? Throws;
+        // Runs while a plan waits for the typing slot: what changes at the machine meanwhile.
+        public Action? BeforeTyping;
+        // What the worker says once the keys went, when not "typed": an Esc that closed the
+        // agent can end its attach first (interrupted).
+        public InjectionResult? Then;
 
         // As the worker does: nothing is typed unless the rows a send expects are still there.
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
@@ -777,13 +782,16 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
             lock (Typed) { Typed.Add(processId); Plans.Add(plan); }
             if (Throws is { } broken) { throw broken; }
             if (Fails is { } failed) { return Task.FromResult(failed); }
+            // As the worker asks once it holds the typing slot.
+            BeforeTyping?.Invoke();
+            if (plan.Proceed?.Invoke() is { } stop) { return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, $"stopped before typing: {stop}")); }
             var rows = Rows ?? [];
             foreach (var expect in plan.Sends.SelectMany(s => s.Expect ?? []))
             {
                 if (expect.Row >= rows.Count || rows[expect.Row].TrimEnd() != expect.Text.TrimEnd()) { return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, "fail screen 0")); }
             }
             OnTyped?.Invoke(plan);
-            return Task.FromResult(new InjectionResult(InjectionStatus.Typed, "ok"));
+            return Task.FromResult(Then ?? new InjectionResult(InjectionStatus.Typed, "ok"));
         }
 
         // A window that cannot be read: one whose process has gone.
