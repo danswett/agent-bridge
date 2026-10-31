@@ -115,16 +115,20 @@ public sealed partial class HaConnector
     IEnumerable<string> UpdateWatched() =>
         updateServing ? [UpdateEntity("check_updates"), UpdateEntity("install_update")] : [];
 
+    // Taken at the very start of a start or resume, before anything can fail: a start tried again
+    // keeps it, so a press on the buttons Home Assistant still shows, made while it waited, counts.
+    void TakeUpdateCutoff(DateTimeOffset now)
+    {
+        if (updateCutoffTaken) { return; }
+        updateStartedAt = now;
+        updateCutoffTaken = true;
+    }
+
     // StartupAsync's part: the entity, and the buttons when they are served. The state is the
     // version running, as current, until the first check says otherwise: an entity without a
     // latest version reads unavailable, and the machine row with it.
     async Task UpdateStartupAsync(DateTimeOffset now, CancellationToken ct)
     {
-        if (!updateCutoffTaken)
-        {
-            updateStartedAt = now;
-            updateCutoffTaken = true;
-        }
         updateSignature = null;
         nextUpdateSweep = now;
         lock (gate)

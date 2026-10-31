@@ -409,6 +409,7 @@ public sealed partial class HaConnector : IAsyncDisposable
     // this host before a restart).
     async Task StartupAsync(DateTimeOffset now, CancellationToken ct)
     {
+        TakeUpdateCutoff(now);
         // The liveness sensor before its first beat: an unretained beat that reaches Home
         // Assistant before the config is processed is dropped, and the machine would read
         // offline for a whole interval from the moment it started.

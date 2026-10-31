@@ -314,16 +314,20 @@ public sealed class UpdateTests : IDisposable
         Assert.False(State.ContainsKey("latest_version"));
     }
 
-    [Fact]
-    public async Task A_press_made_while_a_failed_start_waits_to_be_tried_again_still_counts()
+    [Theory]
+    // The start after agent-ha-bridge had the machine fails on its very first write, or only after
+    // it has put the buttons up.
+    [InlineData("online")]
+    [InlineData("update")]
+    public async Task A_press_made_while_a_failed_start_waits_to_be_tried_again_still_counts(string failsOn)
     {
         updates.Newer = Release();
         await using var c = await Ready();
         daemon = "agent-ha-bridge's daemon (pid 4321)";
         await Pass(c);
         daemon = null;
-        // The start after agent-ha-bridge has the buttons up, then fails on the entity's state.
-        ha.PublishFailsFor = (topic, _) => topic == HaContract.UpdateStateTopic(Slug);
+        var failing = failsOn == "online" ? HaContract.OnlineConfig(Slug, Machine).Topic : HaContract.UpdateStateTopic(Slug);
+        ha.PublishFailsFor = (topic, _) => topic == failing;
         await Pass(c);
         Assert.False(c.Started);
         ha.Now = time.GetUtcNow().AddSeconds(5);
