@@ -825,17 +825,51 @@ $allowedRemote = '__ALLOWED_REMOTE__'
 $target = '__TARGET__'
 $jumpKey = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('__JUMP_KEY_B64__')).Trim()
 $sshDir = Join-Path $env:ProgramData 'ssh'
+
+# Before changing anything: reuse only the account this script made, never an administrator or
+# someone's real account. Read the group through ADSI, failing closed: Get-LocalGroupMember throws
+# on an orphaned or Entra member, and a swallowed error there would read as "not an administrator".
+$jumpDescription = 'Rehearsal: SSH jump to VM-W only'
+$existing = Get-LocalUser -Name $jumpUser -ErrorAction SilentlyContinue
+if ($existing) {
+    $adminsName = (New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544').Translate([Security.Principal.NTAccount]).Value.Split('\')[-1]
+    $admins = @(([ADSI]"WinNT://./$adminsName,group").Invoke('Members') | ForEach-Object {
+        $sidBytes = $_.GetType().InvokeMember('objectSid', 'GetProperty', $null, $_, $null)
+        (New-Object Security.Principal.SecurityIdentifier ($sidBytes, 0)).Value
+    })
+    if ($admins.Count -eq 0) { throw 'could not read the Administrators group; refusing to reuse an existing account' }
+    if ($existing.Description -ne $jumpDescription -or $admins -contains "$($existing.SID)") {
+        throw "$jumpUser already exists and is not this script's jump account (or is an administrator); choose another -JumpVia user"
+    }
+}
+
 # A fresh install may not have created it yet; the authorized-keys file is written before sshd runs.
-# Whoever made it, it ends up owned by Administrators and writable only by them and SYSTEM, so no
-# local user can swap the configuration the restrictions live in. Existing files keep their own
-# (stricter) ACLs; the ones written below are recreated rather than overwritten.
+# Whoever made it, it and everything in it end up owned by Administrators and writable only by
+# them and SYSTEM, so no local user can swap the configuration the restrictions live in. Ownership
+# matters as much as the ACL: an owner keeps WRITE_DAC and could grant itself access back.
+function Invoke-Icacls { & icacls.exe @args | Out-Null; if ($LASTEXITCODE -ne 0) { throw "icacls $($args -join ' ') failed" } }
 New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
-& icacls.exe $sshDir /setowner '*S-1-5-32-544' | Out-Null
-& icacls.exe $sshDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-11:(OI)(CI)RX' | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "icacls $sshDir failed" }
-foreach ($hostKeyFile in Get-ChildItem $sshDir -Filter 'ssh_host_*_key' -ErrorAction SilentlyContinue) {
+# A host key someone else planted is not one to vouch for, so check owners before taking them over.
+foreach ($hostKeyFile in Get-ChildItem $sshDir -Filter 'ssh_host_*_key' -File) {
     $owner = (Get-Acl $hostKeyFile.FullName).Owner
     if ($owner -notin 'NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators') { throw "$($hostKeyFile.Name) is owned by $owner; refusing to trust it" }
+}
+Invoke-Icacls $sshDir /setowner '*S-1-5-32-544'
+Invoke-Icacls $sshDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-11:(OI)(CI)RX'
+if (Get-ChildItem $sshDir -Force) {
+    Invoke-Icacls (Join-Path $sshDir '*') /setowner '*S-1-5-32-544' /T
+    # Files directly here drop any explicit grants and inherit the directory's ACL ...
+    foreach ($file in Get-ChildItem $sshDir -File -Force) { Invoke-Icacls $file.FullName /reset }
+    # ... except private host keys, which sshd requires be readable by SYSTEM and Administrators only,
+    foreach ($file in Get-ChildItem $sshDir -Filter 'ssh_host_*_key' -File) {
+        Invoke-Icacls $file.FullName /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'
+    }
+    # ... and sshd's logs, which stay private as the installer made them.
+    $logDir = Join-Path $sshDir 'logs'
+    if (Test-Path $logDir) {
+        Invoke-Icacls $logDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
+        if (Get-ChildItem $logDir -Force) { Invoke-Icacls (Join-Path $logDir '*') /reset /T }
+    }
 }
 
 $svc = Get-CimInstance Win32_Service -Filter "Name='sshd'"
@@ -856,15 +890,7 @@ New-NetFirewallRule -Name 'Rehearsal-Jump-SSH-In' -DisplayName 'Rehearsal: SSH j
     -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22 -RemoteAddress $allowedRemote `
     -InterfaceAlias $alias -Profile $fwProfile | Out-Null
 
-$jumpDescription = 'Rehearsal: SSH jump to VM-W only'
-$existing = Get-LocalUser -Name $jumpUser -ErrorAction SilentlyContinue
-if ($existing) {
-    # Reuse only the account this script made: never an administrator or someone's real account.
-    $admins = @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue | ForEach-Object { "$($_.SID)" })
-    if ($existing.Description -ne $jumpDescription -or $admins -contains "$($existing.SID)") {
-        throw "$jumpUser already exists and is not this script's jump account (or is an administrator); choose another -JumpVia user"
-    }
-} else {
+if (-not $existing) {
     # A random password nobody keeps: the account only ever signs in with its key.
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     $bytes = New-Object byte[] 24; $rng.GetBytes($bytes)
@@ -908,8 +934,13 @@ ForceCommand exit 1
 if (-not (Test-Path (Join-Path $sshDir 'ssh_host_ed25519_key'))) {
     & (Join-Path (Split-Path $sshd) 'ssh-keygen.exe') -A
     if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen -A failed' }
+    foreach ($file in Get-ChildItem $sshDir -Filter 'ssh_host_*_key' -File) {
+        Invoke-Icacls $file.FullName /setowner '*S-1-5-32-544'
+        Invoke-Icacls $file.FullName /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'
+    }
 }
 $candidate = Join-Path $sshDir 'sshd_config.candidate'
+Remove-Item -Path $candidate -Force -ErrorAction SilentlyContinue
 Set-Content -Path $candidate -Value $config -Encoding ascii
 & $sshd -t -f $candidate
 if ($LASTEXITCODE -ne 0) { throw 'the new sshd_config does not parse' }
