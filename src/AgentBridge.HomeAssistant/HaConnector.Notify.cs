@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Protocol;
@@ -21,27 +23,39 @@ public sealed partial class HaConnector
 {
     HaNotifySettings Notify => options.Notify;
 
-    // Questions whose answer buttons reached a phone, so one is never sent twice however often the
-    // session changes (DaemonAnswerButtonSent). Forgotten once the question is finished.
+    // Questions whose answer buttons reached a phone, by session and question, so one is never
+    // sent twice however often the session changes (DaemonAnswerButtonSent). Forgotten once the
+    // question is finished.
     readonly HashSet<string> buttonsSent = new(StringComparer.Ordinal);
+    // Which phones hold a session's notification, by session: what a clear goes to, and what is
+    // still to be withdrawn when a clear failed or the host stopped first. Kept in the ledger.
+    readonly Dictionary<string, HashSet<string>> onPhones = new(StringComparer.Ordinal);
     // Taps the listener has taken, waiting for a pass.
     readonly ConcurrentQueue<HaEvent> taps = new();
     Task tapping = Task.CompletedTask;
     // The first pass after a start: what sessions already show then was the hooks' news when it
     // happened, not now, so nothing in it is pushed (answer buttons are, as the daemon re-sends them).
     bool baselinePass;
+    // When a withdrawal that failed is next tried.
+    DateTimeOffset staleRetryAt;
+
+    static string SentKey(string sessionId, string questionId) => sessionId + "\n" + questionId;
 
     sealed class NotifyState
     {
         // The question whose answer buttons are on the phones now, and when sending them is next tried.
         public string? Shown;
         public DateTimeOffset RetryAt;
-        // What the hooks' pushes have said already.
+        // What the hooks' pushes have said already, and what the session was doing when last seen.
+        public bool Seen;
         public string? Question;
         public bool Waiting;
-        public string? Finished;
+        public string? FinishedKey;
+        public SessionStatus? LastStatus;
+        public int? LastTurn;
+        // A finished turn waiting to be sure it stays finished: when, and which.
+        public (DateTimeOffset At, string Key)? FinishedDue;
     }
-
     // Holds the subscription for as long as the connector runs and is not paused, and queues what
     // arrives; the passes act on it. Started only when there is a phone to tap.
     async Task TapLoopAsync(CancellationToken token)
@@ -88,31 +102,54 @@ public sealed partial class HaConnector
 
     bool ServesButtons => ServesAnswers && Notify.ButtonsOn;
 
-    // Sends the answer buttons for every armed question that has none on the phones yet.
+    // Whether a session's question belongs on the phones: armed, still waiting, and not an approval
+    // (the daemon has no marker for one, so never sends it, however the card shows it).
+    static bool Wanted(Published p) => p.Armed is { Settled: false } a && a.Question.Kind != QuestionKind.Approval;
+
+    // The buttons' notification for the question a session's card is armed with.
+    (JsonArray Actions, JsonObject Payload) Buttons(string sessionId, Published p, Armed armed)
+    {
+        var marker = HaNotify.Marker(armed.Plan);
+        var actions = HaNotify.Actions(marker, armed.Question.Id, HaNotify.Options(marker), Notify.MaxButtons, textAction: TakesWords(armed.Plan));
+        return (actions, HaNotify.Payload(sessionId, p.Name, marker, actions, options.DashboardUrlPath, options.MachineName,
+            Notify.Icon, Notify.IconColor, Notify.Color, Notify.InterruptionLevel));
+    }
+
+    // Sends the answer buttons for every armed question that has none on the phones yet, and
+    // withdraws what is left on a phone with no question to show.
     async Task ButtonsAsync(DateTimeOffset now, CancellationToken ct)
     {
+        if (now >= staleRetryAt)
+        {
+            List<string> stale;
+            lock (gate) { stale = [.. onPhones.Keys.Where(id => !published.TryGetValue(id, out var p) || !Wanted(p))]; }
+            foreach (var id in stale) { await ClearButtonsAsync(id, null, forget: false, ct); }
+            bool left;
+            lock (gate) { left = stale.Any(onPhones.ContainsKey); }
+            if (left) { staleRetryAt = now + options.ButtonsRetry; }
+        }
         if (!ServesButtons || !options.ConsumeAnswers) { return; }
         List<(string Id, Published P)> due;
         lock (gate)
         {
-            due = [.. published.Where(x => x.Value.Armed is { Settled: false } a && !buttonsSent.Contains(a.Question.Id) && x.Value.Notify.RetryAt <= now)
+            due = [.. published.Where(x => Wanted(x.Value) && !buttonsSent.Contains(SentKey(x.Key, x.Value.Armed!.Question.Id)) && x.Value.Notify.RetryAt <= now)
                 .Select(x => (x.Key, x.Value))];
         }
         foreach (var (id, p) in due)
         {
             var armed = p.Armed!;
-            // An approval is answered by its own tap on the card; the daemon never puts one on a phone.
-            if (armed.Plan.AnswerOnTap) { continue; }
-            var marker = HaNotify.Marker(armed.Plan);
-            var buttons = HaNotify.Options(marker);
-            var actions = HaNotify.Actions(marker, armed.Question.Id, buttons, Notify.MaxButtons, textAction: TakesWords(armed.Plan));
-            var payload = HaNotify.Payload(id, p.Name, marker, actions, options.DashboardUrlPath, options.MachineName,
-                Notify.Icon, Notify.IconColor, Notify.Color, Notify.InterruptionLevel);
-            var sent = await SendAsync(Notify.AnswerButtonServices, payload, "answer buttons", ct);
-            if (sent > 0)
+            var (actions, payload) = Buttons(id, p, armed);
+            var sent = await SendAsync(id, Notify.AnswerButtonServices, payload, "answer buttons", ct);
+            if (sent.Count > 0)
             {
-                lock (gate) { buttonsSent.Add(armed.Question.Id); }
+                lock (gate)
+                {
+                    buttonsSent.Add(SentKey(id, armed.Question.Id));
+                    if (!onPhones.TryGetValue(id, out var phones)) { onPhones[id] = phones = new(StringComparer.Ordinal); }
+                    phones.UnionWith(sent);
+                }
                 p.Notify.Shown = armed.Question.Id;
+                SaveLedger();
                 log($"Home Assistant connector sent answer buttons for {id[..Math.Min(8, id.Length)]} ({actions.Count} action(s))");
             }
             else { p.Notify.RetryAt = now + options.ButtonsRetry; }
@@ -126,38 +163,50 @@ public sealed partial class HaConnector
     static bool TakesWords(DecisionPlan plan) =>
         !plan.TerminalOnly && !plan.AnswerOnTap && (plan.Fields.Count == 0 || (plan.Fields.Count == 1 && (plan.Fields[0].IsText || plan.TakesTypedAnswer)));
 
-    // Withdraws a question's notification from the phones; forget once the question is finished.
-    async Task ClearButtonsAsync(string sessionId, NotifyState state, bool forget, CancellationToken ct)
+    // Withdraws a session's notification from every phone that has it (Clear-DaemonAnswerButtons).
+    // A phone that could not be reached keeps it on the list and is tried again on a later pass.
+    // Forget once the question is finished, so a question asked again is sent again.
+    async Task ClearButtonsAsync(string sessionId, NotifyState? state, bool forget, CancellationToken ct)
     {
-        var shown = state.Shown;
-        if (shown is null || !Notify.ButtonsOn) { return; }
-        try { await SendAsync(Notify.AnswerButtonServices, HaNotify.Clear(sessionId), "answer button clear", ct); }
-        finally
+        if (forget && state?.Shown is { } shown)
         {
-            if (forget)
+            lock (gate) { buttonsSent.Remove(SentKey(sessionId, shown)); }
+            state.Shown = null;
+        }
+        List<string> phones;
+        lock (gate) { phones = onPhones.TryGetValue(sessionId, out var p) ? [.. p] : []; }
+        if (phones.Count == 0) { return; }
+        var cleared = await SendAsync(sessionId, phones, HaNotify.Clear(sessionId), "answer button clear", ct);
+        lock (gate)
+        {
+            if (onPhones.TryGetValue(sessionId, out var left))
             {
-                lock (gate) { buttonsSent.Remove(shown); }
-                state.Shown = null;
+                left.ExceptWith(cleared);
+                if (left.Count == 0) { onPhones.Remove(sessionId); }
             }
         }
+        if (cleared.Count > 0) { SaveLedger(); }
     }
 
     // Send-BridgeAnswerButtonNotification: one payload to each service, a failure at one logged and
-    // the rest still sent. How many took it.
-    async Task<int> SendAsync(IReadOnlyList<string> services, JsonObject payload, string what, CancellationToken ct)
+    // the rest still sent. The services that took it.
+    async Task<List<string>> SendAsync(string sessionId, IEnumerable<string> services, JsonObject payload, string what, CancellationToken ct)
     {
-        var sent = 0;
+        var sent = new List<string>();
         foreach (var service in services)
         {
             if (HaNotify.Split(service) is not { } target) { continue; }
             try
             {
                 await ha.CallServiceAsync(target.Domain, target.Service, payload.DeepClone().AsObject(), ct);
-                sent++;
+                sent.Add(service);
+                Resolved($"{what}:{service}");
             }
             catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
             {
-                log($"Home Assistant connector {what} via {service} failed: {Describe(e)}");
+                // Said once until it works again: a phone that is gone would otherwise be a line
+                // on every retry.
+                Problem($"{what}:{service}", $"Home Assistant connector {what} via {service} failed for {sessionId[..Math.Min(8, sessionId.Length)]}: {Describe(e)}");
             }
         }
         return sent;
@@ -199,7 +248,15 @@ public sealed partial class HaConnector
             await ClearButtonsAsync(choice.SessionId, p.Notify, forget: false, ct);
             return;
         }
-        if (armed.Plan.TerminalOnly || armed.Plan.AnswerOnTap) { return; }
+        if (!Wanted(p) || armed.Plan.TerminalOnly || armed.Plan.AnswerOnTap) { return; }
+        // Only an action this question's notification offers: another app's action that happens to
+        // end in a number, or one past maxButtons, is not a tap on one of these buttons.
+        var action = tap.Data.TryGetProperty("action", out var a) && a.ValueKind == JsonValueKind.String ? a.GetString() : null;
+        if (action is null || !Buttons(choice.SessionId, p, armed).Actions.Any(x => x?["action"]?.GetValue<string>() == action))
+        {
+            log($"Home Assistant connector: an answer button for {who} is not one this question offers; ignored");
+            return;
+        }
         if (PhoneAnswer(choice, armed, DriverOf(tap.UserId)) is not { } read)
         {
             log($"Home Assistant connector: an answer button for {who} names no answer this question takes; ignored");
@@ -219,8 +276,10 @@ public sealed partial class HaConnector
     {
         var plan = armed.Plan;
         var sessionId = choice.SessionId;
-        // One tap, however often it arrives: the same button, or the same words.
-        var press = $"phone:{choice.Index}:{choice.ReplyText}";
+        // One tap, however often it arrives: the same button, or the same words, for this attempt.
+        // A delivery the host refused counts an attempt, so the same button tapped again after one
+        // is a new answer, not the refused one read twice.
+        var press = $"phone:{armed.Attempts}:{choice.Index}:{choice.ReplyText}";
         if (!string.IsNullOrWhiteSpace(choice.ReplyText))
         {
             var text = choice.ReplyText.Trim();
@@ -245,7 +304,7 @@ public sealed partial class HaConnector
         var lone = plan.Fields[0];
         var source = lone.Source!;
         var index = lone.Options.ToList().IndexOf(label);
-        if (lone.IsText || index < 0 || source.Options is not { } offered && source.Type != FieldType.Boolean) { return null; }
+        if (lone.IsText || index < 0 || (source.Options is null && source.Type != FieldType.Boolean)) { return null; }
         JsonElement value = source.Type switch
         {
             FieldType.Boolean => JsonSerializer.SerializeToElement(index == 0),
@@ -256,25 +315,36 @@ public sealed partial class HaConnector
         return Answer(sessionId, armed, new Dictionary<string, JsonElement> { [source.Name] = value }, null, label, null, press, driver);
     }
 
+    // A finished turn, by turn and reply: the same words ending a later turn are that turn's own.
+    static string? FinishedKey(Session s) =>
+        string.IsNullOrWhiteSpace(s.Activity.Response) ? null
+            : $"{s.Activity.TurnCount}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s.Activity.Response)))[..16]}";
+
     // The hooks' pushes for one session, from what the host now shows of it.
-    async Task PushesAsync(Session full, Published p, string name, bool firstSeen, CancellationToken ct)
+    async Task PushesAsync(Session full, Published p, string name, DateTimeOffset now, CancellationToken ct)
     {
         var state = p.Notify;
-        var status = HaPayloads.Status(full);
+        var status = full.Status;
         var question = full.Question;
-        // As the hooks send it: the preview is the reply's own text, not trimmed.
-        var response = full.Activity.Response;
-        var idle = status is "idle" or "agents" or "shell";
-        // A reply already there when the session first appears is an earlier turn's (a resumed
-        // session's, or one from before this start): the hooks pushed it when it was new, if ever.
-        if (firstSeen) { state.Finished = response; }
-        if (firstSeen && baselinePass)
+        var turn = full.Activity.TurnCount;
+        var key = FinishedKey(full);
+        // Claude blocked on the person with nothing to answer on the card (Invoke-ClaudeNotificationHook).
+        var blocked = full.Agent == AgentKind.Claude && status == SessionStatus.Waiting && question is null;
+        if (!state.Seen)
         {
-            state.Question = question?.Id;
-            state.Waiting = full.Agent == AgentKind.Claude && status == "waiting" && question is null;
-            return;
+            // A reply already there when the session first appears is an earlier turn's (a resumed
+            // session's, or one from before this start): the hooks pushed it when it was new, if ever.
+            state.Seen = true;
+            state.FinishedKey = key;
+            state.LastStatus = status;
+            state.LastTurn = turn;
+            if (baselinePass)
+            {
+                state.Question = question?.Id;
+                state.Waiting = blocked;
+                return;
+            }
         }
-        if (!Notify.Enabled) { return; }
         var pushes = new List<(string Title, string Message)>();
         if (question is not null && question.Id != state.Question)
         {
@@ -282,30 +352,55 @@ public sealed partial class HaConnector
             if (QuestionPush(full, name, question) is { } push) { pushes.Add(push); }
         }
         if (question is null) { state.Question = null; }
-        // Claude blocked on the person with nothing to answer on the card (Invoke-ClaudeNotificationHook).
-        var blocked = full.Agent == AgentKind.Claude && status == "waiting" && question is null;
         if (blocked && !state.Waiting) { pushes.Add(HaNotify.ClaudeWaiting(name, options.MachineName, null)); }
         state.Waiting = blocked;
-        // A finished turn (the agentStop and Stop hooks): once, with a reply that is the turn's own.
-        // The host keeps the previous turn's reply while the next runs, so a reply counts only once it
-        // differs from the one last seen at rest.
-        if (idle && !string.IsNullOrWhiteSpace(response) && response != state.Finished
-            && HaNotify.Response(name, response, full.Agent == AgentKind.Copilot) is { } finished)
+        // A finished turn (the agentStop and Stop hooks): a session that was working or waiting, or
+        // has a new turn, now at rest with a reply that turn has not been pushed for. Sent once it
+        // has stayed at rest a moment, as the host's own notifier waits: a question answered at the
+        // machine passes through idle on its way back to work. A background agent's message while
+        // the session rests is not a finished turn.
+        if (status == SessionStatus.Idle && question is null && key is not null && key != state.FinishedKey
+            && (state.LastStatus is SessionStatus.Working or SessionStatus.Waiting || state.LastTurn != turn))
         {
-            pushes.Add(finished);
+            state.FinishedDue = (now + options.FinishedDelay, key);
         }
-        if (idle) { state.Finished = response; }
-        foreach (var (title, message) in pushes)
+        else if (status != SessionStatus.Idle || question is not null) { state.FinishedDue = null; }
+        state.LastStatus = status;
+        state.LastTurn = turn;
+        if (!Notify.Enabled) { return; }
+        foreach (var (title, message) in pushes) { await PushAsync(title, message, ct); }
+    }
+
+    // Finished turns that have stayed finished, pushed.
+    async Task FinishedAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        List<(string Id, Published P, string Key)> due;
+        lock (gate)
         {
-            if (HaNotify.Split(Notify.Service) is not { } target) { continue; }
-            var data = HaNotify.Notification(Notify.Service, title, message, Notify.TickerCategory, options.DashboardUrlPath);
-            try { await ha.CallServiceAsync(target.Domain, target.Service, data, ct); }
-            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
+            due = [.. published.Where(x => x.Value.Notify.FinishedDue is { } d && d.At <= now).Select(x => (x.Key, x.Value, x.Value.Notify.FinishedDue!.Value.Key))];
+        }
+        foreach (var (id, p, key) in due)
+        {
+            p.Notify.FinishedDue = null;
+            if (source.Get(id) is not { Status: SessionStatus.Idle, Question: null } s || FinishedKey(s) != key) { continue; }
+            p.Notify.FinishedKey = key;
+            if (Notify.Enabled && HaNotify.Response(p.Name, s.Activity.Response, s.Agent == AgentKind.Copilot) is { } finished)
             {
-                // As the hooks do: the session is on the dashboard already, and a lost push must not
-                // hold anything else up.
-                log($"Home Assistant connector notification via {Notify.Service} failed: {Describe(e)}");
+                await PushAsync(finished.Title, finished.Message, ct);
             }
+        }
+    }
+
+    async Task PushAsync(string title, string message, CancellationToken ct)
+    {
+        if (HaNotify.Split(Notify.Service) is not { } target) { return; }
+        var data = HaNotify.Notification(Notify.Service, title, message, Notify.TickerCategory, options.DashboardUrlPath);
+        try { await ha.CallServiceAsync(target.Domain, target.Service, data, ct); }
+        catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
+        {
+            // As the hooks do: the session is on the dashboard already, and a lost push must not
+            // hold anything else up.
+            log($"Home Assistant connector notification via {Notify.Service} failed: {Describe(e)}");
         }
     }
 
@@ -322,5 +417,29 @@ public sealed partial class HaConnector
             (AgentKind.Codex, QuestionKind.Approval) => HaNotify.CodexApproval(name, question.Message),
             _ => null,
         };
+    }
+
+    // The ledger's record of which phones hold which session's notification.
+    JsonObject OnPhonesLedger()
+    {
+        var o = new JsonObject();
+        foreach (var (id, phones) in onPhones.OrderBy(x => x.Key, StringComparer.Ordinal))
+        {
+            o[id] = new JsonArray([.. phones.Order(StringComparer.Ordinal).Select(s => (JsonNode)s)]);
+        }
+        return o;
+    }
+
+    void LoadOnPhones(JsonElement root)
+    {
+        if (!root.TryGetProperty("onPhones", out var o) || o.ValueKind != JsonValueKind.Object) { return; }
+        foreach (var session in o.EnumerateObject())
+        {
+            if (session.Value.ValueKind != JsonValueKind.Array) { continue; }
+            var phones = session.Value.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String && HaNotify.Split(x.GetString()!) is not null).Select(x => x.GetString()!).ToList();
+            if (phones.Count == 0) { continue; }
+            if (!onPhones.TryGetValue(session.Name, out var set)) { onPhones[session.Name] = set = new(StringComparer.Ordinal); }
+            set.UnionWith(phones);
+        }
     }
 }

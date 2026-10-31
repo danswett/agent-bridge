@@ -84,6 +84,9 @@ public sealed record HaConnectorOptions
     // How long after an answer-button notification reached no phone it is tried again (the daemon
     // tries on each 15-second pass).
     public TimeSpan ButtonsRetry { get; init; } = TimeSpan.FromSeconds(15);
+    // How long a session must stay at rest after a turn before the turn is pushed as finished (the
+    // host's own notifier waits as long): a question answered at the machine passes through idle.
+    public TimeSpan FinishedDelay { get; init; } = TimeSpan.FromSeconds(3);
 }
 
 // The Home Assistant connector (docs/ha-connector.md): this machine's sessions, liveness,
@@ -336,6 +339,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             await Step("sessions", () => SessionsAsync(now, cancellationToken));
             await Step("answers", () => AnswersAsync(now, cancellationToken));
             await Step("buttons", () => ButtonsAsync(now, cancellationToken));
+            await Step("finished", () => FinishedAsync(now, cancellationToken));
             await Step("launch", () => LaunchAsync(now, cancellationToken));
             await Step("global", () => GlobalAsync(now, cancellationToken));
             await Step("heartbeat", () => HeartbeatAsync(now, cancellationToken));
@@ -585,7 +589,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             Published? was;
             lock (gate) { published.TryGetValue(id, out was); }
             // Its question went with it: withdrawn from the phones (Clear-DaemonAnswerButtons).
-            if (was is not null) { await ClearButtonsAsync(id, was.Notify, forget: true, ct); }
+            await ClearButtonsAsync(id, was?.Notify, forget: true, ct);
             lock (gate)
             {
                 published.Remove(id);
@@ -616,7 +620,6 @@ public sealed partial class HaConnector : IAsyncDisposable
         var t = HaContract.Topics(node);
         Published? p;
         lock (gate) { published.TryGetValue(s.Id, out p); }
-        var firstSeen = p is null;
         if (p is null)
         {
             lock (gate) { starting[s.Id] = node; }
@@ -697,7 +700,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         p.Detail = detail;
 
         await QuestionAsync(full, p, name, now, ct);
-        await PushesAsync(full, p, name, firstSeen, ct);
+        await PushesAsync(full, p, name, now, ct);
     }
 
     // Publish-CopilotMqttSession: every entity of a session's card, the selector parked on Idle.
@@ -919,6 +922,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             if (doc.RootElement.ValueKind != JsonValueKind.Object) { return []; }
+            lock (gate) { LoadOnPhones(doc.RootElement); }
             return [.. new[] { "retiring", "starting" }
                 .SelectMany(key => doc.RootElement.TryGetProperty(key, out var list) && list.ValueKind == JsonValueKind.Array ? list.EnumerateArray().ToArray() : [])
                 .Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!)
@@ -941,6 +945,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             {
                 ["retiring"] = new JsonArray([.. retiring.Keys.Order(StringComparer.Ordinal).Select(n => (JsonNode)n)]),
                 ["starting"] = new JsonArray([.. starting.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(n => (JsonNode)n)]),
+                ["onPhones"] = OnPhonesLedger(),
             });
         }
         try

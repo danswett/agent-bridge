@@ -210,7 +210,9 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                 {
                     var known = keys.FirstOrDefault(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
                     if (known is null || value is null) { if (known is null) { notCarried.Add($"{part}.{key}"); } continue; }
-                    Put(Section(Section(host, "homeAssistant"), part), known, value.DeepClone(), $"{part}.{key}", $"homeAssistant.{part}.{known}");
+                    // One service named alone is a list of one, as agent-ha-bridge reads it (@(...)).
+                    var carried = known == "services" && value is JsonValue ? new JsonArray(value.DeepClone()) : value.DeepClone();
+                    Put(Section(Section(host, "homeAssistant"), part), known, carried, $"{part}.{key}", $"homeAssistant.{part}.{known}");
                 }
             }
             if (ha is not null)

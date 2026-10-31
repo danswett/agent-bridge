@@ -102,6 +102,7 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
 
     // Notifications sent (any call naming no entity), in order, with the account that sent them.
     public List<(string Service, JsonObject Data)> Notified { get; } = [];
+    public List<(string Service, JsonObject Data)> NotifiedNow() { lock (gate) { return [.. Notified]; } }
     public Func<string, bool>? NotifyFailsFor { get; set; }
     readonly System.Threading.Channels.Channel<HaEvent> events = System.Threading.Channels.Channel.CreateUnbounded<HaEvent>();
     public int EventSubscriptions;

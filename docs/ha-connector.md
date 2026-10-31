@@ -509,7 +509,8 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   your answer)` left out), with a "Type an answer" text action. A phone that fails is logged and
   the others are still sent; a question no phone took is tried again 15 s later. A question
   answered only at the machine is sent as a notice with no actions; an approval (Codex's, or a
-  permission prompt) is not sent, as the daemon sends none (it has no marker).
+  permission prompt, however the card shows it) is not sent, as the daemon sends none (it has no
+  marker). Sent is kept per session and question, so two sessions' questions never share one.
 * **A tap** fires `mobile_app_notification_action`, which the connector holds a subscription
   for while it runs and is not paused (agent-ha-bridge's own listener takes them otherwise). It
   is answered on the next pass through the same delivery as the card: an option's own value
@@ -517,11 +518,16 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   `Selections @(answer)`), or typed words as the free-text answer, a lone text or number field's
   value, or through the prompt's own "Other". The card says `Answer sent`, and the next turn is
   `agent`-driven when the tapping account is in `agentUserIds`. A tap for a session that is not
-  live, for an earlier question, or after the question was answered, answers nothing.
-* **Withdrawn** (`clear_notification` by tag, at every phone) once a tap is delivered, when the
-  question is answered anywhere else or replaced, and when the session ends. A restart, or
-  taking the machine back from agent-ha-bridge, sends a waiting question again, as the daemon
-  does after its own restart; the tag replaces what the phone shows.
+  live, for an earlier question, or after the question was answered, answers nothing, and so does
+  an action the notification does not offer (another action ending in a number, or a button past
+  `maxButtons`). The same button tapped again after the host refused the answer is tried again.
+* **Withdrawn** (`clear_notification` by tag, at every phone that has it) once a tap is
+  delivered, when the question is answered anywhere else or replaced, and when the session ends.
+  A phone that could not be reached is tried again every 15 s, and which phones hold which
+  session's notification is kept in the connector's state file, so one answered or ended while
+  the host was stopped is withdrawn when it starts. A restart, or taking the machine back from
+  agent-ha-bridge, sends a waiting question again, as the daemon does after its own restart; the
+  tag replaces what the phone shows.
 * **The hooks' pushes** (`notifications.*`, off by default, as in agent-ha-bridge). The daemon's
   hooks sent them; the host owns the hooks on a migrated machine, so the connector sends them
   from what the host sees, worded as each hook words them: Copilot's question (`Copilot:
@@ -530,9 +536,12 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   notification (`Waiting: <name>`), Codex's approval (`Approval needed: <name>`), and a
   finished turn's reply (`Copilot response: <name>` or `Response: <name>`, cut at 880 with
   where to read the rest). A `ticker.*` service gets its own fields. Each question is pushed
-  once, a finished turn once, and only with a reply that is the turn's own (the host keeps the
-  last turn's reply while the next runs). What sessions already show when the connector starts
-  is not pushed again. A push that fails is logged and holds nothing up.
+  once. A turn is finished when a session that was working or waiting (or has a new turn) is at
+  rest with a reply that turn has not been pushed for, and stays at rest for 3 s, as the host's
+  own notifier waits (a question answered at the machine passes through idle); a background
+  agent's message while the session rests is not one, and a later turn ending in the same words
+  is. What sessions already show when the connector starts is not pushed again. A push that
+  fails is logged and holds nothing up.
 
 Where stage 5b knowingly differs from the daemon:
 
@@ -542,6 +551,7 @@ Where stage 5b knowingly differs from the daemon:
 | The hooks' pushes are made from the host's view of the session, not from inside each hook | The host's hooks report to the host; Copilot's permission push carries the host's prompt text, where the hook had its own title |
 | Until migrate re-points the hooks, a machine whose agent-ha-bridge hooks still run may push a question twice | Both would be sending; `migrate` moves the hooks to the host, and nothing runs agent-ha-bridge's hooks after it |
 | The host's own Web Push (`push.*`) notifies the app's phones as well | A different channel, with its own settings; turn one off if both reach the same phone |
+| A tap must name an action its notification offered; a withdrawal that failed is retried, across a restart too | Beyond parity: the daemon reads the index off any action's suffix, and forgets a withdrawal whether or not it arrived |
 ### The shadow: comparing with a running daemon
 
 `agent-bridge-host ha shadow [--json] [--window <seconds>]` runs one connector pass against a

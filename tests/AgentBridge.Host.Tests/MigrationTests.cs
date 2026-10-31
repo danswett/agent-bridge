@@ -1429,7 +1429,7 @@ public sealed class MigrationTests : IAsyncLifetime
         var ahb = (JsonObject)JsonNode.Parse("""
             {"homeAssistant":{"baseUrl":"http://ha:8123"},
              "Notifications":{"Enabled":true,"service":"ticker.notify","tickerCategory":"agents","sound":"chime"},
-             "answerButtons":{"services":["notify.mobile_app_phone"],"maxButtons":4,"max":9}}
+             "answerButtons":{"services":"notify.mobile_app_phone","maxButtons":4,"max":9}}
             """, new JsonNodeOptions { PropertyNameCaseInsensitive = true })!;
 
         var import = ConfigImport.Build(ahb, null);
@@ -1448,6 +1448,8 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Equal(["notify.mobile_app_phone"], notify.AnswerButtonServices);
         Assert.Equal(4, notify.MaxButtons);
 
+        // One service named alone, as agent-ha-bridge reads it: a list of one.
+        Assert.Equal("notify.mobile_app_phone", (string?)JsonNode.Parse(import.Text!)!["homeAssistant"]!["answerButtons"]!["services"]![0]);
         // A setting this profile already has is kept.
         var again = ConfigImport.Build(ahb, """{"version":1,"homeAssistant":{"notifications":{"enabled":false}}}""");
         Assert.Contains(again.Kept, k => k.StartsWith("homeAssistant.notifications.enabled", StringComparison.Ordinal));

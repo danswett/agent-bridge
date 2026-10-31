@@ -88,7 +88,7 @@ public sealed class NotifyTests : IDisposable
             Activity = new Activity { Response = response, TurnCount = turn, UserMessage = "go" },
         });
 
-    List<(string Service, JsonObject Data)> Sent(string? service = null) { lock (ha.Notified) { return [.. ha.Notified.Where(n => service is null || n.Service == service)]; } }
+    List<(string Service, JsonObject Data)> Sent(string? service = null) => [.. ha.NotifiedNow().Where(n => service is null || n.Service == service)];
     List<JsonObject> Buttons(string service = Phone) => [.. Sent(service).Where(n => n.Data["message"]?.GetValue<string>() != HaNotify.ClearMessage).Select(n => n.Data)];
     int Clears(string service = Phone) => Sent(service).Count(n => n.Data["message"]?.GetValue<string>() == HaNotify.ClearMessage);
     List<JsonObject> Pushes(string service = "notify.notify") => [.. Sent(service).Select(n => n.Data)];
@@ -441,24 +441,37 @@ public sealed class NotifyTests : IDisposable
         await Pass(c, 20);
         Assert.Single(Pushes());
 
+        // Answered at the machine: idle for a moment on the way back to work is not a finished turn.
+        Ask(null, response: "Cutting it.", status: SessionStatus.Idle);
+        await Pass(c);
+        Ask(null, response: "Cutting it.", status: SessionStatus.Working);
+        await Pass(c, 5);
+        Assert.Single(Pushes());
+
         Ask(null, response: "Done: the release is cut.", status: SessionStatus.Idle);
         await Pass(c);
+        Assert.Single(Pushes());
+        await Pass(c, 5);
         var done = Pushes()[^1];
         Assert.Equal("Copilot response: Copilot: Fix the relay", done["title"]!.GetValue<string>());
         Assert.Equal("Done: the release is cut.", done["message"]!.GetValue<string>());
         await Pass(c, 20);
         Assert.Equal(2, Pushes().Count);
 
-        // The next turn keeps the last reply until it has its own: nothing until then.
+        // A background agent's message while the session rests is not a finished turn.
+        sessions.Set(sessions.Get(A)! with { Activity = new Activity { Response = "An agent reports in.", TurnCount = 1, UserMessage = "go", Background = Background.Of(1, 0) } });
+        await Pass(c);
+        await Pass(c, 5);
+        Assert.Equal(2, Pushes().Count);
+
+        // The next turn ending in the same words is a finished turn of its own.
         Ask(null, response: "Done: the release is cut.", status: SessionStatus.Working, turn: 2);
         await Pass(c);
         Ask(null, response: "Done: the release is cut.", status: SessionStatus.Idle, turn: 2);
         await Pass(c);
-        Assert.Equal(2, Pushes().Count);
-        Ask(null, response: "And tagged.", status: SessionStatus.Idle, turn: 2);
-        await Pass(c);
-        Assert.Equal("And tagged.", Pushes()[^1]["message"]!.GetValue<string>());
+        await Pass(c, 5);
         Assert.Equal(3, Pushes().Count);
+        Assert.Equal("Done: the release is cut.", Pushes()[^1]["message"]!.GetValue<string>());
     }
 
     [Fact]
@@ -488,6 +501,7 @@ public sealed class NotifyTests : IDisposable
 
         Ask(null, AgentKind.Claude, response: "All done.", status: SessionStatus.Idle);
         await Pass(c);
+        await Pass(c, 5);
         Assert.Equal("Response: Claude: scratch", Pushes("ticker.notify")[^1]["title"]!.GetValue<string>());
         Assert.Equal(3, Pushes("ticker.notify").Count);
     }
@@ -509,6 +523,7 @@ public sealed class NotifyTests : IDisposable
             // But not a reply it brought with it: that turn was over before it was seen here.
             Ask(null, id: "9c000000-0000-4000-8000-0000000000dd", response: "Resumed with this", status: SessionStatus.Idle);
             await Pass(c);
+            await Pass(c, 5);
             Assert.Single(Pushes());
         }
 
@@ -517,7 +532,107 @@ public sealed class NotifyTests : IDisposable
         await Pass(off);
         Ask(null, response: "New reply", status: SessionStatus.Idle);
         await Pass(off);
+        await Pass(off, 5);
         Assert.Single(Pushes());
+    }
+
+    [Fact]
+    public async Task A_session_whose_first_publication_failed_is_still_not_news_when_it_is_published()
+    {
+        Ask(Form("q1", Release), response: "Earlier reply");
+        ha.PublishFailsFor = (topic, _) => topic == HaContract.Topics(Node).ActivityState;
+        await using var c = Connector(new HaNotifySettings { Enabled = true });
+        await Pass(c);
+        ha.PublishFailsFor = null;
+        await Pass(c);
+        await Pass(c, 5);
+        Assert.Empty(Pushes());
+    }
+
+    [Fact]
+    public async Task Two_sessions_asking_with_the_same_question_id_are_each_notified()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        Ask(Form("q1", Release), id: B);
+        await Pass(c);
+        Assert.Equal([A, B], Buttons().Select(b => b["data"]!["action_data"]!["session"]!.GetValue<string>()).Order());
+    }
+
+    [Fact]
+    public async Task An_approval_shown_for_the_terminal_is_still_an_approval_and_goes_to_no_phone()
+    {
+        Ask(new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "Allow the edit?", AskedAt = FakeSessions.T0, AnswerAtMachine = true }, AgentKind.Claude);
+        await using var c = Connector();
+        await Pass(c);
+        await Pass(c, 20);
+        Assert.Empty(Buttons());
+    }
+
+    [Fact]
+    public async Task A_withdrawal_that_failed_is_tried_again_and_one_left_by_a_stopped_host_is_made_on_start()
+    {
+        Ask(Form("q1", Release));
+        await using (var c = Connector())
+        {
+            await Pass(c);
+            ha.NotifyFailsFor = s => s == Phone;
+            Ask(null);
+            await Pass(c);
+            Assert.Equal((0, 1), (Clears(), Clears(Tablet)));
+            await Pass(c, 5);
+            Assert.Equal(0, Clears());
+            ha.NotifyFailsFor = null;
+            await Pass(c, 20);
+            Assert.Equal((1, 1), (Clears(), Clears(Tablet)));
+
+            // Asked again, and the host stops before the answer.
+            Ask(Form("q2", Release));
+            await Pass(c);
+            Assert.Equal(2, Buttons().Count);
+        }
+        Ask(null);
+        await using var again = Connector();
+        await Pass(again);
+        Assert.Equal((2, 2), (Clears(), Clears(Tablet)));
+        await Pass(again, 20);
+        Assert.Equal((2, 2), (Clears(), Clears(Tablet)));
+    }
+
+    [Fact]
+    public async Task Only_an_action_the_notification_offers_answers_it()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector(Phones with { MaxButtons = 1 });
+        await Pass(c);
+        Assert.Equal(["BRIDGE_q1_0", "BRIDGE_q1_text"], Buttons()[0]["data"]!["actions"]!.AsArray().Select(a => a!["action"]!.GetValue<string>()));
+        Tap(c, "SOMETHING_ELSE_0");
+        Tap(c, "BRIDGE_q1_1");
+        Tap(c, "SOMETHING_ELSE", reply: "typed elsewhere");
+        await Pass(c);
+        Assert.Empty(answered);
+        Tap(c, "BRIDGE_q1_0");
+        await Pass(c);
+        Assert.Equal("cut_now", Assert.Single(answered).Fields!["release"].GetString());
+    }
+
+    [Fact]
+    public async Task A_tap_the_host_refused_can_be_made_again()
+    {
+        var refusals = 1;
+        outcome = _ => refusals-- > 0 ? new AnswerResult(AnswerOutcome.Refused, "busy") : new AnswerResult(AnswerOutcome.Delivered);
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        Tap(c, "BRIDGE_q1_0");
+        await Pass(c);
+        Assert.Single(answered);
+        Assert.Equal(0, Clears());
+        Tap(c, "BRIDGE_q1_0");
+        await Pass(c);
+        Assert.Equal(2, answered.Count);
+        Assert.Equal(1, Clears());
     }
 
     [Fact]
