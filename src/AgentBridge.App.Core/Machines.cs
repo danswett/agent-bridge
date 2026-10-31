@@ -61,6 +61,14 @@ public interface IFleetLink : IAsyncDisposable
     // command this app signs for one of them. None in a stand-in.
     Task<IReadOnlyList<TransferSource>> TransferSourcesAsync(string target, CancellationToken ct) => Task.FromResult<IReadOnlyList<TransferSource>>([]);
     SignedCommand? SignTransfer(TransferSource from, string session, string to) => null;
+    // A folder-trust answer (launch.trust.answer), signed by this app as a person's device for the
+    // machine asking (machinePublic, whose device id is machine), for exactly that question, choice
+    // and request. Null when it cannot be signed now. None in a stand-in.
+    SignedCommand? SignTrust(byte[]? machinePublic, string machine, string question, string choice, string request) => null;
+    // This app's own device id on the relay, which a machine approves to answer folder-trust
+    // questions from; and the people's devices (the PWA, this app elsewhere) the relay lists now.
+    string? DeviceId => null;
+    IReadOnlyList<FleetHost> People => [];
 }
 
 // The account's other machines, kept in step with the relay's presence: a machine for each
@@ -124,6 +132,9 @@ public sealed class Fleet : IAsyncDisposable
 
     public Task<IReadOnlyList<TransferSource>> TransferSourcesAsync(string target, CancellationToken ct) => link.TransferSourcesAsync(target, ct);
     public SignedCommand? SignTransfer(TransferSource from, string session, string to) => link.SignTransfer(from, session, to);
+    public SignedCommand? SignTrust(byte[]? machinePublic, string machine, string question, string choice, string request) => link.SignTrust(machinePublic, machine, question, choice, request);
+    public string? DeviceId => link.DeviceId;
+    public IReadOnlyList<FleetHost> People => link.People;
 
     // This machine's own host reached through the relay, as a device reaches it, for what the pipe
     // does not carry: a session transfer is only ever launched on a channel through the relay
@@ -297,6 +308,10 @@ public sealed class RelayFleetLink : IFleetLink
 
     public IReadOnlyList<FleetHost> Hosts => current is { } c
         ? [.. c.Relay.Presence.Where(p => p.Kind == "host" && p.Id != c.Relay.DeviceId).Select(p => new FleetHost(p.Id, p.Name))]
+        : [];
+
+    public IReadOnlyList<FleetHost> People => current is { } c
+        ? [.. c.Relay.Presence.Where(p => p.Kind is "pwa" or "app").Select(p => new FleetHost(p.Id, p.Name))]
         : [];
 
     public void Start() => loop = Task.Run(() => RunAsync(stop.Token));
@@ -484,6 +499,12 @@ public sealed class RelayFleetLink : IFleetLink
     // Signed with this app's own device key, for the machine the session is on.
     public SignedCommand SignTransfer(TransferSource from, string session, string to) =>
         Transfers.Sign(key, from.Key, session, to, DateTimeOffset.UtcNow, Guid.NewGuid().ToString());
+
+    // Only for the key the channel's handshake proved for that machine.
+    public SignedCommand? SignTrust(byte[]? machinePublic, string machine, string question, string choice, string request) =>
+        machinePublic is { } k && Wire.DeviceId(k) == machine
+            ? Transfers.SignCommand(key, k, TrustProtocol.Action(choice), question, machine, DateTimeOffset.UtcNow, request)
+            : null;
 
     public async ValueTask DisposeAsync()
     {
