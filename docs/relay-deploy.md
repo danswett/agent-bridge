@@ -338,7 +338,8 @@ Security Policy already allows `https://abblobprodwus2.blob.core.windows.net`, s
 Each account's hosts, online or not, so the PWA and the app can list a machine that is offline
 with when it was last seen, and a person can forget one that is gone (#50,
 [protocol/roster.md](protocol/roster.md)). The relay holds it in memory and writes it behind,
-at most once every 30 seconds per account and once at drain.
+at most once every 30 seconds per account, and everything left when it stops: after the drain,
+within the 20-second shutdown timeout (10 seconds for the roster).
 
 `infra/modules/roster-store.bicep`, one per app (`deployRosterStore`), next to it:
 

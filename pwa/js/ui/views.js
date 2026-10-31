@@ -117,6 +117,10 @@ export function offlineMachines({ presence, known, me }) {
 export function renderMachines(list, { presence, me, current, onSelect, status = () => '', known = null, forget = null, now = Date.now() }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   const offline = offlineMachines({ presence, known, me });
+  // Every change redraws the list, so the button that had focus is replaced: Forget's first
+  // press redraws it armed, and a keyboard's second press must land on the new one.
+  const active = list.ownerDocument?.activeElement;
+  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button'].find((c) => active.classList.contains(c)) } : null;
   list.replaceChildren(...hosts.map((d) => {
     const selected = d.id === current;
     const said = status(d.id);
@@ -146,10 +150,16 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
         forget ? h('button', {
           type: 'button', class: `button secondary machine-forget${s.armed ? ' armed' : ''}`,
           'aria-label': s.armed ? `Forget ${name}: press again to confirm` : `Forget ${name}`,
-          disabled: s.busy,
+          // Not disabled while it goes: a disabled button loses focus, and the next draw could not
+          // give it back. A press meanwhile does nothing (forget.js).
+          'aria-disabled': s.busy ? 'true' : null,
           onclick: () => forget.press(k.id),
         }, s.busy ? 'Forgetting\u2026' : s.armed ? 'Press again to forget' : 'Forget') : h('span', { class: 'machine-state' }, 'Offline')),
       s.error ? h('p', { class: 'machine-error', role: 'alert' }, s.error) : null);
   }));
+  if (had?.id && had.cls) {
+    const again = [...list.children].find((li) => li.dataset.deviceId === had.id)?.querySelector(`.${had.cls}`);
+    again?.focus();
+  }
   return hosts.length;
 }

@@ -213,7 +213,7 @@ public class RosterTests
         var store = new MemoryRosterStore();
         var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         string hostId;
-        await using (var relay = await TestRelay.StartAsync(o => { o.TokenKey = key; o.Roster.Store = store; }))
+        await using (var relay = await TestRelay.StartAsync(o => { o.TokenKey = key; o.Roster.Store = store; o.Roster.FlushEvery = TimeSpan.FromHours(1); }))
         {
             var token = relay.TokenFor(1, "octo");
             var app = await relay.ConnectAsync(token, "app", "app");
@@ -221,7 +221,9 @@ public class RosterTests
             hostId = host.Id;
             await LeaveAsync(relay, host, app);
             await UntilKnownAsync(app, host.Id);
-            await relay.App.Services.GetRequiredService<RelayHub>().DrainAsync();
+            // Written as the app stops, not by the periodic writer, whose interval is far off.
+            Assert.Equal(0, store.Count);
+            await relay.App.StopAsync();
         }
         // Stored under an opaque name, never the account id: an HMAC under a key from the token key.
         Assert.Equal([Replica(store, key).Roster.NameOf("1")], store.Names);
@@ -368,6 +370,98 @@ public class RosterTests
         time.Advance(TimeSpan.FromSeconds(31));
         await roster.FlushAsync();
         Assert.Equal(1, store.Inner.Count);
+    }
+
+    [Fact]
+    public async Task A_forget_is_not_undone_by_a_stale_copy_even_once_its_marker_is_gone()
+    {
+        var store = new MemoryRosterStore();
+        var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        void Few(RosterOptions o) { o.MaxForgotten = 2; o.MaxForgetsPerMinute = 100; }
+        var (old, _) = Replica(store, key, time, Few);
+        var (next, _) = Replica(store, key, time, Few);
+        var gone = Id();
+        await old.ConnectedAsync("1", Id(), "app", "app");
+        await old.ConnectedAsync("1", gone, "desk", "host");
+        old.Disconnected("1", gone, "host");
+        await old.FlushAsync(all: true);
+
+        // The new relay forgets it, then more machines than it keeps markers for.
+        await next.ConnectedAsync("1", Id(), "phone", "pwa");
+        var others = Enumerable.Range(0, 3).Select(_ => Id()).ToList();
+        foreach (var o in others) { await next.ConnectedAsync("1", o, "other", "host"); next.Disconnected("1", o, "host"); }
+        foreach (var id in others.Prepend(gone))
+        {
+            time.Advance(TimeSpan.FromSeconds(1));
+            Assert.Null(next.Forget("1", id, _ => false));
+        }
+        await next.FlushAsync(all: true);
+        Assert.DoesNotContain(gone, Read(store, next, "1").Forgotten.Keys);
+
+        // The old relay, still holding it, writes against a copy that has changed.
+        var seen = Id();
+        await old.ConnectedAsync("1", seen, "laptop", "host");
+        old.Disconnected("1", seen, "host");
+        await old.FlushAsync(all: true);
+
+        Assert.Equal([seen], Read(store, next, "1").Machines.Select(m => m.Id));
+        Assert.Equal([seen], old.Known("1", _ => false)!.Select(k => k.Id));
+    }
+
+    [Fact]
+    public async Task A_reader_admitted_while_the_store_was_down_is_told_the_list_once_it_is_back()
+    {
+        var store = new FlakyStore();
+        var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        var (writer, _) = Replica(store.Inner, key);
+        var host = Id();
+        await writer.ConnectedAsync("1", host, "desk", "host");
+        writer.Disconnected("1", host, "host");
+        await writer.FlushAsync(all: true);
+
+        var (roster, _) = Replica(store, key, configure: o => o.StoreTimeout = TimeSpan.FromMilliseconds(200));
+        var told = new List<string>();
+        roster.Changed = account => { lock (told) { told.Add(account); } return Task.CompletedTask; };
+        store.Down = true;
+        await roster.ConnectedAsync("1", Id(), "phone", "pwa");
+        Assert.Empty(roster.Known("1", _ => false)!);
+        await roster.FlushAsync();
+        Assert.Empty(told);
+
+        store.Down = false;
+        await roster.FlushAsync();
+
+        Assert.Equal(["1"], told);
+        Assert.Equal([host], roster.Known("1", _ => false)!.Select(k => k.Id));
+        // Read, not written: the phone changed nothing.
+        Assert.Equal(1, store.Inner.Writes);
+    }
+
+    [Fact]
+    public async Task A_relay_tells_an_accounts_devices_when_its_stored_list_arrives_late()
+    {
+        var store = new FlakyStore();
+        var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        var (writer, _) = Replica(store.Inner, key);
+        var host = Id();
+        await writer.ConnectedAsync("1", host, "desk", "host");
+        writer.Disconnected("1", host, "host");
+        await writer.FlushAsync(all: true);
+        store.Down = true;
+        await using var relay = await TestRelay.StartAsync(o =>
+        {
+            o.TokenKey = key;
+            o.Roster.Store = store;
+            o.Roster.StoreTimeout = TimeSpan.FromMilliseconds(200);
+            o.Roster.FlushEvery = TimeSpan.FromMilliseconds(100);
+        });
+        var phone = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "phone", "pwa");
+        Assert.Empty(phone.Relay.Known!);
+
+        store.Down = false;
+
+        await UntilKnownAsync(phone, host);
     }
 
     [Fact]

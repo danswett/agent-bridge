@@ -42,6 +42,18 @@ test('an offline machine is listed after the online ones with when it was last s
   expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
 });
 
+test('a keyboard forgets with two presses on the same button, which keeps focus while it is redrawn', async ({ page }) => {
+  await openDemo(page, '&offline=1');
+  await offline(page).locator('.machine-forget').focus();
+
+  await page.keyboard.press('Enter');
+  await expect(offline(page).locator('.machine-forget')).toHaveText('Press again to forget');
+  await expect(offline(page).locator('.machine-forget')).toBeFocused();
+  await page.keyboard.press('Enter');
+
+  await expect(offline(page)).toHaveCount(0);
+});
+
 test('an arm lapses after a few seconds, and the next press arms again', async ({ page }) => {
   await openDemo(page, '&offline=1&forgetMs=300');
   const button = offline(page).locator('.machine-forget');

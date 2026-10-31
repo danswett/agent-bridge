@@ -32,9 +32,11 @@ public sealed class RosterOptions
     public TimeSpan RefreshInterval { get; set; } = TimeSpan.FromMinutes(10);
     // How often the writer looks for something to write.
     public TimeSpan FlushEvery { get; set; } = TimeSpan.FromSeconds(5);
-    // How long a forget is remembered against a stale copy (another replica's, mid-deploy)
-    // bringing the machine back.
-    public TimeSpan ForgottenFor { get; set; } = TimeSpan.FromDays(30);
+    // How long, and how many, forgets are kept: they settle a forget on one relay against the
+    // same machine seen on another at the same moment (mid-deploy). A stale copy is kept from
+    // bringing a forgotten machine back by the merge itself (MachineRoster.LoadAsync).
+    public TimeSpan ForgottenFor { get; set; } = TimeSpan.FromDays(1);
+    public int MaxForgotten { get; set; } = 256;
     public int MaxForgetsPerMinute { get; set; } = 10;
     // The longest any one read or write of the store may take: admission waits this long at most
     // for an account's stored roster, and the writer gives up on a call (and tries again later).
@@ -201,6 +203,8 @@ public sealed class MachineRoster
         public int Connections;
         public bool Loaded;
         public string? ETag;
+        // Each machine as the stored copy this relay last read or wrote had it.
+        public Dictionary<string, DateTimeOffset> Base = new(StringComparer.Ordinal);
         public bool Dirty;
         public DateTimeOffset WrittenAt = DateTimeOffset.MinValue;
         public DateTimeOffset RefreshedAt;
@@ -339,16 +343,19 @@ public sealed class MachineRoster
         }
     }
 
-    // One pass of the writer: every account due a write is written, online hosts are brought
-    // up to date every RefreshInterval, and an account with no device left is let go once it is
-    // written. all: write everything due now, whatever the interval (a drain).
+    // One pass of the writer: an account whose stored roster could not be read is read again;
+    // every account due a write is written; online hosts are brought up to date every
+    // RefreshInterval; and an account with no device left is let go once it is written.
+    // all: write everything now, whatever the interval (shutdown). Accounts go in parallel, a
+    // few at a time, each call to the store bounded by StoreTimeout.
     public async Task FlushAsync(bool all = false, CancellationToken ct = default)
     {
         if (!Enabled) { return; }
-        var now = Now;
-        foreach (var (id, a) in accounts)
+        await Parallel.ForEachAsync(accounts, new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = ct }, async (entry, token) =>
         {
-            bool due;
+            var (id, a) = entry;
+            var now = Now;
+            bool due, unread;
             lock (a)
             {
                 if (a.Online.Count > 0 && (all || now - a.RefreshedAt >= o.RefreshInterval))
@@ -361,8 +368,11 @@ public sealed class MachineRoster
                     a.Dirty = true;
                 }
                 due = a.Dirty && (all || now - a.WrittenAt >= o.WriteInterval);
+                unread = !a.Loaded && a.Connections > 0;
             }
-            if (due) { await WriteAsync(a, ct); }
+            if (due) { await WriteAsync(id, a, token); }
+            // A device that only reads, admitted while the store was down, still gets its list.
+            else if (unread) { await ReadAgainAsync(id, a, token); }
             lock (a)
             {
                 // Not before the write interval is up: letting go sooner would let a host that
@@ -373,7 +383,7 @@ public sealed class MachineRoster
                     accounts.TryRemove(new KeyValuePair<string, AccountRoster>(id, a));
                 }
             }
-        }
+        });
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -391,19 +401,51 @@ public sealed class MachineRoster
         catch (OperationCanceledException) { }
     }
 
-    async Task WriteAsync(AccountRoster a, CancellationToken stopping)
+    // Raised with an account id when what its devices should be told changed other than by its
+    // own devices: a stored roster read late. The hub sends that account presence again.
+    public Func<string, Task>? Changed { get; set; }
+
+    async Task ReadAgainAsync(string accountId, AccountRoster a, CancellationToken stopping)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+        cts.CancelAfter(o.StoreTimeout);
+        bool changed;
+        try
+        {
+            await a.Io.WaitAsync(cts.Token);
+            try { changed = !a.Loaded && await LoadAsync(a, cts.Token); }
+            finally { a.Io.Release(); }
+        }
+        catch (Exception e) when (e is not OperationCanceledException || !stopping.IsCancellationRequested)
+        {
+            metrics.Roster("load", e is OperationCanceledException ? "timeout" : "error");
+            log.LogWarning("roster load failed: {Type}", e.GetType().Name);
+            return;
+        }
+        if (changed) { await AnnounceAsync(accountId); }
+    }
+
+    async Task AnnounceAsync(string accountId)
+    {
+        if (Changed is not { } changed) { return; }
+        try { await changed(accountId); }
+        catch (Exception e) when (e is not OutOfMemoryException) { log.LogWarning("roster announcement failed: {Type}", e.GetType().Name); }
+    }
+
+    async Task WriteAsync(string accountId, AccountRoster a, CancellationToken stopping)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(stopping);
         cts.CancelAfter(o.StoreTimeout);
         var ct = cts.Token;
         try { await a.Io.WaitAsync(ct); }
         catch (OperationCanceledException) when (!stopping.IsCancellationRequested) { return; }
+        var announce = false;
         try
         {
             // A conflict means another relay wrote since this one read: read, merge, try again.
             for (var attempt = 0; attempt < 3; attempt++)
             {
-                if (!a.Loaded) { await LoadAsync(a, ct); }
+                if (!a.Loaded) { announce |= await LoadAsync(a, ct); }
                 RosterDocument doc;
                 string? etag;
                 lock (a)
@@ -418,8 +460,7 @@ public sealed class MachineRoster
                 bool ok;
                 if (doc.Machines.Count == 0 && doc.Forgotten.Count == 0)
                 {
-                    // Nothing to remember: nothing is kept. A forget is kept until ForgottenFor
-                    // has passed, so a stale copy cannot bring the machine back meanwhile.
+                    // Nothing to remember: nothing is kept.
                     ok = etag is null || await store!.DeleteAsync(a.Name, etag, ct);
                     written = null;
                 }
@@ -430,7 +471,12 @@ public sealed class MachineRoster
                 }
                 if (ok)
                 {
-                    lock (a) { a.ETag = written; }
+                    lock (a)
+                    {
+                        a.ETag = written;
+                        // What storage holds now: the base of the next merge.
+                        a.Base = doc.Machines.ToDictionary(m => m.Id, m => m.LastSeen, StringComparer.Ordinal);
+                    }
                     metrics.Roster("write", "ok");
                     return;
                 }
@@ -444,12 +490,26 @@ public sealed class MachineRoster
             log.LogWarning("roster write failed: {Type}", e.GetType().Name);
             lock (a) { a.Dirty = true; }
         }
-        finally { a.Io.Release(); }
+        finally
+        {
+            a.Io.Release();
+            if (announce) { await AnnounceAsync(accountId); }
+        }
     }
 
-    // Under Io. Merges the stored copy into what is held: per machine, the later sighting; per
-    // forget, the later one; a machine shows only if seen after it was forgotten.
-    async Task LoadAsync(AccountRoster a, CancellationToken ct)
+    // Under Io. Merges the stored copy into what is held, against the copy this relay last read
+    // or wrote (the base), as a three-way merge:
+    //  * a machine both have: the later sighting;
+    //  * one only storage has: added, unless this relay had it in the base and has since let it
+    //    go (forgotten or capped here), with no newer sighting since;
+    //  * one only this relay has: kept, unless it was in the base and storage no longer has it
+    //    (another relay forgot or capped it) and this relay has not seen it since;
+    //  * a forget, kept (the later of two), removes any machine not seen after it.
+    // So a relay holding an old copy never brings back a machine another forgot, however many
+    // forgets have been made since; the forgets themselves only settle a forget and a sighting
+    // made on two relays at once, and are kept for ForgottenFor.
+    // True when what the account's devices are told (the offline machines) changed.
+    async Task<bool> LoadAsync(AccountRoster a, CancellationToken ct)
     {
         var stored = await store!.ReadAsync(a.Name, ct);
         RosterDocument? doc = null;
@@ -459,36 +519,57 @@ public sealed class MachineRoster
             try { doc = JsonSerializer.Deserialize<RosterDocument>(stored.Body, Json); }
             catch (JsonException) { metrics.Roster("load", "corrupt"); }
         }
+        bool changed;
         lock (a)
         {
+            var shown = Shown(a);
             a.ETag = stored?.ETag;
             a.Loaded = true;
+            var theirs = (doc?.Machines ?? [])
+                .Where(m => Wire.IsDeviceId(m.Id) && m.Name is not null)
+                .GroupBy(m => m.Id, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.MaxBy(m => m.LastSeen)!, StringComparer.Ordinal);
             foreach (var (id, at) in doc?.Forgotten ?? [])
             {
                 if (!Wire.IsDeviceId(id)) { continue; }
                 if (!a.Forgotten.TryGetValue(id, out var mine) || at > mine) { a.Forgotten[id] = at; }
             }
-            foreach (var m in doc?.Machines ?? [])
+            foreach (var (id, m) in theirs)
             {
-                if (!Wire.IsDeviceId(m.Id) || m.Name is null) { continue; }
                 // An online host's own record is newer than any stored one.
-                if (a.Online.ContainsKey(m.Id)) { continue; }
-                if (!a.Machines.TryGetValue(m.Id, out var mine) || m.LastSeen > mine.LastSeen)
+                if (a.Online.ContainsKey(id)) { continue; }
+                if (a.Machines.TryGetValue(id, out var mine))
                 {
-                    a.Machines[m.Id] = new RosterMachine(m.Id, Clean(m.Name), "host", m.LastSeen);
+                    if (m.LastSeen > mine.LastSeen) { a.Machines[id] = new RosterMachine(id, Clean(m.Name), "host", m.LastSeen); }
                 }
+                else if (!a.Base.TryGetValue(id, out var based) || m.LastSeen > based)
+                {
+                    a.Machines[id] = new RosterMachine(id, Clean(m.Name), "host", m.LastSeen);
+                }
+            }
+            foreach (var (id, m) in a.Machines.ToList())
+            {
+                if (a.Online.ContainsKey(id) || theirs.ContainsKey(id)) { continue; }
+                if (a.Base.TryGetValue(id, out var based) && m.LastSeen <= based) { a.Machines.Remove(id); }
             }
             foreach (var (id, at) in a.Forgotten)
             {
                 if (!a.Online.ContainsKey(id) && a.Machines.TryGetValue(id, out var m) && m.LastSeen <= at) { a.Machines.Remove(id); }
             }
             Prune(a);
+            a.Base = theirs.ToDictionary(t => t.Key, t => t.Value.LastSeen, StringComparer.Ordinal);
             // What this relay held that storage did not have has to reach it; a device that only
             // reads (a phone opening the app) writes nothing.
             a.Dirty = a.Dirty || Signature(a) != StoredSignature(doc);
+            changed = Shown(a) != shown;
         }
         metrics.Roster("load", "ok");
+        return changed;
     }
+
+    // What the account's devices are told: its offline machines, as known.
+    static string Shown(AccountRoster a) => string.Join('|',
+        a.Machines.Values.Where(m => !a.Online.ContainsKey(m.Id)).OrderBy(m => m.Id, StringComparer.Ordinal).Select(m => $"{m.Id} {m.Name} {m.LastSeen.UtcTicks}"));
 
     // Under the lock: a forget superseded by a later sighting, or older than ForgottenFor, goes;
     // then the caps.
@@ -502,6 +583,9 @@ public sealed class MachineRoster
         Cap(a);
     }
 
+    // The oldest offline machines past MaxMachines go. Forgets past MaxForgotten go oldest first:
+    // the base already keeps a stale copy from bringing a machine back, and at MaxForgetsPerMinute
+    // the oldest of them is far older than two relays ever overlap.
     void Cap(AccountRoster a)
     {
         if (a.Machines.Count > o.MaxMachines)
@@ -511,9 +595,9 @@ public sealed class MachineRoster
                 a.Machines.Remove(m.Id);
             }
         }
-        if (a.Forgotten.Count > o.MaxMachines)
+        if (a.Forgotten.Count > o.MaxForgotten)
         {
-            foreach (var (id, _) in a.Forgotten.OrderBy(f => f.Value).Take(a.Forgotten.Count - o.MaxMachines).ToList()) { a.Forgotten.Remove(id); }
+            foreach (var (id, _) in a.Forgotten.OrderBy(f => f.Value).Take(a.Forgotten.Count - o.MaxForgotten).ToList()) { a.Forgotten.Remove(id); }
         }
     }
 
@@ -532,8 +616,23 @@ public sealed class MachineRoster
     }
 }
 
-// Runs the roster's writer for the life of the app; a drain writes what is left (RelayHub).
-public sealed class RosterWriter(MachineRoster roster) : BackgroundService
+// Runs the roster's writer for the life of the app, and writes everything left when the app
+// stops: after the hub has drained (ApplicationStopping), with every host online here marked
+// seen now, so the next relay says when each was last here. Awaited by the host, inside its
+// shutdown timeout (RelayApp), and after the periodic writer has stopped, so the two never
+// write at once.
+public sealed class RosterWriter(MachineRoster roster, ILogger<RosterWriter> log) : BackgroundService
 {
+    public static readonly TimeSpan FinalFlush = TimeSpan.FromSeconds(10);
+
     protected override Task ExecuteAsync(CancellationToken stoppingToken) => roster.RunAsync(stoppingToken);
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(FinalFlush);
+        try { await roster.FlushAsync(all: true, cts.Token); }
+        catch (Exception e) when (e is not OutOfMemoryException) { log.LogWarning("roster flush at shutdown failed: {Type}", e.GetType().Name); }
+    }
 }

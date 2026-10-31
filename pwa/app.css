@@ -109,7 +109,7 @@ a { color: var(--primary); }
   border: 1px solid var(--primary); background: var(--primary); color: var(--primary-text);
 }
 .button.secondary { background: transparent; color: var(--primary); }
-.button:disabled { opacity: .55; cursor: default; }
+.button:disabled, .button[aria-disabled="true"] { opacity: .55; cursor: default; }
 
 /* ---- machines ---- */
 .machines-panel h2 { margin: 0; }

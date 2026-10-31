@@ -54,6 +54,9 @@ public sealed class OfflineMachineViewModel : Observable
     public async Task PressAsync()
     {
         if (busy) { return; }
+        // The tick that lapses an arm comes once a second, or later on a busy dispatcher: a
+        // press after the deadline arms again, whether or not that tick has come.
+        if (armedAt is { } at && time.GetUtcNow() - at >= TimeSpan.FromSeconds(ConfirmSeconds)) { armedAt = null; }
         if (!Armed)
         {
             armedAt = time.GetUtcNow();
@@ -66,7 +69,10 @@ public sealed class OfflineMachineViewModel : Observable
         Changed();
         string? why;
         try { why = await forget(Id, CancellationToken.None); }
-        catch (Exception e) when (e is IOException or TimeoutException or OperationCanceledException or InvalidOperationException)
+        // Whatever the connection threw (a send on a socket that just dropped throws
+        // WebSocketException): the press must end, not leave the button stuck on "Forgetting…".
+        catch (Exception e) when (e is IOException or TimeoutException or OperationCanceledException or InvalidOperationException
+            or System.Net.WebSockets.WebSocketException or ObjectDisposedException)
         {
             why = "unreachable";
         }

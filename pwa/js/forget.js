@@ -16,6 +16,16 @@ const REASONS = {
   unreachable: 'The relay did not answer. Try again when connected.',
 };
 
+// The machines gone from the offline list without coming online: forgotten (from this device
+// or another), or past the relay's cap. Only between two lists from a relay with a roster: a
+// relay without one (null) says nothing about what was forgotten.
+export function vanished(before, after, online) {
+  if (!before || !after) { return []; }
+  const still = new Set(after.map((k) => k.id));
+  const here = new Set(online);
+  return before.map((k) => k.id).filter((id) => !still.has(id) && !here.has(id));
+}
+
 export function forgetReason(code) {
   return REASONS[code] ?? `The relay refused: ${code}.`;
 }

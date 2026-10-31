@@ -26,8 +26,8 @@ Everything here is relay text control messages, outside any channel, as for the 
   existed.
 * **Bounded.** At most 64 machines per account; past that, the offline machine seen longest
   ago goes. An account's roster is written at most once every 30 seconds, however often its
-  hosts come and go, plus once when the relay drains. A device that only reads, such as a
-  phone opening the app, writes nothing.
+  hosts come and go, plus once when the relay stops (after it has drained, awaited within the
+  shutdown timeout). A device that only reads, such as a phone opening the app, writes nothing.
 
 ## `presence`: `known`
 
@@ -80,8 +80,10 @@ Clients ask for a forget only after **two presses**: the first arms that machine
 5 seconds (the button reads "Press again to forget"), the second sends it. An arm lapses, and
 goes when the machine leaves the offline list (back online, or forgotten from another device);
 on the PWA, pressing another machine's Forget moves the arm there. Once forgotten, the PWA also drops what it had learnt
-about the machine (its status line and usage), leaves it if it was the one being viewed, and
-closes the notifications it had shown from it. Push subscriptions are kept by each host, so a
+about the machine (its status line and usage, including any look at it still on its way),
+leaves it if it was the one being viewed, and closes the notifications it had shown from it;
+it does the same for a machine forgotten from another of the account's devices (one that leaves
+`known` without coming online). Push subscriptions are kept by each host, so a
 forgotten machine holds its own until it is uninstalled; if it ever connects again, it is
 listed again and its notifications resume.
 
@@ -101,15 +103,21 @@ with no key.
 * **Contents.** `{ "v": 1, "machines": [{ "id", "name", "kind", "lastSeen" }], "forgotten": { "<id>": "<when>" } }`.
 * **Two relays at once.** Writes are conditional on the blob's ETag, so a draining relay and
   its replacement cannot lose each other's changes: a write against a copy that has changed is
-  refused, and the writer reads, merges and writes again. The merge keeps each machine's latest
-  sighting and each forget's latest time, and a machine shows only if it was seen after it was
-  last forgotten, so a forget is not undone by a stale copy. A forget is remembered for 30 days.
+  refused, and the writer reads, merges and writes again. The merge is three-way, against the
+  copy the writer last read or wrote: a machine both have keeps its latest sighting; one only
+  storage has is added unless this relay let it go since; one only this relay has is kept unless
+  storage has dropped it (forgotten or capped by the other relay) and this relay has not seen it
+  since. So a relay holding an old copy never brings back a machine forgotten elsewhere. Forgets
+  are also stored, at most 256 per account for a day, to settle a forget on one relay against
+  the same machine seen on the other at the same moment: a machine shows only if seen after it
+  was last forgotten.
 * **Ageing out.** A roster whose hosts have all been offline for 180 days is deleted by the
   storage account's lifecycle rule. A roster left with no machines and no forgets is deleted
   by the relay when it next writes it.
 * **When the store is down.** Admission waits at most 5 seconds for an account's roster, then
-  goes on without it; the writer reads it again before writing anything, so a roster is never
-  overwritten by what one relay happened to see.
+  goes on without it. The writer reads it again every few seconds while any of the account's
+  devices is connected, and sends them `presence` once it has it; and it reads it before
+  writing anything, so a roster is never overwritten by what one relay happened to see.
 
 Logs and metrics carry no account, device, name or blob name: `relay.roster` counts loads,
 writes and forgets by outcome only.

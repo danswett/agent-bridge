@@ -22,15 +22,15 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     // so a device told to reconnect (1012) lands on a replica that is staying, not this one.
     public bool Draining { get; private set; }
 
-    public async Task DrainAsync()
+    // The roster's last write comes after this, when the app stops its writer (RosterWriter).
+    public Task DrainAsync()
     {
         Draining = true;
-        await CloseAllAsync();
-        // Every host online here is seen now, and what is not written yet is written, so the next
-        // replica's roster says when each was last here.
-        try { await roster.FlushAsync(all: true); }
-        catch (Exception e) when (e is not OutOfMemoryException) { log.LogWarning("roster flush at drain failed: {Type}", e.GetType().Name); }
+        return CloseAllAsync();
     }
+
+    // The roster read an account's stored list late (MachineRoster.Changed): tell its devices.
+    public Task RosterChangedAsync(string accountId) => BroadcastPresenceAsync(accountId);
 
     // On shutdown, tell every device to reconnect now. A rolling deploy otherwise leaves old
     // sockets on the draining replica for up to its drain timeout (about 90 s observed on

@@ -486,6 +486,11 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.False(laptop.Armed);
         await laptop.PressAsync();
         Assert.Empty(link.Forgotten);
+        // Even when the tick that would lapse it has not come yet.
+        clock.Advance(TimeSpan.FromSeconds(OfflineMachineViewModel.ConfirmSeconds));
+        await laptop.PressAsync();
+        Assert.Empty(link.Forgotten);
+        Assert.True(laptop.Armed);
 
         await laptop.PressAsync();
 
@@ -510,6 +515,24 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal("It is back online, so it was not forgotten.", laptop.Error);
         Assert.Single(Offline());
         Assert.False(laptop.Armed);
+    }
+
+    [Fact]
+    public async Task A_forget_whose_connection_drops_mid_send_ends_and_says_the_relay_did_not_answer()
+    {
+        await BothMachinesAsync();
+        link.Known = [Gone("laptop-id", "Travel laptop", 5)];
+        link.Throw = new System.Net.WebSockets.WebSocketException("the socket dropped");
+        link.Raise();
+        await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
+        var laptop = Offline()[0];
+
+        await laptop.PressAsync();
+        await laptop.PressAsync();
+
+        Assert.False(laptop.Busy);
+        Assert.True(laptop.CanForget);
+        Assert.Equal("The relay did not answer. Try again when connected.", laptop.Error);
     }
 
     [Fact]
@@ -566,10 +589,12 @@ public sealed class FleetTests : IAsyncLifetime
         public IReadOnlyList<KnownMachine>? Known { get; set; }
         public IReadOnlyList<KnownMachine>? Offline => State == FleetState.Connected ? Known : null;
         public string? Refusal { get; set; }
+        public Exception? Throw { get; set; }
         public List<string> Forgotten { get; } = [];
 
         public Task<string?> ForgetAsync(string machineId, CancellationToken ct)
         {
+            if (Throw is { } e) { return Task.FromException<string?>(e); }
             if (Refusal is { } why) { return Task.FromResult<string?>(why); }
             Forgotten.Add(machineId);
             Known = [.. (Known ?? []).Where(k => k.Id != machineId)];

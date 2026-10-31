@@ -12,6 +12,8 @@ import { USAGE, machineStatus } from './usage.js';
 export class FleetStatus {
   #listeners = new Set();
   #machines = new Map();
+  // Bumped when a machine is forgotten, so a look at it already on its way changes nothing.
+  #epochs = new Map();
   #queue = Promise.resolve();
   #queued = new Set();
   #viewed = null;
@@ -66,8 +68,10 @@ export class FleetStatus {
   // Settles when every look asked for so far is done.
   idle() { return this.#queue; }
 
-  // A machine forgotten (forget.js): what was learnt about it, and its usage, go.
+  // A machine forgotten (forget.js): what was learnt about it, and its usage, go, and a look
+  // at it still on its way changes nothing when it ends.
   forget(id) {
+    this.#epochs.set(id, (this.#epochs.get(id) ?? 0) + 1);
     this.#machines.delete(id);
     this.book.delete(id);
     this.#emit();
@@ -130,23 +134,27 @@ export class FleetStatus {
     if (!this.connection.ready || id === this.hosts.targetId || !this.connection.presence.some((d) => d.id === id)) { return; }
     let channel = null;
     let client = null;
+    const epoch = this.#epochs.get(id) ?? 0;
+    const forgotten = () => (this.#epochs.get(id) ?? 0) !== epoch;
     try {
       channel = await this.connection.openChannel(id, { timeoutMs: 10000 });
       client = this.makeClient(channel);
       // Each answer is dropped if the machine has been chosen for viewing meanwhile: its own
-      // channel then has newer figures, and the book keeps one report per machine.
+      // channel then has newer figures, and the book keeps one report per machine. And if it
+      // has been forgotten meanwhile: nothing about it is kept.
       const viewed = () => id === this.hosts.targetId;
       const hello = await client.hello();
-      if (viewed()) { return; }
+      if (viewed() || forgotten()) { return; }
       this.#note(id, hello.machine);
       if (hello.capabilities.includes(USAGE.capability)) {
         const report = await client.usage();
-        if (!viewed()) { this.book.set(id, report); }
+        if (!viewed() && !forgotten()) { this.book.set(id, report); }
       } else {
         // Said by the machine itself, so its last report goes; one that cannot be reached keeps it.
         this.book.delete(id);
       }
     } catch {
+      if (forgotten()) { return; }
       // Not retried before the minute is up, whatever went wrong.
       const old = this.#machines.get(id);
       this.#machines.set(id, { ...(old ?? { hostVersion: null, dev: false, sessions: null }), at: this.now() });

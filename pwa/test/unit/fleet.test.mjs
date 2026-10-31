@@ -220,3 +220,34 @@ test('the machine being viewed is asked again on its own channel every minute, a
   assert.deepEqual(connection.opened, []);
   assert.equal(fleet.status('v'), '0.1.0 \u00b7 read-only: agent-ha-bridge is running for this user');
 });
+test('a machine forgotten while it is being looked at keeps nothing from that look', async () => {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const { connection, book, fleet } = fleetWith({
+    a: { machine: { hostVersion: '0.1.0', sessions: 3 }, capabilities: ['sessions.read', 'usage'], usage: usage(40) },
+  });
+  const makeClient = fakeClient(connection);
+  fleet.makeClient = (channel) => ({ ...makeClient(channel), async usage() { await held; return connection.hosts.a.usage; } });
+
+  fleet.probe();
+  await flush();
+  fleet.forget('a');
+  release();
+  await fleet.idle();
+
+  assert.equal(book.size, 0);
+  assert.equal(fleet.status('a'), '');
+});
+
+test('a forgotten machine whose look then fails is not remembered as looked at', async () => {
+  const { connection, fleet } = fleetWith({ a: { fail: true } });
+  connection.openChannel = async (id) => { connection.opened.push(id); fleet.forget(id); throw new Error('gone'); };
+
+  fleet.probe();
+  await fleet.idle();
+  fleet.probe();
+  await fleet.idle();
+
+  // Not held off for a minute as a machine that failed would be: nothing about it is kept.
+  assert.deepEqual(connection.opened, ['a', 'a']);
+});

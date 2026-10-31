@@ -35,7 +35,7 @@ import { Capabilities } from './protocol.js';
 import { SessionListView, MachinesFold, renderMachines, offlineMachines } from './ui/views.js';
 import { UsageBook, USAGE, machineStatus } from './usage.js';
 import { FleetStatus } from './fleet.js';
-import { ForgetControl, CONFIRM_MS } from './forget.js';
+import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UsageView } from './ui/usage-view.js';
 import { LaunchPanel } from './ui/launch-view.js';
 import { DemoBlobStore, DemoHost, demoTransfers, runScript } from './demo.js';
@@ -433,14 +433,16 @@ function begin(account) {
   const fleet = new FleetStatus({ connection, hosts, store, book, me: identity.deviceId });
   // Forgetting an offline machine (#50): what this app keeps about it goes with it. Its push
   // subscription is on that machine, which is gone; the notices it left here are closed.
-  const forgets = new ForgetControl({
-    connection,
-    onForgotten: (id) => {
-      fleet.forget(id);
-      if (hosts.targetId === id) { hosts.forget(); }
-      worker().then((r) => closeMachineNotices(r, id)).catch(() => {});
-    },
-  });
+  const dropMachine = (id) => {
+    fleet.forget(id);
+    if (hosts.targetId === id) { hosts.forget(); }
+    worker().then((r) => closeMachineNotices(r, id)).catch(() => {});
+  };
+  const forgets = new ForgetControl({ connection, onForgotten: dropMachine });
+  // The same for a machine forgotten from another of the account's devices: it leaves the
+  // offline list without coming online.
+  let lastKnown = null;
+  const offlineNow = () => offlineMachines({ presence: connection.presence, known: connection.known, me: identity.deviceId });
   const drawMachines = () => {
     const n = renderMachines($('machine-list'), {
       presence: connection.presence, me: identity.deviceId, current: hosts.targetId,
@@ -458,8 +460,13 @@ function begin(account) {
   fleet.start();
   forgets.onChange(drawMachines);
 
-  // A machine that comes back takes its arm, and any refusal shown for it, with it.
-  connection.on('presence', () => forgets.reconcile(offlineMachines({ presence: connection.presence, known: connection.known, me: identity.deviceId }).map((k) => k.id)));
+  connection.on('presence', () => {
+    const now = connection.known ? offlineNow() : null;
+    for (const id of vanished(lastKnown, now, connection.presence.map((d) => d.id))) { dropMachine(id); }
+    lastKnown = now;
+    // A machine that comes back takes its arm, and any refusal shown for it, with it.
+    forgets.reconcile((now ?? []).map((k) => k.id));
+  });
   connection.on('presence', drawMachines);
   connection.on('log', (line) => console.log(line));
   connection.on('state', ({ state }) => {
@@ -479,6 +486,7 @@ function begin(account) {
     hosts.forget();
     fleet.clear();
     forgets.clear();
+    lastKnown = null;
     answers.clear();
     replies.clear();
     stops.clear();

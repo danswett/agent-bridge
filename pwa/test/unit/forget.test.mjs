@@ -2,7 +2,7 @@
 // machine comes back, and the relay's refusals said as a person reads them.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ForgetControl, CONFIRM_MS, forgetReason } from '../../js/forget.js';
+import { ForgetControl, CONFIRM_MS, forgetReason, vanished } from '../../js/forget.js';
 import { BridgeConnection } from '../../js/connection.js';
 
 function fakeTimers() {
@@ -108,6 +108,15 @@ test('a press while one is in flight does nothing', async () => {
   await done;
   assert.deepEqual(asked, ['a']);
   assert.equal(c.stateOf('b').armed, false);
+});
+
+test('a machine that leaves the offline list without coming online has been forgotten, wherever it was', () => {
+  const k = (id) => ({ id, name: id, kind: 'host', lastSeen: '2026-10-31T00:00:00Z' });
+
+  assert.deepEqual(vanished([k('a'), k('b'), k('c')], [k('c')], ['b']), ['a']);
+  // A relay without a roster, before or after (a rollback, a reconnect to an older one), says nothing.
+  assert.deepEqual(vanished(null, [k('c')], []), []);
+  assert.deepEqual(vanished([k('a')], null, []), []);
 });
 
 test('a connection to a relay without a roster does not ask it to forget', async () => {
