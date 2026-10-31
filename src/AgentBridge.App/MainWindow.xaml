@@ -113,6 +113,48 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+                            <!-- The account's machines that are offline, from the relay's roster, each with a
+                                 two-press Forget (#50). -->
+                            <StackPanel
+                                Spacing="6"
+                                AutomationProperties.AutomationId="OfflineMachines"
+                                Visibility="{x:Bind local:Ui.Show(ViewModel.ShowOfflineMachines), Mode=OneWay}">
+                                <TextBlock Style="{StaticResource AbSecondaryText}" Text="Offline machines" />
+                                <ItemsControl ItemsSource="{x:Bind ViewModel.OfflineMachines}" IsTabStop="False">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Spacing="6" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="core:OfflineMachineViewModel">
+                                            <Grid ColumnSpacing="12" AutomationProperties.AutomationId="OfflineMachine">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Text="{x:Bind Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind LastSeenText, Mode=OneWay}" />
+                                                    <TextBlock
+                                                        Style="{StaticResource AbSecondaryText}"
+                                                        TextWrapping="Wrap"
+                                                        Text="{x:Bind Error, Mode=OneWay}"
+                                                        Visibility="{x:Bind local:Ui.Show(HasError), Mode=OneWay}" />
+                                                </StackPanel>
+                                                <Button
+                                                    Grid.Column="1"
+                                                    VerticalAlignment="Center"
+                                                    AutomationProperties.AutomationId="ForgetMachine"
+                                                    AutomationProperties.Name="{x:Bind ForgetName, Mode=OneWay}"
+                                                    Content="{x:Bind ForgetText, Mode=OneWay}"
+                                                    IsEnabled="{x:Bind CanForget, Mode=OneWay}"
+                                                    Click="{x:Bind Press}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
                         </StackPanel>
                     </Grid>
                 </ScrollViewer>

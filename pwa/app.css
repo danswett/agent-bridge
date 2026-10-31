@@ -129,6 +129,19 @@ a { color: var(--primary); }
 .machine-state { grid-column: 3; grid-row: 1 / 3; color: var(--ok); font-size: .85rem; }
 .machine-button.selected { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
 .machine-button.selected .machine-state { color: var(--primary); }
+/* An offline machine, from the relay's roster: not a button, as there is nothing to open. */
+.machine-row {
+  min-height: var(--tap); display: grid;
+  grid-template-columns: auto 1fr auto; grid-template-rows: auto auto; column-gap: 10px;
+  align-items: center; padding: 8px 12px;
+  border: 1px dashed var(--border); border-radius: 10px; color: var(--muted);
+}
+.machine-row .icon { grid-row: 1 / 3; width: 24px; height: 24px; }
+.machine-row .machine-name { color: var(--text); }
+.machine-row .machine-state { color: var(--muted); }
+.machine-forget { grid-column: 3; grid-row: 1 / 3; }
+.machine-forget.armed { color: var(--danger); border-color: currentColor; }
+.machine-error { margin: 4px 12px 0; color: var(--danger); font-size: .85rem; }
 
 /* ---- agent usage: agent-ha-bridge's usage card ---- */
 .usage h2 { margin: 0; }

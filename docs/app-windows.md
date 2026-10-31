@@ -93,6 +93,12 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
   refused), they all go, and so do the last account's when the host signs in to another account
   or relay, without waiting for the new one to connect. The
   app serves nothing on the relay: it only opens channels, as the PWA does.
+* **Offline machines.** The account's hosts that are not connected, from the relay's roster
+  ([roster.md](protocol/roster.md)), are listed under the cards with when each was last seen,
+  never this machine's own. **Forget** takes two presses, the first arming for 5 seconds; the
+  app is a person's device (kind `app`), so the relay accepts it, for a machine that is not
+  connected. One that comes back leaves the list, its arm with it. A relay without a roster
+  lists none.
 * **Not the app's management.** Another machine's host is never managed from here: `host.*`
   is the pipe's alone, and a relay channel answers it with `unknown op`.
 * **On screen.** With more than one machine, a picker over the cards shows every machine or one

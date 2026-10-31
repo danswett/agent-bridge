@@ -10,7 +10,7 @@ public sealed class RelayMetrics
     public const string MeterName = "AgentBridge.Relay";
     public static readonly IReadOnlySet<string> AllowedTags = new HashSet<string> { "kind", "outcome", "code" };
 
-    readonly Counter<long> connects, disconnects, refusals, frames, bytes, undeliverable, pushes, signIns, blobs, blobBytes;
+    readonly Counter<long> connects, disconnects, refusals, frames, bytes, undeliverable, pushes, signIns, blobs, blobBytes, roster;
 
     public RelayMetrics(IMeterFactory factory, Func<int> online)
     {
@@ -26,6 +26,7 @@ public sealed class RelayMetrics
         signIns = meter.CreateCounter<long>("relay.signins", description: "Device-flow completions, by outcome");
         blobs = meter.CreateCounter<long>("relay.blobs", description: "Blob store requests, by kind (put, get, delete) and outcome");
         blobBytes = meter.CreateCounter<long>("relay.blobs.bytes", unit: "By", description: "Stored bytes of blobs issued for upload");
+        roster = meter.CreateCounter<long>("relay.roster", description: "Machine roster loads, writes and forgets, by kind and outcome");
     }
 
     public void Connected(string kind) => connects.Add(1, new KeyValuePair<string, object?>("kind", kind));
@@ -36,6 +37,9 @@ public sealed class RelayMetrics
     // Push outcomes: the HTTP status class from the push service, or the relay's refusal.
     public void Pushed(PushGateway.Result r) => pushes.Add(1, new KeyValuePair<string, object?>("outcome", r.Error ?? (r.Status / 100) + "xx"));
     public void SignedIn(string outcome) => signIns.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
+
+    public void Roster(string kind, string outcome) =>
+        roster.Add(1, new KeyValuePair<string, object?>("kind", kind), new KeyValuePair<string, object?>("outcome", outcome));
 
     public void Blob(string kind, string outcome, long bytes)
     {

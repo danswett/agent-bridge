@@ -27,6 +27,7 @@ param production = {
   memory: '0.5Gi'
   customDomain: 'relay.bad-duck.com'
   blobStorageName: 'abblobprodwus2'
+  rosterStorageName: 'abrosterprodwus2'
 }
 
 param staging = {
@@ -36,6 +37,7 @@ param staging = {
   identityName: 'id-agent-bridge-relay-staging'
   keyVaultName: 'kv-abrelay-stg-wus2'
   blobStorageName: 'abblobstgwus2'
+  rosterStorageName: 'abrosterstgwus2'
   minReplicas: 0
   maxReplicas: 1
   cpu: '0.25'

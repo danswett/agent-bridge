@@ -66,6 +66,13 @@ export class FleetStatus {
   // Settles when every look asked for so far is done.
   idle() { return this.#queue; }
 
+  // A machine forgotten (forget.js): what was learnt about it, and its usage, go.
+  forget(id) {
+    this.#machines.delete(id);
+    this.book.delete(id);
+    this.#emit();
+  }
+
   // Everything tied to the signed-in account goes with it.
   clear() {
     this.#started = false;

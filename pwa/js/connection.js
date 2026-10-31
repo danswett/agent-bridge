@@ -17,6 +17,8 @@ export class BridgeConnection {
   #wake = null;
   relay = null;
   presence = [];
+  // The account's machines that are offline (relay.js); null while the relay keeps no roster.
+  known = null;
   // 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'replaced' | 'signed-out' | 'stopped'
   state = 'idle';
   detail = '';
@@ -72,12 +74,21 @@ export class BridgeConnection {
     }
     const r = this.relay;
     this.relay = null;
+    this.known = null;
     this.channels.attach(null);
     r?.close();
     this.#setState('stopped');
   }
 
   openChannel(peerId, options) { return this.channels.open(peerId, options); }
+
+  // Forgets one of the account's offline machines: null once done, or why not ('unsupported'
+  // from a relay without a roster).
+  forget(machineId) {
+    if (!this.relay?.open) { return Promise.reject(new Error('not connected to the relay')); }
+    if (this.known === null) { return Promise.resolve('unsupported'); }
+    return this.relay.forget(machineId);
+  }
 
   #connect() {
     if (['signed-out', 'replaced', 'stopped'].includes(this.state)) { return Promise.resolve(); }
@@ -87,10 +98,11 @@ export class BridgeConnection {
     if (this.state !== 'reconnecting') { this.#setState('connecting'); }
     const r = new Relay({ base: this.base, key: this.key, deviceId: this.deviceId, name: this.name, kind: 'pwa' });
     r.onLog = (line) => this.#emit('log', line);
-    r.onPresence = (list) => {
+    r.onPresence = (list, known) => {
       // Presence can arrive before 'ready' (S5 finding 2), while this.relay is still null.
       if (this.relay && this.relay !== r) { return; }
       this.presence = list;
+      this.known = known;
       this.#emit('presence', list);
     };
     r.onClose = (e) => this.#dropped(r, e);
