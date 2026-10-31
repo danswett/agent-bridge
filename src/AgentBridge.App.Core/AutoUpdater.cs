@@ -108,18 +108,16 @@ public sealed class AutoUpdater
             if (Pending is null || !Due(time.GetUtcNow())) { return; }
             // Settings shares the updater: a check there, or a change of feed, may have replaced
             // the release downloaded here. Then it is found and downloaded again first.
-            if (updater.Ready != Pending)
-            {
-                log($"auto-update: {Pending} is no longer the release downloaded; checking again");
-                Pending = null;
-                checkedAt = null;
-                return;
-            }
+            if (Stale()) { return; }
             // Asked again now, not as last reported: the host's status and G5 by this app's own probe
             // (agent-ha-bridge may have started during the download), and the other processes.
             if (Refused(await WhyNotNowAsync())) { return; }
             // Those took time: the switch turned off, or the host gone, meanwhile, counts too.
             if (Refused(WhyNot()) || !Due(time.GetUtcNow())) { return; }
+            // And Settings may have checked, or changed the feed, meanwhile (WhyNot itself reads the
+            // feed): still the release downloaded, or nothing is stopped. Should it change even
+            // while the host stops, ApplyAndRestart refuses it and the host is started again.
+            if (Stale()) { return; }
             await InstallAsync(Idle ? "no session is busy" : $"it has waited {WaitAtMost.TotalHours:0} hours");
         }
         // A check that cannot reach the network, a download cut off: tried again at the next check.
@@ -144,6 +142,15 @@ public sealed class AutoUpdater
         if (await Task.Run(agentHaBridge) is { } running) { return $"agent-ha-bridge runs for this user (G5): {running}"; }
         if (await Task.Run(() => othersInPackage(fresh.ProcessId)) is { } others) { return others; }
         return null;
+    }
+
+    bool Stale()
+    {
+        if (updater.Ready == Pending) { return false; }
+        log($"auto-update: {Pending} is no longer the release downloaded; checking again");
+        Pending = null;
+        checkedAt = null;
+        return true;
     }
 
     bool Refused(string? why)

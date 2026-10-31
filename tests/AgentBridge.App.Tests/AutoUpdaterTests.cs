@@ -336,6 +336,20 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_release_replaced_during_the_last_checks_does_not_stop_the_host()
+    {
+        await StartAsync();
+        // Settings checks during the last of the checks and finds another release.
+        othersProbe = () => { updater.Ready = null; return null; };
+
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Null(auto.Pending);
+    }
+
+    [Fact]
     public async Task Turned_off_it_neither_checks_nor_installs()
     {
         prefs = prefs with { AutoUpdate = false };
