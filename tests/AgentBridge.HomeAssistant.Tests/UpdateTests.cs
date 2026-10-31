@@ -300,6 +300,23 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task A_check_begun_before_an_install_answering_after_it_ended_is_not_laid_over_what_the_install_found()
+    {
+        var gate = updates.CheckGate = new TaskCompletionSource<UpdateRelease?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var c = await Ready();
+        updates.Newer = Release();
+        updates.DownloadFails = new IOException("disk full");
+        await Press(c, "install_update");
+        await Settle(c, () => Stage == "failed");
+        Assert.Equal("0.2.0", State["latest_version"]!.GetValue<string>());
+        // The check begun at start, before the install, answers only now, with older news.
+        gate.SetResult(null);
+        await Pass(c);
+        await Pass(c);
+        Assert.Equal("0.2.0", State["latest_version"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_check_that_cannot_reach_the_feed_says_why_and_is_not_called_a_failed_update()
     {
         updates.ReleasesUrl = null;

@@ -61,6 +61,10 @@ public sealed partial class HaConnector
     // A press of Check that came while a check was already under way: answered by a check of its
     // own once that one is done, not by one begun before it.
     bool updateCheckQueued;
+    // Counts installs begun; a check begun before the latest one says nothing newer than what that
+    // install's own check found, and is not laid over it, however late it answers.
+    int installEpoch;
+    int updateCheckEpoch;
     // What the last check found: latest unknown (null) when it could not be established.
     string? updateLatest;
     // Whether any check has answered, either way, since this host started: until one has, the
@@ -249,6 +253,7 @@ public sealed partial class HaConnector
             return;
         }
         updateCheckPressed = pressed;
+        updateCheckEpoch = installEpoch;
         updateCheck = Begin(() => updates!.CheckAsync(updateCancel.Token).WaitAsync(options.UpdateCheckTimeout, time));
     }
 
@@ -266,6 +271,13 @@ public sealed partial class HaConnector
         // Cancelled only matters when the connector is stopping: otherwise it is a request that
         // timed out (HttpClient's timeout is a cancellation), and as much a failure as any other.
         if ((done.IsCanceled && updateCancel.IsCancellationRequested) || UpdateBusy) { return; }
+        if (updateCheckEpoch != installEpoch)
+        {
+            // Begun before an install that has since looked for itself: older news. A press it was
+            // to answer gets a check of its own.
+            if (pressed) { updateCheckQueued = true; }
+            return;
+        }
         lock (gate) { updateCheckAnswered = true; }
         if (done.IsCanceled || done.Exception is not null)
         {
@@ -334,6 +346,7 @@ public sealed partial class HaConnector
                 $"This press did not start an update: {detail}. That update reports here when it finishes.", ct);
             return;
         }
+        installEpoch++;
         lock (gate)
         {
             updateVerdict = null;
