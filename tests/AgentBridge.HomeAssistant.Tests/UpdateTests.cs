@@ -215,6 +215,35 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task A_check_whose_request_timed_out_is_one_that_could_not_reach_the_feed()
+    {
+        await using var c = await Ready();
+        updates.CheckCancels = true;
+        await Press(c, "check_updates");
+        await Pass(c);
+        Assert.False(State.ContainsKey("latest_version"));
+        Assert.Equal("The latest release could not be established: the request timed out", State["release_summary"]!.GetValue<string>());
+        updates.CheckCancels = false;
+        await Pass(c, TimeSpan.FromMinutes(6).TotalSeconds);
+        await Pass(c);
+        Assert.Equal("0.1.0", State["latest_version"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_press_of_Check_during_a_check_already_under_way_is_answered_by_a_check_of_its_own()
+    {
+        var gate = updates.CheckGate = new TaskCompletionSource<UpdateRelease?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var c = await Ready();
+        await Press(c, "check_updates");
+        await Pass(c);
+        Assert.Equal(1, updates.Checks);
+        gate.SetResult(null);
+        await PassUntil(c, () => updates.Checks == 2);
+        await Pass(c);
+        Assert.Equal("current", Stage);
+    }
+
+    [Fact]
     public async Task A_check_that_cannot_reach_the_feed_says_why_and_is_not_called_a_failed_update()
     {
         updates.ReleasesUrl = null;
@@ -598,6 +627,8 @@ internal sealed class FakeUpdates : IHostUpdates
     public string? ReleasesUrl { get; set; } = "https://github.com/danswett/agent-bridge/releases";
     public UpdateRelease? Newer { get; set; }
     public Exception? CheckFails { get; set; }
+    // Ends cancelled, as an HttpClient timeout does.
+    public bool CheckCancels { get; set; }
     public TaskCompletionSource<UpdateRelease?>? CheckGate { get; set; }
     public TaskCompletionSource? DownloadGate { get; set; }
     public Exception? DownloadFails { get; set; }
@@ -615,6 +646,7 @@ internal sealed class FakeUpdates : IHostUpdates
             CheckGate = null;
             return gate.Task.WaitAsync(cancellationToken);
         }
+        if (CheckCancels) { return Task.FromCanceled<UpdateRelease?>(new CancellationToken(true)); }
         return CheckFails is { } e ? Task.FromException<UpdateRelease?>(e) : Task.FromResult(Newer);
     }
 

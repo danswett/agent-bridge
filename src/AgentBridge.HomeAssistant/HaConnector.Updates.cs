@@ -54,6 +54,9 @@ public sealed partial class HaConnector
     DateTimeOffset nextUpdateCheck;
     Task<UpdateRelease?>? updateCheck;
     bool updateCheckPressed;
+    // A press of Check that came while a check was already under way: answered by a check of its
+    // own once that one is done, not by one begun before it.
+    bool updateCheckQueued;
     // What the last check found: latest unknown (null) when it could not be established.
     string? updateLatest;
     string updateNotes = "";
@@ -148,6 +151,11 @@ public sealed partial class HaConnector
             updateCheck = null;
             CheckDone(done, now);
         }
+        if (updateCheckQueued && updateCheck is null)
+        {
+            updateCheckQueued = false;
+            if (!UpdateBusy) { StartCheck(now, pressed: true); }
+        }
         var touched = Interlocked.Exchange(ref updateTouched, 0) == 1;
         if (options.ConsumeAnswers && (touched || now >= nextUpdateSweep))
         {
@@ -192,8 +200,13 @@ public sealed partial class HaConnector
     void StartCheck(DateTimeOffset now, bool pressed)
     {
         nextUpdateCheck = now + options.UpdateCheck;
-        if (pressed) { updateCheckPressed = true; }
-        updateCheck ??= Begin(() => updates!.CheckAsync(updateCancel.Token).WaitAsync(options.UpdateCheckTimeout, time));
+        if (updateCheck is not null)
+        {
+            if (pressed) { updateCheckQueued = true; }
+            return;
+        }
+        updateCheckPressed = pressed;
+        updateCheck = Begin(() => updates!.CheckAsync(updateCancel.Token).WaitAsync(options.UpdateCheckTimeout, time));
     }
 
     static Task<T> Begin<T>(Func<Task<T>> start)
@@ -207,10 +220,12 @@ public sealed partial class HaConnector
         var pressed = updateCheckPressed;
         updateCheckPressed = false;
         // An install looks for itself, and what it found is what the entity shows until it ends.
-        if (done.IsCanceled || UpdateBusy) { return; }
-        if (done.Exception is { } failed)
+        // Cancelled only matters when the connector is stopping: otherwise it is a request that
+        // timed out (HttpClient's timeout is a cancellation), and as much a failure as any other.
+        if ((done.IsCanceled && updateCancel.IsCancellationRequested) || UpdateBusy) { return; }
+        if (done.IsCanceled || done.Exception is not null)
         {
-            var why = failed.InnerException?.Message ?? failed.Message;
+            var why = done.Exception is { } failed ? failed.InnerException?.Message ?? failed.Message : "the request timed out";
             Problem("update-check", $"Home Assistant connector update check failed: {why}");
             nextUpdateCheck = now + options.UpdateRetry;
             // Not "failed": a check that could not be made is not a failed update (#92). The

@@ -589,10 +589,11 @@ looks nothing up.
   out, with `The latest release could not be established: <why>` in the notes, and is tried
   again after five minutes: not `failed`, because a check that could not be made is not a
   failed update (agent-ha-bridge #92). So does a check that has not answered within two
-  minutes, and a configured `feed.txt` that cannot be read:
+  minutes or whose request timed out, and a configured `feed.txt` that cannot be read:
   it is never taken for GitHub, which would be another channel. A press of Check that finds
   nothing newer says `current`, `Checked just now; <version> is the latest release.` for ten
-  minutes, until a check finds a newer one.
+  minutes, until a check finds a newer one. A press while a check is already under way gets a
+  check of its own once that one is done, so "just now" is never an earlier check's answer.
 * **Install.** A press shows `checking` at once (`in_progress`, the spinner), then looks for the
   newest release again, downloads it (`downloading` with `update_percentage`), records the
   attempt in the connector's state file (an attempt that cannot be recorded is not handed
@@ -605,7 +606,8 @@ looks nothing up.
   hand-over fails says `failed` with the reason, notifies **Bridge update failed on
   `<machine>`**, and leaves Install usable. A press while an update runs, or while the host waits
   to exit into one, is not acted on and gets the daemon's **Bridge update already running on
-  `<machine>`** notice.
+  `<machine>`** notice. A host stopped part-way through leaves the last stage retained, as the
+  daemon does, and the next start republishes the entity without it.
 * **The outcome.** The host that comes back reads the attempt and says how it ended, once: on
   the new version, `completed` (`Updated to <version>`) for an hour and **Bridge installer
   completed on `<machine>`**; on the old one, `failed` and **Bridge update failed on
