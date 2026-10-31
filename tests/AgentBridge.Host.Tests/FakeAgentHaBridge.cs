@@ -226,9 +226,13 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
     // prompt). With RefusalVisible, Task reports them as not modifiable; without, it cannot tell.
     public HashSet<string> Refused { get; } = [];
     public bool RefusalVisible { get; set; } = true;
+    // Tasks Task Scheduler cannot be asked about at all (its service refusing the query).
+    public HashSet<string> Unreadable { get; } = [];
     public List<string> Calls { get; } = [];
 
-    public ScheduledTaskState? Task(string name) => Tasks.TryGetValue(name, out var t)
+    public ScheduledTaskState? Task(string name) => Unreadable.Contains(name)
+        ? throw new IOException($"Task Scheduler refused {name}: The RPC server is unavailable.")
+        : Tasks.TryGetValue(name, out var t)
         ? new(t.Enabled, t.Running, RefusalVisible ? !Refused.Contains(name) : null)
         : null;
 

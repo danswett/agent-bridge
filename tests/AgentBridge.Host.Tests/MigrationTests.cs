@@ -1247,6 +1247,24 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Equal([$"enable {daemon}", $"start {daemon}"], _f.Runtime_.Calls);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_task_Task_Scheduler_cannot_be_asked_about_refuses_the_migration_before_anything_changes(bool dryRun)
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        _f.Runtime_.Unreadable.Add(daemon);
+        var listing = _f.Listing();
+
+        var report = await _f.Migrator().MigrateAsync(dryRun);
+
+        Assert.False(report.Ok);
+        Assert.Contains($"Refused: Task Scheduler could not be asked about {daemon}", report.ToString());
+        Assert.Empty(_f.Runtime_.Calls);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+        Assert.Equal(listing, _f.Listing());
+    }
+
     [Fact]
     public async Task An_older_records_task_still_enabled_is_not_started_by_a_rollback_unless_it_is_the_daemon()
     {

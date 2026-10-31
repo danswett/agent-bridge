@@ -162,7 +162,14 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         if (install.PublicationProblem() is { } publication) { Say("Refused: " + publication); return new(false, lines); }
         foreach (var name in new[] { install.TaskName, install.DevBoxTaskName })
         {
-            if (runtime.Task(name) is { Enabled: true, Modifiable: false })
+            ScheduledTaskState? state;
+            try { state = runtime.Task(name); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
+            {
+                Say($"Refused: Task Scheduler could not be asked about {name} ({e.Message}); nothing was changed.");
+                return new(false, lines);
+            }
+            if (state is { Enabled: true, Modifiable: false })
             {
                 Say($"Refused: {name} was registered from an administrator (elevated) prompt, so Task Scheduler lets this Windows user read it but not disable it, and agent-ha-bridge could not be handed over. Re-register it as this user: remove it from an elevated prompt (Unregister-ScheduledTask -TaskName {name}), then run agent-ha-bridge's installer again from a normal one, and migrate again.");
                 return new(false, lines);
