@@ -53,6 +53,16 @@ public class TaskAccessTests
     }
 
     [Fact]
+    public void An_owner_rights_entry_applies_to_the_user_who_owns_the_task_and_no_one_else()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.True(TaskAccess.CanModify("O:S-1-5-21-1-2-3-1000D:(A;;FA;;;OW)", User, []));
+        Assert.False(TaskAccess.CanModify("O:BAD:(A;;FA;;;OW)(A;;FR;;;S-1-5-21-1-2-3-1000)", User, []));
+        // Owned through Administrators held for denial only: its denial still applies.
+        Assert.False(TaskAccess.CanModify("O:BAD:(D;;GW;;;OW)(A;;FA;;;S-1-5-21-1-2-3-1000)", User, [], [Administrators]));
+    }
+
+    [Fact]
     public void A_denial_listed_before_an_allowance_wins()
     {
         if (!OperatingSystem.IsWindows()) { return; }

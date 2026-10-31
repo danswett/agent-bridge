@@ -34,6 +34,15 @@ public static class TaskAccess
         var who = new HashSet<SecurityIdentifier>(groups) { user };
         var denied = new HashSet<SecurityIdentifier>(who);
         denied.UnionWith(denyOnly ?? []);
+        // OWNER RIGHTS entries apply to whoever owns the object, in place of the owner's implicit
+        // rights; owning it grants no write of its own. An owner held for denial only meets its
+        // denials alone, as any deny-only group does.
+        var ownerRights = new SecurityIdentifier(WellKnownSidType.WinCreatorOwnerRightsSid, null);
+        if (descriptor.Owner is { } owner)
+        {
+            if (who.Contains(owner)) { who.Add(ownerRights); }
+            if (denied.Contains(owner)) { denied.Add(ownerRights); }
+        }
         int granted = 0, refused = 0;
         foreach (var entry in acl)
         {
