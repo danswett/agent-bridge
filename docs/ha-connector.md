@@ -615,7 +615,8 @@ looks nothing up.
   old outcome file. The host that recorded it never announces it: it is still on the old version
   for the moment before it exits. The outcome answers the press, not a check, so it is told
   even when checks were turned off meanwhile, and a notification Home Assistant refuses is tried
-  again every 15 s without holding up a new press. Every notice is a `persistent_notification` with
+  again every 15 s without holding up a new press; an install pressed meanwhile that fails leaves
+  it to be told. Every notice is a `persistent_notification` with
   `notification_id: agent_bridge_update_<slug>`, so each replaces the last.
 * **Presses** are read from the buttons' states (press timestamps), on a watch hit or every
   five seconds; a press from before the connector started is history, not an instruction

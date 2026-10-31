@@ -591,6 +591,25 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task An_install_that_fails_before_an_earlier_outcome_is_told_leaves_that_outcome_to_be_told()
+    {
+        Attempt("0.2.0", FakeSessions.T0.AddMinutes(-1));
+        updates.Installed = "0.2.0";
+        ha.NotifyFailsFor = s => s == "persistent_notification.create";
+        updates.Newer = Release("0.3.0");
+        updates.ApplyFails = new FileNotFoundException("Cannot find Update.exe to apply updates.");
+        await using var c = await Ready();
+        await Press(c, "install_update");
+        await Settle(c, () => updates.Downloaded.Count == 1 && Stage == "failed");
+        Assert.Equal("0.2.0", JsonNode.Parse(File.ReadAllText(StateFile))!["update"]!["target"]!.GetValue<string>());
+        ha.NotifyFailsFor = null;
+        await Pass(c, 16);
+        var (_, data) = Assert.Single(ha.NotifiedNow());
+        Assert.Equal($"Bridge installer completed on {Machine}", data["title"]!.GetValue<string>());
+        Assert.Null(JsonNode.Parse(File.ReadAllText(StateFile))!["update"]);
+    }
+
+    [Fact]
     public async Task An_outcome_older_than_six_hours_is_not_announced()
     {
         Attempt("0.2.0", FakeSessions.T0.AddHours(-7));

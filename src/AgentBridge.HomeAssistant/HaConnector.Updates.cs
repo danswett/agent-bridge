@@ -70,6 +70,10 @@ public sealed partial class HaConnector
     // can say how it ended (Invoke-DaemonUpdateOutcome's outcome file).
     UpdateAttempt? updateAttempt;
     bool updateAttemptHere;
+    // An attempt an earlier host recorded, whose outcome this one has still to tell. Apart from
+    // updateAttempt, so an install pressed meanwhile that fails does not take it away. The ledger
+    // holds one: an install handed over records its own, whose outcome the next host tells.
+    UpdateAttempt? updateOutcome;
     string? updateSignature;
 
     sealed record UpdateAttempt(string Target, string Before, DateTimeOffset At, string? Url);
@@ -417,7 +421,7 @@ public sealed partial class HaConnector
         UpdateAttempt attempt;
         lock (gate)
         {
-            if (updateAttempt is not { } a || updateAttemptHere) { return; }
+            if (updateOutcome is not { } a) { return; }
             attempt = a;
         }
         if (now - attempt.At > options.UpdateOutcomeAge)
@@ -451,7 +455,7 @@ public sealed partial class HaConnector
             await NoticeAsync(title, message, ct);
             log($"Home Assistant connector: self-update {(success ? $"completed for {attempt.Target}" : $"to {attempt.Target} FAILED: the host restarted on {installed}")}");
         }
-        lock (gate) { if (ReferenceEquals(updateAttempt, attempt)) { updateAttempt = null; } }
+        lock (gate) { if (ReferenceEquals(updateOutcome, attempt)) { updateOutcome = null; } }
         SaveLedger();
     }
 
@@ -496,17 +500,17 @@ public sealed partial class HaConnector
     void LoadUpdateAttempt(JsonElement root)
     {
         if (updateAttemptHere) { return; }
-        updateAttempt = null;
+        updateOutcome = null;
         if (!root.TryGetProperty("update", out var u) || u.ValueKind != JsonValueKind.Object) { return; }
         string? Text(string name) => u.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
         if (Text("target") is { Length: > 0 } target && Text("before") is { } before
             && DateTimeOffset.TryParse(Text("at"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var at))
         {
-            updateAttempt = new UpdateAttempt(target, before, at, Text("url"));
+            updateOutcome = new UpdateAttempt(target, before, at, Text("url"));
         }
     }
 
-    JsonNode? UpdateAttemptLedger() => updateAttempt is { } a
+    JsonNode? UpdateAttemptLedger() => (updateAttempt ?? updateOutcome) is { } a
         ? new JsonObject
         {
             ["target"] = a.Target,
