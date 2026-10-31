@@ -60,9 +60,37 @@
 .PARAMETER ExpectedAzureUser
     The az sign-in the rehearsal belongs to. Any other is refused unless -AllowOtherAzureUser.
 
+.PARAMETER JumpVia
+    user@host of an SSH jump host (VM-M) for an operator whose own SSH egress the NSG does not
+    accept. SSH to VM-W then goes through it with ProxyJump, from a generated ssh config file.
+    The jump host never holds a key for VM-W.
+
+.PARAMETER JumpKeyPath
+    This machine's key for the jump account. Created, without a passphrase, if missing.
+
+.PARAMETER JumpHostKey
+    The jump host's sshd public key ("ssh-ed25519 AAAA..."), as -JumpHostSetup's script printed
+    it, read over a channel you trust. Pinned; without it the pin must already exist.
+
+.PARAMETER JumpHostSetup
+    Print the script that makes the jump host (elevated, Windows PowerShell): sshd key-only for
+    one low-privilege account whose key may only open VM-W:22, with no shell, and an inbound
+    rule for -JumpAllowedCidr only. Run it there (VM-M has Hyperloop), then pin its HOSTKEY.
+
+.PARAMETER JumpAllowedCidr
+    For -JumpHostSetup: the only source allowed to reach the jump host's sshd, normally this
+    machine's Hyper-V switch subnet.
+
 .EXAMPLE
     ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -AllowedSshCidr 203.0.113.0/24 `
         -TunnelPublicKeyPath .\rehearsal-m-tunnel.pub -HyperloopDirectory <Hyperloop.Tools folder>
+
+.EXAMPLE
+    ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -JumpHostSetup -JumpVia vmjump@<VM-M ip> `
+        -JumpAllowedCidr <Hyper-V switch subnet>
+
+.EXAMPLE
+    ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Start -JumpVia vmjump@<VM-M ip> -JumpHostKey 'ssh-ed25519 AAAA...'
 
 .EXAMPLE
     ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Deallocate
@@ -71,6 +99,7 @@
     ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Remove
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Subscription', Justification = 'Used by Invoke-Az and Test-AzResource')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'JumpHostKey', Justification = 'Used by Write-JumpSshConfig')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPositionalParameters', '', Justification = 'Invoke-Az passes az arguments through verbatim')]
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium', DefaultParameterSetName = 'Provision')]
 param(
@@ -101,6 +130,29 @@ param(
 
     [switch] $AllowOtherAzureUser,
 
+    [Parameter(ParameterSetName = 'Provision')]
+    [Parameter(ParameterSetName = 'Start')]
+    [Parameter(Mandatory, ParameterSetName = 'JumpSetup')]
+    [ValidatePattern('^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$')]
+    [string] $JumpVia,
+
+    [Parameter(ParameterSetName = 'Provision')]
+    [Parameter(ParameterSetName = 'Start')]
+    [Parameter(ParameterSetName = 'JumpSetup')]
+    [string] $JumpKeyPath = (Join-Path $HOME '.ssh/agentbridge-vm01-jump'),
+
+    [Parameter(ParameterSetName = 'Provision')]
+    [Parameter(ParameterSetName = 'Start')]
+    [ValidatePattern('^ssh-ed25519 [A-Za-z0-9+/=]+$')]
+    [string] $JumpHostKey,
+
+    [Parameter(Mandatory, ParameterSetName = 'JumpSetup')]
+    [switch] $JumpHostSetup,
+
+    [Parameter(Mandatory, ParameterSetName = 'JumpSetup')]
+    [ValidatePattern('^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$')]
+    [string] $JumpAllowedCidr,
+
     [Parameter(Mandatory, ParameterSetName = 'Deallocate')]
     [switch] $Deallocate,
 
@@ -130,8 +182,11 @@ $AutoShutdownUtc = '0800'
 $HyperloopPort = 4850
 $Tags = @('purpose=rehearsal-39', 'owner=danswett', 'lifetime=delete-after-rehearsal')
 $KnownHostsPath = Join-Path $HOME '.ssh/known_hosts_agentbridge-rehearsal'
+$JumpKnownHostsPath = Join-Path $HOME '.ssh/known_hosts_agentbridge-vm01-jump'
+$SshConfigPath = Join-Path $HOME '.ssh/config-agentbridge-rehearsal'
+$JumpUser, $JumpHost = if ($JumpVia) { $JumpVia.Split('@', 2) } else { $null, $null }
 # Relative paths resolve against the current location, so Split-Path always finds a parent.
-foreach ($name in 'SecretFile', 'AdminKeyPath', 'TunnelPublicKeyPath', 'HyperloopDirectory', 'AzureConfigDir') {
+foreach ($name in 'SecretFile', 'AdminKeyPath', 'TunnelPublicKeyPath', 'HyperloopDirectory', 'AzureConfigDir', 'JumpKeyPath') {
     $value = Get-Variable -Name $name -ValueOnly
     if ($value) { Set-Variable -Name $name -Value $PSCmdlet.GetUnresolvedProviderPathFromPSPath($value) }
 }
@@ -169,10 +224,12 @@ function Get-VmPublicIp {
 }
 
 function Get-TunnelCommand([string] $Ip) {
-    $ssh = "ssh -i `"$AdminKeyPath`" -o IdentitiesOnly=yes -o UserKnownHostsFile=`"$KnownHostsPath`" -o StrictHostKeyChecking=yes"
+    $ssh = if ($JumpVia) { "ssh -F `"$SshConfigPath`"" } else {
+        "ssh -i `"$AdminKeyPath`" -o IdentitiesOnly=yes -o UserKnownHostsFile=`"$KnownHostsPath`" -o StrictHostKeyChecking=yes"
+    }
     $hostKey = if (Test-Path $KnownHostsPath) { (Get-Content $KnownHostsPath -Raw).Trim() } else { '<run a provision first>' }
     return [pscustomobject]@{
-        HyperloopTunnel = "$ssh -N -L 4851:127.0.0.1:${HyperloopPort} $AdminUser@$Ip"
+        HyperloopTunnel = "$ssh -N -L 127.0.0.1:4851:127.0.0.1:${HyperloopPort} $AdminUser@$Ip"
         HyperloopServer = 'hyperloop servers add rehearsal-w --scheme tcp --authority 127.0.0.1:4851'
         AdminShell      = "$ssh $AdminUser@$Ip"
         # VM-M must not trust on first use: append KnownHostsLine to its ~/.ssh/known_hosts first.
@@ -212,15 +269,54 @@ function ConvertTo-PlainText([securestring] $Secure) {
     return [System.Net.NetworkCredential]::new('', $Secure).Password
 }
 
-function Initialize-AdminKey {
-    if (Test-Path $AdminKeyPath) { return }
-    $dir = Split-Path $AdminKeyPath
+function Initialize-SshKey([string] $Path, [string] $Comment) {
+    if (Test-Path $Path) { return }
+    $dir = Split-Path $Path
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     # PowerShell 7.3+ passes '' to a native command as an empty argument; '""' would become a
     # two-character passphrase.
-    & ssh-keygen -t ed25519 -N '' -C 'agentbridge-rehearsal-admin' -f $AdminKeyPath -q
+    & ssh-keygen -t ed25519 -N '' -C $Comment -f $Path -q
     if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen failed' }
-    Write-Step "admin key created at $AdminKeyPath"
+    Write-Step "key created at $Path"
+}
+
+function Write-JumpSshConfig([string] $Ip) {
+    <#
+    The ssh config that routes VM-W through the jump host. A config file rather than -J on the
+    command line, because ssh does not pass -i, -o UserKnownHostsFile or StrictHostKeyChecking on
+    to the jump connection; with -F the same file governs both hops, each pinned.
+    #>
+    if ($JumpHostKey) {
+        Set-Content -Path $JumpKnownHostsPath -Value "$JumpHost $JumpHostKey" -Encoding ascii
+    }
+    if (-not (Test-Path $JumpKnownHostsPath) -or
+        -not (Select-String -Path $JumpKnownHostsPath -SimpleMatch "$JumpHost " -Quiet)) {
+        throw "the jump host's key is not pinned in $JumpKnownHostsPath; pass -JumpHostKey with the HOSTKEY that -JumpHostSetup's script printed"
+    }
+    $config = @"
+# Written by build/rehearsal-azure-vmw.ps1 -JumpVia. Use with: ssh -F "$SshConfigPath" rehearsal-w
+Host vm01-jump $JumpHost
+    HostName $JumpHost
+    User $JumpUser
+    IdentityFile "$JumpKeyPath"
+    IdentitiesOnly yes
+    UserKnownHostsFile "$JumpKnownHostsPath"
+    StrictHostKeyChecking yes
+    ForwardAgent no
+    RequestTTY no
+
+Host rehearsal-w $Ip
+    HostName $Ip
+    User $AdminUser
+    IdentityFile "$AdminKeyPath"
+    IdentitiesOnly yes
+    UserKnownHostsFile "$KnownHostsPath"
+    StrictHostKeyChecking yes
+    ProxyJump vm01-jump
+    ExitOnForwardFailure yes
+    ServerAliveInterval 30
+"@
+    Set-Content -Path $SshConfigPath -Value $config -Encoding ascii
 }
 
 function Invoke-VmRunCommand {
@@ -331,6 +427,7 @@ function Invoke-VmRestart {
 }
 
 function Get-SshArgument([string] $Ip) {
+    if ($JumpVia) { return @('-F', $SshConfigPath, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15') }
     return @('-i', $AdminKeyPath, '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
         '-o', "UserKnownHostsFile=$KnownHostsPath", '-o', 'StrictHostKeyChecking=yes',
         '-o', 'ConnectTimeout=15')
@@ -711,6 +808,87 @@ for ($i = 0; $i -lt 30 -and $code -ne 200; $i++) {
 "windows-loopback-18123=$code"
 '@
 
+# The jump host (VM-M), for an operator whose SSH egress the NSG does not accept. It runs there,
+# elevated, by whatever means the operator has (VM-M is driven through Hyperloop), and prints the
+# host key to pin. It needs sshd installed first: the OpenSSH.Server capability, or the signed
+# Win32-OpenSSH MSI where Windows Update cannot supply it (0x800f0950 on the rehearsal's VM-M).
+$JumpHostSetupScript = @'
+# Runs elevated on the jump host (VM-M), in Windows PowerShell 5.1.
+$ErrorActionPreference = 'Stop'
+$jumpUser = '__JUMP_USER__'
+$allowedRemote = '__ALLOWED_REMOTE__'
+$target = '__TARGET__'
+$jumpKey = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('__JUMP_KEY_B64__')).Trim()
+$sshDir = Join-Path $env:ProgramData 'ssh'
+
+$svc = Get-CimInstance Win32_Service -Filter "Name='sshd'"
+if (-not $svc) { throw 'sshd is not installed: add the OpenSSH.Server capability, or the signed Win32-OpenSSH MSI where Windows Update is unavailable' }
+$sshd = $svc.PathName.Trim('"')
+
+# Firewall first: whatever rule the installer added would allow 22 from anywhere. Only this
+# host's Hyper-V switch subnet, only on the interface and profile that subnet arrives on.
+Get-NetFirewallPortFilter -Protocol TCP | Where-Object { @($_.LocalPort) -contains '22' } | Get-NetFirewallRule |
+    Where-Object { $_.Name -ne 'Rehearsal-Jump-SSH-In' -and "$($_.Direction)" -eq 'Inbound' -and "$($_.Enabled)" -eq 'True' } |
+    Disable-NetFirewallRule
+$route = Find-NetRoute -RemoteIPAddress ($allowedRemote.Split('/')[0]) | Select-Object -First 1
+$alias = (Get-NetIPInterface -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4).InterfaceAlias
+$category = (Get-NetConnectionProfile -InterfaceAlias $alias).NetworkCategory
+$fwProfile = if ("$category" -eq 'DomainAuthenticated') { 'Domain' } else { "$category" }
+Get-NetFirewallRule -Name 'Rehearsal-Jump-SSH-In' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -Name 'Rehearsal-Jump-SSH-In' -DisplayName 'Rehearsal: SSH jump from the Hyper-V host only' `
+    -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22 -RemoteAddress $allowedRemote `
+    -InterfaceAlias $alias -Profile $fwProfile | Out-Null
+
+if (-not (Get-LocalUser -Name $jumpUser -ErrorAction SilentlyContinue)) {
+    # A random password nobody keeps: the account only ever signs in with its key.
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $bytes = New-Object byte[] 24; $rng.GetBytes($bytes)
+    $pw = ConvertTo-SecureString ('Aa1-' + [Convert]::ToBase64String($bytes)) -AsPlainText -Force
+    New-LocalUser -Name $jumpUser -Password $pw -PasswordNeverExpires -AccountNeverExpires `
+        -Description 'Rehearsal: SSH jump to VM-W only' | Out-Null
+    Add-LocalGroupMember -Group 'Users' -Member $jumpUser -ErrorAction SilentlyContinue
+    $pw = $null
+}
+$sid = (Get-LocalUser -Name $jumpUser).SID.Value
+
+# The key's own options repeat sshd_config's limits, so either alone keeps it to one forward.
+$options = 'restrict,port-forwarding,permitopen="' + $target + '",no-pty,no-agent-forwarding,no-X11-forwarding,command="exit 1"'
+$keys = Join-Path $sshDir "${jumpUser}_authorized_keys"
+Set-Content -Path $keys -Value "$options $jumpKey" -Encoding ascii
+& icacls.exe $keys /inheritance:r /grant '*S-1-5-32-544:F' '*S-1-5-18:F' "*${sid}:R" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "icacls $keys failed" }
+
+$config = @"
+# Written by build/rehearsal-azure-vmw.ps1 -JumpVia: key-only, one account, one forward, no shell.
+Port 22
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+AllowUsers $jumpUser
+AuthorizedKeysFile __PROGRAMDATA__/ssh/${jumpUser}_authorized_keys
+AllowAgentForwarding no
+AllowStreamLocalForwarding no
+AllowTcpForwarding local
+PermitOpen $target
+GatewayPorts no
+PermitTunnel no
+PermitTTY no
+X11Forwarding no
+ForceCommand exit 1
+"@
+$candidate = Join-Path $sshDir 'sshd_config.candidate'
+Set-Content -Path $candidate -Value $config -Encoding ascii
+& $sshd -t -f $candidate
+if ($LASTEXITCODE -ne 0) { throw 'the new sshd_config does not parse' }
+Move-Item -Path $candidate -Destination (Join-Path $sshDir 'sshd_config') -Force
+Set-Service sshd -StartupType Automatic
+Restart-Service sshd
+
+"firewall=$alias/$fwProfile from $allowedRemote"
+"HOSTKEY=$((Get-Content (Join-Path $sshDir 'ssh_host_ed25519_key.pub')).Trim())"
+'@
+
 function Expand-Guest([string] $Script) {
     return $Script.Replace('__ADMIN_USER__', $AdminUser).Replace('__TUNNEL_USER__', $TunnelUser).Replace('__HL_PORT__', "$HyperloopPort")
 }
@@ -748,7 +926,16 @@ if ($Remove) {
     return
 }
 
-if (($Deallocate -or $Start) -and -not $groupExists) { throw "$ResourceGroup does not exist; provision first" }
+if (($Deallocate -or $Start -or $JumpHostSetup) -and -not $groupExists) { throw "$ResourceGroup does not exist; provision first" }
+
+if ($JumpHostSetup) {
+    Initialize-SshKey -Path $JumpKeyPath -Comment 'agentbridge-rehearsal-jump'
+    $jumpPub = (Get-Content "$JumpKeyPath.pub" -Raw).Trim()
+    $ip = Get-VmPublicIp
+    Write-Step "run this elevated on $JumpHost, then pass its HOSTKEY to -JumpHostKey"
+    return $JumpHostSetupScript.Replace('__JUMP_USER__', $JumpUser).Replace('__ALLOWED_REMOTE__', $JumpAllowedCidr).
+        Replace('__TARGET__', "${ip}:22").Replace('__JUMP_KEY_B64__', [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($jumpPub)))
+}
 
 if ($Deallocate) {
     if ($PSCmdlet.ShouldProcess($VmName, 'Deallocate')) {
@@ -764,6 +951,7 @@ if ($Start) {
         Wait-AdminSession
         Invoke-VmRunCommand -Script (Expand-Guest $GuestHyperloopCheck) | Write-Verbose
         $ip = Get-VmPublicIp
+        if ($JumpVia) { Write-JumpSshConfig $ip }
         Write-Step "$VmName is running at $ip with the admin signed in"
         Get-TunnelCommand $ip
     }
@@ -784,7 +972,7 @@ if ($HyperloopDirectory -and -not (Test-Path (Join-Path $HyperloopDirectory 'Hyp
 if (-not $PSCmdlet.ShouldProcess("$ResourceGroup/$VmName", 'Provision VM-W')) { return }
 if (-not (Test-Path $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
 
-Initialize-AdminKey
+Initialize-SshKey -Path $AdminKeyPath -Comment 'agentbridge-rehearsal-admin'
 $adminPub = (Get-Content "$AdminKeyPath.pub" -Raw).Trim()
 $tunnelPub = if ($TunnelPublicKeyPath) { (Get-Content $TunnelPublicKeyPath -Raw).Trim() } else { '' }
 
@@ -855,6 +1043,7 @@ $hostKey = ($hostKeyLine.Substring(8).Trim() -split '\s+')[0..1] -join ' '
 $khDir = Split-Path $KnownHostsPath
 if (-not (Test-Path $khDir)) { New-Item -ItemType Directory -Path $khDir -Force | Out-Null }
 Set-Content -Path $KnownHostsPath -Value "$ip $hostKey" -Encoding ascii
+if ($JumpVia) { Write-JumpSshConfig $ip }
 
 Write-Step 'autologon for the admin'
 $envelope = Invoke-VmRunCommand -Script $GuestEnvelopeKey

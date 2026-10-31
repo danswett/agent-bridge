@@ -160,8 +160,39 @@ ssh -o StrictHostKeyChecking=yes -N -L 8123:127.0.0.1:8123 rehearsal@<ip>
 ```
 
 If the operator's own SSH arrives from outside `-AllowedSshCidr`, the first tunnel cannot be
-made from that machine. Do not widen the NSG to fix it; agree on the range with the owner
-first. `-Start` (below) still checks Hyperloop from inside the VM through `run-command`.
+made from that machine. Do not widen the NSG to fix it. Either agree on the range with the
+owner, or go through a jump host as below. `-Start` still checks Hyperloop from inside the VM
+through `run-command`.
+
+**Through a jump host (`-JumpVia`).** VM-M, a local Hyper-V VM, reaches VM-W from inside the
+range, so it can carry the operator's SSH:
+
+```powershell
+# 1. Print the jump host's setup and run it elevated on VM-M (through Hyperloop's shell).
+#    It needs sshd first. Where Windows Update cannot supply the OpenSSH.Server capability,
+#    use the signed Win32-OpenSSH MSI.
+./build/rehearsal-azure-vmw.ps1 -Subscription <id> -JumpHostSetup -JumpVia vmjump@<VM-M ip> `
+    -JumpAllowedCidr <this host's Hyper-V switch subnet>
+# 2. Pin the HOSTKEY it printed. That writes ~/.ssh/config-agentbridge-rehearsal.
+./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Start -JumpVia vmjump@<VM-M ip> -JumpHostKey 'ssh-ed25519 AAAA...'
+# 3. The Hyperloop tunnel, through VM-M
+ssh -F ~/.ssh/config-agentbridge-rehearsal -N -L 127.0.0.1:4851:127.0.0.1:4850 rehearsal-w
+```
+
+The jump host's posture:
+
+* sshd is key-only and admits one account, `vmjump`. It is a standard user with a discarded
+  random password.
+* Its key may only open `<VM-W ip>:22`: `permitopen`, `restrict`, `no-pty`,
+  `no-agent-forwarding` and `no-X11-forwarding` in the key, and `PermitOpen`,
+  `PermitTTY no` and `ForceCommand exit 1` in `sshd_config`. A shell and any other forward
+  are refused.
+* Windows Firewall admits port 22 only from `-JumpAllowedCidr`, and only on the interface and
+  profile that subnet arrives on. The installer's own SSH rules are disabled.
+* No key for VM-W is stored on VM-M. ssh's `ProxyJump` carries the end-to-end connection,
+  and both hops' host keys are pinned on the operator's machine.
+* The Default Switch can change subnet and addresses when the host restarts. Then run the
+  setup again and pin the key again.
 
 **Pause or remove it:**
 
