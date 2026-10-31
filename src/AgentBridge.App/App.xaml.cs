@@ -179,12 +179,14 @@ public partial class App : Application
         if (!options.Background && !options.ToastActivated) { window.Activate(); }
         if (!options.Demo) { _ = StartHostAsync(); }
 
-        // Updates without being asked (AutoUpdater): only for an installed copy of the real app,
-        // never the demo. The first start after one says what changed.
-        if (installed && !options.Demo)
+        // Updates without being asked (AutoUpdater): any installed copy of the real app, whatever
+        // its profile, never the demo or a development copy. The first start after one says what
+        // changed.
+        if (!options.Demo && updater.InstalledVersion is not null)
         {
             AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write);
-            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write);
+            var probe = new AgentBridge.Host.Delivery.Windows.AgentHaBridgeProbe();
+            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, probe.Active, PackageProcesses.Others);
             updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
             updateTimer.Tick += (_, _) => _ = autoUpdater.TickAsync();
             updateTimer.Start();

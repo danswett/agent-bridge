@@ -40,25 +40,78 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
                 : new SimpleFileSource(new DirectoryInfo(feed));
         source = key;
         pending = null;
+        downloaded = null;
         return manager = new UpdateManager(from);
     }
 
     public async Task<string?> CheckAsync()
     {
-        pending = await Manager().CheckForUpdatesAsync();
+        var found = await Manager().CheckForUpdatesAsync();
+        // The same release found again stays the one downloaded.
+        if (found?.TargetFullRelease.Version.ToString() != pending?.TargetFullRelease.Version.ToString()) { pending = found; downloaded = null; }
         return pending?.TargetFullRelease.Version.ToString();
     }
 
     public string? PendingNotes => pending?.TargetFullRelease.NotesMarkdown is { Length: > 0 } notes ? notes : null;
 
-    public Task DownloadAsync(Action<int> progress) =>
-        pending is null ? Task.CompletedTask : Manager().DownloadUpdatesAsync(pending, p => ui.Post(() => progress(p)));
+    // Settings and the automatic updates share this updater, so a check or a change of feed by one
+    // can replace the release the other downloaded: only the release downloaded is ready.
+    UpdateInfo? downloaded;
+
+    public string? Ready
+    {
+        get
+        {
+            Manager();
+            return pending is not null && ReferenceEquals(downloaded, pending) ? pending.TargetFullRelease.Version.ToString() : null;
+        }
+    }
+
+    public async Task DownloadAsync(Action<int> progress)
+    {
+        if (pending is not { } release) { return; }
+        await Manager().DownloadUpdatesAsync(release, p => ui.Post(() => progress(p)));
+        if (ReferenceEquals(pending, release)) { downloaded = release; }
+    }
 
     // Back in the background for this app's profile, as the host's own updates restart it
     // (HostUpdates.RestartArguments): without --profile it would come back as the default one.
+    // Only a release downloaded here: anything else throws, before anything is replaced.
     public void ApplyAndRestart()
     {
-        if (pending is not null) { Manager().ApplyUpdatesAndRestart(pending.TargetFullRelease, ["--background", "--profile", profile]); }
+        if (Ready is null || pending is null) { throw new InvalidOperationException("no downloaded update to install; check for updates again"); }
+        Manager().ApplyUpdatesAndRestart(pending.TargetFullRelease, ["--background", "--profile", profile]);
+    }
+}
+
+// Another profile's app or host running from this installation, which an update would stop
+// whatever it is doing (Update.exe stops every process in the package, and starts only the
+// updating profile's app again). One that cannot be looked at counts: not knowing is not
+// permission.
+static class PackageProcesses
+{
+    public static string? Others(int? ownHost)
+    {
+        var root = Path.GetFullPath(AppContext.BaseDirectory);
+        foreach (var name in new[] { "AgentBridge", "agent-bridge-host" })
+        {
+            foreach (var p in System.Diagnostics.Process.GetProcessesByName(name))
+            {
+                using (p)
+                {
+                    if (p.Id == Environment.ProcessId || p.Id == ownHost) { continue; }
+                    string? path;
+                    try { path = p.MainModule?.FileName; }
+                    catch (InvalidOperationException) { continue; }
+                    catch (System.ComponentModel.Win32Exception) { return $"{name} (pid {p.Id}) runs and cannot be looked at"; }
+                    if (path is not null && path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return $"another profile's {(name == "AgentBridge" ? "app" : "host")} (pid {p.Id}) runs from this installation";
+                    }
+                }
+            }
+        }
+        return null;
     }
 }
 

@@ -24,9 +24,10 @@ public sealed class SettingsTests : IAsyncLifetime
         public Action? OnApply;
         public Exception? CheckFails;
         public bool Applied;
+        public string? Ready { get; private set; }
         public string? InstalledVersion => "0.1.0";
         public Task<string?> CheckAsync() => CheckFails is { } e ? Task.FromException<string?>(e) : Task.FromResult<string?>("0.2.0");
-        public Task DownloadAsync(Action<int> progress) { progress(100); return Task.CompletedTask; }
+        public Task DownloadAsync(Action<int> progress) { progress(100); Ready = "0.2.0"; return Task.CompletedTask; }
         public void ApplyAndRestart() { OnApply?.Invoke(); Applied = true; }
     }
 

@@ -42,6 +42,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AgentBridge.App.Core\AgentBridge.App.Core.csproj" />
+    <!-- The G5 probe the host uses, asked by the app itself before an automatic update. -->
+    <ProjectReference Include="..\AgentBridge.Host.Delivery\AgentBridge.Host.Delivery.csproj" />
   </ItemGroup>
 
 </Project>
