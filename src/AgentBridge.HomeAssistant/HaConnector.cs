@@ -385,6 +385,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         if (pausedFor != why) { log($"Home Assistant connector paused: {why}"); }
         pausedFor = why;
         started = false;
+        updateCutoffTaken = false;
     }
 
     async Task Step(string name, Func<Task> step)

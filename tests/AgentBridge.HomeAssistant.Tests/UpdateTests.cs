@@ -241,6 +241,62 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task A_check_that_cannot_reach_the_feed_after_one_that_found_none_is_no_longer_current()
+    {
+        await using var c = await Ready();
+        await Press(c, "check_updates");
+        await Pass(c);
+        Assert.Equal("current", Stage);
+        updates.CheckFails = new HttpRequestException("rate limited");
+        await Press(c, "check_updates");
+        await Pass(c);
+        Assert.Equal("", Stage);
+        Assert.False(State.ContainsKey("latest_version"));
+    }
+
+    [Fact]
+    public async Task A_press_made_while_a_failed_start_waits_to_be_tried_again_still_counts()
+    {
+        updates.Newer = Release();
+        await using var c = await Ready();
+        daemon = "agent-ha-bridge's daemon (pid 4321)";
+        await Pass(c);
+        daemon = null;
+        // The start after agent-ha-bridge has the buttons up, then fails on the entity's state.
+        ha.PublishFailsFor = (topic, _) => topic == HaContract.UpdateStateTopic(Slug);
+        await Pass(c);
+        Assert.False(c.Started);
+        ha.Now = time.GetUtcNow().AddSeconds(5);
+        c.Observe(ha.Press(Button("install_update")));
+        ha.PublishFailsFor = null;
+        await Pass(c, 31);
+        Assert.True(c.Started);
+        await Pass(c);
+        await Settle(c, () => updates.Applied.Count == 1);
+    }
+
+    [Fact]
+    public async Task A_home_assistant_that_times_out_showing_the_restart_does_not_stop_the_update()
+    {
+        updates.Newer = Release();
+        updates.DownloadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var c = await Ready();
+        await Press(c, "install_update");
+        await Settle(c, () => updates.Downloaded.Count == 1);
+        // HttpClient's timeout is a cancellation: the next update state publish times out, once.
+        var timedOut = 0;
+        ha.BeforePublish = topic =>
+        {
+            if (topic == HaContract.UpdateStateTopic(Slug) && Interlocked.Exchange(ref timedOut, 1) == 0) { throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 15 seconds elapsing."); }
+        };
+        updates.DownloadGate.SetResult();
+        for (var i = 0; i < 200 && updates.Applied.Count == 0 && !log.Any(l => l.Contains("did not start", StringComparison.Ordinal)); i++) { await Task.Delay(10); }
+        Assert.Equal(1, timedOut);
+        Assert.Single(updates.Applied);
+        Assert.Empty(ha.NotifiedNow());
+    }
+
+    [Fact]
     public async Task An_update_that_cannot_be_recorded_is_not_handed_over()
     {
         // Something in the way of the connector's state file: the host that would come back could
@@ -455,12 +511,17 @@ public sealed class UpdateTests : IDisposable
         Attempt("0.2.0", FakeSessions.T0.AddMinutes(-1));
         updates.Installed = "0.2.0";
         ha.NotifyFailsFor = s => s == "persistent_notification.create";
+        updates.Newer = Release("0.3.0");
         await using var c = await Ready();
         Assert.Empty(ha.NotifiedNow());
         var checks = updates.Checks;
         await Press(c, "check_updates");
         await Pass(c);
         Assert.Equal(checks + 1, updates.Checks);
+        // Trying the outcome again tells how that update ended, and leaves what the checks found since.
+        await Pass(c, 16);
+        Assert.Empty(ha.NotifiedNow());
+        Assert.Equal("0.3.0", State["latest_version"]!.GetValue<string>());
         ha.NotifyFailsFor = null;
         await Pass(c, 16);
         var (_, data) = Assert.Single(ha.NotifiedNow());

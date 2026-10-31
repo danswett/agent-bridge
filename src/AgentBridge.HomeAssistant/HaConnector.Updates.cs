@@ -43,6 +43,10 @@ public sealed partial class HaConnector
     // instruction (Test-DaemonUpdateCheckPress compares with the daemon's start the same way, so
     // a press made moments after a restart still counts).
     DateTimeOffset updateStartedAt;
+    // Whether that instant has been taken since the connector started or was paused: a start that
+    // fails and is tried again keeps it, so a press made on the buttons it had already published,
+    // while it waited to try again, still counts.
+    bool updateCutoffTaken;
     string? installPressSeen;
     string? checkPressSeen;
     int updateTouched;
@@ -92,7 +96,11 @@ public sealed partial class HaConnector
     // latest version reads unavailable, and the machine row with it.
     async Task UpdateStartupAsync(DateTimeOffset now, CancellationToken ct)
     {
-        updateStartedAt = now;
+        if (!updateCutoffTaken)
+        {
+            updateStartedAt = now;
+            updateCutoffTaken = true;
+        }
         updateSignature = null;
         nextUpdateSweep = now;
         lock (gate)
@@ -209,6 +217,8 @@ public sealed partial class HaConnector
             // as not established.
             lock (gate)
             {
+                // "Already current" is no longer known.
+                if (updateVerdict is { Stage: "current" }) { updateVerdict = null; }
                 updateLatest = null;
                 updateNotes = $"The latest release could not be established: {why}";
                 updateUrl = updates!.ReleasesUrl;
@@ -318,7 +328,7 @@ public sealed partial class HaConnector
                 {
                     await PublishUpdateAsync(time.GetUtcNow(), ct);
                     await NoticeAsync($"No newer bridge release on {options.MachineName}", $"The bridge update did not start: {detail}", ct);
-                }, "say there is no newer release");
+                }, "say there is no newer release", ct);
                 return;
             }
             target = release.Version;
@@ -346,7 +356,7 @@ public sealed partial class HaConnector
             {
                 throw new IOException($"the update could not be recorded in {options.StateFile}, so how it ended could not be told after the restart");
             }
-            await SayAsync(() => PublishUpdateAsync(time.GetUtcNow(), ct), "show the restart");
+            await SayAsync(() => PublishUpdateAsync(time.GetUtcNow(), ct), "show the restart", ct);
             log($"Home Assistant connector: self-update: restarting into {release.Version}");
             updates.ApplyAndRestart(release);
         }
@@ -367,17 +377,19 @@ public sealed partial class HaConnector
             {
                 await PublishUpdateAsync(time.GetUtcNow(), ct);
                 await NoticeAsync($"Bridge update failed on {options.MachineName}", $"The bridge update did not start: {why}", ct);
-            }, "say the update did not start");
+            }, "say the update did not start", ct);
         }
     }
 
     // What the update beside the passes says about itself: best effort, as the update must not
     // depend on Home Assistant (or on agent-ha-bridge not having started meanwhile, which refuses
     // the write).
-    async Task SayAsync(Func<Task> say, string what)
+    // A request that timed out is one of those failures (HttpClient's timeout is a cancellation);
+    // only the update itself stopping is not.
+    async Task SayAsync(Func<Task> say, string what, CancellationToken ct)
     {
         try { await say(); }
-        catch (OperationCanceledException) { throw; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception e) { log($"Home Assistant connector could not {what}: {Describe(e)}"); }
     }
 
@@ -417,11 +429,8 @@ public sealed partial class HaConnector
                 title = $"Bridge update failed on {options.MachineName}";
                 message = $"The bridge update to {attempt.Target} did not complete: the host restarted on {installed}. Currently recorded version: {installed}. The installation may be partially changed; no rollback is claimed.";
             }
-            lock (gate)
-            {
-                updateVerdict = (stage, detail, now + options.UpdateOutcomeShown);
-                if (success) { updateLatest = attempt.Target; }
-            }
+            // The verdict alone: what the checks found since stays as they found it.
+            lock (gate) { updateVerdict = (stage, detail, now + options.UpdateOutcomeShown); }
             await PublishUpdateAsync(now, ct);
             await NoticeAsync(title, message, ct);
             log($"Home Assistant connector: self-update {(success ? $"completed for {attempt.Target}" : $"to {attempt.Target} FAILED: the host restarted on {installed}")}");
