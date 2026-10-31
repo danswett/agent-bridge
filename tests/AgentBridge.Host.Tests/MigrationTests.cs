@@ -154,6 +154,44 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.False(WindowsAgentHaBridgeRuntime.TaskMissing(new UnauthorizedAccessException()));
     }
 
+    [Fact]
+    public void Another_users_unreadable_runtime_does_not_leave_the_running_agents_unknown_but_one_not_known_to_be_theirs_does()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var mine = new AgentBridge.Host.Core.Processes.AgentProcess(10, null, "copilot");
+        var unread = new AgentBridge.Host.Core.Processes.AgentProcess(20, null, null);
+        var observed = new AgentBridge.Host.Core.Processes.AgentProcessObservation([mine], true) { Unidentified = [unread] };
+
+        Assert.Equal(1, WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => pid == 20));
+        Assert.Null(WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => false));
+        Assert.Null(WindowsAgentHaBridgeRuntime.CountRunning(observed with { Known = false }, null, pid => true));
+    }
+
+    [Fact]
+    public void Another_users_agent_executable_is_not_counted_as_running_but_an_unreadable_one_not_known_to_be_theirs_is()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var theirs = new AgentBridge.Host.Core.Processes.AgentProcess(30, null, null);
+        var mine = new AgentBridge.Host.Core.Processes.AgentProcess(40, null, "codex.exe");
+        var observed = new AgentBridge.Host.Core.Processes.AgentProcessObservation([theirs, mine], true);
+
+        Assert.Equal(1, WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => pid == 30));
+        Assert.Equal(2, WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => false));
+    }
+
+    [Theory]
+    [InlineData(null, 2, false, false)] // opened: this user's (or readable anyway)
+    [InlineData(5, 2, false, true)] // refused, another session: another user's
+    [InlineData(5, 1, false, false)] // refused on this desktop: maybe runas from here
+    [InlineData(87, 2, false, false)] // another error says nothing about the owner
+    [InlineData(5, null, false, false)] // the session could not be read
+    [InlineData(5, null, true, true)] // refused, then gone: not running
+    public void A_process_is_another_users_only_when_this_user_may_not_open_it_and_it_is_off_this_desktop(int? openError, int? session, bool gone, bool expected)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.Equal(expected, WindowsAgentHaBridgeRuntime.AnotherUsers(openError, session, gone, ownSession: 1));
+    }
+
     [Theory]
     [InlineData("{\"authority\":\"home\",\"participant\":\"laptop\"}")]
     [InlineData("\"desk\"")]

@@ -32,14 +32,58 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
 
     public bool SupervisorSeen(string installationId) => _probe.SupervisorSeen(installationId);
 
-    public int? Running(AgentBridge.Protocol.AgentKind agent, DateTimeOffset? startedBefore = null)
-    {
-        var observed = new SystemProcessInspector().Observe(agent);
-        // A runtime (node, bun) whose command line could not be read may be one of the agent's.
-        return observed.Known && observed.Unidentified.Count == 0
-            ? observed.Processes.Count(p => startedBefore is not { } before || p.StartedAt is not { } started || started < before)
+    public int? Running(AgentBridge.Protocol.AgentKind agent, DateTimeOffset? startedBefore = null) =>
+        CountRunning(new SystemProcessInspector().Observe(agent), startedBefore, AnotherUsers);
+
+    // A runtime (node, bun) whose command line could not be read may be one of the agent's, so
+    // it leaves the answer unknown. But another user's processes are always unreadable to a
+    // standard user, node and the agent's own executable alike, and counting those refused every
+    // migrate on a machine where anyone else was signed in with an agent running (#140). So a
+    // process known to be another user's is left out, of both lists; any other unreadable one
+    // still leaves the answer unknown (a runtime) or counts as running (the agent's executable).
+    internal static int? CountRunning(AgentProcessObservation observed, DateTimeOffset? startedBefore, Func<int, bool> anotherUsers) =>
+        observed.Known && observed.Unidentified.All(p => anotherUsers(p.Id))
+            ? observed.Processes.Count(p => (p.CommandLine is not null || !anotherUsers(p.Id))
+                && (startedBefore is not { } before || p.StartedAt is not { } started || started < before))
             : null;
+
+    // Windows does not tell a standard user who owns a process it may not open (the terminal
+    // services list leaves the SID out), so this goes by what it does say. This user may open
+    // every process of its own for query-limited information, elevated ones and those in its
+    // other sessions included; a refusal therefore means another account. A refusal in this
+    // session is not taken as one: a process run as another user from here (runas) still has
+    // this desktop. Anything else (a refusal of another kind, the session unknown) is not known.
+    static bool AnotherUsers(int pid)
+    {
+        int? openError;
+        using (var handle = OpenProcess(ProcessQueryLimitedInformation, false, pid))
+        {
+            openError = handle.IsInvalid ? Marshal.GetLastPInvokeError() : null;
+        }
+        if (openError is null) { return false; }
+        int? session = null;
+        var gone = false;
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            session = process.SessionId;
+        }
+        catch (ArgumentException) { gone = true; }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
+        using var self = Process.GetCurrentProcess();
+        return AnotherUsers(openError, session, gone, self.SessionId);
     }
+
+    // openError is null when the open succeeded; session is null when it could not be read; gone
+    // when the process has exited since (not running, so not ours to wait for).
+    internal static bool AnotherUsers(int? openError, int? session, bool gone, int ownSession) =>
+        openError == ErrorAccessDenied && (gone || session is { } s && s != ownSession);
+
+    const int ProcessQueryLimitedInformation = 0x1000;
+    const int ErrorAccessDenied = 5;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern Microsoft.Win32.SafeHandles.SafeProcessHandle OpenProcess(int access, bool inherit, int pid);
 
     public ScheduledTaskState? Task(string name) => WithTask(name, task => new ScheduledTaskState((bool)Get(task, "Enabled")!, (int)Get(task, "State")! == 4, Modifiable(task)), missing: true);
 
