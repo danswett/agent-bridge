@@ -455,7 +455,8 @@ test('picking the machine a notification is showing remembers it', () => {
   const s = new HostSession({ connection, storage, makeClient: (ch) => fakeClient(ch) });
   s.select('a');
   s.visit('b');
-  assert.equal(storage.saved['agent-bridge.app.lastHost'], 'a');
+  s.visit('b');
+  assert.equal(storage.saved['agent-bridge.app.lastHost'], 'a', 'a second notification for it is no pick either');
   s.select('b');
   assert.equal(storage.saved['agent-bridge.app.lastHost'], 'b');
 });

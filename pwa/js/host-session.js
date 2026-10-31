@@ -202,7 +202,7 @@ export class HostSession {
 
   // A notification's machine, shown on its own without changing what is remembered.
   visit(id) {
-    if (id === this.selection) { this.select(id); return; }
+    if (id === this.selection) { this.#retryNow(); return; }
     this.selection = id;
     this.#linked = null;
     this.#reconcile();
@@ -214,11 +214,7 @@ export class HostSession {
     if (choice === this.selection) {
       // Picked, so remembered, even when shown already (by a notification, say).
       this.#write(LAST_HOST, choice);
-      // Chosen again while it can't be reached: try now rather than at the next retry.
-      for (const l of this.links()) {
-        if (!l.client && !l.attempt && l.phase !== 'unsupported') { clearTimeout(l.timer); l.timer = null; }
-      }
-      this.#pump();
+      this.#retryNow();
       return;
     }
     this.selection = choice;
@@ -226,6 +222,14 @@ export class HostSession {
     this.#write(LAST_HOST, choice);
     this.#reconcile();
     this.#emit();
+  }
+
+  // Shown again while it can't be reached: tried now rather than at the next retry.
+  #retryNow() {
+    for (const l of this.links()) {
+      if (!l.client && !l.attempt && l.phase !== 'unsupported') { clearTimeout(l.timer); l.timer = null; }
+    }
+    this.#pump();
   }
 
   #onPresence() {
