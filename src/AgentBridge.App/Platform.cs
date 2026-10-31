@@ -10,7 +10,7 @@ namespace AgentBridge.App;
 // The app's updates through Velopack. The host is in the same package, so this updates both.
 // Releases come from the repository's GitHub releases; a feed.txt beside the app's data (a
 // folder or URL holding releases.win.json) overrides that, for a test VM or a private channel.
-sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui) : IUpdater
+sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string profile) : IUpdater
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
     UpdateManager? manager;
@@ -49,12 +49,16 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui) : IUpdate
         return pending?.TargetFullRelease.Version.ToString();
     }
 
+    public string? PendingNotes => pending?.TargetFullRelease.NotesMarkdown is { Length: > 0 } notes ? notes : null;
+
     public Task DownloadAsync(Action<int> progress) =>
         pending is null ? Task.CompletedTask : Manager().DownloadUpdatesAsync(pending, p => ui.Post(() => progress(p)));
 
+    // Back in the background for this app's profile, as the host's own updates restart it
+    // (HostUpdates.RestartArguments): without --profile it would come back as the default one.
     public void ApplyAndRestart()
     {
-        if (pending is not null) { Manager().ApplyUpdatesAndRestart(pending.TargetFullRelease, ["--background"]); }
+        if (pending is not null) { Manager().ApplyUpdatesAndRestart(pending.TargetFullRelease, ["--background", "--profile", profile]); }
     }
 }
 

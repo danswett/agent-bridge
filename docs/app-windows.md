@@ -141,6 +141,18 @@ into one folder with one version. An app update is a host update, so they never 
 * Feed: GitHub Releases of `danswett/agent-bridge` (pre-releases included unless turned
   off), or a folder or URL holding `releases.win.json` in
   `%LOCALAPPDATA%\AgentBridge\app\feed.txt` (for testing on a VM).
+* **Automatic updates** (`AutoUpdater`): Settings has "Include pre-releases in updates" and
+  "Install updates automatically", both per profile (`<profile>-settings.json`) and both on by
+  default. The installed app checks on start and every 30 minutes, and downloads a release it
+  finds at once. It installs it when this machine's host is idle (no session with a turn running
+  or a question waiting), or six hours after it first found one, whatever the sessions are doing,
+  by the same path as "Update and restart": the host stopped over the pipe, then
+  `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
+  host again. The new version's first start shows a toast: the version it came from, and the
+  release's notes. It never installs on a read-only host (`delivery.readOnly`), on a machine where
+  agent-ha-bridge runs for this user (G5), or while the host is not running and so cannot say
+  which it is; those are updated from Settings by the person. Only the app's own timer starts it,
+  so nothing an agent can reach does. A development copy and the demo never update.
 * The host can start an update too: the Home Assistant connector's Install button
   ([ha-connector.md](ha-connector.md), stage 6) for a machine driven from the dashboard. It
   uses the same feed and the app's "Include pre-releases" for its profile
@@ -257,7 +269,7 @@ reaches the real host or its profile.
   page's choices, every setting and the whole prompt sent, resume, Codex's first prompt,
   busy, failed and Try again, a lost response sent again with the same request, no approved folder,
   profile and context, and a launch on another machine, including one whose machine leaves or drops out; and the app reaching another
-  host through the in-process relay with the host's account), toast plans and activation handling, host lifecycle with a
+  host through the in-process relay with the host's account), toast plans and activation handling, automatic updates (`AutoUpdaterTests`: when one waits for the sessions, when it goes anyway, and the read-only and agent-ha-bridge hosts it never touches), host lifecycle with a
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
 * CI (`app` job) runs `build/pack-app.ps1`: publishes the app, host, launcher, injector and hook
