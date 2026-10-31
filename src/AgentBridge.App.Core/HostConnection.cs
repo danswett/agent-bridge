@@ -155,6 +155,11 @@ public sealed class HostConnection : IAsyncDisposable
                     again ??= gaps.WaitAsync(ct);
                     var tick = Task.Delay(CapabilityRefresh, ct);
                     var done = await Task.WhenAny(ch.Closed, again, pump, tick);
+                    // Stopped: every wait above completes at once, cancelled. Without this, a gap
+                    // wait that won was taken for a gap, and a connection that follows no sessions
+                    // (the relay loopback) recovers by doing nothing, so the loop spun a thread at
+                    // full speed and DisposeAsync never returned (#129).
+                    ct.ThrowIfCancellationRequested();
                     if (done == again)
                     {
                         again = null;

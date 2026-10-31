@@ -18,12 +18,28 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # A clean run takes about five minutes. The Linux test step has hung in dotnet test for hours
+    # (#129); this caps what a hang can cost.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - run: dotnet test AgentBridge.slnx -c Release --nologo
+      # --blame-hang: a test running five minutes is a hang (none takes one); its test host is dumped
+      # and killed, and the run fails naming the test in progress, instead of stalling the job.
+      - run: dotnet test AgentBridge.slnx -c Release --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults
+        timeout-minutes: 20
+      - name: Keep the hang dumps
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-hang-${{ matrix.os }}
+          path: |
+            TestResults/**/*.dmp
+            TestResults/**/Sequence_*.xml
+          if-no-files-found: ignore
+          retention-days: 14
       - name: The NativeAOT injector types into a real console
         # The same integration tests again, against the worker as it ships.
         if: runner.os == 'Windows'

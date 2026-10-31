@@ -443,8 +443,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     [Fact]
     public async Task Another_machine_offers_its_own_choices_and_a_launch_there_goes_to_its_host_only()
     {
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         Assert.Equal(["Test PC (this machine)", "Build server"], launch.Machines.Select(m => m.Label));
         Assert.Equal("here", launch.Workspace!.Value);
@@ -466,8 +465,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         remoteHost.On(LaunchProtocol.Launch, _ => { gate.Task.Wait(FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "there-new" }; });
         var opened = new List<string>();
         main.OpenRequested += c => opened.Add(c.Id);
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
@@ -489,8 +487,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     public async Task A_launch_that_failed_just_before_its_machine_left_says_so_and_another_can_go()
     {
         remoteHost.On(LaunchProtocol.Launch, _ => throw new InvalidOperationException("the launcher could not be found"));
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
@@ -512,8 +509,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     [Fact]
     public async Task A_machine_that_drops_out_for_a_moment_comes_back_with_what_was_picked_on_it()
     {
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
@@ -537,8 +533,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
             Workspaces = [new LaunchWorkspace { Label = "there", Path = "/there" }, new LaunchWorkspace { Label = "there-2", Path = "/there-2" }],
             Defaults = new LaunchDefaults { Agent = "claude", Workspace = "there", Permissions = LaunchProtocol.Ask },
         });
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
@@ -571,8 +566,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
             Session = "there-new",
             Launched = new LaunchedWith { Agent = "claude", Permissions = LaunchProtocol.Ask, Workspace = "there-2", Transfer = new LaunchedTransfer { From = LaptopId, Session = Brought, Bytes = 4096 } },
         });
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered");
@@ -604,8 +598,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         link.Endpoints["host-id"] = localHost.Endpoint;
         localHost.Capabilities.Add(TransferProtocol.Capability);
         link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered here");
 
         ui.Post(() => { launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"); launch.Launch(); });
@@ -626,8 +619,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         localHost.Capabilities.Add(TransferProtocol.Capability);
         localHost.On(LaunchProtocol.Launch, _ => { gate.Task.Wait(FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "here-new" }; });
         link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered here");
         ui.Post(() => { launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"); launch.Launch(); });
         await Wait.UntilAsync(() => localHost.Sent(LaunchProtocol.Launch).Count == 1, "the launch to go");
@@ -644,8 +636,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     public async Task A_session_picked_from_another_machine_stays_picked_when_its_machine_answers_after_the_choices()
     {
         link.Sources.Add(Laptop());
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
@@ -674,8 +665,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     {
         link.Sources.Add(Laptop());
         remoteHost.On(LaunchProtocol.Launch, _ => new LaunchResult(LaunchOutcome.Failed) { Reason = "the agent did not start" });
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
@@ -696,8 +686,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         localHost.Capabilities.Add(TransferProtocol.Capability);
         localHost.On(LaunchProtocol.Launch, _ => new LaunchResult(LaunchOutcome.Failed) { Reason = "the agent did not start" });
         link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered here");
         ui.Post(() => { launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"); launch.Launch(); });
         await Wait.UntilAsync(() => launch.State == "failed" && launch.ShowResend, "the failure");
@@ -715,8 +704,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     public async Task A_transfer_is_measured_with_the_command_it_carries_so_a_prompt_that_fits_goes()
     {
         link.Sources.Add(Laptop());
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
@@ -743,8 +731,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         link.Endpoints["host-id"] = localHost.Endpoint;
         localHost.Capabilities.Add(TransferProtocol.Capability);
         link.Switch();
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.ShowForm, "this machine's choices");
         Assert.DoesNotContain(launch.Resumes, r => r.Value.StartsWith('@'));
 
@@ -761,8 +748,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         localHost.Capabilities.Add(TransferProtocol.Capability);
         // Down for now, the same account: every machine stays as it was, and nothing is made.
         link.Set(FleetState.Connecting, ("remote-id", "Build server"), ("host-id", "Test PC"));
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.ShowForm, "this machine's choices");
         await Task.Delay(300);
         Assert.DoesNotContain(launch.Resumes, r => r.Value.StartsWith('@'));
@@ -776,8 +762,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     public async Task A_session_picked_to_bring_over_stays_picked_through_a_relay_reconnect()
     {
         link.Sources.Add(Laptop());
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
@@ -798,8 +783,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     public async Task A_session_picked_to_bring_over_stays_picked_when_the_relay_drops_while_discovery_is_asked()
     {
         link.Sources.Add(Laptop());
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
@@ -825,8 +809,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     [Fact]
     public async Task Discovery_asks_again_when_this_machines_host_comes_online_as_a_source_for_another()
     {
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
@@ -846,8 +829,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         link.Endpoints["host-id"] = localHost.Endpoint;
         localHost.Capabilities.Add(TransferProtocol.Capability);
         link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered here");
         ui.Post(() => launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"));
         // A reload whose answer about the last account's machines is still on its way.
@@ -870,8 +852,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     {
         var gate = new TaskCompletionSource();
         remoteHost.On(LaunchProtocol.Launch, _ => { gate.Task.Wait(FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "there-new" }; });
-        var launch = new LaunchViewModel(main, ui);
-        launch.Opened();
+        var launch = LaunchPage.Open(main, ui);
         await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
         ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
         await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
@@ -890,4 +871,17 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         await Wait.UntilAsync(() => launch.SelectedMachine?.Value == "remote-id" && launch.ShowForm, "the machine to come back");
         Assert.StartsWith("Not confirmed: Build server left", launch.StatusText);
     }
+}
+
+// The Launch page as the app opens it: made and opened on the UI thread. Made on the test thread,
+// it read the machines while posted actions changed them, and the dictionary it filled was
+// corrupted (#129).
+static class LaunchPage
+{
+    public static LaunchViewModel Open(MainViewModel main, IUiDispatcher ui) => TestUi.Read(() =>
+    {
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        return launch;
+    });
 }
