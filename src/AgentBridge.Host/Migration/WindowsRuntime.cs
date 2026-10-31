@@ -32,13 +32,30 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
 
     public bool SupervisorSeen(string installationId) => _probe.SupervisorSeen(installationId);
 
-    public int? Running(AgentBridge.Protocol.AgentKind agent, DateTimeOffset? startedBefore = null)
-    {
-        var observed = new SystemProcessInspector().Observe(agent);
-        // A runtime (node, bun) whose command line could not be read may be one of the agent's.
-        return observed.Known && observed.Unidentified.Count == 0
+    public int? Running(AgentBridge.Protocol.AgentKind agent, DateTimeOffset? startedBefore = null) =>
+        CountRunning(new SystemProcessInspector().Observe(agent), startedBefore, InThisSession);
+
+    // A runtime (node, bun) whose command line could not be read may be one of the agent's, so
+    // it leaves the answer unknown; but only one in this Windows session. Another user's node is
+    // always unreadable to a standard user, and counting those refused every migrate on a machine
+    // where anyone else was signed in with an agent running (#39 rehearsal, a second user).
+    internal static int? CountRunning(AgentProcessObservation observed, DateTimeOffset? startedBefore, Func<int, bool> inThisSession) =>
+        observed.Known && !observed.Unidentified.Any(p => inThisSession(p.Id))
             ? observed.Processes.Count(p => startedBefore is not { } before || p.StartedAt is not { } started || started < before)
             : null;
+
+    // The session id comes with the process list, so it is known even for a process this user
+    // may not open. One that has gone is not in this session; one that cannot be asked might be.
+    static bool InThisSession(int pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            using var self = Process.GetCurrentProcess();
+            return process.SessionId == self.SessionId;
+        }
+        catch (ArgumentException) { return false; }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { return true; }
     }
 
     public ScheduledTaskState? Task(string name) => WithTask(name, task => new ScheduledTaskState((bool)Get(task, "Enabled")!, (int)Get(task, "State")! == 4, Modifiable(task)), missing: true);

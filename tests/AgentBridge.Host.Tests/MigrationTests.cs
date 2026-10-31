@@ -154,6 +154,19 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.False(WindowsAgentHaBridgeRuntime.TaskMissing(new UnauthorizedAccessException()));
     }
 
+    [Fact]
+    public void An_unreadable_runtime_in_another_users_session_does_not_leave_the_running_agents_unknown()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var mine = new AgentBridge.Host.Core.Processes.AgentProcess(10, null, "copilot");
+        var unread = new AgentBridge.Host.Core.Processes.AgentProcess(20, null, null);
+        var observed = new AgentBridge.Host.Core.Processes.AgentProcessObservation([mine], true) { Unidentified = [unread] };
+
+        Assert.Equal(1, WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => pid != 20));
+        Assert.Null(WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => true));
+        Assert.Null(WindowsAgentHaBridgeRuntime.CountRunning(observed with { Known = false }, null, pid => false));
+    }
+
     [Theory]
     [InlineData("{\"authority\":\"home\",\"participant\":\"laptop\"}")]
     [InlineData("\"desk\"")]
