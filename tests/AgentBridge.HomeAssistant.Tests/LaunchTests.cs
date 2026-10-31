@@ -652,6 +652,30 @@ public sealed class LaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Launch_pressed_just_as_the_machine_is_published_again_is_launched()
+    {
+        await using var c = await Ready();
+        // Only the liveness sensor's config goes; the machine is published again around the card,
+        // and Launch is pressed just then, with the watch down.
+        var (topic, _) = HaContract.OnlineConfig(Slug, Machine);
+        await ha.PublishAsync(topic, "", true);
+        var pressed = false;
+        ha.BeforePublish = t =>
+        {
+            if (t != topic || pressed) { return; }
+            pressed = true;
+            ha.Press(Entity("button", "new_session"));
+        };
+        for (var i = 0; i < 400 && launchedCount == 0; i++)
+        {
+            await Pass(c);
+            await c.DeliveredAsync();
+        }
+        Assert.True(pressed);
+        Assert.Equal(1, launchedCount);
+    }
+
+    [Fact]
     public async Task A_note_left_for_ten_minutes_is_cleared()
     {
         answer = _ => Task.FromResult(new LaunchResult(LaunchOutcome.Failed, "Launch failed: no agent"));

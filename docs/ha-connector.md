@@ -227,8 +227,8 @@ With an answerer, a session's first publication is agent-ha-bridge's full set in
 (`Publish-CopilotMqttSession`): availability, the decision selector (`Idle`), the reply box,
 the reply payload sensor, status, activity, the twelve field slots (`Idle`, `Field <i>`) and
 Send; everything but stop. 900 ms later (`FieldPinDelay`, the daemon's wait for discovery) the
-controls are pinned to their ids, and the reply box is primed to `' '` as `Add-DaemonSession`
-primes it, so the card shows an empty field rather than `unknown`. `HaDecision` is the port of `Set-CopilotMqttDecision`,
+controls are pinned to their ids, and the reply box, if it holds no value, is primed to `' '`
+as `Add-DaemonSession` primes it, so the card shows an empty field rather than `unknown`. `HaDecision` is the port of `Set-CopilotMqttDecision`,
 `Publish-CopilotMqttDecisionFields` and `Clear-CopilotMqttDecision`, and
 `Fixtures/ha-decisions.json` records the originals on ten questions (free text, approval, a
 long question, single choice, yes/no, text, a form, a twelve-slot multi-select, unsafe and
@@ -706,7 +706,8 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
   * **Read failed:** nothing happens. A republish parks the selector on Idle, which would blank a
     question somebody is answering.
   * **Reply box or selector reads `unknown`:** these have no state topic, so a Home Assistant
-    restart brings them back with no value. The box gets `' '` again, and the question goes on
+    restart brings them back with no value. A box that lost its value gets `' '` again (words in
+    a box whose selector alone was lost are somebody's, and are left), and the question goes on
     screen again with fresh baselines. When there is no question, the selector is parked on Idle.
     Home Assistant may bring the selector and the choices back with their values while the box
     comes back empty, so the card looks answerable before the question is armed again. The card
@@ -754,8 +755,9 @@ A machine is forgotten because it is gone: renamed, reimaged or thrown away. Two
   beats, and publishes the whole machine again, as a start does. It is not a restart, though: its
   sessions keep what they know (who drives each, a thought on the card, a question's history),
   and only their entities go again. A card that stayed is read with its old baselines before its
-  question is armed again, so an answer given on it just then is delivered rather than lost. The
-  daemon here rebuilds only the sensor, and the rest comes back piecemeal.
+  question is armed again, so an answer given on it just then is delivered rather than lost, words
+  in its reply box stay, and what Launch was last read as is kept, so a press made just then
+  still launches. The daemon here rebuilds only the sensor, and the rest comes back piecemeal.
 
 Where stage 7 knowingly differs from the daemon:
 
@@ -766,6 +768,7 @@ Where stage 7 knowingly differs from the daemon:
 | An online sensor that is absent, rather than present and silent, is answered by publishing the whole machine again, not only the sensor | It is absent because its config went, most likely to the X pressed while the machine's liveness had lapsed, which removed every entity of the machine; a running machine was not gone. Bounded by the same three attempts |
 | The rebuild count is kept when the connector resumes after agent-ha-bridge had the machine; a daemon starting has a count of its own | A hand-back is no sign the sensor was mended, and a fresh count on each would undo the limit (#202). Two beats landing in a row still reset it |
 | The session check waits until 60 s after a session's entities were published, and republishes only an absence that has lasted 60 s | Before then a missing entity may only be one Home Assistant has not registered yet, or has not loaded again while it starts; the daemon publishes and pins in one step and republishes on the first 404 |
+| The reply box is primed, and put back to `' '` after a restart, only when it holds no value; the daemon blanks it at every session add and every repair | Words in the box are somebody's reply, not yet sent. A machine published again around a card that stayed, or a selector that lost its value on its own, leaves them |
 | A switch present but with no state yet is not waited for; it is named and left | The daemon only warns. There is nothing to do until Home Assistant finishes starting, and waiting would hold every start for four seconds |
 ### The shadow: comparing with a running daemon
 

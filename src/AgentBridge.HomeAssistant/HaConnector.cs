@@ -452,8 +452,13 @@ public sealed partial class HaConnector : IAsyncDisposable
         launchOptions = null;
         launchSignature = null;
         launchDefaultsPending = null;
-        launchPressBaselined = false;
-        launchOutcomesRestored = false;
+        // A machine published again while this host runs keeps what it has read of Launch: taken
+        // anew, the baseline would swallow a press made since the last read.
+        if (!republishing)
+        {
+            launchPressBaselined = false;
+            launchOutcomesRestored = false;
+        }
         // The update buttons only where the host's updater can act on them.
         updateInstalled = updates?.Installed;
         updateServing = options.CheckForUpdates && updateInstalled is not null;
@@ -797,8 +802,13 @@ public sealed partial class HaConnector : IAsyncDisposable
             // Add-DaemonSession primes the reply box blank, so the card shows an empty field rather
             // than "unknown" before the box has ever been used. Left unknown, the box would also
             // read as lost to a Home Assistant restart a minute later (SessionUpkeepAsync), and the
-            // question be armed again under somebody choosing an answer.
-            await ResetReplyBoxAsync(node, ct);
+            // question be armed again under somebody choosing an answer. Only a box that holds no
+            // value: one published again around a card that stayed keeps the words in it.
+            HaState? box = null;
+            var read = true;
+            try { box = await ha.GetStateAsync(SessionEntities.Reply(node), ct); }
+            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { read = false; }
+            if (read && (box is null || Unset(box.State))) { await ResetReplyBoxAsync(node, ct); }
         }
         else
         {

@@ -296,7 +296,9 @@ public sealed partial class HaConnector
         }
         if (!lost) { return; }
         var shortId = id[..Math.Min(8, id.Length)];
-        await ResetReplyBoxAsync(p.Node, ct);
+        // Only a box that lost its value: when only the selector did, the words in the box are
+        // somebody's, not yet sent.
+        if (Unset(reply.State)) { await ResetReplyBoxAsync(p.Node, ct); }
         if (p.Armed is { } armed)
         {
             // On screen again on the next pass, with fresh baselines: the question is still waiting

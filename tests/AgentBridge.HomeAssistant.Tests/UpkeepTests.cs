@@ -471,6 +471,32 @@ public sealed class UpkeepTests : IDisposable
         Assert.Equal(rearmed, Logged("armed " + NodeA + " again"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Words_in_the_reply_box_survive_the_card_being_put_back_around_them(bool machineAgain)
+    {
+        sessions.Set(FakeSessions.Copilot(A));
+        await using var c = Connector(answers: true);
+        await Run(c, 70);
+        await ha.CallServiceAsync("text", "set_value", new JsonObject { ["entity_id"] = SessionEntities.Reply(NodeA), ["value"] = "half a reply" });
+        if (machineAgain)
+        {
+            // Only the liveness sensor's config goes: the machine is published again around the card.
+            await ha.PublishAsync(HaContract.OnlineConfig(Slug, Machine).Topic, "", true);
+            await Run(c, 400);
+            Assert.Equal(1, Logged("publishing the machine again"));
+        }
+        else
+        {
+            // A restart that loses the selector's value but not the box's.
+            ha.ForgetOptimistic(SessionEntities.Decision(NodeA));
+            await Run(c, 30);
+            Assert.Equal(HaDecision.Idle, (await ha.GetStateAsync(SessionEntities.Decision(NodeA)))!.State);
+        }
+        Assert.Equal("half a reply", (await ha.GetStateAsync(SessionEntities.Reply(NodeA)))!.State);
+    }
+
     [Fact]
     public async Task An_answer_given_just_as_the_machine_is_published_again_around_its_card_is_delivered()
     {
