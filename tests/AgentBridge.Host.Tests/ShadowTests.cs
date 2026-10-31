@@ -1023,21 +1023,34 @@ public sealed class ShadowTests : IDisposable
     public async Task A_place_whose_login_reader_has_lapsed_is_not_compared_rather_than_missing_on_the_daemon()
     {
         var now = f.Time.GetUtcNow();
+        var named = true;
         var inner = new FakeHomeAssistant(entity => entity switch
         {
             "sensor.agent_bridge_fixture_usage_copilot" => UsageState("copilot", 40, now),
-            "select.agent_bridge_fixture_new_resume" => ResumeState("Agency on OTHER-PC: Shared from there (abcdef12)"),
+            "select.agent_bridge_fixture_new_resume" => named ? ResumeState("Agency on OTHER-PC: Shared from there (abcdef12)") : ResumeState(),
             "sensor.agent_bridge_other_pc_usage_copilot_2" => UsageState("copilot", 52, now - TimeSpan.FromHours(11), account: "second-login", slug: "other_pc"),
             _ => null,
         });
         using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
         Config();
         var host = new Dictionary<string, ShadowUsage> { ["copilot"] = Reading(40, now), ["copilot_2"] = Reading(52, now, "second-login") };
-        var daemon = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!, host)).Usage;
-        var compared = ShadowCompare.Compare(new ShadowView { Usage = daemon, Resumable = [] }, new ShadowView { SeesAgentHaBridge = true, Usage = host, Resumable = [] });
+        async Task<(IReadOnlyDictionary<string, ShadowUsage>? Daemon, ShadowComparison Compared)> Read()
+        {
+            var daemon = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!, host)).Usage;
+            return (daemon, ShadowCompare.Compare(new ShadowView { Usage = daemon, Resumable = [] }, new ShadowView { SeesAgentHaBridge = true, Usage = host, Resumable = [] }));
+        }
 
+        var (daemon, compared) = await Read();
         Assert.DoesNotContain(compared.Differences, d => d.Kind.StartsWith("usage.", StringComparison.Ordinal));
         Assert.Contains(ShadowCompare.UsageLapsed, compared.NotCompared);
+        Assert.True(daemon!["copilot_2"].Lapsed);
+
+        // Found in review (#136): the shared session that named the reader is gone by the next
+        // read, and the reader found last is still looked at.
+        named = false;
+        f.Time.Advance(TimeSpan.FromMinutes(1));
+        (daemon, compared) = await Read();
+        Assert.DoesNotContain(compared.Differences, d => d.Kind.StartsWith("usage.", StringComparison.Ordinal));
         Assert.True(daemon!["copilot_2"].Lapsed);
     }
 

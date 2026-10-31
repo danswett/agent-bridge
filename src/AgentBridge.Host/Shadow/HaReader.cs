@@ -310,6 +310,7 @@ public sealed class DaemonHaReader : IDisposable
             string? bestSlug = null;
             // The latest reading of the account that has lapsed, should no current one be found.
             ShadowUsage? stale = null;
+            string? staleSlug = null;
             foreach (var slug in slugs)
             {
                 foreach (var sensor in sensors)
@@ -335,7 +336,7 @@ public sealed class DaemonHaReader : IDisposable
                     if (at - readAt > access.UsagePace.Poll) { continue; }
                     if (access.UsagePace.Lapsed(at, readAt))
                     {
-                        if (stale?.MeasuredAt is not { } older || older < at) { stale = u; }
+                        if (stale?.MeasuredAt is not { } older || older < at) { (stale, staleSlug) = (u, slug); }
                         continue;
                     }
                     if (best?.MeasuredAt is { } was && was >= at) { continue; }
@@ -349,8 +350,12 @@ public sealed class DaemonHaReader : IDisposable
                 // nothing about now, as a lapsed figure of its own does not (UsageLapsed). Taken as
                 // no reading at all, it was a mismatch: on DEV-VM1, 2026-10-30 22:40 PT, while
                 // DSWETT-HOME went 35 minutes without reading the login (#40).
-                if (stale is not null && !usage.ContainsKey(key))
+                if (stale is not null && staleSlug is not null && !usage.ContainsKey(key))
                 {
+                    // Kept as the reader found last, as a current one is: found through a resume
+                    // option that is gone by the next read, it would otherwise not be looked at
+                    // again, and the place would read as missing (found in review, #136).
+                    lastReader[key] = staleSlug;
                     standing.Remove(key);
                     usage[key] = stale with { Lapsed = true };
                 }
