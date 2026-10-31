@@ -54,7 +54,9 @@ internal static class BaselineCapture
         Tree(files, homes, Install, homes.BridgeHome, rel =>
             !rel.StartsWith("runtime/", StringComparison.OrdinalIgnoreCase) &&
             !rel.StartsWith("logs/", StringComparison.OrdinalIgnoreCase) &&
-            !IsLog(rel));
+            !IsLog(rel) &&
+            !IsCodexHooks(rel));
+        Tree(files, homes, Hooks, homes.BridgeHome, IsCodexHooks);
         Tree(files, homes, Hooks, Path.Combine(homes.CopilotHome, "hooks"), _ => true);
         One(files, homes, Hooks, Path.Combine(homes.CopilotHome, "instructions", "agent-ha-bridge.instructions.md"));
         One(files, homes, Agents, Path.Combine(homes.ClaudeHome, "settings.json"));
@@ -68,6 +70,18 @@ internal static class BaselineCapture
         var taskList = tasks.Read() ?? throw new IOException("agent-ha-bridge's scheduled tasks could not be read");
         return new Baseline(1, now, Environment.MachineName, Environment.UserName,
             [.. files.OrderBy(f => f.Path, StringComparer.Ordinal)], [.. taskList.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase)]);
+    }
+
+    // Codex's hook registration. agent-ha-bridge's installer keeps its Codex plugin, and the
+    // plugin's hooks.json, in its own folder, and a migration re-points those hooks as it does
+    // Copilot's and Claude's; filed as install, D-04 could never pass (#115).
+    static bool IsCodexHooks(string rel)
+    {
+        var parts = rel.Split('/');
+        return parts.Length == 4
+            && parts[0].Equals("codex-bridge", StringComparison.OrdinalIgnoreCase)
+            && parts[1].Equals("plugins", StringComparison.OrdinalIgnoreCase)
+            && parts[3].Equals("hooks.json", StringComparison.OrdinalIgnoreCase);
     }
 
     static bool IsLog(string rel)
@@ -113,7 +127,9 @@ internal static class BaselineCapture
         foreach (var f in before.Files.Where(f => !Ignored(f.Path)))
         {
             if (!now.TryGetValue(f.Path, out var n)) { diffs.Add(new(f.Category, f.Path, "removed")); }
-            else if (n.Sha256 != f.Sha256) { diffs.Add(new(f.Category, f.Path, $"changed ({f.Bytes} -> {n.Bytes} bytes)")); }
+            // Filed as this tool files it now, so a baseline saved by an older one is judged by the
+            // current rule (#115).
+            else if (n.Sha256 != f.Sha256) { diffs.Add(new(n.Category, f.Path, $"changed ({f.Bytes} -> {n.Bytes} bytes)")); }
         }
         foreach (var f in after.Files.Where(f => !Ignored(f.Path) && !was.ContainsKey(f.Path)))
         {
