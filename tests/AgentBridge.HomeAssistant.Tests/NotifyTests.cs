@@ -683,6 +683,22 @@ public sealed class NotifyTests : IDisposable
     }
 
     [Fact]
+    public async Task Other_changes_while_a_finished_turn_waits_do_not_hold_it_back()
+    {
+        Ask(null, response: null);
+        await using var c = Connector(new HaNotifySettings { Enabled = true });
+        await Pass(c);
+        Ask(null, response: "Done.", status: SessionStatus.Idle);
+        await Pass(c);
+        for (var i = 0; i < 3; i++)
+        {
+            sessions.Set(sessions.Get(A)! with { Activity = sessions.Get(A)!.Activity with { Reasoning = $"thought {i}" } });
+            await Pass(c, 1.5);
+        }
+        Assert.Equal("Done.", Assert.Single(Pushes())["message"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_tap_the_host_refused_can_be_made_again()
     {
         var refusals = 1;

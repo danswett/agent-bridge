@@ -386,11 +386,12 @@ public sealed partial class HaConnector
         // has stayed at rest a moment, as the host's own notifier waits: a question answered at the
         // machine passes through idle on its way back to work. A background agent's message while
         // the session rests is not a finished turn.
-        // A reply that changes while it waits is the turn's latest: the wait starts again with it.
-        if (status == SessionStatus.Idle && question is null && key is not null && key != state.FinishedKey
-            && (state.LastStatus is SessionStatus.Working or SessionStatus.Waiting || state.LastTurn != turn || state.FinishedDue is not null))
+        if (status == SessionStatus.Idle && question is null && key is not null && key != state.FinishedKey)
         {
-            state.FinishedDue = (now + options.FinishedDelay, key);
+            // A reply that changes while it waits is the turn's latest: the wait starts again with
+            // it. Anything else that changes meanwhile (reasoning, history) leaves the wait as it is.
+            if (state.FinishedDue is { } waiting) { if (waiting.Key != key) { state.FinishedDue = (now + options.FinishedDelay, key); } }
+            else if (state.LastStatus is SessionStatus.Working or SessionStatus.Waiting || state.LastTurn != turn) { state.FinishedDue = (now + options.FinishedDelay, key); }
         }
         else if (status != SessionStatus.Idle || question is not null) { state.FinishedDue = null; }
         state.LastStatus = status;
