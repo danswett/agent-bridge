@@ -179,9 +179,15 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     public void Fire(string eventType, JsonObject data, string? userId = "person", string? id = null) =>
         events.Writer.TryWrite(new HaEvent(eventType, JsonSerializer.SerializeToElement(data), userId, id ?? Guid.NewGuid().ToString("N")));
 
-    public async IAsyncEnumerable<HaEvent> EventsAsync(string eventType, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    // Holds a subscription unconfirmed until it is let go (a Home Assistant slow to answer).
+    public TaskCompletionSource SubscriptionGate { get; set; } = CompletedGate();
+    static TaskCompletionSource CompletedGate() { var t = new TaskCompletionSource(); t.SetResult(); return t; }
+
+    public async IAsyncEnumerable<HaEvent> EventsAsync(string eventType, Action? subscribed = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        await SubscriptionGate.Task.WaitAsync(cancellationToken);
         Interlocked.Increment(ref EventSubscriptions);
+        subscribed?.Invoke();
         await foreach (var e in events.Reader.ReadAllAsync(cancellationToken))
         {
             if (e.EventType == eventType) { yield return e; }

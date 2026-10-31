@@ -299,7 +299,11 @@ public sealed partial class HaConnector : IAsyncDisposable
             }
         }, token);
         if (ServesAnswers) { watch = Task.Run(() => WatchLoopAsync(token), token); }
-        if (ServesButtons) { tapping = Task.Run(() => TapLoopAsync(token), token); }
+        if (ServesButtons)
+        {
+            tapLoop = true;
+            tapping = Task.Run(() => TapLoopAsync(token), token);
+        }
     }
 
     void OnChanged(object? sender, SessionChange change)
@@ -1039,7 +1043,7 @@ public sealed partial class HaConnector : IAsyncDisposable
 
         public Task<byte[]?> DownloadImageAsync(string imageId, long maxBytes, CancellationToken cancellationToken = default) => inner.DownloadImageAsync(imageId, maxBytes, cancellationToken);
         public IAsyncEnumerable<HaTrigger> WatchAsync(IReadOnlyCollection<string> entityIds, CancellationToken cancellationToken = default) => inner.WatchAsync(entityIds, cancellationToken);
-        public IAsyncEnumerable<HaEvent> EventsAsync(string eventType, CancellationToken cancellationToken = default) => inner.EventsAsync(eventType, cancellationToken);
+        public IAsyncEnumerable<HaEvent> EventsAsync(string eventType, Action? subscribed = null, CancellationToken cancellationToken = default) => inner.EventsAsync(eventType, subscribed, cancellationToken);
         public Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default) => inner.ReadTopicsAsync(filters, window, cancellationToken);
 
         public Task<HaState?> GetStateAsync(string entityId, CancellationToken cancellationToken = default) => inner.GetStateAsync(entityId, cancellationToken);

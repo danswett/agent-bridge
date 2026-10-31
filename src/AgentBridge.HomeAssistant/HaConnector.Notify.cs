@@ -46,6 +46,10 @@ public sealed partial class HaConnector
     }
     readonly ConcurrentQueue<PendingTap> taps = new();
     Task tapping = Task.CompletedTask;
+    // Whether the tap listener runs (Start), and whether its subscription is confirmed now: a
+    // notification is sent only once a tap on it can be heard.
+    bool tapLoop;
+    volatile bool listening;
     // The first pass after a start: what sessions already show then was the hooks' news when it
     // happened, not now, so nothing in it is pushed (answer buttons are, as the daemon re-sends them).
     bool baselinePass;
@@ -93,7 +97,7 @@ public sealed partial class HaConnector
             }, CancellationToken.None);
             try
             {
-                await foreach (var e in ha.EventsAsync(HaNotify.ActionEvent, held.Token))
+                await foreach (var e in ha.EventsAsync(HaNotify.ActionEvent, () => listening = true, held.Token))
                 {
                     Tapped(e);
                     backoff = TimeSpan.FromSeconds(2);
@@ -102,10 +106,12 @@ public sealed partial class HaConnector
             catch (OperationCanceledException) when (held.IsCancellationRequested) { }
             catch (Exception e)
             {
+                listening = false;
                 Problem("taps", $"Home Assistant connector could not hold the notification-action subscription: {Describe(e)}; trying again in {backoff.TotalSeconds:F0}s");
                 try { await Task.Delay(backoff, time, token); } catch (OperationCanceledException) { return; }
                 backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, TimeSpan.FromSeconds(60).Ticks));
             }
+            finally { listening = false; }
             await held.CancelAsync();
             await monitor;
         }
@@ -147,6 +153,9 @@ public sealed partial class HaConnector
             if (left) { staleRetryAt = now + options.ButtonsRetry; }
         }
         if (!ServesButtons || !options.ConsumeAnswers) { return; }
+        // Not before the listener holds its subscription (on a start, a resume, or after it lost
+        // the connection): a tap on a notification sent sooner would be fired to nobody.
+        if (tapLoop && !listening) { return; }
         List<(string Id, Published P)> due;
         lock (gate)
         {

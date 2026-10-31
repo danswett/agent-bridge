@@ -512,7 +512,9 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   permission prompt, however the card shows it) is not sent, as the daemon sends none (it has no
   marker). Sent is kept per session and question, so two sessions' questions never share one.
 * **A tap** fires `mobile_app_notification_action`, which the connector holds a subscription
-  for while it runs and is not paused (agent-ha-bridge's own listener takes them otherwise). It
+  for while it runs and is not paused (agent-ha-bridge's own listener takes them otherwise). No
+  notification is sent until Home Assistant has confirmed that subscription (on a start, a
+  resume, or after a lost connection), so a tap on one is never fired to nobody. It
   is answered on the next pass through the same delivery as the card: an option's own value
   (`true`/`false` for Yes/No, a one-element list for a "choose any" question, as the daemon's
   `Selections @(answer)`), or typed words as the free-text answer, a lone text or number field's

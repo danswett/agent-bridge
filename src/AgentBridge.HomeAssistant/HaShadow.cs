@@ -207,7 +207,7 @@ public static partial class HaShadow
         }
 
         // A dry pass takes no tap from a phone either.
-        public async IAsyncEnumerable<HaEvent> EventsAsync(string eventType, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        public async IAsyncEnumerable<HaEvent> EventsAsync(string eventType, Action? subscribed = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             await Task.CompletedTask;
             yield break;

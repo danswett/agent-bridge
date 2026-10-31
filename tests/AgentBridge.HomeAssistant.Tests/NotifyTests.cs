@@ -892,6 +892,24 @@ public sealed class NotifyTests : IDisposable
         await Until(() => Volatile.Read(ref ha.EventSubscriptions) == held + 1);
     }
 
+    [Fact]
+    public async Task No_notification_goes_out_before_the_listener_can_hear_a_tap_on_it()
+    {
+        ha.SubscriptionGate = new TaskCompletionSource();
+        Ask(Form("q1", Release));
+        await using var c = new HaConnector(new HaConnectorOptions
+        {
+            MachineName = Machine, Version = "0.1.0", Tick = TimeSpan.FromMilliseconds(20), StateFile = Path.Combine(folder, "ha-connector.json"),
+            FieldPinDelay = TimeSpan.Zero, SelectDelay = TimeSpan.Zero, Notify = Phones,
+        }, ha, sessions, () => null, answer: (r, _) => { lock (answered) { answered.Add(r); } return Task.FromResult(new AnswerResult(AnswerOutcome.Delivered)); });
+        c.Start();
+        await Until(() => c.Started && ha.Exists(SessionEntities.Decision(Node)));
+        await Task.Delay(300);
+        Assert.Empty(Buttons());
+        ha.SubscriptionGate.SetResult();
+        await Until(() => Buttons().Count == 1);
+    }
+
     static async Task Until(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(10);

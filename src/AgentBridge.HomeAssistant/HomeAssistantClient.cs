@@ -44,7 +44,9 @@ public interface IHomeAssistant
     // Every event of one type as Home Assistant fires it (subscribe_events), held for as long as it
     // is read: an event is delivered once, to whoever is subscribed then, and leaves nothing to
     // read back later (the daemon's answer-button listener). Ends when the connection does.
-    IAsyncEnumerable<HaEvent> EventsAsync(string eventType, CancellationToken cancellationToken = default);
+    // subscribed is called once Home Assistant has confirmed the subscription: from then on no
+    // event of the type is missed.
+    IAsyncEnumerable<HaEvent> EventsAsync(string eventType, Action? subscribed = null, CancellationToken cancellationToken = default);
 
     // Every message the broker holds or delivers on these topic filters within the window, read
     // through Home Assistant's mqtt/subscribe. Read-only: used by the shadow comparison.
@@ -358,12 +360,13 @@ public sealed class HomeAssistantClient : IHomeAssistant
         return new HaTrigger(id.GetString()!, new HaState(id.GetString()!, state, to.TryGetProperty("attributes", out var a) ? a.Clone() : default, UserId(to), Instant(to, "last_changed"), Instant(to, "last_updated")));
     }
 
-    public async IAsyncEnumerable<HaEvent> EventsAsync(string eventType, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public async IAsyncEnumerable<HaEvent> EventsAsync(string eventType, Action? subscribed = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         using var ws = await OpenAsync(cancellationToken);
         try
         {
             await HaWebSocket.SubscribeAsync(ws, new JsonObject { ["type"] = "subscribe_events", ["event_type"] = eventType }, cancellationToken);
+            subscribed?.Invoke();
             while (!cancellationToken.IsCancellationRequested)
             {
                 using var message = await HaWebSocket.ReceiveAsync(ws, cancellationToken);
