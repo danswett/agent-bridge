@@ -709,7 +709,9 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
     restart brings them back with no value. A box that lost its value gets `' '` again (words in
     a box whose selector alone was lost are somebody's, and are left), and the question goes on
     screen again with fresh baselines. Words left in the box keep the baseline they had, so a
-    form's text field still takes them at Send. When there is no question, the selector is parked on Idle.
+    form's text field still takes them at Send. `unavailable` is not `unknown`: it is Home
+    Assistant not answering for the entity yet, and the entity comes back holding its value, so
+    nothing is repaired on it. When there is no question, the selector is parked on Idle.
     Home Assistant may bring the selector and the choices back with their values while the box
     comes back empty, so the card looks answerable before the question is armed again. The card
     is therefore read once with the baselines it was armed with before new ones are taken. An
@@ -772,6 +774,7 @@ Where stage 7 knowingly differs from the daemon:
 | The rebuild count is kept when the connector resumes after agent-ha-bridge had the machine; a daemon starting has a count of its own | A hand-back is no sign the sensor was mended, and a fresh count on each would undo the limit (#202). Two beats landing in a row still reset it |
 | The session check waits until 60 s after a session's entities were published, and republishes only an absence that has lasted 60 s | Before then a missing entity may only be one Home Assistant has not registered yet, or has not loaded again while it starts; the daemon publishes and pins in one step and republishes on the first 404 |
 | The reply box is primed, and put back to `' '` after a restart, only when it holds no value; the daemon blanks it at every session add and every repair | Words in the box are somebody's reply, not yet sent. A machine published again around a card that stayed, or a selector that lost its value on its own, leaves them |
+| A reply box or selector that reads `unavailable` is not repaired; the daemon repairs `unavailable` as it repairs `unknown` | `unavailable` is Home Assistant still starting, or an availability lapse, not a lost value. Repairing it would re-arm a question over a choice being made and blank words not yet sent, for an entity that comes back holding both |
 | A switch present but with no state yet is not waited for; it is named and left | The daemon only warns. There is nothing to do until Home Assistant finishes starting, and waiting would hold every start for four seconds |
 ### The shadow: comparing with a running daemon
 

@@ -547,6 +547,29 @@ public sealed class UpkeepTests : IDisposable
         Assert.Equal("wait", given.Fields!["release"].GetString());
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_card_that_reads_unavailable_for_a_while_keeps_its_choice_and_its_words(bool boxUnavailable)
+    {
+        var note = new Field { Name = "note", Title = "Note", Type = FieldType.Text };
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release, note] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 70);
+        ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
+        await ha.CallServiceAsync("text", "set_value", new JsonObject { ["entity_id"] = SessionEntities.Reply(NodeA), ["value"] = "after the fix lands" });
+
+        // Home Assistant not answering for the card's entities for a while, values and all kept.
+        ha.Unavailable.Add(boxUnavailable ? SessionEntities.Reply(NodeA) : SessionEntities.Decision(NodeA));
+        await Run(c, 60);
+        ha.Unavailable.Clear();
+        await Run(c, 30);
+        Assert.Equal(0, Logged("goes on screen again"));
+        Assert.Equal("Wait for the fix", (await ha.GetStateAsync(SessionEntities.Field(NodeA, 1)))!.State);
+        Assert.Equal("after the fix lands", (await ha.GetStateAsync(SessionEntities.Reply(NodeA)))!.State);
+    }
+
     [Fact]
     public async Task A_forms_words_kept_in_the_box_through_a_selector_only_loss_are_still_its_answer()
     {
