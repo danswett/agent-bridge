@@ -1328,6 +1328,25 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_task_marked_turned_off_but_never_touched_and_not_this_users_to_change_is_not_started()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        // As a migration cut short between marking the task and asking the scheduler leaves it.
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        _f.Runtime_.Refused.Add(keepAwake);
+        _f.Runtime_.Calls.Clear();
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.Equal([$"enable {daemon}", $"start {daemon}"], _f.Runtime_.Calls);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+    }
+
+    [Fact]
     public async Task An_older_records_task_still_enabled_is_not_started_by_a_rollback_unless_it_is_the_daemon()
     {
         var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";

@@ -738,6 +738,10 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
                     // disable, which it would refuse to run too. Only the daemon, which must run,
                     // is started.
                     if (task.Disabled is null && !daemon) { continue; }
+                    // Marked as turned off, but enabled and not this user's to change: the
+                    // migration was cut short between marking it and asking, or its unmarking was
+                    // lost. It was never touched, and asking to run it would fail every retry.
+                    if (state is { Modifiable: false }) { continue; }
                 }
                 var running = daemon ? daemonRunning : state is { Running: true };
                 if (!running) { runtime.Start(task.Name); }
