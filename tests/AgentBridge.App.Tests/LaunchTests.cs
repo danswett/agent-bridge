@@ -418,7 +418,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
             h.On(LaunchProtocol.Launch, _ => new LaunchResult(LaunchOutcome.Started) { Session = $"{label}-new" });
         }
         remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "linux", "0.1.0"),
-            [Capabilities.SessionsRead, Capabilities.SessionsAnswer, UsageProtocol.Capability, LaunchProtocol.Capability]));
+            [Capabilities.SessionsRead, Capabilities.SessionsAnswer, UsageProtocol.Capability, LaunchProtocol.Capability, TransferProtocol.Capability]));
         localHost.Start();
         remoteHost.Start();
         link.Endpoints["remote-id"] = remoteHost.Endpoint;
@@ -556,6 +556,315 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         Assert.Equal("there-2", launch.Workspace!.Value);
     }
 
+    const string Brought = "0f3c4d5e-6a7b-4c8d-9e0f-a1b2c3d4e5f6";
+    const string LaptopId = "3f9a2c71b0de4a5f8c6d7e8f9a0b1c2d";
+
+    static TransferSource Laptop() => new(LaptopId, "Laptop", new byte[65],
+        [new ResumableSession { Id = Brought, Agent = AgentKind.Claude, Launcher = "claude", Title = "Fix the flaky test" }]);
+
+    [Fact]
+    public async Task A_session_from_a_third_machine_is_brought_to_another_with_a_command_signed_for_the_machine_it_is_on()
+    {
+        link.Sources.Add(Laptop());
+        remoteHost.On(LaunchProtocol.Launch, _ => new LaunchResult(LaunchOutcome.Started)
+        {
+            Session = "there-new",
+            Launched = new LaunchedWith { Agent = "claude", Permissions = LaunchProtocol.Ask, Workspace = "there-2", Transfer = new LaunchedTransfer { From = LaptopId, Session = Brought, Bytes = 4096 } },
+        });
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered");
+
+        ui.Post(() => launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"));
+        Assert.Equal("Fix the flaky test · on Laptop", launch.Resume!.Label);
+        Assert.Equal(["claude"], launch.Agents.Select(a => a.Value));
+        Assert.True(launch.ShowWorkspace);
+        Assert.StartsWith("This copies the session's whole conversation, with its checkpoints and files, from Laptop to Build server", launch.Note);
+        ui.Post(() => { launch.Workspace = launch.Workspaces.Single(w => w.Value == "there-2"); launch.Launch(); });
+
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        var sent = Assert.Single(remoteHost.Sent(LaunchProtocol.Launch));
+        var transfer = sent.GetProperty("transfer");
+        Assert.Equal((LaptopId, Brought, "body1"), (transfer.GetProperty("from").GetString(), transfer.GetProperty("session").GetString(), transfer.GetProperty("command").GetProperty("body").GetString()));
+        Assert.Equal("there-2", sent.GetProperty("workspace").GetString());
+        Assert.False(sent.TryGetProperty("resume", out _));
+        // Signed for the machine the session is on, to go to the one launching it.
+        Assert.Equal((LaptopId, Brought, "remote-id"), Assert.Single(link.Signed));
+        var delivery = main.MachineOf("remote-id")!.Deliveries.Get("launch")!;
+        Assert.Equal((Transfers.LaunchTimeout, Transfers.GiveUp), (delivery.Timeout, delivery.GiveUp));
+        Assert.Equal("Session brought over and started. The original is still on its machine.", launch.StatusText);
+    }
+
+    [Fact]
+    public async Task A_session_brought_to_this_machine_goes_to_its_host_through_the_relay_never_the_pipe()
+    {
+        link.Sources.Add(Laptop());
+        link.Endpoints["host-id"] = localHost.Endpoint;
+        localHost.Capabilities.Add(TransferProtocol.Capability);
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered here");
+
+        ui.Post(() => { launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"); launch.Launch(); });
+
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        Assert.Equal((LaptopId, Brought, "host-id"), Assert.Single(link.Signed));
+        Assert.NotNull(fleet.CurrentLoopback!.Deliveries.Get("launch"));
+        Assert.Null(main.MachineOf(Machine.LocalKey)!.Deliveries.Get("launch"));
+        Assert.Equal("here", Assert.Single(localHost.Sent(LaunchProtocol.Launch)).GetProperty("workspace").GetString());
+    }
+
+    [Fact]
+    public async Task A_transfer_to_this_machine_still_on_its_way_when_the_account_changes_is_unconfirmed_not_left_waiting()
+    {
+        var gate = new TaskCompletionSource();
+        link.Sources.Add(Laptop());
+        link.Endpoints["host-id"] = localHost.Endpoint;
+        localHost.Capabilities.Add(TransferProtocol.Capability);
+        localHost.On(LaunchProtocol.Launch, _ => { gate.Task.Wait(FakeHost.Patience); return new LaunchResult(LaunchOutcome.Started) { Session = "here-new" }; });
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered here");
+        ui.Post(() => { launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"); launch.Launch(); });
+        await Wait.UntilAsync(() => localHost.Sent(LaunchProtocol.Launch).Count == 1, "the launch to go");
+
+        link.Switch();
+
+        await Wait.UntilAsync(() => launch.State == "unconfirmed", "the launch to be unconfirmed");
+        Assert.Equal("Not confirmed: the relay connection to this machine's host changed before it said whether the launch started. Check at this machine before launching again.", launch.StatusText);
+        Assert.True(launch.CanLaunch);
+        gate.SetResult();
+    }
+
+    [Fact]
+    public async Task A_session_picked_from_another_machine_stays_picked_when_its_machine_answers_after_the_choices()
+    {
+        link.Sources.Add(Laptop());
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
+        ui.Post(() => launch.Resume = launch.Resumes.Single(r => r.Value.StartsWith('@')));
+        ui.Post(() => launch.SelectedMachine = launch.Machines[0]);
+        await Wait.UntilAsync(() => launch.Workspace?.Value == "here", "this machine's choices");
+        link.HoldSources = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.ShowForm && launch.Workspace?.Value == "there", "the choices, before the other machines answer");
+        Assert.Equal($"@{LaptopId}/{Brought}", launch.Resume!.Value);
+        ui.Post(launch.Launch);
+        Assert.Equal("Not launched: the session picked on another machine is still being looked for; try again in a moment.", launch.Problem);
+        Assert.Empty(remoteHost.Sent(LaunchProtocol.Launch));
+
+        link.HoldSources.SetResult();
+        await Wait.UntilAsync(() => launch.Note.StartsWith("This copies", StringComparison.Ordinal), "the session found");
+        ui.Post(launch.Launch);
+
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        Assert.Equal(Brought, Assert.Single(remoteHost.Sent(LaunchProtocol.Launch)).GetProperty("transfer").GetProperty("session").GetString());
+    }
+
+    [Fact]
+    public async Task Try_again_after_a_transfer_the_machine_reports_failed_signs_a_new_command()
+    {
+        link.Sources.Add(Laptop());
+        remoteHost.On(LaunchProtocol.Launch, _ => new LaunchResult(LaunchOutcome.Failed) { Reason = "the agent did not start" });
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
+        ui.Post(() => { launch.Resume = launch.Resumes.Single(r => r.Value.StartsWith('@')); launch.Launch(); });
+        await Wait.UntilAsync(() => launch.State == "failed" && launch.ShowResend, "the failure");
+
+        ui.Post(launch.Resend);
+
+        await Wait.UntilAsync(() => remoteHost.Sent(LaunchProtocol.Launch).Count == 2, "the second launch");
+        Assert.Equal(["body1", "body2"], remoteHost.Sent(LaunchProtocol.Launch).Select(s => s.GetProperty("transfer").GetProperty("command").GetProperty("body").GetString()));
+    }
+
+    [Fact]
+    public async Task Try_again_is_not_offered_through_a_loopback_an_account_switch_retired()
+    {
+        link.Sources.Add(Laptop());
+        link.Endpoints["host-id"] = localHost.Endpoint;
+        localHost.Capabilities.Add(TransferProtocol.Capability);
+        localHost.On(LaunchProtocol.Launch, _ => new LaunchResult(LaunchOutcome.Failed) { Reason = "the agent did not start" });
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered here");
+        ui.Post(() => { launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"); launch.Launch(); });
+        await Wait.UntilAsync(() => launch.State == "failed" && launch.ShowResend, "the failure");
+
+        link.Switch();
+
+        await Wait.UntilAsync(() => !launch.ShowResend, "Try again to go with the loopback");
+        Assert.Equal("failed", launch.State);
+        Assert.True(launch.CanLaunch);
+        ui.Post(launch.Resend);
+        Assert.Single(localHost.Sent(LaunchProtocol.Launch));
+    }
+
+    [Fact]
+    public async Task A_transfer_is_measured_with_the_command_it_carries_so_a_prompt_that_fits_goes()
+    {
+        link.Sources.Add(Laptop());
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
+        // Quotes count twice once sent: within the prompt limit, 100 bytes short of the request's
+        // with the command the fake link signs (a placeholder's would be far longer).
+        var bare = new LaunchRequest
+        {
+            Request = Guid.Empty.ToString(), Agent = "claude", Permissions = LaunchProtocol.Ask, Workspace = "there", Prompt = "",
+            Transfer = new LaunchTransfer { From = LaptopId, Session = Brought, Command = new SignedCommand { Body = "body1", By = "by", Mac = "mac" } },
+        };
+        var prompt = new string('"', (LaunchProtocol.MaxRequest - JsonSerializer.SerializeToUtf8Bytes(bare, ProtocolJson.Options).Length - 100) / 2);
+
+        ui.Post(() => { launch.Resume = launch.Resumes.Single(r => r.Value.StartsWith('@')); launch.Prompt = prompt; launch.Launch(); });
+
+        Assert.Equal("", launch.Problem);
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        Assert.Equal(prompt, Assert.Single(remoteHost.Sent(LaunchProtocol.Launch)).GetProperty("prompt").GetString());
+    }
+
+    [Fact]
+    public async Task Sessions_to_bring_here_are_found_once_the_relay_connects_after_the_page_opened()
+    {
+        link.Sources.Add(Laptop());
+        link.Endpoints["host-id"] = localHost.Endpoint;
+        localHost.Capabilities.Add(TransferProtocol.Capability);
+        link.Switch();
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.ShowForm, "this machine's choices");
+        Assert.DoesNotContain(launch.Resumes, r => r.Value.StartsWith('@'));
+
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered once connected");
+    }
+
+    [Fact]
+    public async Task Sessions_to_bring_here_are_found_once_the_relay_is_back_for_the_same_account()
+    {
+        link.Sources.Add(Laptop());
+        link.Endpoints["host-id"] = localHost.Endpoint;
+        localHost.Capabilities.Add(TransferProtocol.Capability);
+        // Down for now, the same account: every machine stays as it was, and nothing is made.
+        link.Set(FleetState.Connecting, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.ShowForm, "this machine's choices");
+        await Task.Delay(300);
+        Assert.DoesNotContain(launch.Resumes, r => r.Value.StartsWith('@'));
+
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered once the relay is back");
+    }
+
+    [Fact]
+    public async Task A_session_picked_to_bring_over_stays_picked_through_a_relay_reconnect()
+    {
+        link.Sources.Add(Laptop());
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
+        ui.Post(() => launch.Resume = launch.Resumes.Single(r => r.Value.StartsWith('@')));
+
+        // Down for now, the same account: discovery is asked again, and answers nothing.
+        link.Set(FleetState.Connecting, ("remote-id", "Build server"));
+        await Task.Delay(300);
+        Assert.Equal($"@{LaptopId}/{Brought}", launch.Resume!.Value);
+        link.Set(FleetState.Connected, ("remote-id", "Build server"));
+        await Task.Delay(300);
+
+        Assert.Equal($"@{LaptopId}/{Brought}", launch.Resume!.Value);
+        Assert.StartsWith("This copies", launch.Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_session_picked_to_bring_over_stays_picked_when_the_relay_drops_while_discovery_is_asked()
+    {
+        link.Sources.Add(Laptop());
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
+        ui.Post(() => launch.Resume = launch.Resumes.Single(r => r.Value.StartsWith('@')));
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        link.HoldSources = hold;
+        var asked = link.Asked;
+        _ = launch.RefreshAsync();
+        await Wait.UntilAsync(() => link.Asked > asked, "discovery asked");
+
+        // The relay drops while it is asked: its answer, given after, is empty.
+        link.Set(FleetState.Connecting, ("remote-id", "Build server"));
+        link.HoldSources = null;
+        hold.SetResult();
+        await Task.Delay(300);
+        Assert.Equal($"@{LaptopId}/{Brought}", launch.Resume!.Value);
+
+        link.Set(FleetState.Connected, ("remote-id", "Build server"));
+        await Task.Delay(300);
+        Assert.Equal($"@{LaptopId}/{Brought}", launch.Resume!.Value);
+    }
+
+    [Fact]
+    public async Task Discovery_asks_again_when_this_machines_host_comes_online_as_a_source_for_another()
+    {
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
+        await Task.Delay(300);
+        var asked = link.Asked;
+
+        // This machine's own host appears on the relay: no machine is added, but it can be asked now.
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+
+        await Wait.UntilAsync(() => link.Asked > asked, "discovery to ask again");
+    }
+
+    [Fact]
+    public async Task Another_account_forgets_the_last_ones_sessions_and_an_answer_from_before_it_is_dropped()
+    {
+        link.Sources.Add(Laptop());
+        link.Endpoints["host-id"] = localHost.Endpoint;
+        localHost.Capabilities.Add(TransferProtocol.Capability);
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value == $"@{LaptopId}/{Brought}"), "the other machine's session offered here");
+        ui.Post(() => launch.Resume = launch.Resumes.Single(r => r.Value == $"@{LaptopId}/{Brought}"));
+        // A reload whose answer about the last account's machines is still on its way.
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        link.HoldSources = hold;
+        _ = launch.RefreshAsync();
+        await Task.Delay(300);
+
+        link.Switch();
+
+        await Wait.UntilAsync(() => !launch.Resumes.Any(r => r.Value.StartsWith('@')), "the last account's sessions to go");
+        Assert.Equal("", launch.Resume?.Value ?? "");
+        link.HoldSources = null;
+        hold.SetResult();
+        await Task.Delay(300);
+        Assert.DoesNotContain(launch.Resumes, r => r.Value.StartsWith('@'));
+    }
     [Fact]
     public async Task A_machine_that_leaves_with_a_launch_on_its_way_says_the_launch_is_not_confirmed()
     {

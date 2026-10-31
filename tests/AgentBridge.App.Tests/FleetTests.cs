@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Local;
@@ -492,6 +493,30 @@ public sealed class FleetTests : IAsyncLifetime
 
         public void Start() { }
 
+        // What the account's machines hand on, and the commands signed: (source, session, to).
+        public List<TransferSource> Sources { get; } = [];
+        public List<(string From, string Session, string To)> Signed { get; } = [];
+        // Holds every answer about sources until it completes: machines slow to answer.
+        public TaskCompletionSource? HoldSources { get; set; }
+        public int Asked;
+
+        public async Task<IReadOnlyList<TransferSource>> TransferSourcesAsync(string target, CancellationToken ct)
+        {
+            Interlocked.Increment(ref Asked);
+            if (HoldSources is { } hold) { await hold.Task; }
+            // As RelayFleetLink: nothing to ask the machines through while the relay is not up.
+            return State != FleetState.Connected ? [] : [.. Sources.Where(s => s.HostId != target)];
+        }
+
+        public SignedCommand? SignTransfer(TransferSource from, string session, string to)
+        {
+            lock (Signed)
+            {
+                Signed.Add((from.HostId, session, to));
+                return new SignedCommand { Body = $"body{Signed.Count}", By = "by", Mac = "mac" };
+            }
+        }
+
         public async Task<IClientChannel> OpenAsync(string hostId, CancellationToken ct) =>
             State == FleetState.Connected && Hosts.Any(h => h.Id == hostId) && Endpoints.TryGetValue(hostId, out var e)
                 ? await LocalClient.ConnectAsync(e, TimeSpan.FromSeconds(1), ct)
@@ -579,6 +604,65 @@ public sealed class RelayFleetLinkTests
             await Task.Delay(Timeout.Infinite, cancellationToken);
             throw new InvalidOperationException("unreachable");
         }
+    }
+
+    [Fact]
+    public async Task The_account_s_machines_that_hand_sessions_on_are_listed_with_their_keys_and_a_command_signed_for_one_is_theirs_alone()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(7, "octo");
+        await using var laptop = await relay.ConnectAsync(token, "Laptop", "host");
+        await using var server = await relay.ConnectAsync(token, "Build server", "host");
+        await using var old = await relay.ConnectAsync(token, "Old PC", "host");
+        var session = new ResumableSession { Id = "0f3c4d5e-6a7b-4c8d-9e0f-a1b2c3d4e5f6", Agent = AgentKind.Copilot, Launcher = "copilot", Title = "Fix the flaky test" };
+        foreach (var (d, name, serves) in new[] { (laptop, "Laptop", true), (server, "Build server", true), (old, "Old PC", false) })
+        {
+            d.Hub.JsonOptions = ProtocolJson.Options;
+            d.Hub.Handler = (_, op, _) => Task.FromResult<object?>(op switch
+            {
+                Ops.Hello => new HelloResult(1, new MachineInfo(d.Id, name, "windows", "0.1.0"), serves ? [LaunchProtocol.Capability, TransferProtocol.ServeCapability] : [LaunchProtocol.Capability]),
+                LaunchProtocol.Options => new LaunchOptions { Resumable = [session], Defaults = new LaunchDefaults { Permissions = LaunchProtocol.Ask } },
+                _ => null,
+            });
+        }
+        var me = P256KeyPair.Generate();
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), me, "Test PC · Agent Bridge app");
+        link.Start();
+        await Wait.UntilAsync(() => link.State == FleetState.Connected && link.Hosts.Count == 3, "the machines in presence", Patience);
+
+        // To bring one to the build server: the others are asked, and only the laptop hands it on.
+        var source = Assert.Single(await link.TransferSourcesAsync(server.Id, default));
+
+        Assert.Equal((laptop.Id, "Laptop", "Fix the flaky test"), (source.HostId, source.MachineName, Assert.Single(source.Resumable).Title));
+        Assert.Equal(laptop.Key.Public, source.Key);
+        var command = link.SignTransfer(source, session.Id, server.Id);
+        var body = BlobFormat.FromBase64Url(command.Body)!;
+        // Checked as the laptop checks it: the MAC from its own key and the app's.
+        var expected = HMACSHA256.HashData(CommandMac.Key(laptop.Key, me.Public, Wire.DeviceId(me.Public), laptop.Id), body);
+        Assert.Equal(BlobFormat.Base64Url(expected), command.Mac);
+        var read = JsonSerializer.Deserialize<CommandBody>(body, ProtocolJson.Options)!;
+        Assert.Equal(("user", link.DeviceId, laptop.Id, session.Id, server.Id), (read.Principal.Kind, read.Principal.Device, read.Target.Machine, read.Target.Session, read.To));
+        Assert.Equal(300, read.ExpiresAt - read.IssuedAt);
+    }
+
+    [Fact]
+    public void The_app_signs_the_same_command_the_PWA_and_the_host_agree_on()
+    {
+        // SignedCommandTests' vector, which pwa/test/unit/transfer.test.mjs signs too.
+        var phone = P256KeyPair.FromParameters(
+            Convert.FromHexString("905900d4260fa339e62fdd5e34ca9db632ff099271432b0b957d44c389d4576e"),
+            Convert.FromHexString("accab67f642cf9f9c35c24175fb780e76d00f0a2782a5af26dba7ac634647b7f"),
+            Convert.FromHexString("73d0820dc17ec237ae270a993b2b7400d662284d1b921c83c1b839136163138f"));
+        var source = P256KeyPair.FromParameters(
+            Convert.FromHexString("5f659de036a5d83c281f6c80a44633fc4cae31a37a140c73c21bff1d917b3597"),
+            Convert.FromHexString("5d7f19384abde7014a17903abac0264f1add24f8639ab69fb9da7bbfaf24f910"),
+            Convert.FromHexString("48ceda706c4697a48859a8fd3cc690992b208a4dcdd4ae0b2c32f3c65cfcde4a"));
+
+        var command = Transfers.Sign(phone, source.Public, "0f3c4d5e-6a7b-4c8d-9e0f-a1b2c3d4e5f6", "00112233445566778899aabbccddeeff",
+            DateTimeOffset.FromUnixTimeSeconds(1_793_300_000), "7d0f3a2e-1c4b-4d5e-8f60-112233445566");
+
+        Assert.Equal("_PJ9LEydaL4_cLc4dUQ-wkKfhFj1DfQi-9K7Bl_0fxs", command.Mac);
+        Assert.Equal(BlobFormat.Base64Url(phone.Public), command.By);
     }
 
     [Fact]

@@ -95,7 +95,9 @@ static class SelfTest
                 main.SelectedMachine = main.Machines[0];
                 await Until(() => Find<SessionCard>(window.RootElement).Count == expected, TimeSpan.FromSeconds(10));
             }
-            var settled = await Until(() => Listeners(watched) == shown, TimeSpan.FromSeconds(10));
+            // A leak grows with each change; the count read as shown can also include a recycled
+            // control not yet unloaded (4 shown, 2 settled, seen once in four runs), so it is a ceiling.
+            var settled = await Until(() => Listeners(watched) is var n && n <= shown && n > hidden, TimeSpan.FromSeconds(10));
             var again = Find<SessionCard>(window.RootElement).FirstOrDefault(c => c.Card?.Id == "demo-approval");
             Check(again is not null && ById<Button>(again, "Option:approve") is { IsEnabled: true }, "still shows a question's choices on a card drawn again after the picker changes");
             Check(settled && shown > hidden && hidden >= 0, $"a card's control listens while shown and lets go when hidden, however often the picker changes ({hidden} listeners hidden, {shown} shown, {Listeners(watched)} after five more changes)");
