@@ -143,10 +143,20 @@ export function offlineMachines({ presence, known, me }) {
 // known: the account's machines that are offline (connection.known), each listed after the
 // online ones with when it was last seen and a two-press Forget (forget.js); null lists none.
 // Returns how many are online.
+// What each list was last drawn from.
+const drawnAs = new WeakMap();
+
 export function renderMachines(list, { presence, me, current, onSelect, status = () => '', known = null, forget = null, now = Date.now(), allStatus = '' }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   const all = current === ALL;
   const offline = offlineMachines({ presence, known, me });
+  // Drawn again only when something in it changes. It is asked to redraw on every session
+  // update of every machine shown, and a button replaced between a tap's touch and its release
+  // takes no click: a tap at startup, with every machine sending its sessions, was lost.
+  const key = JSON.stringify([current, allStatus, hosts.map((d) => [d.id, d.name, status(d.id)]),
+    offline.map((k) => [k.id, k.name, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget]);
+  if (drawnAs.get(list) === key) { return hosts.length; }
+  drawnAs.set(list, key);
   // Every change redraws the list, so the button that had focus is replaced: Forget's first
   // press redraws it armed, and a keyboard's second press must land on the new one.
   const active = list.ownerDocument?.activeElement;

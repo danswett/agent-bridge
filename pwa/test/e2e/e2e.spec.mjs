@@ -73,6 +73,10 @@ async function signIn(page) {
   await page.click('#signin-button');
   await expect(page.locator('#account')).toBeVisible({ timeout: 30000 });
   await expect(page.locator('#conn')).toHaveText('Connected', { timeout: 20000 });
+  // Every machine is shown at first: settled once each has said what it is, so a tap on the
+  // list that follows lands on the list it was aimed at.
+  await expect(page.locator('[data-device-name="fixture-host"] .machine-status')).toContainText('0.0.0-fixture', { timeout: 30000 });
+  await expect(page.locator('#host-state')).toContainText('demo-host:', { timeout: 30000 });
 }
 
 const card = (page, id) => page.locator(`.session[data-id="${id}"]`);
