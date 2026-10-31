@@ -519,6 +519,22 @@ public sealed class FleetTests : IAsyncLifetime
             }
         }
 
+        // This app's device id, the people's devices the relay lists, and the folder-trust answers
+        // signed: (machine, question, choice, request).
+        public string? DeviceId { get; set; } = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+        public List<FleetHost> PeopleNow { get; } = [];
+        public IReadOnlyList<FleetHost> People => PeopleNow;
+        public List<(string Machine, string Question, string Choice, string Request)> Trusted { get; } = [];
+
+        public SignedCommand? SignTrust(byte[]? machinePublic, string machine, string question, string choice, string request)
+        {
+            lock (Trusted)
+            {
+                Trusted.Add((machine, question, choice, request));
+                return new SignedCommand { Body = $"trust{Trusted.Count}", By = "by", Mac = "mac" };
+            }
+        }
+
         public async Task<IClientChannel> OpenAsync(string hostId, CancellationToken ct) =>
             State == FleetState.Connected && Hosts.Any(h => h.Id == hostId) && Endpoints.TryGetValue(hostId, out var e)
                 ? await LocalClient.ConnectAsync(e, TimeSpan.FromSeconds(1), ct)

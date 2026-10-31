@@ -11,6 +11,61 @@
         <DataTemplate x:Key="ChoiceTemplate" x:DataType="core:Choice">
             <TextBlock Text="{x:Bind Label}" />
         </DataTemplate>
+        <!-- A launched agent asking whether to trust its folder: the whole path, wrapped and
+             selectable, never cut short; its repository root and its own words; Trust and Quit
+             where this app may answer, else why not. -->
+        <DataTemplate x:Key="TrustTemplate" x:DataType="core:TrustCard">
+            <Border
+                AutomationProperties.AutomationId="TrustCard"
+                AutomationProperties.Name="{x:Bind Title, Mode=OneWay}"
+                BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,8"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                <StackPanel Spacing="8">
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" TextWrapping="Wrap" Text="{x:Bind Title, Mode=OneWay}" />
+                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="Folder" />
+                    <TextBlock
+                        AutomationProperties.AutomationId="TrustFolder"
+                        FontFamily="Consolas" TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                        Text="{x:Bind Folder, Mode=OneWay}" />
+                    <StackPanel Spacing="4" Visibility="{x:Bind local:Ui.Show(ShowRoot), Mode=OneWay}">
+                        <TextBlock Style="{StaticResource AbSecondaryText}" TextWrapping="Wrap" Text="{x:Bind RootNote, Mode=OneWay}" />
+                        <TextBlock
+                            AutomationProperties.AutomationId="TrustRoot"
+                            FontFamily="Consolas" TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                            Text="{x:Bind Root, Mode=OneWay}" />
+                    </StackPanel>
+                    <TextBlock
+                        AutomationProperties.AutomationId="TrustWarning"
+                        TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                        Text="{x:Bind Warning, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Show(ShowWarning), Mode=OneWay}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind local:Ui.Show(CanAnswer), Mode=OneWay}">
+                        <Button Style="{StaticResource AccentButtonStyle}" Content="Trust" AutomationProperties.AutomationId="TrustYes" Click="OnTrust" />
+                        <Button Content="Quit" AutomationProperties.AutomationId="TrustNo" Click="OnQuit" />
+                    </StackPanel>
+                    <Button
+                        Content="Try again" AutomationProperties.AutomationId="TrustResend"
+                        Visibility="{x:Bind local:Ui.Show(ShowResend), Mode=OneWay}" Click="OnTrustResend" />
+                    <TextBlock
+                        AutomationProperties.AutomationId="TrustAtMachine"
+                        TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                        Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                        Text="{x:Bind AtMachine, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Show(ShowAtMachine), Mode=OneWay}" />
+                    <Button
+                        Content="Allow answering from this app" AutomationProperties.AutomationId="TrustAllow"
+                        Visibility="{x:Bind local:Ui.Show(ShowAllowHere), Mode=OneWay}" Click="OnTrustAllow" />
+                    <TextBlock
+                        AutomationProperties.AutomationId="TrustStatus"
+                        AutomationProperties.LiveSetting="Polite"
+                        TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                        Text="{x:Bind StatusText, Mode=OneWay}"
+                        Foreground="{x:Bind local:Ui.ToneBrush(StatusTone), Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Show(ShowStatus), Mode=OneWay}" />
+                </StackPanel>
+            </Border>
+        </DataTemplate>
     </UserControl.Resources>
     <ScrollViewer AutomationProperties.AutomationId="LaunchPane">
         <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, so a
@@ -37,6 +92,17 @@
                     IsClosable="False" Severity="Warning"
                     IsOpen="{x:Bind local:LaunchView.Has(ViewModel.Busy), Mode=OneWay}"
                     Message="{x:Bind ViewModel.Busy, Mode=OneWay}" />
+                <ItemsControl
+                    AutomationProperties.AutomationId="TrustQuestions"
+                    ItemsSource="{x:Bind ViewModel.TrustQuestions, Mode=OneWay}"
+                    ItemTemplate="{StaticResource TrustTemplate}"
+                    Visibility="{x:Bind local:Ui.Show(ViewModel.ShowTrust), Mode=OneWay}" />
+                <TextBlock
+                    AutomationProperties.AutomationId="TrustNote"
+                    TextWrapping="Wrap"
+                    Foreground="{x:Bind local:LaunchView.ProblemBrush()}"
+                    Text="{x:Bind ViewModel.TrustNote, Mode=OneWay}"
+                    Visibility="{x:Bind local:Ui.Some(ViewModel.TrustNote), Mode=OneWay}" />
                 <StackPanel Spacing="12" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowForm), Mode=OneWay}">
                     <ComboBox
                         Tag="resume" Header="Resume" MinWidth="320" AutomationProperties.AutomationId="LaunchResume"
