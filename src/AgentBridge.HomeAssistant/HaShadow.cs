@@ -206,6 +206,13 @@ public static partial class HaShadow
             yield break;
         }
 
+        // A dry pass takes no tap from a phone either.
+        public async IAsyncEnumerable<HaEvent> EventsAsync(string eventType, Action? subscribed = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
         public Task<HaState?> GetStateAsync(string entityId, CancellationToken cancellationToken = default) => real.GetStateAsync(entityId, cancellationToken);
         public Task<IReadOnlyList<HaState>> GetStatesAsync(CancellationToken cancellationToken = default) => real.GetStatesAsync(cancellationToken);
         public Task<IReadOnlyList<HaRegistryEntry>> ListEntityRegistryAsync(CancellationToken cancellationToken = default) => real.ListEntityRegistryAsync(cancellationToken);

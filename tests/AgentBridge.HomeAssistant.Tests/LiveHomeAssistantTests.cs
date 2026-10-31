@@ -43,6 +43,7 @@ public sealed class LiveHomeAssistantTests : IDisposable
     readonly List<StopRequest> stopped = [];
     readonly List<LaunchRequest> launched = [];
     readonly List<string> log = [];
+    HaNotifySettings notify = HaNotifySettings.Default;
 
     public LiveHomeAssistantTests()
     {
@@ -63,6 +64,7 @@ public sealed class LiveHomeAssistantTests : IDisposable
         Reconcile = TimeSpan.FromSeconds(2),
         RetireGrace = TimeSpan.FromSeconds(2),
         AgentUserIds = agents,
+        Notify = notify,
     }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } }, answer: (r, _) =>
     {
         lock (answered) { answered.Add(r); }
@@ -399,6 +401,101 @@ public sealed class LiveHomeAssistantTests : IDisposable
             && recent[0].GetProperty("outcome").GetString() == "started");
     }
 
+    [HomeAssistantFact]
+    public async Task A_question_goes_to_the_phones_with_its_buttons_a_tap_answers_it_and_the_hooks_pushes_follow()
+    {
+        // persistent_notification stands in for a phone: Home Assistant's own notify service, which
+        // takes the same title, message and data and keeps what it was sent where it can be read.
+        var services = await ServicesAsync();
+        Assert.True(services.Contains("notify.persistent_notification"), "this Home Assistant has no notify.persistent_notification to stand in for a phone");
+        const string Service = "notify.persistent_notification";
+        notify = new HaNotifySettings { Enabled = true, Service = Service, AnswerButtonServices = [Service] };
+        var me = await CurrentUserAsync();
+        var id = Session();
+        var node = HaContract.NodeId(id);
+        var before = (await NotificationsAsync()).Count;
+        sessions.Set(FakeSessions.Copilot(id, status: SessionStatus.Working) with { Activity = new Activity { TurnCount = 1, UserMessage = "go" } });
+        await using var c = Connector("CI-NOTIFY", me);
+        c.Start();
+        await Until(SessionEntities.Status(node), s => s.State == "working");
+        Ask(id, Form("q1", Release));
+        await Until(SessionEntities.Decision(node), s => s.State == HaDecision.Awaiting);
+
+        // The buttons' notification, and the hook's push.
+        var shown = await UntilNotified(n => n.Title == "Copilot: Fixture session" && n.Message == "Cut the release?", before);
+        await UntilNotified(n => n.Title == "Copilot: Copilot: Fixture session" && n.Message.Contains("1. Cut the release now", StringComparison.Ordinal), before);
+
+        // A tap, as the companion app fires it.
+        await PostEventAsync(HaNotify.ActionEvent, new JsonObject
+        {
+            ["action"] = "BRIDGE_q1_1",
+            ["action_data"] = new JsonObject { ["bridge"] = "decision", ["session"] = id, ["decision"] = "q1" },
+        });
+        await Until(() => { lock (answered) { return answered.Count == 1; } }, "the tap never answered");
+        Assert.Equal("wait", answered[0].Fields!["release"].GetString());
+        await Until(SessionEntities.Activity(node), s => s.State == "Answer sent");
+        await UntilNotified(n => n.Message == HaNotify.ClearMessage, before);
+
+        // The turn the tap started finishes: its reply is pushed.
+        sessions.Set(FakeSessions.Copilot(id, status: SessionStatus.Idle) with { Activity = new Activity { Response = "Waiting for the fix, then cutting.", TurnCount = 2, UserMessage = "wait" } });
+        await UntilNotified(n => n.Title == "Copilot response: Copilot: Fixture session" && n.Message == "Waiting for the fix, then cutting.", before);
+        await Until(SessionEntities.Activity(node), s => s.Attributes.TryGetProperty("driver", out var d) && d.GetString() == "agent");
+        Assert.NotNull(shown);
+    }
+
+    sealed record Notification(string Title, string Message);
+
+    async Task<Notification> UntilNotified(Func<Notification, bool> match, int skip, int seconds = 60)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(seconds);
+        IReadOnlyList<Notification> seen = [];
+        while (DateTime.UtcNow < deadline)
+        {
+            seen = await NotificationsAsync();
+            if (seen.Skip(skip).FirstOrDefault(match) is { } found) { return found; }
+            await Task.Delay(250);
+        }
+        string history;
+        lock (log) { history = string.Join("\n", log.TakeLast(20)); }
+        Assert.Fail($"never notified; saw {string.Join(" | ", seen.Skip(skip).Select(n => $"{n.Title}: {n.Message}"))}\n{history}");
+        return null!;
+    }
+
+    // persistent_notification/get: what notify.persistent_notification has been sent, oldest first.
+    static async Task<IReadOnlyList<Notification>> NotificationsAsync()
+    {
+        var result = await WebSocketAsync(new JsonObject { ["type"] = "persistent_notification/get" });
+        return [.. result!.AsArray().Select(n => n!.AsObject())
+            .OrderBy(n => n["created_at"]?.GetValue<string>(), StringComparer.Ordinal)
+            .Select(n => new Notification(n["title"]?.GetValue<string>() ?? "", n["message"]?.GetValue<string>() ?? ""))];
+    }
+
+    async Task<HashSet<string>> ServicesAsync()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(new Uri(LiveHomeAssistant.Url!), "/api/services"));
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", LiveHomeAssistant.Token);
+        using var response = await http.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+        var all = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var domain in JsonNode.Parse(await response.Content.ReadAsStringAsync())!.AsArray())
+        {
+            foreach (var (service, _) in domain!["services"]!.AsObject()) { all.Add($"{domain["domain"]!.GetValue<string>()}.{service}"); }
+        }
+        return all;
+    }
+
+    // POST /api/events/<type>: an event fired as the companion app fires it, by this token's account.
+    async Task PostEventAsync(string eventType, JsonObject data)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(new Uri(LiveHomeAssistant.Url!), "/api/events/" + eventType))
+        {
+            Content = new StringContent(data.ToJsonString(), Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", LiveHomeAssistant.Token);
+        using var response = await http.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+    }
+
     // What the reply card does with an image: POST /api/image/upload, which answers with its id.
     async Task<string> UploadImageAsync(byte[] png)
     {
@@ -414,7 +511,11 @@ public sealed class LiveHomeAssistantTests : IDisposable
     }
 
     // auth/current_user: the account behind the test's token, as Home Assistant records presses.
-    static async Task<string> CurrentUserAsync()
+    static async Task<string> CurrentUserAsync() =>
+        (await WebSocketAsync(new JsonObject { ["type"] = "auth/current_user" }))!["id"]!.GetValue<string>();
+
+    // One command over Home Assistant's WebSocket API, and its result.
+    static async Task<JsonNode?> WebSocketAsync(JsonObject command)
     {
         var uri = new UriBuilder(new Uri(new Uri(LiveHomeAssistant.Url!), "/api/websocket")) { Scheme = "ws" }.Uri;
         using var ws = new ClientWebSocket();
@@ -422,14 +523,18 @@ public sealed class LiveHomeAssistantTests : IDisposable
         await ReceiveAsync(ws);
         await SendAsync(ws, new JsonObject { ["type"] = "auth", ["access_token"] = LiveHomeAssistant.Token });
         await ReceiveAsync(ws);
-        await SendAsync(ws, new JsonObject { ["id"] = 1, ["type"] = "auth/current_user" });
+        command["id"] = 1;
+        await SendAsync(ws, command);
         while (true)
         {
             var message = await ReceiveAsync(ws);
-            if (message["type"]?.GetValue<string>() == "result") { return message["result"]!["id"]!.GetValue<string>(); }
+            if (message["type"]?.GetValue<string>() == "result")
+            {
+                Assert.True(message["success"]?.GetValue<bool>() == true, $"{command["type"]} failed: {message.ToJsonString()}");
+                return message["result"]?.DeepClone();
+            }
         }
     }
-
     static Task SendAsync(ClientWebSocket ws, JsonObject message) =>
         ws.SendAsync(Encoding.UTF8.GetBytes(message.ToJsonString()), WebSocketMessageType.Text, true, CancellationToken.None);
 

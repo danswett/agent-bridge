@@ -1,0 +1,775 @@
+{
+  "source": {
+    "repository": "danswett/agent-ha-bridge",
+    "commit": "42fc551c1c6184797520c18f4b75457ff08a9276",
+    "dirty": false,
+    "generator": "tools/ha-contract/Export-HaContract.ps1",
+    "note": "Recorded by running agent-ha-bridge's own functions with a recording transport. Regenerate; do not edit by hand."
+  },
+  "machine": "DSWETT-DEV-VM1",
+  "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20",
+  "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
+  "defaults": {
+    "notifications.enabled": false,
+    "notifications.service": "notify.notify",
+    "notifications.tickerCategory": "",
+    "answerButtons.enabled": true,
+    "answerButtons.services": [],
+    "answerButtons.maxButtons": 6,
+    "answerButtons.icon": "mdi:chat-question",
+    "answerButtons.iconColor": "#FFFFFF",
+    "answerButtons.color": "#FF9F0A",
+    "answerButtons.interruptionLevel": "time-sensitive"
+  },
+  "buttons": {
+    "choice": {
+      "marker": {
+        "decisionId": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+        "question": "Cut the release now?",
+        "mode": "multiple_choice",
+        "choices": [
+          "(Recommended) Open the PR and wait for CI to go green",
+          "Wait for the fix",
+          "Other (type your answer)"
+        ],
+        "fields": [],
+        "terminalOnly": false
+      },
+      "options": [
+        "(Recommended) Open the PR and wait for CI to go green",
+        "Wait for the fix"
+      ],
+      "actions": [
+        {
+          "action": "BRIDGE_730232000000_0",
+          "title": "(Recommended) Open the PR and..."
+        },
+        {
+          "action": "BRIDGE_730232000000_1",
+          "title": "Wait for the fix"
+        },
+        {
+          "action": "BRIDGE_730232000000_text",
+          "behavior": "textInput",
+          "textInputButtonTitle": "Send",
+          "textInputPlaceholder": "Your answer",
+          "title": "Type an answer"
+        }
+      ],
+      "payload": {
+        "data": {
+          "action_data": {
+            "bridge": "decision",
+            "decision": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+            "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+          },
+          "actions": [
+            {
+              "action": "BRIDGE_730232000000_0",
+              "title": "(Recommended) Open the PR and..."
+            },
+            {
+              "action": "BRIDGE_730232000000_1",
+              "title": "Wait for the fix"
+            },
+            {
+              "action": "BRIDGE_730232000000_text",
+              "behavior": "textInput",
+              "textInputButtonTitle": "Send",
+              "textInputPlaceholder": "Your answer",
+              "title": "Type an answer"
+            }
+          ],
+          "color": "#FF9F0A",
+          "group": "agent-bridge",
+          "interruption-level": "time-sensitive",
+          "notification_icon": "mdi:chat-question",
+          "notification_icon_color": "#FFFFFF",
+          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
+          "url": "/agent-decisions/decision"
+        },
+        "message": "Cut the release now?",
+        "title": "Copilot: Fix the relay"
+      }
+    },
+    "many": {
+      "marker": {
+        "decisionId": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+        "question": "Cut the release now?",
+        "mode": "multiple_choice",
+        "choices": [
+          "one",
+          "two",
+          "three",
+          "four",
+          "five",
+          "six",
+          "seven",
+          "eight"
+        ],
+        "fields": [],
+        "terminalOnly": false
+      },
+      "options": [
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight"
+      ],
+      "actions": [
+        {
+          "action": "BRIDGE_730232000000_0",
+          "title": "one"
+        },
+        {
+          "action": "BRIDGE_730232000000_1",
+          "title": "two"
+        },
+        {
+          "action": "BRIDGE_730232000000_2",
+          "title": "three"
+        },
+        {
+          "action": "BRIDGE_730232000000_3",
+          "title": "four"
+        },
+        {
+          "action": "BRIDGE_730232000000_4",
+          "title": "five"
+        },
+        {
+          "action": "BRIDGE_730232000000_5",
+          "title": "six"
+        },
+        {
+          "action": "BRIDGE_730232000000_text",
+          "behavior": "textInput",
+          "textInputButtonTitle": "Send",
+          "textInputPlaceholder": "Your answer",
+          "title": "Type an answer"
+        }
+      ],
+      "payload": {
+        "data": {
+          "action_data": {
+            "bridge": "decision",
+            "decision": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+            "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+          },
+          "actions": [
+            {
+              "action": "BRIDGE_730232000000_0",
+              "title": "one"
+            },
+            {
+              "action": "BRIDGE_730232000000_1",
+              "title": "two"
+            },
+            {
+              "action": "BRIDGE_730232000000_2",
+              "title": "three"
+            },
+            {
+              "action": "BRIDGE_730232000000_3",
+              "title": "four"
+            },
+            {
+              "action": "BRIDGE_730232000000_4",
+              "title": "five"
+            },
+            {
+              "action": "BRIDGE_730232000000_5",
+              "title": "six"
+            },
+            {
+              "action": "BRIDGE_730232000000_text",
+              "behavior": "textInput",
+              "textInputButtonTitle": "Send",
+              "textInputPlaceholder": "Your answer",
+              "title": "Type an answer"
+            }
+          ],
+          "color": "#FF9F0A",
+          "group": "agent-bridge",
+          "interruption-level": "time-sensitive",
+          "notification_icon": "mdi:chat-question",
+          "notification_icon_color": "#FFFFFF",
+          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
+          "url": "/agent-decisions/decision"
+        },
+        "message": "Cut the release now?",
+        "title": "Copilot: Fix the relay"
+      }
+    },
+    "lone": {
+      "marker": {
+        "decisionId": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+        "question": "Cut the release now?",
+        "mode": "multiple_choice",
+        "choices": [],
+        "fields": [
+          {
+            "Label": "Release",
+            "Options": [
+              "Cut it",
+              "Hold it"
+            ],
+            "IsText": false,
+            "MultiSelect": false
+          }
+        ],
+        "terminalOnly": false
+      },
+      "options": [
+        "Cut it",
+        "Hold it"
+      ],
+      "actions": [
+        {
+          "action": "BRIDGE_730232000000_0",
+          "title": "Cut it"
+        },
+        {
+          "action": "BRIDGE_730232000000_1",
+          "title": "Hold it"
+        },
+        {
+          "action": "BRIDGE_730232000000_text",
+          "behavior": "textInput",
+          "textInputButtonTitle": "Send",
+          "textInputPlaceholder": "Your answer",
+          "title": "Type an answer"
+        }
+      ],
+      "payload": {
+        "data": {
+          "action_data": {
+            "bridge": "decision",
+            "decision": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+            "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+          },
+          "actions": [
+            {
+              "action": "BRIDGE_730232000000_0",
+              "title": "Cut it"
+            },
+            {
+              "action": "BRIDGE_730232000000_1",
+              "title": "Hold it"
+            },
+            {
+              "action": "BRIDGE_730232000000_text",
+              "behavior": "textInput",
+              "textInputButtonTitle": "Send",
+              "textInputPlaceholder": "Your answer",
+              "title": "Type an answer"
+            }
+          ],
+          "color": "#FF9F0A",
+          "group": "agent-bridge",
+          "interruption-level": "time-sensitive",
+          "notification_icon": "mdi:chat-question",
+          "notification_icon_color": "#FFFFFF",
+          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
+          "url": "/agent-decisions/decision"
+        },
+        "message": "Cut the release now?",
+        "title": "Copilot: Fix the relay"
+      }
+    },
+    "loneText": {
+      "marker": {
+        "decisionId": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+        "question": "Cut the release now?",
+        "mode": "multiple_choice",
+        "choices": [],
+        "fields": [
+          {
+            "Label": "Name",
+            "Options": [],
+            "IsText": true,
+            "MultiSelect": false
+          }
+        ],
+        "terminalOnly": false
+      },
+      "options": [],
+      "actions": [
+        {
+          "action": "BRIDGE_730232000000_text",
+          "behavior": "textInput",
+          "textInputButtonTitle": "Send",
+          "textInputPlaceholder": "Your answer",
+          "title": "Type an answer"
+        }
+      ],
+      "payload": {
+        "data": {
+          "action_data": {
+            "bridge": "decision",
+            "decision": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+            "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+          },
+          "actions": [
+            {
+              "action": "BRIDGE_730232000000_text",
+              "behavior": "textInput",
+              "textInputButtonTitle": "Send",
+              "textInputPlaceholder": "Your answer",
+              "title": "Type an answer"
+            }
+          ],
+          "color": "#FF9F0A",
+          "group": "agent-bridge",
+          "interruption-level": "time-sensitive",
+          "notification_icon": "mdi:chat-question",
+          "notification_icon_color": "#FFFFFF",
+          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
+          "url": "/agent-decisions/decision"
+        },
+        "message": "Cut the release now?",
+        "title": "Copilot: Fix the relay"
+      }
+    },
+    "form": {
+      "marker": {
+        "decisionId": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+        "question": "Cut the release now?",
+        "mode": "multiple_choice",
+        "choices": [],
+        "fields": [
+          {
+            "Label": "Release",
+            "Options": [
+              "Cut it",
+              "Hold it"
+            ],
+            "IsText": false,
+            "MultiSelect": false
+          },
+          {
+            "Label": "Notes",
+            "Options": [],
+            "IsText": true,
+            "MultiSelect": false
+          }
+        ],
+        "terminalOnly": false
+      },
+      "options": [],
+      "actions": [],
+      "payload": {
+        "data": {
+          "action_data": {
+            "bridge": "decision",
+            "decision": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+            "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+          },
+          "actions": [],
+          "color": "#FF9F0A",
+          "group": "agent-bridge",
+          "interruption-level": "time-sensitive",
+          "notification_icon": "mdi:chat-question",
+          "notification_icon_color": "#FFFFFF",
+          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
+          "url": "/agent-decisions/decision"
+        },
+        "message": "Cut the release now?",
+        "title": "Copilot: Fix the relay"
+      }
+    },
+    "freeform": {
+      "marker": {
+        "decisionId": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+        "question": "What should the release notes say?",
+        "mode": "freeform",
+        "choices": [],
+        "fields": [],
+        "terminalOnly": false
+      },
+      "options": [],
+      "actions": [
+        {
+          "action": "BRIDGE_730232000000_text",
+          "behavior": "textInput",
+          "textInputButtonTitle": "Send",
+          "textInputPlaceholder": "Your answer",
+          "title": "Type an answer"
+        }
+      ],
+      "payload": {
+        "data": {
+          "action_data": {
+            "bridge": "decision",
+            "decision": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+            "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+          },
+          "actions": [
+            {
+              "action": "BRIDGE_730232000000_text",
+              "behavior": "textInput",
+              "textInputButtonTitle": "Send",
+              "textInputPlaceholder": "Your answer",
+              "title": "Type an answer"
+            }
+          ],
+          "color": "#FF9F0A",
+          "group": "agent-bridge",
+          "interruption-level": "time-sensitive",
+          "notification_icon": "mdi:chat-question",
+          "notification_icon_color": "#FFFFFF",
+          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
+          "url": "/agent-decisions/decision"
+        },
+        "message": "What should the release notes say?",
+        "title": "Copilot: Fix the relay"
+      }
+    },
+    "terminal": {
+      "marker": {
+        "decisionId": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+        "question": "Cut the release now?",
+        "mode": "multiple_choice",
+        "choices": [
+          "Yes",
+          "No"
+        ],
+        "fields": [],
+        "terminalOnly": true
+      },
+      "options": [],
+      "actions": [],
+      "payload": {
+        "data": {
+          "action_data": {
+            "bridge": "decision",
+            "decision": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+            "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+          },
+          "actions": [],
+          "color": "#FF9F0A",
+          "group": "agent-bridge",
+          "interruption-level": "time-sensitive",
+          "notification_icon": "mdi:chat-question",
+          "notification_icon_color": "#FFFFFF",
+          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
+          "url": "/agent-decisions/decision"
+        },
+        "message": "Cut the release now?",
+        "title": "Copilot: Fix the relay"
+      }
+    },
+    "blank": {
+      "marker": {
+        "decisionId": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+        "question": "   ",
+        "mode": "freeform",
+        "choices": [],
+        "fields": [],
+        "terminalOnly": false
+      },
+      "options": [],
+      "actions": [
+        {
+          "action": "BRIDGE_730232000000_text",
+          "behavior": "textInput",
+          "textInputButtonTitle": "Send",
+          "textInputPlaceholder": "Your answer",
+          "title": "Type an answer"
+        }
+      ],
+      "payload": {
+        "data": {
+          "action_data": {
+            "bridge": "decision",
+            "decision": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+            "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+          },
+          "actions": [
+            {
+              "action": "BRIDGE_730232000000_text",
+              "behavior": "textInput",
+              "textInputButtonTitle": "Send",
+              "textInputPlaceholder": "Your answer",
+              "title": "Type an answer"
+            }
+          ],
+          "color": "#FF9F0A",
+          "group": "agent-bridge",
+          "interruption-level": "time-sensitive",
+          "notification_icon": "mdi:chat-question",
+          "notification_icon_color": "#FFFFFF",
+          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
+          "url": "/agent-decisions/decision"
+        },
+        "message": "This session is waiting for an answer.",
+        "title": "Copilot: Fix the relay"
+      }
+    }
+  },
+  "plain": {
+    "data": {
+      "action_data": {
+        "bridge": "decision",
+        "decision": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+        "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+      },
+      "actions": [],
+      "group": "agent-bridge",
+      "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
+      "url": "/my-dash/decision"
+    },
+    "message": "Cut the release now?",
+    "title": "Claude: scratch"
+  },
+  "titles": {
+    "Wait": "Wait",
+    "  Open   the   PR  ": "Open the PR",
+    "(Recommended) Open the PR and wait for CI to go green": "(Recommended) Open the PR and...",
+    "Supercalifragilisticexpialidocious-and-more": "Supercalifragilisticexpialidoc...",
+    "a b c d e f g h i j k l m n o p q r s t": "a b c d e f g h i j k l m n o...",
+    "Ship it, then; tell them.....": "Ship it, then; tell them....."
+  },
+  "services": [
+    "notify.mobile_app_phone",
+    "not-a-service",
+    "notify.mobile_app_tablet"
+  ],
+  "sent": [
+    {
+      "service": "notify.mobile_app_phone",
+      "data": {
+        "data": {
+          "action_data": {
+            "bridge": "decision",
+            "decision": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+            "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+          },
+          "actions": [
+            {
+              "action": "BRIDGE_730232000000_0",
+              "title": "(Recommended) Open the PR and..."
+            },
+            {
+              "action": "BRIDGE_730232000000_1",
+              "title": "Wait for the fix"
+            },
+            {
+              "action": "BRIDGE_730232000000_text",
+              "behavior": "textInput",
+              "textInputButtonTitle": "Send",
+              "textInputPlaceholder": "Your answer",
+              "title": "Type an answer"
+            }
+          ],
+          "color": "#FF9F0A",
+          "group": "agent-bridge",
+          "interruption-level": "time-sensitive",
+          "notification_icon": "mdi:chat-question",
+          "notification_icon_color": "#FFFFFF",
+          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
+          "url": "/agent-decisions/decision"
+        },
+        "message": "Cut the release now?",
+        "title": "Copilot: Fix the relay"
+      }
+    },
+    {
+      "service": "notify.mobile_app_tablet",
+      "data": {
+        "data": {
+          "action_data": {
+            "bridge": "decision",
+            "decision": "agent_bridge_6fcbab0c1d2e4f50-1730232000000",
+            "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+          },
+          "actions": [
+            {
+              "action": "BRIDGE_730232000000_0",
+              "title": "(Recommended) Open the PR and..."
+            },
+            {
+              "action": "BRIDGE_730232000000_1",
+              "title": "Wait for the fix"
+            },
+            {
+              "action": "BRIDGE_730232000000_text",
+              "behavior": "textInput",
+              "textInputButtonTitle": "Send",
+              "textInputPlaceholder": "Your answer",
+              "title": "Type an answer"
+            }
+          ],
+          "color": "#FF9F0A",
+          "group": "agent-bridge",
+          "interruption-level": "time-sensitive",
+          "notification_icon": "mdi:chat-question",
+          "notification_icon_color": "#FFFFFF",
+          "subtitle": "DSWETT-DEV-VM1 - waiting on you",
+          "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50",
+          "url": "/agent-decisions/decision"
+        },
+        "message": "Cut the release now?",
+        "title": "Copilot: Fix the relay"
+      }
+    }
+  ],
+  "cleared": [
+    {
+      "service": "notify.mobile_app_phone",
+      "data": {
+        "data": {
+          "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50"
+        },
+        "message": "clear_notification"
+      }
+    },
+    {
+      "service": "notify.mobile_app_tablet",
+      "data": {
+        "data": {
+          "tag": "bridge_decision_agent_bridge_6fcbab0c1d2e4f50"
+        },
+        "message": "clear_notification"
+      }
+    }
+  ],
+  "choices": {
+    "tap": {
+      "event": {
+        "action": "BRIDGE_ab12cd34ef56_1",
+        "action_data": {
+          "bridge": "decision",
+          "decision": "d-1",
+          "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+        }
+      },
+      "choice": {
+        "SessionId": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20",
+        "DecisionId": "d-1",
+        "Index": 1,
+        "ReplyText": ""
+      }
+    },
+    "typed": {
+      "event": {
+        "action": "BRIDGE_ab12cd34ef56_text",
+        "action_data": {
+          "bridge": "decision",
+          "decision": "d-1",
+          "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+        },
+        "reply_text": "  Ship it after the hotfix  "
+      },
+      "choice": {
+        "SessionId": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20",
+        "DecisionId": "d-1",
+        "Index": -1,
+        "ReplyText": "  Ship it after the hotfix  "
+      }
+    },
+    "noIndex": {
+      "event": {
+        "action": "SOMETHING_ELSE",
+        "action_data": {
+          "bridge": "decision",
+          "decision": "d-1",
+          "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+        }
+      },
+      "choice": {
+        "SessionId": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20",
+        "DecisionId": "d-1",
+        "Index": -1,
+        "ReplyText": ""
+      }
+    },
+    "noData": {
+      "event": {
+        "action": "BRIDGE_ab12cd34ef56_0"
+      },
+      "choice": null
+    },
+    "otherBridge": {
+      "event": {
+        "action": "BRIDGE_ab12cd34ef56_0",
+        "action_data": {
+          "bridge": "something",
+          "decision": "d-1",
+          "session": "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20"
+        }
+      },
+      "choice": null
+    },
+    "noSession": {
+      "event": {
+        "action": "BRIDGE_ab12cd34ef56_0",
+        "action_data": {
+          "bridge": "decision",
+          "decision": "d-1",
+          "session": ""
+        }
+      },
+      "choice": null
+    }
+  },
+  "longTitle": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...",
+  "longResponse": "Line 1 of a long answer.\nLine 2 of a long answer.\nLine 3 of a long answer.\nLine 4 of a long answer.\nLine 5 of a long answer.\nLine 6 of a long answer.\nLine 7 of a long answer.\nLine 8 of a long answer.\nLine 9 of a long answer.\nLine 10 of a long answer.\nLine 11 of a long answer.\nLine 12 of a long answer.\nLine 13 of a long answer.\nLine 14 of a long answer.\nLine 15 of a long answer.\nLine 16 of a long answer.\nLine 17 of a long answer.\nLine 18 of a long answer.\nLine 19 of a long answer.\nLine 20 of a long answer.\nLine 21 of a long answer.\nLine 22 of a long answer.\nLine 23 of a long answer.\nLine 24 of a long answer.\nLine 25 of a long answer.\nLine 26 of a long answer.\nLine 27 of a long answer.\nLine 28 of a long answer.\nLine 29 of a long answer.\nLine 30 of a long answer.\nLine 31 of a long answer.\nLine 32 of a long answer.\nLine 33 of a long answer.\nLine 34 of a long answer.\nLine 35 of a long answer.\nLine 36 of a long answer.\nLine 37 of a long answer.\nLine 38 of a long answer.\nLine 39 of a long answer.\nLine 40 of a long answer.\nLine 41 of a long answer.\nLine 42 of a long answer.\nLine 43 of a long answer.\nLine 44 of a long answer.\nLine 45 of a long answer.\nLine 46 of a long answer.\nLine 47 of a long answer.\nLine 48 of a long answer.\nLine 49 of a long answer.\nLine 50 of a long answer.\nLine 51 of a long answer.\nLine 52 of a long answer.\nLine 53 of a long answer.\nLine 54 of a long answer.\nLine 55 of a long answer.\nLine 56 of a long answer.\nLine 57 of a long answer.\nLine 58 of a long answer.\nLine 59 of a long answer.\nLine 60 of a long answer.",
+  "pushes": {
+    "notify": [
+      {
+        "service": "notify.notify",
+        "data": {
+          "message": "Hello",
+          "title": "Copilot: Copilot: Fix the relay"
+        }
+      }
+    ],
+    "responseShort": [
+      {
+        "service": "notify.notify",
+        "data": {
+          "message": "  Done.  ",
+          "title": "Response: Claude: scratch"
+        }
+      }
+    ],
+    "responseLong": [
+      {
+        "service": "notify.notify",
+        "data": {
+          "message": "Line 1 of a long answer.\nLine 2 of a long answer.\nLine 3 of a long answer.\nLine 4 of a long answer.\nLine 5 of a long answer.\nLine 6 of a long answer.\nLine 7 of a long answer.\nLine 8 of a long answer.\nLine 9 of a long answer.\nLine 10 of a long answer.\nLine 11 of a long answer.\nLine 12 of a long answer.\nLine 13 of a long answer.\nLine 14 of a long answer.\nLine 15 of a long answer.\nLine 16 of a long answer.\nLine 17 of a long answer.\nLine 18 of a long answer.\nLine 19 of a long answer.\nLine 20 of a long answer.\nLine 21 of a long answer.\nLine 22 of a long answer.\nLine 23 of a long answer.\nLine 24 of a long answer.\nLine 25 of a long answer.\nLine 26 of a long answer.\nLine 27 of a long answer.\nLine 28 of a long answer.\nLine 29 of a long answer.\nLine 30 of a long answer.\nLine 31 of a long answer.\nLine 32 of a long answer.\nLine 33 of a long answer.\nLine 34 of a long answer.\nLine...\n\nFull response is on the Agent Sessions dashboard.",
+          "title": "Copilot response: Copilot: Fix the relay"
+        }
+      }
+    ],
+    "responseEmpty": [],
+    "ticker": [
+      {
+        "service": "ticker.notify",
+        "data": {
+          "actions": "none",
+          "category": "agents",
+          "expiration": 8,
+          "message": "rm -rf build",
+          "navigate_to": "/agent-decisions/decision",
+          "title": "Approval needed: Codex: api"
+        }
+      }
+    ],
+    "disabled": []
+  }
+}

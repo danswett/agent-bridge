@@ -41,6 +41,13 @@ public interface IHomeAssistant
     // Ends when the connection does; the caller watches again.
     IAsyncEnumerable<HaTrigger> WatchAsync(IReadOnlyCollection<string> entityIds, CancellationToken cancellationToken = default);
 
+    // Every event of one type as Home Assistant fires it (subscribe_events), held for as long as it
+    // is read: an event is delivered once, to whoever is subscribed then, and leaves nothing to
+    // read back later (the daemon's answer-button listener). Ends when the connection does.
+    // subscribed is called once Home Assistant has confirmed the subscription: from then on no
+    // event of the type is missed.
+    IAsyncEnumerable<HaEvent> EventsAsync(string eventType, Action? subscribed = null, CancellationToken cancellationToken = default);
+
     // Every message the broker holds or delivers on these topic filters within the window, read
     // through Home Assistant's mqtt/subscribe. Read-only: used by the shadow comparison.
     Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default);
@@ -66,6 +73,10 @@ public static class HaImageId
 // token the agent's. LastChanged is when the state itself last changed, on Home Assistant's clock,
 // the clock its press timestamps are on too; LastUpdated when its state or attributes last did.
 public sealed record HaState(string EntityId, string State, JsonElement Attributes, string? UserId = null, DateTimeOffset? LastChanged = null, DateTimeOffset? LastUpdated = null);
+
+// One event, with the account behind it (context.user_id) when there was one, and what tells it
+// from every other event: its context id, or the time it was fired when it has none.
+public sealed record HaEvent(string EventType, JsonElement Data, string? UserId, string? Id = null);
 
 // One change a watch reported. A removed entity is not a change (Get-BridgeStateTriggerHit).
 public sealed record HaTrigger(string EntityId, HaState State);
@@ -347,6 +358,39 @@ public sealed class HomeAssistantClient : IHomeAssistant
         var state = s.GetString()!;
         if (state is "" or "unknown" or "unavailable") { return null; }
         return new HaTrigger(id.GetString()!, new HaState(id.GetString()!, state, to.TryGetProperty("attributes", out var a) ? a.Clone() : default, UserId(to), Instant(to, "last_changed"), Instant(to, "last_updated")));
+    }
+
+    public async IAsyncEnumerable<HaEvent> EventsAsync(string eventType, Action? subscribed = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        using var ws = await OpenAsync(cancellationToken);
+        try
+        {
+            await HaWebSocket.SubscribeAsync(ws, new JsonObject { ["type"] = "subscribe_events", ["event_type"] = eventType }, cancellationToken);
+            subscribed?.Invoke();
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                using var message = await HaWebSocket.ReceiveAsync(ws, cancellationToken);
+                if (Event(message.RootElement, eventType) is { } e) { yield return e; }
+            }
+        }
+        finally { await CloseAsync(ws); }
+    }
+
+    // The event one subscribe_events message carries, or null.
+    internal static HaEvent? Event(JsonElement message, string eventType)
+    {
+        if (!message.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String || type.GetString() != "event") { return null; }
+        if (!message.TryGetProperty("event", out var e) || e.ValueKind != JsonValueKind.Object
+            || !e.TryGetProperty("event_type", out var t) || t.ValueKind != JsonValueKind.String || t.GetString() != eventType
+            || !e.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+        string? id = null;
+        if (e.TryGetProperty("context", out var context) && context.ValueKind == JsonValueKind.Object
+            && context.TryGetProperty("id", out var cid) && cid.ValueKind == JsonValueKind.String && cid.GetString() is { Length: > 0 } c) { id = c; }
+        else if (e.TryGetProperty("time_fired", out var fired) && fired.ValueKind == JsonValueKind.String && fired.GetString() is { Length: > 0 } f) { id = "fired:" + f; }
+        return new HaEvent(eventType, data.Clone(), UserId(e), id);
     }
 
     public async Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default)

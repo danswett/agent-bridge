@@ -30,6 +30,8 @@ public sealed partial class HaConnector
         public string? SpentPress;
         // A press or a publish already used, so it is never delivered twice.
         public string? UsedPress;
+        // The phone taps (by event) already given to the host for this question.
+        public readonly HashSet<string> PhoneTaps = new(StringComparer.Ordinal);
         public string? UsedStamp;
         // An answer reached, or may have reached, the terminal: never typed again.
         public bool Settled;
@@ -163,6 +165,7 @@ public sealed partial class HaConnector
             // once it shows no question is.
             if (ServesReplies && p.Armed is not null && !await BaselineRepliesAsync(p, ct)) { p.Reply.Baselined = false; }
             await RunAsync(HaDecision.Clear(p.Node, name, options.MachineName, slots), p.Node, ct);
+            await ClearButtonsAsync(full.Id, p.Notify, forget: true, ct);
             p.Armed = null;
             p.Cleared = true;
             p.ArmedSlots = 0;
@@ -180,6 +183,8 @@ public sealed partial class HaConnector
             lock (gate) { dirty.Add(full.Id); }
             return;
         }
+        // The last question's buttons, still on the phones: gone with it.
+        if (p.Notify.Shown is { } shown && shown != question.Id) { await ClearButtonsAsync(full.Id, p.Notify, forget: true, ct); }
         var plan = HaDecision.Plan(question, full.Agent);
         var armedSlots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
         var unset = await RunAsync(HaDecision.Arm(plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow()), p.Node, ct);
@@ -354,7 +359,8 @@ public sealed partial class HaConnector
     // acted on.
     async Task AnswersAsync(DateTimeOffset now, CancellationToken ct)
     {
-        if (!ServesAnswers || !options.ConsumeAnswers) { hits.Clear(); return; }
+        if (!ServesAnswers || !options.ConsumeAnswers) { hits.Clear(); taps.Clear(); return; }
+        await TapsAsync(now, ct);
         await RepliesDoneAsync(now, ct);
         await StopsDoneAsync(now, ct);
         await StopLapsesAsync(now, ct);
@@ -453,6 +459,14 @@ public sealed partial class HaConnector
             return;
         }
         if (outcome.Request is not { } request || answer is null) { return; }
+        await DeliverAsync(sessionId, p, armed, outcome, request, now, ct);
+    }
+
+    // An answer read from the card, or tapped on a phone, to the host's delivery, and what came of
+    // it said on the card. Null when nothing was delivered because there is no delivery.
+    async Task<AnswerOutcome?> DeliverAsync(string sessionId, Published p, Armed armed, Read outcome, AnswerRequest request, DateTimeOffset now, CancellationToken ct)
+    {
+        if (answer is null) { return null; }
 
         // Said before anything is marked used: if saying it fails, the next pass reads the same
         // press again rather than finding it spent with nothing delivered.
@@ -522,6 +536,7 @@ public sealed partial class HaConnector
                 log($"Home Assistant connector answer to {sessionId[..Math.Min(8, sessionId.Length)]} not sent: {result.Outcome}");
                 break;
         }
+        return result.Outcome;
     }
 
     static string Shown(string answer)

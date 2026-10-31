@@ -84,4 +84,46 @@ public sealed class SettingsTests : IDisposable
         Assert.False(HaTokenStore.Exists(folder));
         Assert.Null(HaTokenStore.Load(folder));
     }
+
+    [Fact]
+    public void Phone_notifications_are_read_under_the_daemons_names_and_a_wrong_one_turns_the_connector_off()
+    {
+        Assert.Equal(HaNotifySettings.Default, Read("{}").Settings.Notify);
+        Assert.False(HaNotifySettings.Default.ButtonsOn);
+        var (settings, none) = Read("""
+            {"enabled":true,"baseUrl":"http://ha.test:8123",
+             "notifications":{"enabled":true,"service":"ticker.notify","tickerCategory":"agents"},
+             "answerButtons":{"services":["notify.mobile_app_phone"," notify.mobile_app_phone "],"maxButtons":3,"icon":"","interruptionLevel":"active"}}
+            """);
+        Assert.Empty(none);
+        Assert.True(settings.Enabled);
+        var n = settings.Notify;
+        Assert.True(n.Enabled);
+        Assert.Equal("ticker.notify", n.Service);
+        Assert.Equal("agents", n.TickerCategory);
+        Assert.Equal(["notify.mobile_app_phone"], n.AnswerButtonServices);
+        Assert.Equal(3, n.MaxButtons);
+        Assert.Equal("", n.Icon);
+        Assert.Equal("active", n.InterruptionLevel);
+        Assert.Equal("#FF9F0A", n.Color);
+        Assert.True(n.ButtonsOn);
+        Assert.False((n with { AnswerButtons = false }).ButtonsOn);
+
+        foreach (var part in new[]
+        {
+            """ "notifications":"on" """,
+            """ "notifications":{"enabled":"yes"} """,
+            """ "notifications":{"service":"notify"} """,
+            """ "answerButtons":"on" """,
+            """ "answerButtons":{"services":"notify.mobile_app_phone"} """,
+            """ "answerButtons":{"services":["phone"]} """,
+            """ "answerButtons":{"maxButtons":-1} """,
+            """ "answerButtons":{"icon":3} """,
+        })
+        {
+            var (wrong, problems) = Read($$"""{"enabled":true,"baseUrl":"http://ha.test",{{part}}}""");
+            Assert.False(wrong.Enabled, part);
+            Assert.Contains(problems, p => p.StartsWith("homeAssistant.notifications", StringComparison.Ordinal) || p.StartsWith("homeAssistant.answerButtons", StringComparison.Ordinal));
+        }
+    }
 }

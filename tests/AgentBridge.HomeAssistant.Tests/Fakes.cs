@@ -100,9 +100,25 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     readonly System.Threading.Channels.Channel<HaTrigger> triggers = System.Threading.Channels.Channel.CreateUnbounded<HaTrigger>();
     public List<IReadOnlyCollection<string>> Watches { get; } = [];
 
+    // Notifications sent (any call naming no entity), in order, with the account that sent them.
+    public List<(string Service, JsonObject Data)> Notified { get; } = [];
+    public List<(string Service, JsonObject Data)> NotifiedNow() { lock (gate) { return [.. Notified]; } }
+    public Func<string, bool>? NotifyFailsFor { get; set; }
+    // What a notify call throws instead, when not null (a timeout, say).
+    public Func<string, Exception?>? NotifyThrows { get; set; }
+    readonly System.Threading.Channels.Channel<HaEvent> events = System.Threading.Channels.Channel.CreateUnbounded<HaEvent>();
+    public int EventSubscriptions;
+
     public Task CallServiceAsync(string domain, string service, JsonObject data, CancellationToken cancellationToken = default)
     {
         if (ServiceTarget.Check(data) is { } refused) { throw new InvalidOperationException(refused); }
+        if (data["entity_id"] is null)
+        {
+            if (NotifyThrows?.Invoke($"{domain}.{service}") is { } thrown) { throw thrown; }
+            if (NotifyFailsFor?.Invoke($"{domain}.{service}") == true) { throw new HttpRequestException($"{domain}.{service}: Home Assistant answered 400 Bad Request"); }
+            lock (gate) { Notified.Add(($"{domain}.{service}", data.DeepClone().AsObject())); }
+            return Task.CompletedTask;
+        }
         var entityId = data["entity_id"]!.GetValue<string>();
         if (ServiceFailsFor?.Invoke($"{domain}.{service}", entityId) == true) { throw new HttpRequestException($"{domain}.{service}: Home Assistant answered 500 Internal Server Error"); }
         var value = data["option"]?.GetValue<string>() ?? data["value"]?.GetValue<string>() ?? "";
@@ -157,6 +173,25 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         PublishAsync(HaContract.Topics(node).ReplyPayload, HaContract.Serialize(payload), true).GetAwaiter().GetResult();
         var entityId = SessionEntities.ReplyPayload(node);
         lock (gate) { return new HaTrigger(entityId, Derived(entityId)!); }
+    }
+
+    // A phone's tap, as Home Assistant fires it.
+    public void Fire(string eventType, JsonObject data, string? userId = "person", string? id = null) =>
+        events.Writer.TryWrite(new HaEvent(eventType, JsonSerializer.SerializeToElement(data), userId, id ?? Guid.NewGuid().ToString("N")));
+
+    // Holds a subscription unconfirmed until it is let go (a Home Assistant slow to answer).
+    public TaskCompletionSource SubscriptionGate { get; set; } = CompletedGate();
+    static TaskCompletionSource CompletedGate() { var t = new TaskCompletionSource(); t.SetResult(); return t; }
+
+    public async IAsyncEnumerable<HaEvent> EventsAsync(string eventType, Action? subscribed = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await SubscriptionGate.Task.WaitAsync(cancellationToken);
+        Interlocked.Increment(ref EventSubscriptions);
+        subscribed?.Invoke();
+        await foreach (var e in events.Reader.ReadAllAsync(cancellationToken))
+        {
+            if (e.EventType == eventType) { yield return e; }
+        }
     }
 
     public async IAsyncEnumerable<HaTrigger> WatchAsync(IReadOnlyCollection<string> entityIds, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)

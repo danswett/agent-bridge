@@ -178,6 +178,25 @@ public class ClientTests
     }
 
     [Fact]
+    public void An_event_is_read_with_the_account_that_fired_it_and_anything_else_is_not_one()
+    {
+        static JsonElement Message(string json) => JsonDocument.Parse(json).RootElement;
+        var tap = HomeAssistantClient.Event(Message("""
+            {"id":1,"type":"event","event":{"event_type":"mobile_app_notification_action",
+             "data":{"action":"BRIDGE_q1_0","action_data":{"bridge":"decision"}},"context":{"id":"c","user_id":"u-phone"}}}
+            """), HaNotify.ActionEvent);
+        Assert.NotNull(tap);
+        Assert.Equal("u-phone", tap.UserId);
+        Assert.Equal("c", tap.Id);
+        Assert.Equal("fired:2026-10-31T04:00:00.000000+00:00", HomeAssistantClient.Event(Message("""{"id":1,"type":"event","event":{"event_type":"mobile_app_notification_action","data":{},"time_fired":"2026-10-31T04:00:00.000000+00:00"}}"""), HaNotify.ActionEvent)!.Id);
+        Assert.Equal("BRIDGE_q1_0", tap.Data.GetProperty("action").GetString());
+        Assert.Null(HomeAssistantClient.Event(Message("""{"id":1,"type":"event","event":{"event_type":"mobile_app_notification_action","data":{},"context":{"user_id":null}}}"""), HaNotify.ActionEvent)!.UserId);
+        Assert.Null(HomeAssistantClient.Event(Message("""{"id":1,"type":"event","event":{"event_type":"state_changed","data":{}}}"""), HaNotify.ActionEvent));
+        Assert.Null(HomeAssistantClient.Event(Message("""{"id":1,"type":"result","success":true}"""), HaNotify.ActionEvent));
+        Assert.Null(HomeAssistantClient.Event(Message("""{"id":1,"type":"event","event":{"event_type":"mobile_app_notification_action","data":"x"}}"""), HaNotify.ActionEvent));
+    }
+
+    [Fact]
     public async Task A_rename_names_one_entity_and_its_new_id()
     {
         var (client, received, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonObject() });
