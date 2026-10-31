@@ -606,7 +606,9 @@ looks nothing up.
   hand-over fails says `failed` with the reason, notifies **Bridge update failed on
   `<machine>`**, and leaves Install usable. A press while an update runs, or while the host waits
   to exit into one, is not acted on and gets the daemon's **Bridge update already running on
-  `<machine>`** notice. A host stopped part-way through leaves the last stage retained, as the
+  `<machine>`** notice. A notice Home Assistant does not take is tried again every 15 s until it
+  does or a newer one replaces it. What is downloaded and applied is exactly the release the
+  install's own check found, from the feed that found it. A host stopped part-way through leaves the last stage retained, as the
   daemon does, and the next start republishes the entity without it.
 * **The outcome.** The host that comes back reads the attempt and says how it ended, once: on
   the new version, `completed` (`Updated to <version>`) for an hour and **Bridge installer

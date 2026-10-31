@@ -23,13 +23,19 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
     readonly object gate = new();
     UpdateManager? manager;
     string? source;
-    // Each release a check has found, with the manager that found it, by version: a check made
-    // while one is being installed (or a feed changed in between) must not take away the release
-    // the install downloads and applies.
-    readonly Dictionary<string, (UpdateManager Manager, UpdateInfo Info)> found = new(StringComparer.Ordinal);
-    // What was downloaded, which is what is applied: never a same-numbered release another check
-    // found since, from another feed.
-    (UpdateManager Manager, UpdateInfo Info)? downloaded;
+
+    // A release as a check found it, carried in the UpdateRelease the check returned: the install
+    // downloads and applies exactly that, from the manager (and so the feed) that found it, never a
+    // same-numbered release another check found since.
+    sealed class Found(UpdateManager manager, UpdateInfo info)
+    {
+        public UpdateManager Manager { get; } = manager;
+        public UpdateInfo Info { get; } = info;
+        public volatile bool Downloaded;
+    }
+
+    static Found Of(UpdateRelease release) =>
+        release.Handle as Found ?? throw new InvalidOperationException($"{release.Version} was not found by a check here");
 
     string AppFolder => Path.Combine(dataRoot, "app");
 
@@ -112,25 +118,14 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
         var info = await m.CheckForUpdatesAsync().WaitAsync(cancellationToken);
         if (info is null) { return null; }
         var target = info.TargetFullRelease;
-        var version = target.Version.ToString();
-        lock (gate) { found[version] = (m, info); }
-        return new UpdateRelease(version, target.NotesMarkdown, ReleasesUrl);
-    }
-
-    (UpdateManager Manager, UpdateInfo Info) Found(UpdateRelease release)
-    {
-        lock (gate)
-        {
-            return found.TryGetValue(release.Version, out var f) ? f : throw new InvalidOperationException($"{release.Version} was not found by a check here");
-        }
+        return new UpdateRelease(target.Version.ToString(), target.NotesMarkdown, ReleasesUrl) { Handle = new Found(m, info) };
     }
 
     public async Task DownloadAsync(UpdateRelease release, Action<int> progress, CancellationToken cancellationToken)
     {
-        var entry = Found(release);
-        lock (gate) { downloaded = null; }
-        await entry.Manager.DownloadUpdatesAsync(entry.Info, progress, cancellationToken);
-        lock (gate) { downloaded = entry; }
+        var found = Of(release);
+        await found.Manager.DownloadUpdatesAsync(found.Info, progress, cancellationToken);
+        found.Downloaded = true;
     }
 
     // What the app is started with after the update: in the background, for this host's profile
@@ -139,14 +134,9 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
 
     public void ApplyAndRestart(UpdateRelease release)
     {
-        (UpdateManager Manager, UpdateInfo Info) entry;
-        lock (gate)
-        {
-            entry = downloaded is { } d && d.Info.TargetFullRelease.Version.ToString() == release.Version
-                ? d
-                : throw new InvalidOperationException($"{release.Version} has not been downloaded here");
-        }
-        entry.Manager.WaitExitThenApplyUpdates(entry.Info.TargetFullRelease, silent: true, restart: true, RestartArguments(profile));
+        var found = Of(release);
+        if (!found.Downloaded) { throw new InvalidOperationException($"{release.Version} has not been downloaded here"); }
+        found.Manager.WaitExitThenApplyUpdates(found.Info.TargetFullRelease, silent: true, restart: true, RestartArguments(profile));
         log($"updating to {release.Version}: Velopack applies it once this host has exited, and starts the app again, which starts the host");
         stop();
     }

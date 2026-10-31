@@ -4,8 +4,12 @@ using System.Text.Json.Nodes;
 
 namespace AgentBridge.HomeAssistant;
 
-// A release newer than the one installed: its version, notes and page.
-public sealed record UpdateRelease(string Version, string? Notes, string? Url);
+// A release newer than the one installed: its version, notes and page, and whatever the updater
+// that found it needs to download and apply exactly that release (opaque to the connector).
+public sealed record UpdateRelease(string Version, string? Notes, string? Url)
+{
+    public object? Handle { get; init; }
+}
 
 // The host's own updater, as the connector drives it. The host is updated with the app that
 // carries it (Velopack, docs/app-windows.md); a copy its updater did not install (a build folder,
@@ -74,6 +78,10 @@ public sealed partial class HaConnector
     // updateAttempt, so an install pressed meanwhile that fails does not take it away. The ledger
     // holds one: an install handed over records its own, whose outcome the next host tells.
     UpdateAttempt? updateOutcome;
+    // A notice Home Assistant did not take, tried again until it does or a newer one replaces it
+    // (they share one notification_id, so only the newest means anything).
+    (string Title, string Message)? noticePending;
+    DateTimeOffset nextNoticeTry;
     string? updateSignature;
 
     sealed record UpdateAttempt(string Target, string Before, DateTimeOffset At, string? Url);
@@ -145,6 +153,9 @@ public sealed partial class HaConnector
                 Problem("update-outcome", $"Home Assistant connector could not tell how the update ended: {Describe(e)}; trying again");
             }
         }
+        (string Title, string Message)? retry;
+        lock (gate) { retry = now >= nextNoticeTry ? noticePending : null; }
+        if (retry is { } n) { await TellAsync(n.Title, n.Message, ct); }
         if (!updateServing)
         {
             await PublishUpdateAsync(now, ct);
@@ -290,15 +301,8 @@ public sealed partial class HaConnector
                     : "an update is already under way here";
             }
             log($"Home Assistant connector: install press not acted on: {detail}");
-            try
-            {
-                await NoticeAsync($"Bridge update already running on {options.MachineName}",
-                    $"This press did not start an update: {detail}. That update reports here when it finishes.", ct);
-            }
-            catch (Exception e) when (e is not AgentHaBridgeRunning && !ct.IsCancellationRequested)
-            {
-                log($"Home Assistant connector could not say the update is already running: {Describe(e)}");
-            }
+            await TellAsync($"Bridge update already running on {options.MachineName}",
+                $"This press did not start an update: {detail}. That update reports here when it finishes.", ct);
             return;
         }
         lock (gate)
@@ -344,11 +348,8 @@ public sealed partial class HaConnector
                     updateVerdict = ("current", detail, time.GetUtcNow() + options.UpdateVerdict);
                 }
                 log($"Home Assistant connector: self-update: {detail}");
-                await SayAsync(async () =>
-                {
-                    await PublishUpdateAsync(time.GetUtcNow(), ct);
-                    await NoticeAsync($"No newer bridge release on {options.MachineName}", $"The bridge update did not start: {detail}", ct);
-                }, "say there is no newer release", ct);
+                await SayAsync(() => PublishUpdateAsync(time.GetUtcNow(), ct), "say there is no newer release", ct);
+                await TellAsync($"No newer bridge release on {options.MachineName}", $"The bridge update did not start: {detail}", ct);
                 return;
             }
             target = release.Version;
@@ -393,11 +394,8 @@ public sealed partial class HaConnector
             }
             SaveLedger();
             log($"Home Assistant connector: self-update{(target is null ? "" : $" to {target}")} did not start: {why}");
-            await SayAsync(async () =>
-            {
-                await PublishUpdateAsync(time.GetUtcNow(), ct);
-                await NoticeAsync($"Bridge update failed on {options.MachineName}", $"The bridge update did not start: {why}", ct);
-            }, "say the update did not start", ct);
+            await SayAsync(() => PublishUpdateAsync(time.GetUtcNow(), ct), "say the update did not start", ct);
+            await TellAsync($"Bridge update failed on {options.MachineName}", $"The bridge update did not start: {why}", ct);
         }
     }
 
@@ -457,6 +455,26 @@ public sealed partial class HaConnector
         }
         lock (gate) { if (ReferenceEquals(updateOutcome, attempt)) { updateOutcome = null; } }
         SaveLedger();
+    }
+
+    // A notice answering a press: sent now, or kept and tried again with the passes until Home
+    // Assistant takes it, so a failure it reports is not lost to a moment's refusal. Never throws but
+    // for the connector stopping.
+    async Task TellAsync(string title, string message, CancellationToken ct)
+    {
+        lock (gate) { noticePending = (title, message); }
+        try
+        {
+            await NoticeAsync(title, message, ct);
+            lock (gate) { if (noticePending == (title, message)) { noticePending = null; } }
+            Resolved("update-notice");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception e)
+        {
+            lock (gate) { nextNoticeTry = time.GetUtcNow() + options.ButtonsRetry; }
+            Problem("update-notice", $"Home Assistant connector could not send \"{title}\": {Describe(e)}; trying again");
+        }
     }
 
     // The update notices all replace one another (notification_id agent_bridge_update_<slug>).

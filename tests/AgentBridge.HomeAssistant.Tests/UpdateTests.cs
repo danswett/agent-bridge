@@ -475,6 +475,24 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task A_failure_notice_Home_Assistant_did_not_take_is_tried_again_until_it_does()
+    {
+        updates.Newer = Release();
+        updates.DownloadFails = new IOException("disk full");
+        ha.NotifyFailsFor = s => s == "persistent_notification.create";
+        await using var c = await Ready();
+        await Press(c, "install_update");
+        await Settle(c, () => Stage == "failed");
+        Assert.Empty(ha.NotifiedNow());
+        ha.NotifyFailsFor = null;
+        await Pass(c, 16);
+        var (_, data) = Assert.Single(ha.NotifiedNow());
+        Assert.Equal("The bridge update did not start: disk full", data["message"]!.GetValue<string>());
+        await Pass(c, 16);
+        Assert.Single(ha.NotifiedNow());
+    }
+
+    [Fact]
     public async Task An_updater_that_cannot_take_the_release_is_a_failure_and_no_restart_is_awaited()
     {
         updates.Newer = Release();
@@ -604,8 +622,9 @@ public sealed class UpdateTests : IDisposable
         Assert.Equal("0.2.0", JsonNode.Parse(File.ReadAllText(StateFile))!["update"]!["target"]!.GetValue<string>());
         ha.NotifyFailsFor = null;
         await Pass(c, 16);
-        var (_, data) = Assert.Single(ha.NotifiedNow());
-        Assert.Equal($"Bridge installer completed on {Machine}", data["title"]!.GetValue<string>());
+        // Both told, the newer last: they share one notification, which ends up saying the newer.
+        Assert.Equal([$"Bridge installer completed on {Machine}", $"Bridge update failed on {Machine}"],
+            ha.NotifiedNow().Select(n => n.Data["title"]!.GetValue<string>()));
         Assert.Null(JsonNode.Parse(File.ReadAllText(StateFile))!["update"]);
     }
 

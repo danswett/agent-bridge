@@ -1,3 +1,4 @@
+using AgentBridge.HomeAssistant;
 using AgentBridge.Host;
 using Xunit;
 
@@ -27,6 +28,19 @@ public sealed class HostUpdatesTests : IDisposable
         Directory.CreateDirectory(Path.Combine(root, "app"));
         File.WriteAllText(Path.Combine(root, "app", "feed.txt"), Path.Combine(root, "releases"));
         Assert.Null(updates.ReleasesUrl);
+    }
+
+    [Fact]
+    public async Task Only_the_release_a_check_here_found_and_downloaded_is_downloaded_or_applied()
+    {
+        var stopped = false;
+        var updates = new VelopackHostUpdates(root, "default", () => stopped = true, _ => { });
+        // Same version, but not the one a check here found (another feed's, say): refused.
+        var stranger = new UpdateRelease("0.2.0", null, null);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => updates.DownloadAsync(stranger, _ => { }, CancellationToken.None));
+        Assert.Throws<InvalidOperationException>(() => updates.ApplyAndRestart(stranger));
+        Assert.Throws<InvalidOperationException>(() => updates.ApplyAndRestart(stranger with { Handle = new object() }));
+        Assert.False(stopped);
     }
 
     [Fact]
