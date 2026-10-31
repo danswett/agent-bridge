@@ -276,6 +276,30 @@ public sealed partial class LaunchViewModel
         if (machine?.Key == answer.Machine && shown) { _ = RefreshAsync(); }
     }
 
+    // The relay or this machine's loopback came up after this machine's questions were listed
+    // through the pipe alone: list them through the relay now, so one this app may answer offers
+    // Trust and Quit without a reload. One at a time.
+    bool relisting;
+
+    void RelistLocalTrust()
+    {
+        if (!shown || relisting || machine is not { IsLocal: true } m || localTrust is not null || options?.Trust is not { Count: > 0 } piped) { return; }
+        if (main.Fleet?.State != FleetState.Connected) { return; }
+        relisting = true;
+        var load = loads;
+        _ = Task.Run(async () =>
+        {
+            var got = await LocalTrustAsync(options);
+            ui.Post(() =>
+            {
+                relisting = false;
+                if (load != loads || m != machine || got is null) { return; }
+                localTrust = got;
+                DrawTrust();
+            });
+        });
+    }
+
     // This machine's questions through the relay, where the pipe listed any: only then, since
     // launch.options is costly at the host.
     async Task<IReadOnlyList<TrustQuestion>?> LocalTrustAsync(LaunchOptions? piped)

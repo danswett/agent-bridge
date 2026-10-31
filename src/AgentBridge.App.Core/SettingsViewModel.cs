@@ -120,8 +120,37 @@ public sealed class SettingsViewModel : Observable
         set
         {
             if (Status is not { } s || s.Settings.RemoteFolderTrust == value) { return; }
-            var approve = value && (s.Settings.RemoteFolderTrustDevices ?? []).Count == 0 && fleet?.DeviceId is { } me ? new[] { me } : null;
-            _ = RunAsync(() => host.CallAsync(HostOps.Settings, new SettingsRequest(RemoteFolderTrust: value, RemoteFolderTrustDevices: approve)));
+            _ = TrustSettingsAsync(devices => new SettingsRequest(RemoteFolderTrust: value,
+                RemoteFolderTrustDevices: value && devices.Count == 0 && fleet?.DeviceId is { } me ? [me] : null));
+        }
+    }
+
+    // Changes to who may answer go one at a time, each from what the host said after the last:
+    // the host replaces the whole list, so two made from the same status would undo each other
+    // (revoking A and approving B before the first is in would put A back).
+    readonly SemaphoreSlim trustEdits = new(1, 1);
+    IReadOnlyList<string>? confirmedDevices;
+    int pendingEdits;
+
+    async Task TrustSettingsAsync(Func<IReadOnlyList<string>, SettingsRequest?> change)
+    {
+        Interlocked.Increment(ref pendingEdits);
+        await trustEdits.WaitAsync();
+        try
+        {
+            var now = confirmedDevices ?? Status?.Settings.RemoteFolderTrustDevices ?? [];
+            if (change(now) is not { } request) { return; }
+            await RunAsync(async () =>
+            {
+                var result = await host.CallAsync<SettingsResult>(HostOps.Settings, request);
+                confirmedDevices = result.Settings.RemoteFolderTrustDevices ?? [];
+            });
+        }
+        finally
+        {
+            // With none left to make, the host's status is the word again.
+            if (Interlocked.Decrement(ref pendingEdits) == 0) { confirmedDevices = null; }
+            trustEdits.Release();
         }
     }
 
@@ -143,7 +172,7 @@ public sealed class SettingsViewModel : Observable
 
     void DrawDevices()
     {
-        var approved = Status?.Settings.RemoteFolderTrustDevices ?? [];
+        var approved = confirmedDevices ?? Status?.Settings.RemoteFolderTrustDevices ?? [];
         var me = fleet?.DeviceId;
         var rows = new List<(string Id, string Label)>();
         if (me is not null) { rows.Add((me, $"This app ({Environment.MachineName})")); }
@@ -168,12 +197,13 @@ public sealed class SettingsViewModel : Observable
 
     internal async Task ApproveAsync(TrustDevice device, bool on)
     {
-        if (Status is not { } s) { device.Reraise(); return; }
-        var now = (s.Settings.RemoteFolderTrustDevices ?? []).ToList();
-        if (now.Contains(device.Id) != on)
+        if (Status is not null)
         {
-            if (on) { now.Add(device.Id); } else { now.Remove(device.Id); }
-            await RunAsync(() => host.CallAsync(HostOps.Settings, new SettingsRequest(RemoteFolderTrustDevices: now)));
+            await TrustSettingsAsync(devices =>
+            {
+                if (devices.Contains(device.Id) == on) { return null; }
+                return new SettingsRequest(RemoteFolderTrustDevices: on ? [.. devices, device.Id] : [.. devices.Where(d => d != device.Id)]);
+            });
         }
         // What the host says now, whatever the checkbox was left showing.
         DrawDevices();

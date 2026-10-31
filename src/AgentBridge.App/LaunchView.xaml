@@ -93,6 +93,7 @@
                     IsOpen="{x:Bind local:LaunchView.Has(ViewModel.Busy), Mode=OneWay}"
                     Message="{x:Bind ViewModel.Busy, Mode=OneWay}" />
                 <ItemsControl
+                    x:Name="TrustList"
                     AutomationProperties.AutomationId="TrustQuestions"
                     ItemsSource="{x:Bind ViewModel.TrustQuestions, Mode=OneWay}"
                     ItemTemplate="{StaticResource TrustTemplate}"
