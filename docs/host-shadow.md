@@ -406,7 +406,7 @@ What each bug does:
 
 ### Fixed in the host
 
-The same runs, and review, found four host bugs, all fixed:
+The same runs, and review, found six host bugs, all fixed:
 
 * **No model on a busy session** (`TailTests`). The host read a session's model only from
   the last 4 MiB of the transcript, so a session whose background agents filled that tail
@@ -430,6 +430,19 @@ The same runs, and review, found four host bugs, all fixed:
   same list, running sessions included, and only then leaves the running ones out. The host
   did it after, so an older namesake of a running session had a plain label here and a
   suffixed one there. It now does it in the same order.
+* **Working after the turn had ended** (`BackgroundTests`). Copilot answers a background
+  agent's `agent_idle` notification inside the turn it starts: a reply asking for
+  `read_agent`, its result, then a reply with nothing more to run, then `turn_end`. The host
+  remembered the first reply's tool request, so it read that `turn_end` as one more round to
+  come and showed the session working until its next prompt. Seen as `status` daemon `shell`,
+  host `working` on 2026-10-30 from 17:05 PT, cut short by the next bug. The daemon was right:
+  a turn's latest reply now decides.
+* **A relay socket that aborted itself crashed the host** (`RelayTests`). The keep-alive
+  aborts a socket whose pong never comes, and the receive then throws
+  `OperationCanceledException`, which the relay client let through. Four minutes after a
+  production relay deploy on 2026-10-30, the shadow host exited at 17:08 PT, and its task
+  did not restart it (`machine.host` for hours). The connection now just ends and the host
+  reconnects.
 
 ### Not compared
 

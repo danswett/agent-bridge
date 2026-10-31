@@ -210,6 +210,20 @@ public class BackgroundTests
     }
 
     [Fact]
+    public async Task A_turn_that_reads_an_idle_agent_and_then_replies_with_nothing_to_run_leaves_the_session_idle()
+    {
+        await using var s = new Session_();
+        await s.After([.. Delegate("t1", "a1", 1), Copilot.Assistant("Report.", 10, agentId: "a1"), Copilot.TurnEnd(11, "a1")]);
+
+        var idle = await s.After(Copilot.TurnStart(20), Copilot.AgentIdle("a1", 20), Copilot.Assistant("", 20, tools: ["r1"]),
+            Copilot.ToolStart("r1", "read_agent", new { agent_id = "a1" }, 20), Copilot.ToolDone("r1", 20),
+            Copilot.Assistant("The helper is done.", 25), Copilot.TurnEnd(25));
+
+        Assert.Equal(SessionStatus.Idle, idle.Status);
+        Assert.Equal(Fixture.T0.AddSeconds(25), idle.StatusSince);
+    }
+
+    [Fact]
     public async Task Background_shells_count_from_their_start_until_they_complete_are_stopped_or_are_notified()
     {
         await using var s = new Session_();
