@@ -433,8 +433,10 @@ public sealed class UpkeepTests : IDisposable
         Assert.Equal(0, Logged("armed " + NodeA + " again"));
     }
 
-    [Fact]
-    public async Task A_Send_pressed_on_the_card_Home_Assistant_brought_back_by_itself_is_read_before_the_question_is_armed_again()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_Send_pressed_on_the_card_Home_Assistant_brought_back_by_itself_is_read_before_the_question_is_armed_again(bool firstReadFails)
     {
         var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };
         sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
@@ -450,6 +452,12 @@ public sealed class UpkeepTests : IDisposable
         var rearmed = Logged("armed " + NodeA + " again");
         ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
         ha.Press(SessionEntities.Submit(NodeA));
+        if (firstReadFails)
+        {
+            // The first read of Send after the restart fails: no press can be told from none.
+            var failures = 1;
+            ha.GetFailsFor = id => id == SessionEntities.Submit(NodeA) && failures-- > 0;
+        }
         await Run(c, 10);
         var given = Assert.Single(answered);
         Assert.Equal("wait", given.Fields!["release"].GetString());

@@ -388,13 +388,25 @@ public sealed partial class HaConnector
         }
     }
 
+    // Observations nobody could make, ever: a card read is determinate only if this did not move
+    // while it was read.
+    long indeterminate;
+
     async Task<Observation> ObserveAsync(string entityId, CancellationToken ct)
     {
         HaState? state;
         try { state = await ha.GetStateAsync(entityId, ct); }
-        catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { return Observation.Unknown; }
+        catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
+        {
+            Interlocked.Increment(ref indeterminate);
+            return Observation.Unknown;
+        }
         if (state is null) { return new Observation("absent", "", null, false); }
-        if (state.State == "unavailable") { return new Observation("unknown", "", state, true); }
+        if (state.State == "unavailable")
+        {
+            Interlocked.Increment(ref indeterminate);
+            return new Observation("unknown", "", state, true);
+        }
         if (state.State == "unknown" || string.IsNullOrWhiteSpace(state.State)) { return new Observation("absent", "", state, true); }
         return new Observation("present", state.State, state, true);
     }
@@ -456,6 +468,7 @@ public sealed partial class HaConnector
                 // End session first: it is answered whatever else the card holds.
                 if (ServesStops) { await StopPressAsync(e.Id, e.P, now, ct); }
                 var settled = e.P.Armed?.Settled;
+                var unread = Interlocked.Read(ref indeterminate);
                 await CardAsync(e.Id, e.P, seen, now, ct);
                 if (e.P.Armed is { ReadFirst: true } first)
                 {
@@ -465,6 +478,10 @@ public sealed partial class HaConnector
                         first.Rearm = false;
                         first.ReadFirst = false;
                     }
+                    // A read that could not see Send (or the box, or the reply card) cannot tell an
+                    // answer waiting there from none, and the re-arm would take that answer for its
+                    // new baseline: the card is read again on the next pass instead.
+                    else if (Interlocked.Read(ref indeterminate) != unread) { }
                     else if (source.Get(e.Id) is { } full)
                     {
                         await RearmAsync(full, e.P, e.P.Name, ct);
