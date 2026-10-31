@@ -17,6 +17,10 @@ public sealed class CardContext
     public Func<bool> ShowDetail { get; init; } = () => true;
     public HostConnection? Host { get; init; }
     public IImageShrinker? Shrinker { get; init; }
+    // Another machine's: the relay's blob store, and that machine's relay device id, for files over
+    // 256 KiB (sessions.attach.blob). Null for this machine, whose pipe takes them.
+    public IBlobStore? Blobs { get; init; }
+    public string? BlobsFor { get; init; }
     public Func<string, Task<Session?>>? FetchDetail { get; init; }
     public TimeProvider Time { get; init; } = TimeProvider.System;
 }
@@ -210,9 +214,10 @@ public sealed class SessionCardViewModel : Observable
         var replies = caps.Contains(Capabilities.SessionsReply);
         var files = caps.Contains(Capabilities.SessionsAttach);
         var large = files && caps.Contains(Capabilities.SessionsAttachDirect);
+        var blobMax = files && ctx.BlobsFor is not null ? LargeAttachments.Max(caps, ctx.Blobs) : 0;
         if (replies && reply is null)
         {
-            Reply = new ReplyViewModel(session, files, ctx.Deliveries, ctx.Host, ctx.Shrinker, name, large);
+            Reply = new ReplyViewModel(session, files, ctx.Deliveries, ctx.Host, ctx.Shrinker, name, large) { Blobs = ctx.Blobs, BlobsFor = ctx.BlobsFor };
             if (parkedReply is not null) { reply!.TakeDraft(parkedReply); parkedReply = null; }
         }
         else if (!replies && reply is not null)
@@ -222,7 +227,7 @@ public sealed class SessionCardViewModel : Observable
             parkedReply = reply;
             Reply = null;
         }
-        reply?.Update(session, files, large);
+        reply?.Update(session, files, large, blobMax);
 
         var stops = caps.Contains(Capabilities.SessionsStop);
         if (stops && end is null) { End = new EndSessionViewModel(session, ctx.Deliveries, name); }

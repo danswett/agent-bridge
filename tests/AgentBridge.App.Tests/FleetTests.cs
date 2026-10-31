@@ -531,6 +531,57 @@ public sealed class RelayFleetLinkTests
     }
 
     [Fact]
+    public async Task A_large_file_goes_sealed_through_the_relays_blob_store_to_the_one_machine_it_is_for()
+    {
+        await using var relay = await TestRelay.StartAsync(o => { o.Blobs.Backend = "local"; o.Blobs.MaxBytesPerAccountPerDay = 8L * 1024 * 1024; });
+        var token = relay.TokenFor(7, "octo");
+        await using var host = await relay.ConnectAsync(token, "Build server", "host");
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), P256KeyPair.Generate(), "Test PC · Agent Bridge app");
+        link.Start();
+        await Wait.UntilAsync(() => link.State == FleetState.Connected && link.Blobs.Max > 0, "the relay's blob store", Patience);
+        var file = System.Security.Cryptography.RandomNumberGenerator.GetBytes(3 * 1024 * 1024);
+        var progress = new List<long>();
+
+        var blob = await link.Blobs.PutAsync(host.Id, "photo.png", file, n => { lock (progress) { progress.Add(n); } });
+
+        var received = new MemoryStream();
+        using var http = BlobHttp.CreateClient();
+        var hash = await BlobTransfer.ReceiveAsync(host.Relay, http, blob.Id, BlobFormat.FromBase64Url(blob.Key)!, file.Length, received);
+        Assert.Equal(file, received.ToArray());
+        Assert.Equal(System.Security.Cryptography.SHA256.HashData(file), hash);
+        Assert.Equal(file.Length, progress.Max());
+        Assert.Equal(progress.OrderBy(n => n), progress);
+
+        // Over the account's allowance: the relay's reason, said as a person would read it.
+        var e = await Assert.ThrowsAsync<HostErrorException>(() => link.Blobs.PutAsync(host.Id, "video.mp4", new byte[6 * 1024 * 1024], _ => { }));
+        Assert.Equal("the relay's daily allowance for large attachments is used up; try again tomorrow, or send files of up to 256 KiB", e.Message);
+    }
+
+    [Fact]
+    public async Task An_upload_that_storage_stalls_gives_up_in_time_as_one_to_try_again()
+    {
+        await using var relay = await TestRelay.StartAsync(o => o.Blobs.Backend = "local");
+        var token = relay.TokenFor(7, "octo");
+        await using var host = await relay.ConnectAsync(token, "Build server", "host");
+        await using var app = await relay.ConnectAsync(token, "Test PC · Agent Bridge app", "app");
+        var blobs = new RelayBlobStore(() => app.Relay, new HttpClient(new Stalls())) { UploadFor = TimeSpan.FromMilliseconds(300) };
+
+        var e = await Assert.ThrowsAsync<IOException>(() => blobs.PutAsync(host.Id, "photo.png", new byte[400_000], _ => { }));
+
+        Assert.Equal("the upload of photo.png took over 0 minutes", e.Message);
+    }
+
+    // Storage that takes the request and never answers.
+    sealed class Stalls : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new InvalidOperationException("unreachable");
+        }
+    }
+
+    [Fact]
     public async Task A_host_whose_introduction_is_malformed_is_offline_for_now_not_the_end_of_trying()
     {
         await using var relay = await TestRelay.StartAsync();

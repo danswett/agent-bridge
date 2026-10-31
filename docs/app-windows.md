@@ -60,9 +60,13 @@ phone.
 
 The app shows every machine on the account, as the PWA does
 (`pwa/js/fleet.js`): this machine's sessions over its pipe, and each other machine's over a
-Noise channel through the relay, carrying the same v1 ops. Answers, replies (attachments up
-to 256 KiB, an image shrunk to fit), End session, usage and toasts work on another machine's
-cards exactly as on this one's, each going to that card's own host.
+Noise channel through the relay, carrying the same v1 ops. Answers, replies, End session,
+usage and toasts work on another machine's cards exactly as on this one's, each going to that
+card's own host. A reply's file over 256 KiB, up to 100 MiB, goes to another machine through
+the relay's blob store as the PWA's do (sessions.attach.blob, [blobs.md](protocol/blobs.md)):
+sealed here with a key of its own, uploaded straight to storage, and fetched, opened and
+checked by that machine's host; the key travels only inside the channel. Where the machine or
+the relay does not offer it, files go up to 256 KiB, and an image is shrunk to fit.
 
 * **Its own device, the host's account.** The app connects to the relay with a P-256 key of
   its own (kind `app`), kept like the host's (in the TPM, or with DPAPI) in
@@ -177,7 +181,7 @@ separate, explicit step ([migration.md](migration.md)).
 
 | Page | What it has | Parity source |
 |---|---|---|
-| Sessions | One card per live session of every machine on the account (this one's over the pipe, the others' through the relay), with a picker for one machine: status and glow (working, waiting, delegating, ending), title, agent, repository, branch, model, current tool, response (Markdown), reasoning, last message, tool history, background agents and commands, turns, compactions; question forms (single and multi choice, Other, boolean, text, number, Copilot permission Approve once / Deny), reply box (Ctrl+Enter, paste an image, attach files: up to 100 MiB each in chunks over the pipe, `sessions.attach.direct`, or 256 KiB from an older host, which shrinks a larger image to fit), End session with the host's two-press rule; fold per session, persisted, reopened by a new question. While the host's discovery is held, a line over the cards says what holds it ("Discovery held: …", [v1-sessions.md](protocol/v1-sessions.md#discovery-held)) | PWA cards (`pwa/js/ui`), which mirror `agent-bridge-reply-card.js` |
+| Sessions | One card per live session of every machine on the account (this one's over the pipe, the others' through the relay), with a picker for one machine: status and glow (working, waiting, delegating, ending), title, agent, repository, branch, model, current tool, response (Markdown), reasoning, last message, tool history, background agents and commands, turns, compactions; question forms (single and multi choice, Other, boolean, text, number, Copilot permission Approve once / Deny), reply box (Ctrl+Enter, paste an image, attach files: up to 100 MiB each in chunks over the pipe, `sessions.attach.direct`, or through the relay's blob store to another machine, `sessions.attach.blob`, or 256 KiB where neither is offered, which shrinks a larger image to fit), End session with the host's two-press rule; fold per session, persisted, reopened by a new question. While the host's discovery is held, a line over the cards says what holds it ("Discovery held: …", [v1-sessions.md](protocol/v1-sessions.md#discovery-held)) | PWA cards (`pwa/js/ui`), which mirror `agent-bridge-reply-card.js` |
 | Launch | Start or resume a session on any machine on the account that offers it (`sessions.launch`): machine, resume, agent, workspace (a new worktree where the folder is isolated), profile, model, effort, context and permissions as that machine offers them, and a first prompt sent whole. Each press is one launch with its own request id, sent again with the same id after a lost connection, so it starts once; the outcome (started, busy with the reason, refused, failed, unconfirmed) is shown and announced to screen readers, and the new session's card opens when it arrives. Try again sends a launch that could not be sent with the same request, but only to the same host process, never to one that restarted since, and only while the host still remembers the request (9 minutes from the first send). An error from the host says the launch may still have started, and a failure says what Try again would send, since the form may have changed since. A launch the machine reports failed is sent again as a new request. A host that names no run in its hello counts each connection as a new run, so a lost launch to it is reported unconfirmed rather than sent again. What was picked on a machine is kept while it drops out and when another machine is picked. A machine's choices are fetched only while the page is open, since that is costly at the host. A machine waiting on a folder-trust question says it is busy when the page opens or its choices are reloaded. Codex is not launched without a first prompt; why the form cannot go is said beside the Launch button, apart from the last launch's outcome | PWA launch view (`pwa/js/ui/launch-view.js`), agent-ha-bridge's launch card |
 | Usage | Each agent's windows: percent, amber at 75 %, red at 90 %, pace against the window, "resets in" | PWA usage panel |
 | Settings | Host: running, version, profile, pid, start/stop/restart, start at sign-in, log tail; relay: sign in with GitHub (device code shown in the app), machine name, connection state; this machine: approving Copilot permission prompts from other devices (`permissions.remoteApproval`), agent-ha-bridge state; app: show reasoning and tools (the old Detail toggle, kept in the app since every client now gets the full activity), toasts, start the app at sign-in, version and updates | status card, `install.ps1`, `agent-ha-bridge configure` |
@@ -210,16 +214,12 @@ reaches the real host or its profile.
 
 ## Deferred, explicitly
 
-* **Large attachments to other machines.** A reply to another machine's session carries
-  files up to 256 KiB (an image is shrunk to fit). Larger ones will go through the relay's
-  blob store as the PWA's do (`sessions.attach.blob`); the app's own machine needs none,
-  since its pipe takes them.
 * **Session transfer** (#70) from the app: the PWA's Move to another machine. It needs the
   app to sign transfer commands with its device key; the Launch page has none yet.
 * **Pairing and a Devices page**: the account's other devices are trusted by signing in to
   it, as everywhere else for now.
 * **Cancelling a large attachment** part way. The PWA has a Cancel while a file uploads; the
-  app sends over the pipe at local speed and has none yet.
+  app has none yet, over the pipe or through the blob store.
 * Agent hook registration for a fresh install (#54).
 * **Migrate and Roll back on the Settings page** (WinUI slice 2). Both exist in the host
   (`agent-bridge-host migrate` / `rollback`, [migration.md](migration.md)); the page needs

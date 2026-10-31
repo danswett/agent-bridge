@@ -55,6 +55,8 @@ public interface IFleetLink : IAsyncDisposable
     void Start();
     // Throws HostNotRunningException when the host cannot be reached now; the caller retries.
     Task<IClientChannel> OpenAsync(string hostId, CancellationToken ct);
+    // The relay's blob store, for a reply's files over 256 KiB to these machines; none in a stand-in.
+    IBlobStore? Blobs => null;
 }
 
 // The account's other machines, kept in step with the relay's presence: a machine for each
@@ -214,7 +216,10 @@ public sealed class RelayFleetLink : IFleetLink
         this.name = name;
         this.log = log ?? (_ => { });
         this.claim = claim ?? (() => true);
+        Blobs = new RelayBlobStore(() => current?.Relay);
     }
+
+    public IBlobStore Blobs { get; }
 
     public const string ElsewhereNote = "Your other machines are shown by this app in another of your Windows sessions. Close it there and they appear here.";
     public const string ReplacedNote = "Another copy of this app, with this app's key, took over the connection to your other machines. They come back here when this machine's Bridge Host signs in again or restarts, or when this app is opened again.";

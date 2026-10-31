@@ -250,6 +250,150 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Equal(AttachmentLimits.Bytes, r.MaxBytes);
     }
 
+    // The relay's blob store as a test stands it in: what was put, for whom, and what was deleted.
+    sealed class FakeBlobs : IBlobStore
+    {
+        long max = 210_763_776;
+        // A relay that is down has no blob store to speak of: RelayBlobStore.Max reads 0.
+        public long Max { get => Down > 0 ? 0 : max; set => max = value; }
+        public List<(string To, string Name, int Size)> Puts { get; } = [];
+        public List<string> Deleted { get; } = [];
+        public Exception? Refuse { get; set; }
+        // Uploads that find the relay down for now, before one gets through.
+        public int Down { get; set; }
+
+        public Task<BlobRef> PutAsync(string to, string name, byte[] file, Action<long> uploaded)
+        {
+            if (Down > 0) { Down--; return Task.FromException<BlobRef>(new IOException("not connected to the relay")); }
+            if (Refuse is { } e) { return Task.FromException<BlobRef>(e); }
+            lock (Puts) { Puts.Add((to, name, file.Length)); }
+            uploaded(file.Length);
+            return Task.FromResult(new BlobRef { Id = $"ticket-{Puts.Count}", Key = "a2V5" });
+        }
+
+        public Task DeleteAsync(string blob) { lock (Deleted) { Deleted.Add(blob); } return Task.CompletedTask; }
+    }
+
+    ReplyViewModel RemoteReply(FakeBlobs blobs)
+    {
+        var r = new ReplyViewModel(Make.Session(), attach: true, deliveries, connection, new Shrinker(), "Build server") { Blobs = blobs, BlobsFor = "remote-id", BlobPoll = TimeSpan.FromMilliseconds(10) };
+        r.Update(Make.Session(), takesFiles: true, blobMax: AttachmentLimits.BlobBytes);
+        return r;
+    }
+
+    [Fact]
+    public async Task On_another_machine_a_file_over_256_KiB_goes_sealed_through_the_relays_blob_store_not_in_chunks()
+    {
+        var polls = 0;
+        host.On(Ops.AttachmentStart, d => d.TryGetProperty("blob", out _) && ++polls >= 2 ? new AttachmentState(3_000_000, true) : new AttachmentState(0, false));
+        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Delivered));
+        var blobs = new FakeBlobs();
+        var r = RemoteReply(blobs);
+
+        await r.AddAsync("photo.png", "image/png", new byte[3_000_000]);
+        var file = Assert.Single(r.Attachments);
+        Assert.Equal((3_000_000L, false), (file.Size, file.Resized));
+        r.Send();
+
+        await Wait.UntilAsync(() => r.StatusText == "Delivered. The session has your reply.", "delivered");
+        Assert.Equal(("remote-id", "photo.png", 3_000_000), Assert.Single(blobs.Puts));
+        Assert.Empty(host.Sent(Ops.AttachmentChunk));
+        var start = host.Sent(Ops.AttachmentStart)[0];
+        Assert.Equal(("ticket-1", "a2V5"), (start.GetProperty("blob").GetProperty("id").GetString(), start.GetProperty("blob").GetProperty("key").GetString()));
+        Assert.Equal(2, host.Sent(Ops.AttachmentStart).Count);
+
+        // A file of up to 256 KiB still goes in the channel, which costs nothing stored.
+        host.On(Ops.AttachmentChunk, d => new AttachmentState(1000, true));
+        await r.AddAsync("notes.txt", "text/plain", new byte[1000]);
+        r.Send();
+        await Wait.UntilAsync(() => host.Sent(Ops.AttachmentChunk).Count == 1, "the small file in chunks");
+        Assert.Single(blobs.Puts);
+    }
+
+    [Fact]
+    public async Task A_blob_the_machine_could_not_use_is_uploaded_again_on_the_next_try_and_one_left_behind_is_deleted()
+    {
+        var bad = true;
+        host.On(Ops.AttachmentStart, _ => bad ? throw new InvalidOperationException("the blob did not open") : new AttachmentState(400_000, true));
+        var refuse = true;
+        host.On(Ops.SessionReply, _ => refuse ? throw new InvalidOperationException("the session is busy") : new ReplyResult(AnswerOutcome.Delivered));
+        var blobs = new FakeBlobs();
+        var r = RemoteReply(blobs);
+        await r.AddAsync("report.pdf", "application/pdf", new byte[400_000]);
+
+        r.Send();
+        await Wait.UntilAsync(() => r.ShowResend, "the failure");
+        bad = false;
+        r.Resend();
+        await Wait.UntilAsync(() => r.ShowResend && blobs.Puts.Count == 2, "the second upload, then the reply's own failure");
+        Assert.Equal("ticket-2", host.Sent(Ops.AttachmentStart).Last().GetProperty("blob").GetProperty("id").GetString());
+
+        // Taken out of the reply: the blob it left in the store goes too.
+        r.Remove(Assert.Single(r.Attachments));
+        Assert.Equal(["ticket-2"], blobs.Deleted);
+    }
+
+    [Fact]
+    public async Task A_large_file_waits_for_a_relay_that_is_down_for_now_rather_than_failing()
+    {
+        host.On(Ops.AttachmentStart, _ => new AttachmentState(400_000, true));
+        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Delivered));
+        var blobs = new FakeBlobs { Down = 1 };
+        var r = RemoteReply(blobs);
+        await r.AddAsync("report.pdf", "application/pdf", new byte[400_000]);
+        var failed = false;
+        deliveries.Changed += d => failed |= d.State == DeliveryState.Failed;
+
+        r.Send();
+
+        await Wait.UntilAsync(() => r.StatusText == "Delivered. The session has your reply.", "delivered");
+        Assert.False(failed);
+        Assert.Single(blobs.Puts);
+    }
+
+    [Fact]
+    public void A_relay_whose_blob_store_takes_less_than_the_channel_leaves_the_channel_s_limit()
+    {
+        var r = RemoteReply(new FakeBlobs());
+        r.Update(Make.Session(), takesFiles: true, blobMax: 100_000);
+
+        Assert.Equal(AttachmentLimits.Bytes, r.MaxBytes);
+    }
+
+    [Fact]
+    public async Task A_relay_that_refuses_a_large_file_says_why_and_keeps_it_for_another_try()
+    {
+        var blobs = new FakeBlobs { Refuse = new AgentBridge.Local.HostErrorException(LargeAttachments.Refusal("quota", "photo.png")) };
+        var r = RemoteReply(blobs);
+        await r.AddAsync("photo.png", "image/png", new byte[500_000]);
+
+        r.Send();
+
+        await Wait.UntilAsync(() => r.ShowResend, "the failure");
+        Assert.Equal("Couldn't send it: the relay's daily allowance for large attachments is used up; try again tomorrow, or send files of up to 256 KiB.", r.StatusText);
+        Assert.Single(r.Attachments);
+        Assert.Empty(host.Sent(Ops.AttachmentStart));
+    }
+
+    [Fact]
+    public void Another_machine_takes_large_files_only_while_it_offers_them_and_the_relay_has_a_blob_store()
+    {
+        var blobs = new FakeBlobs();
+        var caps = new List<string> { Capabilities.SessionsRead, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachBlob };
+        var ctx = Context(caps: () => caps);
+        var card = new SessionCardViewModel(Make.Session(), new CardContext { Deliveries = ctx.Deliveries, Folds = ctx.Folds, Capabilities = ctx.Capabilities, Host = connection, Blobs = blobs, BlobsFor = "remote-id" });
+        Assert.Equal(AttachmentLimits.BlobBytes, card.Reply!.MaxBytes);
+
+        blobs.Max = 0;
+        card.CapabilitiesChanged();
+        Assert.Equal(AttachmentLimits.Bytes, card.Reply.MaxBytes);
+
+        blobs.Max = 210_763_776;
+        caps.Remove(Capabilities.SessionsAttachBlob);
+        card.CapabilitiesChanged();
+        Assert.Equal(AttachmentLimits.Bytes, card.Reply.MaxBytes);
+    }
+
     [Fact]
     public async Task End_session_on_a_working_session_takes_a_second_press_with_the_hosts_token_inside_the_window()
     {
