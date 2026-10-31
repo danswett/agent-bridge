@@ -1073,24 +1073,34 @@ if (@(Get-Content $file | ForEach-Object { $_.Trim() }) -notcontains $key) { Add
 '@
 
 # VM-M, as `rehearsal`: the tunnel works end to end. SFTP proves the key, the pinned host key and
-# the NSG; the forward proves PermitOpen. Home Assistant may not be running yet (A-02 starts it),
-# so its HTTP status is reported, not required.
+# the NSG. A request through `ssh -W` proves VM-W opens the forwarding channel itself, which a
+# local `-L` listener cannot: that listens even when VM-W refuses every channel. Home Assistant
+# may not be running yet (A-02 starts it), so a refused connection behind an opened channel
+# still passes, and its HTTP status is only reported.
 $GuestVmWCheck = @'
 $batch = Join-Path $env:TEMP 'rehearsal-sftp.txt'
 Set-Content -Path $batch -Value 'pwd' -Encoding ascii
 $sftp = & "$env:SystemRoot\System32\OpenSSH\sftp.exe" -b $batch -o BatchMode=yes -o ConnectTimeout=15 VM-W 2>&1 | Out-String
 "sftp-exit=$LASTEXITCODE"
 Remove-Item $batch -ErrorAction SilentlyContinue
+$in = Join-Path $env:TEMP 'rehearsal-fwd-in.txt'; $out = Join-Path $env:TEMP 'rehearsal-fwd-out.txt'; $err = Join-Path $env:TEMP 'rehearsal-fwd-err.txt'
+[IO.File]::WriteAllText($in, "GET / HTTP/1.0`r`nHost: 127.0.0.1:8123`r`n`r`n")
 $ssh = Start-Process "$env:SystemRoot\System32\OpenSSH\ssh.exe" -PassThru -WindowStyle Hidden `
-    -ArgumentList @('-o', 'BatchMode=yes', '-N', '-L', '18123:127.0.0.1:8123', 'VM-W')
-Start-Sleep -Seconds 8
-$listening = $false
-try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 18123); $listening = $c.Connected; $c.Close() } catch { $listening = $false }
-"forward-listening=$listening"
-$code = 'none'
-try { $code = (Invoke-WebRequest 'http://127.0.0.1:18123/' -UseBasicParsing -TimeoutSec 10).StatusCode } catch { $code = "none ($($_.Exception.Message.Split([Environment]::NewLine)[0]))" }
-"home-assistant-http=$code"
-if (-not $ssh.HasExited) { $ssh.Kill() }
+    -RedirectStandardInput $in -RedirectStandardOutput $out -RedirectStandardError $err `
+    -ArgumentList @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-W', '127.0.0.1:8123', 'VM-W')
+if (-not $ssh.WaitForExit(45000)) { $ssh.Kill() }
+$reply = (Get-Content $out -Raw -ErrorAction SilentlyContinue) + ''
+$why = (Get-Content $err -Raw -ErrorAction SilentlyContinue) + ''
+Remove-Item $in, $out, $err -ErrorAction SilentlyContinue
+if ($reply -match '^HTTP/1\.\d (\d{3})') {
+    'forward=opened'; "home-assistant-http=$($Matches[1])"
+} elseif ($why -match 'administratively prohibited') {
+    'forward=denied'
+} elseif ($why -match 'connect failed|Connection refused') {
+    'forward=opened'; 'home-assistant-http=none (nothing listening on VM-W:8123 yet)'
+} else {
+    "forward=unknown: $($why.Trim())"
+}
 '@
 
 # The jump host (VM-M), for an operator whose SSH egress the NSG does not accept. It runs there,
@@ -1628,7 +1638,7 @@ if ($Role -eq 'W') {
     Set-VmMSshRule $selfIp
     $tunnel = Invoke-VmAsDesktopUser -Script $GuestVmWCheck
     $tunnel | Write-Verbose
-    if ($tunnel -notmatch 'sftp-exit=0' -or $tunnel -notmatch 'forward-listening=True') { throw "VM-M cannot reach VM-W: $tunnel" }
+    if ($tunnel -notmatch 'sftp-exit=0' -or $tunnel -notmatch 'forward=opened') { throw "VM-M cannot reach VM-W: $tunnel" }
     Write-Step "VM-M reaches VM-W at $writerIp ($(($tunnel -split "`n" | Where-Object { $_ -like 'home-assistant-http=*' }) -join ''))"
 }
 
