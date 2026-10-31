@@ -357,6 +357,19 @@ test.describe('a folder-trust question', () => {
     await expect(card(page).getByRole('button')).toHaveCount(0);
   });
 
+  test('a refused answer to a question that has since gone is not offered again', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, QUESTION);
+    await page.evaluate(() => window.agentBridgeDemo.scriptTrust({ outcome: 'refused', reason: 'that question is no longer waiting: it was answered, or the agent closed' }));
+    await openPanel(page);
+    // Answered at the machine meanwhile: the machine no longer lists it.
+    await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.launchOptions = { ...h.launchOptions, trust: [] }; });
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText(/^Not answered/);
+    await expect(card(page).locator('.trust-at-machine')).toHaveText('Demo machine no longer lists this question as waiting.');
+    await expect(card(page).getByRole('button')).toHaveCount(0);
+  });
+
   test('a Trust button with focus keeps it when the machine is redrawn', async ({ page }) => {
     await openDemo(page);
     await ask(page, QUESTION);

@@ -433,9 +433,14 @@ export class LaunchPanel {
     for (const q of this.#options?.trust ?? []) { add(q); }
     const entry = this.#target ? this.service.get(this.#target.hostId) : null;
     if (entry?.state === 'done') { add(entry.detail?.trust); }
+    // What the machine says waits now: an answer remembered here for a question it no longer
+    // lists is shown for its outcome, but never offered again.
+    this.#live = new Set(seen.keys());
     for (const a of this.#answersFor(this.#target?.hostId).values()) { add(a.question); }
     return [...seen.values()];
   }
+
+  #live = new Set();
 
   #answersFor(hostId) {
     let answers = this.#trustAnswers.get(hostId);
@@ -468,7 +473,7 @@ export class LaunchPanel {
     // Sent, and its response lost: only that same command again, which the machine answers with
     // its first outcome, whether or not the question can still be answered afresh.
     const retry = answer?.state === 'failed' && !!answer.data;
-    const canAnswer = q.answerable && !!this.#target?.trust && !settled && !retry;
+    const canAnswer = q.answerable && this.#live.has(q.id) && !!this.#target?.trust && !settled && !retry;
     const shown = answer ? describeTrust(answer, q) : null;
     return h('section', { class: 'trust-question', dataset: { question: q.id, trust: answer ? (answer.state === 'done' ? answer.result.outcome : answer.state) : 'waiting' }, 'aria-label': `${q.label} folder trust` },
       h('h3', { class: 'trust-title' }, `${q.label} on ${name} is asking whether to trust a folder`),
@@ -481,7 +486,7 @@ export class LaunchPanel {
           h('button', { type: 'button', class: 'button secondary trust-no', disabled: pending, onclick: () => this.#answerTrust(q, TRUST.quit) }, 'Quit'))
         : retry
           ? h('div', { class: 'row' }, h('button', { type: 'button', class: 'button secondary trust-resend', onclick: () => this.#sendTrust(hostId, q.id) }, 'Try again'))
-          : settled ? null : h('p', { class: 'note warn trust-at-machine' }, q.atMachine ?? (q.answerable ? `Answer at the machine: this app cannot answer it on ${name}.` : 'Answer at the machine.')),
+          : settled ? null : h('p', { class: 'note warn trust-at-machine' }, this.#options && !this.#live.has(q.id) ? `${name} no longer lists this question as waiting.` : q.atMachine ?? (q.answerable ? `Answer at the machine: this app cannot answer it on ${name}.` : 'Answer at the machine.')),
       shown ? h('p', { class: `answer-status trust-status ${shown.tone}`, role: 'status', 'aria-live': 'polite' }, shown.text) : null);
   }
 
