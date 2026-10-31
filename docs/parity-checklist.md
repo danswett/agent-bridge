@@ -264,6 +264,10 @@ hyperloop servers add rehearsal-m --scheme tcp --authority 127.0.0.1:4852
   brought back. `-RestoreSnapshot` therefore runs a harmless script just before the swap
   (starting the VM if it must), so the replay is that script.
 * A snapshot can be restored only to the VM it was taken from, so VM-W's disk can never become VM-M's.
+* Both stop VM-M, so every SSH connection to or from it ends: A-04's
+  `ssh -N -L 8123:127.0.0.1:8123 rehearsal@VM-W` window on VM-M, and this machine's Hyperloop
+  tunnel. When the command returns, start the Hyperloop tunnel again, then A-04's window
+  through Hyperloop, before the next step that needs Home Assistant on VM-M's loopback.
 
 `-Deallocate` and `-Start` take `-Role M` too. **Cost** is another $0.40 an hour or so while
 running, plus a few cents a day per snapshot.
