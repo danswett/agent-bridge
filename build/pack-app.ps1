@@ -86,9 +86,9 @@ if ($DeltaFrom) {
     }
 }
 
-$pack = @('pack', '-u', $packId, '-v', $Version, '-p', $publish, '-e', 'AgentBridge.exe', '-o', $releases, '--packTitle', 'Agent Bridge', '--icon', (Join-Path $publish 'Assets\AgentBridge.ico'))
-if ($SignParams) { $pack += @('--signParams', $SignParams) }
-if ($AzureTrustedSignFile) { $pack += @('--azureTrustedSignFile', $AzureTrustedSignFile) }
-& vpk @pack
+$sign = @()
+if ($SignParams) { $sign += @('--signParams', $SignParams) }
+if ($AzureTrustedSignFile) { $sign += @('--azureTrustedSignFile', $AzureTrustedSignFile) }
+& vpk pack -u $packId -v $Version -p $publish -e AgentBridge.exe -o $releases --packTitle 'Agent Bridge' --icon (Join-Path $publish 'Assets\AgentBridge.ico') @sign
 if ($LASTEXITCODE) { throw 'vpk pack failed' }
 Write-Host "packed $Version to $releases"

@@ -68,7 +68,9 @@ $hasDelta = [bool]($assets | Where-Object Type -EQ 'Delta')
 # vpk upload github sends the build's assets, a releases.win.json and RELEASES of this version
 # alone; assets.win.json goes up too, as on the first release published by hand (v0.1.583).
 $uploads = @($assets.RelativeFileName) + 'releases.win.json', 'RELEASES', 'assets.win.json'
-Write-Plan "$tag from $Commit, $(if ($hasDelta) { 'with a delta' } else { 'full package only, no delta' }): $($uploads -join ', ')"
+function Get-Megabyte([string]$type) { '{0:N1} MB' -f ((Get-Item (Join-Path $ReleasesDir $expected[$type])).Length / 1MB) }
+$size = if ($hasDelta) { "a $(Get-Megabyte Delta) delta beside the $(Get-Megabyte Full) full package" } else { "the $(Get-Megabyte Full) full package only, no delta" }
+Write-Plan "$tag from ${Commit}, $size`: $($uploads -join ', ')"
 
 if ($DryRun) {
     # vpk itself reads the folder, through the same build-assets file the GitHub upload reads,
@@ -120,7 +122,7 @@ if ($published) {
         ) -join "`n"
         Invoke-Gh api -X PATCH "repos/$Repository/releases/$($draft[0].id)" -f "body=$notes" -F draft=false -F prerelease=true | Out-Null
     }
-    Write-Plan "published $tag as a pre-release"
+    Write-Plan "$(if ($DryRun) { 'would publish' } else { 'published' }) $tag as a pre-release"
 }
 
 # --- Keep the newest pre-releases. Deleting a release deletes its assets but not its tag; full
