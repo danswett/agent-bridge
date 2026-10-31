@@ -19,6 +19,10 @@ public static class StartupQuestions
         // --dangerously-skip-permissions itself raises (agent-ha-bridge's
         // $script:BridgeClaudeStartupPrompts).
         if (Has("Yes, I trust this folder") || (Has("Yes, I accept") && Has("No, exit"))) { return StartupQuestion.Trust; }
+        // Codex's folder trust question ("Folder access ... Trust this folder? ... 1. Trust and
+        // continue / 2. Quit"), drawn before its session exists: seen live on a resume into a
+        // folder Codex had not been trusted in, which went unrecognised and so was not busy.
+        if (Has("Trust this folder?") && Has("Trust and continue")) { return StartupQuestion.Trust; }
         // Codex asks, in its window, for hooks to be trusted (agent-ha-bridge's BlockingPrompt).
         if (Has("Hooks need review")) { return StartupQuestion.HooksReview; }
         return StartupQuestion.None;

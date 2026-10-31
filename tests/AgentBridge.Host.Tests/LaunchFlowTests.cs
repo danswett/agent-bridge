@@ -551,6 +551,24 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_Codex_asking_whether_to_trust_its_folder_is_left_for_the_machine_and_other_launches_are_busy_meanwhile()
+    {
+        locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        starter.Registers = false;
+        screens.Rows = ["  Folder access", $"  {app}", "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.", "› 1. Trust and continue", "  2. Quit"];
+        var ch = await OpenAsync();
+
+        var first = await LaunchAsync(ch, new { agent = "codex", workspace = "App", prompt = "add pagination" });
+
+        Assert.Equal("unconfirmed", first.Outcome_);
+        Assert.Contains("Codex started, and is asking whether to trust App. Only a person at the machine can answer that", first.Reason);
+        Assert.Equal(("busy", "Busy: Codex in App is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes."),
+            Pair(await LaunchAsync(ch, new { agent = "codex", workspace = "API", prompt = "two" })));
+        Assert.Single(starter.Specs);
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
     public async Task Two_codex_launches_at_once_each_get_the_session_their_own_agent_chose()
     {
         const string First = "71111111-1111-4111-8111-111111111111", Second = "72222222-2222-4222-8222-222222222222";

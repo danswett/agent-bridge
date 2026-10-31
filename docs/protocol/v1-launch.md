@@ -131,7 +131,7 @@ machine, is `{ from, session, bytes }` with `resume` its new id here. A client t
 
 **Trust is answered only at the machine.** An agent may ask, before its session registers,
 whether to trust the folder (Copilot's "Confirm folder trust", Claude's "Do you trust this
-folder?" and its Bypass Permissions warning). A host reads the agent's window to see it, says
+folder?" and its Bypass Permissions warning, Codex's "Trust this folder?"). A host reads the agent's window to see it, says
 so in `unconfirmed`, and never types into it. For the next two minutes, while the question
 shows, other launches on that machine are `busy`, so no later press is ever taken as its
 answer and nothing new starts over it, as agent-ha-bridge does. Once a person answers at the
