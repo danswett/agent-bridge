@@ -78,7 +78,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null) => new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null) => new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
     {
         CopilotHome = f.CopilotHome,
         ClaudeHome = f.ClaudeHome,
@@ -91,6 +91,8 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         ScreenEvery = TimeSpan.FromMilliseconds(25),
         ReadyWait = readyWait ?? TimeSpan.FromSeconds(5),
         TrustConfirmWait = trustConfirm ?? TimeSpan.FromSeconds(5),
+        FollowFor = follow ?? TimeSpan.FromMinutes(10),
+        TrustFollowFor = follow ?? TimeSpan.FromMinutes(30),
         ExitGrace = TimeSpan.FromMilliseconds(100),
         // The fixture's folders are under temp, which is a system folder to a real launch.
         IsSystemDirectory = _ => false,

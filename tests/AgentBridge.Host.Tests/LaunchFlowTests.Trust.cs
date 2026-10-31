@@ -73,9 +73,9 @@ public sealed partial class LaunchFlowTests
         "╰──────────────────────────╯",
     ];
 
-    FolderTrustAnswers ServeTrust(LaunchConfig config, TimeSpan? trustConfirm = null)
+    FolderTrustAnswers ServeTrust(LaunchConfig config, TimeSpan? trustConfirm = null, TimeSpan? follow = null)
     {
-        var launcher = trustLauncher = Launcher(config, trustConfirm: trustConfirm);
+        var launcher = trustLauncher = Launcher(config, trustConfirm: trustConfirm, follow: follow);
         var answers = new FolderTrustAnswers(host.Key, launcher);
         answers.Attach(host.Relay);
         host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: launcher) { TrustAnswers = answers }.HandleAsync;
@@ -402,6 +402,27 @@ public sealed partial class LaunchFlowTests
         var answer = await AnswerAsync(ch, Answer(ch, id, "quit", client.Key));
 
         Assert.Equal("declined", answer.Outcome);
+    }
+
+    [Fact]
+    public async Task An_answer_still_being_seen_to_work_is_followed_past_the_follow_deadline()
+    {
+        locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        starter.Registers = false;
+        screens.Rows = CodexAsks(Path.GetDirectoryName(app)!.ToLowerInvariant());
+        ServeTrust(Trusting(), trustConfirm: TimeSpan.FromSeconds(8), follow: TimeSpan.FromSeconds(2));
+        var ch = await OpenAsync();
+        var id = (await LaunchTrustAsync(ch, new { agent = "codex", workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+
+        // Codex takes the Enter, but its session appears only after the follow deadline has passed.
+        screens.OnTyped = _ =>
+        {
+            screens.Rows = ["› go"];
+            Task.Delay(TimeSpan.FromSeconds(3)).ContinueWith(_ => starter.RegisterCodex(starter.Specs[0], starter.Pids[0], 7001, starter.CodexId), TaskScheduler.Default);
+        };
+        var answer = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key));
+
+        Assert.Equal(("started", null, starter.CodexId), answer);
     }
 
     [Fact]
