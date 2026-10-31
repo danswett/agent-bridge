@@ -42,8 +42,8 @@ Larger files come next.
 | `js/reply-service.js` | Sending replies: `answer-service.js` with `session.reply`, one reply on its way per session, its files sent first |
 | `js/attachments.js` | A file or image for a reply: named, size-checked (a large image is redrawn smaller), hashed, and sent in chunks from where the machine has got to |
 | `js/stop-service.js` | Ending sessions: `answer-service.js` with `session.stop`, one press on its way per session, the second press carrying the first's token |
-| `js/launch.js` | Launching: the tolerant readers of `launch.options` and a launch's result (an unknown outcome is `unconfirmed`), and `checkLaunch`, which mirrors the C# `LaunchProtocol.Check` with its wording |
-| `js/transfer.js` | Bringing a session from another machine: the account's other machines' sessions (`sessions.transfer.serve`), and the command this device signs for the one a session is on ([v1-transfer.md](../docs/protocol/v1-transfer.md)), held to the host's by a shared test vector |
+| `js/launch.js` | Launching: the tolerant readers of `launch.options` and a launch's result (an unknown outcome is `unconfirmed`), and `checkLaunch`, which mirrors the C# `LaunchProtocol.Check` with its wording; folder-trust questions and their answers (`launch.trust`) |
+| `js/transfer.js` | Signed commands: bringing a session from another machine (the account's other machines' sessions, `sessions.transfer.serve`, and the command this device signs for the one a session is on, [v1-transfer.md](../docs/protocol/v1-transfer.md)), and answering a folder-trust question (`launch.trust:trust` or `:quit`, for the machine asking it), held to the host's by shared test vectors |
 | `js/launch-service.js` | Starting sessions: `answer-service.js` with `session.launch`, one launch on its way per machine, resent with the same request until it has an outcome |
 | `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
 | `js/usage.js` | Agent usage: the tolerant reader, merging every machine's reports into one row per allowance (a reading beats a failure, then the freshest wins), and the card's words: colours at 75% and 90%, pace, resets, ages |
@@ -71,7 +71,14 @@ the tool history, `session.answer` (with `sessions.answer` in `hello`) takes ans
 `session.reply` (with `sessions.reply`) takes replies, with `attachment.*` (with
 `sessions.attach`) for their files; `launch.options` and `session.launch` (with
 `sessions.launch`) start sessions, and with `sessions.transfer` bring one from another machine,
-signed by this device.
+signed by this device. A launched agent asking whether to trust its folder is shown in the Start
+a session panel in full (agent, the whole folder path, the repository root it applies to, the
+agent's own warning); with `launch.trust` and where the machine allows it (`answerable`), Trust
+and Quit answer it with `launch.trust.answer` and a command this device signs for that choice.
+Otherwise it says to answer at the machine, and how to allow it there (or approve this device).
+A machine that does not take launches now (read-only, agent-ha-bridge) still shows a waiting
+question, read-only. An answer that may have been typed is never offered again from here, and a
+resend the machine refuses (its command expired) reads as not confirmed.
 `test/e2e/fixture-host.mjs` is a working example in about 150 lines.
 
 The client resubscribes when `seq` skips, repeats or goes backwards, and replaces its

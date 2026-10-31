@@ -110,10 +110,11 @@ export function readLaunchOptions(raw) {
       permissions: d.permissions === ALLOW_ALL ? ALLOW_ALL : ASK,
     },
     busy: str(o.busy),
+    trust: (Array.isArray(o.trust) ? o.trust : []).map(readTrustQuestion).filter(Boolean),
   };
 }
 
-// session.launch's result: { outcome, reason, session, launched }.
+// session.launch's result: { outcome, reason, session, launched, trust }.
 export function readLaunchResult(raw) {
   const r = obj(raw) ?? {};
   const l = obj(r.launched);
@@ -125,5 +126,50 @@ export function readLaunchResult(raw) {
       agent: str(l.agent), workspace: str(l.workspace), resume: str(l.resume), cwd: str(l.cwd), worktree: l.worktree === true, permissions: str(l.permissions),
       transfer: obj(l.transfer) && str(l.transfer.from) ? { from: l.transfer.from, session: str(l.transfer.session), bytes: typeof l.transfer.bytes === 'number' ? l.transfer.bytes : null } : null,
     } : null,
+    trust: readTrustQuestion(r.trust),
   };
+}
+
+// ---- folder trust: docs/protocol/v1-launch.md, "Folder trust" ----
+// Mirrors src/AgentBridge.Protocol/LaunchTrust.cs. A launched agent asking whether to trust its
+// folder, which a person may answer from here (Trust or Quit) where the machine allows it.
+
+export const TRUST = Object.freeze({
+  capability: 'launch.trust',
+  answer: 'launch.trust.answer',
+  trust: 'trust',
+  quit: 'quit',
+});
+
+// The signed command's action: one choice's command cannot be sent as the other.
+export const trustAction = (choice) => `launch.trust:${choice}`;
+
+export const TrustOutcomes = Object.freeze(['started', 'declined', 'unconfirmed', 'refused']);
+// Something may have been typed: an outcome from a newer host is never read as refused.
+export const readTrustOutcome = (v) => (TrustOutcomes.includes(v) ? v : 'unconfirmed');
+
+// A question as the machine describes it; null when it has no id or folder to show.
+export function readTrustQuestion(raw) {
+  const q = obj(raw);
+  if (!q || !str(q.id) || !str(q.folder)) { return null; }
+  return {
+    id: q.id,
+    agent: str(q.agent),
+    kind: readAgent(q.kind),
+    label: str(q.label) ?? str(q.agent) ?? 'The agent',
+    workspace: str(q.workspace),
+    folder: q.folder,
+    root: str(q.root),
+    rootNote: str(q.rootNote),
+    warning: str(q.warning),
+    askedAt: str(q.askedAt),
+    answerable: q.answerable === true,
+    atMachine: str(q.atMachine),
+  };
+}
+
+// launch.trust.answer's result: { outcome, reason, session }.
+export function readTrustResult(raw) {
+  const r = obj(raw) ?? {};
+  return { outcome: readTrustOutcome(r.outcome), reason: str(r.reason), session: str(r.session) };
 }

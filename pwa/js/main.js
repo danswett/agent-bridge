@@ -28,8 +28,8 @@ import { AnswerService } from './answer-service.js';
 import { ReplyService } from './reply-service.js';
 import { StopService } from './stop-service.js';
 import { LaunchService } from './launch-service.js';
-import { LAUNCH } from './launch.js';
-import { TRANSFER, collectRemote, signTransfer } from './transfer.js';
+import { LAUNCH, TRUST } from './launch.js';
+import { TRANSFER, collectRemote, signTransfer, signTrust } from './transfer.js';
 import { PushRegistrar, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities } from './protocol.js';
 import { SessionListView, MachinesFold, renderMachines } from './ui/views.js';
@@ -37,7 +37,7 @@ import { UsageBook, USAGE, machineStatus } from './usage.js';
 import { FleetStatus } from './fleet.js';
 import { UsageView } from './ui/usage-view.js';
 import { LaunchPanel } from './ui/launch-view.js';
-import { DemoBlobStore, DemoHost, demoTransfers, runScript } from './demo.js';
+import { DemoBlobStore, DemoHost, demoTransfers, demoTrust, runScript } from './demo.js';
 import { RelayBlobs, maxPlain } from './blobs.js';
 import { AttachmentLimits } from './attachments.js';
 
@@ -192,6 +192,8 @@ async function startDemo() {
     launching: params.get('launch') !== '0' && params.get('answer') !== '0' && !ahb,
     // ?transfer=0: a host from before sessions came from other machines.
     transferring: params.get('transfer') !== '0',
+    // ?trust=0: a host from before folder-trust questions were answered from devices.
+    trusting: params.get('trust') !== '0',
   });
   // ?attachDelay= slows each file chunk, so its progress can be watched.
   host.attachmentDelayMs = Number(params.get('attachDelay')) || 0;
@@ -233,13 +235,19 @@ async function startDemo() {
   const launchPanel = new LaunchPanel($('launch'), { service: launches, jump: showSession });
   const transfers = hello.capabilities.includes(TRANSFER.capability) ? await demoTransfers(host, hello.machine.id) : null;
   // A new target object each time, for the same machine, as a presence update hands in.
-  const target = () => ({ hostId: hello.machine.id, machineName: hello.machine.name, load: () => client.launchOptions(), transfers });
-  if (hello.capabilities.includes(LAUNCH.capability)) { launchPanel.setTarget(target()); }
+  const trust = hello.capabilities.includes(TRUST.capability) ? await demoTrust(host, client) : null;
+  const launchable = hello.capabilities.includes(LAUNCH.capability);
+  const target = () => (launchable
+    ? { hostId: hello.machine.id, machineName: hello.machine.name, load: () => client.launchOptions(), transfers, trust }
+    : { hostId: hello.machine.id, machineName: hello.machine.name, load: () => client.launchOptions(), transfers: null, trust: null, inspectOnly: true, readOnly: hello.machine.readOnly });
+  if (launchable || hello.machine.readOnly) { launchPanel.setTarget(target()); }
   const script = params.get('static') === '1' ? null : runScript(host, { tickMs: Number(params.get('tick')) || 4000 });
   window.agentBridgeDemo = {
     host, client, store, view, answers, replies, stops, launches, launchPanel, book, blobs: blobStore,
     // The launch panel told about the same machine again, as presence updates tell it.
     retarget: () => launchPanel.setTarget(target()),
+    // The target as it is now, for a test to tell the panel about it with a change (read-only).
+    target,
     // A new usage report from the host, sent as usage.update.
     usage: (report) => host.setUsage(report),
     // The next answers' outcomes, in order: 'delivered' (the default once these run out),
@@ -253,6 +261,9 @@ async function startDemo() {
     // The same, for the next launches: 'started' (the default), 'unconfirmed', 'busy', 'refused',
     // 'failed', an unknown one, or { outcome, reason, drop: true }.
     scriptLaunches: (...outcomes) => host.scriptLaunches(outcomes),
+    // A launched agent asking whether to trust its folder, and the next answers' outcomes.
+    askTrust: (question) => host.askTrust(question),
+    scriptTrust: (...outcomes) => host.scriptTrust(outcomes),
     upsert: (s) => host.upsert(s),
     remove: (id) => host.remove(id),
     hold: (held) => host.hold(held),
@@ -465,7 +476,9 @@ function begin(account) {
     showSessionsFor(name);
     // While reconnecting the panel stays, with any launch still waiting to be resent; a machine
     // that comes back without sessions.launch hides it.
-    const launchable = hosts.phase === 'open' ? hosts.capabilities.includes(LAUNCH.capability) : launchPanel.hostId === hosts.targetId;
+    // While reconnecting, a machine shown read-only stays so: it never offered launching.
+    const wasInspect = launchPanel.hostId === hosts.targetId && launchPanel.inspectOnly;
+    const launchable = hosts.phase === 'open' ? hosts.capabilities.includes(LAUNCH.capability) : launchPanel.hostId === hosts.targetId && !wasInspect;
     const targetId = hosts.targetId;
     // The account's other machines' sessions, each signed for when picked: only where this one
     // takes them, and only what they hand on.
@@ -473,7 +486,23 @@ function begin(account) {
       remotes: () => collectRemote({ connection, targetId, me: identity.deviceId, makeClient: (ch) => new HostClient(ch) }),
       sign: (remote, session) => signTransfer({ key: identity.key, deviceId: identity.deviceId, machinePublic: remote.key, session, to: targetId }),
     } : null;
-    launchPanel.setTarget(launchable ? { hostId: targetId, machineName: name, load: () => (hosts.client ? hosts.client.launchOptions() : Promise.reject(new Error('not connected'))), transfers } : null);
+    // Folder-trust questions answered from here, each with a command this device signs for the
+    // machine on the other end of this channel, whose key the handshake proved.
+    const trust = hosts.capabilities.includes(TRUST.capability) ? {
+      sign: (question, choice) => {
+        const key = hosts.channel?.hs?.remoteStatic;
+        if (!key || hosts.targetId !== targetId) { return Promise.reject(new Error(`not connected to ${name}`)); }
+        return signTrust({ key: identity.key, deviceId: identity.deviceId, machinePublic: new Uint8Array(key), question, choice });
+      },
+      answer: (data) => (hosts.client && hosts.targetId === targetId ? hosts.client.answerTrust(data) : Promise.reject(new Error(`not connected to ${name}`))),
+    } : null;
+    const load = () => (hosts.client ? hosts.client.launchOptions() : Promise.reject(new Error('not connected')));
+    // A machine that stopped taking launches (read-only, agent-ha-bridge) still shows a
+    // folder-trust question waiting on it, read-only: only one that offered launching before.
+    const inspect = !launchable && (hosts.phase === 'open' ? !!hosts.machine?.readOnly : wasInspect);
+    const readOnly = hosts.phase === 'open' ? hosts.machine?.readOnly : launchPanel.readOnly;
+    launchPanel.setTarget(launchable ? { hostId: targetId, machineName: name, load, transfers, trust }
+      : inspect ? { hostId: targetId, machineName: name, load, transfers: null, trust: null, inspectOnly: true, readOnly } : null);
     switch (hosts.phase) {
       case 'waiting': return setHostState(hosts.error || (hosts.targetOnline ? `Connecting to ${name}…` : `${name} is offline. Its sessions will show when it is back.`));
       case 'opening': return setHostState(`Opening an end-to-end encrypted channel to ${name}…`);

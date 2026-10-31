@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { LaunchService } from '../../js/launch-service.js';
 import { HostClient, HostError } from '../../js/host-client.js';
-import { checkLaunch, flattenPrompt, readLaunchOptions, readLaunchResult, MAX_PROMPT } from '../../js/launch.js';
-import { describeLaunch } from '../../js/ui/launch-view.js';
+import { checkLaunch, flattenPrompt, readLaunchOptions, readLaunchResult, readTrustResult, MAX_PROMPT } from '../../js/launch.js';
+import { describeLaunch, describeTrust } from '../../js/ui/launch-view.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 const REQUEST = '2b6e1f0a-7c3d-4e5f-8a9b-0c1d2e3f4a5b';
@@ -148,4 +148,24 @@ test('what a launch says matches its outcome, and a started session says where i
   assert.equal(describeLaunch(done('failed', { reason: 'it exited' })).tone, 'bad');
   assert.equal(describeLaunch({ state: 'waiting' }, { machineName: 'Desk' }).tone, 'progress');
   assert.match(describeLaunch({ state: 'sending' }, { machineName: 'Desk' }).text, /on Desk/);
+});
+
+test('a folder-trust question is read whole from options and from a launch it met, and nothing unreadable is shown', () => {
+  const q = { id: 'q1', agent: 'codex', kind: 'codex', label: 'Codex', workspace: 'Bridge', folder: 'C:\\Users\\me\\repos\\bridge\\web', root: 'c:\\users\\me\\repos\\bridge', rootNote: 'Note: …root:', warning: 'Trust this folder? …', askedAt: '2026-10-31T16:31:30Z', answerable: true };
+  const o = readLaunchOptions({ agents: [], workspaces: [], resumable: [], defaults: {}, trust: [q, { id: 'no folder' }, 'junk'] });
+  assert.deepEqual(o.trust, [{ ...q, atMachine: null }]);
+  assert.deepEqual(readLaunchOptions({}).trust, []);
+  const r = readLaunchResult({ outcome: 'busy', reason: 'Busy: …', trust: { ...q, answerable: 'yes' } });
+  assert.equal(r.trust.answerable, false);
+  assert.equal(readLaunchResult({ outcome: 'started' }).trust, null);
+});
+
+test('a folder-trust answer from a newer host is read as unconfirmed, never as refused', () => {
+  assert.deepEqual(readTrustResult({ outcome: 'started', session: 's' }), { outcome: 'started', reason: null, session: 's' });
+  assert.equal(readTrustResult({ outcome: 'retyped' }).outcome, 'unconfirmed');
+  const q = { label: 'Codex' };
+  assert.deepEqual(describeTrust({ state: 'done', choice: 'trust', result: { outcome: 'started' } }, q), { text: 'Trusted. Codex started.', tone: 'ok' });
+  assert.deepEqual(describeTrust({ state: 'done', choice: 'trust', result: { outcome: 'unconfirmed', reason: 'Not confirmed: answer at the machine. The question is still in Codex\'s window.' } }, q),
+    { text: 'Not confirmed: answer at the machine. The question is still in Codex\'s window.', tone: 'warn' });
+  assert.equal(describeTrust({ state: 'done', choice: 'quit', result: { outcome: 'refused', reason: 'Answer at the machine' } }, q).tone, 'bad');
 });
