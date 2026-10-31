@@ -65,6 +65,36 @@ public class BaselineTests
     }
 
     [Fact]
+    public void Codexs_hook_registration_inside_agent_ha_bridges_folder_counts_as_a_hook()
+    {
+        using var s = Install();
+        s.File(".agent-ha-bridge/codex-bridge/plugins/agent-ha-bridge/hooks.json", "{\"hooks\":1}");
+        var before = BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow);
+        s.File(".agent-ha-bridge/codex-bridge/plugins/agent-ha-bridge/hooks.json", "{\"hooks\":2}");
+
+        var diffs = Again(s, before);
+
+        var d = Assert.Single(diffs);
+        Assert.Equal(BaselineCapture.Hooks, d.Category);
+        Assert.Equal("~/.agent-ha-bridge/codex-bridge/plugins/agent-ha-bridge/hooks.json", d.Path);
+        Assert.Equal(Verdict.Pass, BaselineCapture.Judge(before, diffs, new HashSet<string> { BaselineCapture.Hooks }).Verdict);
+    }
+
+    [Fact]
+    public void A_baseline_that_filed_codexs_hooks_as_install_is_judged_by_the_current_rule()
+    {
+        using var s = Install();
+        s.File(".agent-ha-bridge/codex-bridge/plugins/agent-ha-bridge/hooks.json", "{\"hooks\":1}");
+        var captured = BaselineCapture.Capture(Homes.For(s.Root), new Tasks(Daemon), DateTimeOffset.UtcNow);
+        var older = captured with { Files = [.. captured.Files.Select(f => f.Path.EndsWith("hooks.json", StringComparison.Ordinal) && f.Path.Contains("codex-bridge", StringComparison.Ordinal) ? f with { Category = BaselineCapture.Install } : f)] };
+        s.File(".agent-ha-bridge/codex-bridge/plugins/agent-ha-bridge/hooks.json", "{\"hooks\":2}");
+
+        var d = Assert.Single(Again(s, older));
+
+        Assert.Equal(BaselineCapture.Hooks, d.Category);
+    }
+
+    [Fact]
     public void A_removed_file_an_added_file_and_a_disabled_task_are_each_reported()
     {
         using var s = Install();
