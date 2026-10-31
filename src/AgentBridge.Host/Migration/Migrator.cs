@@ -659,6 +659,17 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         }
 
         var tasks = record.Tasks.Where(t => t.Enabled && t.Disabled != false).ToList();
+        // An older record does not say which tasks the migration turned off. One found disabled
+        // now was, and is recorded so before it is turned back on: a retry after this attempt
+        // fails finds it enabled, and must still start it rather than leave it as one the
+        // scheduler refused.
+        void TurnedOff(MigrationRecord.TaskRecord task)
+        {
+            if (task.Disabled is not null) { return; }
+            task.Disabled = true;
+            try { record.Save(options.ProfileFolder); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
         if (dryRun)
         {
             Say("* Hook registrations, once the host has let go of the hook spool:");
@@ -679,7 +690,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             {
                 try
                 {
-                    if (runtime.Task(task.Name) is not { Enabled: true }) { runtime.SetEnabled(task.Name, true); }
+                    if (runtime.Task(task.Name) is not { Enabled: true }) { TurnedOff(task); runtime.SetEnabled(task.Name, true); }
                 }
                 catch (Exception e) when (e is not OperationCanceledException) { Say($"* {task.Name} could not be turned back on ({e.Message}); run agent-ha-bridge configure."); }
             }
@@ -707,6 +718,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
                 var daemon = task.Name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal);
                 if (state is not { Enabled: true })
                 {
+                    TurnedOff(task);
                     runtime.SetEnabled(task.Name, true);
                     reenabled.Add(task.Name);
                 }

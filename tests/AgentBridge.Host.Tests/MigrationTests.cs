@@ -1266,6 +1266,31 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_older_records_task_turned_back_on_by_a_failed_rollback_is_still_started_by_the_next()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var path = MigrationRecord.PathIn(_f.Profile);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        foreach (var t in json["tasks"]!.AsArray()) { t!.AsObject().Remove("disabled"); }
+        File.WriteAllText(path, json.ToJsonString());
+        _f.Runtime_.StartRefused.Add(keepAwake);
+
+        Assert.False((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        Assert.True(_f.Runtime_.Tasks[keepAwake].Enabled);
+        _f.Runtime_.StartRefused.Clear();
+        _f.Runtime_.Calls.Clear();
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.Contains($"start {keepAwake}", _f.Runtime_.Calls);
+        Assert.DoesNotContain($"start {daemon}", _f.Runtime_.Calls);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+    }
+
+    [Fact]
     public async Task An_older_records_task_still_enabled_is_not_started_by_a_rollback_unless_it_is_the_daemon()
     {
         var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";

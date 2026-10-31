@@ -228,6 +228,8 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
     public bool RefusalVisible { get; set; } = true;
     // Tasks Task Scheduler cannot be asked about at all (its service refusing the query).
     public HashSet<string> Unreadable { get; } = [];
+    // Tasks it refuses to run, for now.
+    public HashSet<string> StartRefused { get; } = [];
     public List<string> Calls { get; } = [];
 
     public ScheduledTaskState? Task(string name) => Unreadable.Contains(name)
@@ -246,7 +248,7 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
     public void Start(string name)
     {
         Calls.Add($"start {name}");
-        if (Refused.Contains(name)) { throw new IOException($"Task Scheduler refused {name}: Access is denied."); }
+        if (Refused.Contains(name) || StartRefused.Contains(name)) { throw new IOException($"Task Scheduler refused {name}: Access is denied."); }
         if (!Tasks[name].Enabled) { throw new IOException("disabled"); }
         Tasks[name] = (true, true);
         if (name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal) && !StartsNothing) { DaemonRunning = true; SupervisorRunning = true; }
