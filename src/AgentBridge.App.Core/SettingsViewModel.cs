@@ -208,7 +208,16 @@ public sealed class SettingsViewModel : Observable
         await manager.StopAsync();
         UpdateStatus = "Restarting…";
         AutoUpdater.Record(prefs, savePrefs, updater);
-        updater.ApplyAndRestart();
+        try { updater.ApplyAndRestart(); }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            // Still this version: the host stopped for it comes back, and the failure is shown.
+            savePrefs(prefs() with { UpdatedFrom = null, UpdateNotes = null });
+            updateVersion = null;
+            UpdateStatus = "";
+            await manager.StartAsync();
+            throw;
+        }
     });
 
     // Every action here ends up behind an async void click handler, where an escaping exception
