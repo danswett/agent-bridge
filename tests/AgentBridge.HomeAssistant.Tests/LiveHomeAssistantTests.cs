@@ -219,7 +219,8 @@ public sealed class LiveHomeAssistantTests : IDisposable
         Assert.Equal("wait", answered[0].Fields!["release"].GetString());
         await Until(SessionEntities.Activity(node), s => s.State == "Answer sent");
 
-        Ask(id, null, turn: 2);
+        // The answer carries on the turn it was asked in, which is the agent's from now on.
+        Ask(id, null, turn: 1);
         await Until(SessionEntities.Activity(node), s => s.Attributes.TryGetProperty("driver", out var d) && d.GetString() == "agent");
         await Until(SessionEntities.Decision(node), s => s.State == HaDecision.Idle);
         // The host's own clients show the same edge, naming the account Home Assistant recorded.

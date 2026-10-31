@@ -231,6 +231,8 @@ public sealed partial class HaConnector : IAsyncDisposable
 
         public void ArmDriver(string driver, DateTimeOffset now, string? principal = null) => Drive.ArmDriver(driver, now, principal);
 
+        public void Answered(string driver, string? principal) => Drive.Answered(driver, principal);
+
         public void ArmLaunch(DateTimeOffset at, string? prompt, bool resumed, string? principal) => Drive.ArmLaunch(at, prompt, resumed, principal);
         // Which of the reply and the reasoning changed last. The host keeps the previous turn's
         // reply when a new turn starts, so "no reply yet" cannot say the newest line is a thought.

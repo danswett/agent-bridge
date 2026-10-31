@@ -686,18 +686,20 @@ breathing glow as working or waiting, in purple, while it works or waits (held s
 who asked for reduced motion). It says so in words too ("Driven by an agent"), never by colour
 alone.
 
-* **Set** by the principal of an answer, a reply or a launch made through the host. The session
-  shows as the agent's at once, and the next turn to start within 600 s is the agent's. An agent's
-  launch makes its opening turn the agent's.
-* **Taken back** by the person: an answer or reply from any of the person's devices (or a press by
-  a person on the Home Assistant card) shows the session as the person's at once, and a turn that
-  starts with nobody's arm waiting for it, or after the arm lapsed, is typed at the machine and so
-  is the person's. A resend of the same request, which the host answers from the outcome it
-  remembers without typing anything, takes nothing back. An agent's turn finishing is not a new
-  turn: the session stays the agent's while it is idle. A turn is a prompt started; an answer continues the turn it was asked
-  in, so an answer typed at the machine does not take the session back until the next prompt, as on
-  agent-ha-bridge (#134). A person's answer or reply confirmed only after an agent armed the session
-  meanwhile leaves it with the agent, whose input came later.
+* **A turn is a prompt started.** An agent's turn finishing is not a new turn, so a session left
+  with an agent stays the agent's while it is idle. A prompt that starts with nobody's input waiting
+  for it, or after that input's 600 s lapsed, was typed at the machine, and is the person's.
+* **A reply or a launch** made through the host shows the session as its sender's at once, and the
+  next prompt to start within 600 s (for a launch, its opening prompt) is theirs.
+* **An answer** continues the turn it was asked in: that turn is the answerer's from the moment it
+  is delivered, and nothing is left waiting for the next prompt, which is whoever's it is. An
+  answer typed at the machine is not seen as input, so it takes nothing back until the person's
+  next prompt, as on agent-ha-bridge (#134).
+* **Taken back** by the person: an answer or reply from any of the person's devices (or a press by a
+  person on the Home Assistant card) shows the session as the person's at once. Each request does
+  so once: a resend, which the host answers from the outcome it remembers without typing anything,
+  takes nothing back, and nor does an answer or reply confirmed only after an agent's input
+  arrived meanwhile, which came later.
 * **Who is an agent.** Agents have no principal of their own on the pipe or relay yet (design
   §5.5; the pipe refuses them anything but reading, #44), so today the only agent principal a host
   sees is a press, answer, reply or launch on its Home Assistant cards made by an account listed

@@ -200,6 +200,31 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_resend_waiting_beside_its_first_send_takes_nothing_back_from_an_agent_who_drove_the_session_meanwhile()
+    {
+        var ch = await OpenAsync();
+        var release = new TaskCompletionSource();
+        injector.Gate = release.Task;
+        var request = Guid.NewGuid().ToString();
+        var first = ReplyAsync(ch, "mine", request);
+        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the reply to start typing", Patience);
+
+        // An agent drives the session while the person's reply is still going in, and the phone,
+        // having lost the outcome, sends the same request again.
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, DateTimeOffset.UtcNow, "homeassistant:0f1e2d3c");
+        var again = ReplyAsync(ch, "mine", request);
+        await Task.Delay(300);
+        release.SetResult();
+
+        Assert.Equal("delivered", (await again).Outcome);
+        Assert.Equal("delivered", (await first).Outcome);
+        Assert.Single(injector.Plans);
+        await Task.Delay(200);
+        await source.RefreshAsync();
+        Assert.Equal(DriverKind.Agent, source.Get(Id)!.Driver);
+    }
+
+    [Fact]
     public async Task A_reply_the_transcript_then_records_as_the_persons_prompt_is_delivered_typed_as_one_line_then_Enter()
     {
         var ch = await OpenAsync();

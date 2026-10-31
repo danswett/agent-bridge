@@ -278,8 +278,8 @@ public sealed class NotifyTests : IDisposable
         await Pass(c);
         var request = Assert.Single(answered);
         Assert.False(request.Fields!["push"].GetBoolean());
-        // The turn the answer starts is the agent's, as after its press on the card.
-        Ask(null, turn: 2);
+        // The turn it answers, which carries on, is the agent's, as after its press on the card.
+        Ask(null, turn: 1);
         await Pass(c);
         Assert.Equal("agent", JsonDocument.Parse(ha.Retained[HaContract.Topics(Node).ActivityAttributes]).RootElement.GetProperty("driver").GetString());
     }

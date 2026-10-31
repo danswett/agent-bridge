@@ -98,6 +98,40 @@ public class DriverTests
     }
 
     [Fact]
+    public async Task An_agents_answer_drives_the_turn_it_answers_and_the_persons_next_prompt_moments_later_is_theirs()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.ToolStart("q1", "ask_user", new
+        {
+            message = "Which one?",
+            requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b" } } }, required = new[] { "pick" } },
+        }, 3));
+        await source.RefreshAsync();
+        Assert.Equal(SessionStatus.Waiting, source.Get(Id)!.Status);
+
+        // An agent answers it from the Home Assistant card.
+        drivers.For(Id).Answered(SessionDrivers.Agent, Principal);
+        await Until(source, s => s.Driver == DriverKind.Agent);
+
+        // The answer carries on the turn it was asked in, which ends as the agent's.
+        Fixture.Append(events,
+            Copilot.Event("human_response.recorded", new { toolCallId = "q1", requestId = "r", actor = "human_response", response = new { responseKind = "ask_user", content = new { pick = "b" } } }, 4),
+            Copilot.ToolDone("q1", 5), Copilot.Assistant("Went with b.", 6), Copilot.TurnEnd(7));
+        await source.RefreshAsync();
+        Assert.Equal((SessionStatus.Idle, DriverKind.Agent), (source.Get(Id)!.Status, source.Get(Id)!.Driver));
+
+        // It left nothing armed: the person's own prompt, well within ten minutes, is theirs.
+        f.Time.Advance(TimeSpan.FromSeconds(30));
+        Fixture.Append(events, Copilot.User("mine", 40), Copilot.TurnStart(41));
+        await source.RefreshAsync();
+        Assert.Equal((null, null), Driver(source.Get(Id)!));
+    }
+
+    [Fact]
     public async Task An_arm_whose_turn_did_not_start_within_ten_minutes_leaves_the_turn_to_the_person()
     {
         using var f = new Fixture();

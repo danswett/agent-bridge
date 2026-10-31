@@ -48,10 +48,20 @@ public sealed class SessionDrivers
     // creates (the id may be anything a device sent).
     public long GenerationOf(string id) => drivers.TryGetValue(id, out var d) ? d.Generation : 0;
 
-    // A person answered or replied from a device, if nothing armed the session since `generation`.
-    public void ArmPerson(string id, DateTimeOffset now, long generation)
+    // A person's answer or reply from a device took the session back, unless something armed it
+    // since `generation`, which is then the later input. Checked and applied under the record's own
+    // lock, so a press in between cannot be overwritten. An answer continues the turn it was asked
+    // in, so it arms nothing for the next prompt; a reply arms the prompt it is.
+    public void TakeBack(string id, DateTimeOffset now, long generation, bool answer)
     {
-        if (GenerationOf(id) == generation) { For(id).ArmDriver(Human, now); }
+        SessionDriver d;
+        if (!drivers.TryGetValue(id, out var known))
+        {
+            if (generation != 0) { return; }
+            d = For(id);
+        }
+        else { d = known; }
+        d.ApplyIf(Human, answer ? null : now, generation);
     }
 
     // A person answered or replied from a device: the turn is theirs, as if typed at the machine.
@@ -119,22 +129,31 @@ public sealed class SessionDriver
 
     (DriverKind?, string?) ShownLocked() => driver == SessionDrivers.Agent ? (DriverKind.Agent, principal) : (null, null);
 
-    public void ArmDriver(string by, DateTimeOffset now, string? agentPrincipal = null) => Arm(by, now, agentPrincipal, null, false);
+    // A reply or a press of Send: shown at once, and armed for the prompt it is.
+    public void ArmDriver(string by, DateTimeOffset now, string? agentPrincipal = null) => Apply(by, now, agentPrincipal, null, false, null);
 
     // The whole launch, opening turn included, before anyone hears of it: a source told first
     // would observe an opening turn already here without spending the arm on it.
     public void ArmLaunch(DateTimeOffset at, string? prompt, bool resumed, string? agentPrincipal = null) =>
-        Arm(SessionDrivers.Agent, at, agentPrincipal, prompt is { Length: > 0 } ? Collapse(prompt) : null, resumed);
+        Apply(SessionDrivers.Agent, at, agentPrincipal, prompt is { Length: > 0 } ? Collapse(prompt) : null, resumed, null);
 
-    void Arm(string by, DateTimeOffset now, string? agentPrincipal, string? opening, bool resumed)
+    // An answer continues the turn it was asked in: that turn is the answerer's from now on, and
+    // nothing is left armed, so the next prompt is whoever's it is. An arm left for the next prompt
+    // would wear the agent's edge onto the person's own prompt typed at the machine.
+    public void Answered(string by, string? agentPrincipal = null) => Apply(by, null, agentPrincipal, null, false, null);
+
+    internal void ApplyIf(string by, DateTimeOffset? pending, long generation) => Apply(by, pending, null, null, false, generation);
+
+    void Apply(string by, DateTimeOffset? pending, string? agentPrincipal, string? opening, bool resumed, long? onlyAt)
     {
         bool changed;
         lock (gate)
         {
+            if (onlyAt is { } g && generation != g) { return; }
             var before = ShownLocked();
             driver = by;
             principal = by == SessionDrivers.Agent ? agentPrincipal : null;
-            pendingAt = now;
+            pendingAt = pending;
             openingPrompt = opening;
             openingResumed = resumed;
             generation++;

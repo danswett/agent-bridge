@@ -638,7 +638,7 @@ public sealed partial class HaConnector
         {
             // Who sent it (the press carries the account behind it, a publish names its driver),
             // and which reply-card words were used, only for an answer that may have arrived.
-            p.ArmDriver(outcome.Driver, now, outcome.Principal);
+            p.Answered(outcome.Driver, outcome.Principal);
             if (outcome.Stamp is { } stamp) { p.LastPayloadStamp = stamp; }
         }
         switch (result.Outcome)

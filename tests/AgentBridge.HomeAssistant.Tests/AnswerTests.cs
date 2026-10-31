@@ -238,7 +238,7 @@ public sealed class AnswerTests : IDisposable
     }
 
     [Fact]
-    public async Task An_agents_press_drives_the_next_turn_and_a_person_at_the_machine_takes_it_back()
+    public async Task An_agents_answer_makes_the_turn_it_answers_the_agents_and_the_persons_next_prompt_is_theirs()
     {
         Ask(Form("q1", Release));
         await using var c = Connector("agent-user");
@@ -249,12 +249,14 @@ public sealed class AnswerTests : IDisposable
         // The host's own clients see it at once, with the account that pressed.
         Assert.Equal((DriverKind.Agent, "homeassistant:agent-user"), drivers.Shown(A));
 
-        Ask(null, turn: 2, message: "the agent's answer");
+        // The answer carries on the turn it was asked in, which is the agent's from now on.
+        Ask(null, turn: 1, message: "go");
         await Pass(c);
         Assert.Equal("agent", Detail.GetProperty("driver").GetString());
 
-        // A turn nobody armed is the person's at the machine.
-        Ask(null, turn: 3, message: "typed in the terminal");
+        // It arms nothing beyond it: the person's next prompt, typed at the machine moments later, is
+        // theirs.
+        Ask(null, turn: 2, message: "typed in the terminal");
         await Pass(c);
         Assert.Equal("human", Detail.GetProperty("driver").GetString());
         Assert.Equal((null, null), drivers.Shown(A));
@@ -299,13 +301,13 @@ public sealed class AnswerTests : IDisposable
         await Pass(c);
         await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut the release now", "agent-user"));
         await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
-        Ask(null, turn: 2, message: "the agent's answer");
+        Ask(null, turn: 1, message: "go");
         await Pass(c);
         Assert.Equal("agent", Detail.GetProperty("driver").GetString());
 
         sessions.End(A);
         await Pass(c);
-        Ask(null, turn: 2, message: "the agent's answer");
+        Ask(null, turn: 1, message: "go");
         await Pass(c);
         Assert.Equal("human", Detail.GetProperty("driver").GetString());
     }
