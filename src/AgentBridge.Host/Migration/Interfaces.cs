@@ -30,6 +30,9 @@ public interface IAgentHaBridgeRuntime
     // another installation's daemon is not this one back.
     bool Seen(string installationId);
 
+    // Whether that installation's supervisor was seen running; not being able to tell is no.
+    bool SupervisorSeen(string installationId);
+
     // How many of the agent's processes run now, or null when they could not all be identified.
     // With startedBefore, only those started before then, or whose start cannot be told.
     int? Running(AgentBridge.Protocol.AgentKind agent, DateTimeOffset? startedBefore = null);

@@ -228,6 +228,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             {
                 if (runtime.Task(name) is { } task) { record.Tasks.Add(new(name, task.Enabled) { Disabled = false }); }
             }
+            record.DaemonRunning = runtime.Seen(install.Id);
             record.Save(options.ProfileFolder);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -684,8 +685,11 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         // disable was never touched, and enabling or starting it needs the same access: asking
         // failed every rollback and kept the record for good. A record from an older build does
         // not say, so a task of it still enabled is left as it is. A daemon still running is not
-        // started a second time.
-        var daemonRunning = runtime.Seen(record.InstallationId);
+        // started a second time. One left without its supervisor (the supervisor stops first, and
+        // a daemon that then refused to stop outlives it) has its task started again, so it is
+        // restarted if it fails: the new supervisor's daemon exits at once on the running one's
+        // mutex, and the supervisor keeps trying until it is the only one.
+        var daemonRunning = runtime.Seen(record.InstallationId) && runtime.SupervisorSeen(record.InstallationId);
         var reenabled = new List<string>();
         var alreadyOn = new List<string>();
         foreach (var task in tasks)
@@ -709,8 +713,14 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             }
         }
         // Waited for whether or not the migration turned its task off: the daemon must be running.
+        // Except one already stopped when the migration began, whose task it never turned off (it
+        // was cut short first): nothing stopped it, and nothing here started it.
         var daemonTask = record.Tasks.FirstOrDefault(t => t.Enabled && t.Name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal));
-        if (daemonTask is not null)
+        if (daemonTask is not null && record.DaemonRunning == false && daemonTask.Disabled == false)
+        {
+            Say($"* {daemonTask.Name} was never turned off, and agent-ha-bridge's daemon was not running when the migration began; it is left as it was.");
+        }
+        else if (daemonTask is not null)
         {
             // Seen, not merely uncheckable: a probe that cannot tell would otherwise pass for a daemon
             // back, and the record and snapshot be deleted with nothing running.

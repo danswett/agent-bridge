@@ -1155,6 +1155,52 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_daemon_that_outlived_its_supervisor_has_its_task_started_again_by_the_undo()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        var listing = _f.Listing();
+        _f.Runtime_.OutlivesSupervisor = true;
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("did not stop", report.ToString());
+        Assert.Contains("Rolled back.", report.ToString());
+        // Started for its supervisor: the daemon still running is not what decides it.
+        Assert.Equal([$"disable {daemon}", "stop", $"enable {daemon}", $"start {daemon}"], _f.Runtime_.Calls);
+        Assert.True(_f.Runtime_.SupervisorRunning);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+        Assert.Equal(listing, _f.Listing());
+    }
+
+    [Fact]
+    public async Task A_migration_cut_short_before_it_turned_off_a_stopped_daemons_task_rolls_back_without_waiting_for_that_daemon()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        _f.Runtime_.Tasks[daemon] = (true, false);
+        _f.Runtime_.DaemonRunning = false;
+        var listing = _f.Listing();
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        Assert.False(MigrationRecord.Load(_f.Profile).Record!.DaemonRunning);
+        // As a migration cut short between its snapshot and turning the task off leaves it.
+        var path = MigrationRecord.PathIn(_f.Profile);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        json["tasks"]![0]!["disabled"] = false;
+        File.WriteAllText(path, json.ToJsonString());
+        _f.Runtime_.Tasks[daemon] = (true, false);
+        _f.Runtime_.Calls.Clear();
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.Contains("was not running when the migration began; it is left as it was", report.ToString());
+        Assert.Empty(_f.Runtime_.Calls);
+        Assert.False(_f.Runtime_.DaemonRunning);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+        Assert.Equal(listing, _f.Listing());
+    }
+
+    [Fact]
     public async Task A_task_that_could_not_be_turned_back_on_is_never_reported_as_still_enabled()
     {
         var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";

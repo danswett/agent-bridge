@@ -28,6 +28,10 @@ public sealed class MigrationRecord
     public List<FileRecord> Files { get; init; } = [];
     public List<CheckedFile> Checked { get; init; } = [];
     public HookRecord? Hook { get; set; }
+    // Whether the daemon was running when the snapshot was taken. A rollback that turned nothing
+    // back on does not wait for a daemon that was already stopped: it would time out every time
+    // and keep the record. Null in a record from a build that did not say.
+    public bool? DaemonRunning { get; set; }
 
     public sealed record TaskRecord(string Name, bool Enabled)
     {
@@ -80,6 +84,7 @@ public sealed class MigrationRecord
             ["startedAt"] = StartedAt.ToString("o"),
             ["migratedAt"] = MigratedAt?.ToString("o"),
             ["tasks"] = new JsonArray(Tasks.Select(t => (JsonNode)new JsonObject { ["name"] = t.Name, ["enabled"] = t.Enabled, ["disabled"] = t.Disabled }).ToArray()),
+            ["daemonRunning"] = DaemonRunning,
             ["files"] = new JsonArray(Files.Select(f => (JsonNode)new JsonObject
             {
                 ["role"] = f.Role,
@@ -133,6 +138,7 @@ public sealed class MigrationRecord
                 StartedAt = DateTimeOffset.Parse(S(o["startedAt"]), System.Globalization.CultureInfo.InvariantCulture),
                 MigratedAt = Present(o, "migratedAt") is { } m ? DateTimeOffset.Parse((string)m!, System.Globalization.CultureInfo.InvariantCulture) : null,
                 Tasks = [.. Objects(o["tasks"], "tasks").Select(t => new TaskRecord(S(t["name"]), B(t["enabled"])) { Disabled = (bool?)t["disabled"] })],
+                DaemonRunning = (bool?)o["daemonRunning"],
                 Files = [.. Objects(o["files"], "files").Select(f => new FileRecord
                 {
                     Role = S(f["role"]),

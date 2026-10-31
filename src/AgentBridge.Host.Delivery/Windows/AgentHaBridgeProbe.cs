@@ -44,6 +44,17 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
         return DaemonAmong(found, installationId);
     }
 
+    // Whether that installation's supervisor holds its mutex. Not being able to tell is no: the
+    // answer only decides whether rollback starts the task again, and a second supervisor exits
+    // at once on the first one's mutex.
+    public bool SupervisorSeen(string installationId)
+    {
+        var found = new SortedSet<string>(StringComparer.Ordinal);
+        NamedMutexes(found);
+        Probe("CopilotBridgeSupervisor_" + installationId, found);
+        return found.Contains("CopilotBridgeSupervisor_" + installationId, StringComparer.OrdinalIgnoreCase);
+    }
+
     internal static bool DaemonAmong(IEnumerable<string> found, string installationId) =>
         found.Contains("AgentBridgeDaemon_" + installationId, StringComparer.OrdinalIgnoreCase);
 

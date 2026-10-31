@@ -265,15 +265,21 @@ snapshot to roll back by hand, rather than skipping a file or a task and deletin
 4. Checks the files recorded by hash, and reports any that changed while migrated (by someone
    else; neither step writes them).
 5. Re-enables each task that was enabled before and is disabled now, starts it unless its daemon
-   is already running, and waits until the G5 probe sees
+   and its supervisor (`CopilotBridgeSupervisor_<id>`) are both already running, and waits until the G5 probe sees
    agent-ha-bridge's daemon running again: that installation's own mutex
    (`AgentBridgeDaemon_<id>`) seen, since a probe that cannot tell, a supervisor or task running
    while the daemon fails to start, or another installation's daemon would otherwise pass for it,
    and the record and snapshot would go with nothing running. A task that was disabled before stays disabled.
+   A daemon that refused to stop after its supervisor did still has its task started, so it is
+   restarted if it fails: the new supervisor's daemon exits at once on the running daemon's mutex,
+   and the supervisor retries until it is the only one.
    Only what the migration turned off is put back: the record marks each task as it is
    disabled, and one the scheduler refused to disable is neither enabled nor started, since
    with read access alone both fail and every rollback would keep the record (#114). In a
    record from an older build, which does not say, a task still enabled is left alone.
+   The record also says whether the daemon was running when the migration began. A rollback does
+   not wait for a daemon that was already stopped then and whose task the migration never turned
+   off (it was cut short first): nothing stopped it, and waiting would time out on every attempt.
 6. Deletes `migration.json` and the snapshot. If anything above went wrong they are kept, and
    the report says what to do. A migration cut short (`migration status` says "part-way") is
    rolled back the same way.

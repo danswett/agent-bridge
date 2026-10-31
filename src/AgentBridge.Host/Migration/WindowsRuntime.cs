@@ -30,6 +30,8 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
 
     public bool Seen(string installationId) => _probe.Seen(installationId);
 
+    public bool SupervisorSeen(string installationId) => _probe.SupervisorSeen(installationId);
+
     public int? Running(AgentBridge.Protocol.AgentKind agent, DateTimeOffset? startedBefore = null)
     {
         var observed = new SystemProcessInspector().Observe(agent);
