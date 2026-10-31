@@ -118,6 +118,19 @@ public class RelayTests
     }
 
     [Fact]
+    public async Task A_socket_that_aborts_itself_ends_the_connection_without_faulting_it_or_throwing_on_dispose()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var c = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "aborted");
+
+        c.Relay.AbortSocket();
+        await c.Relay.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(TaskStatus.RanToCompletion, c.Relay.Completion.Status);
+        await c.Relay.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Flooding_frames_closes_the_connection_with_4008()
     {
         await using var relay = await TestRelay.StartAsync(o => o.MaxFramesPerSecond = 20);

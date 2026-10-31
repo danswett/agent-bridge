@@ -240,6 +240,9 @@ public sealed class RelayClient : IAsyncDisposable
         return TimeSpan.FromMilliseconds(window - (now - recentSends.Peek()) + 1);
     }
 
+    // Test use: what the keep-alive does when no pong comes back.
+    internal void AbortSocket() => ws.Abort();
+
     // Test use: send raw bytes the relay must refuse.
     internal async Task SendRawAsync(byte[] data, WebSocketMessageType type)
     {
@@ -304,7 +307,11 @@ public sealed class RelayClient : IAsyncDisposable
                 else { Enqueue(data); }
             }
         }
-        catch (WebSocketException) { }
+        // The receive passes no token, so a cancellation here is the socket aborting itself: a
+        // keep-alive pong that never came throws OperationCanceledException ("Aborted"), not a
+        // WebSocketException, and faulted Completion with it. The host awaits Completion and
+        // disposes this, and the fault crashed it minutes after a relay deploy (#40).
+        catch (Exception e) when (e is WebSocketException or OperationCanceledException or IOException or ObjectDisposedException) { }
         // An oversized frame is a relay protocol violation: end this connection cleanly so
         // the caller reconnects, rather than faulting Completion and taking the host down.
         catch (FrameTooLargeException)
@@ -320,7 +327,8 @@ public sealed class RelayClient : IAsyncDisposable
         foreach (var b in blobRequests.Values) { b.TrySetException(new IOException("relay connection ended")); }
         if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {
-            try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, default); } catch (WebSocketException) { }
+            try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, default); }
+            catch (Exception e) when (e is WebSocketException or OperationCanceledException or IOException or ObjectDisposedException) { }
         }
     }
 
@@ -357,8 +365,10 @@ public sealed class RelayClient : IAsyncDisposable
             }
             catch (Exception e) when (e is WebSocketException or OperationCanceledException or InvalidOperationException) { }
         }
-        try { await loop.WaitAsync(TimeSpan.FromSeconds(2)); } catch (TimeoutException) { }
-        try { await dispatch.WaitAsync(TimeSpan.FromSeconds(2)); } catch (TimeoutException) { }
+        // Disposal is cleanup, called from a finally: a loop that faulted anyway must not throw
+        // here and replace whatever the caller was handling.
+        try { await loop.WaitAsync(TimeSpan.FromSeconds(2)); } catch (Exception) { }
+        try { await dispatch.WaitAsync(TimeSpan.FromSeconds(2)); } catch (Exception) { }
         ws.Dispose();
     }
 }
