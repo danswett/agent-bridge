@@ -30,6 +30,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     readonly Callers callers = new();
     readonly List<string> logged = [];
     readonly List<bool> applied = [];
+    readonly List<IReadOnlyList<string>> approved = [];
     Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> signIn = (_, _, _) => Task.FromException<SignInResult>(new InvalidOperationException("no relay in these tests"));
     (SignInResult Account, Uri Relay)? saved;
     RelayAccount? credential;
@@ -59,6 +60,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             Machine = machine,
             Running = new HostSettingsView(RemoteApproval: true),
             ApplyRemoteFolderTrust = on => { lock (applied) { applied.Add(on); } },
+            ApplyRemoteFolderTrustDevices = ids => { lock (applied) { approved.Add(ids); } },
             Relay = () => new Uri("https://relay.example/"),
             Credential = () => credential,
             SignIn = (relay, show, ct) => signIn(relay, show, ct),
@@ -220,6 +222,17 @@ public sealed class LocalApiTests : IAsyncLifetime
         var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(profile, "config.json")))!;
         Assert.Equal("C:\\src", saved["launch"]!["workspaces"]![0]!.GetValue<string>());
         Assert.True(HostSettings.Load(profile).Settings.Launch.RemoteFolderTrust);
+
+        // And the devices it may be answered from, approved there too, at once; never a malformed id.
+        var phone = new string('a', 32);
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { remoteFolderTrustDevices = new[] { "phone" } }));
+        Assert.Contains("'phone' is not a device id", refused.Message);
+        var devices = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrustDevices = new[] { phone, phone } });
+        Assert.Equal([phone], devices.Settings.RemoteFolderTrustDevices!);
+        Assert.Equal([phone], Assert.Single(approved));
+        Assert.False(devices.RestartRequired);
+        Assert.Equal([phone], HostSettings.Load(profile).Settings.Launch.RemoteFolderTrustDevices);
+        Assert.Equal([phone], (await ch.CallAsync<HostStatus>(HostOps.Status)).Settings.RemoteFolderTrustDevices!);
     }
 
     [Fact]

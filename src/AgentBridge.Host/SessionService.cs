@@ -133,7 +133,8 @@ public sealed class SessionService
             case Ops.PushList:
                 return new PushListResult([]);
             case LaunchProtocol.Options when launcher is not null:
-                return await launcher.OptionsAsync();
+                var options = await launcher.OptionsAsync();
+                return options.Trust is null ? options : options with { Trust = [.. options.Trust.Select(q => ForPeer(channel, q))] };
             case LaunchProtocol.Launch when launcher is not null:
                 return await LaunchAsync(channel, data);
             // Host to host, through the relay only: another machine of the account asking for a
@@ -323,7 +324,27 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
         {
             return new LaunchResult(LaunchOutcome.Refused, "a session from another machine is brought in through the relay, from the phone or browser app");
         }
-        return await launcher!.LaunchAsync(request, channel.PeerId);
+        var result = await launcher!.LaunchAsync(request, channel.PeerId);
+        return result.Trust is null ? result : result with { Trust = ForPeer(channel, result.Trust) };
+    }
+
+    // A folder-trust question as this caller may answer it: the machine says whether it can be
+    // answered at all, and this says whether by this device. Only a device a person approved at
+    // the machine, through the relay; never this machine's pipe, which agents and the MCP server
+    // reach. So a card never offers buttons that would only be refused.
+    TrustQuestion ForPeer(IProtocolChannel channel, TrustQuestion question)
+    {
+        if (!question.Answerable) { return question; }
+        string? why = null;
+        if (TrustAnswers is null || channel is not SecureChannel secure)
+        {
+            why = "Answer at the machine, or from a phone, browser or Windows app through the relay.";
+        }
+        else if (launcher!.TrustDevices.Count > 0 && !launcher.TrustDevices.Contains(secure.PeerId))
+        {
+            why = LaunchService.NotApproved(secure.PeerId);
+        }
+        return why is null ? question : question with { Answerable = false, AtMachine = why };
     }
 
     static string? String(JsonElement data, string name) =>

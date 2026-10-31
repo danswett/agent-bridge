@@ -150,7 +150,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `host.subscribe` | none | `HostStatus`, then a `host.status` event with the whole status whenever it changes |
 | `host.signIn` | `{ "relay"?: "https://…" }` | `SignInStatus`: GitHub's device flow started through that relay (or the profile's), with `userCode` and `verificationUri` once GitHub gives them. The host finishes on its own and starts using the relay; progress arrives as `host.status` events |
 | `host.signIn.cancel` | none | `SignInStatus` as it is; the flow then ends, reported by a `host.status` event |
-| `host.settings` | `{ "remoteApproval"?: bool, "remoteFolderTrust"?: bool, "name"?: string }` (`remoteFolderTrust` applies at once, the rest at the next start) | `{ "settings": HostSettingsView, "restartRequired": bool }`. Written to the profile's `config.json`; read when the host starts. `name: ""` removes the name |
+| `host.settings` | `{ "remoteApproval"?: bool, "remoteFolderTrust"?: bool, "remoteFolderTrustDevices"?: [device id], "name"?: string }` (`remoteFolderTrust` and `remoteFolderTrustDevices`, which replaces the whole list, apply at once; the rest at the next start) | `{ "settings": HostSettingsView, "restartRequired": bool }`. Written to the profile's `config.json`; read when the host starts. `name: ""` removes the name |
 | `host.restart` | none | `{ "restarting": true }`, then the host starts a replacement and exits |
 | `host.stop` | none | `{ "stopping": true }`, then the host exits |
 | `host.relay.account` | none | `{ "relay", "token", "accountId", "login" }`: the account this host signed in to, and the relay that issued it, so the app can reach the account's other machines through the relay as a device of its own (kind `app`, with its own key) without a second sign-in. `token` is a bearer credential for that relay only. Fails with `this host is not signed in to the relay` before a sign-in, and on a `--local-only` host |
@@ -167,7 +167,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `relay` | `{ state, url?, detail?, since? }`; `state` is `off` (`--local-only`), `signedOut`, `connecting`, `connected` or `refused` (sign in again) |
 | `signIn` | `{ state, userCode?, verificationUri?, expiresAt?, error? }`; `state` is `idle`, `pending` or `failed` |
 | `agentHaBridge` | Why answering, replying and stopping are off: agent-ha-bridge runs for this user (design G5). Absent when not |
-| `settings` | `{ remoteApproval, name?, remoteFolderTrust }` as `config.json` says now (`launch.remoteFolderTrust`) |
+| `settings` | `{ remoteApproval, name?, remoteFolderTrust, remoteFolderTrustDevices? }` as `config.json` says now (`launch.remoteFolderTrust`, and the approved device ids, absent when none) |
 | `restartRequired` | `config.json` differs from what the running host read |
 | `log` | Path of the host's log file |
 

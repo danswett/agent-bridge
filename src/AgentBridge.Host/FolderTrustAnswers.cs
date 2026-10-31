@@ -12,6 +12,9 @@ namespace AgentBridge.Host;
 //     this machine's pipe, which agents, the MCP server and the Home Assistant connector reach);
 //   * with a command that device signed for this machine, this question and this choice;
 //   * from a device the relay lists as the PWA or the Windows app, never a machine;
+//   * and from a device a person approved at this machine (launch.remoteFolderTrustDevices):
+//     the relay's kind is what a device says it is, and anything holding the account's token
+//     (an agent on another machine, say) can make a key and say "pwa";
 //   * and only where the machine allows it (launch.remoteFolderTrust), is not read-only, and
 //     agent-ha-bridge is not running (LaunchService checks those, and the window).
 public sealed class FolderTrustAnswers(P256KeyPair key, ISessionLauncher launcher, Action<string>? log = null, TimeProvider? time = null)
@@ -54,7 +57,7 @@ public sealed class FolderTrustAnswers(P256KeyPair key, ISessionLauncher launche
         if (signer is null) { return Refused(peer, "the device that signed the command is not connected to the relay now"); }
         if (!PersonKinds.Contains(signer.Kind)) { return Refused(peer, "only a person's phone, browser or Windows app can answer a folder-trust question"); }
 
-        return await launcher.AnswerTrustAsync(Guid.Parse(c.Request), request.Question, request.Choice == TrustProtocol.Trust, $"{signer.Kind} {peer[..8]}");
+        return await launcher.AnswerTrustAsync(Guid.Parse(c.Request), request.Question, request.Choice == TrustProtocol.Trust, peer, $"{signer.Kind} {peer[..8]}");
     }
 
     TrustAnswerResult Refused(string peer, string why)

@@ -49,7 +49,11 @@ public static class StartupQuestions
     // words, its options as they are drawn (rows of the window), which is highlighted, and which
     // one trusts. Hold is what must still be on the screen, row for row, when a key is sent: the
     // folder and every option, highlight included.
-    public sealed record TrustScreen(string? Root, string? RootNote, string? Warning, IReadOnlyList<int> Options, int Selected, int TrustAt, IReadOnlyList<ScreenRow> Hold);
+    public sealed record TrustScreen(string? Root, string? RootNote, string? Warning, IReadOnlyList<int> Options, int Selected, int TrustAt, IReadOnlyList<ScreenRow> Hold)
+    {
+        // The agent's words in full, which Warning may cut: what tells two questions apart.
+        public string? Words { get; init; }
+    }
 
     // Each agent's options, as drawn after its highlight and number: the one that trusts, and
     // every other it offers. Copilot's "Yes" trusts for this session only; remembering the folder
@@ -139,20 +143,21 @@ public static class StartupQuestions
                 if (root is not { Length: > 0 }) { return null; }
                 continue;
             }
-            var words = string.Join(' ', clean.Skip(first).Take(last - first + 1));
-            if (!NotWarning.Contains(words, StringComparer.Ordinal)) { warning.Add(words); }
+            var para = string.Join(' ', clean.Skip(first).Take(last - first + 1));
+            if (!NotWarning.Contains(para, StringComparer.Ordinal)) { warning.Add(para); }
         }
-        var text = warning.Count == 0 ? null : Limits.KeepStart(string.Join("\n", warning), TrustProtocol.MaxText);
+        var words = warning.Count == 0 ? null : string.Join("\n", warning);
+        var text = words is null ? null : Limits.KeepStart(words, TrustProtocol.MaxText);
         // Everything from the folder to the last option, blank rows too: the folder, the root, the
         // agent's words and every option, highlight included, as they were read.
         var hold = Enumerable.Range(from, options[^1] - from + 1).Select(r => new ScreenRow(r, rows[r].TrimEnd())).ToList();
-        return new TrustScreen(root, note, text, options, selected, trustAt, hold);
+        return new TrustScreen(root, note, text, options, selected, trustAt, hold) { Words = words };
     }
 
     // Whether two reads are the same question to a person: the same repository root, note and
     // words (the folder is the launch's own). Where the highlight is does not matter.
     public static bool SameQuestion(TrustScreen? a, TrustScreen? b) =>
-        a is not null && b is not null && a.Root == b.Root && a.RootNote == b.RootNote && a.Warning == b.Warning;
+        a is not null && b is not null && a.Root == b.Root && a.RootNote == b.RootNote && a.Words == b.Words;
 
     // A row without the frame some agents draw around the question, or the spaces around it.
     static string Clean(string row)

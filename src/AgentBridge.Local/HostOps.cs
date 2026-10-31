@@ -46,7 +46,18 @@ public sealed record SignInStatus(SignInState State, string? UserCode = null, st
 // What the host's config.json says now. A change takes effect when the host restarts, which
 // RestartRequired on the status says.
 // RemoteFolderTrust: launch.remoteFolderTrust, folder-trust questions answered from a person's devices.
-public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false);
+// RemoteFolderTrustDevices: launch.remoteFolderTrustDevices, the devices (by id) approved to answer
+// them; null when none is.
+public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false, IReadOnlyList<string>? RemoteFolderTrustDevices = null)
+{
+    // By the devices in it, not the list object, so a restart is not asked for because two reads
+    // of the same file made two lists.
+    public bool Equals(HostSettingsView? other) =>
+        other is not null && RemoteApproval == other.RemoteApproval && Name == other.Name && RemoteFolderTrust == other.RemoteFolderTrust
+        && (RemoteFolderTrustDevices ?? []).SequenceEqual(other.RemoteFolderTrustDevices ?? [], StringComparer.Ordinal);
+
+    public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0);
+}
 
 public sealed record HostStatus
 {
@@ -74,6 +85,7 @@ public sealed record HostStatus
 public sealed record SignInRequest(string? Relay = null);
 
 // host.settings: any of these; absent ones are left as they are. Name "" clears it.
-public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name = null, bool? RemoteFolderTrust = null);
+// RemoteFolderTrustDevices replaces the whole list ([] approves none).
+public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name = null, bool? RemoteFolderTrust = null, IReadOnlyList<string>? RemoteFolderTrustDevices = null);
 
 public sealed record SettingsResult(HostSettingsView Settings, bool RestartRequired);

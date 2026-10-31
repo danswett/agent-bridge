@@ -34,6 +34,8 @@ public sealed class HostControlOptions
     // Applies launch.remoteFolderTrust to the running host when the app changes it; null where it
     // takes a restart like the rest.
     public Action<bool>? ApplyRemoteFolderTrust { get; init; }
+    // And launch.remoteFolderTrustDevices, the devices approved to answer them.
+    public Action<IReadOnlyList<string>>? ApplyRemoteFolderTrustDevices { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -116,8 +118,11 @@ public sealed class HostControl
     HostSettingsView Configured()
     {
         var (settings, _) = HostSettings.Load(options.Folder);
-        return new HostSettingsView(settings.RemoteApproval, HostConfigFile.ReadName(options.Folder), settings.Launch.RemoteFolderTrust);
+        return Settings(settings, HostConfigFile.ReadName(options.Folder));
     }
+
+    public static HostSettingsView Settings(HostSettings settings, string? name) =>
+        new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null);
 
     // The relay loop reports each change of its connection here.
     public void SetRelay(RelayState state, string? detail = null)
@@ -168,7 +173,9 @@ public sealed class HostControl
     object Settings(SettingsRequest request)
     {
         if (request.Name is { } name && name.Length > 0 && HostConfigFile.CleanName(name) is null) { throw new ArgumentException("the name has no visible characters"); }
-        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust);
+        if (request.RemoteFolderTrustDevices?.FirstOrDefault(d => !TransferProtocol.IsDeviceId(d)) is { } bad) { throw new ArgumentException($"'{bad}' is not a device id"); }
+        var devices = request.RemoteFolderTrustDevices?.Distinct(StringComparer.Ordinal).ToList();
+        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices);
         // Answering folder-trust questions from devices applies at once, so it can be allowed
         // while a question waits; the rest when the host restarts.
         if (request.RemoteFolderTrust is { } trust && options.ApplyRemoteFolderTrust is { } apply)
@@ -176,7 +183,12 @@ public sealed class HostControl
             apply(trust);
             lock (gate) { running = running with { RemoteFolderTrust = trust }; }
         }
-        log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.RemoteFolderTrust is { } t ? $"; folder trust from devices {(t ? "on" : "off")}" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
+        if (devices is not null && options.ApplyRemoteFolderTrustDevices is { } approve)
+        {
+            approve(devices);
+            lock (gate) { running = running with { RemoteFolderTrustDevices = devices.Count > 0 ? devices : null }; }
+        }
+        log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.RemoteFolderTrust is { } t ? $"; folder trust from devices {(t ? "on" : "off")}" : "")}{(devices is not null ? $"; devices approved for folder trust: {(devices.Count == 0 ? "none" : string.Join(", ", devices.Select(d => d[..8])))}" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
         var now = Configured();
         Changed();
         return new SettingsResult(now, now != Volatile.Read(ref running));

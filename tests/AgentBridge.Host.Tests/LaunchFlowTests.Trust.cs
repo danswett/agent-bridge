@@ -84,7 +84,8 @@ public sealed partial class LaunchFlowTests
 
     LaunchService trustLauncher = null!;
 
-    LaunchConfig Trusting() => Config(c => c with { RemoteFolderTrust = true });
+    // Allowed, with the phone approved at the machine.
+    LaunchConfig Trusting() => Config(c => c with { RemoteFolderTrust = true, RemoteFolderTrustDevices = [Wire.DeviceId(client.Key.Public)] });
 
     // What the phone sends: the question, the choice, and a command it signed for exactly that.
     static object Answer(SecureChannel ch, string question, string choice, P256KeyPair signer, string? signedChoice = null, string? request = null, string? signedQuestion = null)
@@ -229,9 +230,40 @@ public sealed partial class LaunchFlowTests
         Assert.StartsWith("Answer at the machine. To answer from your devices", answer.Reason);
         Assert.Empty(screens.Typed);
 
-        // Allowed from the app at the machine while it waits (HostControl applies it at once).
+        // Allowed from the app at the machine while it waits (HostControl applies it at once), but
+        // from no device until one is approved there.
         trustLauncher.RemoteFolderTrust = true;
+        var allowed = (await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("trust")[0];
+        Assert.False(allowed.GetProperty("answerable").GetBoolean());
+        Assert.Contains("No device is approved yet", allowed.GetProperty("atMachine").GetString());
+        Assert.Equal("refused", (await AnswerAsync(ch, Answer(ch, q.GetProperty("id").GetString()!, "trust", client.Key))).Outcome);
+        trustLauncher.TrustDevices = [Wire.DeviceId(client.Key.Public)];
         Assert.True((await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("trust")[0].GetProperty("answerable").GetBoolean());
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task A_device_that_only_says_it_is_a_phone_cannot_answer_until_a_person_approves_it_at_the_machine()
+    {
+        screens.Rows = CopilotAsks();
+        ServeTrust(Trusting());
+        // Anything holding the account's token can connect as "pwa" with a key of its own: an
+        // agent on another machine, say.
+        await using var posing = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "Not a phone", "pwa");
+        await posing.Relay.WaitForPeerAsync(p => p.Id == host.Id, Patience);
+        var ch = await posing.Hub.OpenAsync(host.Id);
+        var posingId = Wire.DeviceId(posing.Key.Public);
+
+        var q = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust");
+        Assert.False(q.GetProperty("answerable").GetBoolean());
+        Assert.Contains($"approve this device ({posingId[..8]})", q.GetProperty("atMachine").GetString());
+        var answer = await AnswerAsync(ch, Answer(ch, q.GetProperty("id").GetString()!, "trust", posing.Key));
+        Assert.Equal(("refused", LaunchService.NotApproved(posingId), null), answer);
+        Assert.Empty(screens.Typed);
+
+        // The approved phone sees the same question as answerable.
+        var phone = await OpenAsync();
+        Assert.True((await RequestAsync(phone, LaunchProtocol.Options, new { })).GetProperty("trust")[0].GetProperty("answerable").GetBoolean());
     }
 
     [Fact]
@@ -287,6 +319,34 @@ public sealed partial class LaunchFlowTests
         Assert.Equal(stuck, await AnswerAsync(ch, Answer(ch, id, "trust", client.Key, request: request)));
         Assert.Equal(("refused", "an answer was already typed into its window; answer at the machine", null), await AnswerAsync(ch, Answer(ch, id, "quit", client.Key)));
         Assert.Equal(2, screens.Plans.Count);
+        // And the card no longer offers buttons for it.
+        var shown = (await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("trust")[0];
+        Assert.False(shown.GetProperty("answerable").GetBoolean());
+        Assert.Contains("an answer was already typed into its window", shown.GetProperty("atMachine").GetString());
+    }
+
+    [Fact]
+    public async Task Agent_ha_bridge_starting_after_the_highlight_moved_stops_the_answer_before_Enter()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        starter.Registers = false;
+        screens.Rows = ClaudeAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var id = (await LaunchTrustAsync(ch, new { agent = "claude", workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+
+        screens.OnTyped = _ =>
+        {
+            screens.Rows = ClaudeAsks(onYes: true);
+            probe.Reason = "agent-ha-bridge is running for this user";
+        };
+        var answer = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key));
+
+        Assert.Equal("unconfirmed", answer.Outcome);
+        Assert.Contains("Enter was not pressed", answer.Reason);
+        Assert.Contains("agent-ha-bridge is running for this user", answer.Reason);
+        // The move went; Enter never did.
+        Assert.False(Assert.Single(screens.Plans).Sends[0].Enter);
     }
 
     [Fact]

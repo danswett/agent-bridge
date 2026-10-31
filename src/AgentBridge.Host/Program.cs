@@ -408,7 +408,7 @@ async Task<int> ServeAsync()
         Dev = IsDevBuild(),
         Elevated = PeerPolicy.SelfElevated(),
         Machine = machine,
-        Running = new HostSettingsView(settings.RemoteApproval, HostConfigFile.ReadName(identity.Folder), settings.Launch.RemoteFolderTrust),
+        Running = HostControl.Settings(settings, HostConfigFile.ReadName(identity.Folder)),
         LocalOnly = localOnly,
         Log = HostLog.FilePath,
         ApplyRemoteFolderTrust = on =>
@@ -416,6 +416,7 @@ async Task<int> ServeAsync()
             launcher.RemoteFolderTrust = on;
             Log($"folder-trust questions from devices: {(on ? "on" : "off")} (set by the app; applies now)");
         },
+        ApplyRemoteFolderTrustDevices = ids => launcher.TrustDevices = ids,
         Account = () => identity.Account is { } a ? new HostAccount(a.Login, a.AccountId) : null,
         Credential = () => Volatile.Read(ref credential),
         Relay = ServeRelay,
