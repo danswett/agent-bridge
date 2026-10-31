@@ -919,6 +919,21 @@ Get-NetFirewallRule -Name 'Rehearsal-Jump-SSH-In' -ErrorAction SilentlyContinue 
 New-NetFirewallRule -Name 'Rehearsal-Jump-SSH-In' -DisplayName 'Rehearsal: SSH jump from the Hyper-V host only' `
     -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22 -RemoteAddress $allowedRemote `
     -InterfaceAlias $alias -Profile $fwProfile | Out-Null
+# Disabling the rules that name port 22 does not catch every allow that covers it: an any-port or
+# program rule would still admit SSH from anywhere, and disabling those wholesale could cut off
+# Hyperloop. Block wins over allow in Windows Firewall, so block 22 from everything outside the range.
+function ConvertTo-Ipv4([uint64] $Value) { ((24, 16, 8, 0) | ForEach-Object { [math]::Floor($Value / [math]::Pow(2, $_)) % 256 }) -join '.' }
+$octets = $cidrAddress.Split('.') | ForEach-Object { [uint64] $_ }
+$size = [uint64] [math]::Pow(2, 32 - [int] $cidrPrefix)
+$first = (($octets[0] * 16777216) + ($octets[1] * 65536) + ($octets[2] * 256) + $octets[3])
+$first -= $first % $size
+$last = $first + $size - 1
+$outside = @('::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff')   # all of IPv6; the firewall refuses ::/0
+if ($first -gt 0) { $outside += "0.0.0.0-$(ConvertTo-Ipv4 ($first - 1))" }
+if ($last -lt 4294967295) { $outside += "$(ConvertTo-Ipv4 ($last + 1))-255.255.255.255" }
+Get-NetFirewallRule -Name 'Rehearsal-Jump-SSH-Block' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -Name 'Rehearsal-Jump-SSH-Block' -DisplayName 'Rehearsal: block SSH from outside the Hyper-V host subnet' `
+    -Direction Inbound -Action Block -Protocol TCP -LocalPort 22 -RemoteAddress $outside -Profile Any | Out-Null
 
 if (-not $existing) {
     # A random password nobody keeps: the account only ever signs in with its key.

@@ -188,7 +188,9 @@ The jump host's posture:
   `PermitTTY no` and `ForceCommand exit 1` in `sshd_config`. A shell and any other forward
   are refused.
 * Windows Firewall admits port 22 only from `-JumpAllowedCidr`, and only on the interface and
-  profile that subnet arrives on. The installer's own SSH rules are disabled.
+  profile that subnet arrives on. The installer's own SSH rules are disabled. A block rule
+  covers port 22 from every other address, IPv6 included, on all profiles, so no broader allow
+  rule (any-port or per-program) can admit SSH from elsewhere.
 * No key for VM-W is stored on VM-M. ssh's `ProxyJump` carries the end-to-end connection,
   and both hops' host keys are pinned on the operator's machine.
 * The Default Switch can change subnet and addresses when the host restarts. Then run the
