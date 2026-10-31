@@ -44,6 +44,23 @@ public sealed class SessionService
     // may have arrived takes the session back from an agent at once, as one typed at the machine.
     public SessionDrivers? Drivers { get; init; }
     public TimeProvider Time { get; init; } = TimeProvider.System;
+    // Requests that have taken their session back, and when. A resend of one is answered from the
+    // outcome the delivery remembers, with nothing typed, so it must not take back a session an
+    // agent has driven since.
+    readonly ConcurrentDictionary<string, DateTimeOffset> takenBack = new(StringComparer.Ordinal);
+    static readonly TimeSpan TakenBackKept = TimeSpan.FromHours(1);
+
+    void TakeBack(string sessionId, string request)
+    {
+        if (Drivers is null) { return; }
+        var now = Time.GetUtcNow();
+        if (!takenBack.TryAdd($"{sessionId}\n{request}", now)) { return; }
+        if (takenBack.Count > 1024)
+        {
+            foreach (var (key, at) in takenBack) { if (now - at > TakenBackKept) { takenBack.TryRemove(key, out _); } }
+        }
+        Drivers.ArmPerson(sessionId, now);
+    }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
@@ -194,7 +211,7 @@ public sealed class SessionService
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {
             push?.Answered(channel.PeerId, request.Id, request.Question);
-            Drivers?.ArmPerson(request.Id, Time.GetUtcNow());
+            TakeBack(request.Id, request.Request);
         }
         return result;
     }
@@ -232,7 +249,7 @@ public sealed class SessionService
         var request = data.Deserialize<ReplyRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.reply needs an id, a request and text");
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
         var result = await replies.ReplyAsync(request, channel.PeerId);
-        if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { Drivers?.ArmPerson(request.Id, Time.GetUtcNow()); }
+        if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { TakeBack(request.Id, request.Request); }
         return result;
     }
 

@@ -48,8 +48,13 @@ public class DriverTests
         await source.RefreshAsync();
         Assert.Equal((DriverKind.Agent, Principal), Driver(source.Get(Id)!));
 
+        // Its turn ending is no new turn: a session left with the agent still says so while idle.
+        Fixture.Append(events, Copilot.TurnEnd(12));
+        await source.RefreshAsync();
+        Assert.Equal((SessionStatus.Idle, DriverKind.Agent, Principal), (source.Get(Id)!.Status, source.Get(Id)!.Driver, source.Get(Id)!.DriverPrincipal));
+
         // The next, which nobody armed: typed at the machine.
-        Fixture.Append(events, Copilot.TurnEnd(12), Copilot.User("mine now", 13), Copilot.TurnStart(14));
+        Fixture.Append(events, Copilot.User("mine now", 13), Copilot.TurnStart(14));
         await source.RefreshAsync();
         Assert.Equal((null, null), Driver(source.Get(Id)!));
     }

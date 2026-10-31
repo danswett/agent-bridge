@@ -217,7 +217,11 @@ public sealed partial class HaConnector : IAsyncDisposable
         // Who is driving the session's turn, and an arm left by a press for the next one
         // (Set-DaemonDriverPending): consumed by the turn it was armed for, or lapsed. Kept in the
         // host's SessionDrivers, so the host's own clients show the same driver (Session.Driver).
-        public required SessionDriver Drive { get; init; }
+        // Looked up each time, never kept: the source forgets a session that goes, and one that
+        // comes back with the same id has a new record, which a kept one would never reach.
+        public required string SessionId { get; init; }
+        public required SessionDrivers Drivers { get; init; }
+        public SessionDriver Drive => Drivers.For(SessionId);
         public string Driver => Drive.Driver;
         public DateTimeOffset? DriverPendingAt
         {
@@ -654,6 +658,8 @@ public sealed partial class HaConnector : IAsyncDisposable
                 published.Remove(id, out was);
                 starting.Remove(id);
                 retiring.TryAdd(node, new Retiring());
+                // Observed here, so forgotten here: one that comes back starts as the person's.
+                if (!drivers.SourceObserves) { drivers.Forget(id); }
             }
             SaveLedger();
             log($"Home Assistant connector: session {id[..Math.Min(8, id.Length)]} ended; its entities go once its card has left the dashboard");
@@ -690,7 +696,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             // while it is down, still retires what that write left behind.
             SaveLedger();
             await PublishEntitiesAsync(t, name, now, ct);
-            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent), PublishedAt = now, Drive = drivers.For(s.Id) };
+            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent), PublishedAt = now, SessionId = s.Id, Drivers = drivers };
             lock (gate)
             {
                 starting.Remove(s.Id);
@@ -754,8 +760,9 @@ public sealed partial class HaConnector : IAsyncDisposable
             p.Name = name;
         }
 
-        // A new turn (a new message from the person or an agent) decides who drives it.
-        p.Drive.Observe(full, now, options.DriverArm);
+        // A new turn (a new message from the person or an agent) decides who drives it. The host's
+        // session source observes for a shared record, from the transcript itself.
+        if (!drivers.SourceObserves) { p.Drive.Observe(full, now, options.DriverArm); }
 
         var status = HaPayloads.Status(s);
         var statusAttributes = HaPayloads.StatusAttributes(s, name, options.MachineName, now);

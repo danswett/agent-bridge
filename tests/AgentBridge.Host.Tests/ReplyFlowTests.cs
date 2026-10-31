@@ -154,15 +154,24 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         await source.RefreshAsync();
         Assert.Equal(DriverKind.Agent, source.Get(Id)!.Driver);
 
-        Assert.Equal("delivered", (await ReplyAsync(ch, "I'll take it from here")).Outcome);
+        var mine = Guid.NewGuid().ToString();
+        Assert.Equal("delivered", (await ReplyAsync(ch, "I'll take it from here", mine)).Outcome);
         Assert.Null(await DriverAsync(null));
         Assert.Null(source.Get(Id)!.DriverPrincipal);
 
-        // An answer, the same.
+        // The same request again, after an agent has taken the session: the delivery answers it from
+        // the outcome it remembers, with nothing typed, so the agent keeps it.
         drivers.For(Id).ArmDriver(SessionDrivers.Agent, DateTimeOffset.UtcNow, "homeassistant:0f1e2d3c");
+        Assert.Equal(DriverKind.Agent, await DriverAsync(DriverKind.Agent));
+        Assert.Equal("delivered", (await ReplyAsync(ch, "I'll take it from here", mine)).Outcome);
+        Assert.Single(injector.Plans);
+        await Task.Delay(200);
+        Assert.Equal(DriverKind.Agent, source.Get(Id)!.Driver);
+
+        // An answer, the same.
         Fixture.Append(events, Ask("q1", second++));
         await source.RefreshAsync();
-        Assert.Equal(DriverKind.Agent, await DriverAsync(DriverKind.Agent));
+        Assert.Equal(DriverKind.Agent, source.Get(Id)!.Driver);
         injector.OnInject = _ => Fixture.Append(events, Copilot.Event("human_response.recorded",
             new { toolCallId = "q1", requestId = "r", actor = "human_response", response = new { responseKind = "ask_user", content = new { pick = "b" } } }, second++));
         var answered = await ch.RequestAsync(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), fields = new { pick = "b" } });

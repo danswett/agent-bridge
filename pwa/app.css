@@ -472,6 +472,8 @@ summary {
 .end-session .resend { margin-bottom: 6px; }
 /* Being ended: still, grey and dotted, neither working nor finished. */
 .frame.ending { border-color: var(--muted); border-style: dotted; }
+/* Still the agent's while the machine ends it: dotted, in purple. */
+.frame.agent.ending { border-color: var(--agent); }
 .session[data-status="ending"] .status-text { color: var(--muted); }
 
 /* ---- account ---- */

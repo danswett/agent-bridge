@@ -74,7 +74,11 @@ public sealed class SessionSource : ISessionSource
         _time = time ?? TimeProvider.System;
         _unaccounted = new Unaccounted(_time, Log);
         _drivers = drivers;
-        if (_drivers is not null) { _drivers.Changed += OnDriverChanged; }
+        if (_drivers is not null)
+        {
+            _drivers.SourceObserves = true;
+            _drivers.Changed += OnDriverChanged;
+        }
         _dispatch = Task.Run(DispatchAsync);
     }
 

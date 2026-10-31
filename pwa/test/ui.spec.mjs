@@ -183,9 +183,13 @@ test('a session an agent drives has a purple edge, steady while idle and breathi
   await openDemo(page);
   const c = card(page, CODEX);
   const frame = c.locator('.frame');
-  const border = (id) => card(page, id).locator('.frame').evaluate((e) => getComputedStyle(e).borderTopColor);
+  // The edge's colour eases over 0.4 s, so it is read once the frame's transitions have finished.
+  const border = (id) => card(page, id).locator('.frame').evaluate(async (e) => {
+    await Promise.all(e.getAnimations().map((a) => a.finished));
+    return getComputedStyle(e).borderTopColor;
+  });
   const glow = () => c.locator('.glow').evaluate((e) => ({ animation: getComputedStyle(e).animationName, shadow: getComputedStyle(e).boxShadow }));
-  // The edge's colour eases over 0.4 s, so it is waited for, against the palette's own purple.
+  // The palette's own purple.
   const purple = await page.evaluate(() => {
     const probe = document.createElement('i');
     probe.style.color = 'var(--agent)';
@@ -207,23 +211,30 @@ test('a session an agent drives has a purple edge, steady while idle and breathi
   await expect(c.locator('.driver')).toHaveAttribute('title', 'homeassistant:0f1e2d3c');
   expect(purple).not.toBe(calm);
   expect(purple).not.toBe(working);
-  await expect.poll(() => border(CODEX)).toBe(purple);
+  expect(await border(CODEX)).toBe(purple);
   // Idle: a steady edge, no breathing.
   expect((await glow()).animation).toBe('none');
 
   await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later() });
   await expect(frame).toHaveClass(/\bworking\b/);
-  await expect.poll(() => border(CODEX)).toBe(purple);
+  expect(await border(CODEX)).toBe(purple);
   const breathing = await glow();
   expect(breathing.animation).toBe('glow');
   expect(breathing.shadow).not.toBe(workingGlow);
+
+  // Still the agent's while the machine ends it: dotted, in purple.
+  await upsert(page, CODEX, { status: 'ending', statusSince: later(), updatedAt: later() });
+  await expect(frame).toHaveClass(/\bending\b/);
+  expect(await border(CODEX)).toBe(purple);
+  expect(await frame.evaluate((e) => getComputedStyle(e).borderTopStyle)).toBe('dotted');
+  await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later() });
 
   // The person answers or replies: the host sends the session as theirs again.
   await upsert(page, CODEX, { driver: null, driverPrincipal: null, updatedAt: later() });
   await expect(c).toHaveAttribute('data-driver', 'person');
   await expect(frame).not.toHaveClass(/\bagent\b/);
   await expect(c.locator('.driver')).toBeHidden();
-  await expect.poll(() => border(CODEX)).toBe(working);
+  expect(await border(CODEX)).toBe(working);
 });
 
 test('with reduced motion an agent\'s purple glow holds still too', async ({ page }) => {

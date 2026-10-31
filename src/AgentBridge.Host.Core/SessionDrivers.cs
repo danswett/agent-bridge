@@ -29,6 +29,12 @@ public sealed class SessionDrivers
     // ignored, so it cannot undo a press.
     public event Action<string>? Changed;
 
+    // Set by the SessionSource that observes every session for this record, from the transcript
+    // as it is read. Anyone else then only arms and reads: a second observer may hold an older
+    // or budget-trimmed snapshot, and would take it for another turn. Without one (a connector
+    // over a source of its own), the connector observes, and forgets a session once it has gone.
+    public bool SourceObserves { get; set; }
+
     public SessionDriver For(string id) => drivers.GetOrAdd(id, i => new SessionDriver(this, i));
 
     // The session has gone.
@@ -146,7 +152,10 @@ public sealed class SessionDriver
     // driver changed; it raises nothing, since whoever observes is about to show the session.
     public bool Observe(Session full, DateTimeOffset now, TimeSpan arm)
     {
-        var turn = $"{full.Activity.TurnCount}\n{full.Activity.UserMessage}";
+        // The prompts started, not finished: TurnCount counts those whose turn has finished, one
+        // fewer while one is in progress, so an agent's turn ending must not read as a new turn.
+        var turns = full.Activity.TurnCount is { } n ? n + (full.Status is SessionStatus.Working or SessionStatus.Waiting ? 1 : 0) : (int?)null;
+        var turn = $"{turns}\n{full.Activity.UserMessage}";
         lock (gate)
         {
             var before = ShownLocked();

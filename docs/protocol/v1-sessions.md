@@ -692,7 +692,9 @@ alone.
 * **Taken back** by the person: an answer or reply from any of the person's devices (or a press by
   a person on the Home Assistant card) shows the session as the person's at once, and a turn that
   starts with nobody's arm waiting for it, or after the arm lapsed, is typed at the machine and so
-  is the person's.
+  is the person's. A resend of the same request, which the host answers from the outcome it
+  remembers without typing anything, takes nothing back. An agent's turn finishing is not a new
+  turn: the session stays the agent's while it is idle.
 * **Who is an agent.** Agents have no principal of their own on the pipe or relay yet (design
   §5.5; the pipe refuses them anything but reading, #44), so today the only agent principal a host
   sees is a press, answer, reply or launch on its Home Assistant cards made by an account listed

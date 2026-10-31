@@ -29,6 +29,8 @@ public sealed class AnswerTests : IDisposable
 
     // Shared with the host's session source in the host itself, which shows the same driver.
     readonly SessionDrivers drivers = new();
+    // A connector that keeps a record of its own, as one over a source that does not observe.
+    bool ownDrivers;
 
     HaConnector Connector(params string[] agents) => new(new HaConnectorOptions
     {
@@ -36,7 +38,7 @@ public sealed class AnswerTests : IDisposable
         Version = "0.1.0",
         StateFile = Path.Combine(folder, "ha-connector.json"),
         AgentUserIds = agents,
-        Drivers = drivers,
+        Drivers = ownDrivers ? null : drivers,
         FieldPinDelay = TimeSpan.Zero,
         SelectDelay = TimeSpan.Zero,
     }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } }, time: time, answer: (r, _) =>
@@ -256,6 +258,56 @@ public sealed class AnswerTests : IDisposable
         await Pass(c);
         Assert.Equal("human", Detail.GetProperty("driver").GetString());
         Assert.Equal((null, null), drivers.Shown(A));
+    }
+
+    [Fact]
+    public async Task Beside_the_hosts_session_source_only_the_source_judges_turns_and_a_press_reaches_the_record_even_for_a_session_that_came_back()
+    {
+        // As the host's SessionSource sets it, for the record it observes and shares.
+        drivers.SourceObserves = true;
+        Ask(Form("q1", Release));
+        await using var c = Connector("agent-user");
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut the release now", "agent-user"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        Assert.Equal((DriverKind.Agent, "homeassistant:agent-user"), drivers.Shown(A));
+
+        // A later turn the source has not observed, after the arm would have lapsed: the connector
+        // reads it, but does not judge it.
+        await Pass(c, drivers.Arm.TotalSeconds + 1);
+        Ask(null, turn: 5, message: "a turn only the connector has seen");
+        await Pass(c);
+        Assert.Equal((DriverKind.Agent, "homeassistant:agent-user"), drivers.Shown(A));
+        Assert.Equal("agent", Detail.GetProperty("driver").GetString());
+
+        // The source forgets a session that goes; the same one back has a new record, which the
+        // next press reaches.
+        drivers.Forget(A);
+        Ask(Form("q2", Release), turn: 5, message: "a turn only the connector has seen");
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut the release now", "agent-user"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        Assert.Equal((DriverKind.Agent, "homeassistant:agent-user"), drivers.Shown(A));
+    }
+
+    [Fact]
+    public async Task A_session_that_ends_and_comes_back_under_a_connector_with_its_own_record_starts_again_as_the_persons()
+    {
+        ownDrivers = true;
+        Ask(Form("q1", Release));
+        await using var c = Connector("agent-user");
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut the release now", "agent-user"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        Ask(null, turn: 2, message: "the agent's answer");
+        await Pass(c);
+        Assert.Equal("agent", Detail.GetProperty("driver").GetString());
+
+        sessions.End(A);
+        await Pass(c);
+        Ask(null, turn: 2, message: "the agent's answer");
+        await Pass(c);
+        Assert.Equal("human", Detail.GetProperty("driver").GetString());
     }
 
     [Fact]
