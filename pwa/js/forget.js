@@ -35,6 +35,8 @@ export class ForgetControl {
   armed = null;
   busy = null;
   #armedUntil = 0;
+  // When the armed machine was last seen as the list said at the first press.
+  #armedSeen = null;
   #errors = new Map();
   #timer = null;
   #listeners = new Set();
@@ -53,7 +55,8 @@ export class ForgetControl {
     return { armed: this.armed === id, busy: this.busy === id, error: this.#errors.get(id) ?? null };
   }
 
-  async press(id) {
+  // lastSeen: as the row pressed shows it.
+  async press(id, lastSeen = null) {
     if (this.busy) { return; }
     // A background tab's timers are held back, so the one that lapses an arm may not have run:
     // a press after the deadline arms again whatever it says.
@@ -61,6 +64,7 @@ export class ForgetControl {
     if (this.armed !== id) {
       this.#disarm();
       this.armed = id;
+      this.#armedSeen = lastSeen;
       this.#armedUntil = this.now() + this.confirmMs;
       this.#errors.delete(id);
       this.#timer = this.timers.setTimeout(() => { if (this.armed === id) { this.armed = null; this.#emit(); } }, this.confirmMs);
@@ -80,12 +84,14 @@ export class ForgetControl {
     this.#emit();
   }
 
-  // The machines offline now: an arm or a refusal for one no longer listed (back online, or
-  // forgotten from another device) goes.
-  reconcile(offlineIds) {
-    const ids = new Set(offlineIds);
+  // The machines offline now ({ id, lastSeen }): an arm or a refusal for one no longer listed
+  // (back online, or forgotten from another device) goes, and so does an arm for one seen again
+  // since the first press (back and gone again between two lists).
+  reconcile(offline) {
+    const seen = new Map(offline.map((k) => [k.id, k.lastSeen ?? null]));
+    const ids = new Set(seen.keys());
     let changed = false;
-    if (this.armed && !ids.has(this.armed)) { this.#disarm(); changed = true; }
+    if (this.armed && (!ids.has(this.armed) || (this.#armedSeen !== null && seen.get(this.armed) !== this.#armedSeen))) { this.#disarm(); changed = true; }
     for (const id of [...this.#errors.keys()]) {
       if (!ids.has(id)) { this.#errors.delete(id); changed = true; }
     }
@@ -102,5 +108,6 @@ export class ForgetControl {
     this.timers.clearTimeout(this.#timer);
     this.#timer = null;
     this.armed = null;
+    this.#armedSeen = null;
   }
 }

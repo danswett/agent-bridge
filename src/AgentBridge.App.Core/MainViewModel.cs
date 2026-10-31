@@ -124,9 +124,11 @@ public sealed class MainViewModel : Observable
     public bool ShowOfflineMachines => OfflineMachines.Count > 0;
 
     // On the UI thread, from the fleet: entries for machines still offline are kept (an arm with
-    // them), a machine no longer listed goes, and a new one is added.
-    internal void SetOffline(IReadOnlyList<KnownMachine> known, Func<string, CancellationToken, Task<string?>> forget, TimeProvider time)
+    // them), a machine no longer listed goes, and a new one is added. fresh: the list is another
+    // account's (or relay's), so nothing is kept, an arm least of all.
+    internal void SetOffline(IReadOnlyList<KnownMachine> known, Func<string, CancellationToken, Task<string?>> forget, TimeProvider time, bool fresh = false)
     {
+        if (fresh) { OfflineMachines.Clear(); }
         var now = known.ToDictionary(k => k.Id, StringComparer.Ordinal);
         foreach (var gone in OfflineMachines.Where(o => !now.ContainsKey(o.Id)).ToList()) { OfflineMachines.Remove(gone); }
         for (var i = 0; i < known.Count; i++)

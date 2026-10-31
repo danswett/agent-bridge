@@ -278,6 +278,12 @@ async function startDemo() {
     scriptForgets: (...outcomes) => forgetOutcomes.push(...outcomes),
     // The offline machine back online: the relay stops listing it.
     reconnectOffline: () => { demoKnown = []; demoForget.reconcile([]); drawMachine(); },
+    // The offline machine back and gone again between two lists: seen later than when pressed.
+    bounceOffline: () => {
+      demoKnown = demoKnown.map((k) => ({ ...k, lastSeen: new Date().toISOString() }));
+      demoForget.reconcile(demoKnown);
+      drawMachine();
+    },
     upsert: (s) => host.upsert(s),
     remove: (id) => host.remove(id),
     hold: (held) => host.hold(held),
@@ -467,7 +473,7 @@ function begin(account) {
     for (const id of vanished(lastKnown, now, connection.presence.map((d) => d.id))) { dropMachine(id); }
     lastKnown = now;
     // A machine that comes back takes its arm, and any refusal shown for it, with it.
-    forgets.reconcile((now ?? []).map((k) => k.id));
+    forgets.reconcile(now ?? []);
   });
   connection.on('presence', drawMachines);
   connection.on('log', (line) => console.log(line));

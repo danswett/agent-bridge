@@ -30,6 +30,10 @@ public sealed class RosterOptions
     // How often an online host's "last seen" is brought up to date in storage, so a relay that
     // dies without draining leaves it at most this stale.
     public TimeSpan RefreshInterval { get; set; } = TimeSpan.FromMinutes(10);
+    // How long after first reading an account's roster it is read again: long enough for a relay
+    // handing over in a deploy to have written its last (RosterWriter.FinalFlush). After that,
+    // every RefreshInterval while any of the account's devices is connected.
+    public TimeSpan ReadAgainAfter { get; set; } = TimeSpan.FromSeconds(60);
     // How often the writer looks for something to write.
     public TimeSpan FlushEvery { get; set; } = TimeSpan.FromSeconds(5);
     // How long, and how many, forgets are kept: they settle a forget on one relay against the
@@ -133,9 +137,21 @@ public sealed class AzureRosterStore : IRosterStore
     {
         try
         {
-            var r = await container.GetBlobClient(name).DownloadContentAsync(ct);
-            var body = r.Value.Details.ContentLength > MaxBytes ? [] : r.Value.Content.ToArray();
-            return new StoredRoster(body, r.Value.Details.ETag.ToString());
+            // Streamed, and its length checked before a byte is read: a stored copy far bigger
+            // than a relay writes is not buffered, only replaced (an empty body) by the next write.
+            var r = await container.GetBlobClient(name).DownloadStreamingAsync(cancellationToken: ct);
+            using var download = r.Value;
+            var etag = download.Details.ETag.ToString();
+            if (download.Details.ContentLength > MaxBytes) { return new StoredRoster([], etag); }
+            using var buffer = new MemoryStream();
+            var chunk = new byte[16 * 1024];
+            int n;
+            while ((n = await download.Content.ReadAsync(chunk, ct)) > 0)
+            {
+                if (buffer.Length + n > MaxBytes) { return new StoredRoster([], etag); }
+                buffer.Write(chunk, 0, n);
+            }
+            return new StoredRoster(buffer.ToArray(), etag);
         }
         catch (RequestFailedException e) when (e.Status == 404) { return null; }
     }
@@ -208,6 +224,8 @@ public sealed class MachineRoster
         public bool Dirty;
         public DateTimeOffset WrittenAt = DateTimeOffset.MinValue;
         public DateTimeOffset RefreshedAt;
+        // When a loaded roster is next read again for what another relay wrote meanwhile.
+        public DateTimeOffset ReadAgainAt;
         public bool Evicted;
     }
 
@@ -371,7 +389,10 @@ public sealed class MachineRoster
                     a.Dirty = true;
                 }
                 due = a.Dirty && (all || now - a.WrittenAt >= o.WriteInterval);
-                unread = !a.Loaded && a.Connections > 0;
+                // Unread (the store was down at admission), or read a while ago: a relay handing
+                // over in a deploy writes its last changes after this one has read, and only the
+                // devices of an account with no host here would otherwise never hear of them.
+                unread = a.Connections > 0 && !all && (!a.Loaded || now >= a.ReadAgainAt);
             }
             if (due) { await WriteAsync(id, a, token); }
             // A device that only reads, admitted while the store was down, still gets its list.
@@ -418,7 +439,7 @@ public sealed class MachineRoster
         try
         {
             await a.Io.WaitAsync(cts.Token);
-            try { changed = !a.Loaded && await LoadAsync(a, cts.Token); }
+            try { changed = await LoadAsync(a, cts.Token); }
             finally { a.Io.Release(); }
         }
         catch (Exception e) when (e is not OperationCanceledException || !stopping.IsCancellationRequested)
@@ -536,6 +557,8 @@ public sealed class MachineRoster
         {
             var shown = Shown(a);
             a.ETag = stored?.ETag;
+            // Soon after the first read, for a relay handing over; then now and then.
+            a.ReadAgainAt = Now + (a.Loaded ? o.RefreshInterval : o.ReadAgainAfter);
             a.Loaded = true;
             var theirs = (doc?.Machines ?? [])
                 .Where(m => Wire.IsDeviceId(m.Id) && m.Name is not null)

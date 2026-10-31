@@ -44,7 +44,13 @@ public sealed class OfflineMachineViewModel : Observable
     internal void Update(KnownMachine m)
     {
         if (name != m.Name) { name = m.Name; Raise(nameof(Name)); Raise(nameof(ForgetName)); }
-        if (lastSeen != m.LastSeen) { lastSeen = m.LastSeen; Raise(nameof(LastSeen)); Raise(nameof(LastSeenText)); }
+        if (lastSeen == m.LastSeen) { return; }
+        lastSeen = m.LastSeen;
+        Raise(nameof(LastSeen));
+        Raise(nameof(LastSeenText));
+        // Seen again since the first press (back and gone again between two looks at the list):
+        // a press now confirms nothing about this absence, so it arms again.
+        if (armedAt is not null) { armedAt = null; error = null; Changed(); }
     }
 
     // For the button: PressAsync, whose outcome shows on the entry.

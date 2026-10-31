@@ -86,12 +86,25 @@ test('a machine that comes back takes its arm and any refusal with it', async ()
   assert.equal(c.stateOf('b').error, 'Too many machines forgotten just now. Try again in a minute.');
   await c.press('a');
 
-  c.reconcile(['c']);
+  c.reconcile([{ id: 'c' }]);
 
   assert.deepEqual(c.stateOf('a'), { armed: false, busy: false, error: null });
   assert.equal(c.stateOf('b').error, null);
   await c.press('a');
   assert.deepEqual(asked, ['b']);
+});
+
+test('a machine seen again since the first press, back and gone between two lists, is armed again', async () => {
+  const { c, asked } = control();
+  await c.press('a', '2026-10-31T10:00:00Z');
+  c.reconcile([{ id: 'a', lastSeen: '2026-10-31T10:00:00Z' }]);
+  assert.equal(c.stateOf('a').armed, true);
+
+  c.reconcile([{ id: 'a', lastSeen: '2026-10-31T10:00:03Z' }]);
+
+  assert.equal(c.stateOf('a').armed, false);
+  await c.press('a', '2026-10-31T10:00:03Z');
+  assert.deepEqual(asked, []);
 });
 
 test('a refusal is said and the machine is kept; a relay that cannot be reached reads as such', async () => {

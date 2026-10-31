@@ -153,7 +153,7 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
           // Not disabled while it goes: a disabled button loses focus, and the next draw could not
           // give it back. A press meanwhile does nothing (forget.js).
           'aria-disabled': s.busy ? 'true' : null,
-          onclick: () => forget.press(k.id),
+          onclick: () => forget.press(k.id, k.lastSeen),
         }, s.busy ? 'Forgetting\u2026' : s.armed ? 'Press again to forget' : 'Forget') : h('span', { class: 'machine-state' }, 'Offline')),
       s.error ? h('p', { class: 'machine-error', role: 'alert' }, s.error) : null);
   }));

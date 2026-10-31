@@ -88,6 +88,17 @@ test('a machine that comes back leaves the list and takes its arm with it', asyn
   await expect(offline(page)).toHaveCount(0);
 });
 
+test('a machine back and gone again between two lists is armed again, not forgotten', async ({ page }) => {
+  await openDemo(page, '&offline=1');
+  await offline(page).locator('.machine-forget').click();
+  await expect(offline(page).locator('.machine-forget')).toHaveText('Press again to forget');
+
+  await page.evaluate(() => window.agentBridgeDemo.bounceOffline());
+
+  await expect(offline(page).locator('.machine-forget')).toHaveText('Forget');
+  await expect(offline(page).locator('.machine-seen')).toHaveText(' \u00b7 last seen just now');
+});
+
 test('a relay without a roster lists only what is online', async ({ page }) => {
   await openDemo(page);
   await expect(page.locator('#machine-list .machine')).toHaveCount(1);

@@ -209,7 +209,7 @@ public sealed class Fleet : IAsyncDisposable
         if (switched) { DropLoopback(); AccountChanged?.Invoke(); }
         if (state == FleetState.Connecting && !switched) { return; }
         // This machine's own host is never listed: the banner says when it is not running.
-        main.SetOffline(state == FleetState.Connected ? [.. (offline ?? []).Where(k => k.Id != me && !hosts.ContainsKey(k.Id))] : [], ForgetAsync, time);
+        main.SetOffline(state == FleetState.Connected ? [.. (offline ?? []).Where(k => k.Id != me && !hosts.ContainsKey(k.Id))] : [], ForgetAsync, time, fresh: switched);
         foreach (var id in machines.Keys.Where(id => !hosts.ContainsKey(id)).ToList())
         {
             machines.Remove(id, out var gone);

@@ -504,6 +504,45 @@ public class RosterTests
     }
 
     [Fact]
+    public async Task A_relay_that_read_before_another_wrote_its_last_reads_again_and_tells_its_devices()
+    {
+        var store = new MemoryRosterStore();
+        var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var (old, _) = Replica(store, key, time);
+        var (next, _) = Replica(store, key, time);
+        var gone = Id();
+        var later = Id();
+        await old.ConnectedAsync("1", Id(), "app", "app");
+        await old.ConnectedAsync("1", gone, "desk", "host");
+        old.Disconnected("1", gone, "host");
+        await old.FlushAsync(all: true);
+
+        // The new relay reads with only a phone of the account on it...
+        var told = 0;
+        next.Changed = _ => { Interlocked.Increment(ref told); return Task.CompletedTask; };
+        await next.ConnectedAsync("1", Id(), "phone", "pwa");
+        Assert.Equal([gone], next.Known("1", _ => false)!.Select(k => k.Id));
+        // ...then the old one, handing over, forgets one machine and sees another leave, and
+        // writes its last.
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Null(old.Forget("1", gone, _ => false));
+        await old.ConnectedAsync("1", later, "laptop", "host");
+        old.Disconnected("1", later, "host");
+        await old.FlushAsync(all: true);
+
+        await next.FlushAsync();
+        Assert.Equal(0, told);
+        time.Advance(TimeSpan.FromSeconds(61));
+        await next.FlushAsync();
+
+        Assert.Equal(1, told);
+        Assert.Equal([later], next.Known("1", _ => false)!.Select(k => k.Id));
+        // Read, not written: nothing changed there.
+        Assert.Equal(2, store.Writes);
+    }
+
+    [Fact]
     public async Task A_stored_copy_that_cannot_be_read_is_replaced_not_trusted()
     {
         var store = new MemoryRosterStore();

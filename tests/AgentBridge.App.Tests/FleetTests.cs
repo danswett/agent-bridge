@@ -558,6 +558,32 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_arm_goes_when_the_machine_was_seen_again_or_the_list_is_another_accounts()
+    {
+        await BothMachinesAsync();
+        link.Known = [Gone("laptop-id", "Travel laptop", 5)];
+        link.Raise();
+        await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
+        await Offline()[0].PressAsync();
+
+        // Back and gone again before the app looked: only its last-seen time says so.
+        link.Known = [Gone("laptop-id", "Travel laptop", 0)];
+        link.Raise();
+        await Wait.UntilAsync(() => !Offline()[0].Armed, "the arm to go");
+        await Offline()[0].PressAsync();
+        Assert.True(Offline()[0].Armed);
+        Assert.Empty(link.Forgotten);
+
+        // Another account, seen first already connected, with a machine of the same id.
+        link.Switch(announce: false);
+        link.Known = [Gone("laptop-id", "Travel laptop", 0)];
+        link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        await Wait.UntilAsync(() => Offline().Length == 1 && !Offline()[0].Armed, "a new entry, not armed");
+        await Offline()[0].PressAsync();
+        Assert.Empty(link.Forgotten);
+    }
+
+    [Fact]
     public async Task Offline_machines_stay_while_the_relay_drops_for_a_moment_and_go_with_the_account_or_a_relay_without_a_roster()
     {
         await BothMachinesAsync();

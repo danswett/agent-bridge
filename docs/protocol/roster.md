@@ -82,9 +82,11 @@ A forgotten machine that connects again is the account's again, and is listed as
 next time it leaves, as agent-ha-bridge's Forget behaved.
 
 Clients ask for a forget only after **two presses**: the first arms that machine's Forget for
-5 seconds (the button reads "Press again to forget"), the second sends it. An arm lapses, and
-goes when the machine leaves the offline list (back online, or forgotten from another device);
-on the PWA, pressing another machine's Forget moves the arm there. Once forgotten, the PWA also drops what it had learnt
+5 seconds (the button reads "Press again to forget"), the second sends it. An arm lapses (checked
+at the second press too, not only by a timer), and goes when the machine leaves the offline list
+(back online, or forgotten from another device), when its `lastSeen` changes (back and gone again
+between two lists), and when the list is another account's; on the PWA, pressing another
+machine's Forget moves the arm there. Once forgotten, the PWA also drops what it had learnt
 about the machine (its status line and usage, including any look at it still on its way),
 leaves it if it was the one being viewed, and closes the notifications it had shown from it;
 it does the same for a machine forgotten from another of the account's devices (one that leaves
@@ -112,7 +114,10 @@ with no key.
   copy the writer last read or wrote: a machine both have keeps its latest sighting; one only
   storage has is added unless this relay let it go since; one only this relay has is kept unless
   storage has dropped it (forgotten or capped by the other relay) and this relay has not seen it
-  since. So a relay holding an old copy never brings back a machine forgotten elsewhere. Forgets
+  since. So a relay holding an old copy never brings back a machine forgotten elsewhere. A relay
+  also reads each account's roster again a minute after first reading it (after a relay handing
+  over has written its last) and every 10 minutes after that while any of the account's devices
+  is connected, and sends them `presence` if what they are told has changed. Forgets
   are also stored, at most 256 per account for a day, to settle a forget on one relay against
   the same machine seen on the other at the same moment: a machine shows only if seen after it
   was last forgotten.
