@@ -91,7 +91,7 @@ key order is not part of the contract), numbers by value, `updated` stamps as a 
 
 ### Keeping up with agent-ha-bridge
 
-The fixtures are pinned at agent-ha-bridge **`42fc551`** (`Release 1.33.32`). agent-ha-bridge
+The fixtures are pinned at agent-ha-bridge **`8b9f2f4`** (`Release 1.33.33`). agent-ha-bridge
 keeps shipping, so `.github/workflows/ha-contract-drift.yml` records the contract again from
 its `main` every day (and on demand) with `tools/ha-contract/Test-HaContractDrift.ps1`, which
 writes the recording outside the repository and compares it with the committed fixtures,
@@ -117,7 +117,11 @@ it), update this document, and close the issue by merging. The re-pin to `42fc55
 heartbeat's attributes topic, the update-check button, the launch outcomes topic and the usage
 sensors for further Copilot logins (below); the exporter now also runs the daemon's
 `Get-BridgeConsoleFailureHint` when a reply fails, which adds a hint only for the Windows
-console's refusal of an elevated session, a detail the host never reports.
+console's refusal of an elevated session, a detail the host never reports. The re-pin to
+`8b9f2f4` changed no recorded topic or payload: its two changes (agent-ha-bridge #266, which reads
+a question's start however far back in the transcript it is, and #267, which stops the decision log
+flooding on OneDrive folders) are inside the daemon, and the host's own transcript reader already
+parses every append whole and skims a cold start for unanswered questions.
 
 ### Names
 

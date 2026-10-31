@@ -6,7 +6,7 @@ too, with the evidence. This is the audit the migration plan starts from (design
 when the rows that matter to it are `Verified`, or `Intentionally different` for a stated
 reason.
 
-* **Spec:** agent-ha-bridge at `42fc551` (1.33.32): `frontend/agent-bridge-reply-card.js`,
+* **Spec:** agent-ha-bridge at `8b9f2f4` (1.33.33): `frontend/agent-bridge-reply-card.js`,
   the dashboard generator (`Save-CopilotSessionDashboard` in
   `hooks/decision-ha-websocket.ps1`, `hooks/bridge-frontend-cards.ps1`), `README.md`,
   `mcp/`, `hook/`, `hooks/`, `claude/`, `codex/`, `install.ps1`, `uninstall.ps1`, and
