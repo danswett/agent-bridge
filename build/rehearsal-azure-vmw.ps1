@@ -826,7 +826,17 @@ $target = '__TARGET__'
 $jumpKey = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('__JUMP_KEY_B64__')).Trim()
 $sshDir = Join-Path $env:ProgramData 'ssh'
 # A fresh install may not have created it yet; the authorized-keys file is written before sshd runs.
+# Whoever made it, it ends up owned by Administrators and writable only by them and SYSTEM, so no
+# local user can swap the configuration the restrictions live in. Existing files keep their own
+# (stricter) ACLs; the ones written below are recreated rather than overwritten.
 New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+& icacls.exe $sshDir /setowner '*S-1-5-32-544' | Out-Null
+& icacls.exe $sshDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-11:(OI)(CI)RX' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "icacls $sshDir failed" }
+foreach ($hostKeyFile in Get-ChildItem $sshDir -Filter 'ssh_host_*_key' -ErrorAction SilentlyContinue) {
+    $owner = (Get-Acl $hostKeyFile.FullName).Owner
+    if ($owner -notin 'NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators') { throw "$($hostKeyFile.Name) is owned by $owner; refusing to trust it" }
+}
 
 $svc = Get-CimInstance Win32_Service -Filter "Name='sshd'"
 if (-not $svc) { throw 'sshd is not installed: add the OpenSSH.Server capability, or the signed Win32-OpenSSH MSI where Windows Update is unavailable' }
@@ -846,13 +856,21 @@ New-NetFirewallRule -Name 'Rehearsal-Jump-SSH-In' -DisplayName 'Rehearsal: SSH j
     -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22 -RemoteAddress $allowedRemote `
     -InterfaceAlias $alias -Profile $fwProfile | Out-Null
 
-if (-not (Get-LocalUser -Name $jumpUser -ErrorAction SilentlyContinue)) {
+$jumpDescription = 'Rehearsal: SSH jump to VM-W only'
+$existing = Get-LocalUser -Name $jumpUser -ErrorAction SilentlyContinue
+if ($existing) {
+    # Reuse only the account this script made: never an administrator or someone's real account.
+    $admins = @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue | ForEach-Object { "$($_.SID)" })
+    if ($existing.Description -ne $jumpDescription -or $admins -contains "$($existing.SID)") {
+        throw "$jumpUser already exists and is not this script's jump account (or is an administrator); choose another -JumpVia user"
+    }
+} else {
     # A random password nobody keeps: the account only ever signs in with its key.
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     $bytes = New-Object byte[] 24; $rng.GetBytes($bytes)
     $pw = ConvertTo-SecureString ('Aa1-' + [Convert]::ToBase64String($bytes)) -AsPlainText -Force
     New-LocalUser -Name $jumpUser -Password $pw -PasswordNeverExpires -AccountNeverExpires `
-        -Description 'Rehearsal: SSH jump to VM-W only' | Out-Null
+        -Description $jumpDescription | Out-Null
     Add-LocalGroupMember -Group 'Users' -Member $jumpUser -ErrorAction SilentlyContinue
     $pw = $null
 }
@@ -861,6 +879,7 @@ $sid = (Get-LocalUser -Name $jumpUser).SID.Value
 # The key's own options repeat sshd_config's limits, so either alone keeps it to one forward.
 $options = 'restrict,port-forwarding,permitopen="' + $target + '",no-pty,no-agent-forwarding,no-X11-forwarding,command="exit 1"'
 $keys = Join-Path $sshDir "${jumpUser}_authorized_keys"
+Remove-Item -Path $keys -Force -ErrorAction SilentlyContinue
 Set-Content -Path $keys -Value "$options $jumpKey" -Encoding ascii
 & icacls.exe $keys /inheritance:r /grant '*S-1-5-32-544:F' '*S-1-5-18:F' "*${sid}:R" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "icacls $keys failed" }
@@ -894,6 +913,7 @@ $candidate = Join-Path $sshDir 'sshd_config.candidate'
 Set-Content -Path $candidate -Value $config -Encoding ascii
 & $sshd -t -f $candidate
 if ($LASTEXITCODE -ne 0) { throw 'the new sshd_config does not parse' }
+Remove-Item -Path (Join-Path $sshDir 'sshd_config') -Force -ErrorAction SilentlyContinue
 Move-Item -Path $candidate -Destination (Join-Path $sshDir 'sshd_config') -Force
 Set-Service sshd -StartupType Automatic
 Restart-Service sshd
