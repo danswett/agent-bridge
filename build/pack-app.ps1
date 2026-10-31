@@ -19,7 +19,7 @@ param(
     [switch]$NoPack,
     # A GitHub repository whose latest release (pre-releases included) the new package gets a
     # delta from. Each full package is about 100 MB; a delta is what an installed copy downloads.
-    # Uses GH_TOKEN when set, for the API's rate limit.
+    # Uses GH_TOKEN when set, for the API's rate limit. Empties the releases folder first.
     [string]$DeltaFrom,
     # The signing hook, passed to vpk pack as they are: signtool arguments, or an Azure Trusted
     # Signing metadata.json. vpk signs every executable in the package and Setup.exe.
@@ -65,6 +65,9 @@ if ($DeltaFrom) {
     # when the download fails, or the latest release is not older (a pull request built before a
     # newer merge published), this packs the full package alone rather than failing the build.
     # vpk would also stop at a prompt, which in CI is a failure, over a same-or-newer package.
+    # Only the package checked here may be a base: one left in the output folder by an earlier
+    # pack would be taken just the same, so the folder starts empty.
+    if (Test-Path $releases) { Remove-Item $releases -Recurse -Force }
     $previous = Join-Path $Out 'previous'
     if (Test-Path $previous) { Remove-Item $previous -Recurse -Force }
     $download = @('download', 'github', '--repoUrl', $DeltaFrom, '--pre', '--channel', 'win', '-o', $previous)

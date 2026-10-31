@@ -27,6 +27,7 @@ $packId = 'AgentBridgeApp'
 $tag = "v$Version"
 $semver = [semver]$Version
 $ReleasesDir = [IO.Path]::GetFullPath($ReleasesDir)
+$work = Join-Path (Split-Path $ReleasesDir) 'publish-work'
 $mode = if ($DryRun) { 'dry run: ' } else { '' }
 
 function Invoke-Gh {
@@ -36,8 +37,8 @@ function Invoke-Gh {
     $output
 }
 
-function Write-Plan([string]$line) {
-    Write-Host "$mode$line"
+function Write-Plan([string]$line, [switch]$Warn) {
+    if ($Warn -and $env:GITHUB_ACTIONS) { Write-Host "::warning::$mode$line" } else { Write-Host "$mode$line" }
     if ($env:GITHUB_STEP_SUMMARY) { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "* $mode$line" }
 }
 
@@ -50,10 +51,17 @@ function Get-TagVersion([string]$tagName) {
     if ($tagName -match '^v(\d+\.\d+\.\d+)$') { [semver]$Matches[1] }
 }
 
+function Get-Megabyte([string]$path) { '{0:N1} MB' -f ((Get-Item $path).Length / 1MB) }
+
+function Reset-Work {
+    if (Test-Path $work) { Remove-Item $work -Recurse -Force }
+    New-Item -ItemType Directory -Force $work | Out-Null
+}
+
 # --- The folder is what vpk pack wrote: exactly one version's packages, named as clients expect.
 $assetsFile = Join-Path $ReleasesDir 'assets.win.json'
 if (-not (Test-Path $assetsFile)) { throw "no assets.win.json in ${ReleasesDir}: not the output of vpk pack" }
-$assets = @(Get-Content $assetsFile -Raw | ConvertFrom-Json)
+$assets = [Collections.Generic.List[object]]@(Get-Content $assetsFile -Raw | ConvertFrom-Json)
 $expected = [ordered]@{ Full = "$packId-$Version-full.nupkg"; Installer = "$packId-win-Setup.exe"; Portable = "$packId-win-Portable.zip"; Delta = "$packId-$Version-delta.nupkg" }
 foreach ($asset in $assets) {
     if (-not $expected.Contains([string]$asset.Type) -or $asset.RelativeFileName -ne $expected[[string]$asset.Type]) {
@@ -64,44 +72,95 @@ foreach ($asset in $assets) {
 foreach ($type in 'Full', 'Installer', 'Portable') {
     if (-not ($assets | Where-Object Type -EQ $type)) { throw "assets.win.json has no $type ($($expected[$type]))" }
 }
-$hasDelta = [bool]($assets | Where-Object Type -EQ 'Delta')
-# vpk upload github sends the build's assets, a releases.win.json and RELEASES of this version
-# alone; assets.win.json goes up too, as on the first release published by hand (v0.1.583).
-$uploads = @($assets.RelativeFileName) + 'releases.win.json', 'RELEASES', 'assets.win.json'
-function Get-Megabyte([string]$type) { '{0:N1} MB' -f ((Get-Item (Join-Path $ReleasesDir $expected[$type])).Length / 1MB) }
-$size = if ($hasDelta) { "a $(Get-Megabyte Delta) delta beside the $(Get-Megabyte Full) full package" } else { "the $(Get-Megabyte Full) full package only, no delta" }
-Write-Plan "$tag from ${Commit}, $size`: $($uploads -join ', ')"
-
-if ($DryRun) {
-    # vpk itself reads the folder, through the same build-assets file the GitHub upload reads,
-    # into a scratch feed beside it: the nearest a pull request can come to uploading.
-    $scratch = Join-Path (Split-Path $ReleasesDir) 'dry-run-feed'
-    if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
-    New-Item -ItemType Directory -Force $scratch | Out-Null
-    & vpk upload local --outputDir $ReleasesDir --channel win --path $scratch
-    if ($LASTEXITCODE) { throw 'vpk upload local failed: vpk cannot upload this folder' }
-    $feed = Get-Content (Join-Path $scratch 'releases.win.json') -Raw | ConvertFrom-Json
-    if (-not ($feed.Assets | Where-Object { $_.Version -eq $Version -and $_.Type -eq 'Full' })) { throw "vpk's feed has no full package of $Version" }
-    if ($hasDelta -and -not ($feed.Assets | Where-Object { $_.Version -eq $Version -and $_.Type -eq 'Delta' })) { throw "vpk's feed has no delta of $Version" }
-    Remove-Item $scratch -Recurse -Force
-}
+$fullPath = Join-Path $ReleasesDir $expected.Full
+$deltaPath = Join-Path $ReleasesDir $expected.Delta
 
 # --- Whether to publish: once per version, and never a version older than one already out.
 $releases = Get-Release
 $tagged = @(Invoke-Gh api "repos/$Repository/git/matching-refs/tags/$tag" --jq '.[].ref') -contains "refs/tags/$tag"
 $published = $tagged -or [bool]($releases | Where-Object { -not $_.draft -and $_.tag_name -eq $tag })
-$newer = @($releases | Where-Object { -not $_.draft } | ForEach-Object { Get-TagVersion $_.tag_name } | Where-Object { $_ -gt $semver } | Sort-Object -Descending)
-$publishing = $false
+$released = @($releases | Where-Object { -not $_.draft } | ForEach-Object { Get-TagVersion $_.tag_name } | Sort-Object -Descending)
+$newer = @($released | Where-Object { $_ -gt $semver })
+$publishing = -not $published -and -not $newer
 if ($published) {
     Write-Plan "$tag is already published; nothing to upload"
 } elseif ($newer) {
     # Two merges close together: the later one's build published first. Installed copies take
     # the highest version, so this one would only be noise, and a delta base nobody has.
     Write-Plan "$tag is older than the published v$($newer[0]); not publishing it"
-} else {
-    $publishing = $true
+}
+
+function Test-Delta([string]$basePath) {
+    # Right only if it rebuilds this version's full package, byte for byte, from the package of
+    # the release installed copies are on; vpk delta patch reproduces it exactly.
+    $patched = Join-Path $work 'patched.nupkg'
+    Remove-Item $patched -ErrorAction SilentlyContinue
+    & vpk delta patch --base $basePath --patch $deltaPath --output $patched | Out-Host
+    $LASTEXITCODE -eq 0 -and (Test-Path $patched) -and (Get-FileHash $patched).Hash -eq (Get-FileHash $fullPath).Hash
+}
+
+function Update-Delta {
+    # The app job built its delta from whatever release was latest when it packed. Another merge
+    # may have published since (this runs under the publish lock, so that one is now final), and a
+    # delta from an older base would fail on every copy that took it. Check it against the latest
+    # release, rebuild it from that one if it is wrong or missing, and report why when neither works.
+    Reset-Work
+    $latest = $released | Select-Object -First 1
+    if (-not $latest) { return 'there is no earlier release' }
+    $basePath = Join-Path $ReleasesDir "$packId-$latest-full.nupkg"
+    if (-not (Test-Path $basePath)) {
+        $download = @('download', 'github', '--repoUrl', "https://github.com/$Repository", '--pre', '--channel', 'win', '-o', $work)
+        if ($env:GH_TOKEN) { $download += @('--token', $env:GH_TOKEN) }
+        & vpk @download | Out-Host
+        $basePath = Join-Path $work "$packId-$latest-full.nupkg"
+        if ($LASTEXITCODE -or -not (Test-Path $basePath)) { return "v$latest's full package could not be downloaded" }
+    }
+    if ((Test-Path $deltaPath) -and (Test-Delta $basePath)) { return "@v$latest" }
+    Write-Plan "rebuilding the delta from v$latest"
+    Remove-Item $deltaPath -ErrorAction SilentlyContinue
+    & vpk delta generate --base $basePath --new $fullPath --output $deltaPath | Out-Host
+    if ($LASTEXITCODE -or -not (Test-Path $deltaPath) -or -not (Test-Delta $basePath)) { return "no delta from v$latest rebuilds the full package" }
+    "@v$latest"
+}
+
+if ($publishing) {
+    $deltaResult = Update-Delta
+    $deltaEntry = $assets | Where-Object Type -EQ 'Delta'
+    if ($deltaResult -like '@*') {
+        if (-not $deltaEntry) { $assets.Add([pscustomobject]@{ RelativeFileName = $expected.Delta; Type = 'Delta' }) }
+        $size = "a $(Get-Megabyte $deltaPath) delta from $($deltaResult.Substring(1)) beside the $(Get-Megabyte $fullPath) full package"
+    } else {
+        # A wrong delta costs every installed copy a failed patch before the full download; none
+        # costs only the download.
+        if ($deltaEntry) { [void]$assets.Remove($deltaEntry) }
+        Remove-Item $deltaPath -ErrorAction SilentlyContinue
+        Write-Plan "publishing the full package alone: $deltaResult" -Warn
+        $size = "the $(Get-Megabyte $fullPath) full package only, no delta"
+    }
+    ConvertTo-Json @($assets) -Compress | Set-Content $assetsFile -NoNewline
+    if (Test-Path $work) { Remove-Item $work -Recurse -Force }
+
+    # vpk upload github sends the build's assets, a releases.win.json and RELEASES of this
+    # version alone; assets.win.json goes up too, as on the first release published by hand.
+    $uploads = @($assets.RelativeFileName) + 'releases.win.json', 'RELEASES', 'assets.win.json'
+    Write-Plan "$tag from ${Commit}, ${size}: $($uploads -join ', ')"
+}
+
+if ($DryRun) {
+    # vpk itself reads the folder, through the same build-assets file the GitHub upload reads,
+    # into a scratch feed beside it: the nearest a pull request can come to uploading.
+    Reset-Work
+    & vpk upload local --outputDir $ReleasesDir --channel win --path $work | Out-Host
+    if ($LASTEXITCODE) { throw 'vpk upload local failed: vpk cannot upload this folder' }
+    $feed = Get-Content (Join-Path $work 'releases.win.json') -Raw | ConvertFrom-Json
+    if (-not ($feed.Assets | Where-Object { $_.Version -eq $Version -and $_.Type -eq 'Full' })) { throw "vpk's feed has no full package of $Version" }
+    if ((Test-Path $deltaPath) -and -not ($feed.Assets | Where-Object { $_.Version -eq $Version -and $_.Type -eq 'Delta' })) { throw "vpk's feed has no delta of $Version" }
+    Remove-Item $work -Recurse -Force
+}
+
+if ($publishing) {
     foreach ($leftover in @($releases | Where-Object { $_.draft -and $_.tag_name -eq $tag })) {
-        # A draft is all a failed attempt leaves (vpk publishes only after every upload), and
+        # A draft is all a failed attempt leaves (it is published only after every upload), and
         # vpk refuses a tag that has one.
         Write-Plan "deleting the draft $tag left by an earlier attempt"
         if (-not $DryRun) { Invoke-Gh api -X DELETE "repos/$Repository/releases/$($leftover.id)" | Out-Null }
@@ -109,12 +168,13 @@ if ($published) {
     if (-not $DryRun) {
         if (-not $env:GH_TOKEN) { throw 'GH_TOKEN is needed to publish' }
         # As a draft first: clients never see a release that is missing its notes or a file.
-        & vpk upload github --outputDir $ReleasesDir --channel win --repoUrl "https://github.com/$Repository" --token $env:GH_TOKEN --pre --releaseName "Agent Bridge $Version (pre-release)" --tag $tag --targetCommitish $Commit
+        & vpk upload github --outputDir $ReleasesDir --channel win --repoUrl "https://github.com/$Repository" --token $env:GH_TOKEN --pre --releaseName "Agent Bridge $Version (pre-release)" --tag $tag --targetCommitish $Commit | Out-Host
         if ($LASTEXITCODE) { throw 'vpk upload github failed' }
         $draft = @(Get-Release | Where-Object { $_.draft -and $_.tag_name -eq $tag })
         if ($draft.Count -ne 1) { throw "expected one draft $tag after the upload, found $($draft.Count)" }
         Invoke-Gh release upload $tag $assetsFile -R $Repository --clobber | Out-Null
         $run = if ($env:GITHUB_RUN_ID) { " (CI run $env:GITHUB_SERVER_URL/$Repository/actions/runs/$env:GITHUB_RUN_ID)" } else { '' }
+        $hasDelta = Test-Path $deltaPath
         $notes = @(
             "Pre-release of the Agent Bridge Windows app and host, built from main at $Commit$run."
             ''

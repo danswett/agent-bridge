@@ -171,8 +171,11 @@ default, find it and update themselves.
 * **When:** after the `product` tests (both systems) and the `app` job (build, pack, self-test)
   pass, for pushes to `danswett/agent-bridge`'s `main` only: never a pull request or a fork. It
   is the only job with `contents: write`, and runs one at a time (concurrency group
-  `publish-prerelease`). A third merge arriving while one publishes and one waits cancels the
-  waiting one, which its newer version supersedes anyway.
+  `publish-prerelease`). Before it, `publish-gate` lets through only the commit `main` is at
+  now: GitHub keeps one waiting job per concurrency group and cancels the older waiting one, so
+  a slow build of an older merge must not reach the group and evict a newer one. A run whose
+  commit main has moved past publishes nothing, and the newer commit's run publishes instead
+  (re-run it if it failed).
 * **What:** `build/publish-prerelease.ps1` uploads the app job's folder with `vpk upload github
   --pre` as a draft, adds `assets.win.json` and the notes, and only then publishes it, creating
   the tag `v<version>` on the exact commit; a client never sees half a release. Assets:
@@ -180,13 +183,17 @@ default, find it and update themselves.
   `AgentBridgeApp-win-Setup.exe`, `AgentBridgeApp-win-Portable.zip`, `releases.win.json`
   (this version's packages), `RELEASES` and `assets.win.json`, as on the first release
   (`v0.1.583`, published by hand) plus the delta.
-* **Deltas:** `pack-app.ps1 -DeltaFrom` downloads the latest release's full package (`vpk
-  download github --pre`) before packing, and `vpk pack` builds a delta from it. A copy on the
-  previous version downloads only the delta rather than the ~100 MB full package; one further
-  behind applies the chain of deltas, as far back as the newest ten releases Velopack's GitHub
-  source reads, or else the full package. If the download fails, or the latest release is not
-  older (a pull request built before a newer merge published), the full package is packed alone,
-  with a warning.
+* **Deltas:** `pack-app.ps1 -DeltaFrom` empties its releases folder, downloads the latest
+  release's full package (`vpk download github --pre`) and, if it is older, puts it there, so
+  `vpk pack` builds a delta from it. Another merge may publish between that pack and this one's
+  publish, so under the lock the script checks the delta again: `vpk delta patch` on the latest
+  release's full package must rebuild this version's full package byte for byte. If it does not
+  (or there is no delta), it is rebuilt from that release with `vpk delta generate` and checked
+  the same way; if that fails too, the full package is published alone, with a warning, since a
+  wrong delta would cost every copy a failed patch first. A copy on the previous version
+  downloads only the delta rather than the ~100 MB full package; one further behind applies the
+  chain of deltas, as far back as the newest ten releases Velopack's GitHub source reads, or
+  else the full package.
 * **Once per version:** a version whose tag exists is skipped, so re-running a run publishes
   nothing twice. A version older than one already published is skipped (two merges close
   together, the later one's build first). A draft left by a failed attempt is deleted and the
@@ -195,7 +202,8 @@ default, find it and update themselves.
   their tags stay. A full (non-pre-release) release, a draft, or a release not tagged
   `v<major>.<minor>.<patch>` is never touched.
 * **Pull requests** prove it without publishing: the app job runs the same script with
-  `-DryRun`, which checks the folder, has vpk read it into a scratch feed (`vpk upload local`),
+  `-DryRun`, which checks the folder and its delta against the latest release as above, has vpk
+  read it into a scratch feed (`vpk upload local`),
   and prints what it would upload, publish and prune against the real releases (in the job
   summary too), writing nothing.
 * A pre-release is unsigned (below), and is packed without `-Release`, so its host reports

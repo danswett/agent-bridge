@@ -202,19 +202,41 @@ jobs:
           path: ${{ runner.temp }}/selftest
           retention-days: 7
 
+  publish-gate:
+    # Only main's newest commit goes on to publish. GitHub keeps one pending job per concurrency
+    # group, cancelling the older pending one when another arrives, so a slow build of an older
+    # merge reaching the group could evict a newer one waiting there, then find itself superseded,
+    # leaving the newest merge unpublished. Turned away here, before the group, it never gets there.
+    needs: [product, app]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
+    runs-on: ubuntu-latest
+    outputs:
+      newest: ${{ steps.head.outputs.newest }}
+    steps:
+      - id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(gh api "repos/${{ github.repository }}/git/ref/heads/main" --jq .object.sha)
+          if [ "$head" = "${{ github.sha }}" ]; then
+            echo "newest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "newest=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::main has moved on to $head; that commit's own run publishes"
+          fi
+
   publish:
     # Every push to main becomes a GitHub pre-release, which installed copies update from
     # (docs/app-windows.md, "Releases and updates"): the app job's package, once the product's
     # tests pass on both systems. Never a pull request and never a fork, and the only job here
     # that can write to the repository.
-    needs: [product, app]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
+    needs: [publish-gate]
+    if: needs.publish-gate.outputs.newest == 'true'
     runs-on: windows-latest
     permissions:
       contents: write
-    # One publish at a time, so two merges cannot both see "nothing newer" and race. A third
-    # arriving while one runs and one waits replaces the waiting one, which a newer version
-    # supersedes anyway.
+    # One publish at a time: the checks against what is already out, and the delta's base, hold
+    # until the release is up.
     concurrency:
       group: publish-prerelease
       cancel-in-progress: false

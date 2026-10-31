@@ -71,8 +71,19 @@ function global:vpk {
         if ($global:PpDownload -eq 'fail') { $global:LASTEXITCODE = 1; return }
         if ($global:PpDownload) {
             New-Item -ItemType Directory -Force (Arg '-o') | Out-Null
-            Set-Content (Join-Path (Arg '-o') "AgentBridgeApp-$($global:PpDownload)-full.nupkg") 'previous'
+            Set-Content (Join-Path (Arg '-o') "AgentBridgeApp-$($global:PpDownload)-full.nupkg") "full $($global:PpDownload)"
         }
+    } elseif ($a[0] -eq 'delta' -and $a[1] -eq 'generate') {
+        # A stand-in delta names the two packages it lies between.
+        $global:PpCalls.Add('vpk delta generate')
+        $from = (Get-Content (Arg '--base')) -replace '^full ', ''
+        $to = (Get-Content (Arg '--new')) -replace '^full ', ''
+        Set-Content (Arg '--output') "delta $from->$to"
+    } elseif ($a[0] -eq 'delta' -and $a[1] -eq 'patch') {
+        # Rebuilds the new package only from the base the delta was made from, as vpk does.
+        $base = (Get-Content (Arg '--base')) -replace '^full ', ''
+        if ((Get-Content (Arg '--patch')) -notmatch '^delta (.+)->(.+)$' -or $Matches[1] -ne $base) { $global:LASTEXITCODE = 1; return }
+        Set-Content (Arg '--output') "full $($Matches[2])"
     } elseif ($a[0] -eq 'pack') {
         $global:PpPackSaw = @(Get-ChildItem (Arg '-o') -Filter *.nupkg -ErrorAction SilentlyContinue | ForEach-Object Name)
     } else { throw "stand-in vpk: unexpected $($a -join ' ')" }
@@ -97,23 +108,33 @@ function Reset([int]$prereleases = 0) {
     if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
 }
 
-function New-Folder([string]$version, [switch]$Delta, [string[]]$Skip = @()) {
+function New-Folder([string]$version, [string]$DeltaFrom, [string[]]$Skip = @()) {
+    # As vpk pack leaves it: with -DeltaFrom, a delta from that version and its full package beside.
     $dir = Join-Path $scratch 'releases'
     New-Item -ItemType Directory -Force $dir | Out-Null
     $assets = [Collections.Generic.List[object]]::new()
     $assets.Add([ordered]@{ RelativeFileName = 'AgentBridgeApp-win-Setup.exe'; Type = 'Installer' })
     $assets.Add([ordered]@{ RelativeFileName = 'AgentBridgeApp-win-Portable.zip'; Type = 'Portable' })
     $assets.Add([ordered]@{ RelativeFileName = "AgentBridgeApp-$version-full.nupkg"; Type = 'Full' })
-    if ($Delta) { $assets.Add([ordered]@{ RelativeFileName = "AgentBridgeApp-$version-delta.nupkg"; Type = 'Delta' }) }
-    foreach ($a in $assets) { if ($a.RelativeFileName -notin $Skip) { Set-Content (Join-Path $dir $a.RelativeFileName) 'stand-in' } }
+    if ($DeltaFrom) {
+        $assets.Add([ordered]@{ RelativeFileName = "AgentBridgeApp-$version-delta.nupkg"; Type = 'Delta' })
+        Set-Content (Join-Path $dir "AgentBridgeApp-$DeltaFrom-full.nupkg") "full $DeltaFrom"
+    }
+    foreach ($a in $assets) {
+        $content = switch ($a.Type) { 'Full' { "full $version" } 'Delta' { "delta $DeltaFrom->$version" } default { 'stand-in' } }
+        if ($a.RelativeFileName -notin $Skip) { Set-Content (Join-Path $dir $a.RelativeFileName) $content }
+    }
     ConvertTo-Json @($assets) -Compress | Set-Content (Join-Path $dir 'assets.win.json')
     $dir
 }
 
-function Invoke-Publish([string]$version, [switch]$DryRun, [switch]$Delta, [string[]]$Skip = @()) {
-    $dir = New-Folder $version -Delta:$Delta -Skip $Skip
+function Invoke-Publish([string]$version, [switch]$DryRun, [string]$DeltaFrom, [string[]]$Skip = @()) {
+    $dir = New-Folder $version -DeltaFrom $DeltaFrom -Skip $Skip
     & $publishScript -Version $version -ReleasesDir $dir -Repository $repo -Commit $commit -DryRun:$DryRun 6>$null
 }
+
+function Get-Asset { @(Get-Content (Join-Path $scratch 'releases' 'assets.win.json') -Raw | ConvertFrom-Json) }
+function Get-Delta { Get-Content (Join-Path $scratch 'releases' 'AgentBridgeApp-0.1.600-delta.nupkg') -ErrorAction SilentlyContinue }
 
 $failures = 0
 function Check([string]$name, [scriptblock]$body) {
@@ -127,7 +148,9 @@ function Deletes { @($global:PpCalls | Where-Object { $_ -like 'gh api -X DELETE
 # --- Publishing.
 Check 'A new version goes up as a draft, then is published as a pre-release of the commit with assets.win.json beside it' {
     Reset 3
-    Invoke-Publish '0.1.600' -Delta
+    Invoke-Publish '0.1.600' -DeltaFrom '0.1.503'
+    Assert ($global:PpCalls -notcontains 'vpk delta generate') 'a delta from the latest release was rebuilt'
+    Assert ((Get-Delta) -eq 'delta 0.1.503->0.1.600') "delta: $(Get-Delta)"
     Assert (@(Uploads).Count -eq 1) "uploads: $(Uploads)"
     Assert (@(Uploads)[0] -eq "vpk upload github --tag v0.1.600 --targetCommitish $commit pre=True publish=False") "upload: $(Uploads)"
     Assert ([bool]($global:PpCalls | Where-Object { $_ -like 'gh release upload v0.1.600 *assets.win.json*' })) 'assets.win.json was not uploaded'
@@ -186,6 +209,33 @@ Check "A folder of another version's packages is refused" {
     Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
 }
 
+# --- The delta: from the release installed copies are on, or none.
+Check 'A delta from an older release than the latest is rebuilt from the latest before upload' {
+    Reset 3
+    $global:PpDownload = '0.1.503'
+    Invoke-Publish '0.1.600' -DeltaFrom '0.1.501'
+    Assert ((Get-Delta) -eq 'delta 0.1.503->0.1.600') "delta: $(Get-Delta)"
+    Assert ([bool](Get-Asset | Where-Object Type -EQ 'Delta')) 'the delta is not in assets.win.json'
+    Assert (@(Uploads).Count -eq 1) "uploads: $(Uploads)"
+}
+
+Check 'A delta that cannot be rebuilt is left out and the full package published alone' {
+    Reset 3
+    $global:PpDownload = 'fail'
+    Invoke-Publish '0.1.600' -DeltaFrom '0.1.501'
+    Assert ($null -eq (Get-Delta)) "delta: $(Get-Delta)"
+    Assert (-not (Get-Asset | Where-Object Type -EQ 'Delta')) 'assets.win.json still lists the delta'
+    Assert (@(Uploads).Count -eq 1) "uploads: $(Uploads)"
+}
+
+Check 'A package packed without a delta gets one from the latest release' {
+    Reset 3
+    $global:PpDownload = '0.1.503'
+    Invoke-Publish '0.1.600'
+    Assert ((Get-Delta) -eq 'delta 0.1.503->0.1.600') "delta: $(Get-Delta)"
+    Assert ([bool](Get-Asset | Where-Object Type -EQ 'Delta')) 'the delta is not in assets.win.json'
+}
+
 # --- Keeping the newest twenty.
 Check 'Only pre-releases beyond the newest twenty are deleted, never a full release, a draft or a tag' {
     Reset 22
@@ -204,7 +254,7 @@ Check 'Only pre-releases beyond the newest twenty are deleted, never a full rele
 
 Check 'A dry run uploads, publishes and deletes nothing, and has vpk read the folder' {
     Reset 22
-    Invoke-Publish '0.1.600' -DryRun -Delta
+    Invoke-Publish '0.1.600' -DryRun -DeltaFrom '0.1.522'
     Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
     Assert (@(Deletes).Count -eq 0) "deletes: $(Deletes)"
     Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "writes: $($global:PpCalls -join '; ')"
@@ -233,6 +283,15 @@ Check 'A release that is not older than the new package is not a delta base' {
 
 Check 'A failed download packs the full package alone' {
     Reset
+    $global:PpDownload = 'fail'
+    Invoke-Pack '0.1.600'
+    Assert ($null -ne $global:PpPackSaw -and @($global:PpPackSaw).Count -eq 0) "vpk pack saw: $($global:PpPackSaw)"
+}
+
+Check 'A package left in the output folder by an earlier pack is not a delta base' {
+    Reset
+    New-Item -ItemType Directory -Force (Join-Path $scratch 'releases') | Out-Null
+    Set-Content (Join-Path $scratch 'releases' 'AgentBridgeApp-0.1.590-full.nupkg') 'full 0.1.590'
     $global:PpDownload = 'fail'
     Invoke-Pack '0.1.600'
     Assert ($null -ne $global:PpPackSaw -and @($global:PpPackSaw).Count -eq 0) "vpk pack saw: $($global:PpPackSaw)"
