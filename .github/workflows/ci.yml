@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+env:
+  # The app's version. The run number only grows, for pull requests and main alike, and a re-run
+  # keeps it, so every push to main packs a version above the last one published. Renaming this
+  # workflow starts the count again at 1: below every release, which installed copies would
+  # never take (docs/app-windows.md, "Releases and updates").
+  APP_VERSION: 0.1.${{ github.run_number }}
+
 jobs:
   product:
     # The product itself (src/, tests/), separate from the spikes. Windows and Linux,
@@ -54,6 +61,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: pwsh -NoProfile -File build/test-shadow-week.ps1
+      - name: Publishing makes one pre-release per version and prunes only old pre-releases
+        # Against stand-ins for gh, vpk and dotnet: nothing is uploaded or deleted.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -NoProfile -File build/test-publish-prerelease.ps1
       - name: The NativeAOT hook replies and spools as an agent runs it
         # The hook every agent waits on, as it ships: NativeAOT, started fresh for each event.
         if: runner.os == 'Windows'
@@ -153,7 +165,13 @@ jobs:
       - run: dotnet tool install -g vpk --version 1.2.161
       - name: Publish and pack
         shell: pwsh
-        run: ./build/pack-app.ps1 -Version "0.1.${{ github.run_number }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # -DeltaFrom: a delta from the latest release, so an installed copy downloads what changed
+        # rather than the whole ~100 MB package. Signing goes here too, when there is a
+        # certificate: -SignParams or -AzureTrustedSignFile from a secret, for pushes to main only,
+        # since a pull request from a fork gets no secrets (docs/app-windows.md, Signing).
+        run: ./build/pack-app.ps1 -Version $env:APP_VERSION -DeltaFrom "https://github.com/${{ github.repository }}"
       - name: The published app draws the demo's cards and answers one
         shell: pwsh
         run: |
@@ -165,9 +183,16 @@ jobs:
           if (-not $finished) { Stop-Process -Id $p.Id; Write-Error 'the self-test did not finish'; exit 1 }
           if (Test-Path $result) { Get-Content $result } else { Write-Error 'the self-test wrote no result' }
           exit $p.ExitCode
+      - name: The release would publish (dry run)
+        # What the publish job would upload, publish and prune, against the repository's real
+        # releases, with vpk reading the folder into a scratch feed. Read-only: nothing is uploaded.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -DryRun
       - uses: actions/upload-artifact@v4
         with:
-          name: agent-bridge-windows-0.1.${{ github.run_number }}
+          name: agent-bridge-windows-${{ env.APP_VERSION }}
           path: out/app/releases
           retention-days: 30
       - uses: actions/upload-artifact@v4
@@ -176,6 +201,39 @@ jobs:
           name: app-self-test
           path: ${{ runner.temp }}/selftest
           retention-days: 7
+
+  publish:
+    # Every push to main becomes a GitHub pre-release, which installed copies update from
+    # (docs/app-windows.md, "Releases and updates"): the app job's package, once the product's
+    # tests pass on both systems. Never a pull request and never a fork, and the only job here
+    # that can write to the repository.
+    needs: [product, app]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    # One publish at a time, so two merges cannot both see "nothing newer" and race. A third
+    # arriving while one runs and one waits replaces the waiting one, which a newer version
+    # supersedes anyway.
+    concurrency:
+      group: publish-prerelease
+      cancel-in-progress: false
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet tool install -g vpk --version 1.2.161
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-bridge-windows-${{ env.APP_VERSION }}
+          path: out/app/releases
+      - name: Publish the pre-release and prune old ones
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}"
 
   s2-noise-interop:
     # The .NET and WebCrypto implementations must keep agreeing byte for byte, in
