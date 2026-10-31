@@ -113,9 +113,14 @@ public sealed partial class LaunchViewModel
         void Add(TrustQuestion? q) { if (q is not null) { seen.TryAdd(q.Id, q); } }
         foreach (var q in (m.IsLocal ? localTrust ?? options?.Trust : options?.Trust) ?? []) { Add(q); }
         if (lastMachine == m && lost is null && last is { State: DeliveryState.Done } e) { Add(Result(e)?.Trust); }
+        // What the machine says waits now: an answer remembered here for a question it no longer
+        // lists is shown for its outcome, but never offered again.
+        liveTrust = [.. seen.Keys];
         foreach (var a in trustAnswers.Values.Where(a => a.Machine == m.Key)) { Add(a.Question); }
         return seen.Values;
     }
+
+    HashSet<string> liveTrust = new(StringComparer.Ordinal);
 
     void DrawTrust()
     {
@@ -150,15 +155,17 @@ public sealed partial class LaunchViewModel
         var settled = orphaned || outcome is "started" or "declined" or "unconfirmed";
         var pending = !orphaned && d?.State is DeliveryState.Sending or DeliveryState.Waiting;
         var retry = !orphaned && d?.State == DeliveryState.Failed;
-        var canAnswer = q.Answerable && Answers(via) && !settled && !pending && !retry;
+        var live = liveTrust.Contains(q.Id);
+        var canAnswer = q.Answerable && live && Answers(via) && !settled && !pending && !retry;
         var name = m.Name;
         var atMachine = canAnswer || settled || pending || retry ? ""
+            : !live && (options is not null || localTrust is not null) ? $"{name} no longer lists this question as waiting."
             : q.AtMachine ?? (q.Answerable ? $"Answer at the machine: this app cannot answer it on {name} now." : "Answer at the machine.");
         var status = orphaned
             ? ("Not confirmed: answer at the machine. The relay connection changed before it said what the answer did.", Tone.Warn)
             : answer is null || d is null ? ("", Tone.None) : DescribeTrust(d, answer, q.Label, name);
         var state = orphaned ? "unconfirmed" : d is null ? "waiting" : d.State == DeliveryState.Done ? outcome! : d.State.ToString().ToLowerInvariant();
-        card.Update(q, $"{q.Label} on {name} is asking whether to trust a folder", canAnswer, retry, atMachine, !canAnswer && !settled && !pending && !retry && AllowsHere(m, q), status, state);
+        card.Update(q, $"{q.Label} on {name} is asking whether to trust a folder", canAnswer, retry, atMachine, !canAnswer && live && !settled && !pending && !retry && AllowsHere(m, q), status, state);
     }
 
     // Whether a person here can allow answering this machine's question from this app: the

@@ -109,12 +109,17 @@ public sealed class SettingsViewModel : Observable
     // their devices, each approved here (launch.remoteFolderTrustDevices). Both apply at once.
     // Turned on with none approved yet, this app is approved with it: the way most people
     // will answer, and a setting that lets no device answer would look broken.
+    // While changes are on their way, what was last asked for, so a switch turned on and straight
+    // back off is not taken for no change (the host's status still says off) and lost.
+    bool? trustWanted;
+
     public bool RemoteFolderTrust
     {
-        get => Status?.Settings.RemoteFolderTrust ?? false;
+        get => trustWanted ?? Status?.Settings.RemoteFolderTrust ?? false;
         set
         {
-            if (Status is not { } s || s.Settings.RemoteFolderTrust == value) { return; }
+            if (Status is null || RemoteFolderTrust == value) { return; }
+            trustWanted = value;
             _ = TrustSettingsAsync(devices => new SettingsRequest(RemoteFolderTrust: value,
                 RemoteFolderTrustDevices: value && devices.Count == 0 && fleet?.DeviceId is { } me ? [me] : null));
         }
@@ -140,11 +145,14 @@ public sealed class SettingsViewModel : Observable
                 var result = await host.CallAsync<SettingsResult>(HostOps.Settings, request);
                 confirmedDevices = result.Settings.RemoteFolderTrustDevices ?? [];
             });
+            // Not made: the switch shows what the host has again.
+            if (Error is not null) { trustWanted = null; }
         }
         finally
         {
-            // With none left to make, the host's status is the word again.
-            if (Interlocked.Decrement(ref pendingEdits) == 0) { confirmedDevices = null; }
+            // The last one made: the host sends its status after each change (whichever arrives
+            // first), so from here its status is the word again.
+            if (Interlocked.Decrement(ref pendingEdits) == 0) { confirmedDevices = null; trustWanted = null; }
             trustEdits.Release();
         }
     }
@@ -176,11 +184,13 @@ public sealed class SettingsViewModel : Observable
             if (p.Id != me && rows.All(r => r.Id != p.Id)) { rows.Add((p.Id, p.Name is { Length: > 0 } n ? n : "A device")); }
         }
         foreach (var id in approved.Where(id => rows.All(r => r.Id != id))) { rows.Add((id, "A device not connected now")); }
+
         var next = rows.Select(r => (r.Id, Label: $"{r.Label} · {r.Id[..Math.Min(8, r.Id.Length)]}", Approved: approved.Contains(r.Id))).ToList();
         // The same rows, kept: a presence update does not recreate the checkboxes on screen.
         if (next.Count == TrustDevices.Count && next.Zip(TrustDevices).All(p => p.First.Id == p.Second.Id && p.First.Label == p.Second.Label))
         {
-            foreach (var (row, d) in next.Zip(TrustDevices)) { d.Show(row.Approved); }
+            // While changes are on their way, the boxes show what was asked for, not a status from before.
+            if (Volatile.Read(ref pendingEdits) == 0) { foreach (var (row, d) in next.Zip(TrustDevices)) { d.Show(row.Approved); } }
         }
         else
         {
@@ -241,6 +251,8 @@ public sealed class SettingsViewModel : Observable
     public void Refresh()
     {
         if (!nameEdited) { machineName = Status?.Settings.Name ?? Status?.Machine.Name ?? ""; }
+        // A status with no change of ours on its way is the host's word again.
+        if (Volatile.Read(ref pendingEdits) == 0) { confirmedDevices = null; trustWanted = null; }
         DrawDevices();
         RaiseAll();
     }
@@ -327,10 +339,18 @@ public sealed class TrustDevice(SettingsViewModel page, string id, string label,
     public string Id { get; } = id;
     public string Label { get; } = label;
 
+    // Shown as asked at once, and every change sent, so ticking and unticking quickly ends as
+    // unticked rather than the second click being taken for no change.
     public bool Approved
     {
         get => approved;
-        set { if (value != approved) { _ = page.ApproveAsync(this, value); } }
+        set
+        {
+            if (value == approved) { return; }
+            approved = value;
+            Raise();
+            _ = page.ApproveAsync(this, value);
+        }
     }
 
     internal void Reraise() => Raise(nameof(Approved));
