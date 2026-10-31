@@ -86,8 +86,11 @@ public sealed class SystemProcessInspector : IProcessInspector
                     try { started = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero); }
                     catch (Exception e) when (e is InvalidOperationException or Win32Exception or NotSupportedException) { }
                     var key = (id, started?.UtcTicks ?? 0);
-                    live.Add(key);
                     var commandLine = CommandLineOf(key);
+                    // Another user's agent is none of this user's sessions, and nothing of it can
+                    // be read: taken for one, it held discovery for as long as it ran (#143).
+                    if (commandLine is null && OperatingSystem.IsWindows() && ProcessOwnership.AnotherUsers(id)) { continue; }
+                    live.Add(key);
                     // agent-ha-bridge's usage snapshot (Get-BridgeWorktreeUsage) gives up on a
                     // runtime it cannot identify outside Windows. On Windows it never looks at
                     // node at all; every other user's and service's node is listed there too,

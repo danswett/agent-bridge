@@ -609,4 +609,23 @@ public class DiscoveryTests
         while (subscription.Events.TryRead(out var e)) { events.Add(e); }
         return events;
     }
+
+    [Theory]
+    [InlineData(null, 2, false, false)] // opened: this user's (or readable anyway)
+    [InlineData(5, 2, false, true)] // refused, another session: another user's
+    [InlineData(5, 1, false, false)] // refused on this desktop: maybe runas from here
+    [InlineData(87, 2, false, false)] // another error says nothing about the owner
+    [InlineData(5, null, false, false)] // the session could not be read
+    [InlineData(5, null, true, true)] // refused, then gone: not running
+    public void A_process_is_another_users_only_when_this_user_may_not_open_it_and_it_is_off_this_desktop(int? openError, int? session, bool gone, bool expected)
+    {
+        Assert.Equal(expected, ProcessOwnership.AnotherUsers(openError, session, gone, ownSession: 1));
+    }
+
+    [Fact]
+    public void This_users_own_process_is_never_taken_for_another_users()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.False(ProcessOwnership.AnotherUsers(Environment.ProcessId));
+    }
 }

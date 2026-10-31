@@ -180,19 +180,6 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData(null, 2, false, false)] // opened: this user's (or readable anyway)
-    [InlineData(5, 2, false, true)] // refused, another session: another user's
-    [InlineData(5, 1, false, false)] // refused on this desktop: maybe runas from here
-    [InlineData(87, 2, false, false)] // another error says nothing about the owner
-    [InlineData(5, null, false, false)] // the session could not be read
-    [InlineData(5, null, true, true)] // refused, then gone: not running
-    public void A_process_is_another_users_only_when_this_user_may_not_open_it_and_it_is_off_this_desktop(int? openError, int? session, bool gone, bool expected)
-    {
-        if (!OperatingSystem.IsWindows()) { return; }
-        Assert.Equal(expected, WindowsAgentHaBridgeRuntime.AnotherUsers(openError, session, gone, ownSession: 1));
-    }
-
-    [Theory]
     [InlineData("{\"authority\":\"home\",\"participant\":\"laptop\"}")]
     [InlineData("\"desk\"")]
     public async Task A_publication_policy_that_cannot_be_read_is_refused(string policy)
