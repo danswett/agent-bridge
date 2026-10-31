@@ -618,6 +618,71 @@ public sealed class NotifyTests : IDisposable
     }
 
     [Fact]
+    public async Task A_phone_that_missed_both_the_withdrawal_and_the_next_question_is_withdrawn_alone()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        ha.NotifyFailsFor = s => s == Phone;
+        Ask(Form("q2", Release));
+        await Pass(c);
+        Assert.Equal((0, 1), (Clears(), Clears(Tablet)));
+        Assert.Equal((1, 2), (Buttons().Count, Buttons(Tablet).Count));
+        ha.NotifyFailsFor = null;
+        await Pass(c, 20);
+        // The phone still showing q1 is cleared; the tablet keeps q2.
+        Assert.Equal((1, 1), (Clears(), Clears(Tablet)));
+        await Pass(c, 20);
+        Assert.Equal((1, 1), (Clears(), Clears(Tablet)));
+    }
+
+    [Fact]
+    public async Task A_phone_that_times_out_does_not_stop_the_others_or_the_pass()
+    {
+        ha.NotifyThrows = s => s == Phone ? new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout") : null;
+        Ask(Form("q1", Release));
+        await using var c = Connector(Phones with { Enabled = true, Service = Phone });
+        await Pass(c);
+        Assert.Single(Buttons(Tablet));
+        // The push to the phone timed out too, and the session's card was still published.
+        Assert.Equal(HaDecision.Awaiting, (await ha.GetStateAsync(SessionEntities.Decision(Node)))!.State);
+        ha.NotifyThrows = null;
+        await Pass(c, 20);
+        Assert.Single(Buttons(Tablet));
+    }
+
+    [Fact]
+    public async Task A_refused_tap_read_again_after_a_failure_to_say_so_is_not_delivered_again()
+    {
+        outcome = _ => answered.Count == 1 ? new AnswerResult(AnswerOutcome.Refused, "busy") : new AnswerResult(AnswerOutcome.Delivered);
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        ha.PublishFailsFor = (topic, payload) => topic == HaContract.Topics(Node).ActivityState && payload == "Answer NOT sent";
+        Tap(c, "BRIDGE_q1_0");
+        await Pass(c);
+        Assert.Single(answered);
+        ha.PublishFailsFor = null;
+        await Pass(c);
+        await Pass(c);
+        Assert.Single(answered);
+    }
+
+    [Fact]
+    public async Task A_reply_that_changes_while_a_finished_turn_waits_is_pushed_as_it_ends()
+    {
+        Ask(null, response: null);
+        await using var c = Connector(new HaNotifySettings { Enabled = true });
+        await Pass(c);
+        Ask(null, response: "Almost.", status: SessionStatus.Idle);
+        await Pass(c);
+        Ask(null, response: "Done.", status: SessionStatus.Idle);
+        await Pass(c);
+        await Pass(c, 5);
+        Assert.Equal("Done.", Assert.Single(Pushes())["message"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_tap_the_host_refused_can_be_made_again()
     {
         var refusals = 1;

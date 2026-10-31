@@ -523,8 +523,9 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   `maxButtons`). The same button tapped again after the host refused the answer is tried again.
 * **Withdrawn** (`clear_notification` by tag, at every phone that has it) once a tap is
   delivered, when the question is answered anywhere else or replaced, and when the session ends.
-  A phone that could not be reached is tried again every 15 s, and which phones hold which
-  session's notification is kept in the connector's state file, so one answered or ended while
+  A phone that could not be reached, or that missed the question replacing the one it shows, is
+  withdrawn on its own every 15 s (a timeout at one phone is that phone's failure, not the
+  pass's); which question each phone shows is kept in the connector's state file, so one answered or ended while
   the host was stopped is withdrawn when it starts. A restart, or taking the machine back from
   agent-ha-bridge, sends a waiting question again, as the daemon does after its own restart; the
   tag replaces what the phone shows.
@@ -539,8 +540,8 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   once. A turn is finished when a session that was working or waiting (or has a new turn) is at
   rest with a reply that turn has not been pushed for, and stays at rest for 3 s, as the host's
   own notifier waits (a question answered at the machine passes through idle); a background
-  agent's message while the session rests is not one, and a later turn ending in the same words
-  is. What sessions already show when the connector starts is not pushed again. A push that
+  agent's message while the session rests is not one, a reply that changes during the wait
+  starts it again, and a later turn ending in the same words is a finished turn of its own. What sessions already show when the connector starts is not pushed again. A push that
   fails is logged and holds nothing up.
 
 Where stage 5b knowingly differs from the daemon:

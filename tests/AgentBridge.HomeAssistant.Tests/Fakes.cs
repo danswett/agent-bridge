@@ -104,6 +104,8 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     public List<(string Service, JsonObject Data)> Notified { get; } = [];
     public List<(string Service, JsonObject Data)> NotifiedNow() { lock (gate) { return [.. Notified]; } }
     public Func<string, bool>? NotifyFailsFor { get; set; }
+    // What a notify call throws instead, when not null (a timeout, say).
+    public Func<string, Exception?>? NotifyThrows { get; set; }
     readonly System.Threading.Channels.Channel<HaEvent> events = System.Threading.Channels.Channel.CreateUnbounded<HaEvent>();
     public int EventSubscriptions;
 
@@ -112,6 +114,7 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         if (ServiceTarget.Check(data) is { } refused) { throw new InvalidOperationException(refused); }
         if (data["entity_id"] is null)
         {
+            if (NotifyThrows?.Invoke($"{domain}.{service}") is { } thrown) { throw thrown; }
             if (NotifyFailsFor?.Invoke($"{domain}.{service}") == true) { throw new HttpRequestException($"{domain}.{service}: Home Assistant answered 400 Bad Request"); }
             lock (gate) { Notified.Add(($"{domain}.{service}", data.DeepClone().AsObject())); }
             return Task.CompletedTask;

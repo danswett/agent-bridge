@@ -27,11 +27,18 @@ public sealed partial class HaConnector
     // sent twice however often the session changes (DaemonAnswerButtonSent). Forgotten once the
     // question is finished.
     readonly HashSet<string> buttonsSent = new(StringComparer.Ordinal);
-    // Which phones hold a session's notification, by session: what a clear goes to, and what is
-    // still to be withdrawn when a clear failed or the host stopped first. Kept in the ledger.
-    readonly Dictionary<string, HashSet<string>> onPhones = new(StringComparer.Ordinal);
-    // Taps the listener has taken, waiting for a pass.
-    readonly ConcurrentQueue<HaEvent> taps = new();
+    // Which question each phone shows, by session: what a clear goes to, and what is still to be
+    // withdrawn from a phone when its clear failed, it missed the question that replaced it, or the
+    // host stopped first. Kept in the ledger.
+    readonly Dictionary<string, Dictionary<string, string>> onPhones = new(StringComparer.Ordinal);
+    // Taps the listener has taken, waiting for a pass, each with the attempt it was first read
+    // against once it has been: a tap tried again after a failure is the same answer, not a new one.
+    sealed class PendingTap(HaEvent e)
+    {
+        public HaEvent Event { get; } = e;
+        public int? Attempt;
+    }
+    readonly ConcurrentQueue<PendingTap> taps = new();
     Task tapping = Task.CompletedTask;
     // The first pass after a start: what sessions already show then was the hooks' news when it
     // happened, not now, so nothing in it is pushed (answer buttons are, as the daemon re-sends them).
@@ -98,7 +105,7 @@ public sealed partial class HaConnector
         }
     }
 
-    internal void Tapped(HaEvent e) => taps.Enqueue(e);
+    internal void Tapped(HaEvent e) => taps.Enqueue(new PendingTap(e));
 
     bool ServesButtons => ServesAnswers && Notify.ButtonsOn;
 
@@ -121,11 +128,16 @@ public sealed partial class HaConnector
     {
         if (now >= staleRetryAt)
         {
-            List<string> stale;
-            lock (gate) { stale = [.. onPhones.Keys.Where(id => !published.TryGetValue(id, out var p) || !Wanted(p))]; }
-            foreach (var id in stale) { await ClearButtonsAsync(id, null, forget: false, ct); }
-            bool left;
-            lock (gate) { left = stale.Any(onPhones.ContainsKey); }
+            // Phone by phone: one that shows the question asked now is left as it is.
+            List<(string Id, List<string> Phones)> stale;
+            lock (gate)
+            {
+                stale = [.. onPhones.Select(x => (x.Key, Phones: x.Value.Where(phone =>
+                        !published.TryGetValue(x.Key, out var p) || !Wanted(p) || phone.Value != p.Armed!.Question.Id).Select(phone => phone.Key).ToList()))
+                    .Where(x => x.Phones.Count > 0)];
+            }
+            var left = false;
+            foreach (var (id, phones) in stale) { left |= await ClearPhonesAsync(id, phones, ct) < phones.Count; }
             if (left) { staleRetryAt = now + options.ButtonsRetry; }
         }
         if (!ServesButtons || !options.ConsumeAnswers) { return; }
@@ -146,7 +158,8 @@ public sealed partial class HaConnector
                 {
                     buttonsSent.Add(SentKey(id, armed.Question.Id));
                     if (!onPhones.TryGetValue(id, out var phones)) { onPhones[id] = phones = new(StringComparer.Ordinal); }
-                    phones.UnionWith(sent);
+                    // The same tag: what the phone showed before is replaced.
+                    foreach (var phone in sent) { phones[phone] = armed.Question.Id; }
                 }
                 p.Notify.Shown = armed.Question.Id;
                 SaveLedger();
@@ -174,19 +187,30 @@ public sealed partial class HaConnector
             state.Shown = null;
         }
         List<string> phones;
-        lock (gate) { phones = onPhones.TryGetValue(sessionId, out var p) ? [.. p] : []; }
-        if (phones.Count == 0) { return; }
+        lock (gate) { phones = onPhones.TryGetValue(sessionId, out var p) ? [.. p.Keys] : []; }
+        await ClearPhonesAsync(sessionId, phones, ct);
+    }
+
+    // Withdraws a session's notification from these phones; how many it reached.
+    async Task<int> ClearPhonesAsync(string sessionId, List<string> phones, CancellationToken ct)
+    {
+        if (phones.Count == 0) { return 0; }
         var cleared = await SendAsync(sessionId, phones, HaNotify.Clear(sessionId), "answer button clear", ct);
         lock (gate)
         {
             if (onPhones.TryGetValue(sessionId, out var left))
             {
-                left.ExceptWith(cleared);
+                foreach (var phone in cleared) { left.Remove(phone); }
                 if (left.Count == 0) { onPhones.Remove(sessionId); }
             }
         }
         if (cleared.Count > 0) { SaveLedger(); }
+        return cleared.Count;
     }
+
+    // A failure at one phone, or of one push: a timeout cancels too, but only the caller's own
+    // cancellation, or agent-ha-bridge starting, stops the rest.
+    static bool OnePhone(Exception e, CancellationToken ct) => e is not AgentHaBridgeRunning && !(e is OperationCanceledException && ct.IsCancellationRequested);
 
     // Send-BridgeAnswerButtonNotification: one payload to each service, a failure at one logged and
     // the rest still sent. The services that took it.
@@ -202,7 +226,7 @@ public sealed partial class HaConnector
                 sent.Add(service);
                 Resolved($"{what}:{service}");
             }
-            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
+            catch (Exception e) when (OnePhone(e, ct))
             {
                 // Said once until it works again: a phone that is gone would otherwise be a line
                 // on every retry.
@@ -228,8 +252,9 @@ public sealed partial class HaConnector
         }
     }
 
-    async Task TapAsync(HaEvent tap, DateTimeOffset now, CancellationToken ct)
+    async Task TapAsync(PendingTap pending, DateTimeOffset now, CancellationToken ct)
     {
+        var tap = pending.Event;
         if (HaNotify.Choice(tap.Data) is not { } choice) { return; }
         Published? p;
         lock (gate) { published.TryGetValue(choice.SessionId, out p); }
@@ -257,7 +282,8 @@ public sealed partial class HaConnector
             log($"Home Assistant connector: an answer button for {who} is not one this question offers; ignored");
             return;
         }
-        if (PhoneAnswer(choice, armed, DriverOf(tap.UserId)) is not { } read)
+        pending.Attempt ??= armed.Attempts;
+        if (PhoneAnswer(choice, armed, pending.Attempt.Value, DriverOf(tap.UserId)) is not { } read)
         {
             log($"Home Assistant connector: an answer button for {who} names no answer this question takes; ignored");
             return;
@@ -272,14 +298,15 @@ public sealed partial class HaConnector
     }
 
     // What a tap answers, or null: an option by its button's index, or words typed at the text action.
-    Read? PhoneAnswer(TapChoice choice, Armed armed, string driver)
+    Read? PhoneAnswer(TapChoice choice, Armed armed, int attempt, string driver)
     {
         var plan = armed.Plan;
         var sessionId = choice.SessionId;
-        // One tap, however often it arrives: the same button, or the same words, for this attempt.
-        // A delivery the host refused counts an attempt, so the same button tapped again after one
-        // is a new answer, not the refused one read twice.
-        var press = $"phone:{armed.Attempts}:{choice.Index}:{choice.ReplyText}";
+        // One tap, however often it arrives: the same button, or the same words, for the attempt it
+        // was first read against. A delivery the host refused counts an attempt, so the same button
+        // tapped again after one is a new answer, while the refused tap, read again after a failure
+        // to say so, is still the one already used.
+        var press = $"phone:{attempt}:{choice.Index}:{choice.ReplyText}";
         if (!string.IsNullOrWhiteSpace(choice.ReplyText))
         {
             var text = choice.ReplyText.Trim();
@@ -359,8 +386,9 @@ public sealed partial class HaConnector
         // has stayed at rest a moment, as the host's own notifier waits: a question answered at the
         // machine passes through idle on its way back to work. A background agent's message while
         // the session rests is not a finished turn.
+        // A reply that changes while it waits is the turn's latest: the wait starts again with it.
         if (status == SessionStatus.Idle && question is null && key is not null && key != state.FinishedKey
-            && (state.LastStatus is SessionStatus.Working or SessionStatus.Waiting || state.LastTurn != turn))
+            && (state.LastStatus is SessionStatus.Working or SessionStatus.Waiting || state.LastTurn != turn || state.FinishedDue is not null))
         {
             state.FinishedDue = (now + options.FinishedDelay, key);
         }
@@ -396,7 +424,7 @@ public sealed partial class HaConnector
         if (HaNotify.Split(Notify.Service) is not { } target) { return; }
         var data = HaNotify.Notification(Notify.Service, title, message, Notify.TickerCategory, options.DashboardUrlPath);
         try { await ha.CallServiceAsync(target.Domain, target.Service, data, ct); }
-        catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
+        catch (Exception e) when (OnePhone(e, ct))
         {
             // As the hooks do: the session is on the dashboard already, and a lost push must not
             // hold anything else up.
@@ -425,7 +453,9 @@ public sealed partial class HaConnector
         var o = new JsonObject();
         foreach (var (id, phones) in onPhones.OrderBy(x => x.Key, StringComparer.Ordinal))
         {
-            o[id] = new JsonArray([.. phones.Order(StringComparer.Ordinal).Select(s => (JsonNode)s)]);
+            var shown = new JsonObject();
+            foreach (var (phone, question) in phones.OrderBy(x => x.Key, StringComparer.Ordinal)) { shown[phone] = question; }
+            o[id] = shown;
         }
         return o;
     }
@@ -435,11 +465,13 @@ public sealed partial class HaConnector
         if (!root.TryGetProperty("onPhones", out var o) || o.ValueKind != JsonValueKind.Object) { return; }
         foreach (var session in o.EnumerateObject())
         {
-            if (session.Value.ValueKind != JsonValueKind.Array) { continue; }
-            var phones = session.Value.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String && HaNotify.Split(x.GetString()!) is not null).Select(x => x.GetString()!).ToList();
-            if (phones.Count == 0) { continue; }
-            if (!onPhones.TryGetValue(session.Name, out var set)) { onPhones[session.Name] = set = new(StringComparer.Ordinal); }
-            set.UnionWith(phones);
+            if (session.Value.ValueKind != JsonValueKind.Object) { continue; }
+            foreach (var phone in session.Value.EnumerateObject())
+            {
+                if (phone.Value.ValueKind != JsonValueKind.String || HaNotify.Split(phone.Name) is null) { continue; }
+                if (!onPhones.TryGetValue(session.Name, out var set)) { onPhones[session.Name] = set = new(StringComparer.Ordinal); }
+                set[phone.Name] = phone.Value.GetString()!;
+            }
         }
     }
 }
