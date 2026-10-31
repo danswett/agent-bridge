@@ -11,6 +11,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 {
     readonly FakeHost host = new();
     readonly Updater updater = new();
+    readonly FakeTasks tasks = new();
+    readonly FakeProcesses processes = new();
     readonly FakeTimeProvider time = new(Make.T0);
     readonly List<string> log = [];
     readonly string app = Path.Combine(Path.GetTempPath(), "abu-" + Guid.NewGuid().ToString("N")[..8]);
@@ -18,6 +20,9 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     HostConnection connection = null!;
     HostManager manager = null!;
     AutoUpdater auto = null!;
+    string? agentHaBridge;
+    string? others;
+    int? othersAskedFor;
 
     sealed class Updater : IUpdater
     {
@@ -26,11 +31,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public bool Applied;
         public Action? OnApply;
         public string? Found = "0.2.0";
+        public string? Ready { get; set; }
+        public Exception? ApplyFails;
         public string? InstalledVersion { get; set; } = "0.1.0";
         public string? PendingNotes => Found is null ? null : $"What {Found} changes";
         public Task<string?> CheckAsync() { Checks++; return Task.FromResult(Found); }
-        public Task DownloadAsync(Action<int> progress) { Downloads++; progress(100); return Task.CompletedTask; }
-        public void ApplyAndRestart() { OnApply?.Invoke(); Applied = true; }
+        public Task DownloadAsync(Action<int> progress) { Downloads++; progress(100); Ready = Found; return Task.CompletedTask; }
+        public void ApplyAndRestart() { OnApply?.Invoke(); if (ApplyFails is { } e) { throw e; } Applied = true; }
     }
 
     sealed class Toasts : IToastSink
@@ -60,7 +67,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         host.Sessions.AddRange(sessions);
         host.Start();
         connection = host.Connect(new LockedDispatcher());
-        manager = new HostManager(new InstallLayout(app, host.Folder, "test"), new FakeTasks(), new FakeProcesses(),
+        manager = new HostManager(new InstallLayout(app, host.Folder, "test"), tasks, processes,
             ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
         {
             StartTimeout = TimeSpan.FromSeconds(5),
@@ -68,8 +75,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(50),
             Elevated = () => false,
         };
-        auto = new AutoUpdater(updater, connection, manager, () => prefs, p => prefs = p, log.Add, time);
-        await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Status is not null && connection.Sessions.All.Count == sessions.Length, "the connection");
+        auto = new AutoUpdater(updater, connection, manager, () => prefs, p => prefs = p, log.Add, () => agentHaBridge, pid => { othersAskedFor = pid; return others; }, time);
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Status is not null && connection.Sessions.All.Count == sessions.Length && connection.Sessions.Complete, "the connection");
     }
 
     public async Task DisposeAsync()
@@ -215,6 +222,103 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Equal(0, updater.Checks);
         Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    public async Task A_host_whose_sessions_are_not_yet_read_in_full_is_not_idle()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        Assert.True(auto.Idle);
+
+        connection.Sessions.BeginSnapshot();
+
+        Assert.False(auto.Idle);
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    public async Task Agent_ha_bridge_starting_during_the_download_stops_the_install()
+    {
+        await StartAsync();
+        agentHaBridge = "agent-ha-bridge's daemon is running";
+
+        await auto.TickAsync();
+
+        Assert.Equal("0.2.0", auto.Pending);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Contains(log, l => l.Contains("G5"));
+    }
+
+    [Fact]
+    public async Task A_host_read_only_by_its_status_now_is_not_updated_though_the_last_report_said_otherwise()
+    {
+        await StartAsync();
+        // What host.status answers now; the connection has not heard of it yet.
+        host.Status = ReadOnly();
+
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    public async Task Another_profile_running_from_the_installation_holds_the_update()
+    {
+        await StartAsync();
+        others = "another profile's host (pid 77) runs from this installation";
+
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Equal(4242, othersAskedFor);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    public async Task A_release_replaced_since_it_was_downloaded_does_not_stop_the_host()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        Assert.Equal("0.2.0", auto.Pending);
+
+        // Settings checked meanwhile and found another release, not yet downloaded.
+        updater.Ready = null;
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Idle));
+        await Wait.UntilAsync(() => connection.Sessions.Get("s1")?.Status == SessionStatus.Idle, "the session going idle");
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Null(auto.Pending);
+
+        // The next tick checks and downloads again, then installs.
+        await auto.TickAsync();
+        Assert.True(updater.Applied);
+    }
+
+    [Fact]
+    public async Task A_failed_install_brings_the_host_back_and_waits_for_the_next_check()
+    {
+        await StartAsync();
+        // The host the failed install stopped is started again, as its logon task would.
+        tasks.OnRun = () => host.Start();
+        processes.OnStart = () => host.Start();
+        updater.ApplyFails = new InvalidOperationException("Update.exe is missing");
+
+        await auto.TickAsync();
+
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.Null(auto.Pending);
+        Assert.Null(prefs.UpdatedFrom);
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Complete, "the host back");
+        var checks = updater.Checks;
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.Equal(checks, updater.Checks);
+        Assert.Single(host.Sent(HostOps.Stop));
     }
 
     [Fact]

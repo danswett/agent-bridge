@@ -327,7 +327,16 @@ public sealed class SessionStore
         HeldChanged?.Invoke();
     }
 
-    public void BeginSnapshot() => snapshot = new HashSet<string>(StringComparer.Ordinal);
+    public void BeginSnapshot()
+    {
+        snapshot = new HashSet<string>(StringComparer.Ordinal);
+        Complete = false;
+    }
+
+    // Whether the list is the host's whole snapshot: false until a subscribe's sessions.synced, and
+    // again from each new subscribe (a reconnect, a gap) until its own. An incomplete list may be
+    // missing a busy session.
+    public bool Complete { get; private set; }
 
     public void Upsert(Session s)
     {
@@ -347,6 +356,7 @@ public sealed class SessionStore
     {
         if (snapshot is not { } seen) { return; }
         snapshot = null;
+        Complete = true;
         foreach (var id in sessions.Keys.Where(id => !seen.Contains(id)).ToList()) { Remove(id); }
         SetHeld(held);
         Synced?.Invoke();

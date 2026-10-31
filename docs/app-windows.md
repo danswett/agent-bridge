@@ -150,9 +150,16 @@ into one folder with one version. An app update is a host update, so they never 
   `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
   host again. The new version's first start shows a toast: the version it came from, and the
   release's notes. It never installs on a read-only host (`delivery.readOnly`), on a machine where
-  agent-ha-bridge runs for this user (G5), or while the host is not running and so cannot say
-  which it is; those are updated from Settings by the person. Only the app's own timer starts it,
-  so nothing an agent can reach does. A development copy and the demo never update.
+  agent-ha-bridge runs for this user (G5), while another profile's app or host runs from this
+  installation (Velopack stops every process in the package and restarts only this profile), or
+  while the host is not running or its sessions are not yet read in full (`sessions.synced`), so
+  that it cannot say which; those are updated from Settings by the person. Just before stopping
+  the host it asks again rather than trusting the last report: `host.status` from the host, G5
+  from the app's own `AgentHaBridgeProbe`, and the processes running from the package. Settings
+  and the automatic updates share one updater, and only the release actually downloaded is
+  applied (`IUpdater.Ready`): one replaced since is checked and downloaded again first. An install
+  that fails starts the host again and waits for the next check. Only the app's own timer starts
+  it, so nothing an agent can reach does. A development copy and the demo never update.
 * The host can start an update too: the Home Assistant connector's Install button
   ([ha-connector.md](ha-connector.md), stage 6) for a machine driven from the dashboard. It
   uses the same feed and the app's "Include pre-releases" for its profile
@@ -361,7 +368,7 @@ reaches the real host or its profile.
   page's choices, every setting and the whole prompt sent, resume, Codex's first prompt,
   busy, failed and Try again, a lost response sent again with the same request, no approved folder,
   profile and context, and a launch on another machine, including one whose machine leaves or drops out; and the app reaching another
-  host through the in-process relay with the host's account), toast plans and activation handling, automatic updates (`AutoUpdaterTests`: when one waits for the sessions, when it goes anyway, and the read-only and agent-ha-bridge hosts it never touches), host lifecycle with a
+  host through the in-process relay with the host's account), toast plans and activation handling, automatic updates (`AutoUpdaterTests`: when one waits for the sessions, when it goes anyway, and the read-only, agent-ha-bridge and shared-installation hosts it never touches, asked again just before), host lifecycle with a
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
 * CI (`app` job) runs `build/pack-app.ps1`: publishes the app, host, launcher, injector and hook
