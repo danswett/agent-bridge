@@ -101,6 +101,12 @@ public sealed class Fleet : IAsyncDisposable
     public event Action? AccountChanged;
     public int Account => account;
 
+    // Every host the relay last said is online, this machine's own among them, as one value that
+    // changes when they do: the hosts session transfer asks (TransferSourcesAsync).
+    public string Presence { get; private set; } = "";
+    // Raised on the UI thread when Presence changes.
+    public event Action? PresenceChanged;
+
     // What the Sessions page says about the other machines, when there is something to say.
     // Nothing while this machine's own host is not there: the banner already says so, and the
     // account comes from it.
@@ -169,8 +175,11 @@ public sealed class Fleet : IAsyncDisposable
         // published its presence would be taken, with the state read after, for every machine gone.
         var now = link.Account;
         var state = link.State;
-        var hosts = link.Hosts.Where(h => h.Id != me).ToDictionary(h => h.Id, StringComparer.Ordinal);
+        var present = link.Hosts;
+        var hosts = present.Where(h => h.Id != me).ToDictionary(h => h.Id, StringComparer.Ordinal);
         if (link.Account != now || link.State != state) { return; }
+        var presence = string.Join(',', present.Select(h => h.Id).Order(StringComparer.Ordinal));
+        if (presence != Presence) { Presence = presence; PresenceChanged?.Invoke(); }
         foreach (var (id, h) in hosts)
         {
             if (machines.TryGetValue(id, out var known)) { known.PresenceName = h.Name; continue; }

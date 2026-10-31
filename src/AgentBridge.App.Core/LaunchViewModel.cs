@@ -104,6 +104,7 @@ public sealed class LaunchViewModel : Observable
             // The relay back for the same account changes no machine and, with no loopback made yet,
             // no loopback either: only the link's own state says discovery can now be answered.
             f.Changed += () => ui.Post(Rediscover);
+            f.PresenceChanged += () => ui.Post(Rediscover);
         }
         var now = main.Fleet?.CurrentLoopback;
         if (now == watchedLoopback) { return; }
@@ -152,10 +153,11 @@ public sealed class LaunchViewModel : Observable
         Rediscover();
     }
 
-    // What discovery depends on: the account and the relay's state, whether the machine shown takes
-    // sessions from others now (for this one, its loopback's word), and the other machines there are.
+    // What discovery depends on: the account and the relay's state, the machine's own link (for this
+    // one, its loopback's), whether it takes sessions from others now, and the hosts online, this
+    // machine's among them (a source for any other).
     string SourcesKey(Machine m) =>
-        $"{main.Fleet?.Account}|{main.Fleet?.State}|{(m.IsLocal ? watchedLoopback : m)?.Host.State}|{TakesTransfers(m)}|{string.Join(',', main.AllMachines.Where(x => !x.IsLocal && x != m).Select(x => x.Key).Order(StringComparer.Ordinal))}";
+        $"{main.Fleet?.Account}|{main.Fleet?.State}|{(m.IsLocal ? watchedLoopback : m)?.Host.State}|{TakesTransfers(m)}|{main.Fleet?.Presence}";
 
     // Asks again when that has changed since it last asked: a page opened while the relay was
     // still connecting, or this machine's loopback connecting after discovery stopped waiting,
@@ -443,7 +445,9 @@ public sealed class LaunchViewModel : Observable
             sourcesBusy = false;
             sourcesAsked = key;
             if (load != loads || m != machine) { return; }
-            if (definitive)
+            // Taken only if nothing it depends on changed while it was asked: the relay dropping
+            // meanwhile leaves an empty or partial answer, which would drop a session picked.
+            if (definitive && SourcesKey(m) == key)
             {
                 sources = got;
                 sourcesKnown = true;

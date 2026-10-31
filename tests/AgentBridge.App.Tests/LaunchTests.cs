@@ -795,6 +795,51 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_session_picked_to_bring_over_stays_picked_when_the_relay_drops_while_discovery_is_asked()
+    {
+        link.Sources.Add(Laptop());
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Resumes.Any(r => r.Value.StartsWith('@')), "the other machine's session offered");
+        ui.Post(() => launch.Resume = launch.Resumes.Single(r => r.Value.StartsWith('@')));
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        link.HoldSources = hold;
+        var asked = link.Asked;
+        _ = launch.RefreshAsync();
+        await Wait.UntilAsync(() => link.Asked > asked, "discovery asked");
+
+        // The relay drops while it is asked: its answer, given after, is empty.
+        link.Set(FleetState.Connecting, ("remote-id", "Build server"));
+        link.HoldSources = null;
+        hold.SetResult();
+        await Task.Delay(300);
+        Assert.Equal($"@{LaptopId}/{Brought}", launch.Resume!.Value);
+
+        link.Set(FleetState.Connected, ("remote-id", "Build server"));
+        await Task.Delay(300);
+        Assert.Equal($"@{LaptopId}/{Brought}", launch.Resume!.Value);
+    }
+
+    [Fact]
+    public async Task Discovery_asks_again_when_this_machines_host_comes_online_as_a_source_for_another()
+    {
+        var launch = new LaunchViewModel(main, ui);
+        launch.Opened();
+        await Wait.UntilAsync(() => launch.Machines.Count == 2 && launch.ShowForm, "both machines");
+        ui.Post(() => launch.SelectedMachine = launch.Machines[1]);
+        await Wait.UntilAsync(() => launch.Workspace?.Value == "there", "the other machine's choices");
+        await Task.Delay(300);
+        var asked = link.Asked;
+
+        // This machine's own host appears on the relay: no machine is added, but it can be asked now.
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+
+        await Wait.UntilAsync(() => link.Asked > asked, "discovery to ask again");
+    }
+
+    [Fact]
     public async Task Another_account_forgets_the_last_ones_sessions_and_an_answer_from_before_it_is_dropped()
     {
         link.Sources.Add(Laptop());

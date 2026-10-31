@@ -498,9 +498,11 @@ public sealed class FleetTests : IAsyncLifetime
         public List<(string From, string Session, string To)> Signed { get; } = [];
         // Holds every answer about sources until it completes: machines slow to answer.
         public TaskCompletionSource? HoldSources { get; set; }
+        public int Asked;
 
         public async Task<IReadOnlyList<TransferSource>> TransferSourcesAsync(string target, CancellationToken ct)
         {
+            Interlocked.Increment(ref Asked);
             if (HoldSources is { } hold) { await hold.Task; }
             // As RelayFleetLink: nothing to ask the machines through while the relay is not up.
             return State != FleetState.Connected ? [] : [.. Sources.Where(s => s.HostId != target)];
