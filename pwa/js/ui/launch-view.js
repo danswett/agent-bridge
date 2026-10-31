@@ -178,10 +178,20 @@ export class LaunchPanel {
   // the account's other machines, is { remotes(), sign(remote, session) }: what they offer, and a
   // signed command for one (../transfer.js). trust, when it takes launch.trust.answer, is
   // { sign(question, choice), answer(data) }: a command this device signs for that choice on that
-  // machine, and launch.trust.answer sent with it.
+  // machine, and launch.trust.answer sent with it. inspectOnly: the machine does not take
+  // launches now (read-only, or agent-ha-bridge runs there), but a folder-trust question waiting
+  // on it is still shown, read-only, with why; readOnly says why when it is known. The panel
+  // shows only when there is such a question.
   setTarget(target) {
     const same = target && this.#target && target.hostId === this.#target.hostId;
-    if (same) { this.#target = target; this.#title(); this.#draw(); return; }
+    if (same) {
+      const was = this.#target.inspectOnly;
+      this.#target = target;
+      this.#title();
+      this.#draw();
+      if (target.inspectOnly && !was && !this.#loading) { this.refresh(); }
+      return;
+    }
     this.#unwatch?.();
     this.#unwatch = null;
     this.#selection++;
@@ -201,12 +211,14 @@ export class LaunchPanel {
     this.#unwatch = this.service.watch(target.hostId, (entry) => this.#settled(entry));
     this.#title();
     this.setOpen(this.#open);
+    // Its questions are looked for even with the panel closed: it shows only if there is one.
+    if (target.inspectOnly && !this.#loading) { this.refresh(); }
     this.#draw();
   }
 
   #title() {
     const name = this.#target?.machineName;
-    this.root.querySelector('.launch-title').textContent = name ? `Start a session on ${name}` : 'Start a session';
+    this.root.querySelector('.launch-title').textContent = this.#target?.inspectOnly ? `Waiting on ${name}` : name ? `Start a session on ${name}` : 'Start a session';
   }
 
   // launch.options again: a workspace approved, an agent installed, a session ended since.
@@ -267,6 +279,20 @@ export class LaunchPanel {
     const e = this.els;
     const o = this.#options;
     const name = this.#target?.machineName || 'this machine';
+    if (this.#target?.inspectOnly) {
+      const questions = this.#trustQuestions();
+      this.root.hidden = questions.length === 0;
+      e.form.hidden = true;
+      e.reload.hidden = true;
+      e.busy.hidden = true;
+      e.note.hidden = false;
+      e.note.className = 'note launch-note warn';
+      e.note.textContent = `Sessions can't be started on ${name} now${this.#target.readOnly ? `: ${sentence(this.#target.readOnly)}` : '.'}`;
+      this.#drawTrust();
+      this.#show(this.service.get(this.#target.hostId));
+      return;
+    }
+    if (this.#target) { this.root.hidden = false; }
     e.form.hidden = !o;
     e.reload.hidden = !o && !this.#error;
     e.reload.disabled = !!this.#loading;
@@ -275,8 +301,9 @@ export class LaunchPanel {
       e.note.textContent = this.#error ? `Couldn't get the choices from ${name}: ${sentence(this.#error)}` : `Getting the choices from ${name}…`;
       e.note.className = `note launch-note${this.#error ? ' warn' : ''}`;
       e.busy.hidden = true;
-      e.trust.replaceChildren();
-      e.trust.hidden = true;
+      // An answer pressed here stays in view, with its Try again, while the choices load or
+      // fail to: the machine still answers a resend with its first outcome.
+      this.#drawTrust();
       return;
     }
 
@@ -414,8 +441,15 @@ export class LaunchPanel {
   #drawTrust() {
     const e = this.els;
     const questions = this.#trustQuestions();
+    // Redrawn on every presence update: a button that had focus keeps it, if it is still there.
+    const had = e.trust.contains(document.activeElement) ? document.activeElement : null;
+    const focus = had ? { question: had.closest('[data-question]')?.dataset.question, button: [...had.classList].find((c) => c.startsWith('trust-')) } : null;
     e.trust.hidden = questions.length === 0;
     e.trust.replaceChildren(...questions.map((q) => this.#trustCard(q)));
+    if (focus?.question && focus.button) {
+      const again = [...e.trust.querySelectorAll('[data-question]')].find((s) => s.dataset.question === focus.question)?.querySelector(`.${focus.button}`);
+      if (again && !again.disabled) { again.focus(); }
+    }
   }
 
   #trustCard(q) {
@@ -472,10 +506,17 @@ export class LaunchPanel {
     const answer = this.#answersFor(hostId).get(id);
     if (!answer?.data || answer.state === 'sending') { return; }
     const trust = (this.#target?.hostId === hostId ? this.#target.trust : null) ?? answer.trust;
+    const resend = (answer.sent ?? 0) > 0;
+    answer.sent = (answer.sent ?? 0) + 1;
     answer.state = 'sending';
     if (this.#target?.hostId === hostId) { this.#drawTrust(); }
     try {
       answer.result = await trust.answer(answer.data);
+      // A resend the machine refuses (the command expired, say) says nothing about the first
+      // send, which may have typed: never read as "not answered", which would offer Trust again.
+      if (resend && answer.result?.outcome === 'refused') {
+        answer.result = { outcome: 'unconfirmed', reason: `Not confirmed: answer at the machine. The first answer may have reached it, and the resend was refused (${answer.result.reason ?? 'no reason given'})` };
+      }
       answer.state = 'done';
     } catch (e) {
       answer.state = 'failed';
@@ -497,7 +538,7 @@ export class LaunchPanel {
 
   #settled(entry) {
     this.#show(entry);
-    if (this.#options) { this.#drawTrust(); }
+    this.#drawTrust();
     if (entry?.state !== 'done') { return; }
     if (entry.outcome === 'started') { this.els.prompt.value = ''; this.#drawCount(); this.#openSession(false); }
     // What it offers has changed: a resumed session is no longer resumable, a worktree counts.

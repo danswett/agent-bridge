@@ -75,8 +75,10 @@ signed by this device. A launched agent asking whether to trust its folder is sh
 a session panel in full (agent, the whole folder path, the repository root it applies to, the
 agent's own warning); with `launch.trust` and where the machine allows it (`answerable`), Trust
 and Quit answer it with `launch.trust.answer` and a command this device signs for that choice.
-Otherwise it says to answer at the machine, and how to allow it there. An answer that may have
-been typed is never offered again from here.
+Otherwise it says to answer at the machine, and how to allow it there (or approve this device).
+A machine that does not take launches now (read-only, agent-ha-bridge) still shows a waiting
+question, read-only. An answer that may have been typed is never offered again from here, and a
+resend the machine refuses (its command expired) reads as not confirmed.
 `test/e2e/fixture-host.mjs` is a working example in about 150 lines.
 
 The client resubscribes when `seq` skips, repeats or goes backwards, and replaces its

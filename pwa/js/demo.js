@@ -172,7 +172,8 @@ export class DemoHost {
         if (!this.capabilities.includes('sessions.stop')) { break; }
         return this.#stop(data, reply);
       case LAUNCH.options:
-        if (!this.capabilities.includes(LAUNCH.capability)) { break; }
+        // A read-only host still says what waits on it (a folder-trust question), as a real one does.
+        if (!this.capabilities.includes(LAUNCH.capability) && !this.machine.readOnly) { break; }
         return reply(clone(this.launchOptions));
       case LAUNCH.launch:
         if (!this.capabilities.includes(LAUNCH.capability)) { break; }
@@ -279,11 +280,14 @@ export class DemoHost {
     this.trustLog.push(clone(data ?? null));
     const request = (() => { try { return JSON.parse(fromUtf8.decode(fromBase64url(data?.command?.body ?? ''))).request; } catch { return ''; } })();
     const known = this.trustAnswers.get(request);
+    // expire: the command had expired by the time it was sent again, which a host refuses
+    // before it looks for the first outcome.
+    if (known?.expire) { this.#after(() => ({ outcome: 'refused', reason: 'the command has expired' })).then(reply); return; }
     if (known) { known.result.then(reply); return; }
     const step = this.#trustScript.shift() ?? null;
     const scripted = typeof step === 'string' ? { outcome: step } : step;
     const result = this.#after(() => this.#decideTrust(data ?? {}, scripted));
-    this.trustAnswers.set(request, { result });
+    this.trustAnswers.set(request, { result, expire: !!scripted?.expire });
     result.then((r) => { if (!scripted?.drop) { reply(r); } });
   }
 

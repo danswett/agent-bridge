@@ -109,8 +109,9 @@ test('a machine where agent-ha-bridge runs is shown read-only with its reason, a
   await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
   await expect(page.locator('form.reply')).toHaveCount(0);
   await expect(page.locator('.end-session')).toHaveCount(0);
+  // It is asked only whether a folder-trust question waits there (none does), to show read-only.
   await expect(page.locator('#launch')).toBeHidden();
-  expect(await page.evaluate(() => window.agentBridgeDemo.calls)).not.toContain('launch.options');
+  expect(await page.evaluate(() => window.agentBridgeDemo.calls)).not.toContain('session.launch');
 
   // A prompt only the machine could answer anyway says that, and why the machine is read-only.
   const prompt = (await page.evaluate((id) => window.agentBridgeDemo.host.get(id), COPILOT)).question;

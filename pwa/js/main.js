@@ -236,8 +236,11 @@ async function startDemo() {
   const transfers = hello.capabilities.includes(TRANSFER.capability) ? await demoTransfers(host, hello.machine.id) : null;
   // A new target object each time, for the same machine, as a presence update hands in.
   const trust = hello.capabilities.includes(TRUST.capability) ? await demoTrust(host, client) : null;
-  const target = () => ({ hostId: hello.machine.id, machineName: hello.machine.name, load: () => client.launchOptions(), transfers, trust });
-  if (hello.capabilities.includes(LAUNCH.capability)) { launchPanel.setTarget(target()); }
+  const launchable = hello.capabilities.includes(LAUNCH.capability);
+  const target = () => (launchable
+    ? { hostId: hello.machine.id, machineName: hello.machine.name, load: () => client.launchOptions(), transfers, trust }
+    : { hostId: hello.machine.id, machineName: hello.machine.name, load: () => client.launchOptions(), transfers: null, trust: null, inspectOnly: true, readOnly: hello.machine.readOnly });
+  if (launchable || hello.machine.readOnly) { launchPanel.setTarget(target()); }
   const script = params.get('static') === '1' ? null : runScript(host, { tickMs: Number(params.get('tick')) || 4000 });
   window.agentBridgeDemo = {
     host, client, store, view, answers, replies, stops, launches, launchPanel, book, blobs: blobStore,
@@ -489,7 +492,12 @@ function begin(account) {
       },
       answer: (data) => (hosts.client && hosts.targetId === targetId ? hosts.client.answerTrust(data) : Promise.reject(new Error(`not connected to ${name}`))),
     } : null;
-    launchPanel.setTarget(launchable ? { hostId: targetId, machineName: name, load: () => (hosts.client ? hosts.client.launchOptions() : Promise.reject(new Error('not connected'))), transfers, trust } : null);
+    const load = () => (hosts.client ? hosts.client.launchOptions() : Promise.reject(new Error('not connected')));
+    // A machine that stopped taking launches (read-only, agent-ha-bridge) still shows a
+    // folder-trust question waiting on it, read-only: only one that offered launching before.
+    const inspect = !launchable && hosts.phase === 'open' && !!hosts.machine?.readOnly;
+    launchPanel.setTarget(launchable ? { hostId: targetId, machineName: name, load, transfers, trust }
+      : inspect ? { hostId: targetId, machineName: name, load, transfers: null, trust: null, inspectOnly: true, readOnly: hosts.machine.readOnly } : null);
     switch (hosts.phase) {
       case 'waiting': return setHostState(hosts.error || (hosts.targetOnline ? `Connecting to ${name}…` : `${name} is offline. Its sessions will show when it is back.`));
       case 'opening': return setHostState(`Opening an end-to-end encrypted channel to ${name}…`);
