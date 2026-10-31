@@ -244,6 +244,21 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task A_check_that_could_not_reach_the_feed_still_says_so_after_agent_ha_bridge_had_the_machine()
+    {
+        updates.CheckFails = new HttpRequestException("rate limited");
+        await using var c = await Ready();
+        Assert.False(State.ContainsKey("latest_version"));
+        daemon = "agent-ha-bridge's daemon (pid 4321)";
+        await Pass(c);
+        daemon = null;
+        await Pass(c);
+        Assert.True(c.Started);
+        Assert.False(State.ContainsKey("latest_version"));
+        Assert.Equal("The latest release could not be established: rate limited", State["release_summary"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_check_that_cannot_reach_the_feed_says_why_and_is_not_called_a_failed_update()
     {
         updates.ReleasesUrl = null;

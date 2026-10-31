@@ -583,7 +583,8 @@ looks nothing up.
 * **Checks.** At start, every `homeAssistant.updates.checkHours` (0.5, as the daemon's
   `updates.checkHours`; at least 0.1), and on a press of Check, beside the passes so a slow feed
   holds up no card. Until the first answer the entity reports the version installed as current
-  (an entity with no `latest_version` reads unavailable, and the machine row with it). A newer
+  (an entity with no `latest_version` reads unavailable, and the machine row with it); after it,
+  only a check changes what it says, a resume included. A newer
   release puts its version, notes (capped at 2000) and the releases page on the entity, and
   Home Assistant shows an update. A check that cannot reach the feed leaves `latest_version`
   out, with `The latest release could not be established: <why>` in the notes, and is tried

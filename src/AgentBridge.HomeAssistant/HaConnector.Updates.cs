@@ -63,6 +63,9 @@ public sealed partial class HaConnector
     bool updateCheckQueued;
     // What the last check found: latest unknown (null) when it could not be established.
     string? updateLatest;
+    // Whether any check has answered, either way, since this host started: until one has, the
+    // version installed stands in for the latest; after, only a check changes it.
+    bool updateCheckAnswered;
     string updateNotes = "";
     string? updateUrl;
     // How the last attempt ended, while it is still news (Set-DaemonUpdateVerdict).
@@ -126,7 +129,7 @@ public sealed partial class HaConnector
         nextUpdateSweep = now;
         lock (gate)
         {
-            updateLatest ??= Installed;
+            if (!updateCheckAnswered) { updateLatest ??= Installed; }
             updateUrl ??= updates?.ReleasesUrl;
         }
         var (updateTopic, updateConfig) = HaContract.UpdateConfig(Slug, options.MachineName);
@@ -249,6 +252,7 @@ public sealed partial class HaConnector
         // Cancelled only matters when the connector is stopping: otherwise it is a request that
         // timed out (HttpClient's timeout is a cancellation), and as much a failure as any other.
         if ((done.IsCanceled && updateCancel.IsCancellationRequested) || UpdateBusy) { return; }
+        lock (gate) { updateCheckAnswered = true; }
         if (done.IsCanceled || done.Exception is not null)
         {
             var why = done.Exception is { } failed ? failed.InnerException?.Message ?? failed.Message : "the request timed out";
