@@ -293,6 +293,28 @@ public sealed class UpkeepTests : IDisposable
     }
 
     [Fact]
+    public async Task A_last_rebuild_whose_declaration_failed_is_declared_again_whatever_the_count()
+    {
+        await using var c = Connector();
+        await Run(c, 5);
+        var (topic, _) = HaContract.OnlineConfig(Slug, Machine);
+        ha.StaysDeaf = true;
+        ha.Deaf.Add(OnlineUnique);
+        // The last rebuild the limit allows retracts the sensor, and declaring it again fails once.
+        var failed = false;
+        ha.PublishFailsFor = (t, payload) =>
+        {
+            if (failed || t != topic || payload.Length == 0 || Retractions(topic) != HaContract.OnlineRepairLimit) { return false; }
+            failed = true;
+            return true;
+        };
+        await Run(c, 1500);
+        Assert.True(failed);
+        Assert.Equal(HaContract.OnlineRepairLimit, Retractions(topic));
+        Assert.True(ha.Exists(Online), "the sensor was declared again");
+    }
+
+    [Fact]
     public async Task A_sensor_Home_Assistant_cannot_be_asked_about_is_never_rebuilt()
     {
         await using var c = Connector();
@@ -415,6 +437,35 @@ public sealed class UpkeepTests : IDisposable
         c.Observe(ha.Press(SessionEntities.Submit(NodeA)));
         await Run(c, 5);
         Assert.Single(answered);
+    }
+
+    [Fact]
+    public async Task A_Send_pressed_between_the_card_being_read_and_armed_again_is_still_read()
+    {
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 90);
+
+        // A restart that loses the box; the choice is made on the card Home Assistant kept, and Send
+        // is pressed just after the card is read ahead of its re-arm (the snapshot of its channels,
+        // then the read itself), with the watch down.
+        ha.ForgetOptimistic(SessionEntities.Reply(NodeA));
+        for (var i = 0; i < 30 && (await ha.GetStateAsync(SessionEntities.Reply(NodeA)))!.State != HaDecision.ReplyBlank; i++) { await Run(c, 1); }
+        ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
+        var reads = 0;
+        var pressed = false;
+        ha.AfterRead = id =>
+        {
+            if (id != SessionEntities.Submit(NodeA) || pressed || ++reads < 2) { return; }
+            pressed = true;
+            ha.Press(SessionEntities.Submit(NodeA));
+        };
+        await Run(c, 15);
+        ha.AfterRead = null;
+        Assert.True(pressed);
+        var given = Assert.Single(answered);
+        Assert.Equal("wait", given.Fields!["release"].GetString());
     }
 
     [Fact]
@@ -617,11 +668,15 @@ public sealed class UpkeepTests : IDisposable
             ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
             ha.Press(SessionEntities.Submit(NodeA));
         };
+        var before = ha.Log.Count;
         await Run(c, 400);
         Assert.True(given);
         Assert.Equal(1, Logged("publishing the machine again"));
         var request = Assert.Single(answered);
         Assert.Equal("wait", request.Fields!["release"].GetString());
+        // The card was still there: its controls were left as they were, not published again.
+        Assert.DoesNotContain(ha.Log.Skip(before), m => m.Topic.Contains(NodeA, StringComparison.Ordinal) && m.Topic.EndsWith("/config", StringComparison.Ordinal));
+        Assert.Equal(0, Logged("armed " + NodeA + " again"));
     }
 
     // An answer that may have reached the terminal is never typed again: not after a Home Assistant

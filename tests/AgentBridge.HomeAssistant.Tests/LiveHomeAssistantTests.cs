@@ -614,6 +614,48 @@ public sealed class LiveHomeAssistantTests : IDisposable
         Assert.Equal(before, after);
     }
 
+    [HomeAssistantFact]
+    public async Task A_choice_on_a_card_that_stays_while_only_its_machines_liveness_sensor_goes_is_still_answered()
+    {
+        var id = Session();
+        var node = HaContract.NodeId(id);
+        Ask(id, Form("q1", Release));
+        var slug = HaContract.MachineSlug("CI-SENSOR");
+        var online = HaContract.MachineEntityId("binary_sensor", "online", slug);
+        // The daemon's timings, shortened: a beat every two seconds, a stall after three of them.
+        await using var c = new HaConnector(new HaConnectorOptions
+        {
+            MachineName = "CI-SENSOR", Version = "0.1.0", Dev = true,
+            Tick = TimeSpan.FromMilliseconds(250), Reconcile = TimeSpan.FromSeconds(2), RetireGrace = TimeSpan.FromSeconds(2),
+            Heartbeat = TimeSpan.FromSeconds(2), OnlineStall = TimeSpan.FromSeconds(6), EntityRestore = TimeSpan.FromSeconds(4),
+        }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } }, answer: (r, _) =>
+        {
+            lock (answered) { answered.Add(r); }
+            return Task.FromResult(new AnswerResult(AnswerOutcome.Delivered));
+        });
+        c.Start();
+        await Until(SessionEntities.Field(node, 1), s => s.State == HaDecision.Choose);
+        await Until(online, s => s.State == "on");
+
+        // A choice made, then only the liveness sensor's config goes: the machine is published again
+        // around the card.
+        await ha.CallServiceAsync("select", "select_option", new JsonObject { ["entity_id"] = SessionEntities.Field(node, 1), ["option"] = "Wait for the fix" });
+        await ha.PublishAsync(HaContract.OnlineConfig(slug, "CI-SENSOR").Topic, "", true);
+        await Until(() => { lock (log) { return log.Any(l => l.Contains("publishing the machine again", StringComparison.Ordinal)); } }, "the machine was never published again", 60);
+        await Until(online, s => s.State == "on", seconds: 60);
+        Assert.Equal("Wait for the fix", (await ha.GetStateAsync(SessionEntities.Field(node, 1)))!.State);
+
+        await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = SessionEntities.Submit(node) });
+        try { await Until(() => { lock (answered) { return answered.Count == 1; } }, "the answer never arrived"); }
+        catch (Xunit.Sdk.XunitException)
+        {
+            string history;
+            lock (log) { history = string.Join("\n", log.TakeLast(30)); }
+            Assert.Fail($"the answer never arrived\n{history}");
+        }
+        Assert.Equal("wait", answered[0].Fields!["release"].GetString());
+    }
+
     sealed record Notification(string Title, string Message);
 
     async Task<Notification> UntilNotified(Func<Notification, bool> match, int skip, int seconds = 60)

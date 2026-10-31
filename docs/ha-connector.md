@@ -684,7 +684,9 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
   * **When it is rebuilt.** Only when two things both hold: the sensor has taken no beat for
     180 s, and it has missed 3 beats.
   * **How.** The connector publishes an empty retained config, waits 1.5 s, publishes the config
-    again, pins the id, waits up to 12 × 250 ms for the entity, and only then beats.
+    again, pins the id, waits up to 12 × 250 ms for the entity, and only then beats. A rebuild
+    whose declaration failed after the retraction is declared again on the next beat, whatever
+    the count, so a publish that failed once cannot leave the machine without its sensor.
   * **When it stops.** After 3 rebuilds in a row it stops and says once which topic nothing
     reaches. Only two beats landing in a row reset that count; the one beat a rebuild sends
     itself does not.
@@ -720,8 +722,11 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
     control counts: one that could not read Send, say, or found the selector or a choice
     `unavailable`, cannot tell an answer from none, so the card is read again on the next pass
     before anything is re-armed. A Send made while a choice reads `unavailable` is not refused
-    as incomplete either; it waits for a read that can see the choice. A card whose entities were published
-    again from nothing is armed at once, since there is nothing on it to read.
+    as incomplete either; it waits for a read that can see the choice. What the card's channels
+    held (Send, the reply payload, the box, the selector) is noted just before it is read, and
+    the new baselines are that. Anything given on the card after it, a Send, a tap, words or a
+    publish, holds the re-arm off until the next read takes it, since arming resets the choices
+    an answer needs.
   * In both cases the question keeps what it has been through: answered, its attempts, what was
     used. An answer that may have reached the terminal is never typed again because the card was
     put back (`An_answer_that_may_have_landed_is_not_given_again_once_the_card_is_put_back`). An
@@ -759,10 +764,10 @@ A machine is forgotten because it is gone: renamed, reimaged or thrown away. Two
   had lapsed for three minutes. The connector finds its online sensor gone for 180 s and three
   beats, and publishes the whole machine again, as a start does. It is not a restart, though: its
   sessions keep what they know (who drives each, a thought on the card, a question's history),
-  and only their entities go again. A card that stayed is read with its old baselines before its
-  question is armed again, so an answer given on it just then is delivered rather than lost, words
-  in its reply box stay, and what Launch was last read as is kept, so a press made just then
-  still launches. The daemon here rebuilds only the sensor, and the rest comes back piecemeal.
+  and only the cards that went with it are published again. A card still in Home Assistant (only
+  the liveness sensor's config went) is left as it is, choices and words included: published
+  again, its selectors would get the first publication's options. What Launch was last read as
+  is kept, so a press made just then still launches. The daemon here rebuilds only the sensor, and the rest comes back piecemeal.
 
 Where stage 7 knowingly differs from the daemon:
 
@@ -770,7 +775,7 @@ Where stage 7 knowingly differs from the daemon:
 |---|---|
 | The daemon's one-time move off the pre-1.2x shared switch `input_boolean.agent_bridge_detailed_activity`, which deletes that switch, is not ported | Every machine of the fleet shared it, and a machine comes to this host from agent-ha-bridge 1.33, which made the move long since. The connector deletes no helper but a numbered copy of its own switch that it has just made |
 | A create that comes back as anything but the switch's id or a numbered copy of it is left alone; the daemon deletes whatever came back | Only what the connector can show is its own is ever deleted |
-| An online sensor that is absent, rather than present and silent, is answered by publishing the whole machine again, not only the sensor | It is absent because its config went, most likely to the X pressed while the machine's liveness had lapsed, which removed every entity of the machine; a running machine was not gone. Bounded by the same three attempts |
+| An online sensor that is absent, rather than present and silent, is answered by publishing the whole machine again, not only the sensor | It is absent because its config went, most likely to the X pressed while the machine's liveness had lapsed, which removed every entity of the machine; a running machine was not gone. Bounded by the same three attempts. A session whose card is still there is left as it is |
 | The rebuild count is kept when the connector resumes after agent-ha-bridge had the machine; a daemon starting has a count of its own | A hand-back is no sign the sensor was mended, and a fresh count on each would undo the limit (#202). Two beats landing in a row still reset it |
 | The session check waits until 60 s after a session's entities were published, and republishes only an absence that has lasted 60 s | Before then a missing entity may only be one Home Assistant has not registered yet, or has not loaded again while it starts; the daemon publishes and pins in one step and republishes on the first 404 |
 | The reply box is primed, and put back to `' '` after a restart, only when it holds no value; the daemon blanks it at every session add and every repair | Words in the box are somebody's reply, not yet sent. A machine published again around a card that stayed, or a selector that lost its value on its own, leaves them |
@@ -983,6 +988,9 @@ Assistant itself rather than a fake:
 * a machine forgotten as the row's X forgets it (an empty retained message on every topic of
   `Get-BridgeMachineForgetTopic`) while its host runs, with the beat shortened, is published
   again whole: online, sessions, update and its session's card, showing what the session does;
+* only the machine's liveness sensor's config removed, with a choice made on a waiting question:
+  the machine is published again around the card, the choice is still there, and a Send press
+  reaches the host's answerer with it;
 * Home Assistant restarted through `homeassistant.restart` while a question waits on a card: once
   it is back, the reply box holds a value again, the question is armed on the card again, a
   choice and a Send press reach the host's answerer, and the session's entity ids are exactly

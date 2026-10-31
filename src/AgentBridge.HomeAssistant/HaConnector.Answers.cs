@@ -234,19 +234,38 @@ public sealed partial class HaConnector
         log($"Home Assistant connector armed {p.Node} for its question{(plan.TerminalOnly ? " (answered at the machine)" : "")}");
     }
 
+    // What a card's answer channels held just before it was read ahead of a re-arm.
+    sealed record CardSeen(Observation Payload, Observation Submit, Observation Reply, string? Decision);
+
+    static bool Same(CardSeen a, CardSeen b) =>
+        Same(a.Payload, b.Payload) && Same(a.Submit, b.Submit) && Same(a.Reply, b.Reply) && a.Decision == b.Decision;
+
+    static bool Same(Observation a, Observation b) => a.Kind == b.Kind && a.Value == b.Value;
+
+    async Task<CardSeen> SeeCardAsync(string node, CancellationToken ct) => new(
+        await ObserveAsync(SessionEntities.ReplyPayload(node), ct),
+        await ObserveAsync(SessionEntities.Submit(node), ct),
+        await ObserveAsync(SessionEntities.Reply(node), ct),
+        (await ha.GetStateAsync(SessionEntities.Decision(node), ct))?.State);
+
     // The question already armed, put on screen again after Home Assistant lost it: the controls and
-    // the baselines are new, everything the question has been through is kept.
-    async Task RearmAsync(Session full, Published p, string name, CancellationToken ct)
+    // the baselines are new, everything the question has been through is kept. Given what the card
+    // held before it was read (seen), the new baselines are that, not a read taken afterwards: a
+    // Send between the two would otherwise become the baseline and never be read.
+    async Task RearmAsync(Session full, Published p, string name, CancellationToken ct, CardSeen? seen = null)
     {
         var armed = p.Armed!;
-        var payload = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
-        var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
-        var reply = await ObserveAsync(SessionEntities.Reply(p.Node), ct);
+        var payload = seen?.Payload ?? await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
+        var submit = seen?.Submit ?? await ObserveAsync(SessionEntities.Submit(p.Node), ct);
+        var reply = seen?.Reply ?? await ObserveAsync(SessionEntities.Reply(p.Node), ct);
         if (payload.Kind == "unknown" || submit.Kind == "unknown" || reply.Kind == "unknown")
         {
             lock (gate) { dirty.Add(full.Id); }
             return;
         }
+        // Anything given on the card since it was read (a Send, a tap, words, a reply-card publish) is
+        // read first on the next pass, not armed over: arming resets the choices it would need.
+        if (seen is not null && !Same(seen, await SeeCardAsync(p.Node, ct))) { return; }
         var armedSlots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
         var unset = await RunAsync(HaDecision.Arm(armed.Plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow()), p.Node, ct);
         // Reply-card words held for a press of Send (HeldStamp) are still there to be sent: the
@@ -472,6 +491,7 @@ public sealed partial class HaConnector
                 if (ServesStops) { await StopPressAsync(e.Id, e.P, now, ct); }
                 var settled = e.P.Armed?.Settled;
                 var unread = Interlocked.Read(ref indeterminate);
+                var held = e.P.Armed is { ReadFirst: true } ? await SeeCardAsync(e.P.Node, ct) : null;
                 await CardAsync(e.Id, e.P, seen, now, ct);
                 if (e.P.Armed is { ReadFirst: true } first)
                 {
@@ -487,7 +507,7 @@ public sealed partial class HaConnector
                     else if (Interlocked.Read(ref indeterminate) != unread) { }
                     else if (source.Get(e.Id) is { } full)
                     {
-                        await RearmAsync(full, e.P, e.P.Name, ct);
+                        await RearmAsync(full, e.P, e.P.Name, ct, held);
                         if (!first.Rearm) { first.ReadFirst = false; }
                     }
                 }

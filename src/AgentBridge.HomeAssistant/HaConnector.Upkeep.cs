@@ -16,6 +16,8 @@ public sealed partial class HaConnector
     // The next start publishes the machine again for a host that never stopped (its online sensor
     // went, most likely to the dashboard's X): its sessions keep what they know.
     bool republishing;
+    // A rebuild retracted the sensor and has not yet declared it again.
+    bool redeclarePending;
     // Restore-DaemonSessionEntities' attempts, by session: said the first time and every tenth.
     readonly Dictionary<string, int> restores = new(StringComparer.Ordinal);
     // When each session's entities were first read as gone, this time.
@@ -131,6 +133,14 @@ public sealed partial class HaConnector
     async Task ConfirmBeatAsync(DateTimeOffset now, CancellationToken ct)
     {
         var entityId = HaContract.MachineEntityId("binary_sensor", "online", Slug);
+        if (redeclarePending)
+        {
+            // A rebuild that retracted the sensor and could not declare it again: declared now,
+            // whatever the rebuild count says, or the machine would stay without its sensor until
+            // the host restarts.
+            await RedeclareAsync(entityId, ct);
+            return;
+        }
         HaLiveness.Read read;
         try
         {
@@ -167,10 +177,17 @@ public sealed partial class HaConnector
         log($"Home Assistant connector: {entityId} has taken no beat for {stalled}s; rebuilding it");
         // Reset-CopilotMqttDiscoveryConfig: Home Assistant ignores a config identical to the one it
         // holds, so the same config again changes nothing; retracting it first builds the entity anew.
-        var (topic, config) = HaContract.OnlineConfig(Slug, options.MachineName);
-        await ha.PublishAsync(topic, "", true, ct);
+        redeclarePending = true;
+        await ha.PublishAsync(HaContract.OnlineConfig(Slug, options.MachineName).Topic, "", true, ct);
         await Task.Delay(options.DiscoveryReset, time, ct);
+        await RedeclareAsync(entityId, ct);
+    }
+
+    async Task RedeclareAsync(string entityId, CancellationToken ct)
+    {
+        var (topic, config) = HaContract.OnlineConfig(Slug, options.MachineName);
         await PublishAsync(topic, config, true, ct);
+        redeclarePending = false;
         // The beat only once the sensor is back: unretained, one that outruns discovery is dropped and
         // the rebuilt sensor reads offline for another whole interval.
         if (await RegisteredAsync($"agent_bridge_{Slug}_online", entityId, ct))

@@ -119,7 +119,17 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
 
     static string Slugify(string text) => NotSlug().Replace(text.ToLowerInvariant(), "_").Trim('_');
 
+    // Something that happens on the card just after an entity is read (the read returns what it held).
+    public Action<string>? AfterRead { get; set; }
+
     public Task<HaState?> GetStateAsync(string entityId, CancellationToken cancellationToken = default)
+    {
+        var read = Read(entityId);
+        AfterRead?.Invoke(entityId);
+        return read;
+    }
+
+    Task<HaState?> Read(string entityId)
     {
         lock (gate) { reads[entityId] = reads.GetValueOrDefault(entityId) + 1; }
         if (GetFailsFor?.Invoke(entityId) == true) { throw new HttpRequestException($"{entityId}: Home Assistant answered 502 Bad Gateway"); }

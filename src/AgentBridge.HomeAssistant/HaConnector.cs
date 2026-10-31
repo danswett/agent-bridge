@@ -439,6 +439,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         // offline for a whole interval from the moment it started.
         var (onlineTopic, onlineConfig) = HaContract.OnlineConfig(Slug, options.MachineName);
         await PublishAsync(onlineTopic, onlineConfig, true, ct);
+        redeclarePending = false;
         AddPin($"agent_bridge_{Slug}_online", HaContract.MachineEntityId("binary_sensor", "online", Slug), now);
         nextBeat = now + TimeSpan.FromSeconds(2);
 
@@ -484,6 +485,25 @@ public sealed partial class HaConnector : IAsyncDisposable
             log($"Home Assistant connector could not read this machine's retained session list ({Describe(e)}); sessions it named are left until the next start");
         }
         foreach (var node in await OrphansAsync(live, ct)) { inherited.Add(node); }
+        // Published again with the machine: only the sessions whose card went with it (the X removes
+        // every entity of the machine). A card still in Home Assistant keeps its controls as they are:
+        // published again, its selectors would get the first publication's options, and a choice
+        // being made on them would read as no choice. One that could not be read is left to the
+        // session check.
+        var cardGone = new HashSet<string>(StringComparer.Ordinal);
+        if (republishing)
+        {
+            List<(string Id, string Node)> held;
+            lock (gate) { held = [.. published.Select(x => (x.Key, x.Value.Node))]; }
+            foreach (var (id, node) in held)
+            {
+                try
+                {
+                    if (await ha.GetStateAsync(ServesAnswers ? SessionEntities.Reply(node) : SessionEntities.Status(node), ct) is null) { cardGone.Add(id); }
+                }
+                catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { }
+            }
+        }
         lock (gate)
         {
             // A session whose first publication a pause interrupted is retired like any other
@@ -496,7 +516,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 // The host did not restart, nor did its sessions: each keeps everything it knows (who
                 // drives it, what it was thinking, its question's history) and only its entities
                 // go again (SessionAsync's Lost path).
-                foreach (var p in published.Values) { p.Lost = true; }
+                foreach (var (id, p) in published) { p.Lost = cardGone.Contains(id); }
             }
             else
             {
