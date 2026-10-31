@@ -826,7 +826,13 @@ public sealed partial class HaConnector
                 continue;
             }
             var slot = (await ha.GetStateAsync(SessionEntities.Field(node, i + 1), ct))?.State ?? "";
-            if (slot == "unavailable") { Interlocked.Increment(ref indeterminate); }
+            if (slot == "unavailable")
+            {
+                // Not unanswered but unreadable: nothing is decided and no press is spent on it, so a
+                // Send waits for the next read rather than being refused as incomplete and lost.
+                Interlocked.Increment(ref indeterminate);
+                return null;
+            }
             if (armed.StaleSlots.TryGetValue(i + 1, out var stale))
             {
                 if (stale.Stale is not null && slot != stale.Stale) { armed.StaleSlots.Remove(i + 1); }

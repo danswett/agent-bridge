@@ -717,7 +717,8 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
     question answered that way is not put on screen again. Only a read that could see every
     control counts: one that could not read Send, say, or found the selector or a choice
     `unavailable`, cannot tell an answer from none, so the card is read again on the next pass
-    before anything is re-armed. A card whose entities were published
+    before anything is re-armed. A Send made while a choice reads `unavailable` is not refused
+    as incomplete either; it waits for a read that can see the choice. A card whose entities were published
     again from nothing is armed at once, since there is nothing on it to read.
   * In both cases the question keeps what it has been through: answered, its attempts, what was
     used. An answer that may have reached the terminal is never typed again because the card was

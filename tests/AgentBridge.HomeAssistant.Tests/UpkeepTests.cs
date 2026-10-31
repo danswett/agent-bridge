@@ -523,6 +523,31 @@ public sealed class UpkeepTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Send_on_a_restored_card_whose_choice_reads_unavailable_waits_and_is_then_delivered()
+    {
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 70);
+
+        // A restart: the box comes back empty; a choice and Send are made on the card Home
+        // Assistant kept, and the choice then reads unavailable for a while.
+        ha.ForgetOptimistic(SessionEntities.Reply(NodeA));
+        ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
+        ha.Press(SessionEntities.Submit(NodeA));
+        ha.Unavailable.Add(SessionEntities.Field(NodeA, 1));
+        await Run(c, 40);
+        Assert.Empty(answered);
+        Assert.Equal(0, Logged("armed " + NodeA + " again"));
+        Assert.DoesNotContain(ha.Log, m => m.Topic == HaContract.Topics(NodeA).ActivityState && m.Payload.Contains("answer every field", StringComparison.Ordinal));
+
+        ha.Unavailable.Clear();
+        await Run(c, 10);
+        var given = Assert.Single(answered);
+        Assert.Equal("wait", given.Fields!["release"].GetString());
+    }
+
+    [Fact]
     public async Task A_forms_words_kept_in_the_box_through_a_selector_only_loss_are_still_its_answer()
     {
         var note = new Field { Name = "note", Title = "Note", Type = FieldType.Text };
