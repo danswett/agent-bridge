@@ -128,7 +128,13 @@ public static partial class HaShadow
         {
             return "launch card not compared (the shadow takes no launch options)";
         }
-        foreach (var part in new[] { "/install_update/", "/check_updates/", "/transfer", "/transfer_request/" })
+        // The update buttons are served only by a host its updater installed, which a shadow beside
+        // the daemon does not stand in for: it looks for no release.
+        foreach (var part in new[] { "/install_update/", "/check_updates/" })
+        {
+            if (topic.Contains(part, StringComparison.Ordinal)) { return "update buttons not compared (the shadow looks for no release)"; }
+        }
+        foreach (var part in new[] { "/transfer", "/transfer_request/" })
         {
             if (topic.Contains(part, StringComparison.Ordinal)) { return "not served yet (a later stage)"; }
         }

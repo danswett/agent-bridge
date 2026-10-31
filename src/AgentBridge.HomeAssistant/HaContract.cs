@@ -209,6 +209,26 @@ public static partial class HaContract
     public static string UpdateStateTopic(string slug) => $"{MachineTopicRoot(slug)}/update/state";
     public static string UpdateAttributesTopic(string slug) => $"{MachineTopicRoot(slug)}/update/attributes";
 
+    // Publish-CopilotMqttUpdate's two buttons, Install and Check, on the machine device. Two,
+    // because Install acts on what the last check found; Check forces a fresh one. Their presses
+    // are read as button states (press timestamps): nothing here subscribes to the command topics.
+    public static IReadOnlyList<(string Topic, JsonObject Config)> UpdateButtonConfigs(string slug, string machineName) =>
+    [
+        UpdateButton(slug, machineName, "install_update", "Install Bridge Update", "install", "mdi:download"),
+        UpdateButton(slug, machineName, "check_updates", "Check for Bridge Update", "check", "mdi:cloud-refresh"),
+    ];
+
+    static (string Topic, JsonObject Config) UpdateButton(string slug, string machineName, string key, string name, string command, string icon) =>
+        (DiscoveryTopic("button", MachineNode(slug), key), new JsonObject
+        {
+            ["name"] = name,
+            ["unique_id"] = $"agent_bridge_{slug}_{key}",
+            ["object_id"] = $"agent_bridge_{slug}_{key}",
+            ["command_topic"] = $"{MachineTopicRoot(slug)}/update/{command}",
+            ["icon"] = icon,
+            ["device"] = MachineDevice(slug, machineName),
+        });
+
     // Publish-CopilotMqttSession's answer controls: the selector parked on Idle, the reply box,
     // the sensor the reply card publishes through, the twelve field slots and Send.
     public const int ReplyMaxChars = 255;

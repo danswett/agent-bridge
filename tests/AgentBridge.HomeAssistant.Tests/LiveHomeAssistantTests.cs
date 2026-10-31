@@ -44,6 +44,7 @@ public sealed class LiveHomeAssistantTests : IDisposable
     readonly List<LaunchRequest> launched = [];
     readonly List<string> log = [];
     HaNotifySettings notify = HaNotifySettings.Default;
+    IHostUpdates? hostUpdates;
 
     public LiveHomeAssistantTests()
     {
@@ -91,7 +92,7 @@ public sealed class LiveHomeAssistantTests : IDisposable
             Session = Guid.NewGuid().ToString(),
             Launched = new LaunchedWith { Agent = r.Agent ?? "copilot", Workspace = r.Workspace ?? "agent-bridge", Permissions = r.Permissions ?? LaunchProtocol.Ask },
         });
-    }));
+    }), updates: hostUpdates);
 
     static string Session() => Guid.NewGuid().ToString();
 
@@ -441,6 +442,49 @@ public sealed class LiveHomeAssistantTests : IDisposable
         await UntilNotified(n => n.Title == "Copilot response: Copilot: Fixture session" && n.Message == "Waiting for the fix, then cutting.", before);
         await Until(SessionEntities.Activity(node), s => s.Attributes.TryGetProperty("driver", out var d) && d.GetString() == "agent");
         Assert.NotNull(shown);
+    }
+
+    [HomeAssistantFact]
+    public async Task The_update_entity_shows_the_release_found_and_Install_downloads_it_and_hands_it_to_the_updater()
+    {
+        var updater = new FakeUpdates
+        {
+            Newer = new UpdateRelease("0.2.0", "## What changed\nA fix.", "https://github.com/danswett/agent-bridge/releases"),
+            DownloadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        hostUpdates = updater;
+        var before = (await NotificationsAsync()).Count;
+        await using var c = Connector("CI-UPDATE");
+        c.Start();
+        var slug = HaContract.MachineSlug("CI-UPDATE");
+        var entity = HaContract.MachineEntityId("update", "update", slug);
+        string Button(string key) => HaContract.MachineEntityId("button", key, slug);
+
+        // Home Assistant took the state (its schema refuses the whole payload for one wrong key):
+        // a release is on offer, and the buttons are on the dashboard's ids.
+        await Until(entity, s => s.State == "on" && s.Attributes.TryGetProperty("latest_version", out var l) && l.GetString() == "0.2.0"
+            && s.Attributes.GetProperty("installed_version").GetString() == "0.1.0");
+        await Until(Button("check_updates"), _ => true);
+        await Until(Button("install_update"), _ => true);
+        await Task.Delay(TimeSpan.FromSeconds(1));
+
+        var checks = updater.Checks;
+        await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = Button("check_updates") });
+        await Until(() => updater.Checks > checks, "a press of Check never asked the feed");
+
+        await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = Button("install_update") });
+        await Until(entity, s => s.Attributes.TryGetProperty("in_progress", out var p) && p.ValueKind == JsonValueKind.True
+            && s.Attributes.TryGetProperty("update_percentage", out var pc) && pc.ValueKind == JsonValueKind.Number && pc.GetDouble() == 42
+            && s.Attributes.TryGetProperty("stage", out var st) && st.GetString() == "downloading");
+
+        // Pressed again while it downloads: the daemon's notice, and nothing more started.
+        await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = Button("install_update") });
+        await UntilNotified(n => n.Title == "Bridge update already running on CI-UPDATE", before);
+        Assert.Single(updater.Downloaded);
+
+        updater.DownloadGate.SetResult();
+        await Until(() => { lock (updater.Applied) { return updater.Applied.Count == 1; } }, "the release never reached the updater");
+        await Until(entity, s => s.Attributes.TryGetProperty("stage", out var st) && st.GetString() == "restarting");
     }
 
     sealed record Notification(string Title, string Message);

@@ -77,7 +77,7 @@ public sealed partial class HaConnector
     // the next pass reads the card.
     internal void Observe(HaTrigger hit)
     {
-        if (LaunchHit(hit)) { return; }
+        if (LaunchHit(hit) || UpdateHit(hit)) { return; }
         hits.Enqueue((Interlocked.Increment(ref hitSeq), hit));
     }
 
@@ -86,7 +86,7 @@ public sealed partial class HaConnector
     {
         lock (gate)
         {
-            return [.. published.Values.SelectMany(p => Controls(p.Node)).Concat(LaunchWatched()).Order(StringComparer.Ordinal)];
+            return [.. published.Values.SelectMany(p => Controls(p.Node)).Concat(LaunchWatched()).Concat(UpdateWatched()).Order(StringComparer.Ordinal)];
         }
     }
 

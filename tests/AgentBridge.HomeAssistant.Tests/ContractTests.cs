@@ -113,11 +113,12 @@ public class ContractTests
 
         var update = Contract.Publications("update");
         var (updateTopic, updateConfig) = HaContract.UpdateConfig(Slug, Machine);
-        Contract.Equal(update.Take(3).ToList(),
+        Contract.Equal(update,
         [
             new Published(updateTopic, HaContract.Serialize(updateConfig), true),
             new Published(HaContract.UpdateStateTopic(Slug), HaContract.Serialize(HaPayloads.UpdateState("0.1.0")), true),
             new Published(HaContract.UpdateAttributesTopic(Slug), HaContract.Serialize(HaPayloads.UpdateAttributes()), true),
+            .. HaContract.UpdateButtonConfigs(Slug, Machine).Select(b => new Published(b.Topic, HaContract.Serialize(b.Config), true)),
         ]);
     }
 

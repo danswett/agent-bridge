@@ -135,6 +135,18 @@ into one folder with one version. An app update is a host update, so they never 
 * Feed: GitHub Releases of `danswett/agent-bridge` (pre-releases included unless turned
   off), or a folder or URL holding `releases.win.json` in
   `%LOCALAPPDATA%\AgentBridge\app\feed.txt` (for testing on a VM).
+* The host can start an update too: the Home Assistant connector's Install button
+  ([ha-connector.md](ha-connector.md), stage 6) for a machine driven from the dashboard. It
+  uses the same feed and the app's "Include pre-releases" for its profile
+  (`<profile>-settings.json` beside `feed.txt`), downloads, calls
+  `WaitExitThenApplyUpdates` (silent, restarting the app with `--background --profile
+  <the host's profile>`) and stops as on Ctrl+C. Update.exe applies the release once the host
+  has exited, force-stops everything still running from the package folder (the app, and every
+  other profile's host), and starts the app again in the background for that profile, which
+  starts the host. Another profile's host comes back as after an update from the app: at its next
+  start. Hence a read-only host serves no Install button, and an agent's press of it is refused. Update.exe outlives the host
+  that started it, so the update hooks may find their ancestry incomplete and leave the host
+  alone (`LifecycleGuard`); the app's own start brings it back either way.
 * Uninstall (`OnBeforeUninstallFastCallback`) stops the host and removes the logon task,
   the app's `Run` entry and the toast registration. The host's profile (device key,
   account, `config.json`, logs) stays in `%LOCALAPPDATA%\AgentBridge`, like any app's

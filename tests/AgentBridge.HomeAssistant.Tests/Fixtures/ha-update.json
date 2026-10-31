@@ -1,0 +1,566 @@
+{
+  "source": {
+    "repository": "danswett/agent-ha-bridge",
+    "commit": "42fc551c1c6184797520c18f4b75457ff08a9276",
+    "dirty": false,
+    "generator": "tools/ha-contract/Export-HaContract.ps1",
+    "note": "Recorded by running agent-ha-bridge's own functions with a recording transport. Regenerate; do not edit by hand."
+  },
+  "machine": "DSWETT-DEV-VM1",
+  "updates": {
+    "available": [
+      {
+        "topic": "homeassistant/update/agent_bridge_dswett_dev_vm1/update/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "availability_template": "{{ 'online' if value_json.get('latest_version') else 'offline' }}",
+          "availability_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "device_class": "firmware",
+          "icon": "mdi:package-up",
+          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+          "name": "Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_update",
+          "state_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+          "unique_id": "agent_bridge_dswett_dev_vm1_update"
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "in_progress": false,
+          "installed_version": "0.1.0",
+          "latest_version": "0.2.0",
+          "release_summary": "## What changed\nNotes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. ...",
+          "release_url": "https://github.com/danswett/agent-bridge/releases",
+          "title": "AI coding agent Home Assistant bridge",
+          "update_percentage": null
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "stage": "",
+          "stage_detail": ""
+        }
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/install_update/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/install",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:download",
+          "name": "Install Bridge Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_install_update",
+          "unique_id": "agent_bridge_dswett_dev_vm1_install_update"
+        }
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/check",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:cloud-refresh",
+          "name": "Check for Bridge Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_check_updates",
+          "unique_id": "agent_bridge_dswett_dev_vm1_check_updates"
+        }
+      }
+    ],
+    "checking": [
+      {
+        "topic": "homeassistant/update/agent_bridge_dswett_dev_vm1/update/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "availability_template": "{{ 'online' if value_json.get('latest_version') else 'offline' }}",
+          "availability_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "device_class": "firmware",
+          "icon": "mdi:package-up",
+          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+          "name": "Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_update",
+          "state_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+          "unique_id": "agent_bridge_dswett_dev_vm1_update"
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "in_progress": true,
+          "installed_version": "0.1.0",
+          "latest_version": "0.2.0",
+          "release_summary": "",
+          "release_url": "https://github.com/danswett/agent-bridge/releases",
+          "title": "AI coding agent Home Assistant bridge",
+          "update_percentage": null
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "stage": "checking",
+          "stage_detail": ""
+        }
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/install_update/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/install",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:download",
+          "name": "Install Bridge Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_install_update",
+          "unique_id": "agent_bridge_dswett_dev_vm1_install_update"
+        }
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/check",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:cloud-refresh",
+          "name": "Check for Bridge Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_check_updates",
+          "unique_id": "agent_bridge_dswett_dev_vm1_check_updates"
+        }
+      }
+    ],
+    "downloading": [
+      {
+        "topic": "homeassistant/update/agent_bridge_dswett_dev_vm1/update/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "availability_template": "{{ 'online' if value_json.get('latest_version') else 'offline' }}",
+          "availability_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "device_class": "firmware",
+          "icon": "mdi:package-up",
+          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+          "name": "Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_update",
+          "state_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+          "unique_id": "agent_bridge_dswett_dev_vm1_update"
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "in_progress": true,
+          "installed_version": "0.1.0",
+          "latest_version": "0.2.0",
+          "release_summary": "",
+          "release_url": "https://github.com/danswett/agent-bridge/releases",
+          "title": "AI coding agent Home Assistant bridge",
+          "update_percentage": 42.0
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "stage": "downloading",
+          "stage_detail": ""
+        }
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/install_update/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/install",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:download",
+          "name": "Install Bridge Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_install_update",
+          "unique_id": "agent_bridge_dswett_dev_vm1_install_update"
+        }
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/check",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:cloud-refresh",
+          "name": "Check for Bridge Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_check_updates",
+          "unique_id": "agent_bridge_dswett_dev_vm1_check_updates"
+        }
+      }
+    ],
+    "unknown": [
+      {
+        "topic": "homeassistant/update/agent_bridge_dswett_dev_vm1/update/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "availability_template": "{{ 'online' if value_json.get('latest_version') else 'offline' }}",
+          "availability_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "device_class": "firmware",
+          "icon": "mdi:package-up",
+          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+          "name": "Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_update",
+          "state_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+          "unique_id": "agent_bridge_dswett_dev_vm1_update"
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "in_progress": false,
+          "installed_version": "0.1.0",
+          "release_summary": "The latest release could not be established: rate limited",
+          "title": "AI coding agent Home Assistant bridge",
+          "update_percentage": null
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "stage": "",
+          "stage_detail": ""
+        }
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/install_update/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/install",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:download",
+          "name": "Install Bridge Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_install_update",
+          "unique_id": "agent_bridge_dswett_dev_vm1_install_update"
+        }
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/check",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:cloud-refresh",
+          "name": "Check for Bridge Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_check_updates",
+          "unique_id": "agent_bridge_dswett_dev_vm1_check_updates"
+        }
+      }
+    ],
+    "current": [
+      {
+        "topic": "homeassistant/update/agent_bridge_dswett_dev_vm1/update/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "availability_template": "{{ 'online' if value_json.get('latest_version') else 'offline' }}",
+          "availability_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "device_class": "firmware",
+          "icon": "mdi:package-up",
+          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+          "name": "Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_update",
+          "state_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+          "unique_id": "agent_bridge_dswett_dev_vm1_update"
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "in_progress": false,
+          "installed_version": "0.1.0",
+          "latest_version": "0.1.0",
+          "release_summary": "",
+          "title": "AI coding agent Home Assistant bridge",
+          "update_percentage": null
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "stage": "current",
+          "stage_detail": "Checked just now; 0.1.0 is the latest release."
+        }
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/install_update/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/install",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:download",
+          "name": "Install Bridge Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_install_update",
+          "unique_id": "agent_bridge_dswett_dev_vm1_install_update"
+        }
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/check",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:cloud-refresh",
+          "name": "Check for Bridge Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_check_updates",
+          "unique_id": "agent_bridge_dswett_dev_vm1_check_updates"
+        }
+      }
+    ],
+    "completed": [
+      {
+        "topic": "homeassistant/update/agent_bridge_dswett_dev_vm1/update/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "availability_template": "{{ 'online' if value_json.get('latest_version') else 'offline' }}",
+          "availability_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "device_class": "firmware",
+          "icon": "mdi:package-up",
+          "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+          "name": "Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_update",
+          "state_topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+          "unique_id": "agent_bridge_dswett_dev_vm1_update"
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/update/state",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "in_progress": false,
+          "installed_version": "0.2.0",
+          "latest_version": "0.2.0",
+          "release_summary": "",
+          "release_url": "https://github.com/danswett/agent-bridge/releases",
+          "title": "AI coding agent Home Assistant bridge",
+          "update_percentage": null
+        }
+      },
+      {
+        "topic": "copilot/cli/machine/dswett_dev_vm1/update/attributes",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "stage": "completed",
+          "stage_detail": "Updated to 0.2.0"
+        }
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/install_update/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/install",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:download",
+          "name": "Install Bridge Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_install_update",
+          "unique_id": "agent_bridge_dswett_dev_vm1_install_update"
+        }
+      },
+      {
+        "topic": "homeassistant/button/agent_bridge_dswett_dev_vm1/check_updates/config",
+        "retain": true,
+        "qos": 1,
+        "json": true,
+        "payload": {
+          "command_topic": "copilot/cli/machine/dswett_dev_vm1/update/check",
+          "device": {
+            "identifiers": [
+              "agent_bridge_dswett_dev_vm1"
+            ],
+            "manufacturer": "AI CLI bridge",
+            "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+          },
+          "icon": "mdi:cloud-refresh",
+          "name": "Check for Bridge Update",
+          "object_id": "agent_bridge_dswett_dev_vm1_check_updates",
+          "unique_id": "agent_bridge_dswett_dev_vm1_check_updates"
+        }
+      }
+    ]
+  },
+  "notes": "## What changed\nNotes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. Notes. ",
+  "busy": [
+    {
+      "service": "persistent_notification.create",
+      "data": {
+        "message": "This press did not start an update: an update started moments ago is still starting. That update reports here when it finishes.",
+        "notification_id": "agent_bridge_update_dswett_dev_vm1",
+        "title": "Bridge update already running on DSWETT-DEV-VM1"
+      }
+    }
+  ]
+}

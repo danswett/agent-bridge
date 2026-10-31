@@ -1,0 +1,153 @@
+using System.Text.Json;
+using AgentBridge.HomeAssistant;
+using Velopack;
+using Velopack.Locators;
+using Velopack.Sources;
+
+namespace AgentBridge.Host;
+
+// The host's own updates, for the Home Assistant connector's Install and Check buttons (stage 6,
+// docs/ha-connector.md). The host is published inside the app's Velopack package
+// (docs/app-windows.md), so updating it is updating the app: the same feed and the same rule for
+// pre-releases as the app's Settings use (VelopackUpdater in AgentBridge.App), read from the app's
+// files beside the profiles. A copy Velopack did not install (a build folder) has no Installed,
+// and the connector serves no buttons for it.
+//
+// Applying: Velopack's Update.exe waits for this process to exit, stops whatever else runs from
+// the package (the app, whose update hook stops the host it manages), replaces the version, and
+// starts the app again in the background for this host's profile, which starts this host. So
+// handing the release over is followed by this host stopping, as serve does on Ctrl+C.
+sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, Action<string> log) : IHostUpdates
+{
+    public const string Repository = "https://github.com/danswett/agent-bridge";
+    readonly object gate = new();
+    UpdateManager? manager;
+    string? source;
+
+    // A release as a check found it, carried in the UpdateRelease the check returned: the install
+    // downloads and applies exactly that, from the manager (and so the feed) that found it, never a
+    // same-numbered release another check found since.
+    sealed class Found(UpdateManager manager, UpdateInfo info)
+    {
+        public UpdateManager Manager { get; } = manager;
+        public UpdateInfo Info { get; } = info;
+        public volatile bool Downloaded;
+    }
+
+    static Found Of(UpdateRelease release) =>
+        release.Handle as Found ?? throw new InvalidOperationException($"{release.Version} was not found by a check here");
+
+    string AppFolder => Path.Combine(dataRoot, "app");
+
+    // The app's feed.txt: a folder or URL holding releases.win.json, for a test VM or a private
+    // channel. Absent is GitHub; one that is there but cannot be read is an error, as in the app,
+    // never GitHub: a press must not install from another channel than the one configured.
+    string Feed()
+    {
+        var file = Path.Combine(AppFolder, "feed.txt");
+        return File.Exists(file) ? File.ReadAllText(file).Trim() : "";
+    }
+
+    // The app's "Include pre-releases" for this profile, read as the app reads it
+    // (AppPreferences.Load: web defaults, so any case; on unless turned off, and the defaults when
+    // the file cannot be read).
+    internal bool Prereleases()
+    {
+        var file = Path.Combine(AppFolder, $"{profile}-settings.json");
+        try
+        {
+            if (!File.Exists(file)) { return true; }
+            using var doc = JsonDocument.Parse(File.ReadAllText(file));
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) { return true; }
+            foreach (var p in doc.RootElement.EnumerateObject())
+            {
+                if (string.Equals(p.Name, "prereleases", StringComparison.OrdinalIgnoreCase)) { return p.Value.ValueKind != JsonValueKind.False; }
+            }
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return true; }
+    }
+
+    UpdateManager Manager()
+    {
+        lock (gate)
+        {
+            var feed = Feed();
+            var prereleases = Prereleases();
+            var key = $"{feed}|{prereleases}";
+            if (manager is not null && source == key) { return manager; }
+            IUpdateSource from = feed.Length == 0
+                ? new GithubSource(Repository, null, prereleases, null)
+                : Uri.TryCreate(feed, UriKind.Absolute, out var u) && u.Scheme is "http" or "https"
+                    ? new SimpleWebSource(feed)
+                    : new SimpleFileSource(new DirectoryInfo(feed));
+            source = key;
+            // The platform's own locator rather than VelopackLocator.Current, which only
+            // VelopackApp.Build().Run() sets: that is the app's entry point, and the host has none.
+            return manager = new UpdateManager(from, null, VelopackLocator.CreateDefaultForPlatform());
+        }
+    }
+
+    // From the package alone, whatever the feed: a feed that cannot be read now is a check's
+    // problem, not a reason to stop serving the buttons.
+    public string? Installed
+    {
+        get
+        {
+            try
+            {
+                var m = new UpdateManager(new SimpleFileSource(new DirectoryInfo(AppFolder)), null, VelopackLocator.CreateDefaultForPlatform());
+                return m.IsInstalled ? m.CurrentVersion?.ToString() : null;
+            }
+            catch (Exception e) when (e is not OutOfMemoryException) { return null; }
+        }
+    }
+
+    public string? ReleasesUrl
+    {
+        get
+        {
+            try { return Feed().Length == 0 ? $"{Repository}/releases" : null; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        }
+    }
+
+    public async Task<UpdateRelease?> CheckAsync(CancellationToken cancellationToken)
+    {
+        // Off the caller's thread before anything else: reading the feed and the preferences, and
+        // whatever Velopack does before its first await, would otherwise run on the connector's
+        // pass, where the heartbeat waits for it and no timeout reaches it.
+        await Task.Yield();
+        var m = Manager();
+        var info = await m.CheckForUpdatesAsync().WaitAsync(cancellationToken);
+        if (info is null) { return null; }
+        var target = info.TargetFullRelease;
+        return new UpdateRelease(target.Version.ToString(), target.NotesMarkdown, ReleasesUrl) { Handle = new Found(m, info) };
+    }
+
+    public async Task DownloadAsync(UpdateRelease release, Action<int> progress, CancellationToken cancellationToken)
+    {
+        var found = Of(release);
+        await found.Manager.DownloadUpdatesAsync(found.Info, progress, cancellationToken);
+        found.Downloaded = true;
+    }
+
+    // The updater serve hands the connector: none on a read-only host, which may be driven from no
+    // other device (an update would restart it, and every other profile's host in the package),
+    // nor where nothing packages the host.
+    internal static IHostUpdates? For(string? readOnlyReason, bool windows, Func<IHostUpdates> make) =>
+        readOnlyReason is null && windows ? make() : null;
+
+    // What the app is started with after the update: in the background, for this host's profile
+    // (the app starts the host of the profile it opens, and defaults to "default").
+    internal static string[] RestartArguments(string profile) => ["--background", "--profile", profile];
+
+    public void ApplyAndRestart(UpdateRelease release)
+    {
+        var found = Of(release);
+        if (!found.Downloaded) { throw new InvalidOperationException($"{release.Version} has not been downloaded here"); }
+        found.Manager.WaitExitThenApplyUpdates(found.Info.TargetFullRelease, silent: true, restart: true, RestartArguments(profile));
+        log($"updating to {release.Version}: Velopack applies it once this host has exited, and starts the app again, which starts the host");
+        stop();
+    }
+}

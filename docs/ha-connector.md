@@ -149,7 +149,7 @@ Per machine:
 |---|---|---|---|
 | `binary_sensor.agent_bridge_<slug>_online` | `homeassistant/binary_sensor/<mnode>/online/config` | `…/online/state`, unretained `online`; `…/online/attr`, unretained `{"at"}` | config at start; beat every 60 s |
 | `sensor.agent_bridge_<slug>_sessions` | `homeassistant/sensor/<mnode>/sessions/config` | `…/global/state` = count; `…/global/attr` = `sessions[{name,machine,node,kind}]`, `machine`, `machine_slug`, `capabilities`, `resumable: []`, `discovery_held` (what holds the host's discovery, [v1-sessions.md](protocol/v1-sessions.md#discovery-held), else `""`), `updated` | on a change, and every 300 s |
-| `update.agent_bridge_<slug>_update` | `homeassistant/update/<mnode>/update/config` | `…/update/state` = `installed_version`, `latest_version` (both the host's version), `title`, `release_summary: ""`, `in_progress: false`, `update_percentage: null`; `…/update/attributes` = `stage`, `stage_detail` | at start |
+| `update.agent_bridge_<slug>_update` | `homeassistant/update/<mnode>/update/config` | `…/update/state` = `installed_version`, `latest_version` (both the host's version), `title`, `release_summary: ""`, `in_progress: false`, `update_percentage: null`; `…/update/attributes` = `stage`, `stage_detail` | at start; from stage 6, on an installed host, what its release checks and updates find (below) |
 | `sensor.agent_bridge_<slug>_usage_<agent>` (copilot, claude, codex) | `homeassistant/sensor/<mnode>/usage_<agent>/config` | state = the window closest to running out, or `unknown`; attributes `client`, `label`, `account`, `account_id`, `plan`, `source`, `windows[{key,label,percent,used?,limit?,unit?,resets_at?,elapsed?}]`, `error`, `measured_at`, `machine`, `machine_slug`, `updated` | when a reading changes |
 | `sensor.agent_bridge_<slug>_usage_copilot_<n>` (2–4: the further Copilot logins of the host's `usage.copilotAccounts`, by place, `Get-CopilotMqttUsageRecordKey`) | `homeassistant/sensor/<mnode>/usage_copilot_<n>/config`, named `GitHub Copilot usage (<login>)` | as above, `client` `copilot` and `account` the login (GitHub's spelling once read); a login that cannot be read is `unknown` with its `error` | when its reading changes |
 
@@ -192,10 +192,12 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
 Everything agent-ha-bridge publishes that the connector would not act on is withdrawn (an empty
 retained payload), so the dashboard never offers a control that silently does nothing:
 
-* per machine, at start: the install and update-check buttons and the transfer request with its
-  state topic; when the host cannot launch here, also the launch card's prompt, prompt payload,
-  workspace, profile, agent, model, effort, context, resume and permissions selectors, Launch,
-  the launch result and its outcomes (4, or 19 without a launcher, of the 28 machine topics); and the usage sensors of further Copilot logins
+* per machine, at start: the transfer request with its state topic; the Install and Check
+  buttons where the host's updater cannot act on them (a copy it did not install, or
+  `homeAssistant.updates.checkForUpdates` off; stage 6); when the host cannot launch here, also
+  the launch card's prompt, prompt payload, workspace, profile, agent, model, effort, context,
+  resume and permissions selectors, Launch, the launch result and its outcomes (2 of the 28
+  machine topics, 4 without the update buttons, and 15 more without a launcher); and the usage sensors of further Copilot logins
   (`usage_copilot_2`–`_4`, three topics each) in a place the host's `usage.copilotAccounts` does not
   fill, so a reading the daemon or an earlier configuration left is not kept with nothing to refresh
   it (as the daemon's first pass does with `Remove-CopilotMqttUsageSensors`). Taken from the
@@ -211,8 +213,10 @@ retained payload), so the dashboard never offers a control that silently does no
   reply payload sensor, as stage 1 did.
 
 The generated dashboard draws "Entity not found" for those controls until the stage that serves
-them lands. **The connector is therefore for the disposable rehearsal only; no real machine
-enables it until the stage that serves what it withdraws (6) has landed** (see the plan).
+them lands. With stage 6 every control a machine row draws for an installed host is served; the
+transfer request stays withdrawn because sharing a session between machines is not a host
+feature yet, and the upkeep of stage 7 (the Detailed activity helper, liveness repair,
+forget-machine) is still to come, so a real machine waits for stage 7 (see the plan).
 
 ### Stage 2: answering from the card
 
@@ -558,6 +562,93 @@ Where stage 5b knowingly differs from the daemon:
 | Until migrate re-points the hooks, a machine whose agent-ha-bridge hooks still run may push a question twice | Both would be sending; `migrate` moves the hooks to the host, and nothing runs agent-ha-bridge's hooks after it |
 | The host's own Web Push (`push.*`) notifies the app's phones as well | A different channel, with its own settings; turn one off if both reach the same phone |
 | A tap must name an action its notification offered; a withdrawal that failed is retried, across a restart too | Beyond parity: the daemon reads the index off any action's suffix, and forgets a withdrawal whether or not it arrived |
+### Stage 6: update buttons
+
+The machine row's update entity, and its **Install Bridge Update** and **Check for Bridge
+Update** buttons, as `Sync-DaemonUpdateStatus` serves them for agent-ha-bridge's own install.
+`Fixtures/ha-update.json` records `Publish-CopilotMqttUpdate` at six moments (a release found,
+with notes past the 2000-character cap; checking; downloading at 42%; a release that could not
+be established; a check that found nothing newer; completed) and the busy notice
+(`Send-DaemonUpdateBusyNotice`); the drift guard re-records it.
+
+What is checked and installed is **this host's own product** (design G2): the app's package,
+which carries the host (`IHostUpdates`, Velopack on Windows, [app-windows.md](app-windows.md)),
+with the app's feed (GitHub releases of `danswett/agent-bridge`, or the app's `feed.txt`) and
+its "Include pre-releases" setting. `latest_version` on a migrated machine is therefore an
+agent-bridge version, never agent-ha-bridge's. A copy its updater did not install (a build
+folder, or a platform it does not package yet) serves no buttons and reports its own version as
+current, as stage 1 did; so does a host with `homeAssistant.updates.checkForUpdates` off, which
+looks nothing up, and a read-only host (`delivery.readOnly`), which acts on nothing from another
+device.
+
+* **Checks.** At start, every `homeAssistant.updates.checkHours` (0.5, as the daemon's
+  `updates.checkHours`; at least 0.1), and on a press of Check, beside the passes so a slow feed
+  holds up no card. Until the first answer the entity reports the version installed as current
+  (an entity with no `latest_version` reads unavailable, and the machine row with it); after it,
+  only a check changes what it says, a resume included. A newer
+  release puts its version, notes (capped at 2000) and the releases page on the entity, and
+  Home Assistant shows an update. A check that cannot reach the feed leaves `latest_version`
+  out, with `The latest release could not be established: <why>` in the notes, and is tried
+  again after five minutes: not `failed`, because a check that could not be made is not a
+  failed update (agent-ha-bridge #92). So does a check that has not answered within two
+  minutes or whose request timed out, and a configured `feed.txt` that cannot be read:
+  it is never taken for GitHub, which would be another channel. A press of Check that finds
+  nothing newer says `current`, `Checked just now; <version> is the latest release.` for ten
+  minutes, until a check finds a newer one. A press while a check is already under way gets a
+  check of its own once that one is done, so "just now" is never an earlier check's answer.
+* **Install.** A press shows `checking` at once (`in_progress`, the spinner), then looks for the
+  newest release again, downloads it (`downloading` with `update_percentage`), records the
+  attempt in the connector's state file (an attempt that cannot be recorded is not handed
+  over: the host that came back could not say how it ended), shows `restarting` and hands the
+  release to Velopack,
+  which applies it once the host has exited; the host then stops as on Ctrl+C. Velopack
+  force-stops everything else running from the package folder (the app, and every other
+  profile's host, with their sessions' delivery), starts the app again in the background for the
+  host's profile, and the app starts the host. A press made with an agent's account
+  (`agentUserIds`) is refused with **Bridge update not started on `<machine>`**: a person must
+  press it (below). While an
+  update runs a press of Check looks nothing up: the install found its release itself. A press with nothing newer says
+  `current` and notifies **No newer bridge release on `<machine>`**; one whose download or
+  hand-over fails says `failed` with the reason, notifies **Bridge update failed on
+  `<machine>`**, and leaves Install usable. A press while an update runs, or while the host waits
+  to exit into one, is not acted on and gets the daemon's **Bridge update already running on
+  `<machine>`** notice. A notice Home Assistant does not take is tried again every 15 s until it
+  does or a newer one replaces it; notices go one at a time, newest first, so an older one never
+  lands after a newer one. What is downloaded and applied is exactly the release the
+  install's own check found, from the feed that found it. A host stopped part-way through leaves the last stage retained, as the
+  daemon does, and the next start republishes the entity without it.
+* **The outcome.** The host that comes back reads the attempt and says how it ended, once: on
+  the new version, `completed` (`Updated to <version>`) for an hour and **Bridge installer
+  completed on `<machine>`**; on the old one, `failed` and **Bridge update failed on
+  `<machine>`**. An attempt older than six hours is dropped unannounced, as the daemon drops an
+  old outcome file. The host that recorded it never announces it: it is still on the old version
+  for the moment before it exits. The outcome answers the press, not a check, so it is told
+  even when checks were turned off meanwhile, and a notification Home Assistant refuses is tried
+  again every 15 s without holding up a new press. It is older news than any press this host has
+  answered: its verdict is not laid over a press's answer, and its notice is not sent once a
+  press's notice has been (they share one notification, which would then say the older). Every
+  notice is a `persistent_notification` with
+  `notification_id: agent_bridge_update_<slug>`, so each replaces the last.
+* **Presses** are read from the buttons' states (press timestamps), on a watch hit or every
+  five seconds; a press from before the connector started is history, not an instruction
+  (`Test-DaemonUpdateCheckPress`), so one made moments after a restart still counts.
+
+What the tests cannot show is the hand-over itself: the unit tests and the `ha-integration` job
+use a stand-in updater, so Update.exe stopping the host and the rest of the package, replacing it
+and restarting the app for the pressing profile, and that host then telling the outcome, are
+checked on an installed machine by the rehearsal's step E18-06
+([parity-checklist.md](parity-checklist.md)), from a local feed one version up.
+
+Where stage 6 knowingly differs from the daemon:
+
+| Difference | Why |
+|---|---|
+| No check is forced because another machine's entity reports a newer `latest_version` (`Test-DaemonPeerUpdateNotice`) | Machines on agent-ha-bridge report agent-ha-bridge versions on the same entity; comparing across products would be wrong both ways. A daemon reading a host's lower version does nothing with it |
+| The outcome is the host seeing its own version after the restart, not an updater's outcome file | Velopack applies the update out of process and leaves no outcome; the version the host comes back on is the evidence. Its notice says the host restarted on it, which the daemon could not observe |
+| Install checks the feed itself rather than an `agent-ha-bridge update` child, and refuses a second press from the host's own state | One host per machine and user (its mutex), so the host knows whether it is updating; there is no lock file to share |
+| An agent may not press Install: a press made with an account in `agentUserIds` starts nothing and gets **Bridge update not started on `<machine>`**, saying a person must press it. Check is still an agent's to press | Design §6.3 invariant 13: no agent stops or restarts its host. An update does both, and Velopack stops every profile's host running from the package folder while it applies it. The daemon (`Sync-DaemonUpdateStatus`) does not ask who pressed |
+| A read-only host (`delivery.readOnly`) serves neither button, as a copy its updater did not install | It acts on nothing from another device, and an update restarts it |
+
 ### The shadow: comparing with a running daemon
 
 `agent-bridge-host ha shadow [--json] [--window <seconds>]` runs one connector pass against a
@@ -568,7 +659,7 @@ reads the broker's retained topics for this machine and for every session either
 `asked_at`. It takes one reading of every agent's usage first, as `agent-bridge-host usage`
 does, so the usage sensors are compared too. Each topic is reported `same`, `differs`,
 `agent-ha-bridge only` or `host only`,
-with a note where the difference is by design (the launch card, whose choices are the launcher's, which a shadow does not ask for; install, update-check and transfer controls; the answer and
+with a note where the difference is by design (the launch card, whose choices are the launcher's, which a shadow does not ask for; the update buttons, as a shadow looks for no release; the transfer controls; the answer and
 stop controls when the host cannot use them; usage when no reading was given). It needs `baseUrl` and the stored token but not
 `enabled`, and it ignores G5: it is the one thing that is meant to run while the daemon does,
 for the week of shadow running before a machine's cutover (§10 stage 4). It complements
@@ -581,7 +672,9 @@ files; `ha shadow` compares what each would *publish* to Home Assistant.
 
 1. Declare the online sensor and pin it; the first beat follows two seconds later.
 2. Read the Detailed activity switch (`on`, `off`, or absent: the setting `detailedActivity`).
-3. Withdraw this machine's unserved controls; publish the update entity and pin it.
+3. Withdraw this machine's unserved controls; publish the update entity (and, on a host its
+   updater installed, the Install and Check buttons) and pin them; announce how an update the
+   host restarted for ended, if it did (stage 6).
 4. Work out what this machine published before and is not running now: the nodes in its
    retained session list (whichever bridge wrote it), the nodes the connector remembered as
    waiting for retirement or as part-way through their first publication (`ha-connector.json`
@@ -703,7 +796,7 @@ does), never by subscribing to the broker.
 | 4 Stop (done) | `button.<node>_stop`, two presses when the session is not idle, the confirm and lapsed notes pinned on the activity line; `StopService`; `ending` (above) | `Invoke-PendingStops`, `Get-DaemonCardSummary`, `CopilotEndSessionConfirmNote` |
 | 5 Launch (done) | The launch card's controls (`Publish-CopilotMqttNewSession`) from the host's approved workspaces and agents; the 255-character limit lifted through the retained `newsession/promptpayload` (`{at, text, request, settings}`); `new_session_result` with `recent` per request (its attributes, on the retained `newsession/outcome`); `capabilities.newSession`/`launchRequest`; the purple edge for a session an agent launched (above). The transfer request stays withdrawn | `daemon-launch.ps1`, `Publish-DaemonNewSessionControls`, `Resolve-DaemonRequestedLaunch` |
 | 5b Phone notifications (done) | `notify.mobile_app_*` with the question's answer buttons, and the `mobile_app_notification_action` events back through `AnswerService`; the response notification when a turn ends | `daemon-decision-notify.ps1`, `Send-BridgeResponseNotification` |
-| 6 Update buttons | `button.agent_bridge_<slug>_check_updates` forces a fresh release check, and `button.agent_bridge_<slug>_install_update` starts the product's own update (the app's Velopack update on Windows), with `stage`/`stage_detail` and `update_percentage` from it, and `latest_version` from this product's release feed — never agent-ha-bridge's (G2) | `Publish-CopilotMqttUpdate`, `daemon-maintenance.ps1` |
+| 6 Update buttons (done) | `button.agent_bridge_<slug>_check_updates` forces a fresh release check, and `button.agent_bridge_<slug>_install_update` starts the product's own update (the app's Velopack update on Windows), with `stage`/`stage_detail` and `update_percentage` from it, and `latest_version` from this product's release feed — never agent-ha-bridge's (G2) | `Publish-CopilotMqttUpdate`, `daemon-maintenance.ps1` |
 | 7 Upkeep | The Detailed activity helper created when absent (`input_boolean/create`, never recreated); the liveness repair for a sensor Home Assistant has stopped applying, with its attempt limit (#177, #202); forget-machine (the card's X clears this machine's topics from the browser; the connector must not resurrect a machine that was forgotten while it was off) | `Initialize-CopilotVerboseToggle`, `Confirm-DaemonOnlineHeartbeat`, `Get-BridgeMachineForgetTopic` |
 
 ## Validation: a disposable Home Assistant and Mosquitto
@@ -750,6 +843,10 @@ Assistant itself rather than a fake:
   Assistant's events API answers it with the tapped option, the notification is withdrawn, and
   the reply of the turn it started is pushed, `agent`-driven because the account that fired the
   tap is in `agentUserIds`;
+* the update entity Home Assistant builds from the state shows the release found and the
+  installed version; a press of Check asks the feed again; a press of Install shows
+  `downloading` at 42% with the spinner, a second press gets the busy notice, and the release
+  reaches the updater with the entity at `restarting`;
 * with no dashboard at all, an ended session is retired, and nothing it published is left
   retained;
 * the shadow, against the daemon's own recorded publications seeded into the broker, reports
@@ -811,8 +908,8 @@ for retained state, and `config/entity_registry/list` for ids:
 
 1. Daemon → host: the machine row stays (online, session count, version, `(dev)`); each card
    keeps rendering status, activity, the reply text, the trail, compactions and background
-   counts; Detailed activity toggles reasoning; usage rows stay; no `_2` ids; the launch card,
-   install button for the machine go and nothing else does; a question is answered
+   counts; Detailed activity toggles reasoning; usage rows stay; no `_2` ids; the update row
+   shows agent-bridge's version and its Install and Check buttons work; a question is answered
    from the card, on a phone-sized browser too.
 2. A session ending: it leaves the list, the writer drops its card, and only then do its
    entities go; all 29 topics are empty.
@@ -849,6 +946,9 @@ Assistant and broker).
   "answerButtons": {                      // a question's buttons on the phones named here
     "enabled": true, "services": [], "maxButtons": 6,
     "icon": "mdi:chat-question", "iconColor": "#FFFFFF", "color": "#FF9F0A", "interruptionLevel": "time-sensitive"
+  },
+  "updates": {                            // the host's own releases on the update entity (stage 6)
+    "checkForUpdates": true, "checkHours": 0.5
   }
 }
 ```

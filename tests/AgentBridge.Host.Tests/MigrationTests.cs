@@ -1456,6 +1456,27 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Update_check_settings_are_carried_and_the_rest_of_the_daemons_update_section_is_not()
+    {
+        var ahb = (JsonObject)JsonNode.Parse("""
+            {"updates":{"checkForUpdates":false,"CheckHours":2,"repository":"danswett/agent-ha-bridge","token":"secret-value","installedVersion":"1.40.0"}}
+            """, new JsonNodeOptions { PropertyNameCaseInsensitive = true })!;
+
+        var import = ConfigImport.Build(ahb, null);
+
+        Assert.Empty(import.Problems);
+        Assert.Contains("updates.checkForUpdates -> homeAssistant.updates.checkForUpdates", import.Imported);
+        Assert.Contains("updates.CheckHours -> homeAssistant.updates.checkHours", import.Imported);
+        Assert.Equal(["updates.repository", "updates.token (a secret: never copied)", "updates.installedVersion"], import.NotCarried);
+        Assert.DoesNotContain("secret-value", import.Text!, StringComparison.Ordinal);
+        var (settings, problem) = HostSettings.Parse(import.Text!, "config.json");
+        Assert.Null(problem);
+        Assert.Empty(settings.HomeAssistantProblems);
+        Assert.False(settings.HomeAssistant.CheckForUpdates);
+        Assert.Equal(2, settings.HomeAssistant.CheckHours);
+    }
+
+    [Fact]
     public async Task The_cli_runs_status_and_a_dry_run_and_refuses_unknown_words()
     {
         var output = new StringWriter();

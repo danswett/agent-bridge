@@ -26,6 +26,8 @@ namespace AgentBridge.Host.Migration;
 //   detailedActivity                            homeAssistant.detailedActivity
 //   homeAssistant.agentUserIds, agentTokenEnvVar homeAssistant.agentUserIds, agentTokenEnvVar
 //   notifications.*, answerButtons.*            homeAssistant.notifications.*, homeAssistant.answerButtons.*
+//   updates.checkForUpdates, checkHours         homeAssistant.updates.checkForUpdates, checkHours (whether,
+//                                               and how often, the host looks for its own releases)
 //
 // A setting this profile already has is kept, and the report says so: the person set it here.
 public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, IReadOnlyList<string> Kept, IReadOnlyList<string> NotCarried, IReadOnlyList<string> Problems)
@@ -48,6 +50,9 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
     [
         ("notifications", ["enabled", "service", "tickerCategory"]),
         ("answerButtons", ["enabled", "services", "maxButtons", "icon", "iconColor", "color", "interruptionLevel"]),
+        // Whether the machine's update entity looks for releases, and how often: the rest of
+        // agent-ha-bridge's updates section is about its own install (its repository, its token).
+        ("updates", ["checkForUpdates", "checkHours"]),
     ];
     static bool Named(string key, params string[] names) => names.Any(n => string.Equals(n, key, StringComparison.OrdinalIgnoreCase));
     static bool Secret(string key) => Secrets.Contains(key, StringComparer.OrdinalIgnoreCase);
@@ -201,15 +206,20 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                 };
                 foreach (var (key, value) in target2.ToList()) { Put(section, key, value!.DeepClone(), names[key], $"homeAssistant.{key}"); }
             }
-            // Phone notifications, which the connector sends once it has the machine (stage 5b): the
-            // daemon's own settings, by name, in the homeAssistant section here.
+            // Phone notifications, which the connector sends once it has the machine (stage 5b), and
+            // its update checks (stage 6): the daemon's own settings, by name, in the homeAssistant
+            // section here.
             foreach (var (part, keys) in NotifyKeys)
             {
                 if (ahb.FirstOrDefault(p => Named(p.Key, part)) is not { Value: JsonObject from }) { continue; }
                 foreach (var (key, value) in from)
                 {
                     var known = keys.FirstOrDefault(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
-                    if (known is null || value is null) { if (known is null) { notCarried.Add($"{part}.{key}"); } continue; }
+                    if (known is null || value is null)
+                    {
+                        if (known is null) { notCarried.Add(Secret($"{part}.{key}") ? $"{part}.{key} (a secret: never copied)" : $"{part}.{key}"); }
+                        continue;
+                    }
                     // One service named alone is a list of one, as agent-ha-bridge reads it (@(...)).
                     var carried = known == "services" && value is JsonValue ? new JsonArray(value.DeepClone()) : value.DeepClone();
                     Put(Section(Section(host, "homeAssistant"), part), known, carried, $"{part}.{key}", $"homeAssistant.{part}.{known}");
@@ -229,7 +239,7 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                     notCarried.Add(Named(key, "publication") ? "dashboard.publication (this host never publishes the dashboard, G7)" : $"dashboard.{key}");
                 }
             }
-            foreach (var (key, value) in ahb.Where(p => !Named(p.Key, "newSession", "homeAssistant", "dashboard", "detailedActivity", "notifications", "answerButtons")))
+            foreach (var (key, value) in ahb.Where(p => !Named(p.Key, "newSession", "homeAssistant", "dashboard", "detailedActivity", "notifications", "answerButtons", "updates")))
             {
                 notCarried.Add(value is JsonObject ? $"{key}.*" : key);
             }

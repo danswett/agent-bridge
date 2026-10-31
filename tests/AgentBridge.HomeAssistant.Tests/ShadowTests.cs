@@ -96,7 +96,7 @@ public sealed class ShadowTests
 
         var report = await HaShadow.CompareAsync(ha, sessions, new HaConnectorOptions { MachineName = Machine, Version = "0.1.0", Dev = true }, true,
             TimeSpan.Zero, () => (new AgentBridge.Protocol.UsageReport(ContractTests.UsageReadings), 1));
-        Assert.Equal("not served yet (a later stage)", report.Differences.Single(d => d.Topic == HaContract.DiscoveryTopic("button", node, "check_updates")).Note);
+        Assert.Equal("update buttons not compared (the shadow looks for no release)", report.Differences.Single(d => d.Topic == HaContract.DiscoveryTopic("button", node, "check_updates")).Note);
         Assert.Equal("launch card not compared (the shadow takes no launch options)", report.Differences.Single(d => d.Topic.EndsWith("/newsession/outcome", StringComparison.Ordinal)).Note);
         foreach (var topic in new[] { HaContract.DiscoveryTopic("sensor", node, "usage_copilot_2"), HaContract.UsageStateTopic(slug, "copilot_2") })
         {

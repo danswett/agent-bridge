@@ -50,6 +50,24 @@ public sealed class SettingsTests : IDisposable
     }
 
     [Fact]
+    public void Update_checks_are_on_every_half_hour_unless_set_and_a_wrong_setting_turns_the_connector_off()
+    {
+        var on = Read("""{"enabled":true,"baseUrl":"http://ha.test"}""").Settings;
+        Assert.True(on.CheckForUpdates);
+        Assert.Equal(0.5, on.CheckHours);
+        var (set, none) = Read("""{"enabled":true,"baseUrl":"http://ha.test","updates":{"checkForUpdates":false,"checkHours":4}}""");
+        Assert.Empty(none);
+        Assert.False(set.CheckForUpdates);
+        Assert.Equal(4, set.CheckHours);
+        foreach (var updates in new[] { "true", """{"checkForUpdates":"no"}""", """{"checkHours":0.05}""", """{"checkHours":"1"}""", """{"checkHours":200}""" })
+        {
+            var (settings, problems) = Read($$"""{"enabled":true,"baseUrl":"http://ha.test","updates":{{updates}}}""");
+            Assert.False(settings.Enabled, updates);
+            Assert.Contains(problems, p => p.StartsWith("homeAssistant.updates", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public void A_development_build_only_ever_writes_to_a_home_assistant_said_to_be_disposable()
     {
         var on = new HaSettings { Enabled = true, BaseUrl = new Uri("http://ha.test:8123") };

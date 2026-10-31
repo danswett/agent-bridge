@@ -18,7 +18,7 @@ public sealed class HaRunning : IAsyncDisposable
     public static HaRunning? Start(HostSettings settings, string folder, ISessionSource source, UsageMonitor? usage,
         Func<string?>? agentHaBridge, bool devBuild, string version, Action<string> log, ISessionAnswerer? answers = null,
         Func<HaReply, CancellationToken, Task<AgentBridge.Protocol.ReplyResult>>? reply = null, ISessionStopper? stops = null,
-        AgentBridge.Host.Delivery.Launch.ISessionLauncher? launcher = null)
+        AgentBridge.Host.Delivery.Launch.ISessionLauncher? launcher = null, IHostUpdates? updates = null)
     {
         foreach (var p in settings.HomeAssistantProblems) { log($"config.json: {p}"); }
         var ha = settings.HomeAssistant;
@@ -75,11 +75,15 @@ public sealed class HaRunning : IAsyncDisposable
             AgentUserIds = ha.AgentUserIds,
             Notify = ha.Notify,
             UsageAccountSensors = usage is null ? [] : HaContract.UsageAccountSensors(settings.Usage.CopilotAccounts.Select(a => a.Slot)),
-        }, new HomeAssistantClient(ha.BaseUrl!, token, http), source, agentHaBridge!, usage is null ? null : () => usage.Current, log, answer: answer, reply: reply, stop: stop, launch: launch);
+            CheckForUpdates = ha.CheckForUpdates,
+            UpdateCheck = TimeSpan.FromHours(ha.CheckHours),
+        }, new HomeAssistantClient(ha.BaseUrl!, token, http), source, agentHaBridge!, usage is null ? null : () => usage.Current, log, answer: answer, reply: reply, stop: stop, launch: launch,
+            updates: updates);
         connector.Start();
         log($"the Home Assistant connector is on: {ha.BaseUrl} as agent_bridge_{slug}{(ha.Disposable ? " (disposable)" : "")}; " +
             (answer is null ? "status only" : "status, answers" + (reply is null ? "" : ", replies") + (stop is null ? "" : ", End session")) +
             (launch is null ? "" : ", the launch card when the host launches here") +
+            (updates is null || !ha.CheckForUpdates ? "" : ", the update buttons when this copy was installed by its updater") +
             (ha.Notify.Enabled ? $", notifications via {ha.Notify.Service}" : "") +
             (answer is not null && ha.Notify.ButtonsOn ? $", answer buttons to {ha.Notify.AnswerButtonServices.Count} phone(s)" : ""));
         return new HaRunning(connector, http, claim);

@@ -17,7 +17,8 @@ namespace AgentBridge.HomeAssistant;
 //     "disposable": false,
 //     "notifications": { "enabled": false, "service": "notify.notify", "tickerCategory": "" },
 //     "answerButtons": { "enabled": true, "services": [], "maxButtons": 6, "icon": "mdi:chat-question",
-//                        "iconColor": "#FFFFFF", "color": "#FF9F0A", "interruptionLevel": "time-sensitive" }
+//                        "iconColor": "#FFFFFF", "color": "#FF9F0A", "interruptionLevel": "time-sensitive" },
+//     "updates": { "checkForUpdates": true, "checkHours": 0.5 }
 //   }
 //
 // The token is never here: it is kept beside the device key, protected (HaTokenStore).
@@ -45,6 +46,14 @@ public sealed record HaSettings
     // Phone notifications through Home Assistant (HaNotifySettings): agent-ha-bridge's notifications
     // and answerButtons, under the same names.
     public HaNotifySettings Notify { get; init; } = HaNotifySettings.Default;
+    // The host's own updates on the machine's update entity and its Install and Check buttons:
+    // agent-ha-bridge's updates.checkForUpdates and updates.checkHours, under the same names. Off,
+    // no release is looked up and the buttons are not served.
+    public bool CheckForUpdates { get; init; } = true;
+    public double CheckHours { get; init; } = 0.5;
+    // At most every six minutes: the release feed is GitHub's API, which allows an address 60
+    // requests an hour, shared with everything else on it.
+    public const double MinCheckHours = 0.1;
 
     public static readonly HaSettings Default = new();
 
@@ -78,6 +87,23 @@ public sealed record HaSettings
             MachineName = Text("machineName"),
             Notify = HaNotifySettings.Read(s, problems),
         };
+        if (s.TryGetProperty("updates", out var u) && u.ValueKind != JsonValueKind.Null)
+        {
+            if (u.ValueKind != JsonValueKind.Object) { problems.Add("homeAssistant.updates is not an object"); }
+            else
+            {
+                if (u.TryGetProperty("checkForUpdates", out var c) && c.ValueKind != JsonValueKind.Null)
+                {
+                    if (c.ValueKind is JsonValueKind.True or JsonValueKind.False) { settings = settings with { CheckForUpdates = c.GetBoolean() }; }
+                    else { problems.Add("homeAssistant.updates.checkForUpdates is not true or false"); }
+                }
+                if (u.TryGetProperty("checkHours", out var h) && h.ValueKind != JsonValueKind.Null)
+                {
+                    if (h.ValueKind == JsonValueKind.Number && h.TryGetDouble(out var hours) && hours >= MinCheckHours && hours <= 24 * 7) { settings = settings with { CheckHours = hours }; }
+                    else { problems.Add($"homeAssistant.updates.checkHours is not a number of hours from {MinCheckHours} to 168"); }
+                }
+            }
+        }
         if (s.TryGetProperty("agentUserIds", out var ids) && ids.ValueKind != JsonValueKind.Null)
         {
             if (ids.ValueKind == JsonValueKind.Array && ids.EnumerateArray().All(i => i.ValueKind == JsonValueKind.String))
