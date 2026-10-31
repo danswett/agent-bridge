@@ -447,11 +447,11 @@ public sealed class UpkeepTests : IDisposable
         await using var c = Connector(answers: true);
         await Run(c, 90);
 
-        // A restart that loses the box; the choice is made on the card Home Assistant kept, and Send
-        // is pressed just after the card is read ahead of its re-arm (the snapshot of its channels,
-        // then the read itself), with the watch down.
-        ha.ForgetOptimistic(SessionEntities.Reply(NodeA));
-        for (var i = 0; i < 30 && (await ha.GetStateAsync(SessionEntities.Reply(NodeA)))!.State != HaDecision.ReplyBlank; i++) { await Run(c, 1); }
+        // A restart that loses the selector's value; the choice is made on the slot Home Assistant
+        // kept, and Send is pressed just after the card is read ahead of its re-arm (the snapshot of
+        // its channels, then the read itself), with the watch down.
+        ha.ForgetOptimistic(SessionEntities.Decision(NodeA));
+        for (var i = 0; i < 30 && Logged("goes on screen again") == 0; i++) { await Run(c, 1); }
         ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
         var reads = 0;
         var pressed = false;
@@ -466,6 +466,80 @@ public sealed class UpkeepTests : IDisposable
         Assert.True(pressed);
         var given = Assert.Single(answered);
         Assert.Equal("wait", given.Fields!["release"].GetString());
+    }
+
+    [Fact]
+    public async Task A_Send_made_while_the_question_is_being_armed_again_finds_the_choice_it_was_made_with()
+    {
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 90);
+        ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
+
+        // A restart that loses the selector's value; Send is pressed while the question is being
+        // armed again (as its choice slot's config goes out, before the slots are pinned).
+        ha.ForgetOptimistic(SessionEntities.Decision(NodeA));
+        var slot = HaContract.FieldConfig(HaContract.Topics(NodeA), "", "", 1, "", []).Topic;
+        var pressed = false;
+        ha.BeforePublish = t =>
+        {
+            if (t != slot || pressed || Logged("goes on screen again") == 0) { return; }
+            pressed = true;
+            ha.Press(SessionEntities.Submit(NodeA));
+        };
+        await Run(c, 30);
+        ha.BeforePublish = null;
+        Assert.True(pressed);
+        Assert.Equal(1, Logged("armed " + NodeA + " again"));
+        var given = Assert.Single(answered);
+        Assert.Equal("wait", given.Fields!["release"].GetString());
+    }
+
+    [Fact]
+    public async Task A_choice_left_from_the_last_question_is_not_kept_as_this_ones_when_it_is_armed_again()
+    {
+        var q1 = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = q1 });
+        await using var c = Connector(answers: true);
+        await Run(c, 90);
+        c.Observe(ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix"));
+        await Run(c, 1);
+        c.Observe(ha.Press(SessionEntities.Submit(NodeA)));
+        await Run(c, 5);
+        Assert.Single(answered);
+
+        // The next question cannot reset the choice slot, which still shows the last answer; then
+        // a restart loses the selector's value and the question is armed again.
+        ha.ServiceFailsFor = (service, entity) => service == "select.select_option" && entity == SessionEntities.Field(NodeA, 1);
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = q1 with { Id = "q2" } });
+        await Run(c, 5);
+        ha.ForgetOptimistic(SessionEntities.Decision(NodeA));
+        for (var i = 0; i < 30 && Logged("armed " + NodeA + " again") == 0; i++) { await Run(c, 1); }
+        Assert.Equal(1, Logged("armed " + NodeA + " again"));
+
+        // Send with nothing chosen for this question: the slot's last answer is not this one's.
+        c.Observe(ha.Press(SessionEntities.Submit(NodeA)));
+        await Run(c, 5);
+        Assert.Single(answered);
+    }
+
+    [Fact]
+    public async Task A_restart_that_loses_only_the_reply_box_leaves_the_question_and_its_choice_as_they_are()
+    {
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 90);
+        ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
+        var before = ha.Log.Count;
+
+        ha.ForgetOptimistic(SessionEntities.Reply(NodeA));
+        await Run(c, 60);
+        Assert.Equal(HaDecision.ReplyBlank, (await ha.GetStateAsync(SessionEntities.Reply(NodeA)))!.State);
+        Assert.Equal("Wait for the fix", (await ha.GetStateAsync(SessionEntities.Field(NodeA, 1)))!.State);
+        Assert.Equal(0, Logged("goes on screen again"));
+        Assert.DoesNotContain(ha.Log.Skip(before), m => m.Topic.Contains(NodeA, StringComparison.Ordinal) && m.Topic.EndsWith("/config", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -495,12 +569,12 @@ public sealed class UpkeepTests : IDisposable
         await using var c = Connector(answers: true);
         await Run(c, 90);
 
-        // A restart that keeps the selector and the choice but not the reply box. Once the box is
-        // put back, the card looks as it did, and an answer is given on it before the next pass,
-        // with the watch still down after the restart.
-        ha.ForgetOptimistic(SessionEntities.Reply(NodeA));
-        for (var i = 0; i < 30 && (await ha.GetStateAsync(SessionEntities.Reply(NodeA)))!.State != HaDecision.ReplyBlank; i++) { await Run(c, 1); }
-        Assert.Equal(HaDecision.ReplyBlank, (await ha.GetStateAsync(SessionEntities.Reply(NodeA)))!.State);
+        // A restart that loses the selector's value but keeps the choice slots'. Once the question is
+        // to go on screen again, the card still looks answerable, and an answer is given on it
+        // before the next pass, with the watch still down after the restart.
+        ha.ForgetOptimistic(SessionEntities.Decision(NodeA));
+        for (var i = 0; i < 30 && Logged("goes on screen again") == 0; i++) { await Run(c, 1); }
+        Assert.Equal(1, Logged("goes on screen again"));
         var rearmed = Logged("armed " + NodeA + " again");
         ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
         ha.Press(SessionEntities.Submit(NodeA));
@@ -855,6 +929,44 @@ public sealed class UpkeepTests : IDisposable
         foreach (var topic in forget) { await ha.PublishAsync(topic, "", true); }
         Assert.Empty(ha.Retained);
         Assert.DoesNotContain(await ha.ListEntityRegistryAsync(), e => !e.EntityId.StartsWith("input_boolean.", StringComparison.Ordinal));
+    }
+
+    // The X clears what the machine's retained list names, and an ended session waiting for the
+    // dashboard to stop drawing it is no longer on that list: listed, the writer would draw it as a
+    // live card, and its retirement would wait for ever. So a host stopped with one waiting and then
+    // forgotten leaves that session's entities behind, as the daemon does; the next bridge to start
+    // anywhere finds them listed by no machine and retires them.
+    [Fact]
+    public async Task A_session_waiting_for_retirement_when_its_forgotten_host_stopped_is_retired_by_the_next_bridge_to_start()
+    {
+        var nodeB = HaContract.NodeId(B);
+        sessions.Set(FakeSessions.Copilot(A));
+        sessions.Set(FakeSessions.Copilot(B, response: "Done"));
+        await using (var c = Connector(answers: true))
+        {
+            await Run(c, 30);
+            sessions.End(B);
+            ha.Draw(NodeA, nodeB);
+            await Run(c, 60);
+            Assert.Contains(nodeB, c.PendingRetirement);
+        }
+        var listed = JsonNode.Parse(ha.Retained[HaContract.GlobalAttributesTopic(Slug)])!["sessions"]!.AsArray().Select(s => s!["node"]!.GetValue<string>()).ToList();
+        foreach (var topic in HaContract.ForgetTopics(Slug, listed)) { await ha.PublishAsync(topic, "", true); }
+        Assert.Contains(ha.Retained.Keys, t => t.Contains(nodeB, StringComparison.Ordinal));
+
+        // Another machine's bridge starts (its second start, once its own list is there to show
+        // which sessions are claimed), after the writer has stopped drawing the forgotten machine.
+        ha.Draw();
+        var other = new HaConnectorOptions
+        {
+            MachineName = "DSWETT-HOME", Version = "0.1.0", StateFile = Path.Combine(folder, "other.json"),
+            FieldPinDelay = TimeSpan.Zero, SelectDelay = TimeSpan.Zero, DiscoveryReset = TimeSpan.Zero,
+            RegisteredDelay = TimeSpan.Zero, HelperStateDelay = TimeSpan.Zero,
+        };
+        var none = new FakeSessions();
+        await using (var first = new HaConnector(other, ha, none, () => null, null, m => { lock (log) { log.Add(m); } }, time)) { await Run(first, 5); }
+        await using (var second = new HaConnector(other, ha, none, () => null, null, m => { lock (log) { log.Add(m); } }, time)) { await Run(second, 60); }
+        Assert.DoesNotContain(ha.Retained.Keys, t => t.Contains(nodeB, StringComparison.Ordinal));
     }
 
     [Fact]

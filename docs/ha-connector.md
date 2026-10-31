@@ -708,25 +708,32 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
   * **Read failed:** nothing happens. A republish parks the selector on Idle, which would blank a
     question somebody is answering.
   * **Reply box or selector reads `unknown`:** these have no state topic, so a Home Assistant
-    restart brings them back with no value. A box that lost its value gets `' '` again (words in
-    a box whose selector alone was lost are somebody's, and are left), and the question goes on
-    screen again with fresh baselines. Words left in the box keep the baseline they had, so a
-    form's text field still takes them at Send. `unavailable` is not `unknown`: it is Home
+    restart can bring them back with no value. `unavailable` is not `unknown`: it is Home
     Assistant not answering for the entity yet, and the entity comes back holding its value, so
-    nothing is repaired on it. When there is no question, the selector is parked on Idle.
-    Home Assistant may bring the selector and the choices back with their values while the box
-    comes back empty, so the card looks answerable before the question is armed again. The card
-    is therefore read once with the baselines it was armed with before new ones are taken. An
-    answer given on it in the meantime is delivered rather than taken for the new baseline, and a
-    question answered that way is not put on screen again. Only a read that could see every
-    control counts: one that could not read Send, say, or found the selector or a choice
-    `unavailable`, cannot tell an answer from none, so the card is read again on the next pass
-    before anything is re-armed. A Send made while a choice reads `unavailable` is not refused
-    as incomplete either; it waits for a read that can see the choice. What the card's channels
-    held (Send, the reply payload, the box, the selector) is noted just before it is read, and
-    the new baselines are that. Anything given on the card after it, a Send, a tap, words or a
-    publish, holds the re-arm off until the next read takes it, since arming resets the choices
-    an answer needs.
+    nothing is repaired on it.
+    * Only the box lost its value: it gets `' '` again, and nothing else is touched. The
+      selector and the choices kept their values and their options, so the question is still on
+      screen, and arming it again would only reset choices somebody may be making.
+    * The selector lost its value: words in the box are somebody's and are left (they keep the
+      baseline they had, so a form's text field still takes them at Send), and the question goes
+      on screen again. When there is no question, the selector is parked on Idle; under a
+      question already answered, it is put back on `Awaiting answer...` and nothing is armed.
+    * Before the question is armed again, the card is read once with the baselines it was armed
+      with, because the choices may have come through and an answer given on them since is still
+      an answer. It is delivered rather than taken for the new baseline, and a question answered
+      that way is not put on screen again. What the card's channels held (Send, the reply
+      payload, the box, the selector) is noted just before that read, and the new baselines are
+      that. Anything given on the card after it, a Send, a tap, words or a publish, holds the
+      re-arm off until the next read takes it.
+    * Only a read that could see every control counts: one that could not read Send, say, or
+      found the selector or a choice `unavailable`, cannot tell an answer from none, so the card
+      is read again on the next pass before anything is re-armed. A Send made while a choice
+      reads `unavailable` is not refused as incomplete either; it waits for a read that can see
+      the choice.
+    * Arming again keeps a choice slot that still holds a choice of this question: its options
+      are this question's, as they were, and a Send made while the arm runs (it waits for the
+      slots to register) still finds the choice it was made with. A slot still showing the last
+      question's choice is reset as usual.
   * In both cases the question keeps what it has been through: answered, its attempts, what was
     used. An answer that may have reached the terminal is never typed again because the card was
     put back (`An_answer_that_may_have_landed_is_not_given_again_once_the_card_is_put_back`). An
@@ -755,6 +762,14 @@ a machine is forgotten, and has no forget command an agent, a press or a payload
   and that pressing the X then leaves nothing of the machine in the broker or the registry.
   The one exception is the Detailed activity switch, which is Home Assistant's helper and not
   MQTT's; the daemon's X leaves it too.
+* An ended session still waiting for retirement is not on the machine's retained list (listed,
+  the writer would draw it as a live card, and its retirement, which waits until no dashboard
+  draws it, would never come). So a host stopped with one waiting and then forgotten leaves that
+  session's entities behind, as the daemon does. The next bridge to start anywhere, host or
+  daemon, finds them listed by no machine and retires them through the orphan sweep
+  (`A_session_waiting_for_retirement_when_its_forgotten_host_stopped_is_retired_by_the_next_bridge_to_start`).
+  Clearing them with the X itself needs the writer to read such sessions from an attribute of
+  their own, which is agent-ha-bridge's to add.
 
 A machine is forgotten because it is gone: renamed, reimaged or thrown away. Two cases are not:
 
@@ -780,6 +795,7 @@ Where stage 7 knowingly differs from the daemon:
 | The session check waits until 60 s after a session's entities were published, and republishes only an absence that has lasted 60 s | Before then a missing entity may only be one Home Assistant has not registered yet, or has not loaded again while it starts; the daemon publishes and pins in one step and republishes on the first 404 |
 | The reply box is primed, and put back to `' '` after a restart, only when it holds no value; the daemon blanks it at every session add and every repair | Words in the box are somebody's reply, not yet sent. A machine published again around a card that stayed, or a selector that lost its value on its own, leaves them |
 | A reply box or selector that reads `unavailable` is not repaired; the daemon repairs `unavailable` as it repairs `unknown` | `unavailable` is Home Assistant still starting, or an availability lapse, not a lost value. Repairing it would re-arm a question over a choice being made and blank words not yet sent, for an entity that comes back holding both |
+| After a restart, a question is armed again only when its selector lost its value, never for the reply box alone, and an answered question's selector is put back on `Awaiting answer...` without arming; a choice slot still holding this question's choice keeps it. The daemon re-arms whenever either lost its value (`Restore-DaemonSessionQuestion`) | Arming resets the choices: re-arming a question still on screen would only reset choices somebody may be making, and lose a Send made while it ran |
 | A switch present but with no state yet is not waited for; it is named and left | The daemon only warns. There is nothing to do until Home Assistant finishes starting, and waiting would hold every start for four seconds |
 ### The shadow: comparing with a running daemon
 

@@ -291,10 +291,15 @@ public sealed partial class HaConnector
 
     async Task RePrimeAsync(string id, Published p, HaState reply, DateTimeOffset now, CancellationToken ct)
     {
-        var lost = Unset(reply.State);
-        HaState? decision = null;
-        if (!lost && reply.State != Unavailable)
+        // Unavailable is Home Assistant not answering for the entity yet (still starting, or its
+        // availability lapsed), not a value lost: nothing is decided on it, as nothing is on a read
+        // that failed. Acting on it would re-arm a question over a choice being made and blank
+        // words not yet sent, for an entity that comes back holding both.
+        var boxLost = Unset(reply.State);
+        var selectorLost = false;
+        if (reply.State != Unavailable)
         {
+            HaState? decision;
             try { decision = await ha.GetStateAsync(SessionEntities.Decision(p.Node), ct); }
             catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { return; }
             // The selector gone on its own, the reply box still there: the set goes again, as when
@@ -304,22 +309,35 @@ public sealed partial class HaConnector
                 Lose(id, p, now);
                 return;
             }
-            lost = Unset(decision.State);
+            selectorLost = Unset(decision.State);
         }
         lock (gate)
         {
             restores.Remove(id);
             absentSince.Remove(id);
         }
-        // Unavailable is Home Assistant not answering for the entity yet (still starting, or its
-        // availability lapsed), not a value lost: nothing is decided on it, as nothing is on a read
-        // that failed. Acting on it would re-arm a question over a choice being made and blank
-        // words not yet sent, for an entity that comes back holding both.
-        if (!lost) { return; }
+        if (!boxLost && !selectorLost) { return; }
         var shortId = id[..Math.Min(8, id.Length)];
         // Only a box that lost its value: when only the selector did, the words in the box are
         // somebody's, not yet sent.
-        if (Unset(reply.State)) { await ResetReplyBoxAsync(p.Node, ct); }
+        if (boxLost) { await ResetReplyBoxAsync(p.Node, ct); }
+        if (!selectorLost)
+        {
+            // Only the box lost its value: the selector and the choices kept theirs, and their
+            // options with them, so the question is still on screen. Arming it again would only
+            // reset choices somebody may be making.
+            log($"Home Assistant connector: put {shortId}'s reply box back, which Home Assistant held no value for (restarted?)");
+            return;
+        }
+        if (p.Armed is { Settled: true })
+        {
+            // Answered already (on the card as Home Assistant brought it back, say): nothing is to be
+            // answered on it again, so nothing is armed and no choice reset. The selector only needs
+            // a value, under the question it still shows until the session moves on.
+            await SelectAsync(SessionEntities.Decision(p.Node), HaDecision.Awaiting, ct);
+            log($"Home Assistant connector: put {shortId}'s selector back under its answered question, which Home Assistant held no value for (restarted?)");
+            return;
+        }
         if (p.Armed is { } armed)
         {
             // On screen again on the next pass, with fresh baselines: the question is still waiting
@@ -328,8 +346,8 @@ public sealed partial class HaConnector
             lock (gate)
             {
                 armed.Rearm = true;
-                // Read first where it can be read: Home Assistant may have kept the selector and
-                // the choices, and an answer given on them since it came back is still an answer.
+                // Read first where it can be read: Home Assistant may have kept the choices, and an
+                // answer given on them since it came back is still an answer.
                 armed.ReadFirst = ServesAnswers && options.ConsumeAnswers;
                 dirty.Add(id);
             }

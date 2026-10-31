@@ -267,7 +267,18 @@ public sealed partial class HaConnector
         // read first on the next pass, not armed over: arming resets the choices it would need.
         if (seen is not null && !Same(seen, await SeeCardAsync(p.Node, ct))) { return; }
         var armedSlots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
-        var unset = await RunAsync(HaDecision.Arm(armed.Plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow()), p.Node, ct);
+        IEnumerable<DecisionStep> steps = HaDecision.Arm(armed.Plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow());
+        if (seen is not null)
+        {
+            // Controls that came through the loss: a choice slot still holding a choice keeps it.
+            // Its options are this question's, as they were, and a Send made while the arm runs (it
+            // waits for the slots to register) still finds the choice it was made with.
+            var kept = await ChosenSlotsAsync(armed.Plan, p.Node, ct);
+            // Not one still showing the last question's choice: that is no choice of this one's.
+            foreach (var stale in armed.StaleSlots.Keys) { kept.Remove(SessionEntities.Field(p.Node, stale)); }
+            steps = steps.Where(s => s is not SelectStep select || !kept.Contains(select.EntityId));
+        }
+        var unset = await RunAsync([.. steps], p.Node, ct);
         // Reply-card words held for a press of Send (HeldStamp) are still there to be sent: the
         // baseline stays the one before them, or they would read as nothing new.
         if (!(armed.HeldStamp is { } held && payload.Present && payload.Value == held)) { armed.PayloadBaseline = payload; }
@@ -290,6 +301,22 @@ public sealed partial class HaConnector
         p.ArmedSlots = armed.Plan.UsesFieldSlots ? armed.Plan.Fields.Count : 0;
         p.Cleared = false;
         log($"Home Assistant connector armed {p.Node} again for its question{(armed.Settled ? " (already answered: check the terminal)" : "")}");
+    }
+
+    // The choice slots of this question that hold a choice, not a placeholder or nothing.
+    async Task<HashSet<string>> ChosenSlotsAsync(DecisionPlan plan, string node, CancellationToken ct)
+    {
+        var chosen = new HashSet<string>(StringComparer.Ordinal);
+        if (!plan.UsesFieldSlots) { return chosen; }
+        for (var i = 1; i <= plan.Fields.Count; i++)
+        {
+            if (plan.Fields[i - 1].IsText) { continue; }
+            var slot = SessionEntities.Field(node, i);
+            var shown = (await ha.GetStateAsync(slot, ct))?.State;
+            if (shown is null or HaDecision.Choose or HaDecision.Idle or "unknown" or Unavailable or "") { continue; }
+            chosen.Add(slot);
+        }
+        return chosen;
     }
 
     // Whether the selector waits under this question; if it shows a choice, it is set waiting again.
