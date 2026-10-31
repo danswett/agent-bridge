@@ -122,6 +122,31 @@ test('folding the usage panel is remembered across a reload', async ({ page }) =
   await expect(usage.locator('.usage-body')).toBeHidden();
 });
 
+test('folding the machines panel leaves one line naming the machine, and is remembered across a reload', async ({ page }) => {
+  await openDemo(page);
+  const machines = page.locator('#machines');
+  const toggle = machines.getByRole('button', { name: 'Machines' });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(machines.locator('#machine-list .machine')).toHaveCount(1);
+  await expect(machines.locator('.machines-summary')).toBeHidden();
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(machines.locator('#machine-list')).toBeHidden();
+  await expect(machines.locator('.machines-summary')).toHaveText('Viewing Demo machine · 1 online');
+  // Folding the list leaves the sessions where they were.
+  await expect(page.locator('.session').first()).toBeVisible();
+
+  await page.reload();
+  await page.waitForSelector('html[data-demo-ready]');
+  await expect(machines.getByRole('button', { name: 'Machines' })).toHaveAttribute('aria-expanded', 'false');
+  await expect(machines.locator('#machine-list')).toBeHidden();
+
+  await machines.getByRole('button', { name: 'Machines' }).click();
+  await expect(machines.locator('#machine-list .machine')).toHaveCount(1);
+  await expect(machines.locator('.machines-summary')).toBeHidden();
+});
+
 test('a machine that does not offer usage shows no usage panel', async ({ page }) => {
   await openDemo(page, '&usage=0');
   await expect(page.locator('.session').first()).toBeVisible();

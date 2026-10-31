@@ -109,6 +109,8 @@ a { color: var(--primary); }
 .button:disabled { opacity: .55; cursor: default; }
 
 /* ---- machines ---- */
+.machines-panel h2 { margin: 0; }
+.machines-body { margin-top: 8px; }
 .machines { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .machine-button {
   width: 100%; min-height: var(--tap); display: grid;

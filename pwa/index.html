@@ -52,10 +52,13 @@
       </div>
     </section>
 
-    <section id="machines" class="panel" aria-labelledby="machines-h" hidden>
-      <h2 id="machines-h">Machines</h2>
-      <ul id="machine-list" class="machines"></ul>
-      <p id="machines-empty" class="note" hidden>No machines online. Start Agent Bridge on a machine signed in to the same GitHub account.</p>
+    <section id="machines" class="panel machines-panel" aria-labelledby="machines-h" hidden>
+      <h2 id="machines-h"><button type="button" class="usage-toggle machines-toggle" aria-expanded="true" aria-controls="machines-body"><span class="usage-chevron" aria-hidden="true"></span>Machines</button></h2>
+      <p class="usage-summary machines-summary" hidden></p>
+      <div id="machines-body" class="machines-body">
+        <ul id="machine-list" class="machines"></ul>
+        <p id="machines-empty" class="note" hidden>No machines online. Start Agent Bridge on a machine signed in to the same GitHub account.</p>
+      </div>
     </section>
 
     <section id="sessions" class="sessions" aria-labelledby="sessions-h" tabindex="-1" hidden>
