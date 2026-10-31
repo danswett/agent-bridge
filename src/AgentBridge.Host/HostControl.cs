@@ -31,6 +31,11 @@ public sealed class HostControlOptions
     public required Action Stop { get; init; }
     public required Action Restart { get; init; }
     public TimeProvider Time { get; init; } = TimeProvider.System;
+    // Applies launch.remoteFolderTrust to the running host when the app changes it; null where it
+    // takes a restart like the rest.
+    public Action<bool>? ApplyRemoteFolderTrust { get; init; }
+    // And launch.remoteFolderTrustDevices, the devices approved to answer them.
+    public Action<IReadOnlyList<string>>? ApplyRemoteFolderTrustDevices { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -42,6 +47,8 @@ public sealed class HostControl
     readonly Action<string> log;
     readonly object gate = new();
     readonly DateTimeOffset startedAt;
+    // What the host runs with: options.Running, and a setting applied since without a restart.
+    HostSettingsView running;
     readonly Dictionary<IProtocolChannel, Subscriber> subscribers = [];
     RelayStatus relay;
     SignInStatus signIn = new(SignInState.Idle);
@@ -53,6 +60,7 @@ public sealed class HostControl
         this.options = options;
         this.log = log ?? (_ => { });
         startedAt = options.Time.GetUtcNow();
+        running = options.Running;
         relay = options.LocalOnly ? new RelayStatus(RelayState.Off, Detail: "this host serves this machine's apps only (--local-only)")
             : options.Account() is null ? new RelayStatus(RelayState.SignedOut, options.Relay()?.ToString())
             : new RelayStatus(RelayState.Connecting, options.Relay()?.ToString());
@@ -85,7 +93,7 @@ public sealed class HostControl
 
     HostStatus StatusLocked()
     {
-        var running = options.Running;
+        var running = Volatile.Read(ref this.running);
         var now = Configured();
         return new HostStatus
         {
@@ -110,8 +118,11 @@ public sealed class HostControl
     HostSettingsView Configured()
     {
         var (settings, _) = HostSettings.Load(options.Folder);
-        return new HostSettingsView(settings.RemoteApproval, HostConfigFile.ReadName(options.Folder));
+        return Settings(settings, HostConfigFile.ReadName(options.Folder));
     }
+
+    public static HostSettingsView Settings(HostSettings settings, string? name) =>
+        new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null);
 
     // The relay loop reports each change of its connection here.
     public void SetRelay(RelayState state, string? detail = null)
@@ -162,11 +173,31 @@ public sealed class HostControl
     object Settings(SettingsRequest request)
     {
         if (request.Name is { } name && name.Length > 0 && HostConfigFile.CleanName(name) is null) { throw new ArgumentException("the name has no visible characters"); }
-        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name);
-        log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
+        // Every entry checked, a missing one too, and no more than config.json is read back with:
+        // a list saved that the host then could not read would turn launching off at its next start.
+        if (request.RemoteFolderTrustDevices is { } asked && asked.ToList().FindIndex(d => !TransferProtocol.IsDeviceId(d)) is var at and >= 0)
+        {
+            throw new ArgumentException(asked[at] is { } bad ? $"'{bad}' is not a device id" : "a device id is missing");
+        }
+        var devices = request.RemoteFolderTrustDevices?.Distinct(StringComparer.Ordinal).ToList();
+        if (devices is { Count: > LaunchProtocol.MaxChoices }) { throw new ArgumentException($"at most {LaunchProtocol.MaxChoices} devices can be approved"); }
+        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices);
+        // Answering folder-trust questions from devices applies at once, so it can be allowed
+        // while a question waits; the rest when the host restarts.
+        if (request.RemoteFolderTrust is { } trust && options.ApplyRemoteFolderTrust is { } apply)
+        {
+            apply(trust);
+            lock (gate) { running = running with { RemoteFolderTrust = trust }; }
+        }
+        if (devices is not null && options.ApplyRemoteFolderTrustDevices is { } approve)
+        {
+            approve(devices);
+            lock (gate) { running = running with { RemoteFolderTrustDevices = devices.Count > 0 ? devices : null }; }
+        }
+        log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.RemoteFolderTrust is { } t ? $"; folder trust from devices {(t ? "on" : "off")}" : "")}{(devices is not null ? $"; devices approved for folder trust: {(devices.Count == 0 ? "none" : string.Join(", ", devices.Select(d => d[..8])))}" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
         var now = Configured();
         Changed();
-        return new SettingsResult(now, now != options.Running);
+        return new SettingsResult(now, now != Volatile.Read(ref running));
     }
 
     // Only ever with the relay that issued the account, so the app never sends the token

@@ -24,6 +24,10 @@ public sealed record ScreenRow(int Row, string Text);
 
 public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
 {
+    // Asked by the injector once it holds the typing slot, just before anything is typed (it may
+    // have waited there behind another delivery): a reason to type nothing now, or null.
+    public Func<string?>? Proceed { get; init; }
+
     public const string Up = "\u001b[A";
     public const string Down = "\u001b[B";
     // A lone escape: the key itself, which a CLI tells from an arrow by nothing following it.

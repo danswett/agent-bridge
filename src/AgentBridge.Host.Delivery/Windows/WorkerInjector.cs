@@ -28,7 +28,11 @@ public sealed class WorkerInjector : IConsoleInjector
     {
         if (!File.Exists(path)) { return Nothing($"the injector is missing beside the host ({FileName})"); }
         await One.WaitAsync(cancellationToken);
-        try { return await RunAsync(processId, plan); }
+        try
+        {
+            if (plan.Proceed?.Invoke() is { } stop) { return Nothing($"stopped before typing: {stop}"); }
+            return await RunAsync(processId, plan);
+        }
         finally { One.Release(); }
     }
 

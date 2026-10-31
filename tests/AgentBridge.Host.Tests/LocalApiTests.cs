@@ -29,6 +29,8 @@ public sealed class LocalApiTests : IAsyncLifetime
     // Who each connection is. The app, unless a test says otherwise.
     readonly Callers callers = new();
     readonly List<string> logged = [];
+    readonly List<bool> applied = [];
+    readonly List<IReadOnlyList<string>> approved = [];
     Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> signIn = (_, _, _) => Task.FromException<SignInResult>(new InvalidOperationException("no relay in these tests"));
     (SignInResult Account, Uri Relay)? saved;
     RelayAccount? credential;
@@ -57,6 +59,8 @@ public sealed class LocalApiTests : IAsyncLifetime
             Dev = true,
             Machine = machine,
             Running = new HostSettingsView(RemoteApproval: true),
+            ApplyRemoteFolderTrust = on => { lock (applied) { applied.Add(on); } },
+            ApplyRemoteFolderTrustDevices = ids => { lock (applied) { approved.Add(ids); } },
             Relay = () => new Uri("https://relay.example/"),
             Credential = () => credential,
             SignIn = (relay, show, ct) => signIn(relay, show, ct),
@@ -200,6 +204,39 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal("Desktop", saved["name"]!.GetValue<string>());
         Assert.False(HostSettings.Load(profile).Settings.RemoteApproval);
         Assert.True((await ch.CallAsync<HostStatus>(HostOps.Status)).RestartRequired);
+    }
+
+    [Fact]
+    public async Task Answering_folder_trust_from_a_persons_devices_is_turned_on_from_the_app_beside_the_launch_settings_there()
+    {
+        File.WriteAllText(Path.Combine(profile, "config.json"), """{ "launch": { "workspaces": ["C:\\src"] } }""");
+        var ch = await ConnectAsync();
+        Assert.False((await ch.CallAsync<HostStatus>(HostOps.Status)).Settings.RemoteFolderTrust);
+
+        var result = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrust = true });
+
+        Assert.True(result.Settings.RemoteFolderTrust);
+        // Applied to the running host at once, so it can be allowed while a question waits.
+        Assert.Equal([true], applied);
+        Assert.False(result.RestartRequired);
+        var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(profile, "config.json")))!;
+        Assert.Equal("C:\\src", saved["launch"]!["workspaces"]![0]!.GetValue<string>());
+        Assert.True(HostSettings.Load(profile).Settings.Launch.RemoteFolderTrust);
+
+        // And the devices it may be answered from, approved there too, at once; never a malformed id.
+        var phone = new string('a', 32);
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { remoteFolderTrustDevices = new[] { "phone" } }));
+        Assert.Contains("'phone' is not a device id", refused.Message);
+        Assert.Contains("a device id is missing", (await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { remoteFolderTrustDevices = new[] { phone, null } }))).Message);
+        var many = Enumerable.Range(0, LaunchProtocol.MaxChoices + 1).Select(i => i.ToString("x32")).ToArray();
+        Assert.Contains($"at most {LaunchProtocol.MaxChoices} devices", (await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { remoteFolderTrustDevices = many }))).Message);
+        Assert.Empty(approved);
+        var devices = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrustDevices = new[] { phone, phone } });
+        Assert.Equal([phone], devices.Settings.RemoteFolderTrustDevices!);
+        Assert.Equal([phone], Assert.Single(approved));
+        Assert.False(devices.RestartRequired);
+        Assert.Equal([phone], HostSettings.Load(profile).Settings.Launch.RemoteFolderTrustDevices);
+        Assert.Equal([phone], (await ch.CallAsync<HostStatus>(HostOps.Status)).Settings.RemoteFolderTrustDevices!);
     }
 
     [Fact]
