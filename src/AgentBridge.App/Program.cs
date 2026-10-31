@@ -84,7 +84,7 @@ sealed class SingleInstance : IDisposable
 // What installing, updating and uninstalling do beyond Velopack's own copying.
 static class Lifecycle
 {
-    public static bool Installed => new VelopackUpdater(() => false, InlineDispatcher.Instance).InstalledVersion is not null;
+    public static bool Installed => new VelopackUpdater(() => false, InlineDispatcher.Instance, "default").InstalledVersion is not null;
 
     static HostManager Manager() => App.ManagerFor("default");
 

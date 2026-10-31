@@ -114,6 +114,11 @@
                 <ToggleSwitch Header="Notify me when a session asks something" AutomationProperties.AutomationId="Toasts" IsOn="{x:Bind ViewModel.Toasts, Mode=TwoWay}" />
                 <ToggleSwitch Header="Notify me when a session finishes a turn" AutomationProperties.AutomationId="FinishedToasts" IsEnabled="{x:Bind ViewModel.Toasts, Mode=OneWay}" IsOn="{x:Bind ViewModel.FinishedToasts, Mode=TwoWay}" />
                 <ToggleSwitch Header="Start the app in the notification area when I sign in" AutomationProperties.AutomationId="AppAtSignIn" IsOn="{x:Bind ViewModel.AppStartsAtSignIn, Mode=TwoWay}" />
+                <ToggleSwitch Header="Include pre-releases in updates" AutomationProperties.AutomationId="Prereleases" IsOn="{x:Bind ViewModel.Prereleases, Mode=TwoWay}" />
+                <ToggleSwitch Header="Install updates automatically" AutomationProperties.AutomationId="AutoUpdate" IsOn="{x:Bind ViewModel.AutoUpdate, Mode=TwoWay}" />
+                <TextBlock
+                    Style="{StaticResource AbSecondaryText}"
+                    Text="Checked every half hour. An update waits until no session here has a turn running or a question waiting, for at most six hours, then restarts the app and the host. Never on a read-only host, while agent-ha-bridge runs for you, or while another profile runs from this installation." />
                 <TextBlock Text="{x:Bind local:SettingsView.AppLine(ViewModel.AppVersion, ViewModel.InstalledText), Mode=OneWay}" Style="{StaticResource AbSecondaryText}" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <Button Content="Check for updates" AutomationProperties.AutomationId="CheckUpdates" Click="OnCheckUpdates" IsEnabled="{x:Bind local:Ui.Not(ViewModel.Busy), Mode=OneWay}" />
