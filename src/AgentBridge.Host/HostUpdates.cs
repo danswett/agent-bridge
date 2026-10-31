@@ -114,6 +114,10 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
 
     public async Task<UpdateRelease?> CheckAsync(CancellationToken cancellationToken)
     {
+        // Off the caller's thread before anything else: reading the feed and the preferences, and
+        // whatever Velopack does before its first await, would otherwise run on the connector's
+        // pass, where the heartbeat waits for it and no timeout reaches it.
+        await Task.Yield();
         var m = Manager();
         var info = await m.CheckForUpdatesAsync().WaitAsync(cancellationToken);
         if (info is null) { return null; }

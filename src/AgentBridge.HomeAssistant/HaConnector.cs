@@ -944,6 +944,7 @@ public sealed partial class HaConnector : IAsyncDisposable
     // finished: both have entities in Home Assistant that nothing else may remember.
     IEnumerable<string> LoadLedger()
     {
+        ledgerLoaded = true;
         if (options.StateFile is not { } path || !File.Exists(path)) { return []; }
         try
         {
@@ -971,9 +972,15 @@ public sealed partial class HaConnector : IAsyncDisposable
     readonly object ledgerSave = new();
 
     // Whether it was written (or there is nowhere to write it).
+    // Whether the ledger has been read since this connector was made. Until it has (a host that
+    // stops while agent-ha-bridge still has the machine, before its first start), writing would
+    // replace what an earlier run left - nodes to retire, phones to clear, an update's outcome
+    // still to tell - with nothing.
+    bool ledgerLoaded;
+
     bool SaveLedger()
     {
-        if (options.StateFile is not { } path) { return true; }
+        if (options.StateFile is not { } path || !ledgerLoaded) { return true; }
         lock (ledgerSave) { return WriteLedger(path); }
     }
 

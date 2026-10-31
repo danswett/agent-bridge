@@ -726,6 +726,21 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task A_host_that_stops_before_it_ever_started_keeps_the_outcome_still_to_tell()
+    {
+        Attempt("0.2.0", FakeSessions.T0.AddMinutes(-1));
+        updates.Installed = "0.2.0";
+        daemon = "agent-ha-bridge's daemon (pid 4321)";
+        var c = Connector();
+        await Pass(c);
+        await c.DisposeAsync();
+        Assert.Equal("0.2.0", JsonNode.Parse(File.ReadAllText(StateFile))!["update"]!["target"]!.GetValue<string>());
+        daemon = null;
+        await using var next = await Ready();
+        Assert.Single(ha.NotifiedNow());
+    }
+
+    [Fact]
     public async Task An_outcome_older_than_six_hours_is_not_announced()
     {
         Attempt("0.2.0", FakeSessions.T0.AddHours(-7));

@@ -55,6 +55,32 @@ public sealed class HostUpdatesTests : IDisposable
     }
 
     [Fact]
+    public async Task A_check_does_none_of_its_work_on_the_callers_thread()
+    {
+        // The connector starts a check from its pass: nothing of it may run there. A context that
+        // only queues what is posted to it shows whether any of the check ran before returning.
+        Directory.CreateDirectory(Path.Combine(root, "app"));
+        File.WriteAllText(Path.Combine(root, "app", "feed.txt"), Path.Combine(root, "releases"));
+        var updates = new VelopackHostUpdates(root, "default", () => { }, _ => { });
+        var queued = new Queue<(SendOrPostCallback Callback, object? State)>();
+        var before = SynchronizationContext.Current;
+        Task<UpdateRelease?> check;
+        SynchronizationContext.SetSynchronizationContext(new Queueing(queued));
+        try { check = updates.CheckAsync(CancellationToken.None); }
+        finally { SynchronizationContext.SetSynchronizationContext(before); }
+        Assert.False(check.IsCompleted);
+        Assert.NotEmpty(queued);
+        while (queued.TryDequeue(out var work)) { work.Callback(work.State); }
+        // Not installed here: the check itself fails, but only now, off the caller's thread.
+        await Assert.ThrowsAnyAsync<Exception>(() => check);
+    }
+
+    sealed class Queueing(Queue<(SendOrPostCallback, object?)> queued) : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state) => queued.Enqueue((d, state));
+    }
+
+    [Fact]
     public void Pre_releases_follow_the_apps_setting_for_the_profile_read_as_the_app_reads_it()
     {
         var updates = new VelopackHostUpdates(root, "work", () => { }, _ => { });
