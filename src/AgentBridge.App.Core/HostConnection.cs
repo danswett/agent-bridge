@@ -59,6 +59,9 @@ public sealed class HostConnection : IAsyncDisposable
     // connection counts as connected, on any thread: a delivery whose outcome was lost can
     // tell whether the host that may have acted on it is still the one listening.
     public string? HostInstance => Volatile.Read(ref current)?.Instance;
+    // The host's static key, as the current channel's handshake proved it: only through the relay.
+    // What a command this app signs for that machine is signed for.
+    public byte[]? PeerKey => Volatile.Read(ref current)?.Channel is RelayClientChannel { Channel.PeerStatic: { } k } ? [.. k] : null;
     public string? StateDetail { get; private set; }
     public HelloResult? Hello { get; private set; }
     public IReadOnlyList<string> Capabilities => Hello?.Capabilities ?? [];

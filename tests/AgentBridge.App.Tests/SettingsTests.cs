@@ -109,6 +109,43 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Answering_folder_trust_from_devices_is_turned_on_here_with_this_app_approved_and_each_device_is_approved_here()
+    {
+        const string phone = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", gone = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(phone, "Dana's phone"));
+        link.PeopleNow.Add(new FleetHost(link.DeviceId!, "This app, as the relay lists it"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        host.On(HostOps.Settings, _ => new SettingsResult(new HostSettingsView(true), false));
+        await Connected();
+        Assert.False(settings.RemoteFolderTrust);
+        Assert.False(settings.ShowTrustDevices);
+
+        settings.RemoteFolderTrust = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "host.settings");
+        var first = host.Sent(HostOps.Settings)[0];
+        Assert.True(first.GetProperty("remoteFolderTrust").GetBoolean());
+        Assert.Equal([link.DeviceId], first.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()));
+
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [link.DeviceId!, gone]) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.ShowTrustDevices && settings.TrustDevices.Count == 3, "the devices");
+        Assert.Equal([$"This app ({Environment.MachineName}) · a1a1a1a1", "Dana's phone · b2b2b2b2", "A device not connected now · c3c3c3c3"], settings.TrustDevices.Select(d => d.Label));
+        Assert.Equal([true, false, true], settings.TrustDevices.Select(d => d.Approved));
+
+        var rows = settings.TrustDevices;
+        settings.TrustDevices[1].Approved = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2, "the phone approved");
+        Assert.Equal([link.DeviceId, gone, phone], host.Sent(HostOps.Settings)[1].GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()));
+        Assert.False(host.Sent(HostOps.Settings)[1].TryGetProperty("remoteFolderTrust", out _));
+        // A presence update keeps the rows on screen as they are.
+        link.Raise();
+        await Task.Delay(100);
+        Assert.Same(rows, settings.TrustDevices);
+    }
+
+    [Fact]
     public async Task A_switch_set_to_what_it_already_says_installs_or_sends_nothing()
     {
         await Connected();

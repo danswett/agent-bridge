@@ -28,13 +28,18 @@ public static class Transfers
 
     // A session.transfer command signed by this device (key) for the source (machinePublic):
     // the body's exact bytes, this device's public key, and the MAC only the two can make.
-    public static SignedCommand Sign(P256KeyPair key, byte[] machinePublic, string session, string to, DateTimeOffset now, string request)
+    public static SignedCommand Sign(P256KeyPair key, byte[] machinePublic, string session, string to, DateTimeOffset now, string request) =>
+        SignCommand(key, machinePublic, TransferProtocol.Action, session, to, now, request);
+
+    // Any signed command this device makes (v1-transfer.md, "The signed command"): a transfer, or
+    // an answer to a folder-trust question (action launch.trust:<choice>, session the question).
+    public static SignedCommand SignCommand(P256KeyPair key, byte[] machinePublic, string action, string session, string to, DateTimeOffset now, string request)
     {
         var issued = now.ToUnixTimeSeconds();
         var body = JsonSerializer.SerializeToUtf8Bytes(new CommandBody
         {
             V = 1,
-            Action = TransferProtocol.Action,
+            Action = action,
             Request = request,
             Principal = new CommandPrincipal { Kind = "user", Device = Wire.DeviceId(key.Public) },
             Target = new CommandTarget { Machine = Wire.DeviceId(machinePublic), Session = session },

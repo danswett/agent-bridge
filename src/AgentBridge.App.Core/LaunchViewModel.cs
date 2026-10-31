@@ -23,7 +23,11 @@ public sealed record Choice(string Value, string Label)
 // its transcript over as a new session, in the workspace picked, with a command this app signs as
 // a person's device for the machine it is on (Transfers, v1-transfer.md); the original stays. A
 // transfer to this machine goes to its host through the relay, never the pipe (Fleet.Loopback).
-public sealed class LaunchViewModel : Observable
+//
+// A launched agent asking whether to trust its folder is shown here too, and answered from here
+// where the machine allows it (LaunchViewModel.Trust.cs). A machine that does not take launches
+// now (read-only: agent-ha-bridge runs there) is still listed, to show such a question read-only.
+public sealed partial class LaunchViewModel : Observable
 {
     public const string ApproveHint = "agent-bridge-host workspace add <folder>";
     const string Key = "launch";
@@ -186,7 +190,15 @@ public sealed class LaunchViewModel : Observable
         }
     }
 
-    public string Title => machine is null ? "Start a session" : $"Start a session on {machine.Name}";
+    public string Title => machine is null ? "Start a session" : InspectOnly ? $"Waiting on {machine.Name}" : $"Start a session on {machine.Name}";
+
+    // Why a machine takes nothing from other devices now (agent-ha-bridge runs there), as its
+    // host says in hello; for this machine, as its status says.
+    static string? ReadOnly(Machine m) => m.Host.Hello?.Machine.ReadOnly is { Length: > 0 } r ? r : m.IsLocal && m.Host.Status?.AgentHaBridge is { Length: > 0 } a ? a : null;
+
+    // The machine shown does not take launches now, but is shown for a folder-trust question
+    // that may be waiting on it, read-only.
+    bool InspectOnly => machine is { } m && !m.Host.Can(LaunchProtocol.Capability);
     string Name => machine?.Name ?? "this machine";
 
     public IReadOnlyList<Choice> Resumes { get; private set; } = [];
@@ -229,19 +241,19 @@ public sealed class LaunchViewModel : Observable
     public bool CountTooLong => Encoding.UTF8.GetByteCount(prompt) > LaunchProtocol.MaxPrompt;
     public string PromptPlaceholder { get; private set; } = "What should the session do first? (optional)";
 
-    public bool ShowForm => options is not null;
+    public bool ShowForm => options is not null && !InspectOnly;
     public bool ShowResume { get; private set; }
     public bool ShowWorkspace { get; private set; }
     public bool ShowProfile { get; private set; }
     public bool ShowModel { get; private set; }
     public bool ShowEffort { get; private set; }
     public bool ShowContext { get; private set; }
-    public bool ShowReload => options is not null || error is not null;
+    public bool ShowReload => !InspectOnly && (options is not null || error is not null);
     public bool CanReload => !loading;
 
     public string Note { get; private set; } = "";
     public bool NoteWarns { get; private set; }
-    public string Busy => options?.Busy is { Length: > 0 } b ? $"{Name} is busy: {Sentence(b)}" : "";
+    public string Busy => !InspectOnly && options?.Busy is { Length: > 0 } b ? $"{Name} is busy: {Sentence(b)}" : "";
 
     public string StatusText { get; private set; } = "";
     public string Problem => problem;
@@ -253,7 +265,7 @@ public sealed class LaunchViewModel : Observable
         Raise(nameof(Problem));
     }
     public Tone StatusTone { get; private set; }
-    public bool CanLaunch => options is not null && !Pending;
+    public bool CanLaunch => options is not null && !InspectOnly && !Pending;
     // Try again: a launch that could not be sent goes again with the same request; one the machine
     // reports failed (the agent did not start) goes as a new one, since the machine keeps the
     // failure as that request's outcome.
@@ -303,7 +315,7 @@ public sealed class LaunchViewModel : Observable
             m.Deliveries.Changed -= watch;
             watching.Remove(m);
         }
-        var list = main.AllMachines.Where(m => m.Host.Can(LaunchProtocol.Capability))
+        var list = main.AllMachines.Where(m => m.Host.Can(LaunchProtocol.Capability) || ReadOnly(m) is not null)
             .OrderBy(m => m.IsLocal ? 0 : 1)
             .Select(m => new Choice(m.Key, m.IsLocal ? $"{m.Name} (this machine)" : m.Name)).ToList();
         if (list.SequenceEqual(Machines))
@@ -336,6 +348,7 @@ public sealed class LaunchViewModel : Observable
         }
         machine = next;
         options = null;
+        localTrust = null;
         sources = [];
         sourcesKnown = false;
         sourcesAsked = null;
@@ -389,12 +402,16 @@ public sealed class LaunchViewModel : Observable
         string? failed = null;
         try { got = Known(await m.Host.CallAsync<LaunchOptions>(LaunchProtocol.Options, timeout: OptionsTimeout)); }
         catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or JsonException) { failed = e.Message; }
+        // This machine's pipe lists its folder-trust questions read-only: whether this app may
+        // answer one is its host's word through the relay.
+        var trust = m.IsLocal ? await LocalTrustAsync(got) : null;
         var done = new TaskCompletionSource();
         ui.Post(() =>
         {
             if (load == loads && m == machine)
             {
                 loading = false;
+                localTrust = trust;
                 // A reload that fails says so, rather than leaving choices that may be out of date.
                 if (got is not null) { options = got; } else { options = null; error = failed; }
                 Draw();
@@ -505,7 +522,14 @@ public sealed class LaunchViewModel : Observable
         filling = true;
         try
         {
-            if (o is null)
+            if (InspectOnly)
+            {
+                Resumes = Agents = Workspaces = Profiles = Models = Efforts = Contexts = [];
+                ShowResume = ShowWorkspace = ShowProfile = ShowModel = ShowEffort = ShowContext = false;
+                Note = $"Sessions can't be started on {Name} now{(machine is { } m && ReadOnly(m) is { } why ? $": {Sentence(why)}" : ".")}";
+                NoteWarns = true;
+            }
+            else if (o is null)
             {
                 Resumes = Agents = Workspaces = Profiles = Models = Efforts = Contexts = [];
                 ShowResume = ShowWorkspace = ShowProfile = ShowModel = ShowEffort = ShowContext = false;
@@ -562,7 +586,7 @@ public sealed class LaunchViewModel : Observable
         foreach (var p in new[] { nameof(Resumes), nameof(Resume), nameof(Agents), nameof(Agent), nameof(Workspaces), nameof(Workspace), nameof(Profiles), nameof(Profile),
             nameof(Models), nameof(Model), nameof(Efforts), nameof(Effort), nameof(Contexts), nameof(Context), nameof(Permissions),
             nameof(ShowForm), nameof(ShowResume), nameof(ShowWorkspace), nameof(ShowProfile), nameof(ShowModel), nameof(ShowEffort), nameof(ShowContext),
-            nameof(ShowReload), nameof(CanReload), nameof(Note), nameof(NoteWarns), nameof(Busy), nameof(PromptPlaceholder) })
+            nameof(ShowReload), nameof(CanReload), nameof(Note), nameof(NoteWarns), nameof(Busy), nameof(PromptPlaceholder), nameof(Title) })
         {
             Raise(p);
         }
@@ -603,7 +627,7 @@ public sealed class LaunchViewModel : Observable
     public void Launch()
     {
         var m = machine;
-        if (m is null || options is not { } o || Pending) { return; }
+        if (m is null || options is not { } o || InspectOnly || Pending) { return; }
         var launch = Settings();
         var a = AgentOf(launch.Agent);
         var problem = (launch.Agent is null ? "no agent is installed on this machine" : null)
@@ -700,6 +724,7 @@ public sealed class LaunchViewModel : Observable
     // via: the Deliveries it came from, when not m's own (this machine's loopback).
     void OnDelivery(Machine m, Delivery d, Machine? via = null)
     {
+        if (d.Key.StartsWith(TrustKey, StringComparison.Ordinal)) { OnTrustDelivery(m, d); return; }
         if (d.Key != Key) { return; }
         if (m == lastMachine && (via ?? m) == lastVia && (last is null || d.Request == last.Request)) { last = d; Show(); }
         if (d.State != DeliveryState.Done || handled == d.Request) { return; }
@@ -738,6 +763,7 @@ public sealed class LaunchViewModel : Observable
             Raise(nameof(StatusTone));
         }
         foreach (var p in new[] { nameof(CanLaunch), nameof(ShowResend), nameof(ShowOpen), nameof(State) }) { Raise(p); }
+        DrawTrust();
     }
 
     // What a launch's progress or outcome says (describeLaunch in the PWA).

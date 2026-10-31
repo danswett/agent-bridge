@@ -70,4 +70,10 @@ public sealed partial class LaunchView : UserControl
     void OnResend(object sender, RoutedEventArgs e) => viewModel?.Resend();
     void OnOpen(object sender, RoutedEventArgs e) => viewModel?.OpenSession();
     void OnReload(object sender, RoutedEventArgs e) => _ = viewModel?.RefreshAsync();
+
+    static TrustCard? CardOf(object sender) => (sender as FrameworkElement)?.DataContext as TrustCard;
+    void OnTrust(object sender, RoutedEventArgs e) => CardOf(sender)?.Trust();
+    void OnQuit(object sender, RoutedEventArgs e) => CardOf(sender)?.Quit();
+    void OnTrustResend(object sender, RoutedEventArgs e) => CardOf(sender)?.Resend();
+    async void OnTrustAllow(object sender, RoutedEventArgs e) { if (CardOf(sender) is { } c) { await c.AllowHereAsync(); } }
 }

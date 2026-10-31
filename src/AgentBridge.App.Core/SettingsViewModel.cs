@@ -110,6 +110,76 @@ public sealed class SettingsViewModel : Observable
         set { if (Status is { } s && s.Settings.RemoteApproval != value) { _ = RunAsync(() => host.CallAsync(HostOps.Settings, new SettingsRequest(RemoteApproval: value))); } }
     }
 
+    // launch.remoteFolderTrust: a person may answer a launched agent's folder-trust question from
+    // their devices, each approved here (launch.remoteFolderTrustDevices). Both apply at once.
+    // Turned on with none approved yet, this app is approved with it: the way most people
+    // will answer, and a setting that lets no device answer would look broken.
+    public bool RemoteFolderTrust
+    {
+        get => Status?.Settings.RemoteFolderTrust ?? false;
+        set
+        {
+            if (Status is not { } s || s.Settings.RemoteFolderTrust == value) { return; }
+            var approve = value && (s.Settings.RemoteFolderTrustDevices ?? []).Count == 0 && fleet?.DeviceId is { } me ? new[] { me } : null;
+            _ = RunAsync(() => host.CallAsync(HostOps.Settings, new SettingsRequest(RemoteFolderTrust: value, RemoteFolderTrustDevices: approve)));
+        }
+    }
+
+    // The devices that may answer: this app, the account's people's devices the relay lists now
+    // (the PWA on a phone or browser, this app on another machine), and any approved that are not
+    // connected now. Each with whether it is approved, which a person changes here.
+    public IReadOnlyList<TrustDevice> TrustDevices { get; private set; } = [];
+    public bool ShowTrustDevices => RemoteFolderTrust && TrustDevices.Count > 0;
+
+    Fleet? fleet;
+
+    // The account's devices come from the relay link, made after this page.
+    internal void AttachFleet(Fleet f)
+    {
+        fleet = f;
+        f.Changed += DrawDevices;
+        DrawDevices();
+    }
+
+    void DrawDevices()
+    {
+        var approved = Status?.Settings.RemoteFolderTrustDevices ?? [];
+        var me = fleet?.DeviceId;
+        var rows = new List<(string Id, string Label)>();
+        if (me is not null) { rows.Add((me, $"This app ({Environment.MachineName})")); }
+        foreach (var p in fleet?.People ?? [])
+        {
+            if (p.Id != me && rows.All(r => r.Id != p.Id)) { rows.Add((p.Id, p.Name is { Length: > 0 } n ? n : "A device")); }
+        }
+        foreach (var id in approved.Where(id => rows.All(r => r.Id != id))) { rows.Add((id, "A device not connected now")); }
+        var next = rows.Select(r => (r.Id, Label: $"{r.Label} · {r.Id[..Math.Min(8, r.Id.Length)]}", Approved: approved.Contains(r.Id))).ToList();
+        // The same rows, kept: a presence update does not recreate the checkboxes on screen.
+        if (next.Count == TrustDevices.Count && next.Zip(TrustDevices).All(p => p.First.Id == p.Second.Id && p.First.Label == p.Second.Label))
+        {
+            foreach (var (row, d) in next.Zip(TrustDevices)) { d.Show(row.Approved); }
+        }
+        else
+        {
+            TrustDevices = [.. next.Select(r => new TrustDevice(this, r.Id, r.Label, r.Approved))];
+            Raise(nameof(TrustDevices));
+        }
+        Raise(nameof(ShowTrustDevices));
+    }
+
+    internal async Task ApproveAsync(TrustDevice device, bool on)
+    {
+        if (Status is not { } s) { device.Reraise(); return; }
+        var now = (s.Settings.RemoteFolderTrustDevices ?? []).ToList();
+        if (now.Contains(device.Id) != on)
+        {
+            if (on) { now.Add(device.Id); } else { now.Remove(device.Id); }
+            await RunAsync(() => host.CallAsync(HostOps.Settings, new SettingsRequest(RemoteFolderTrustDevices: now)));
+        }
+        // What the host says now, whatever the checkbox was left showing.
+        DrawDevices();
+        device.Reraise();
+    }
+
     // Each setter acts only on a change: a binding refreshing pushes the same value back.
     public bool StartAtSignIn
     {
@@ -148,6 +218,7 @@ public sealed class SettingsViewModel : Observable
     public void Refresh()
     {
         if (!nameEdited) { machineName = Status?.Settings.Name ?? Status?.Machine.Name ?? ""; }
+        DrawDevices();
         RaiseAll();
     }
 
@@ -250,4 +321,28 @@ public sealed class SettingsViewModel : Observable
     }
 
     static string Host(string? url) => Uri.TryCreate(url, UriKind.Absolute, out var u) ? u.Host : url ?? "the relay";
+}
+
+// One device on the Settings page that may be approved to answer folder-trust questions.
+public sealed class TrustDevice(SettingsViewModel page, string id, string label, bool approved) : Observable
+{
+    bool approved = approved;
+
+    public string Id { get; } = id;
+    public string Label { get; } = label;
+
+    public bool Approved
+    {
+        get => approved;
+        set { if (value != approved) { _ = page.ApproveAsync(this, value); } }
+    }
+
+    internal void Reraise() => Raise(nameof(Approved));
+
+    internal void Show(bool now)
+    {
+        if (approved == now) { return; }
+        approved = now;
+        Raise(nameof(Approved));
+    }
 }
