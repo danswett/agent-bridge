@@ -64,18 +64,14 @@ public sealed class SystemProcessInspector : IProcessInspector
         };
         if (name is null) { return new([], true); }
 
-        var names = CandidateNames(name);
-        var found = new List<AgentProcess>();
-        var unidentified = new List<AgentProcess>();
-        var seen = new HashSet<int>();
-        var live = new HashSet<(int, long)>();
-        var known = true;
         var listed = true;
-        foreach (var candidate in names)
+        var listing = new List<ListedProcess>();
+        var seen = new HashSet<int>();
+        foreach (var candidate in CandidateNames(name))
         {
             Process[] processes;
             try { processes = Process.GetProcessesByName(candidate); }
-            catch (Exception e) when (e is InvalidOperationException or Win32Exception or PlatformNotSupportedException) { known = listed = false; continue; }
+            catch (Exception e) when (e is InvalidOperationException or Win32Exception or PlatformNotSupportedException) { listed = false; continue; }
             foreach (var process in processes)
             {
                 using (process)
@@ -85,28 +81,14 @@ public sealed class SystemProcessInspector : IProcessInspector
                     DateTimeOffset? started = null;
                     try { started = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero); }
                     catch (Exception e) when (e is InvalidOperationException or Win32Exception or NotSupportedException) { }
-                    var key = (id, started?.UtcTicks ?? 0);
-                    var commandLine = CommandLineOf(key);
-                    // Another user's agent is none of this user's sessions, and nothing of it can
-                    // be read: taken for one, it held discovery for as long as it ran (#143).
-                    if (commandLine is null && OperatingSystem.IsWindows() && ProcessOwnership.AnotherUsers(id)) { continue; }
-                    live.Add(key);
-                    // agent-ha-bridge's usage snapshot (Get-BridgeWorktreeUsage) gives up on a
-                    // runtime it cannot identify outside Windows. On Windows it never looks at
-                    // node at all; every other user's and service's node is listed there too,
-                    // and an unreadable one would keep every worktree for ever.
-                    if (candidate is "node" or "bun" && string.IsNullOrWhiteSpace(commandLine))
-                    {
-                        if (!OperatingSystem.IsWindows()) { known = false; }
-                        unidentified.Add(new AgentProcess(id, started, null));
-                        continue;
-                    }
-                    if (candidate is "node" or "bun" && !IsAgentScript(agent, name, commandLine)) { continue; }
-                    found.Add(new AgentProcess(id, started, commandLine));
+                    listing.Add(new(candidate, id, started, CommandLineOf((id, started?.UtcTicks ?? 0))));
                 }
             }
         }
 
+        var (observation, kept) = Classify(agent, name, listing, listed, OperatingSystem.IsWindows(),
+            id => OperatingSystem.IsWindows() && ProcessOwnership.AnotherUsers(id));
+        var live = kept.Select(p => (p.Id, p.StartedAt?.UtcTicks ?? 0)).ToHashSet();
         lock (_gate)
         {
             // Forget processes that have gone, so a host up for days does not keep one
@@ -117,7 +99,42 @@ public sealed class SystemProcessInspector : IProcessInspector
                 _commandLines.Remove(key);
             }
         }
-        return new(found, known) { Listed = listed, Unidentified = unidentified };
+        return observation;
+    }
+
+    internal sealed record ListedProcess(string Candidate, int Id, DateTimeOffset? StartedAt, string? CommandLine);
+
+    // What a listing of candidate processes says about this agent, apart from reading the
+    // machine, so the filtering is testable. Kept are the processes whose cached command
+    // lines stay remembered.
+    internal static (AgentProcessObservation Observation, List<ListedProcess> Kept) Classify(
+        AgentKind agent, string name, IEnumerable<ListedProcess> listing, bool listed, bool windows, Func<int, bool> anotherUsers)
+    {
+        var found = new List<AgentProcess>();
+        var unidentified = new List<AgentProcess>();
+        var kept = new List<ListedProcess>();
+        var known = listed;
+        foreach (var process in listing)
+        {
+            var (candidate, id, started, commandLine) = process;
+            // Another user's agent is none of this user's sessions, and nothing of it can
+            // be read: taken for one, it held discovery for as long as it ran (#143).
+            if (commandLine is null && windows && anotherUsers(id)) { continue; }
+            kept.Add(process);
+            // agent-ha-bridge's usage snapshot (Get-BridgeWorktreeUsage) gives up on a
+            // runtime it cannot identify outside Windows. On Windows it never looks at
+            // node at all; every other user's and service's node is listed there too,
+            // and an unreadable one would keep every worktree for ever.
+            if (candidate is "node" or "bun" && string.IsNullOrWhiteSpace(commandLine))
+            {
+                if (!windows) { known = false; }
+                unidentified.Add(new AgentProcess(id, started, null));
+                continue;
+            }
+            if (candidate is "node" or "bun" && !IsAgentScript(agent, name, commandLine)) { continue; }
+            found.Add(new AgentProcess(id, started, commandLine));
+        }
+        return (new(found, known) { Listed = listed, Unidentified = unidentified }, kept);
     }
 
     static bool IsRunning(int pid)
