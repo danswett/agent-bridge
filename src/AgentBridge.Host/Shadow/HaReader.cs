@@ -308,6 +308,8 @@ public sealed class DaemonHaReader : IDisposable
                 .ToList();
             ShadowUsage? best = null;
             string? bestSlug = null;
+            // The latest reading of the account that has lapsed, should no current one be found.
+            ShadowUsage? stale = null;
             foreach (var slug in slugs)
             {
                 foreach (var sensor in sensors)
@@ -330,12 +332,30 @@ public sealed class DaemonHaReader : IDisposable
                     if (!u.Reading || !SameAccount(client, u.AccountKey is { Length: > 0 } ? u.AccountKey : u.Account, account) || u.MeasuredAt is not { } at) { continue; }
                     // Neither old nor ahead of now: a clock running ahead would otherwise outrank a
                     // current reader, as Test-BridgeUsageCovered refuses one more than a poll ahead.
-                    if (access.UsagePace.Lapsed(at, readAt) || at - readAt > access.UsagePace.Poll) { continue; }
+                    if (at - readAt > access.UsagePace.Poll) { continue; }
+                    if (access.UsagePace.Lapsed(at, readAt))
+                    {
+                        if (stale?.MeasuredAt is not { } older || older < at) { stale = u; }
+                        continue;
+                    }
                     if (best?.MeasuredAt is { } was && was >= at) { continue; }
                     (best, bestSlug) = (u, slug);
                 }
             }
-            if (best is null || bestSlug is null) { continue; }
+            if (best is null || bestSlug is null)
+            {
+                // A place with no figure of this daemon's own whose account reader has stopped
+                // reading: what the daemon's machines show for it is that lapsed figure, which says
+                // nothing about now, as a lapsed figure of its own does not (UsageLapsed). Taken as
+                // no reading at all, it was a mismatch: on DEV-VM1, 2026-10-30 22:40 PT, while
+                // DSWETT-HOME went 35 minutes without reading the login (#40).
+                if (stale is not null && !usage.ContainsKey(key))
+                {
+                    standing.Remove(key);
+                    usage[key] = stale with { Lapsed = true };
+                }
+                continue;
+            }
             lastReader[key] = bestSlug;
             // Not confirmed beyond its measurement: how often that machine re-asserts an unchanged
             // figure is its own configuration, not this one's. What it held across reads here still

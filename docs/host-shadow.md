@@ -92,6 +92,10 @@ own token. Enforced in code (`Shadow/HaReader.cs`), and tested:
   machine reads it. Found as `usage.missingOnDaemon` on `copilot_2` for hours on DEV-VM1
   (2026-10-30), while DSWETT-HOME, the daemon's dashboard writer, read that login. With no
   named machine reading it, the daemon has no reading, and that is still a mismatch.
+  If the only reader of that login has itself stopped reading (its figure lapsed), its
+  figure is what the daemon's machines show, and it is **not compared**, as a lapsed figure of
+  this daemon's own is not. Taking it as no reading at all counted a mismatch on DEV-VM1 on
+  2026-10-30, 22:40 PT, while DSWETT-HOME went 35 minutes without reading the login.
 * **The token.** `homeAssistant.baseUrl` and `homeAssistant.token` are read from
   `~/.agent-ha-bridge/config.json` at the moment of each read (so a rotated token is the one
   used), sent in that request's `Authorization` header, and dropped. Never logged, written

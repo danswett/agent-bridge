@@ -1016,6 +1016,31 @@ public sealed class ShadowTests : IDisposable
         Assert.Equal([.. reader.Entities.Select(e => "/api/states/" + e)], inner.Seen.Select(r => r.Path));
     }
 
+    // Seen on DEV-VM1 (#40), 2026-10-30 22:40 PT: DSWETT-HOME, the only reader of the host's further
+    // login, went 35 minutes without reading it. A lapsed figure is not compared, as this daemon's
+    // own is not; it is not the daemon having no reading.
+    [Fact]
+    public async Task A_place_whose_login_reader_has_lapsed_is_not_compared_rather_than_missing_on_the_daemon()
+    {
+        var now = f.Time.GetUtcNow();
+        var inner = new FakeHomeAssistant(entity => entity switch
+        {
+            "sensor.agent_bridge_fixture_usage_copilot" => UsageState("copilot", 40, now),
+            "select.agent_bridge_fixture_new_resume" => ResumeState("Agency on OTHER-PC: Shared from there (abcdef12)"),
+            "sensor.agent_bridge_other_pc_usage_copilot_2" => UsageState("copilot", 52, now - TimeSpan.FromHours(11), account: "second-login", slug: "other_pc"),
+            _ => null,
+        });
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time);
+        Config();
+        var host = new Dictionary<string, ShadowUsage> { ["copilot"] = Reading(40, now), ["copilot_2"] = Reading(52, now, "second-login") };
+        var daemon = (await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!, host)).Usage;
+        var compared = ShadowCompare.Compare(new ShadowView { Usage = daemon, Resumable = [] }, new ShadowView { SeesAgentHaBridge = true, Usage = host, Resumable = [] });
+
+        Assert.DoesNotContain(compared.Differences, d => d.Kind.StartsWith("usage.", StringComparison.Ordinal));
+        Assert.Contains(ShadowCompare.UsageLapsed, compared.NotCompared);
+        Assert.True(daemon!["copilot_2"].Lapsed);
+    }
+
     // Found in review (#105): an empty sensor of this daemon's own cleared the history of the
     // reader's figure standing in for it, so that figure never held from one read to the next; and
     // with an old measured_at, its reader was looked for by its own account, here none.
