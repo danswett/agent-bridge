@@ -695,8 +695,10 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
   `Restore-DaemonSessionEntities`). On every reconcile the connector checks each session it has
   published for at least 60 s (sooner, its entities may not have registered yet). It reads the
   session's reply box, or its status sensor when this host serves no answers.
-  * **Not there** (a 404) while the session runs here: the whole set is published again on the
-    next pass, its status and activity from what the session holds. A question on the card goes
+  * **Not there** (a 404) for at least 60 s while the session runs here: the whole set is
+    published again, its status and activity from what the session holds. A shorter absence is
+    left alone: a Home Assistant that is still starting answers 404 until MQTT has loaded the
+    entities again, and republishing then would reset a question somebody may be answering. A question on the card goes
     on screen again. This is said the first time and every tenth attempt.
   * **Read failed:** nothing happens. A republish parks the selector on Idle, which would blank a
     question somebody is answering.
@@ -751,7 +753,7 @@ Where stage 7 knowingly differs from the daemon:
 | A create that comes back as anything but the switch's id or a numbered copy of it is left alone; the daemon deletes whatever came back | Only what the connector can show is its own is ever deleted |
 | An online sensor that is absent, rather than present and silent, is answered by publishing the whole machine again, not only the sensor | It is absent because its config went, most likely to the X pressed while the machine's liveness had lapsed, which removed every entity of the machine; a running machine was not gone. Bounded by the same three attempts |
 | The rebuild count starts again when the connector resumes after agent-ha-bridge had the machine | The daemon had the sensor meanwhile; a daemon starting has a count of its own too |
-| The session check waits until 60 s after a session's entities were published | Before then a missing entity may only be one Home Assistant has not registered yet; the daemon publishes and pins in one step and checks on its next reconcile |
+| The session check waits until 60 s after a session's entities were published, and republishes only an absence that has lasted 60 s | Before then a missing entity may only be one Home Assistant has not registered yet, or has not loaded again while it starts; the daemon publishes and pins in one step and republishes on the first 404 |
 | A switch present but with no state yet is not waited for; it is named and left | The daemon only warns. There is nothing to do until Home Assistant finishes starting, and waiting would hold every start for four seconds |
 ### The shadow: comparing with a running daemon
 

@@ -282,7 +282,7 @@ public sealed class UpkeepTests : IDisposable
             await ha.PublishAsync(topic, "", true);
         }
         Assert.False(ha.Exists(status));
-        await Run(c, 70);
+        await Run(c, 140);
         Assert.True(ha.Exists(status));
         Assert.True(ha.Exists($"sensor.{NodeA}_activity"));
         Assert.Equal("working", (await ha.GetStateAsync(status))!.State);
@@ -308,8 +308,35 @@ public sealed class UpkeepTests : IDisposable
         await Run(c, 120);
         Assert.False(ha.Exists($"sensor.{NodeA}_status"));
         ha.GetFailsFor = null;
-        await Run(c, 20);
+        // Read gone, but not yet for a minute: a Home Assistant still starting answers so too.
+        await Run(c, 50);
+        Assert.False(ha.Exists($"sensor.{NodeA}_status"));
+        await Run(c, 30);
         Assert.True(ha.Exists($"sensor.{NodeA}_status"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_card_Home_Assistant_answers_for_again_within_the_minute_is_left_as_it_is(bool answers)
+    {
+        sessions.Set(FakeSessions.Copilot(A));
+        await using var c = Connector(answers);
+        await Run(c, 70);
+        // Home Assistant starting up, twice: the entities answer 404 until MQTT has loaded them
+        // again, each time for under a minute.
+        ha.ClearLog();
+        var sentinel = answers ? SessionEntities.Reply(NodeA) : $"sensor.{NodeA}_status";
+        for (var i = 0; i < 2; i++)
+        {
+            ha.Loading.Add(sentinel);
+            await Run(c, 40);
+            ha.Loading.Clear();
+            await Run(c, 40);
+        }
+        await Run(c, 60);
+        Assert.Equal(0, Logged("are gone from Home Assistant"));
+        Assert.Empty(ha.To(HaContract.Topics(NodeA).Availability));
     }
 
     static readonly Field Release = new()
@@ -373,7 +400,7 @@ public sealed class UpkeepTests : IDisposable
             foreach (var topic in HaContract.ForgetTopics(Slug, [NodeA]).Where(t => t.Contains(NodeA, StringComparison.Ordinal))) { await ha.PublishAsync(topic, "", true); }
         }
         else { ha.ForgetOptimistic(); }
-        await Run(c, 90);
+        await Run(c, 150);
         Assert.Equal(HaDecision.Awaiting, (await ha.GetStateAsync(SessionEntities.Decision(NodeA)))!.State);
 
         // The question is still the one asked, and the card shows it; a second Send is not a
@@ -456,7 +483,7 @@ public sealed class UpkeepTests : IDisposable
         await ha.PublishAsync(HaContract.DecisionConfig(HaContract.Topics(NodeA), "x", Machine, [HaDecision.Idle], true).Topic, "", true);
         Assert.Null(await ha.GetStateAsync(decision));
         Assert.NotNull(await ha.GetStateAsync(SessionEntities.Reply(NodeA)));
-        await Run(c, 80);
+        await Run(c, 150);
         var armed = (await ha.GetStateAsync(decision))!;
         Assert.Equal(HaDecision.Awaiting, armed.State);
         Assert.Equal("q1", armed.Attributes.GetProperty("decision_id").GetString());

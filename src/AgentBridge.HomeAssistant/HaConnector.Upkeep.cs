@@ -18,12 +18,18 @@ public sealed partial class HaConnector
     bool republishing;
     // Restore-DaemonSessionEntities' attempts, by session: said the first time and every tenth.
     readonly Dictionary<string, int> restores = new(StringComparer.Ordinal);
+    // When each session's entities were first read as gone, this time.
+    readonly Dictionary<string, DateTimeOffset> absentSince = new(StringComparer.Ordinal);
 
     void ResetUpkeep()
     {
         liveness = null;
         republishing = false;
-        lock (gate) { restores.Clear(); }
+        lock (gate)
+        {
+            restores.Clear();
+            absentSince.Clear();
+        }
     }
 
     // Initialize-CopilotVerboseToggle: the switch the dashboard draws as Detail on this machine's row.
@@ -202,8 +208,10 @@ public sealed partial class HaConnector
     // for at least EntityRestore (sooner, its entities may not have registered yet):
     //   * one whose card is gone from Home Assistant while it runs here is published again whole
     //     (Restore-DaemonSessionEntities): its entities were removed and nothing else would ever
-    //     bring them back. Only on a determinate "not there"; a read that failed decides nothing,
-    //     because a republish parks the selector on Idle and would blank a question being answered;
+    //     bring them back. Only on a determinate "not there", and one that has lasted EntityRestore:
+    //     a Home Assistant starting up answers 404 for MQTT entities it has not loaded yet, and a
+    //     republish parks the selector on Idle, putting a question back on screen for nothing. A
+    //     read that failed decides nothing at all;
     //   * one whose reply box or selector Home Assistant holds no value for (they have no state
     //     topic, so a Home Assistant restart brings them back unknown) has the box blanked and its
     //     question armed again, or the selector parked on Idle when there is none.
@@ -221,21 +229,36 @@ public sealed partial class HaConnector
             var shortId = id[..Math.Min(8, id.Length)];
             if (state is null)
             {
-                Lose(id, p);
+                Lose(id, p, now);
                 continue;
             }
-            if (ServesAnswers) { await RePrimeAsync(id, p, state, ct); }
+            if (ServesAnswers) { await RePrimeAsync(id, p, state, now, ct); }
             // Seen back: a session torn down again starts its count afresh.
-            else { lock (gate) { restores.Remove(id); } }
+            else
+            {
+                lock (gate)
+                {
+                    restores.Remove(id);
+                    absentSince.Remove(id);
+                }
+            }
         }
     }
 
-    // Restore-DaemonSessionEntities' trigger: published again whole on the next pass.
-    void Lose(string id, Published p)
+    // Restore-DaemonSessionEntities' trigger: published again whole on the next pass, once they have
+    // been gone for EntityRestore.
+    void Lose(string id, Published p, DateTimeOffset now)
     {
         int attempt;
         lock (gate)
         {
+            if (!absentSince.TryGetValue(id, out var since))
+            {
+                absentSince[id] = now;
+                return;
+            }
+            if (now - since < options.EntityRestore) { return; }
+            absentSince.Remove(id);
             attempt = restores.TryGetValue(id, out var was) ? was + 1 : 1;
             restores[id] = attempt;
             p.Lost = true;
@@ -246,7 +269,7 @@ public sealed partial class HaConnector
         else if (attempt % 10 == 0) { log($"Home Assistant connector: still publishing the entities of {shortId} ({p.Name}) again after {attempt} attempts"); }
     }
 
-    async Task RePrimeAsync(string id, Published p, HaState reply, CancellationToken ct)
+    async Task RePrimeAsync(string id, Published p, HaState reply, DateTimeOffset now, CancellationToken ct)
     {
         var lost = Unset(reply.State);
         if (!lost)
@@ -258,12 +281,16 @@ public sealed partial class HaConnector
             // the box is gone, since a selector is published and pinned with the rest.
             if (decision is null)
             {
-                Lose(id, p);
+                Lose(id, p, now);
                 return;
             }
             lost = Unset(decision.State);
         }
-        lock (gate) { restores.Remove(id); }
+        lock (gate)
+        {
+            restores.Remove(id);
+            absentSince.Remove(id);
+        }
         if (!lost) { return; }
         var shortId = id[..Math.Min(8, id.Length)];
         await ResetReplyBoxAsync(p.Node, ct);
