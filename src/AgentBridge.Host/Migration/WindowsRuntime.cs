@@ -55,19 +55,29 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
     // this desktop. Anything else (a refusal of another kind, the session unknown) is not known.
     static bool AnotherUsers(int pid)
     {
+        int? openError;
         using (var handle = OpenProcess(ProcessQueryLimitedInformation, false, pid))
         {
-            if (!handle.IsInvalid || Marshal.GetLastPInvokeError() != ErrorAccessDenied) { return false; }
+            openError = handle.IsInvalid ? Marshal.GetLastPInvokeError() : null;
         }
+        if (openError is null) { return false; }
+        int? session = null;
+        var gone = false;
         try
         {
             using var process = Process.GetProcessById(pid);
-            using var self = Process.GetCurrentProcess();
-            return process.SessionId != self.SessionId;
+            session = process.SessionId;
         }
-        catch (ArgumentException) { return true; }
-        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { return false; }
+        catch (ArgumentException) { gone = true; }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
+        using var self = Process.GetCurrentProcess();
+        return AnotherUsers(openError, session, gone, self.SessionId);
     }
+
+    // openError is null when the open succeeded; session is null when it could not be read; gone
+    // when the process has exited since (not running, so not ours to wait for).
+    internal static bool AnotherUsers(int? openError, int? session, bool gone, int ownSession) =>
+        openError == ErrorAccessDenied && (gone || session is { } s && s != ownSession);
 
     const int ProcessQueryLimitedInformation = 0x1000;
     const int ErrorAccessDenied = 5;
