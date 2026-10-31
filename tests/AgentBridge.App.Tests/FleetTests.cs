@@ -181,8 +181,10 @@ public sealed class FleetTests : IAsyncLifetime
 
         await using var late = new Fleet(signedOut, other, ui, h => throw new InvalidOperationException("no machines"));
 
-        Assert.Contains(nameof(MainViewModel.FleetNote), raised);
-        Assert.Contains(nameof(MainViewModel.HasFleetNote), raised);
+        // Read under the UI gate: posted actions from the host link still raise into it.
+        var seen = TestUi.Read(() => raised.ToList());
+        Assert.Contains(nameof(MainViewModel.FleetNote), seen);
+        Assert.Contains(nameof(MainViewModel.HasFleetNote), seen);
     }
 
     [Fact]
