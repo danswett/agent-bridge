@@ -697,13 +697,21 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             try
             {
                 var state = runtime.Task(task.Name);
+                var daemon = task.Name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal);
                 if (state is not { Enabled: true })
                 {
                     runtime.SetEnabled(task.Name, true);
                     reenabled.Add(task.Name);
                 }
-                else { alreadyOn.Add(task.Name); }
-                var running = task.Name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal) ? daemonRunning : state is { Running: true };
+                else
+                {
+                    alreadyOn.Add(task.Name);
+                    // From an older record, still enabled: perhaps one the scheduler refused to
+                    // disable, which it would refuse to run too. Only the daemon, which must run,
+                    // is started.
+                    if (task.Disabled is null && !daemon) { continue; }
+                }
+                var running = daemon ? daemonRunning : state is { Running: true };
                 if (!running) { runtime.Start(task.Name); }
             }
             catch (Exception e) when (e is not OperationCanceledException)

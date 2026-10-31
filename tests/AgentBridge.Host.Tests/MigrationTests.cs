@@ -1247,6 +1247,30 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Equal([$"enable {daemon}", $"start {daemon}"], _f.Runtime_.Calls);
     }
 
+    [Fact]
+    public async Task An_older_records_task_still_enabled_is_not_started_by_a_rollback_unless_it_is_the_daemon()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var path = MigrationRecord.PathIn(_f.Profile);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        foreach (var t in json["tasks"]!.AsArray()) { t!.AsObject().Remove("disabled"); }
+        json.AsObject().Remove("daemonRunning");
+        File.WriteAllText(path, json.ToJsonString());
+        // As an older build left a keep-awake task the scheduler refused to disable.
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        _f.Runtime_.Refused.Add(keepAwake);
+        _f.Runtime_.Calls.Clear();
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.Equal([$"enable {daemon}", $"start {daemon}"], _f.Runtime_.Calls);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+    }
+
     [Theory]
     [InlineData(" Claude ", "claude", false)]
     [InlineData("gemini", "auto", true)]
