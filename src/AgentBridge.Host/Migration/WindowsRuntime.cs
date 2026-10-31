@@ -33,32 +33,47 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
     public bool SupervisorSeen(string installationId) => _probe.SupervisorSeen(installationId);
 
     public int? Running(AgentBridge.Protocol.AgentKind agent, DateTimeOffset? startedBefore = null) =>
-        CountRunning(new SystemProcessInspector().Observe(agent), startedBefore, InThisSession);
+        CountRunning(new SystemProcessInspector().Observe(agent), startedBefore, AnotherUsers);
 
     // A runtime (node, bun) whose command line could not be read may be one of the agent's, so
-    // it leaves the answer unknown; but only one in this Windows session. Another user's
-    // processes are always unreadable to a standard user, node and the agent's own executable
-    // alike, and counting those refused every migrate on a machine where anyone else was signed
-    // in with an agent running (#140). So an unreadable process in another session is not ours.
-    internal static int? CountRunning(AgentProcessObservation observed, DateTimeOffset? startedBefore, Func<int, bool> inThisSession) =>
-        observed.Known && !observed.Unidentified.Any(p => inThisSession(p.Id))
-            ? observed.Processes.Count(p => (p.CommandLine is not null || inThisSession(p.Id))
+    // it leaves the answer unknown. But another user's processes are always unreadable to a
+    // standard user, node and the agent's own executable alike, and counting those refused every
+    // migrate on a machine where anyone else was signed in with an agent running (#140). So a
+    // process known to be another user's is left out, of both lists; any other unreadable one
+    // still leaves the answer unknown (a runtime) or counts as running (the agent's executable).
+    internal static int? CountRunning(AgentProcessObservation observed, DateTimeOffset? startedBefore, Func<int, bool> anotherUsers) =>
+        observed.Known && observed.Unidentified.All(p => anotherUsers(p.Id))
+            ? observed.Processes.Count(p => (p.CommandLine is not null || !anotherUsers(p.Id))
                 && (startedBefore is not { } before || p.StartedAt is not { } started || started < before))
             : null;
 
-    // The session id comes with the process list, so it is known even for a process this user
-    // may not open. One that has gone is not in this session; one that cannot be asked might be.
-    static bool InThisSession(int pid)
+    // Windows does not tell a standard user who owns a process it may not open (the terminal
+    // services list leaves the SID out), so this goes by what it does say. This user may open
+    // every process of its own for query-limited information, elevated ones and those in its
+    // other sessions included; a refusal therefore means another account. A refusal in this
+    // session is not taken as one: a process run as another user from here (runas) still has
+    // this desktop. Anything else (a refusal of another kind, the session unknown) is not known.
+    static bool AnotherUsers(int pid)
     {
+        using (var handle = OpenProcess(ProcessQueryLimitedInformation, false, pid))
+        {
+            if (!handle.IsInvalid || Marshal.GetLastPInvokeError() != ErrorAccessDenied) { return false; }
+        }
         try
         {
             using var process = Process.GetProcessById(pid);
             using var self = Process.GetCurrentProcess();
-            return process.SessionId == self.SessionId;
+            return process.SessionId != self.SessionId;
         }
-        catch (ArgumentException) { return false; }
-        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { return true; }
+        catch (ArgumentException) { return true; }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { return false; }
     }
+
+    const int ProcessQueryLimitedInformation = 0x1000;
+    const int ErrorAccessDenied = 5;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern Microsoft.Win32.SafeHandles.SafeProcessHandle OpenProcess(int access, bool inherit, int pid);
 
     public ScheduledTaskState? Task(string name) => WithTask(name, task => new ScheduledTaskState((bool)Get(task, "Enabled")!, (int)Get(task, "State")! == 4, Modifiable(task)), missing: true);
 

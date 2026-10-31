@@ -155,28 +155,28 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
-    public void An_unreadable_runtime_in_another_users_session_does_not_leave_the_running_agents_unknown()
+    public void Another_users_unreadable_runtime_does_not_leave_the_running_agents_unknown_but_one_not_known_to_be_theirs_does()
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var mine = new AgentBridge.Host.Core.Processes.AgentProcess(10, null, "copilot");
         var unread = new AgentBridge.Host.Core.Processes.AgentProcess(20, null, null);
         var observed = new AgentBridge.Host.Core.Processes.AgentProcessObservation([mine], true) { Unidentified = [unread] };
 
-        Assert.Equal(1, WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => pid != 20));
-        Assert.Null(WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => true));
-        Assert.Null(WindowsAgentHaBridgeRuntime.CountRunning(observed with { Known = false }, null, pid => false));
+        Assert.Equal(1, WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => pid == 20));
+        Assert.Null(WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => false));
+        Assert.Null(WindowsAgentHaBridgeRuntime.CountRunning(observed with { Known = false }, null, pid => true));
     }
 
     [Fact]
-    public void Another_users_agent_executable_is_not_counted_as_running_but_an_unreadable_one_in_this_session_is()
+    public void Another_users_agent_executable_is_not_counted_as_running_but_an_unreadable_one_not_known_to_be_theirs_is()
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var theirs = new AgentBridge.Host.Core.Processes.AgentProcess(30, null, null);
         var mine = new AgentBridge.Host.Core.Processes.AgentProcess(40, null, "codex.exe");
         var observed = new AgentBridge.Host.Core.Processes.AgentProcessObservation([theirs, mine], true);
 
-        Assert.Equal(1, WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => pid != 30));
-        Assert.Equal(2, WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => true));
+        Assert.Equal(1, WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => pid == 30));
+        Assert.Equal(2, WindowsAgentHaBridgeRuntime.CountRunning(observed, null, pid => false));
     }
 
     [Theory]
