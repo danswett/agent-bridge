@@ -45,7 +45,7 @@ public sealed class MainTests : IAsyncLifetime
         await host.DisposeAsync();
     }
 
-    string[] Order() => [.. main.Sessions.Select(c => c.Id)];
+    string[] Order() => TestUi.Read<string[]>(() => [.. main.Sessions.Select(c => c.Id)]);
 
     // Read in full, sessions.synced included, and not just its cards: until then a session asked
     // for that is not in the snapshot is taken to have ended and is forgotten, and upserts are

@@ -257,7 +257,7 @@ public sealed class LaunchTests : IAsyncLifetime
         ui.Post(launch.Resend);
 
         await Wait.UntilAsync(() => launch.State == "started", "started");
-        Assert.StartsWith("Session started", launch.StatusText);
+        Assert.StartsWith("Session started", TestUi.Read(() => launch.StatusText));
     }
 
     [Fact]

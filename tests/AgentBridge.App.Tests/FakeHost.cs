@@ -130,30 +130,41 @@ sealed class FakeProcesses : IProcesses
 // The tests' UI thread: actions run one at a time, in order, as on a dispatcher.
 sealed class LockedDispatcher : IUiDispatcher
 {
-    readonly object gate = new();
-    public void Post(Action action) { lock (gate) { action(); } }
+    public void Post(Action action) { lock (TestUi.Gate) { action(); } }
+}
+
+// One UI thread, as the app has: every dispatcher here takes its turns on this gate, and Wait
+// reads the view models under it too. Each dispatcher had a gate of its own, and the test thread
+// read none, so it could see a posted action half done: a launch's State already "started"
+// while its StatusText still said "Starting…" (#126), a list a PropertyChanged handler was
+// adding to (#100), the card list mid-move (#101).
+static class TestUi
+{
+    public static readonly object Gate = new();
+
+    // What the view models say once no posted action is part-way through.
+    public static T Read<T>(Func<T> read) { lock (Gate) { return read(); } }
 }
 
 // Runs each post at once, as LockedDispatcher does, except while held: then they wait, as they
 // would in a busy UI thread's queue, until released.
 sealed class HoldingDispatcher : IUiDispatcher
 {
-    readonly object gate = new();
     readonly Queue<Action> held = new();
     bool holding;
 
-    public void Hold() { lock (gate) { holding = true; } }
+    public void Hold() { lock (TestUi.Gate) { holding = true; } }
 
     public void Release()
     {
         List<Action> queued;
-        lock (gate) { holding = false; queued = [.. held]; held.Clear(); }
+        lock (TestUi.Gate) { holding = false; queued = [.. held]; held.Clear(); }
         foreach (var a in queued) { Post(a); }
     }
 
     public void Post(Action action)
     {
-        lock (gate)
+        lock (TestUi.Gate)
         {
             if (holding) { held.Enqueue(action); return; }
             action();
@@ -163,10 +174,11 @@ sealed class HoldingDispatcher : IUiDispatcher
 
 static class Wait
 {
+    // The condition is read under the UI gate, so it never sees a posted action part-way through.
     public static async Task UntilAsync(Func<bool> done, string what, TimeSpan? patience = null)
     {
         var deadline = DateTime.UtcNow + (patience ?? FakeHost.Patience);
-        while (!done())
+        while (!TestUi.Read(done))
         {
             if (DateTime.UtcNow > deadline) { throw new TimeoutException($"timed out waiting for {what}"); }
             await Task.Delay(20);
