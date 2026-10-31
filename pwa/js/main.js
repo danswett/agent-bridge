@@ -422,8 +422,11 @@ function begin(account) {
     if (c.type !== 'synced' && !hosts.link(c.hostId)?.client?.synced) { return; }
     clearTimeout(staleTimer);
     staleTimer = setTimeout(() => {
-      const synced = openLinks().filter((l) => l.client.synced);
-      if (synced.length) { worker().then((r) => Promise.all(synced.map((l) => closeStaleNotices(r, l.id, l.store)))).catch(() => {}); }
+      const synced = openLinks().filter((l) => l.client.synced).map((l) => ({ l, client: l.client }));
+      // Each list must still be its machine's when the notices are looked at: one dropped
+      // meanwhile (another machine picked) is empty, and would close every question it has.
+      const still = ({ l, client }) => () => hosts.link(l.id) === l && l.client === client && client.synced;
+      if (synced.length) { worker().then((r) => Promise.all(synced.map((x) => closeStaleNotices(r, x.l.id, x.l.store, still(x))))).catch(() => {}); }
     }, 500);
   });
 

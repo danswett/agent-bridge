@@ -229,8 +229,12 @@ export class PushRegistrar {
 
 // Closes this machine's question notifications that are no longer true: the session has
 // gone, or is not asking that question any more. Called with the machine's complete list.
-export async function closeStaleNotices(registration, hostId, store) {
+// current(): whether the store still holds that machine's synced list, asked once the
+// notifications are in hand: a machine no longer shown has an empty store meanwhile, which
+// says nothing about its questions.
+export async function closeStaleNotices(registration, hostId, store, current = () => true) {
   const shown = await registration?.getNotifications?.() ?? [];
+  if (!current()) { return; }
   for (const n of shown) {
     const d = n.data ?? {};
     if (d.machine !== hostId || d.kind !== 'question') { continue; }

@@ -449,6 +449,45 @@ test('a handshake given up tells the host at once and fails, rather than waiting
   assert.equal(set.channels.size, 0);
 });
 
+test('picking the machine a notification is showing remembers it', () => {
+  const connection = fakeConnection(hosts('a', 'b'));
+  const storage = memory();
+  const s = new HostSession({ connection, storage, makeClient: (ch) => fakeClient(ch) });
+  s.select('a');
+  s.visit('b');
+  assert.equal(storage.saved['agent-bridge.app.lastHost'], 'a');
+  s.select('b');
+  assert.equal(storage.saved['agent-bridge.app.lastHost'], 'b');
+});
+
+test('a channel that was open and closes is reopened a second later without counting as a failed handshake', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const connection = fakeConnection(hosts('a'));
+  const closers = [];
+  const s = new HostSession({
+    connection, storage: null, retryMs: 5000, reopenMs: 1000,
+    makeClient: (ch) => ({ ...fakeClient(ch), on: (type, fn) => { if (type === 'close') { closers.push(fn); } } }),
+  });
+  s.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  for (let i = 0; i < 4; i++) { await flush(); }
+  assert.equal(s.phase, 'open');
+  closers[0](new Error('the host restarted'));
+  t.mock.timers.tick(1000);
+  await flush();
+  assert.equal(connection.opens.length, 2);
+  // The host is still restarting: the first failure waits the first retry, not twice it.
+  connection.opens[1].reject(new Error('the handshake timed out'));
+  for (let i = 0; i < 4; i++) { await flush(); }
+  t.mock.timers.tick(4999);
+  await flush();
+  assert.equal(connection.opens.length, 2);
+  t.mock.timers.tick(1);
+  await flush();
+  assert.equal(connection.opens.length, 3);
+});
+
 // ---- two machines, each card's actions to its own ----
 
 const delay = (ms) => new Promise((r) => { setTimeout(r, ms); });

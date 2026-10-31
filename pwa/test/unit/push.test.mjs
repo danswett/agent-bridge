@@ -303,3 +303,14 @@ test('a machine slow to answer its registration holds up no other machine\'s', a
   answer({ subscribed: true, count: 1 });
   assert.equal(await slowDone, true);
 });
+
+test('a machine\'s question notifications stay when its list stops being current while they are looked up', async () => {
+  const store = new SessionsStore();
+  store.upsert({ id: 's1', status: 'waiting', updatedAt: 't', question: { id: 'q1', kind: 'form', message: 'm' } });
+  const shown = [notification({ kind: 'question', machine: 'm1', session: 's1', question: 'q1' })];
+  let current = true;
+  // Another machine is picked while the browser looks the notifications up: this one's list empties.
+  const lookup = async () => { store.clear(); current = false; return shown; };
+  await closeStaleNotices({ getNotifications: lookup }, 'm1', store, () => current);
+  assert.equal(shown[0].closed, false);
+});

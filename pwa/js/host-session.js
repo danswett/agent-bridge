@@ -212,6 +212,8 @@ export class HostSession {
   // One machine's device id, or ALL, as picked in the Machines panel: remembered.
   select(choice) {
     if (choice === this.selection) {
+      // Picked, so remembered, even when shown already (by a notification, say).
+      this.#write(LAST_HOST, choice);
       // Chosen again while it can't be reached: try now rather than at the next retry.
       for (const l of this.links()) {
         if (!l.client && !l.attempt && l.phase !== 'unsupported') { clearTimeout(l.timer); l.timer = null; }
@@ -322,10 +324,10 @@ export class HostSession {
   }
 
   // Tries the link again after a wait that doubles with each failure in a row.
-  #later(link, base) {
+  #later(link, base, { failed = true } = {}) {
     clearTimeout(link.timer);
-    const delay = Math.min(base * 2 ** link.failures, this.maxRetryMs);
-    link.failures++;
+    const delay = failed ? Math.min(base * 2 ** link.failures, this.maxRetryMs) : base;
+    if (failed) { link.failures++; }
     link.timer = setTimeout(() => { link.timer = null; this.#pump(); }, delay);
   }
 
@@ -348,8 +350,9 @@ export class HostSession {
         // One closing while it is being set up fails that attempt, which retries it once.
         if (!settled) { return; }
         this.#set(link, 'waiting', 'The channel to this machine closed; reopening.');
-        // A close without a relay drop (the host restarted) reopens as soon as it can.
-        this.#later(link, this.reopenMs);
+        // A close without a relay drop (the host restarted) reopens as soon as it can. Not a
+        // failed handshake, so the backoff is not advanced.
+        this.#later(link, this.reopenMs, { failed: false });
       });
       const hello = await client.hello().catch((e) => {
         // Hosts from before this protocol (the S4 demo host) answer "unknown op". Only such
