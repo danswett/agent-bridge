@@ -82,7 +82,8 @@ second snapshot the first's changes as the state to restore; the second is refus
      would refuse to disable it part-way through (#114). It is read from the task's
      discretionary list, as Windows' access check reads it. The fix is to re-register it as the
      user: remove it from an elevated prompt and run agent-ha-bridge's installer again from a
-     normal one. When that cannot be told, the migration goes ahead, and a refusal part-way is
+     normal one. When that cannot be told (a conditional entry that could decide it, whose
+     condition is the token's to evaluate, is one way), the migration goes ahead, and a refusal part-way is
      undone (below);
    * the settings to carry over would leave the profile's `config.json` with problems, in
      launching or in the Home Assistant connector (a `baseUrl` it could not use, say).

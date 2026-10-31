@@ -36,6 +36,23 @@ public class TaskAccessTests
     }
 
     [Fact]
+    public void A_conditional_entry_that_could_decide_write_leaves_the_answer_to_the_scheduler()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        // Whether the condition holds is the token's business, so neither a yes nor a no is known.
+        Assert.Null(TaskAccess.CanModify("D:(XA;;FA;;;S-1-5-21-1-2-3-1000;(WIN://SYSAPPID Contains \"x\"))", User, []));
+        Assert.Null(TaskAccess.CanModify("D:(XD;;GW;;;S-1-5-21-1-2-3-1000;(WIN://SYSAPPID Contains \"x\"))(A;;FA;;;S-1-5-21-1-2-3-1000)", User, []));
+    }
+
+    [Fact]
+    public void A_conditional_entry_after_write_is_decided_changes_nothing()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.True(TaskAccess.CanModify("D:(A;;FA;;;S-1-5-21-1-2-3-1000)(XD;;GW;;;S-1-5-21-1-2-3-1000;(WIN://SYSAPPID Contains \"x\"))", User, []));
+        Assert.False(TaskAccess.CanModify("D:(A;;FR;;;S-1-5-21-1-2-3-1000)(XA;;FR;;;S-1-5-21-1-2-3-1000;(WIN://SYSAPPID Contains \"x\"))", User, []));
+    }
+
+    [Fact]
     public void A_denial_listed_before_an_allowance_wins()
     {
         if (!OperatingSystem.IsWindows()) { return; }

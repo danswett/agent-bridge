@@ -39,8 +39,15 @@ public static class TaskAccess
         {
             if (entry is not CommonAce ace || ace.AceFlags.HasFlag(AceFlags.InheritOnly)) { continue; }
             var mask = Map(ace.AccessMask);
-            if (ace.AceQualifier == AceQualifier.AccessDenied && denied.Contains(ace.SecurityIdentifier)) { refused |= mask & ~granted; }
-            else if (ace.AceQualifier == AceQualifier.AccessAllowed && who.Contains(ace.SecurityIdentifier)) { granted |= mask & ~refused; }
+            var applies = ace.AceQualifier == AceQualifier.AccessDenied ? denied.Contains(ace.SecurityIdentifier)
+                : ace.AceQualifier == AceQualifier.AccessAllowed && who.Contains(ace.SecurityIdentifier);
+            // A conditional entry (XA, XD) counts only when its expression holds for the token,
+            // which is not evaluated here. One that could still decide write leaves it unknown,
+            // so the scheduler decides instead: a false yes or no would mislead the preflight.
+            if (applies && ace.IsCallback && (mask & FileWriteData & ~(granted | refused)) != 0) { return null; }
+            if (!applies || ace.IsCallback) { continue; }
+            if (ace.AceQualifier == AceQualifier.AccessDenied) { refused |= mask & ~granted; }
+            else { granted |= mask & ~refused; }
         }
         return (granted & FileWriteData) != 0;
     }
