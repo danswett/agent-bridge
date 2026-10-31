@@ -205,6 +205,12 @@ public static partial class HaShadow
         public Task CallServiceAsync(string domain, string service, JsonObject data, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task RenameEntityAsync(string entityId, string newEntityId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task DeleteImageAsync(string imageId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        // As Home Assistant would name it, so a dry pass reads it as made and touches nothing more.
+        public Task<string> CreateInputBooleanAsync(string name, string icon, CancellationToken cancellationToken = default) =>
+            Task.FromResult(HaContract.HelperIdOf(name));
+        public Task DeleteInputBooleanAsync(string id, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SetEntityNameAsync(string entityId, string name, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<string>> ListInputBooleansAsync(CancellationToken cancellationToken = default) => real.ListInputBooleansAsync(cancellationToken);
         public Task<byte[]?> DownloadImageAsync(string imageId, long maxBytes, CancellationToken cancellationToken = default) => real.DownloadImageAsync(imageId, maxBytes, cancellationToken);
         public async IAsyncEnumerable<HaTrigger> WatchAsync(IReadOnlyCollection<string> entityIds, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {

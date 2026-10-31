@@ -487,6 +487,66 @@ public sealed class LiveHomeAssistantTests : IDisposable
         await Until(entity, s => s.Attributes.TryGetProperty("stage", out var st) && st.GetString() == "restarting");
     }
 
+    [HomeAssistantFact]
+    public async Task The_detailed_activity_switch_is_made_once_named_for_its_machine_and_a_second_start_keeps_its_value()
+    {
+        var slug = HaContract.MachineSlug("CI-UPKEEP");
+        var toggle = HaContract.MachineEntityId("input_boolean", "detailed_activity", slug);
+        await using (var c = Connector("CI-UPKEEP"))
+        {
+            c.Start();
+            await Until(toggle, s => s.State == "off");
+            await Until(HaContract.MachineEntityId("sensor", "sessions", slug), s => s.Attributes.GetProperty("capabilities").GetProperty("detailed").GetBoolean());
+        }
+        var registry = (await ha.ListEntityRegistryAsync()).Single(e => e.EntityId == toggle);
+        Assert.Equal(HaContract.DetailedHelperDisplayName("CI-UPKEEP"), registry.Name);
+
+        // Switched on from the dashboard, then the host starts again: the same switch, still on.
+        await ha.CallServiceAsync("input_boolean", "turn_on", new JsonObject { ["entity_id"] = toggle });
+        await Until(toggle, s => s.State == "on");
+        await using (var again = Connector("CI-UPKEEP"))
+        {
+            again.Start();
+            await Until(HaContract.MachineEntityId("binary_sensor", "online", slug), s => s.State == "on", seconds: 30);
+            await Task.Delay(TimeSpan.FromSeconds(2));
+        }
+        Assert.Equal("on", (await ha.GetStateAsync(toggle))!.State);
+        Assert.Equal([HaContract.DetailedHelperId(slug)], (await ha.ListInputBooleansAsync()).Where(id => id.StartsWith(HaContract.DetailedHelperId(slug), StringComparison.Ordinal)));
+    }
+
+    [HomeAssistantFact]
+    public async Task A_machine_forgotten_from_the_dashboard_while_its_host_runs_is_published_again_whole()
+    {
+        var id = Session();
+        var node = HaContract.NodeId(id);
+        sessions.Set(FakeSessions.Copilot(id, status: SessionStatus.Working, response: "Halfway there"));
+        var slug = HaContract.MachineSlug("CI-FORGET");
+        // The daemon's timings, shortened: a beat every two seconds, a stall after three of them.
+        await using var c = new HaConnector(new HaConnectorOptions
+        {
+            MachineName = "CI-FORGET", Version = "0.1.0", Dev = true,
+            Tick = TimeSpan.FromMilliseconds(250), Reconcile = TimeSpan.FromSeconds(2), RetireGrace = TimeSpan.FromSeconds(2),
+            Heartbeat = TimeSpan.FromSeconds(2), OnlineStall = TimeSpan.FromSeconds(6), EntityRestore = TimeSpan.FromSeconds(4),
+        }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } });
+        c.Start();
+        var wanted = new[]
+        {
+            HaContract.MachineEntityId("binary_sensor", "online", slug), HaContract.MachineEntityId("sensor", "sessions", slug),
+            HaContract.MachineEntityId("update", "update", slug), $"sensor.{node}_status", $"sensor.{node}_activity",
+        };
+        foreach (var entity in wanted) { await Until(entity, _ => true); }
+        await Until(HaContract.MachineEntityId("binary_sensor", "online", slug), s => s.State == "on");
+
+        // The machine row's X: an empty retained message on every topic the writer lists for it.
+        foreach (var topic in HaContract.ForgetTopics(slug, [node])) { await ha.PublishAsync(topic, "", true); }
+        await Until(() => ha.GetStateAsync(wanted[0]).GetAwaiter().GetResult() is null, "the forget did not remove the machine", 30);
+
+        foreach (var entity in wanted) { await Until(entity, _ => true, seconds: 120); }
+        await Until($"sensor.{node}_status", s => s.State == "working");
+        await Until(HaContract.MachineEntityId("binary_sensor", "online", slug), s => s.State == "on");
+        Assert.Contains(log.ToArray(), l => l.Contains("publishing the machine again", StringComparison.Ordinal));
+    }
+
     sealed record Notification(string Title, string Message);
 
     async Task<Notification> UntilNotified(Func<Notification, bool> match, int skip, int seconds = 60)

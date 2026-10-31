@@ -154,7 +154,8 @@ public sealed class LaunchTests : IDisposable
         // The capability flags of a machine serving the card, as the daemon reports them.
         var global = JsonNode.Parse(ha.Retained[HaContract.GlobalAttributesTopic(Slug)])!;
         var expected = Loaded.Value["capabilities"]!.DeepClone().AsObject();
-        expected["detailed"] = false;
+        // The connector made the machine's Detailed activity switch (stage 7), so the row has one.
+        expected["detailed"] = true;
         expected["dev"] = false;
         Contract.AssertJson(expected, global["capabilities"]);
     }

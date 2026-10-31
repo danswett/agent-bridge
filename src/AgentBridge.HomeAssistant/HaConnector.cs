@@ -104,6 +104,21 @@ public sealed record HaConnectorOptions
     public TimeSpan UpdateOutcomeShown { get; init; } = TimeSpan.FromHours(1);
     // An outcome older than this is not announced (Invoke-DaemonUpdateOutcome's six hours).
     public TimeSpan UpdateOutcomeAge { get; init; } = TimeSpan.FromHours(6);
+
+    // Upkeep (stage 7): the beat, the liveness sensor's repair, and a live session's entities put
+    // back when Home Assistant has lost them. HaContract holds the daemon's values.
+    public TimeSpan Heartbeat { get; init; } = HaContract.HeartbeatInterval;
+    public TimeSpan OnlineStall { get; init; } = HaContract.OnlineStall;
+    public int OnlineStallBeats { get; init; } = HaContract.OnlineStallBeats;
+    public int OnlineRepairLimit { get; init; } = HaContract.OnlineRepairLimit;
+    public TimeSpan DiscoveryReset { get; init; } = HaContract.DiscoveryReset;
+    public int RegisteredAttempts { get; init; } = HaContract.RegisteredAttempts;
+    public TimeSpan RegisteredDelay { get; init; } = HaContract.RegisteredDelay;
+    public TimeSpan EntityRestore { get; init; } = HaContract.EntityRestore;
+    // Test-CopilotHelperHasState: a switch just created is looked for this many times, this far
+    // apart, before it is named.
+    public int HelperStateAttempts { get; init; } = 5;
+    public TimeSpan HelperStateDelay { get; init; } = TimeSpan.FromMilliseconds(800);
 }
 
 // The Home Assistant connector (docs/ha-connector.md): this machine's sessions, liveness,
@@ -112,8 +127,9 @@ public sealed record HaConnectorOptions
 // PowerShell daemon keeps its cards; and, given the host's answer, reply and stop delivery, the
 // answers, replies and End session presses given on those cards (HaConnector.Answers.cs,
 // HaConnector.Replies.cs, HaConnector.Stops.cs); given its launcher, the launch card
-// (HaConnector.Launch.cs); and, given its updater, the machine's Install and Check buttons
-// (HaConnector.Updates.cs).
+// (HaConnector.Launch.cs); given its updater, the machine's Install and Check buttons
+// (HaConnector.Updates.cs); and the daemon's upkeep: the Detailed activity switch, the liveness
+// sensor's repair, and a live session's entities put back (HaConnector.Upkeep.cs).
 //
 // What it never does, and why:
 //   * write the shared card, dashboard or publication policy. The writer is configured and fenced
@@ -168,6 +184,10 @@ public sealed partial class HaConnector : IAsyncDisposable
     sealed class Published
     {
         public required string Node;
+        // When this connector last published its entities: first, or after Home Assistant lost them.
+        public DateTimeOffset PublishedAt;
+        // Home Assistant has lost them: published again on the next pass (SessionUpkeepAsync).
+        public bool Lost;
         public required string Name;
         public required string Kind;
         public string? Status;
@@ -374,6 +394,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             {
                 nextReconcile = now + options.Reconcile;
                 await Step("detailed", () => DetailedAsync(cancellationToken));
+                await Step("entities", () => SessionUpkeepAsync(now, cancellationToken));
                 await Step("retire", () => RetireAsync(now, cancellationToken));
             }
         }
@@ -389,6 +410,9 @@ public sealed partial class HaConnector : IAsyncDisposable
         pausedFor = why;
         started = false;
         updateCutoffTaken = false;
+        // The daemon has the machine meanwhile: what it does to the sensor is its own, and its
+        // rebuilds are not this connector's.
+        ResetUpkeep();
     }
 
     async Task Step(string name, Func<Task> step)
@@ -418,6 +442,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         AddPin($"agent_bridge_{Slug}_online", HaContract.MachineEntityId("binary_sensor", "online", Slug), now);
         nextBeat = now + TimeSpan.FromSeconds(2);
 
+        await DetailedHelperAsync(ct);
         await DetailedAsync(ct);
 
         // agent-ha-bridge's transfer and install controls for this machine, and its launch card
@@ -653,30 +678,8 @@ public sealed partial class HaConnector : IAsyncDisposable
             // On disk before the first write: a host stopped part-way, whose session then ends
             // while it is down, still retires what that write left behind.
             SaveLedger();
-            // Availability first and retained, so a session never appears already stale.
-            await ha.PublishAsync(t.Availability, "online", true, ct);
-            if (ServesAnswers)
-            {
-                await PublishControlsAsync(t, name, ct);
-            }
-            else
-            {
-                await PublishSensorConfigsAsync(t, name, ct);
-            }
-            foreach (var topic in UnservedSessionTopics(node)) { await ha.PublishAsync(topic, "", true, ct); }
-            if (ServesAnswers)
-            {
-                // Before anything is armed on them: a select is driven by the id the dashboard uses
-                // (Publish-CopilotMqttSession forces them at once, after a moment to register).
-                await Task.Delay(options.FieldPinDelay, time, ct);
-                await PinNowAsync(SessionIds(node), now, ct);
-            }
-            else
-            {
-                AddPin($"{node}_status", $"sensor.{node}_status", now);
-                AddPin($"{node}_activity", $"sensor.{node}_activity", now);
-            }
-            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent) };
+            await PublishEntitiesAsync(t, name, now, ct);
+            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent), PublishedAt = now };
             lock (gate)
             {
                 starting.Remove(s.Id);
@@ -686,6 +689,22 @@ public sealed partial class HaConnector : IAsyncDisposable
             }
             SaveLedger();
             WatchSetChanged();
+        }
+        else if (p.Lost)
+        {
+            // Restore-DaemonSessionEntities: its entities are gone from Home Assistant while it runs
+            // here, so the whole set goes again, and the card is put back from what the session
+            // holds rather than left blank. Everything the session was doing stays; what the card
+            // showed is published again, and a question on it armed again.
+            await PublishEntitiesAsync(t, name, now, ct);
+            p.Lost = false;
+            p.Name = name;
+            p.PublishedAt = now;
+            p.Status = null;
+            p.Activity = null;
+            p.Armed = null;
+            p.ArmedSlots = -1;
+            p.Cleared = false;
         }
         else if (p.Name != name)
         {
@@ -728,6 +747,36 @@ public sealed partial class HaConnector : IAsyncDisposable
 
         await QuestionAsync(full, p, name, now, ct);
         await PushesAsync(full, p, name, now, ct);
+    }
+
+    // A session's entities as its first publication makes them: availability first and retained, so
+    // a session never appears already stale; the configs; what this host does not serve withdrawn;
+    // and the ids pinned.
+    async Task PublishEntitiesAsync(SessionTopics t, string name, DateTimeOffset now, CancellationToken ct)
+    {
+        var node = t.Node;
+        await ha.PublishAsync(t.Availability, "online", true, ct);
+        if (ServesAnswers)
+        {
+            await PublishControlsAsync(t, name, ct);
+        }
+        else
+        {
+            await PublishSensorConfigsAsync(t, name, ct);
+        }
+        foreach (var topic in UnservedSessionTopics(node)) { await ha.PublishAsync(topic, "", true, ct); }
+        if (ServesAnswers)
+        {
+            // Before anything is armed on them: a select is driven by the id the dashboard uses
+            // (Publish-CopilotMqttSession forces them at once, after a moment to register).
+            await Task.Delay(options.FieldPinDelay, time, ct);
+            await PinNowAsync(SessionIds(node), now, ct);
+        }
+        else
+        {
+            AddPin($"{node}_status", $"sensor.{node}_status", now);
+            AddPin($"{node}_activity", $"sensor.{node}_activity", now);
+        }
     }
 
     // Publish-CopilotMqttSession: every entity of a session's card, the selector parked on Idle.
@@ -808,7 +857,9 @@ public sealed partial class HaConnector : IAsyncDisposable
         if (now < nextBeat) { return; }
         // Deliberately not retained (Publish-CopilotMqttMachineHeartbeat).
         foreach (var beat in HaContract.Heartbeat(Slug, now)) { await ha.PublishAsync(beat.Topic, beat.Payload, beat.Retain, ct); }
-        nextBeat = now + HaContract.HeartbeatInterval;
+        nextBeat = now + options.Heartbeat;
+        // Publishing a beat proves nothing: whether the sensor took it is read back.
+        await ConfirmBeatAsync(now, ct);
     }
 
     async Task UsageAsync(DateTimeOffset now, CancellationToken ct)
@@ -1091,6 +1142,26 @@ public sealed partial class HaConnector : IAsyncDisposable
             Check();
             return inner.DeleteImageAsync(imageId, cancellationToken);
         }
+
+        public Task<string> CreateInputBooleanAsync(string name, string icon, CancellationToken cancellationToken = default)
+        {
+            Check();
+            return inner.CreateInputBooleanAsync(name, icon, cancellationToken);
+        }
+
+        public Task DeleteInputBooleanAsync(string id, CancellationToken cancellationToken = default)
+        {
+            Check();
+            return inner.DeleteInputBooleanAsync(id, cancellationToken);
+        }
+
+        public Task SetEntityNameAsync(string entityId, string name, CancellationToken cancellationToken = default)
+        {
+            Check();
+            return inner.SetEntityNameAsync(entityId, name, cancellationToken);
+        }
+
+        public Task<IReadOnlyList<string>> ListInputBooleansAsync(CancellationToken cancellationToken = default) => inner.ListInputBooleansAsync(cancellationToken);
 
         public Task<byte[]?> DownloadImageAsync(string imageId, long maxBytes, CancellationToken cancellationToken = default) => inner.DownloadImageAsync(imageId, maxBytes, cancellationToken);
         public IAsyncEnumerable<HaTrigger> WatchAsync(IReadOnlyCollection<string> entityIds, CancellationToken cancellationToken = default) => inner.WatchAsync(entityIds, cancellationToken);

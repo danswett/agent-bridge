@@ -686,6 +686,9 @@ public sealed class NotifyTests : IDisposable
     [Fact]
     public async Task A_reply_that_changes_between_reading_the_session_and_pushing_it_is_still_pushed()
     {
+        // Detailed activity on, so a new thought is a change to publish.
+        var slug = HaContract.MachineSlug(Machine);
+        ha.Helper(HaContract.DetailedHelperId(slug), HaContract.DetailedHelperName(slug), "on");
         Ask(null, response: null);
         await using var c = Connector(new HaNotifySettings { Enabled = true });
         await Pass(c);

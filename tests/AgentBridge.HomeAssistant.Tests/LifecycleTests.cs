@@ -500,6 +500,8 @@ public sealed class LifecycleTests : IDisposable
     public async Task Detailed_activity_follows_the_machines_switch_and_falls_back_to_the_setting_without_one()
     {
         sessions.Set(FakeSessions.Copilot(A) with { Activity = new Activity { Reasoning = "**Weighing it**", Response = null } });
+        // A Home Assistant that will not say what helpers it has gets no switch made for it.
+        ha.HelperListFails = new HaCommandException("input_boolean/list", "unauthorized", "Unauthorized");
         await using var c = Connector();
         await Run(c, 3);
         var attr = HaContract.Topics(NodeA).ActivityAttributes;
@@ -526,6 +528,7 @@ public sealed class LifecycleTests : IDisposable
     [Fact]
     public async Task A_new_turns_thinking_replaces_the_previous_turns_reply_until_its_own_reply_arrives()
     {
+        ha.Helper(HaContract.DetailedHelperId(Slug), HaContract.DetailedHelperName(Slug), "on");
         sessions.Set(FakeSessions.Copilot(A, response: "First answer"));
         await using var c = Connector();
         await Run(c, 3);

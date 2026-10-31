@@ -39,7 +39,9 @@ param(
     # Notifications: a question's answer buttons on a phone, and the notify service's pushes.
     [string]$NotifyOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-notify.json'),
     # Updates: the update entity through a check, a download and a verdict, and the busy notice.
-    [string]$UpdateOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-update.json')
+    [string]$UpdateOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-update.json'),
+    # Upkeep: the Detailed activity helper's provisioning, and the liveness sensor's repair.
+    [string]$UpkeepOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-upkeep.json')
 )
 
 Set-StrictMode -Version Latest
@@ -1122,4 +1124,220 @@ $updateFixture = [ordered]@{
 }
 $full = [IO.Path]::GetFullPath($UpdateOutput)
 [IO.File]::WriteAllText($full, ((ConvertTo-Stable $updateFixture) | ConvertTo-Json -Depth 30) + "`n", [Text.UTF8Encoding]::new($false))
+Write-Host "wrote $full"
+
+# ---- Upkeep ------------------------------------------------------------------------------------
+# What the daemon does to keep a machine's entities working: the Detailed activity switch it
+# creates when the machine has none (Initialize-CopilotVerboseToggle, with the helper's id, name
+# and display name as agent-bridge-daemon.ps1 builds them), and the liveness sensor it rebuilds when
+# Home Assistant has stopped taking its beats (Confirm-DaemonOnlineHeartbeat, run through scripted
+# reads beat by beat, on a clock of the recording's own).
+Import-SpecFunction 'hooks\decision-ha-websocket.ps1' @('Initialize-CopilotVerboseToggle', 'Test-CopilotHelperHasState')
+Import-SpecFunction 'hooks\daemon-sessions.ps1' @('Get-DaemonStateReportedAt', 'Wait-DaemonEntityRegistered')
+
+function Get-SpecDaemonExpression {
+    # One entry of $script:DaemonConfig, or one argument of a call in the daemon's own startup,
+    # evaluated with the machine's name and slug: a constant or a string built from those two only.
+    param($Ast)
+    $text = $Ast.Extent.Text
+    $variables = @($Ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.VariableExpressionAst] }, $true) |
+        ForEach-Object { $_.VariablePath.UserPath })
+    foreach ($v in $variables) { if ($v -notin @('script:DaemonMachineSlug', 'script:DaemonMachineName', 'DaemonMachineSlug')) { throw "the daemon builds $text from $v" } }
+    # Get-BridgeMachineEntityId is the one command allowed: agent-ha-bridge's own, loaded above,
+    # and only string work.
+    foreach ($command in @($Ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true))) {
+        if ($command.GetCommandName() -ne 'Get-BridgeMachineEntityId') { throw "the daemon builds $text with $($command.GetCommandName())" }
+    }
+    [scriptblock]::Create($text).Invoke()[0]
+}
+$daemonAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Source 'hooks\agent-bridge-daemon.ps1'), [ref]$null, [ref]$null)
+$configTable = @($daemonAst.FindAll({ param($a) $a -is [System.Management.Automation.Language.AssignmentStatementAst] -and $a.Left.Extent.Text -eq '$script:DaemonConfig' }, $true))[0].Right.Find({ param($a) $a -is [System.Management.Automation.Language.HashtableAst] }, $true)
+function Get-SpecDaemonConfigEntry([string]$Name) {
+    $pair = @($configTable.KeyValuePairs | Where-Object { $_.Item1.Extent.Text -eq $Name })
+    if ($pair.Count -ne 1) { throw "`$script:DaemonConfig has $Name $($pair.Count) times" }
+    Get-SpecDaemonExpression $pair[0].Item2
+}
+$script:DaemonMachineName = $machine
+$script:DaemonMachineSlug = $slug
+$helperCall = @($daemonAst.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] -and $a.GetCommandName() -eq 'Initialize-CopilotVerboseToggle' }, $true))
+if ($helperCall.Count -ne 1) { throw "agent-bridge-daemon.ps1 calls Initialize-CopilotVerboseToggle $($helperCall.Count) times" }
+$helperArguments = @{}
+$elements = $helperCall[0].CommandElements
+for ($i = 1; $i -lt $elements.Count; $i++) {
+    if ($elements[$i] -is [System.Management.Automation.Language.CommandParameterAst]) {
+        $helperArguments[$elements[$i].ParameterName] = $elements[$i + 1]
+        $i++
+    }
+}
+foreach ($required in @('HelperId', 'Name', 'DisplayName', 'LegacyHelperId')) { if (-not $helperArguments.ContainsKey($required)) { throw "the daemon no longer passes -$required to Initialize-CopilotVerboseToggle" } }
+function Resolve-HelperArgument($Ast) {
+    # $script:DaemonConfig.VerboseHelperId and friends: the entry it names.
+    if ($Ast -is [System.Management.Automation.Language.MemberExpressionAst] -and $Ast.Expression.Extent.Text -eq '$script:DaemonConfig') { return Get-SpecDaemonConfigEntry $Ast.Member.Value }
+    Get-SpecDaemonExpression $Ast
+}
+$helper = [ordered]@{
+    id          = Resolve-HelperArgument $helperArguments['HelperId']
+    name        = Resolve-HelperArgument $helperArguments['Name']
+    displayName = Resolve-HelperArgument $helperArguments['DisplayName']
+    legacyId    = Resolve-HelperArgument $helperArguments['LegacyHelperId']
+    entityId    = Get-SpecDaemonConfigEntry 'VerboseToggle'
+}
+$toggleAst = @([System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Source 'hooks\decision-ha-websocket.ps1'), [ref]$null, [ref]$null).FindAll({ param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq 'Initialize-CopilotVerboseToggle' }, $true))[0]
+$helper['icon'] = Get-SpecDaemonExpression (($toggleAst.Body.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Icon' }).DefaultValue)
+
+# The WebSocket and the state reads, answered from a script, with every command recorded.
+$script:Commands = [System.Collections.Generic.List[object]]::new()
+$script:Answers = @{}
+$script:HelperState = $true
+function script:Invoke-CopilotHaWebSocket {
+    param([object[]]$Commands)
+    $results = foreach ($command in $Commands) {
+        # In key order: a hashtable's own order differs from run to run.
+        $recorded = [ordered]@{}
+        foreach ($key in @($command.Keys | Sort-Object)) { $recorded[$key] = $command[$key] }
+        $script:Commands.Add($recorded)
+        $answer = $script:Answers[[string]$command.type]
+        if ($answer -is [scriptblock]) { $answer = & $answer $command }
+        if ($answer -is [System.Exception]) { throw $answer }
+        , $answer
+    }
+    , @($results)
+}
+function script:Get-HomeAssistantHeaders { $headers }
+function script:Write-Warning { param([string]$Message) }
+function Invoke-HelperCase([hashtable]$Answers, [bool]$HasState = $true) {
+    $script:Commands.Clear()
+    $script:Answers = $Answers
+    $script:HelperState = $HasState
+    $script:States = @{}
+    if ($HasState) { $script:States[$helper.entityId] = [pscustomobject]@{ entity_id = $helper.entityId; state = 'off' } }
+    $ok = Initialize-CopilotVerboseToggle -HelperId $helper.id -Name $helper.name -DisplayName $helper.displayName -LegacyHelperId $helper.legacyId
+    [ordered]@{ result = [bool]$ok; commands = @($script:Commands | ForEach-Object { $_ }) }
+}
+$registryEntry = { param([string]$Name) , @([ordered]@{ entity_id = $helper.entityId; name = $Name }) }
+$helperCases = [ordered]@{
+    # Absent: created, then given its display name.
+    absent        = Invoke-HelperCase @{ 'input_boolean/list' = , @(); 'input_boolean/create' = [ordered]@{ id = $helper.id; name = $helper.name }; 'config/entity_registry/list' = (& $registryEntry $null); 'config/entity_registry/update' = $null }
+    # There already, under its display name: left exactly as it is.
+    present       = Invoke-HelperCase @{ 'input_boolean/list' = , @([ordered]@{ id = $helper.id; name = $helper.name }); 'config/entity_registry/list' = (& $registryEntry $helper.displayName) }
+    # There, under another display name: renamed, never recreated.
+    renamed       = Invoke-HelperCase @{ 'input_boolean/list' = , @([ordered]@{ id = $helper.id; name = $helper.name }); 'config/entity_registry/list' = (& $registryEntry 'Detailed activity'); 'config/entity_registry/update' = $null }
+    # In storage with no state yet (Home Assistant still starting): left alone.
+    starting      = Invoke-HelperCase @{ 'input_boolean/list' = , @([ordered]@{ id = $helper.id; name = $helper.name }); 'config/entity_registry/list' = (& $registryEntry $helper.displayName) } -HasState $false
+    # A list that came back empty while the helper existed: the copy Home Assistant de-duplicated
+    # is the one removed, and the original kept.
+    deduplicated  = Invoke-HelperCase @{ 'input_boolean/list' = , @(); 'input_boolean/create' = [ordered]@{ id = "$($helper.id)_2"; name = $helper.name }; 'input_boolean/delete' = $null }
+    # Created, but no state appears: not reported ready, and not renamed.
+    noState       = Invoke-HelperCase @{ 'input_boolean/list' = , @(); 'input_boolean/create' = [ordered]@{ id = $helper.id; name = $helper.name } } -HasState $false
+    # Home Assistant refused the list: nothing more is asked.
+    listFails     = Invoke-HelperCase @{ 'input_boolean/list' = [System.Exception]::new('Home Assistant refused the command') }
+}
+
+# Liveness: Confirm-DaemonOnlineHeartbeat, with the daemon's clock replaced by the recording's.
+$confirmAst = @([System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Source 'hooks\daemon-sessions.ps1'), [ref]$null, [ref]$null).FindAll({ param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq 'Confirm-DaemonOnlineHeartbeat' }, $true))
+if ($confirmAst.Count -ne 1) { throw "daemon-sessions.ps1 defines Confirm-DaemonOnlineHeartbeat $($confirmAst.Count) times" }
+$confirmText = $confirmAst[0].Extent.Text
+if (([regex]::Matches($confirmText, '\[DateTimeOffset\]::Now')).Count -lt 1) { throw 'Confirm-DaemonOnlineHeartbeat no longer reads the clock as [DateTimeOffset]::Now' }
+. ([scriptblock]::Create($confirmText.Replace('[DateTimeOffset]::Now', '(Get-FixtureNow)').Replace('function Confirm-DaemonOnlineHeartbeat', 'function script:Confirm-DaemonOnlineHeartbeat')))
+$liveness = [ordered]@{}
+foreach ($name in @('DetachedEntitySeconds', 'DetachedEntityBeats', 'DetachedEntityRepairLimit', 'OnlineExpireSeconds', 'OnlineHeartbeatSeconds', 'EntityRestoreSeconds')) { $liveness[$name] = Get-SpecDaemonConfigEntry $name }
+$waitAst = @([System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Source 'hooks\daemon-sessions.ps1'), [ref]$null, [ref]$null).FindAll({ param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq 'Wait-DaemonEntityRegistered' }, $true))[0]
+foreach ($name in @('Attempts', 'DelayMs')) { $liveness["Wait$name"] = Get-SpecDaemonExpression (($waitAst.Body.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq $name }).DefaultValue) }
+$liveness['DiscoveryResetMs'] = $script:CopilotMqttDiscoveryResetMs
+$script:DaemonConfig = @{}
+foreach ($key in $liveness.Keys) { $script:DaemonConfig[$key] = $liveness[$key] }
+
+$script:FixtureStart = [DateTimeOffset]'2026-10-29T20:00:00Z'
+$script:FixtureNow = $script:FixtureStart
+function script:Get-FixtureNow { $script:FixtureNow }
+$script:Logged = [System.Collections.Generic.List[string]]::new()
+$script:Pinned = 0
+$script:Reads = 0
+function script:Write-DaemonLog { param([string]$Message) $script:Logged.Add($Message) }
+function script:Set-CopilotMqttOnlineEntityId { param([string]$Slug) $script:Pinned++ }
+function script:Test-BridgeObservationGuardFailure { param($ErrorRecord) $false }
+function script:Get-BridgeHttpStatusCode { param($ErrorRecord) [int]$ErrorRecord.Exception.Message }
+# The beat's read first, then every read the rebuild's wait for the sensor makes.
+function script:Get-HomeAssistantState {
+    param([string]$EntityId, [hashtable]$Headers)
+    if ($script:HelperState -is [bool]) {
+        # Initialize-CopilotVerboseToggle's reads of its helper.
+        if ($script:States.ContainsKey($EntityId)) { return $script:States[$EntityId] }
+        throw [System.Exception]::new('404')
+    }
+    $script:Reads++
+    $answer = if ($script:Reads -eq 1) { $script:Step.read } else { $script:Step.back }
+    switch ($answer) {
+        'absent' { throw [System.Exception]::new('404') }
+        'error' { throw [System.Exception]::new('502') }
+        'present' { return [pscustomobject]@{ entity_id = $EntityId; state = 'on'; last_reported = 'rebuilt' } }
+        'nofield' { return [pscustomobject]@{ entity_id = $EntityId; state = 'on' } }
+        default { return [pscustomobject]@{ entity_id = $EntityId; state = 'on'; last_reported = $answer } }
+    }
+}
+function Invoke-LivenessCase([object[]]$Steps) {
+    $script:HelperState = $null
+    $script:DaemonOnlineSeen = @{ Reported = ''; At = [DateTimeOffset]::MinValue; Unanswered = 0 }
+    $script:DaemonOnlineRepairs = 0
+    $script:DaemonOnlineReporting = 0
+    $script:DaemonOnlineRepairGivenUp = $false
+    $online = Get-CopilotMqttMachineOnlineTopic -Slug $slug
+    $state = "$(Get-CopilotMqttMachineTopicRoot -Slug $slug)/online/state"
+    foreach ($step in $Steps) {
+        $script:Step = $step
+        $script:FixtureNow = $script:FixtureStart.AddSeconds($step.at)
+        $script:Recorded.Clear()
+        $script:Logged.Clear()
+        $script:Pinned = 0
+        $script:Reads = 0
+        Confirm-DaemonOnlineHeartbeat -Headers $headers
+        [ordered]@{
+            at      = $step.at
+            read    = $step.read
+            back    = $step.back
+            rebuilt = [bool](@($script:Recorded | Where-Object { $_.topic -eq $online -and $_.payload -eq '' }).Count)
+            pinned  = [bool]$script:Pinned
+            beat    = [bool](@($script:Recorded | Where-Object { $_.topic -eq $state }).Count)
+            logs    = @($script:Logged)
+        }
+    }
+}
+function New-Beats([int]$From, [int]$To, [string]$Read, [string]$Back = 'present') {
+    for ($at = $From; $at -le $To; $at += 60) { [ordered]@{ at = $at; read = $Read; back = $Back } }
+}
+$scenarios = [ordered]@{
+    # Every beat lands: nothing is done.
+    healthy      = @(0, 60, 120, 180, 240, 300 | ForEach-Object { [ordered]@{ at = $_; read = "beat $_"; back = 'present' } })
+    # Silent for the expiry window and three beats: rebuilt, three times at most, then left alone
+    # and said once.
+    stalled      = @(New-Beats 0 1200 'stuck')
+    # The sensor gone altogether: the same repair.
+    absent       = @(New-Beats 0 400 'absent')
+    # Home Assistant unreadable, or a sensor that does not say when it last took a message: no
+    # clock starts, nothing is rebuilt.
+    unreadable   = @(New-Beats 0 600 'error')
+    noField      = @(New-Beats 0 600 'nofield')
+    # Rebuilt twice, then two beats in a row land: the count starts again.
+    recovers     = @(@(New-Beats 0 360 'stuck') + @([ordered]@{ at = 420; read = 'moving 1'; back = 'present' }, [ordered]@{ at = 480; read = 'moving 2'; back = 'present' }) + @(New-Beats 540 1260 'moving 2'))
+    # One beat landing (the rebuild's own) is not recovery: the count goes on.
+    oneMove      = @(@(New-Beats 0 180 'stuck') + @(New-Beats 240 900 'once'))
+    # Back from hours asleep: one read after the window is not a stall.
+    asleep       = @([ordered]@{ at = 0; read = 'stuck'; back = 'present' }, [ordered]@{ at = 10800; read = 'stuck'; back = 'present' }, [ordered]@{ at = 10860; read = 'stuck'; back = 'present' }, [ordered]@{ at = 10920; read = 'stuck'; back = 'present' })
+    # Rebuilt, but the sensor does not come back in time: no beat into nothing.
+    neverBack    = @(New-Beats 0 240 'stuck' 'absent')
+}
+$livenessCases = [ordered]@{}
+foreach ($key in $scenarios.Keys) { $livenessCases[$key] = @(Invoke-LivenessCase $scenarios[$key]) }
+
+$upkeepFixture = [ordered]@{
+    source   = $fixture.source
+    machine  = $machine
+    helper   = $helper
+    helperCases = $helperCases
+    liveness = $liveness
+    rebuild  = Get-Published { Publish-CopilotMqttMachineOnlineConfig -Slug $slug -MachineName $machine -ExpireAfter $liveness.OnlineExpireSeconds -Headers $headers -Rebuild }
+    scenarios = $livenessCases
+}
+$full = [IO.Path]::GetFullPath($UpkeepOutput)
+[IO.File]::WriteAllText($full, ((ConvertTo-Stable $upkeepFixture) | ConvertTo-Json -Depth 30) + "`n", [Text.UTF8Encoding]::new($false))
 Write-Host "wrote $full"

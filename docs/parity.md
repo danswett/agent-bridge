@@ -36,12 +36,12 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 | Status | Rows |
 |---|---|
 | `Verified` | 49 |
-| `Implemented, untested live` | 41 |
+| `Implemented, untested live` | 46 |
 | `Partial` | 1 |
 | `Missing` | 13 |
 | `Intentionally different` | 18 |
 | `N/A` | 12 |
-| `In flight (…)` | 13: Claude/Codex live 8, HA connector 5 |
+| `In flight (…)` | 8: Claude/Codex live 8 |
 | **Total** | **147** feature rows in §1–§18 |
 
 Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Partial`. Every `Missing` and `Partial` row links an issue labelled
@@ -57,7 +57,7 @@ Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Par
 | The same for Claude (Stop hook status wins over the transcript) and Codex (task events, registration status) | Cl, Cx | `claude/hooks/claude-transcript.ps1`, `codex/hooks/codex-transcript.ps1` | `In flight (Claude/Codex live)` | `AgentTests.A_hook_status_newer_than_the_transcript_overrides_what_the_transcript_implies`, `Task_started_and_complete_drive_status_and_the_older_event_set_fills_the_activity`, `A_registration_status_newer_than_the_rollout_is_used` | |
 | Current tool, last response as Markdown, last user message, title | All | card `agent-bridge-session-card`, `agent-bridge-activity-card` | `Verified` | `pwa/test/ui.spec.mjs: "the latest response is rendered as Markdown"`, `ModelTests.Headings_paragraphs_emphasis_and_code_become_styled_runs`, `CopilotTests.Without_a_workspace_name_the_title_is_the_first_prompt_on_one_line`. Live: Progress › Windows app (cards), iPhone cards | |
 | Reasoning and the tool history on the card | Cp, Cl, Cx | README "Detailed activity"; `tests/test-detailed-activity.ps1` | `Verified` | `LocalApiTests.Getting_a_session_returns_its_tool_history`, `pwa/test/ui.spec.mjs: "opening the tool history fetches the session with session.get"`. Live: Progress › Subagent rule | Claude and Codex reasoning are in flight (Claude/Codex live) |
-| `detailedActivity: false` and the per-machine Detail toggle hide reasoning and tools | All | `config.json` `detailedActivity`; status card Detail toggle | `Intentionally different` | Every client gets the full activity; the PWA folds reasoning and history under `<details>`, and the app has "show reasoning and tools" (`docs/app-windows.md` › The app; `Stores.cs` `ShowDetail`) | Design §9: the toggle is no longer an HA helper |
+| `detailedActivity: false` and the per-machine Detail toggle hide reasoning and tools | All | `config.json` `detailedActivity`; status card Detail toggle | `Intentionally different` | Every client gets the full activity; the PWA folds reasoning and history under `<details>`, and the app has "show reasoning and tools" (`docs/app-windows.md` › The app; `Stores.cs` `ShowDetail`) | Design §9: the toggle is no longer an HA helper. On the old dashboard, a machine on the HA connector keeps its Detail switch, created when it has none (stage 7) |
 | A subagent's words and tools reach its parent's card; its prompt and model are not the session's | Cp | `hooks/daemon-activity.ps1` | `Verified` | `CopilotTests.A_subagents_words_and_tools_reach_the_card_but_its_turns_prompt_and_model_are_not_the_sessions`. Live: Progress › Subagent rule | Labelling which subagent wrote it is an enhancement (#20) |
 | An idle session waiting for background agents or commands reads as delegating, not idle | Cp | README "Background agents"; `Update-DaemonBackgroundAgents` | `Implemented, untested live` | `BackgroundTests` (13), `pwa/test/ui.spec.mjs: "an idle session still waiting on background work is delegating…"` | #39 |
 | Compaction count beside the status | All | card ~line 1320 ("compacted once", "compacted N times") | `Implemented, untested live` | `CopilotTests.Only_finished_compactions_are_counted_and_the_model_follows_model_changes` | Worded "N compactions" (#53). #39 |
@@ -177,7 +177,7 @@ Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Par
 |---|---|---|---|---|---|
 | Every machine's sessions on one screen | All | One dashboard; `Get-DaemonPeerMachines` | `Verified` | The Windows app shows every machine's sessions together, each card naming its machine, with a picker for one machine (`FleetTests.Each_other_machine_the_relay_lists_gets_its_cards_and_this_machines_own_host_is_not_listed_twice`); the PWA lists every machine and shows one at a time (`pwa/test/unit/fleet.test.mjs`). Live (2026-10-29, #49): the VM's app listed a second host through the relay, and replied (with an image), answered and ended sessions on it | #49 |
 | Machine row: sessions, version, dev marker | All | Status card | `Verified` | `UsageFlowTests.Hello_offers_usage_and_says_how_many_sessions_are_live_and_that_the_build_is_dev`, `pwa/test/usage.spec.mjs`. Live: Progress › Usage ("N sessions · version (dev)") | |
-| Offline machines listed as offline; Forget an offline machine with two presses | All | Status card; `tests/test-multi-machine.ps1` | `Missing` | Only machines present on the relay are listed | #50 |
+| Offline machines listed as offline; Forget an offline machine with two presses | All | Status card; `tests/test-multi-machine.ps1` | `Missing` | Only machines present on the relay are listed. On the old dashboard, the X forgets a machine on the HA connector as it forgets one on the daemon: `UpkeepTests.Everything_this_connector_keeps_in_Home_Assistant_is_on_the_list_the_dashboards_forget_clears` (stage 7) | #50 |
 | Update available, install from another device, progress, outcome, fleet-wide check | All | `install_update` and `check_updates` buttons; `bridge-update.ps1` | `Implemented, untested live` | The Home Assistant connector serves both buttons on a host its updater installed (docs/ha-connector.md, stage 6): `UpdateTests` (the daemon's publications at six moments, the busy notice, a check, an install through download and hand-over, the outcome after the restart); `LiveHomeAssistantTests.The_update_entity_shows_the_release_found_and_Install_downloads_it_and_hands_it_to_the_updater` against a disposable Home Assistant with a stand-in updater. The app's own Settings update too | The Velopack hand-over from a press not yet run on an installed machine (#39; parity-checklist E18-06); a fleet-wide check is the dashboard pressing each machine's Check (#51) |
 | The machine updates itself (app and host as one version) | All | `agent-ha-bridge update`; `tests/test-update*.ps1` | `Implemented, untested live` | `SettingsTests.An_update_stops_the_host_before_the_app_restarts_into_the_new_version`; `docs/app-windows.md` › Updates | S3 spike verified Velopack deltas. The product's update path not yet run live (#39) |
 
@@ -267,17 +267,17 @@ Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Par
 
 ## 18. Home Assistant plumbing
 
-On a migrated machine, the in-flight **HA connector** keeps these entities and inputs
-wire-compatible, so the existing dashboard and phone flow keep working (G9). The new
-product itself replaces them.
+On a migrated machine, the **HA connector** ([ha-connector.md](ha-connector.md), stages 1–7)
+keeps these entities and inputs wire-compatible, so the existing dashboard and phone flow keep
+working (G9). The new product itself replaces them.
 
 | Feature / behaviour | Agents | agent-ha-bridge | Status | Evidence in agent-bridge | Gap / validation |
 |---|---|---|---|---|---|
-| Per-machine and per-session MQTT entities (status, activity, decision selects, reply text, buttons) | All | `decision-mqtt.ps1`, `bridge-adapter.ps1`; `tests/test-bridge-adapter.ps1`, `test-status-card.ps1`, `test-reply-card.ps1`, `test-choices-form.ps1` | `In flight (HA connector)` | — | |
-| Actionable phone notifications through `notify.mobile_app_*`, and taps through `mobile_app_notification_action` | All | `daemon-decision-notify.ps1`; `tests/test-answer-buttons.ps1` | `In flight (HA connector)` | — | |
-| Launch request payload topic and result sensor (`promptpayload`, `new_session_result`) | All | `daemon-launch.ps1` | `In flight (HA connector)` | — | |
-| Per-machine `online` heartbeat and `sessions` sensor | All | `agent-bridge-daemon.ps1` | `In flight (HA connector)` | — | |
-| Agent attribution through `context.user_id` and `agentUserIds` | All | `Test-BridgeAgentUserId` | `In flight (HA connector)` | — | |
+| Per-machine and per-session MQTT entities (status, activity, decision selects, reply text, buttons) | All | `decision-mqtt.ps1`, `bridge-adapter.ps1`; `tests/test-bridge-adapter.ps1`, `test-status-card.ps1`, `test-reply-card.ps1`, `test-choices-form.ps1` | `Implemented, untested live` | Recorded from the daemon's own functions (`tools/ha-contract`): `ContractTests`, `DecisionContractTests`, `LifecycleTests`, `AnswerTests`, `ReplyTests`, `StopTests`, `UpkeepTests` (a live session's entities put back, its reply box and question after a Home Assistant restart). Live on a disposable Home Assistant in CI: `LiveHomeAssistantTests` | #39: E18-01 to E18-04 against the generated dashboard |
+| Actionable phone notifications through `notify.mobile_app_*`, and taps through `mobile_app_notification_action` | All | `daemon-decision-notify.ps1`; `tests/test-answer-buttons.ps1` | `Implemented, untested live` | `NotifyTests` (stage 5b). Live on a disposable Home Assistant in CI: `LiveHomeAssistantTests``.A_question_goes_to_the_phones_with_its_buttons_a_tap_answers_it_and_the_hooks_pushes_follow` | #39: E18-04 on a phone |
+| Launch request payload topic and result sensor (`promptpayload`, `new_session_result`) | All | `daemon-launch.ps1` | `Implemented, untested live` | `LaunchTests` (stage 5). Live on a disposable Home Assistant in CI: `LiveHomeAssistantTests``.Launch_on_the_card_and_an_agents_request_both_reach_the_hosts_launcher_and_the_request_hears_how_it_went` | #39: E18-04 |
+| Per-machine `online` heartbeat and `sessions` sensor | All | `agent-bridge-daemon.ps1` | `Implemented, untested live` | `LifecycleTests.Liveness_is_declared_before_its_first_beat_which_is_never_retained_and_every_entity_gets_its_contract_id`; the sensor's repair and the Detailed activity switch, `UpkeepTests` (stage 7). Live on a disposable Home Assistant in CI: `LiveHomeAssistantTests` | #39: E18-01, E18-03, E18-05 |
+| Agent attribution through `context.user_id` and `agentUserIds` | All | `Test-BridgeAgentUserId` | `Implemented, untested live` | `driver` from the pressing account in `AnswerTests`, `ReplyTests`, `LaunchTests`, `NotifyTests`; an agent may not press Install (`UpdateTests`). Live on a disposable Home Assistant in CI: `LiveHomeAssistantTests``.A_press_on_the_card_reaches_the_hosts_answer_and_says_who_pressed_it` | #39: E18-04 |
 | Generated Lovelace dashboard, the 7 custom cards, card-version gating | All | `Save-CopilotSessionDashboard`, `bridge-frontend-cards.ps1`; `tests/test-dashboard.ps1`, `test-install-cards.ps1`, `frontend/test/test-cards.js` | `N/A` | Native app and PWA render from protocol state | G7: the new stack never publishes it |
 | Publication authority, fences, rollback pins, render fingerprints | All | `tests/test-publication-policy.ps1`, `test-write-boundary-*.ps1` | `N/A` | No shared renderer | Design §2 |
 | Entity-registry pinning, legacy and unscoped entity sweeps | All | `tests/test-registration-isolation.ps1`, `test-multi-machine.ps1` | `N/A` | | |
@@ -285,7 +285,7 @@ product itself replaces them.
 | HA image store for pasted images | All | `/api/image/upload`, `image/delete` | `N/A` | In-channel attachments, and the relay's blob store for larger ones | |
 | HA REST and WebSocket client (state snapshot, filtered reads, retry, auth backoff, HTTP session reuse) | All | `tests/test-state-read.ps1`, `test-state-snapshot.ps1`, `test-reliability.ps1`, `test-auth-backoff.ps1`, `test-http-session.ps1` | `N/A` | Relay reconnect and backoff: `ChannelTests`, `RelayTests.A_relay_that_is_stopping_tells_connected_devices_to_reconnect_at_once_with_1012` | |
 | Pairing through HA helper state (`input_text.agent_bridge_pairing`) | All | `bridge-pairing-io.ps1` | `N/A` | Replaced by device approval (#55) | |
-| Detached-entity repair, global reassert, peer stand-in sessions | All | `agent-bridge-daemon.ps1` (`DetachedEntity*`, `GlobalReassertSeconds`, `PeerSessionsStandInSeconds`) | `N/A` | Snapshot plus ordered events with gap detection: `ConnectionTests.A_gap_in_the_events_after_a_reconnect_reads_the_sessions_status_and_usage_again` | |
+| Detached-entity repair, global reassert, peer stand-in sessions | All | `agent-bridge-daemon.ps1` (`DetachedEntity*`, `GlobalReassertSeconds`, `PeerSessionsStandInSeconds`) | `N/A` | Snapshot plus ordered events with gap detection: `ConnectionTests.A_gap_in_the_events_after_a_reconnect_reads_the_sessions_status_and_usage_again`. For the old dashboard, the HA connector ports the repair and the reassert (`UpkeepTests`, stage 7); peer stand-ins are the writer's | |
 | The test runner's HTTP guard and offline isolation | — | `tests/test-http-guard.ps1`, `test-runner.ps1`, `test-install-http-guard.ps1` | `N/A` | xUnit with fakes; no test reaches a real agent, HA or relay | Design §6.5 |
 
 ## Test suites
