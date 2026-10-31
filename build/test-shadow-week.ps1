@@ -105,7 +105,7 @@ function Assert([bool]$Condition, [string]$Claim) {
 $hostTask = $null; $runTask = $null
 # A previous install's task as exported: marked, and running the launcher in $Folder.
 function PreviousXml([string]$Task, [string]$Folder = $bin) {
-    "<!-- PREVIOUS $Task --><Task xmlns=`"http://schemas.microsoft.com/windows/2004/02/mit/task`"><Actions Context=`"Author`"><Exec><Command>`"$Folder\agent-bridge-hostw.exe`"</Command></Exec></Actions></Task>"
+    "<!-- PREVIOUS $Task --><Task xmlns=`"http://schemas.microsoft.com/windows/2004/02/mit/task`"><Actions Context=`"Author`"><Exec><Command>`"$([Security.SecurityElement]::Escape("$Folder\agent-bridge-hostw.exe"))`"</Command></Exec></Actions></Task>"
 }
 function Reset-World([switch]$Previous) {
     Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
