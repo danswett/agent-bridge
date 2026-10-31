@@ -411,7 +411,14 @@ public sealed partial class HaConnector
         foreach (var (id, p, key) in due)
         {
             p.Notify.FinishedDue = null;
-            if (source.Get(id) is not { Status: SessionStatus.Idle, Question: null } s || FinishedKey(s) != key) { continue; }
+            if (source.Get(id) is not { Status: SessionStatus.Idle, Question: null } s) { continue; }
+            // A reply newer than the one the wait began with, still at rest: wait again for it,
+            // rather than drop the turn because the session moved on between the two reads.
+            if (FinishedKey(s) is var current && current != key)
+            {
+                if (current is not null && current != p.Notify.FinishedKey) { p.Notify.FinishedDue = (now + options.FinishedDelay, current); }
+                continue;
+            }
             p.Notify.FinishedKey = key;
             if (Notify.Enabled && HaNotify.Response(p.Name, s.Activity.Response, s.Agent == AgentKind.Copilot) is { } finished)
             {

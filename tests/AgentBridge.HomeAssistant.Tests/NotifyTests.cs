@@ -683,6 +683,33 @@ public sealed class NotifyTests : IDisposable
     }
 
     [Fact]
+    public async Task A_reply_that_changes_between_reading_the_session_and_pushing_it_is_still_pushed()
+    {
+        Ask(null, response: null);
+        await using var c = Connector(new HaNotifySettings { Enabled = true });
+        await Pass(c);
+        Ask(null, response: "Almost.", status: SessionStatus.Idle);
+        await Pass(c);
+        // The session moves on while this pass is publishing it: the finished step reads the newer reply.
+        var once = true;
+        ha.PublishFailsFor = (topic, _) =>
+        {
+            if (once && topic == HaContract.Topics(Node).ActivityState)
+            {
+                once = false;
+                sessions.Set(sessions.Get(A)! with { Activity = sessions.Get(A)!.Activity with { Response = "Done." } });
+            }
+            return false;
+        };
+        sessions.Set(sessions.Get(A)! with { Activity = sessions.Get(A)!.Activity with { Reasoning = "checking" } });
+        await Pass(c, 5);
+        ha.PublishFailsFor = null;
+        await Pass(c);
+        await Pass(c, 5);
+        Assert.Equal("Done.", Assert.Single(Pushes())["message"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Other_changes_while_a_finished_turn_waits_do_not_hold_it_back()
     {
         Ask(null, response: null);
