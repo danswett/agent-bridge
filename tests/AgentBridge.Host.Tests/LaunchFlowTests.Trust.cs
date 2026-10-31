@@ -277,8 +277,9 @@ public sealed partial class LaunchFlowTests
         var stuck = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key, request: request));
         Assert.Equal(("unconfirmed", "Not confirmed: answer at the machine. The question is still in Copilot's window.", null), stuck);
         Assert.Equal(2, screens.Plans.Count);
-        // The same press again gets the same outcome, and types nothing.
+        // The same press again gets the same outcome, and types nothing; nor does a new one.
         Assert.Equal(stuck, await AnswerAsync(ch, Answer(ch, id, "trust", client.Key, request: request)));
+        Assert.Equal(("refused", "an answer was already typed into its window; answer at the machine", null), await AnswerAsync(ch, Answer(ch, id, "quit", client.Key)));
         Assert.Equal(2, screens.Plans.Count);
     }
 
