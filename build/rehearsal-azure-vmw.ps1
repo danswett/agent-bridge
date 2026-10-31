@@ -239,7 +239,7 @@ function Get-ProtectedDirectory([string] $Leaf) {
 }
 '@
     $body = "`$ErrorActionPreference = 'Stop'`r`n`$ProgressPreference = 'SilentlyContinue'`r`n" +
-        "try {`r`n$protected`r`n$Script`r`n} catch { 'GUEST-ERROR: ' + (`$_ | Out-String) }"
+        "try {`r`n$protected`r`n$Script`r`n'GUEST-OK'`r`n} catch { `$m = (`$_ | Out-String); 'GUEST-ERROR: ' + `$m.Substring(0, [Math]::Min(2000, `$m.Length)); 'GUEST-FAILED' }"
     if (-not (Test-Path $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
     $file = Join-Path $StateDir "guest-$([guid]::NewGuid().ToString('n')).ps1"
     Set-Content -Path $file -Value $body -Encoding utf8
@@ -252,7 +252,10 @@ function Get-ProtectedDirectory([string] $Leaf) {
     $value = @(($json | ConvertFrom-Json).value)
     $stdout = ($value | Where-Object { $_.code -like '*StdOut*' } | ForEach-Object message) -join "`n"
     $stderr = ($value | Where-Object { $_.code -like '*StdErr*' } | ForEach-Object message) -join "`n"
-    if ($stdout -match 'GUEST-ERROR:') { throw "guest script failed: $stdout`n$stderr" }
+    # run-command returns only the last 4 KB of output, so success is a marker the script prints
+    # last; a failure prints its own marker after a bounded message. Neither can be cut off.
+    if ($stdout -notmatch 'GUEST-OK\s*$') { throw "guest script failed: $stdout`n$stderr" }
+    $stdout = $stdout -replace 'GUEST-OK\s*$', ''
     if ($stderr.Trim()) { Write-Verbose "guest stderr: $stderr" }
     return $stdout
 }
@@ -545,6 +548,8 @@ Register-ScheduledTask -TaskName 'Rehearsal Hyperloop Server' -Action $action -T
 # once sat accepting TCP without ever completing a TLS handshake; restarting its task cleared it,
 # so the check does that once before failing.
 $GuestHyperloopCheck = @'
+# A function, so the early return does not skip the wrapper's completion marker.
+function Test-RehearsalHyperloop {
 if (-not (Test-Path 'C:\Tools\hyperloop.exe')) { 'hyperloop=absent'; return }
 # Only Microsoft-signed binaries are started as the admin.
 foreach ($exe in 'C:\Tools\hyperloop.exe', 'C:\Tools\hyperloop-server.exe') {
@@ -574,6 +579,8 @@ if ($diag -notmatch '"tls":\{"success":true') {
 $status = Invoke-Bounded @('status', $target)
 if ($status -notmatch '"interactive":true') { throw "Hyperloop is not serving the interactive session: $status" }
 'hyperloop=interactive'
+}
+Test-RehearsalHyperloop
 '@
 
 # Git and PowerShell 7 from their GitHub releases (winget is not available to SYSTEM). Each
