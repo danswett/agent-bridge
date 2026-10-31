@@ -548,7 +548,7 @@ Where stage 5b knowingly differs from the daemon:
 
 | Difference | Why |
 |---|---|
-| "Type an answer" is left off where the host could not deliver the words: a lone choice whose prompt has no "Other", a Yes/No, a form | A button that silently does nothing is worse than none; the daemon offers it for anything but a form |
+| "Type an answer" is left off where the host could not deliver the words: a lone choice whose prompt has no "Other", a Yes/No, a list with no options, a form | A button that silently does nothing is worse than none; the daemon offers it for anything but a form |
 | The hooks' pushes are made from the host's view of the session, not from inside each hook | The host's hooks report to the host; Copilot's permission push carries the host's prompt text, where the hook had its own title |
 | Until migrate re-points the hooks, a machine whose agent-ha-bridge hooks still run may push a question twice | Both would be sending; `migrate` moves the hooks to the host, and nothing runs agent-ha-bridge's hooks after it |
 | The host's own Web Push (`push.*`) notifies the app's phones as well | A different channel, with its own settings; turn one off if both reach the same phone |

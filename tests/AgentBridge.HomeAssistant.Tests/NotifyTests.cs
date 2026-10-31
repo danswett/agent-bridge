@@ -726,6 +726,56 @@ public sealed class NotifyTests : IDisposable
     }
 
     [Fact]
+    public async Task A_phone_that_took_the_notification_before_the_pass_stopped_is_still_withdrawn()
+    {
+        Ask(Form("q1", Release));
+        // agent-ha-bridge starts just after the phone takes the notification, before the tablet does.
+        ha.NotifyThrows = s => { if (s == Phone) { daemon = "agent-ha-bridge's daemon (pid 4242)"; } return null; };
+        await using var c = Connector();
+        await Pass(c);
+        ha.NotifyThrows = null;
+        Assert.Single(Buttons());
+        Assert.Empty(Buttons(Tablet));
+        Ask(null);
+        daemon = null;
+        await Pass(c);
+        Assert.Equal(1, Clears());
+    }
+
+    [Fact]
+    public async Task Words_are_not_offered_for_a_list_with_no_options()
+    {
+        Ask(Form("q1", new Field { Name = "tags", Title = "Tags", Type = FieldType.Multi }));
+        await using var c = Connector();
+        await Pass(c);
+        Assert.Empty(Buttons()[0]["data"]!["actions"]!.AsArray());
+        Tap(c, "BRIDGE_q1_text", reply: "a, b");
+        await Pass(c);
+        Assert.Empty(answered);
+    }
+
+    [Fact]
+    public async Task A_refused_tap_read_again_after_another_was_refused_is_not_delivered()
+    {
+        outcome = _ => answered.Count <= 2 ? new AnswerResult(AnswerOutcome.Refused, "busy") : new AnswerResult(AnswerOutcome.Delivered);
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        var failOnce = true;
+        ha.PublishFailsFor = (topic, payload) =>
+        {
+            if (failOnce && topic == HaContract.Topics(Node).ActivityState && payload == "Answer NOT sent") { failOnce = false; return true; }
+            return false;
+        };
+        Tap(c, "BRIDGE_q1_0");
+        Tap(c, "BRIDGE_q1_1");
+        await Pass(c);
+        await Pass(c);
+        await Pass(c);
+        Assert.Equal(["cut_now", "wait"], answered.Select(a => a.Fields!["release"].GetString()));
+    }
+
+    [Fact]
     public async Task A_tap_the_host_refused_can_be_made_again()
     {
         var refusals = 1;

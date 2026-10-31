@@ -151,18 +151,22 @@ public sealed partial class HaConnector
         {
             var armed = p.Armed!;
             var (actions, payload) = Buttons(id, p, armed);
-            var sent = await SendAsync(id, Notify.AnswerButtonServices, payload, "answer buttons", ct);
-            if (sent.Count > 0)
+            // Each phone is on record as soon as it has the notification, so one that took it is
+            // withdrawn later even if the pass stops at the next.
+            var sent = await SendAsync(id, Notify.AnswerButtonServices, payload, "answer buttons", phone =>
             {
                 lock (gate)
                 {
-                    buttonsSent.Add(SentKey(id, armed.Question.Id));
                     if (!onPhones.TryGetValue(id, out var phones)) { onPhones[id] = phones = new(StringComparer.Ordinal); }
                     // The same tag: what the phone showed before is replaced.
-                    foreach (var phone in sent) { phones[phone] = armed.Question.Id; }
+                    phones[phone] = armed.Question.Id;
                 }
-                p.Notify.Shown = armed.Question.Id;
                 SaveLedger();
+            }, ct);
+            if (sent.Count > 0)
+            {
+                lock (gate) { buttonsSent.Add(SentKey(id, armed.Question.Id)); }
+                p.Notify.Shown = armed.Question.Id;
                 log($"Home Assistant connector sent answer buttons for {id[..Math.Min(8, id.Length)]} ({actions.Count} action(s))");
             }
             else { p.Notify.RetryAt = now + options.ButtonsRetry; }
@@ -174,7 +178,10 @@ public sealed partial class HaConnector
     // deliver the words (a lone choice whose prompt has no "Other"), which would be a button that
     // silently does nothing.
     static bool TakesWords(DecisionPlan plan) =>
-        !plan.TerminalOnly && !plan.AnswerOnTap && (plan.Fields.Count == 0 || (plan.Fields.Count == 1 && (plan.Fields[0].IsText || plan.TakesTypedAnswer)));
+        !plan.TerminalOnly && !plan.AnswerOnTap && (plan.Fields.Count == 0 || (plan.Fields.Count == 1 && (TypedField(plan.Fields[0]) || plan.TakesTypedAnswer)));
+
+    // A field that takes typed words as its value: text or a number, never a list.
+    static bool TypedField(DecisionField field) => field.IsText && field.Source?.Type is FieldType.Text or FieldType.Number;
 
     // Withdraws a session's notification from every phone that has it (Clear-DaemonAnswerButtons).
     // A phone that could not be reached keeps it on the list and is tried again on a later pass.
@@ -195,16 +202,18 @@ public sealed partial class HaConnector
     async Task<int> ClearPhonesAsync(string sessionId, List<string> phones, CancellationToken ct)
     {
         if (phones.Count == 0) { return 0; }
-        var cleared = await SendAsync(sessionId, phones, HaNotify.Clear(sessionId), "answer button clear", ct);
-        lock (gate)
+        var cleared = await SendAsync(sessionId, phones, HaNotify.Clear(sessionId), "answer button clear", phone =>
         {
-            if (onPhones.TryGetValue(sessionId, out var left))
+            lock (gate)
             {
-                foreach (var phone in cleared) { left.Remove(phone); }
-                if (left.Count == 0) { onPhones.Remove(sessionId); }
+                if (onPhones.TryGetValue(sessionId, out var left))
+                {
+                    left.Remove(phone);
+                    if (left.Count == 0) { onPhones.Remove(sessionId); }
+                }
             }
-        }
-        if (cleared.Count > 0) { SaveLedger(); }
+            SaveLedger();
+        }, ct);
         return cleared.Count;
     }
 
@@ -214,7 +223,7 @@ public sealed partial class HaConnector
 
     // Send-BridgeAnswerButtonNotification: one payload to each service, a failure at one logged and
     // the rest still sent. The services that took it.
-    async Task<List<string>> SendAsync(string sessionId, IEnumerable<string> services, JsonObject payload, string what, CancellationToken ct)
+    async Task<List<string>> SendAsync(string sessionId, IEnumerable<string> services, JsonObject payload, string what, Action<string> took, CancellationToken ct)
     {
         var sent = new List<string>();
         foreach (var service in services)
@@ -224,6 +233,7 @@ public sealed partial class HaConnector
             {
                 await ha.CallServiceAsync(target.Domain, target.Service, payload.DeepClone().AsObject(), ct);
                 sent.Add(service);
+                took(service);
                 Resolved($"{what}:{service}");
             }
             catch (Exception e) when (OnePhone(e, ct))
@@ -282,7 +292,14 @@ public sealed partial class HaConnector
             log($"Home Assistant connector: an answer button for {who} is not one this question offers; ignored");
             return;
         }
-        pending.Attempt ??= armed.Attempts;
+        // A tap read again after its answer was refused, with another refused since: the answer it
+        // was is long past, and only a new tap gives it again.
+        if (pending.Attempt is { } first && first != armed.Attempts)
+        {
+            log($"Home Assistant connector: an answer button for {who} was refused already; ignored");
+            return;
+        }
+        pending.Attempt = armed.Attempts;
         if (PhoneAnswer(choice, armed, pending.Attempt.Value, DriverOf(tap.UserId)) is not { } read)
         {
             log($"Home Assistant connector: an answer button for {who} names no answer this question takes; ignored");
@@ -314,7 +331,7 @@ public sealed partial class HaConnector
             if (plan.Fields.Count != 1) { return null; }
             var field = plan.Fields[0];
             var name = field.Source!.Name;
-            if (field.IsText)
+            if (TypedField(field))
             {
                 if (field.Source.Type != FieldType.Number) { return Answer(sessionId, armed, new Dictionary<string, JsonElement> { [name] = JsonSerializer.SerializeToElement(text) }, null, text, null, press, driver); }
                 var number = ExactNumber(text) ?? (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) && double.IsFinite(d) ? JsonSerializer.SerializeToElement(d) : null);
