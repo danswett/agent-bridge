@@ -212,7 +212,8 @@ A host acts on it only if all of these hold, and otherwise answers `refused` and
   server) and the Home Assistant connector cannot send it at all, and no Home Assistant entity,
   notification button or launch payload answers one;
 * the command verifies for this machine, choice and question, within its lifetime;
-* the question still waits, and nobody else is answering it.
+* the question still waits, nobody else is answering it, and no earlier answer has typed into its
+  window (whatever that did is for a person at the machine to see and finish).
 
 The answer goes only into that agent's own console, by its process, as replies do. **Trust**
 moves the highlight to the option that trusts (Copilot "Yes", this session only; Claude "Yes, I

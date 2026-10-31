@@ -60,6 +60,21 @@ public sealed class SignedCommandTests
     const string Vector = "_PJ9LEydaL4_cLc4dUQ-wkKfhFj1DfQi-9K7Bl_0fxs";
 
     [Fact]
+    public void A_folder_trust_answer_the_PWA_signs_reads_back_for_its_choice_only()
+    {
+        // pwa/test/unit/transfer.test.mjs signs exactly these bytes with signTrust.
+        const string question = "5d0c9f3e-2b1a-4c8d-9e7f-6a5b4c3d2e1f";
+        var machine = Wire.DeviceId(Source.Public);
+        var body = $"{{\"v\":1,\"action\":\"launch.trust:trust\",\"request\":\"7d0f3a2e-1c4b-4d5e-8f60-112233445566\",\"principal\":{{\"kind\":\"user\",\"device\":\"{Wire.DeviceId(Phone.Public)}\"}},\"target\":{{\"machine\":\"{machine}\",\"session\":\"{question}\"}},\"to\":\"{machine}\",\"issuedAt\":1793300000,\"expiresAt\":1793300300}}";
+        var command = new SignedCommand { Body = BlobFormat.Base64Url(Encoding.UTF8.GetBytes(body)), By = BlobFormat.Base64Url(Phone.Public), Mac = "OO_ZAWL1C15dpDTn1IcnT-RZXcsEtdN-9poKPLlx5bA" };
+
+        var (read, problem) = SignedCommands.Verify(Source, command, TrustProtocol.Action(TrustProtocol.Trust), Now);
+        Assert.Null(problem);
+        Assert.Equal((question, machine), (read!.Target.Session, read.To));
+        Assert.Equal("the command is for launch.trust:trust, not launch.trust:quit", SignedCommands.Verify(Source, command, TrustProtocol.Action(TrustProtocol.Quit), Now).Problem);
+    }
+
+    [Fact]
     public void A_command_signed_for_this_machine_reads_back_as_signed()
     {
         var body = Body();

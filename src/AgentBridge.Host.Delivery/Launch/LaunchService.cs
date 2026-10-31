@@ -1071,6 +1071,9 @@ public sealed partial class LaunchService : ISessionLauncher
         var choice = trust ? "trust" : "quit";
         try
         {
+            // Never a second time: once a key may have reached its window, whatever it did is for
+            // a person at the machine to see and finish.
+            if (p.TrustTyped) { return TrustRefused("an answer was already typed into its window; answer at the machine"); }
             if (!starter.Running(p.Started)) { return TrustRefused($"{label} has closed"); }
             var window = p.Window ?? p.Started.ProcessId;
             var screen = await ReadTrustAsync(p, window);
@@ -1083,6 +1086,7 @@ public sealed partial class LaunchService : ISessionLauncher
                 var steps = screen.TrustAt - screen.Selected;
                 var move = string.Concat(Enumerable.Repeat(steps > 0 ? KeyPlan.Down : KeyPlan.Up, Math.Abs(steps)));
                 var moved = await injector.InjectAsync(window, new KeyPlan([new KeySend(move, false, 0, TrustKeyPauseMs, screen.Hold)]));
+                p.TrustTyped |= moved.Status != InjectionStatus.NothingTyped;
                 log($"launch {Short(p.Key)}: folder trust for {by}: {Math.Abs(steps)} {(steps > 0 ? "down" : "up")} -> {moved.Status} {moved.Detail}");
                 if (moved.Status == InjectionStatus.NothingTyped) { return TrustRefused($"its window changed before anything was typed ({moved.Detail}); answer at the machine"); }
                 if (moved.Status != InjectionStatus.Typed) { return TrustUnconfirmed("the highlight may have moved, but whether it did is not known"); }
@@ -1091,6 +1095,7 @@ public sealed partial class LaunchService : ISessionLauncher
             }
             var plan = new KeyPlan([new KeySend(trust ? "" : KeyPlan.Escape, trust, 0, 0, screen.Hold)]);
             var typed = await injector.InjectAsync(window, plan);
+            p.TrustTyped |= typed.Status != InjectionStatus.NothingTyped;
             log($"launch {Short(p.Key)}: folder trust for {by}: {choice}: {plan.Describe()} -> {typed.Status} {typed.Detail}");
             if (typed.Status == InjectionStatus.NothingTyped) { return TrustRefused($"its window changed before anything was typed ({typed.Detail}); answer at the machine"); }
             if (typed.Status != InjectionStatus.Typed) { return TrustUnconfirmed($"the {choice} may not have reached {label}"); }
@@ -1170,6 +1175,8 @@ public sealed partial class LaunchService : ISessionLauncher
         public volatile string? TrustId;
         public volatile StartupQuestions.TrustScreen? TrustScreen;
         public int Answering;
+        // Whether a key of an answer from a device may have reached its window: then no other is.
+        public volatile bool TrustTyped;
         // The window followed (the launcher's, or the process it handed the session on to), the
         // session once it is live, and who declined to trust the folder.
         public int? Window { get; set; }
