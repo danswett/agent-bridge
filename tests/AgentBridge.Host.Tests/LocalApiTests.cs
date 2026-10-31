@@ -29,6 +29,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     // Who each connection is. The app, unless a test says otherwise.
     readonly Callers callers = new();
     readonly List<string> logged = [];
+    readonly List<bool> applied = [];
     Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> signIn = (_, _, _) => Task.FromException<SignInResult>(new InvalidOperationException("no relay in these tests"));
     (SignInResult Account, Uri Relay)? saved;
     RelayAccount? credential;
@@ -57,6 +58,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             Dev = true,
             Machine = machine,
             Running = new HostSettingsView(RemoteApproval: true),
+            ApplyRemoteFolderTrust = on => { lock (applied) { applied.Add(on); } },
             Relay = () => new Uri("https://relay.example/"),
             Credential = () => credential,
             SignIn = (relay, show, ct) => signIn(relay, show, ct),
@@ -212,7 +214,9 @@ public sealed class LocalApiTests : IAsyncLifetime
         var result = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrust = true });
 
         Assert.True(result.Settings.RemoteFolderTrust);
-        Assert.True(result.RestartRequired);
+        // Applied to the running host at once, so it can be allowed while a question waits.
+        Assert.Equal([true], applied);
+        Assert.False(result.RestartRequired);
         var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(profile, "config.json")))!;
         Assert.Equal("C:\\src", saved["launch"]!["workspaces"]![0]!.GetValue<string>());
         Assert.True(HostSettings.Load(profile).Settings.Launch.RemoteFolderTrust);

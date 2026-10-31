@@ -75,12 +75,14 @@ public sealed partial class LaunchFlowTests
 
     FolderTrustAnswers ServeTrust(LaunchConfig config, TimeSpan? trustConfirm = null)
     {
-        var launcher = Launcher(config, trustConfirm: trustConfirm);
+        var launcher = trustLauncher = Launcher(config, trustConfirm: trustConfirm);
         var answers = new FolderTrustAnswers(host.Key, launcher);
         answers.Attach(host.Relay);
         host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: launcher) { TrustAnswers = answers }.HandleAsync;
         return answers;
     }
+
+    LaunchService trustLauncher = null!;
 
     LaunchConfig Trusting() => Config(c => c with { RemoteFolderTrust = true });
 
@@ -226,6 +228,10 @@ public sealed partial class LaunchFlowTests
         Assert.Equal("refused", answer.Outcome);
         Assert.StartsWith("Answer at the machine. To answer from your devices", answer.Reason);
         Assert.Empty(screens.Typed);
+
+        // Allowed from the app at the machine while it waits (HostControl applies it at once).
+        trustLauncher.RemoteFolderTrust = true;
+        Assert.True((await RequestAsync(ch, LaunchProtocol.Options, new { })).GetProperty("trust")[0].GetProperty("answerable").GetBoolean());
     }
 
     [Fact]

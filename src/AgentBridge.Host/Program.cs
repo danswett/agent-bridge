@@ -411,6 +411,11 @@ async Task<int> ServeAsync()
         Running = new HostSettingsView(settings.RemoteApproval, HostConfigFile.ReadName(identity.Folder), settings.Launch.RemoteFolderTrust),
         LocalOnly = localOnly,
         Log = HostLog.FilePath,
+        ApplyRemoteFolderTrust = on =>
+        {
+            launcher.RemoteFolderTrust = on;
+            Log($"folder-trust questions from devices: {(on ? "on" : "off")} (set by the app; applies now)");
+        },
         Account = () => identity.Account is { } a ? new HostAccount(a.Login, a.AccountId) : null,
         Credential = () => Volatile.Read(ref credential),
         Relay = ServeRelay,

@@ -157,6 +157,7 @@ public sealed partial class LaunchService : ISessionLauncher
         resumable = new ResumableStore(options.CopilotHome, options.ClaudeHome, options.CodexHome, options.Time);
         requests = new OutcomeMemory<LaunchResult>(options.Time, options.RememberFor);
         trustAnswers = new OutcomeMemory<TrustAnswerResult>(options.Time, options.RememberFor);
+        remoteFolderTrust = options.Config.RemoteFolderTrust;
     }
 
     LaunchConfig Config => options.Config;
@@ -173,6 +174,16 @@ public sealed partial class LaunchService : ISessionLauncher
     public bool Available => Config.Enabled && options.PlatformSupported && probe.Active() is null && starter.Unavailable() is null;
 
     public bool AnswersTrust => Available;
+
+    // launch.remoteFolderTrust as it is now: config.json's at start, and the app's setting at once
+    // when it changes it (HostControl), so it can be allowed while a question waits.
+    public bool RemoteFolderTrust
+    {
+        get => Volatile.Read(ref remoteFolderTrust);
+        set => Volatile.Write(ref remoteFolderTrust, value);
+    }
+
+    bool remoteFolderTrust;
 
     // ---- launch.options ----
 
@@ -878,9 +889,9 @@ public sealed partial class LaunchService : ISessionLauncher
                         {
                             p.TrustAt ??= now;
                             p.TrustId ??= Guid.NewGuid().ToString();
-                            log($"launch {Short(p.Key)}: {label} in {p.Where} is asking whether to trust the folder; {(Config.RemoteFolderTrust ? "a person can answer it here or from their devices" : "left for a person at the machine")}");
+                            log($"launch {Short(p.Key)}: {label} in {p.Where} is asking whether to trust the folder; {(RemoteFolderTrust ? "a person can answer it here or from their devices" : "left for a person at the machine")}");
                             p.Decided.TrySetResult(new LaunchResult(LaunchOutcome.Unconfirmed,
-                                Config.RemoteFolderTrust
+                                RemoteFolderTrust
                                 ? $"{label} started, and is asking whether to trust {p.Where}. A person can answer that here or at the machine; the session appears here once they do"
                                 : $"{label} started, and is asking whether to trust {p.Where}. Only a person at the machine can answer that; the session appears here once they do")
                             { Session = p.SessionId.Length > 0 ? p.SessionId : null, Launched = p.Launched, Trust = Question(p) });
@@ -896,7 +907,7 @@ public sealed partial class LaunchService : ISessionLauncher
                 }
                 // A question a person may answer from their devices is followed for longer, so it
                 // can still be answered, and its answer seen, after the usual ten minutes.
-                var followFor = Config.RemoteFolderTrust && (p.Question == StartupQuestion.Trust || Volatile.Read(ref p.Answering) != 0)
+                var followFor = RemoteFolderTrust && (p.Question == StartupQuestion.Trust || Volatile.Read(ref p.Answering) != 0)
                     ? TimeSpan.FromTicks(Math.Max(options.FollowFor.Ticks, options.TrustFollowFor.Ticks)) : options.FollowFor;
                 if (now - p.At >= followFor)
                 {
@@ -1026,7 +1037,7 @@ public sealed partial class LaunchService : ISessionLauncher
     // change that; null when it can.
     string? AtMachine(StartupQuestions.TrustScreen? screen)
     {
-        if (!Config.RemoteFolderTrust)
+        if (!RemoteFolderTrust)
         {
             return "Answer at the machine. To answer from your devices, turn on \"Answer folder-trust questions from my devices\" in the Agent Bridge app's Settings on that machine, "
                 + "or run agent-bridge-host config set launch.remoteFolderTrust true there and restart the host.";
@@ -1072,7 +1083,7 @@ public sealed partial class LaunchService : ISessionLauncher
         Pending? p;
         lock (pendingGate) { p = pending.FirstOrDefault(x => x.TrustId == questionId); }
         if (p is null || p.Question != StartupQuestion.Trust) { return TrustRefused("that question is no longer waiting: it was answered, or the agent closed"); }
-        if (!Config.RemoteFolderTrust || probe.Active() is not null) { return TrustRefused(AtMachine(null)!); }
+        if (!RemoteFolderTrust || probe.Active() is not null) { return TrustRefused(AtMachine(null)!); }
         if (Interlocked.CompareExchange(ref p.Answering, 1, 0) != 0) { return TrustRefused("that question is being answered from another device"); }
         var label = p.Launcher.Label;
         var choice = trust ? "trust" : "quit";
