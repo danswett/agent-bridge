@@ -112,7 +112,7 @@ public sealed partial class LaunchViewModel
         var seen = new Dictionary<string, TrustQuestion>(StringComparer.Ordinal);
         void Add(TrustQuestion? q) { if (q is not null) { seen.TryAdd(q.Id, q); } }
         foreach (var q in (m.IsLocal ? localTrust ?? options?.Trust : options?.Trust) ?? []) { Add(q); }
-        if (lastMachine == m && lost is null && last is { State: DeliveryState.Done } e) { Add(Result(e)?.Trust); }
+        if (lastMachine == m && lost is null && last is { State: DeliveryState.Done } e && e.Request != supersededResult) { Add(Result(e)?.Trust); }
         // What the machine says waits now: an answer remembered here for a question it no longer
         // lists is shown for its outcome, but never offered again.
         liveTrust = [.. seen.Keys];
@@ -121,6 +121,20 @@ public sealed partial class LaunchViewModel
     }
 
     HashSet<string> liveTrust = new(StringComparer.Ordinal);
+
+    // A launch's outcome can name a question the machine's listing did not have yet. It counts only
+    // until a listing asked for after it arrives: from then that listing says whether it still
+    // waits, so one answered at the machine or closed meanwhile is not offered again (review of
+    // #137). The outcome's request, its machine and the load counter when it arrived.
+    (string Request, Machine Machine, int Load)? resultSeen;
+    string? supersededResult;
+
+    void SeenResult(Machine m, Delivery d) => resultSeen = (d.Request, m, loads);
+
+    void Listed(Machine m, int load)
+    {
+        if (resultSeen is { } r && r.Machine == m && load > r.Load) { supersededResult = r.Request; }
+    }
 
     void DrawTrust()
     {
@@ -175,8 +189,8 @@ public sealed partial class LaunchViewModel
     bool AllowsHere(Machine m, TrustQuestion q)
     {
         if (!m.IsLocal || q.Answerable || main.Fleet?.DeviceId is not { } me) { return false; }
-        if (m.Host.Status is not { } s || s.AgentHaBridge is not null) { return false; }
-        return !s.Settings.RemoteFolderTrust || !(s.Settings.RemoteFolderTrustDevices ?? []).Contains(me);
+        if (m.Host.Status is not { } s || s.AgentHaBridge is not null || TrustEditor.For(m.Host).Settings is not { } now) { return false; }
+        return !now.RemoteFolderTrust || !(now.RemoteFolderTrustDevices ?? []).Contains(me);
     }
 
     static string TrustOutcome(Delivery d) => d.Outcome is "started" or "declined" or "refused" or "unconfirmed" ? d.Outcome : "unconfirmed";
@@ -241,16 +255,21 @@ public sealed partial class LaunchViewModel
     }
 
     // At this machine: turns on answering folder-trust questions from devices, with this app among
-    // them, as the Settings page does. This app is the person at the machine (the trusted local
-    // caller, #67), over the pipe.
+    // them, as the Settings page does and through the same editor, so it adds this app to the
+    // host's list as it is then rather than to a status from before a change made in Settings.
+    // This app is the person at the machine (the trusted local caller, #67), over the pipe.
     internal async Task AllowHereAsync()
     {
         var host = main.Local.Host;
-        if (host.Status is not { } s || main.Fleet?.DeviceId is not { } me) { return; }
-        var devices = (s.Settings.RemoteFolderTrustDevices ?? []).Append(me).Distinct(StringComparer.Ordinal).ToList();
+        if (host.Status is null || main.Fleet?.DeviceId is not { } me) { return; }
         try
         {
-            await host.CallAsync(HostOps.Settings, new SettingsRequest(RemoteFolderTrust: true, RemoteFolderTrustDevices: devices));
+            await TrustEditor.For(host).EditAsync(now =>
+            {
+                var devices = now.RemoteFolderTrustDevices ?? [];
+                return now.RemoteFolderTrust && devices.Contains(me) ? null
+                    : new SettingsRequest(RemoteFolderTrust: true, RemoteFolderTrustDevices: devices.Contains(me) ? null : [.. devices, me]);
+            });
             SetTrustNote("");
         }
         // Behind an async void click handler: whatever goes wrong is shown, never thrown.
