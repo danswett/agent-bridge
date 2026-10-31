@@ -185,6 +185,7 @@ tells them apart by folder, as agent-ha-bridge did.
 | `dashboard.urlPath` | `homeAssistant.dashboardUrlPath` |
 | `detailedActivity` | `homeAssistant.detailedActivity` |
 | `homeAssistant.agentUserIds`, `agentTokenEnvVar` | `homeAssistant.agentUserIds`, `agentTokenEnvVar` (read by the connector from its stage 2) |
+| `notifications.*`, `answerButtons.*` | `homeAssistant.notifications.*`, `homeAssistant.answerButtons.*` (the connector's phone notifications, stage 5b; a key it does not know is named as not carried) |
 
 #38's table lists `detailedActivity` and `homeAssistant.*` as having no equivalent. The HA
 connector (#60) has since given the first four rows above one, so they are carried. The
@@ -193,7 +194,7 @@ given at the machine (`agent-bridge-host ha token set`), and then `homeAssistant
 
 Everything else is named in the report as not carried and stays in agent-ha-bridge's file:
 `codexStartPrompt`, `discoverWorkspaces`, `platform.*`, `devBox.*`, `usage.*`,
-`answerButtons.*`, `notifications.*`, `updates.*`, `clients`, the rest of `homeAssistant.*`
+`updates.*`, `clients`, the rest of `homeAssistant.*`
 and `dashboard.*`. **No secret is ever copied**: `homeAssistant.token`, `agentToken` and
 `updates.token` are named as such. `dashboard.publication` is never carried: this host never
 publishes the dashboard (G7).

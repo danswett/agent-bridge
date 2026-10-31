@@ -35,7 +35,9 @@ param(
     # Stops: End session's two presses, what the card says and what the status shows.
     [string]$StopsOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-stops.json'),
     # Launch: the launch card, an agent's launch request, its refusals and outcomes.
-    [string]$LaunchOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-launch.json')
+    [string]$LaunchOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-launch.json'),
+    # Notifications: a question's answer buttons on a phone, and the notify service's pushes.
+    [string]$NotifyOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-notify.json')
 )
 
 Set-StrictMode -Version Latest
@@ -121,7 +123,11 @@ function script:Invoke-HomeAssistantService {
     param([string]$Domain, [string]$Service, [hashtable]$Data, [hashtable]$Headers, [int]$TimeoutSec = 15)
     Assert-HomeAssistantServiceTarget -Data $Data
     if ("$Domain.$Service" -notin $script:RecordedServices) { throw "the contract does not call $Domain.$Service here" }
-    if ("$Domain.$Service" -eq 'mqtt.publish') {
+    if ($Domain -in @('notify', 'ticker')) {
+        # A notification is its whole body: title, message and the phone's data.
+        $script:Recorded.Add([ordered]@{ service = "$Domain.$Service"; data = $Data })
+    }
+    elseif ("$Domain.$Service" -eq 'mqtt.publish') {
         $script:Recorded.Add([ordered]@{ topic = [string]$Data.topic; payload = [string]$Data.payload; retain = [bool]$Data.retain; qos = [int]$Data.qos })
     }
     else {
@@ -975,4 +981,113 @@ foreach ($kind in @($script:BridgeLaunchers.Keys)) {
 }
 $full = [IO.Path]::GetFullPath($LaunchOutput)
 [IO.File]::WriteAllText($full, ((ConvertTo-Stable $launch) | ConvertTo-Json -Depth 30) + "`n", [Text.UTF8Encoding]::new($false))
+Write-Host "wrote $full"
+
+# ---- Notifications ---------------------------------------------------------------------------
+# The answer buttons the daemon puts a question on a phone with (daemon-decision-notify.ps1),
+# what a tapped one means, how it is withdrawn, and the notify service's own pushes
+# (Send-BridgeNotification, Send-BridgeResponseNotification) the hooks send.
+Import-SpecFunction 'hooks\daemon-decision-notify.ps1' @('Get-BridgeAnswerButtonTag', 'Get-BridgeAnswerButtonOptions', 'Get-BridgeAnswerButtonActions',
+    'Get-BridgeAnswerButtonTitle', 'Get-BridgeAnswerButtonPayload', 'Send-BridgeAnswerButtonNotification', 'Clear-DaemonAnswerButtons', 'Get-BridgeAnswerButtonChoice')
+Import-SpecFunction 'hooks\decision-bridge-common.ps1' @('Send-BridgeNotification')
+Import-SpecFunction 'hooks\bridge-adapter.ps1' @('Format-BridgeNotificationTitle', 'Send-BridgeResponseNotification')
+function script:Write-DecisionBridgeLog { param([string]$Message) }
+function script:Test-BridgeObservationGuardFailure { param($ErrorRecord) $false }
+# The settings' defaults, as decision-bridge-common.ps1 reads them: Get-BridgeSetting '<name>' <default>.
+$commonAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Source 'hooks\decision-bridge-common.ps1'), [ref]$null, [ref]$null)
+$notifyDefaults = [ordered]@{}
+foreach ($call in $commonAst.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] -and $a.GetCommandName() -eq 'Get-BridgeSetting' }, $true)) {
+    $elements = $call.CommandElements
+    if ($elements.Count -ne 3 -or $elements[1] -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { continue }
+    $name = $elements[1].Value
+    if ($name -notmatch '^(notifications|answerButtons)\.') { continue }
+    $default = $elements[2]
+    # An empty list is assigned as one, not unrolled into nothing.
+    if ($default.Extent.Text -eq '@()') { $notifyDefaults[$name] = [object[]]::new(0); continue }
+    $notifyDefaults[$name] = if ($default -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $default.Value }
+        elseif ($default -is [System.Management.Automation.Language.ConstantExpressionAst]) { $default.Value }
+        elseif ($default.Extent.Text -in @('$true', '$false')) { $default.Extent.Text -eq '$true' }
+        else { throw "decision-bridge-common.ps1 reads $name with a default that is not a constant: $($default.Extent.Text)" }
+}
+$script:RecordedServices = @('notify.mobile_app_phone', 'notify.mobile_app_tablet', 'notify.notify', 'ticker.notify')
+$phones = @('notify.mobile_app_phone', 'not-a-service', 'notify.mobile_app_tablet')
+$script:DecisionBridgeConfig = @{
+    NotifyEnabled = $true; NotifyService = 'notify.notify'; TickerCategory = 'agents'; DashboardPath = '/agent-decisions/decision'
+    AnswerButtonsEnabled = $true; AnswerButtonServices = $phones
+}
+$notifySession = '6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20'
+$notifyNode = Get-CopilotMqttNodeId -SessionId $notifySession
+function New-NotifyField([string]$Label, [string[]]$Options, [bool]$IsText = $false, [bool]$MultiSelect = $false) {
+    [pscustomobject][ordered]@{ Label = $Label; Options = @($Options); IsText = $IsText; MultiSelect = $MultiSelect }
+}
+function New-NotifyMarker([string]$Mode, [string[]]$Choices = @(), [object[]]$Fields = @(), [bool]$TerminalOnly = $false, [string]$Question = 'Cut the release now?') {
+    [pscustomobject][ordered]@{
+        decisionId = "$notifyNode-1730232000000"; question = $Question; mode = $Mode
+        choices = @($Choices); fields = @($Fields); terminalOnly = $TerminalOnly
+    }
+}
+$markers = [ordered]@{
+    choice = New-NotifyMarker 'multiple_choice' @('(Recommended) Open the PR and wait for CI to go green', 'Wait for the fix', 'Other (type your answer)')
+    many = New-NotifyMarker 'multiple_choice' @('one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight')
+    lone = New-NotifyMarker 'multiple_choice' @() @(New-NotifyField 'Release' @('Cut it', 'Hold it'))
+    loneText = New-NotifyMarker 'multiple_choice' @() @(New-NotifyField 'Name' @() $true)
+    form = New-NotifyMarker 'multiple_choice' @() @((New-NotifyField 'Release' @('Cut it', 'Hold it')), (New-NotifyField 'Notes' @() $true))
+    freeform = New-NotifyMarker 'freeform' @() @() $false 'What should the release notes say?'
+    terminal = New-NotifyMarker 'multiple_choice' @('Yes', 'No') @() $true
+    blank = New-NotifyMarker 'freeform' @() @() $false '   '
+}
+$buttonCases = [ordered]@{}
+foreach ($name in @($markers.Keys)) {
+    $marker = $markers[$name]
+    $options = @(Get-BridgeAnswerButtonOptions -Marker $marker)
+    $actions = @(Get-BridgeAnswerButtonActions -Marker $marker -DecisionId $marker.decisionId -Options $options -MaxButtons 6)
+    $payload = Get-BridgeAnswerButtonPayload -SessionId $notifySession -SessionName 'Copilot: Fix the relay' -Marker $marker `
+        -Actions $actions -DashboardUrlPath 'agent-decisions' -MachineName $machine
+    $buttonCases[$name] = [ordered]@{ marker = $marker; options = $options; actions = $actions; payload = $payload }
+}
+$plain = Get-BridgeAnswerButtonPayload -SessionId $notifySession -SessionName 'Claude: scratch' -Marker $markers.choice `
+    -Actions @() -DashboardUrlPath 'my-dash' -MachineName '' -Icon '' -InterruptionLevel ''
+$titles = [ordered]@{}
+foreach ($text in @('Wait', '  Open   the   PR  ', '(Recommended) Open the PR and wait for CI to go green', 'Supercalifragilisticexpialidocious-and-more', 'a b c d e f g h i j k l m n o p q r s t', 'Ship it, then; tell them.....')) {
+    $titles[$text] = Get-BridgeAnswerButtonTitle -Text $text
+}
+$sent = Get-Published { Send-BridgeAnswerButtonNotification -Payload $buttonCases.choice.payload -Headers $headers }
+$cleared = Get-Published { Clear-DaemonAnswerButtons -SessionId $notifySession -Marker $markers.choice -Headers $headers }
+$event = { param($Json) $Json | ConvertFrom-Json }
+$choiceCases = [ordered]@{
+    tap = @{ action = 'BRIDGE_ab12cd34ef56_1'; action_data = @{ bridge = 'decision'; session = $notifySession; decision = 'd-1' } }
+    typed = @{ action = 'BRIDGE_ab12cd34ef56_text'; reply_text = '  Ship it after the hotfix  '; action_data = @{ bridge = 'decision'; session = $notifySession; decision = 'd-1' } }
+    noIndex = @{ action = 'SOMETHING_ELSE'; action_data = @{ bridge = 'decision'; session = $notifySession; decision = 'd-1' } }
+    noData = @{ action = 'BRIDGE_ab12cd34ef56_0' }
+    otherBridge = @{ action = 'BRIDGE_ab12cd34ef56_0'; action_data = @{ bridge = 'something'; session = $notifySession; decision = 'd-1' } }
+    noSession = @{ action = 'BRIDGE_ab12cd34ef56_0'; action_data = @{ bridge = 'decision'; session = ''; decision = 'd-1' } }
+}
+$choices = [ordered]@{}
+foreach ($name in @($choiceCases.Keys)) {
+    $data = & $event ($choiceCases[$name] | ConvertTo-Json -Depth 5)
+    $choices[$name] = [ordered]@{ event = $choiceCases[$name]; choice = (Get-BridgeAnswerButtonChoice -EventData $data) }
+}
+$long = (1..60 | ForEach-Object { "Line $_ of a long answer." }) -join "`n"
+$pushes = [ordered]@{
+    notify = Get-Published { Send-BridgeNotification -Title 'Copilot: Copilot: Fix the relay' -Message 'Hello' -Headers $headers }
+    responseShort = Get-Published { Send-BridgeResponseNotification -SessionName 'Claude: scratch' -Response '  Done.  ' -Headers $headers }
+    responseLong = Get-Published { Send-BridgeResponseNotification -SessionName 'Copilot: Fix the relay' -Response $long -Headers $headers -TitlePrefix 'Copilot response' -DashboardLabel 'the Agent Sessions dashboard' }
+    responseEmpty = Get-Published { Send-BridgeResponseNotification -SessionName 'Codex: api' -Response '   ' -Headers $headers }
+}
+$script:DecisionBridgeConfig.NotifyService = 'ticker.notify'
+$pushes['ticker'] = Get-Published { Send-BridgeNotification -Title 'Approval needed: Codex: api' -Message 'rm -rf build' -Headers $headers }
+$script:DecisionBridgeConfig.NotifyEnabled = $false
+$pushes['disabled'] = Get-Published { Send-BridgeNotification -Title 't' -Message 'm' -Headers $headers }
+$notify = [ordered]@{
+    source = $fixture.source
+    machine = $machine; session = $notifySession; tag = (Get-BridgeAnswerButtonTag -SessionId $notifySession)
+    defaults = $notifyDefaults
+
+    buttons = $buttonCases; plain = $plain; titles = $titles
+    services = $phones; sent = $sent; cleared = $cleared; choices = $choices
+    longTitle = (Format-BridgeNotificationTitle -Title ('x' * 200)); longResponse = $long
+    pushes = $pushes
+}
+$full = [IO.Path]::GetFullPath($NotifyOutput)
+[IO.File]::WriteAllText($full, ((ConvertTo-Stable $notify) | ConvertTo-Json -Depth 30) + "`n", [Text.UTF8Encoding]::new($false))
 Write-Host "wrote $full"

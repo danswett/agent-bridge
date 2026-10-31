@@ -212,7 +212,7 @@ retained payload), so the dashboard never offers a control that silently does no
 
 The generated dashboard draws "Entity not found" for those controls until the stage that serves
 them lands. **The connector is therefore for the disposable rehearsal only; no real machine
-enables it until the stages that serve what it withdraws (phone notifications, and 6) have landed** (see the plan).
+enables it until the stage that serves what it withdraws (6) has landed** (see the plan).
 
 ### Stage 2: answering from the card
 
@@ -489,6 +489,59 @@ Where stage 5 knowingly differs from the daemon:
 | The note is not cleared when the launched session registers, only when the host says it started (or after ten minutes) | The host reports registration as `Started`; there is no separate signal to wait for |
 | Outcomes survive a restart (above); the daemon's start over | Beyond parity: otherwise a payload whose clear was lost could be served twice across a restart |
 
+### Stage 5b: phone notifications
+
+What agent-ha-bridge sends phones through Home Assistant, in its own settings' names under
+`homeAssistant` (below). `Fixtures/ha-notify.json` records the daemon's own functions
+(`daemon-decision-notify.ps1`, `Send-BridgeNotification`, `Send-BridgeResponseNotification`,
+`Format-BridgeNotificationTitle`): the buttons for eight kinds of question, a payload without
+styling, the button titles, what each phone is sent and how it is withdrawn, what six taps mean,
+the pushes (plain, ticker, short and long responses, an empty one, notifications off) and the
+settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-records it.
+
+* **Answer buttons** (`answerButtons.*`, on by default but sent nowhere until `services` names a
+  phone). Once a question is armed on the card and still waiting, it goes to every service in
+  `answerButtons.services`, once (`Sync-DaemonAnswerButtons`): the session's name, the question,
+  the machine as the subtitle, the dashboard's decision view to open, and the daemon's payload
+  exactly (`tag: bridge_decision_<node>`, `group`, `action_data` naming session and question,
+  icon, colour and interruption level). Its options are buttons (`BRIDGE_<last 12 of the
+  question id>_<i>`, up to `maxButtons`, titles cut to 30 as the daemon cuts them, `Other (type
+  your answer)` left out), with a "Type an answer" text action. A phone that fails is logged and
+  the others are still sent; a question no phone took is tried again 15 s later. A question
+  answered only at the machine is sent as a notice with no actions; an approval (Codex's, or a
+  permission prompt) is not sent, as the daemon sends none (it has no marker).
+* **A tap** fires `mobile_app_notification_action`, which the connector holds a subscription
+  for while it runs and is not paused (agent-ha-bridge's own listener takes them otherwise). It
+  is answered on the next pass through the same delivery as the card: an option's own value
+  (`true`/`false` for Yes/No, a one-element list for a "choose any" question, as the daemon's
+  `Selections @(answer)`), or typed words as the free-text answer, a lone text or number field's
+  value, or through the prompt's own "Other". The card says `Answer sent`, and the next turn is
+  `agent`-driven when the tapping account is in `agentUserIds`. A tap for a session that is not
+  live, for an earlier question, or after the question was answered, answers nothing.
+* **Withdrawn** (`clear_notification` by tag, at every phone) once a tap is delivered, when the
+  question is answered anywhere else or replaced, and when the session ends. A restart, or
+  taking the machine back from agent-ha-bridge, sends a waiting question again, as the daemon
+  does after its own restart; the tag replaces what the phone shows.
+* **The hooks' pushes** (`notifications.*`, off by default, as in agent-ha-bridge). The daemon's
+  hooks sent them; the host owns the hooks on a migrated machine, so the connector sends them
+  from what the host sees, worded as each hook words them: Copilot's question (`Copilot:
+  <name>`, the session, machine, question, numbered choices and where to answer, capped at 950)
+  and permission prompt (`Copilot permission needed`), Claude's question and its blocked
+  notification (`Waiting: <name>`), Codex's approval (`Approval needed: <name>`), and a
+  finished turn's reply (`Copilot response: <name>` or `Response: <name>`, cut at 880 with
+  where to read the rest). A `ticker.*` service gets its own fields. Each question is pushed
+  once, a finished turn once, and only with a reply that is the turn's own (the host keeps the
+  last turn's reply while the next runs). What sessions already show when the connector starts
+  is not pushed again. A push that fails is logged and holds nothing up.
+
+Where stage 5b knowingly differs from the daemon:
+
+| Difference | Why |
+|---|---|
+| "Type an answer" is left off where the host could not deliver the words: a lone choice whose prompt has no "Other", a Yes/No, a form | A button that silently does nothing is worse than none; the daemon offers it for anything but a form |
+| The hooks' pushes are made from the host's view of the session, not from inside each hook | The host's hooks report to the host; Copilot's permission push carries the host's prompt text, where the hook had its own title |
+| Until migrate re-points the hooks, a machine whose agent-ha-bridge hooks still run may push a question twice | Both would be sending; `migrate` moves the hooks to the host, and nothing runs agent-ha-bridge's hooks after it |
+| The host's own Web Push (`push.*`) notifies the app's phones as well | A different channel, with its own settings; turn one off if both reach the same phone |
 ### The shadow: comparing with a running daemon
 
 `agent-bridge-host ha shadow [--json] [--window <seconds>]` runs one connector pass against a
@@ -611,8 +664,11 @@ against its own `homeAssistant.agentUserIds` to set `driver` (stage 2). Agents d
 migrated machine go on using their own token, unchanged.
 
 **Notifications.** The phone flow (`notify.mobile_app_*` with answer buttons, and
-`mobile_app_notification_action` events back) is stage 5b. Until then a migrated machine's
-questions reach phones through the host's own Web Push, not through Home Assistant.
+`mobile_app_notification_action` events back) is stage 5b (above). A tap is attributed as a
+press is: the account Home Assistant records on the event, matched against `agentUserIds`. The
+services are named in `homeAssistant.answerButtons.services` and `homeAssistant.notifications.service`;
+they call nothing but notify-style services, and name no entity. The host's own Web Push is a
+separate channel with its own settings.
 
 ## Command handling: the plan for later stages
 
@@ -630,7 +686,7 @@ does), never by subscribing to the broker.
 | 3 Replies and attachments (done) | The reply card's publish (text, image ids, inline files) and the reply box with Send; images from Home Assistant's image store, deleted after; the files through `AttachmentStore` and `ReplyService`; driver pending until the turn starts (above) | `daemon-replies.ps1`, card reply path |
 | 4 Stop (done) | `button.<node>_stop`, two presses when the session is not idle, the confirm and lapsed notes pinned on the activity line; `StopService`; `ending` (above) | `Invoke-PendingStops`, `Get-DaemonCardSummary`, `CopilotEndSessionConfirmNote` |
 | 5 Launch (done) | The launch card's controls (`Publish-CopilotMqttNewSession`) from the host's approved workspaces and agents; the 255-character limit lifted through the retained `newsession/promptpayload` (`{at, text, request, settings}`); `new_session_result` with `recent` per request (its attributes, on the retained `newsession/outcome`); `capabilities.newSession`/`launchRequest`; the purple edge for a session an agent launched (above). The transfer request stays withdrawn | `daemon-launch.ps1`, `Publish-DaemonNewSessionControls`, `Resolve-DaemonRequestedLaunch` |
-| 5b Phone notifications | `notify.mobile_app_*` with the question's answer buttons, and the `mobile_app_notification_action` events back through `AnswerService`; the response notification when a turn ends | `daemon-decision-notify.ps1`, `Send-BridgeResponseNotification` |
+| 5b Phone notifications (done) | `notify.mobile_app_*` with the question's answer buttons, and the `mobile_app_notification_action` events back through `AnswerService`; the response notification when a turn ends | `daemon-decision-notify.ps1`, `Send-BridgeResponseNotification` |
 | 6 Update buttons | `button.agent_bridge_<slug>_check_updates` forces a fresh release check, and `button.agent_bridge_<slug>_install_update` starts the product's own update (the app's Velopack update on Windows), with `stage`/`stage_detail` and `update_percentage` from it, and `latest_version` from this product's release feed — never agent-ha-bridge's (G2) | `Publish-CopilotMqttUpdate`, `daemon-maintenance.ps1` |
 | 7 Upkeep | The Detailed activity helper created when absent (`input_boolean/create`, never recreated); the liveness repair for a sensor Home Assistant has stopped applying, with its attempt limit (#177, #202); forget-machine (the card's X clears this machine's topics from the browser; the connector must not resurrect a machine that was forgotten while it was off) | `Initialize-CopilotVerboseToggle`, `Confirm-DaemonOnlineHeartbeat`, `Get-BridgeMachineForgetTopic` |
 
@@ -673,6 +729,11 @@ Assistant itself rather than a fake:
   through Home Assistant's services and a Launch press reach the host's launcher, and the box is
   reset to `' '`; an agent's request published to the prompt payload and a press reach it with
   the request's own settings, and `new_session_result`'s `recent` says it `started`;
+* a question goes to `notify.persistent_notification` (standing in for a phone) with its buttons,
+  and the hook's push beside it; a tap fired as `mobile_app_notification_action` through Home
+  Assistant's events API answers it with the tapped option, the notification is withdrawn, and
+  the reply of the turn it started is pushed, `agent`-driven because the account that fired the
+  tap is in `agentUserIds`;
 * with no dashboard at all, an ended session is retired, and nothing it published is left
   retained;
 * the shadow, against the daemon's own recorded publications seeded into the broker, reports
@@ -765,7 +826,14 @@ Assistant and broker).
   "detailedActivity": true,               // when the machine has no Detailed activity switch
   "machineName": null,                    // the computer's name; set only for a rehearsal
   "disposable": false,                    // a development build needs true
-  "agentUserIds": []                      // Home Assistant users whose presses are agents'
+  "agentUserIds": [],                     // Home Assistant users whose presses are agents'
+  "notifications": {                      // the hooks' pushes (stage 5b); off by default
+    "enabled": false, "service": "notify.notify", "tickerCategory": ""
+  },
+  "answerButtons": {                      // a question's buttons on the phones named here
+    "enabled": true, "services": [], "maxButtons": 6,
+    "icon": "mdi:chat-question", "iconColor": "#FFFFFF", "color": "#FF9F0A", "interruptionLevel": "time-sensitive"
+  }
 }
 ```
 

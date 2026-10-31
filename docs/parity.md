@@ -189,9 +189,9 @@ Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Par
 | A finished turn notifies with the response's start | All | `Send-BridgeResponseNotification` | `Verified` | `PushNotifierTests.A_finished_turn_is_notified_with_the_start_of_its_response_after_it_stays_idle`. Live: Progress › Push ("finished") | |
 | Answered anywhere withdraws the notice; a stale tap is refused | All | README "Answering from the notification" | `Verified` | `PushNotifierTests.An_answered_question_is_replaced_quietly_where_it_was_shown_but_not_on_the_device_that_answered`. Live: Progress › Push (cleared) | |
 | One notification per session (tags); several sessions at once | All | Per-session tags | `Verified` | `PushNoticeTests.Each_session_has_one_topic_a_push_service_accepts_and_one_tag`, `pwa/test/push.spec.mjs`. Live: Progress › Push | |
-| Option buttons and "Type an answer" on the phone notification | All | `answerButtons.*` | `Intentionally different` | Web Push on iOS has no action buttons or text inputs; a tap opens the card | Design §8 (S5). The old buttons return for migrated machines through the in-flight HA connector |
+| Option buttons and "Type an answer" on the phone notification | All | `answerButtons.*` | `Intentionally different` | Web Push on iOS has no action buttons or text inputs; a tap opens the card | Design §8 (S5). The old buttons return for migrated machines through the HA connector's stage 5b ([ha-connector.md](ha-connector.md#stage-5b-phone-notifications); `NotifyTests`, live in the `ha-integration` job) |
 | Desktop notifications with option buttons and a text box | All | — (HA only) | `Verified` | `ToastTests` (11). Live: Progress › Windows app (answered from a toast button; withdrawn once answered) | Beyond parity |
-| Notification styling (icon, colour, interruption level) | All | `answerButtons.icon`, `.color`, `.interruptionLevel` | `N/A` | HA companion-app specific | |
+| Notification styling (icon, colour, interruption level) | All | `answerButtons.icon`, `.color`, `.interruptionLevel` | `N/A` | HA companion-app specific | Carried for the HA connector's answer buttons (`homeAssistant.answerButtons.*`) |
 
 ## 11. Transfer and cross-machine resume
 

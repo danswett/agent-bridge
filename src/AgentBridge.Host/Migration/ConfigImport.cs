@@ -25,6 +25,7 @@ namespace AgentBridge.Host.Migration;
 //   dashboard.urlPath                           homeAssistant.dashboardUrlPath
 //   detailedActivity                            homeAssistant.detailedActivity
 //   homeAssistant.agentUserIds, agentTokenEnvVar homeAssistant.agentUserIds, agentTokenEnvVar
+//   notifications.*, answerButtons.*            homeAssistant.notifications.*, homeAssistant.answerButtons.*
 //
 // A setting this profile already has is kept, and the report says so: the person set it here.
 public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, IReadOnlyList<string> Kept, IReadOnlyList<string> NotCarried, IReadOnlyList<string> Problems)
@@ -43,6 +44,11 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
         "model", "effort", "context", "models", "efforts", "contexts", "extraArgs",
         "copilotPath", "agencyPath", "claudePath", "codexPath", "worktreeRoot", "worktreeLimit", "worktreeIdleHours",
     };
+    static readonly (string Part, string[] Keys)[] NotifyKeys =
+    [
+        ("notifications", ["enabled", "service", "tickerCategory"]),
+        ("answerButtons", ["enabled", "services", "maxButtons", "icon", "iconColor", "color", "interruptionLevel"]),
+    ];
     static bool Named(string key, params string[] names) => names.Any(n => string.Equals(n, key, StringComparison.OrdinalIgnoreCase));
     static bool Secret(string key) => Secrets.Contains(key, StringComparer.OrdinalIgnoreCase);
 
@@ -195,6 +201,18 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                 };
                 foreach (var (key, value) in target2.ToList()) { Put(section, key, value!.DeepClone(), names[key], $"homeAssistant.{key}"); }
             }
+            // Phone notifications, which the connector sends once it has the machine (stage 5b): the
+            // daemon's own settings, by name, in the homeAssistant section here.
+            foreach (var (part, keys) in NotifyKeys)
+            {
+                if (ahb.FirstOrDefault(p => Named(p.Key, part)) is not { Value: JsonObject from }) { continue; }
+                foreach (var (key, value) in from)
+                {
+                    var known = keys.FirstOrDefault(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
+                    if (known is null || value is null) { if (known is null) { notCarried.Add($"{part}.{key}"); } continue; }
+                    Put(Section(Section(host, "homeAssistant"), part), known, value.DeepClone(), $"{part}.{key}", $"homeAssistant.{part}.{known}");
+                }
+            }
             if (ha is not null)
             {
                 foreach (var (key, _) in ha.Where(p => !Named(p.Key, "baseUrl", "agentUserIds", "agentTokenEnvVar")))
@@ -209,7 +227,7 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                     notCarried.Add(Named(key, "publication") ? "dashboard.publication (this host never publishes the dashboard, G7)" : $"dashboard.{key}");
                 }
             }
-            foreach (var (key, value) in ahb.Where(p => !Named(p.Key, "newSession", "homeAssistant", "dashboard", "detailedActivity")))
+            foreach (var (key, value) in ahb.Where(p => !Named(p.Key, "newSession", "homeAssistant", "dashboard", "detailedActivity", "notifications", "answerButtons")))
             {
                 notCarried.Add(value is JsonObject ? $"{key}.*" : key);
             }

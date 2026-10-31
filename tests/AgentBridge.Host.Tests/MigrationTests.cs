@@ -1424,6 +1424,36 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Phone_notification_settings_are_carried_into_the_connectors_section_by_name()
+    {
+        var ahb = (JsonObject)JsonNode.Parse("""
+            {"homeAssistant":{"baseUrl":"http://ha:8123"},
+             "Notifications":{"Enabled":true,"service":"ticker.notify","tickerCategory":"agents","sound":"chime"},
+             "answerButtons":{"services":["notify.mobile_app_phone"],"maxButtons":4,"max":9}}
+            """, new JsonNodeOptions { PropertyNameCaseInsensitive = true })!;
+
+        var import = ConfigImport.Build(ahb, null);
+
+        Assert.Empty(import.Problems);
+        Assert.Contains("notifications.Enabled -> homeAssistant.notifications.enabled", import.Imported);
+        Assert.Contains("answerButtons.services -> homeAssistant.answerButtons.services", import.Imported);
+        Assert.Equal(["notifications.sound", "answerButtons.max"], import.NotCarried);
+        var (settings, problem) = HostSettings.Parse(import.Text!, "config.json");
+        Assert.Null(problem);
+        Assert.Empty(settings.HomeAssistantProblems);
+        var notify = settings.HomeAssistant.Notify;
+        Assert.True(notify.Enabled);
+        Assert.Equal("ticker.notify", notify.Service);
+        Assert.Equal("agents", notify.TickerCategory);
+        Assert.Equal(["notify.mobile_app_phone"], notify.AnswerButtonServices);
+        Assert.Equal(4, notify.MaxButtons);
+
+        // A setting this profile already has is kept.
+        var again = ConfigImport.Build(ahb, """{"version":1,"homeAssistant":{"notifications":{"enabled":false}}}""");
+        Assert.Contains(again.Kept, k => k.StartsWith("homeAssistant.notifications.enabled", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task The_cli_runs_status_and_a_dry_run_and_refuses_unknown_words()
     {
         var output = new StringWriter();

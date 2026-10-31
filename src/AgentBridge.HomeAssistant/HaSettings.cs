@@ -14,7 +14,10 @@ namespace AgentBridge.HomeAssistant;
 //     "dashboardUrlPath": "agent-decisions",
 //     "detailedActivity": true,
 //     "machineName": null,
-//     "disposable": false
+//     "disposable": false,
+//     "notifications": { "enabled": false, "service": "notify.notify", "tickerCategory": "" },
+//     "answerButtons": { "enabled": true, "services": [], "maxButtons": 6, "icon": "mdi:chat-question",
+//                        "iconColor": "#FFFFFF", "color": "#FF9F0A", "interruptionLevel": "time-sensitive" }
 //   }
 //
 // The token is never here: it is kept beside the device key, protected (HaTokenStore).
@@ -39,6 +42,9 @@ public sealed record HaSettings
     // Home Assistant user ids that are agents, not people (agentUserIds there): a press made by
     // one of them is the agent's, and the card's edge says so.
     public IReadOnlyList<string> AgentUserIds { get; init; } = [];
+    // Phone notifications through Home Assistant (HaNotifySettings): agent-ha-bridge's notifications
+    // and answerButtons, under the same names.
+    public HaNotifySettings Notify { get; init; } = HaNotifySettings.Default;
 
     public static readonly HaSettings Default = new();
 
@@ -70,6 +76,7 @@ public sealed record HaSettings
             Disposable = Bool("disposable", false),
             DashboardUrlPath = Text("dashboardUrlPath") ?? DefaultDashboard,
             MachineName = Text("machineName"),
+            Notify = HaNotifySettings.Read(s, problems),
         };
         if (s.TryGetProperty("agentUserIds", out var ids) && ids.ValueKind != JsonValueKind.Null)
         {

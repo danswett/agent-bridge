@@ -79,6 +79,11 @@ public sealed record HaConnectorOptions
     // How often the launch card's choices are asked of the host's launcher again, and its
     // selectors kept on a usable default (the daemon's reconcile).
     public TimeSpan LaunchRefresh { get; init; } = TimeSpan.FromSeconds(30);
+    // Phone notifications through Home Assistant (homeAssistant.notifications and answerButtons).
+    public HaNotifySettings Notify { get; init; } = HaNotifySettings.Default;
+    // How long after an answer-button notification reached no phone it is tried again (the daemon
+    // tries on each 15-second pass).
+    public TimeSpan ButtonsRetry { get; init; } = TimeSpan.FromSeconds(15);
 }
 
 // The Home Assistant connector (docs/ha-connector.md): this machine's sessions, liveness,
@@ -159,6 +164,8 @@ public sealed partial class HaConnector : IAsyncDisposable
         public ReplyState Reply = new();
         // End session (HaConnector.Stops.cs).
         public StopState Stop = new();
+        // Phone notifications (HaConnector.Notify.cs).
+        public NotifyState Notify = new();
         // Who is driving the session's turn, and an arm left by a press for the next one
         // (Set-DaemonDriverPending): consumed by the turn it was armed for, or lapsed.
         public string Driver = "human";
@@ -289,6 +296,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             }
         }, token);
         if (ServesAnswers) { watch = Task.Run(() => WatchLoopAsync(token), token); }
+        if (ServesButtons) { tapping = Task.Run(() => TapLoopAsync(token), token); }
     }
 
     void OnChanged(object? sender, SessionChange change)
@@ -327,6 +335,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             }
             await Step("sessions", () => SessionsAsync(now, cancellationToken));
             await Step("answers", () => AnswersAsync(now, cancellationToken));
+            await Step("buttons", () => ButtonsAsync(now, cancellationToken));
             await Step("launch", () => LaunchAsync(now, cancellationToken));
             await Step("global", () => GlobalAsync(now, cancellationToken));
             await Step("heartbeat", () => HeartbeatAsync(now, cancellationToken));
@@ -424,8 +433,14 @@ public sealed partial class HaConnector : IAsyncDisposable
             foreach (var node in inherited.Where(n => !live.Contains(n))) { retiring.TryAdd(node, new Retiring()); }
             published.Clear();
             usageSignatures.Clear();
+            // Sent again to every phone, as the daemon does after a restart: the same tag replaces
+            // what is there, and a question answered meanwhile is withdrawn.
+            buttonsSent.Clear();
+            // Taken while agent-ha-bridge had the machine, or before: its own listener had them too.
+            taps.Clear();
             allDirty = true;
         }
+        baselinePass = true;
         SaveLedger();
         globalSignature = null;
         usageVersion = -1;
@@ -567,6 +582,10 @@ public sealed partial class HaConnector : IAsyncDisposable
         }
         foreach (var (id, node) in gone)
         {
+            Published? was;
+            lock (gate) { published.TryGetValue(id, out was); }
+            // Its question went with it: withdrawn from the phones (Clear-DaemonAnswerButtons).
+            if (was is not null) { await ClearButtonsAsync(id, was.Notify, forget: true, ct); }
             lock (gate)
             {
                 published.Remove(id);
@@ -586,6 +605,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 throw;
             }
         }
+        baselinePass = false;
     }
 
     async Task SessionAsync(Session s, DateTimeOffset now, CancellationToken ct)
@@ -596,6 +616,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         var t = HaContract.Topics(node);
         Published? p;
         lock (gate) { published.TryGetValue(s.Id, out p); }
+        var firstSeen = p is null;
         if (p is null)
         {
             lock (gate) { starting[s.Id] = node; }
@@ -676,6 +697,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         p.Detail = detail;
 
         await QuestionAsync(full, p, name, now, ct);
+        await PushesAsync(full, p, name, firstSeen, ct);
     }
 
     // Publish-CopilotMqttSession: every entity of a session's card, the selector parked on Idle.
@@ -964,6 +986,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         {
             await stop.CancelAsync();
             try { await loop; } catch (OperationCanceledException) { }
+            try { await tapping; } catch (OperationCanceledException) { }
             stop.Dispose();
         }
         await StopRepliesAsync();
@@ -1011,6 +1034,7 @@ public sealed partial class HaConnector : IAsyncDisposable
 
         public Task<byte[]?> DownloadImageAsync(string imageId, long maxBytes, CancellationToken cancellationToken = default) => inner.DownloadImageAsync(imageId, maxBytes, cancellationToken);
         public IAsyncEnumerable<HaTrigger> WatchAsync(IReadOnlyCollection<string> entityIds, CancellationToken cancellationToken = default) => inner.WatchAsync(entityIds, cancellationToken);
+        public IAsyncEnumerable<HaEvent> EventsAsync(string eventType, CancellationToken cancellationToken = default) => inner.EventsAsync(eventType, cancellationToken);
         public Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default) => inner.ReadTopicsAsync(filters, window, cancellationToken);
 
         public Task<HaState?> GetStateAsync(string entityId, CancellationToken cancellationToken = default) => inner.GetStateAsync(entityId, cancellationToken);

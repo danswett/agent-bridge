@@ -73,12 +73,15 @@ public sealed class HaRunning : IAsyncDisposable
             DashboardUrlPath = ha.DashboardUrlPath,
             StateFile = Path.Combine(folder, "ha-connector.json"),
             AgentUserIds = ha.AgentUserIds,
+            Notify = ha.Notify,
             UsageAccountSensors = usage is null ? [] : HaContract.UsageAccountSensors(settings.Usage.CopilotAccounts.Select(a => a.Slot)),
         }, new HomeAssistantClient(ha.BaseUrl!, token, http), source, agentHaBridge!, usage is null ? null : () => usage.Current, log, answer: answer, reply: reply, stop: stop, launch: launch);
         connector.Start();
         log($"the Home Assistant connector is on: {ha.BaseUrl} as agent_bridge_{slug}{(ha.Disposable ? " (disposable)" : "")}; " +
             (answer is null ? "status only" : "status, answers" + (reply is null ? "" : ", replies") + (stop is null ? "" : ", End session")) +
-            (launch is null ? "" : ", the launch card when the host launches here"));
+            (launch is null ? "" : ", the launch card when the host launches here") +
+            (ha.Notify.Enabled ? $", notifications via {ha.Notify.Service}" : "") +
+            (answer is not null && ha.Notify.ButtonsOn ? $", answer buttons to {ha.Notify.AnswerButtonServices.Count} phone(s)" : ""));
         return new HaRunning(connector, http, claim);
     }
 
