@@ -19,6 +19,7 @@ public sealed partial class LaunchView : UserControl
             if (viewModel is not null) { viewModel.PropertyChanged -= OnChanged; }
             viewModel = value;
             viewModel.PropertyChanged += OnChanged;
+            WatchCards();
             Bindings.Update();
         }
     }
@@ -28,8 +29,39 @@ public sealed partial class LaunchView : UserControl
     // never have visited it, so FromElement would find none and the first outcome would go unheard.
     void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(LaunchViewModel.TrustQuestions)) { WatchCards(); return; }
         if (e.PropertyName != nameof(LaunchViewModel.StatusText) || string.IsNullOrEmpty(viewModel?.StatusText)) { return; }
         Announce(StatusLine);
+    }
+
+    // Each folder-trust card's progress and outcome is heard too, from its own status line.
+    readonly HashSet<TrustCard> watchedCards = [];
+
+    void WatchCards()
+    {
+        var now = viewModel?.TrustQuestions ?? [];
+        foreach (var gone in watchedCards.Where(c => !now.Contains(c)).ToList()) { gone.PropertyChanged -= OnCardChanged; watchedCards.Remove(gone); }
+        foreach (var card in now.Where(watchedCards.Add)) { card.PropertyChanged += OnCardChanged; }
+    }
+
+    void OnCardChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(TrustCard.StatusText) || sender is not TrustCard { ShowStatus: true } card) { return; }
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (TrustList.ContainerFromItem(card) is DependencyObject container && Find(container, "TrustStatus") is { } line) { Announce(line); }
+        });
+    }
+
+    static FrameworkElement? Find(DependencyObject root, string automationId)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is FrameworkElement f && Microsoft.UI.Xaml.Automation.AutomationProperties.GetAutomationId(f) == automationId) { return f; }
+            if (Find(child, automationId) is { } found) { return found; }
+        }
+        return null;
     }
 
     void Announce(FrameworkElement line) =>

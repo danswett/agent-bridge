@@ -144,6 +144,31 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Two_quick_device_changes_go_one_after_the_other_so_neither_undoes_the_other()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        // The host answers with what it saved; its status event comes only later.
+        host.On(HostOps.Settings, d => new SettingsResult(new HostSettingsView(true, RemoteFolderTrust: true,
+            RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]), false));
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
+        await Connected();
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+
+        // Revoke this app, then approve the phone, before any status event.
+        settings.TrustDevices.Single(d => d.Id == a).Approved = false;
+        settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2, "both changes");
+        var sent = host.Sent(HostOps.Settings).Select(s => s.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()).ToList()).ToList();
+        Assert.Equal([], sent[0]);
+        Assert.Equal([b], sent[1]);
+    }
+
+    [Fact]
     public async Task A_switch_set_to_what_it_already_says_installs_or_sends_nothing()
     {
         await Connected();

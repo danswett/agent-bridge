@@ -103,11 +103,11 @@ public sealed partial class LaunchViewModel : Observable
         if (main.Fleet is { } f && f != watchedFleet)
         {
             watchedFleet = f;
-            f.LoopbackChanged += () => ui.Post(() => { WatchLoopback(); if (machine?.IsLocal == true) { Draw(); } Rediscover(); });
+            f.LoopbackChanged += () => ui.Post(() => { WatchLoopback(); if (machine?.IsLocal == true) { Draw(); } Rediscover(); RelistLocalTrust(); });
             f.AccountChanged += () => ui.Post(OnAccountChanged);
             // The relay back for the same account changes no machine and, with no loopback made yet,
             // no loopback either: only the link's own state says discovery can now be answered.
-            f.Changed += () => ui.Post(Rediscover);
+            f.Changed += () => ui.Post(() => { Rediscover(); RelistLocalTrust(); });
             f.PresenceChanged += () => ui.Post(Rediscover);
         }
         var now = main.Fleet?.CurrentLoopback;
@@ -320,7 +320,8 @@ public sealed partial class LaunchViewModel : Observable
             .Select(m => new Choice(m.Key, m.IsLocal ? $"{m.Name} (this machine)" : m.Name)).ToList();
         if (list.SequenceEqual(Machines))
         {
-            Show();
+            // The same machines, but the one shown may have begun or stopped taking launches.
+            if (InspectOnly != drawnInspect) { Draw(); } else { Show(); }
             Rediscover();
             return;
         }
@@ -516,9 +517,13 @@ public sealed partial class LaunchViewModel : Observable
         return list;
     }
 
+    // Whether the page was last drawn read-only, to see that change.
+    bool drawnInspect;
+
     void Draw()
     {
         var o = options;
+        drawnInspect = InspectOnly;
         filling = true;
         try
         {

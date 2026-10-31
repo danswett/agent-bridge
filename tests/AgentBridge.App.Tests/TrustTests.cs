@@ -57,7 +57,7 @@ public sealed class TrustTests : IAsyncLifetime
         local = localHost.Connect(ui);
         await Wait.UntilAsync(() => local.State == LinkState.Connected && local.Status is not null, "this machine's host");
         main = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel());
-        fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100) }));
+        fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100), CapabilityRefresh = TimeSpan.FromMilliseconds(200) }));
     }
 
     Machine Build(string key, HostConnection c) =>
@@ -181,6 +181,33 @@ public sealed class TrustTests : IAsyncLifetime
         Assert.Equal("Sessions can't be started on Build server now: agent-ha-bridge is running for this user.", page.Note);
         Assert.Equal("Answer at the machine: agent-ha-bridge is running for this user.", card.AtMachine);
         Assert.False(card.CanAnswer);
+    }
+
+    [Fact]
+    public async Task A_machine_that_takes_launches_again_shows_its_form_again()
+    {
+        remoteReadOnly = "agent-ha-bridge is running for this user";
+        var (page, _) = await OnRemoteAsync();
+        Assert.False(page.ShowForm);
+
+        // agent-ha-bridge stopped there: the same machines, but this one launches again.
+        remoteReadOnly = null;
+        await Wait.UntilAsync(() => page.ShowForm, "the form");
+        Assert.Equal("Start a session on Build server", page.Title);
+    }
+
+    [Fact]
+    public async Task This_machines_question_offers_Trust_once_the_relay_connects_without_a_reload()
+    {
+        localTrust = [Question() with { Workspace = "here" }];
+        localHost.On(TrustProtocol.Answer, d => answer(d));
+        var page = LaunchPage.Open(main, ui);
+        await Wait.UntilAsync(() => page.TrustQuestions.Count == 1, "the question");
+        // Through the pipe alone: never answerable from here.
+        Assert.False(page.TrustQuestions[0].CanAnswer);
+
+        link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        await Wait.UntilAsync(() => page.TrustQuestions[0].CanAnswer, "Trust offered");
     }
 
     [Fact]
