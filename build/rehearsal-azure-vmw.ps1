@@ -1372,6 +1372,14 @@ if ($RestoreSnapshot) {
     # The other VM's snapshot would boot as a second copy of that machine.
     if ((Get-SourceVm $snap) -ne $VmName) { throw "$name was not taken from $VmName; refusing to restore it here" }
     if (-not $PSCmdlet.ShouldProcess($VmName, "Replace the OS disk with a copy of $name; everything written since it was taken is lost")) { return }
+    # Run Command's last script stays in the VM's model, and a restored disk's guest agent has not
+    # seen it, so it runs again at the first boot: a restore once rewrote the very file it had just
+    # restored. The last script is made a harmless one first, which needs the VM running.
+    if (-not (Test-VmRunning)) {
+        Write-Step 'starting the VM to clear its last Run Command script'
+        Invoke-Az vm start -g $ResourceGroup -n $VmName -o none | Out-Null
+    }
+    Invoke-VmRunCommand -Script "'run-command cleared before a restore'" | Write-Verbose
     $oldDisk = Get-OsDiskId
     $sku = (Invoke-Az disk show --ids $oldDisk --query sku.name -o tsv).Trim()
     $newDisk = "$VmName-osdisk-$SnapshotName-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))"

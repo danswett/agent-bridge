@@ -259,6 +259,10 @@ hyperloop servers add rehearsal-m --scheme tcp --authority 127.0.0.1:4852
   and waits for `rehearsal`'s session and Hyperloop. The NIC, addresses and host key are
   unchanged, so tunnels and pins still work. The replaced disk is deleted unless
   `-KeepReplacedDisk`, so copy run 1's evidence to VM-W first, as G-01 (1) says.
+* Azure Run Command keeps its last script in the VM's model, and a restored disk runs it
+  again at first boot. In testing, that rewrote the very file the restore had just
+  brought back. `-RestoreSnapshot` therefore runs a harmless script just before the swap
+  (starting the VM if it must), so the replay is that script.
 * A snapshot can be restored only to the VM it was taken from, so VM-W's disk can never become VM-M's.
 
 `-Deallocate` and `-Start` take `-Role M` too. **Cost** is another $0.40 an hour or so while
