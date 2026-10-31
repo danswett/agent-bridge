@@ -633,6 +633,12 @@ device.
   five seconds; a press from before the connector started is history, not an instruction
   (`Test-DaemonUpdateCheckPress`), so one made moments after a restart still counts.
 
+What the tests cannot show is the hand-over itself: the unit tests and the `ha-integration` job
+use a stand-in updater, so Update.exe stopping the host and the rest of the package, replacing it
+and restarting the app for the pressing profile, and that host then telling the outcome, are
+checked on an installed machine by the rehearsal's step E18-06
+([parity-checklist.md](parity-checklist.md)), from a local feed one version up.
+
 Where stage 6 knowingly differs from the daemon:
 
 | Difference | Why |
