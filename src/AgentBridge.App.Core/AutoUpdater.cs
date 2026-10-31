@@ -55,8 +55,11 @@ public sealed class AutoUpdater
         this.log = log;
         this.othersInPackage = othersInPackage;
         this.time = time ?? TimeProvider.System;
-        // A turn starting or a question arriving between ticks starts the idle wait again.
+        // A turn starting or a question arriving between ticks starts the idle wait again; so does a
+        // snapshot read in full again (a reconnect, a gap), so idle seen before it does not count.
+        // Nothing installs while one is being read (Due), and every reconnect ends in one.
         host.Sessions.Upserted += s => { if (Busy(s)) { idleSince = null; } };
+        host.Sessions.Synced += () => idleSince = null;
     }
 
     // The release found and downloaded, waiting to be installed.
@@ -173,9 +176,10 @@ public sealed class AutoUpdater
     {
         var to = Pending!;
         log($"auto-update: installing {to}, as {because}");
-        Record(prefs, save, updater);
         // The host comes back from a failed install, or from the app quitting mid-way (HostManager).
-        try { await manager.StopAndApplyAsync(updater.ApplyAndRestart); }
+        try { await manager.StopAndApplyAsync(() => Record(prefs, save, updater), updater.ApplyAndRestart); }
+        // Settings' Update and restart got there first: that one is installing, and recorded it.
+        catch (UpdateUnderWayException e) { log($"auto-update: not installing {to}: {e.Message}"); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
             // Still this version: nothing to announce. Tried again only after the next check finds

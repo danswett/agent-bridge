@@ -146,7 +146,8 @@ into one folder with one version. An app update is a host update, so they never 
   default. The installed app checks on start and every 30 minutes, and downloads a release it
   finds at once. It installs it once this machine's host has been idle (no session with a turn
   running or a question waiting) for two minutes without a break, seen at every minute's tick
-  and every session change, or six hours after it first found one, whatever the sessions are
+  and every session change, and since its sessions were last read in full (a reconnect starts
+  the wait again), or six hours after it first found one, whatever the sessions are
   doing (though still only once they are read in full, so not in the middle of a reconnect).
   The path is that of "Update and restart": the host stopped over the pipe, then
   `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
@@ -166,7 +167,8 @@ into one folder with one version. An app update is a host update, so they never 
     release replaced since (a check from Settings, or "Include pre-releases" or `feed.txt`
     changed, which drops the downloaded release, and any check still running against the old
     source finds nothing) is checked for and downloaded again first.
-  * The host is never left down (`HostManager.StopAndApplyAsync`): an install that fails starts
+  * The host is never left down (`HostManager.StopAndApplyAsync`, one install at a time: Update
+    and restart pressed while the automatic one installs is refused): an install that fails starts
     it again and waits for the next check; quitting the app while the host is stopping for an
     update, or stopped and not yet updated, waits for the stop to finish, applies nothing, and
     starts the host on the way out; and an app killed meanwhile starts it at its next start, as

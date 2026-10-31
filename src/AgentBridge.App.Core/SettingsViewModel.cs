@@ -205,14 +205,19 @@ public sealed class SettingsViewModel : Observable
             throw new InvalidOperationException("the update found has changed since; check for updates again");
         }
         UpdateStatus = "Stopping the host to update it…";
-        AutoUpdater.Record(prefs, savePrefs, updater);
         try
         {
-            await manager.StopAndApplyAsync(() =>
+            await manager.StopAndApplyAsync(() => AutoUpdater.Record(prefs, savePrefs, updater), () =>
             {
                 UpdateStatus = "Restarting…";
                 updater.ApplyAndRestart();
             });
+        }
+        // The automatic update got there first, and is installing (and recorded) it.
+        catch (UpdateUnderWayException)
+        {
+            UpdateStatus = "";
+            throw;
         }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {

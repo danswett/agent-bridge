@@ -213,19 +213,25 @@ public sealed class HostManager
     readonly object updating = new();
     Task? updateStop;
     Task? updateRestart;
+    bool installing;
     bool quitting;
 
     public bool UpdateUnderWay { get { lock (updating) { return updateStop is not null; } } }
 
     // Stops the host, then applies an update, which ends this process into the new version, whose
     // start brings the host back. Should applying throw, or the app begin quitting meanwhile, the
-    // host is started again (by Quit, if quitting) and the error rethrown.
-    public async Task StopAndApplyAsync(Action apply)
+    // host is started again (by Quit, if quitting) and the error rethrown. One at a time: Settings
+    // and the automatic updates may both try, and the second is refused (UpdateUnderWayException)
+    // before its begin (what the new version announces) is recorded over the first's.
+    public async Task StopAndApplyAsync(Action begin, Action apply)
     {
         Task stop;
         lock (updating)
         {
             if (quitting) { throw new OperationCanceledException("the app is quitting"); }
+            if (installing) { throw new UpdateUnderWayException(); }
+            begin();
+            installing = true;
             // On the thread pool, so Quit can wait for it from the UI thread.
             stop = updateStop = Task.Run(() => StopAsync());
         }
@@ -257,6 +263,7 @@ public sealed class HostManager
             finally { lock (updating) { updateRestart = null; } }
             throw;
         }
+        finally { lock (updating) { installing = false; } }
     }
 
     // The app quitting: an update that had stopped the host, or was stopping it, and not applied,
@@ -425,3 +432,6 @@ public sealed class WindowsLogonTasks : ILogonTasks
 
 // The host answered a stop or restart with no, and is still running.
 public sealed class HostRefusedException(string reason) : InvalidOperationException(reason);
+
+// Another update (Settings', or the automatic one) is stopping the host or being applied.
+public sealed class UpdateUnderWayException() : InvalidOperationException("an update is already being installed");

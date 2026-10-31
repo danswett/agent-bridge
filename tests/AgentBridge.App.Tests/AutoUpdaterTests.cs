@@ -181,6 +181,27 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_reconnect_between_ticks_starts_the_idle_wait_again()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.IdleFor);
+
+        // The host restarts between ticks, and its sessions are read in full again: whatever they
+        // did while the app could not see them, idle from before does not count.
+        await host.StopAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the host gone");
+        host.Start();
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Complete, "the host back");
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+
+        time.Advance(AutoUpdater.IdleFor);
+        await auto.TickAsync();
+        Assert.True(updater.Applied);
+    }
+
+    [Fact]
     public async Task A_question_waiting_holds_the_update_too()
     {
         await StartAsync(null, Make.Session("s1") with { Status = SessionStatus.Idle, Question = Make.Approval() });
@@ -325,24 +346,31 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Single(host.Sent(HostOps.Stop));
     }
 
+    // A host slow to go: its pipe still answers for a while after it was asked to stop. Completes
+    // when it has been asked.
+    Task SlowToStop()
+    {
+        var asked = new TaskCompletionSource();
+        host.On(HostOps.Stop, data =>
+        {
+            asked.TrySetResult();
+            _ = Task.Run(async () => { await Task.Delay(400); await host.StopAsync(); });
+            return new { stopping = true };
+        });
+        return asked.Task;
+    }
+
     [Fact]
     public async Task Quitting_while_the_host_stops_for_an_update_applies_nothing_and_starts_the_host_again_once_it_has_stopped()
     {
         await StartAsync();
         processes.OnStart = () => host.Start();
-        // A host slow to go: its pipe still answers for a while after it was asked to stop.
-        var stopAsked = new TaskCompletionSource();
-        host.On(HostOps.Stop, data =>
-        {
-            stopAsked.TrySetResult();
-            _ = Task.Run(async () => { await Task.Delay(400); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        var stopAsked = SlowToStop();
         await auto.TickAsync();
         time.Advance(AutoUpdater.IdleFor);
 
         var tick = Task.Run(auto.TickAsync);
-        await stopAsked.Task;
+        await stopAsked;
         // What App.Quit does on its way out, at the worst moment (off the test's own context, which
         // the fake host's pipe loops run on).
         await Task.Run(() => manager.Quit(TimeSpan.FromSeconds(10), log.Add));
@@ -353,6 +381,27 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Single(host.Sent(HostOps.Stop));
         Assert.False(manager.UpdateUnderWay);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the host back");
+    }
+
+    [Fact]
+    public async Task Update_and_restart_pressed_while_the_automatic_update_installs_is_refused_and_leaves_it_alone()
+    {
+        await StartAsync();
+        var stopAsked = SlowToStop();
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.IdleFor);
+
+        var tick = Task.Run(auto.TickAsync);
+        await stopAsked;
+        // Settings' Update and restart, meanwhile.
+        var second = false;
+        await Assert.ThrowsAsync<UpdateUnderWayException>(() => manager.StopAndApplyAsync(() => second = true, () => second = true));
+        await tick;
+
+        Assert.False(second);
+        Assert.True(updater.Applied);
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.Equal("0.1.0", prefs.UpdatedFrom);
     }
 
     [Fact]
