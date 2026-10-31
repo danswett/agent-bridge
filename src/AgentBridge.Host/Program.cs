@@ -502,8 +502,10 @@ async Task<int> ServeAsync()
         }
         // Anything else the relay or network does to one connection is a reason to
         // reconnect, never to exit: the relay is not trusted, and a host that one bad frame
-        // can stop is a denial of service.
-        catch (Exception e) when (e is not OperationCanceledException)
+        // can stop is a denial of service. That includes a cancellation neither token above
+        // asked for: the socket's own keep-alive aborts with one, and on DSWETT-DEV-VM1 one
+        // that got this far took the host down for good, minutes after a relay deploy (#40).
+        catch (Exception e)
         {
             Log($"connection failed: {e.GetType().Name}: {e.Message}");
             control.SetRelay(RelayState.Connecting, $"connection failed: {e.Message}");
