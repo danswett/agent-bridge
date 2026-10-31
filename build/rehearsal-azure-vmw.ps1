@@ -339,6 +339,17 @@ $adminKey = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('__ADMI
 $tunnelKey = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('__TUNNEL_KEY_B64__')).Trim()
 $sshDir = Join-Path $env:ProgramData 'ssh'
 
+# Before any SSH account exists. C:\ lets every signed-in user create and modify folders, and
+# Hyperloop's binaries in C:\Tools run as the admin, so `rehearsal` must not be able to create,
+# own or write anything there; the admin itself may, for server updates. Ownership and the
+# children's ACLs are reset too, in case the folder was made by someone else first.
+New-Item -ItemType Directory -Path 'C:\Tools' -Force | Out-Null
+& icacls.exe 'C:\Tools' /setowner '*S-1-5-32-544' /T /C | Out-Null
+& icacls.exe 'C:\Tools' /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' `
+    "${adminUser}:(OI)(CI)M" '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'icacls C:\Tools failed' }
+if (Get-ChildItem 'C:\Tools' -Force) { & icacls.exe 'C:\Tools\*' /reset /T /C | Out-Null }
+
 # Windows Update supplies the capability; on a fresh VM this can take most of an hour.
 $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
 if ($cap.State -ne 'Installed') { Add-WindowsCapability -Online -Name $cap.Name | Out-Null }
@@ -371,6 +382,14 @@ Set-KeyFile (Join-Path $sshDir 'administrators_authorized_keys') $adminKey $null
 $sid = (Get-LocalUser -Name $tunnelUser).SID.Value
 Set-KeyFile (Join-Path $sshDir "${tunnelUser}_authorized_keys") $tunnelKey $sid
 
+# The only folder `rehearsal` sees (sshd chroots its SFTP here), so it cannot plant or read files
+# anywhere else on C:\. Files it exchanges, such as A-04's token, go through here.
+$drop = 'C:\RehearsalDrop'
+New-Item -ItemType Directory -Path $drop -Force | Out-Null
+& icacls.exe $drop /setowner '*S-1-5-32-544' /T /C | Out-Null
+& icacls.exe $drop /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' "*${sid}:(OI)(CI)M" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "icacls $drop failed" }
+
 $config = @"
 # Written by build/rehearsal-azure-vmw.ps1. Key-only; the rehearsal user may only forward to HA and use SFTP.
 Port 22
@@ -390,8 +409,9 @@ Match User $tunnelUser
     AllowTcpForwarding local
     PermitOpen 127.0.0.1:8123
     # No shell: a process it could run would reach Hyperloop (no PIN) on loopback, where
-    # PermitOpen does not apply. 'ssh -N -L' and scp (SFTP) still work.
+    # PermitOpen does not apply. 'ssh -N -L' and scp (SFTP, inside the drop folder) still work.
     ForceCommand internal-sftp
+    ChrootDirectory C:\RehearsalDrop
 
 Match Group administrators
     AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys
@@ -428,12 +448,6 @@ New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE' -Force | Out-Nul
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE' -Name DisablePrivacyExperience -Value 1 -Type DWord
 New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -Force | Out-Null
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -Name HideFirstRunExperience -Value 1 -Type DWord
-New-Item -ItemType Directory -Path 'C:\Tools' -Force | Out-Null
-# C:\ lets every signed-in user modify new folders. Hyperloop's binaries run as the admin, so
-# `rehearsal` must not be able to replace them; the admin itself may, for server updates.
-& icacls.exe 'C:\Tools' /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' `
-    "${adminUser}:(OI)(CI)M" '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'icacls C:\Tools failed' }
 
 $hostKey = (Get-Content (Join-Path $sshDir 'ssh_host_ed25519_key.pub')).Trim()
 "HOSTKEY=$hostKey"
@@ -518,6 +532,13 @@ Register-ScheduledTask -TaskName 'Rehearsal Hyperloop Server' -Action $action -T
 # so the check does that once before failing.
 $GuestHyperloopCheck = @'
 if (-not (Test-Path 'C:\Tools\hyperloop.exe')) { 'hyperloop=absent'; return }
+# Only Microsoft-signed binaries are started as the admin.
+foreach ($exe in 'C:\Tools\hyperloop.exe', 'C:\Tools\hyperloop-server.exe') {
+    $sig = Get-AuthenticodeSignature $exe
+    if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch '^CN=Microsoft Corporation,') {
+        throw "$exe is not a valid Microsoft-signed binary ($($sig.Status)); not starting it"
+    }
+}
 function Invoke-Bounded([string[]] $Arguments) {
     $o = Join-Path (Get-ProtectedDirectory 'jobs') 'hl-check-out.txt'; $e = Join-Path (Get-ProtectedDirectory 'jobs') 'hl-check-err.txt'
     $p = Start-Process 'C:\Tools\hyperloop.exe' -ArgumentList $Arguments -RedirectStandardOutput $o `
@@ -551,9 +572,17 @@ function Get-Release([string] $Repo, [string] $Pattern) {
     $asset = $rel.assets | Where-Object { $_.name -match $Pattern } | Select-Object -First 1
     if (-not $asset) { throw "no asset matching $Pattern in $Repo" }
     $path = Join-Path $dl $asset.name
-    if (-not (Test-Path $path)) { Invoke-WebRequest $asset.browser_download_url -OutFile $path -UseBasicParsing }
+    if (-not (Test-Path $path)) {
+        # Downloaded beside, then renamed, so an interrupted run never leaves a partial file
+        # that the next run would mistake for a cached installer.
+        Invoke-WebRequest $asset.browser_download_url -OutFile "$path.partial" -UseBasicParsing
+        Move-Item "$path.partial" $path -Force
+    }
     $sig = Get-AuthenticodeSignature $path
-    if ($sig.Status -ne 'Valid') { throw "$($asset.name): signature $($sig.Status)" }
+    if ($sig.Status -ne 'Valid') {
+        Remove-Item $path -Force
+        throw "$($asset.name): signature $($sig.Status); deleted so a rerun downloads it again"
+    }
     return $path
 }
 if (-not (Test-Path "$env:ProgramFiles\PowerShell\7\pwsh.exe")) {
@@ -665,14 +694,18 @@ if ($signedIn -ne $ExpectedAzureUser) {
     Write-Warning "continuing as '$signedIn' because -AllowOtherAzureUser was given"
 }
 
+# Every operation on an existing group first proves it is the rehearsal's: the names are fixed, so
+# an unrelated group of the same name must never be started, stopped, adopted or deleted.
+$groupExists = Test-AzResource @('group', 'show', '-n', $ResourceGroup)
+if ($groupExists) {
+    $purpose = "$(Invoke-Az group show -n $ResourceGroup --query 'tags.purpose' -o tsv)".Trim()
+    if ($purpose -ne 'rehearsal-39') { throw "$ResourceGroup is not tagged purpose=rehearsal-39; refusing to touch it" }
+}
+
 if ($Remove) {
-    if (-not (Test-AzResource @('group', 'show', '-n', $ResourceGroup))) {
+    if (-not $groupExists) {
         Write-Step "$ResourceGroup does not exist"
         return
-    }
-    $purpose = Invoke-Az group show -n $ResourceGroup --query 'tags.purpose' -o tsv
-    if ($purpose.Trim() -ne 'rehearsal-39') {
-        throw "$ResourceGroup is not tagged purpose=rehearsal-39; refusing to delete it"
     }
     if ($PSCmdlet.ShouldProcess($ResourceGroup, 'Delete the resource group and everything in it') -and
         $PSCmdlet.ShouldContinue("Delete $ResourceGroup and every resource in it (VM, disk, IP, NSG, network)?", 'Remove VM-W')) {
@@ -681,6 +714,8 @@ if ($Remove) {
     }
     return
 }
+
+if (($Deallocate -or $Start) -and -not $groupExists) { throw "$ResourceGroup does not exist; provision first" }
 
 if ($Deallocate) {
     if ($PSCmdlet.ShouldProcess($VmName, 'Deallocate')) {
@@ -721,11 +756,7 @@ $adminPub = (Get-Content "$AdminKeyPath.pub" -Raw).Trim()
 $tunnelPub = if ($TunnelPublicKeyPath) { (Get-Content $TunnelPublicKeyPath -Raw).Trim() } else { '' }
 
 Write-Step "resource group $ResourceGroup"
-# `group create` would retag an existing group, which -Remove would then accept as ours.
-if (Test-AzResource @('group', 'show', '-n', $ResourceGroup)) {
-    $purpose = (Invoke-Az group show -n $ResourceGroup --query 'tags.purpose' -o tsv).Trim()
-    if ($purpose -ne 'rehearsal-39') { throw "$ResourceGroup exists without the purpose=rehearsal-39 tag; refusing to adopt it" }
-}
+# Safe only because the tag was checked above: `group create` would retag a foreign group.
 Invoke-Az group create -n $ResourceGroup -l $Location --tags @Tags -o none | Out-Null
 
 Write-Step 'network security group'
@@ -788,6 +819,8 @@ $hostKeyLine = ($message -split "`n" | Where-Object { $_ -like 'HOSTKEY=*' } | S
 if (-not $hostKeyLine) { throw "the bootstrap did not report a host key: $message" }
 # Pin exactly the key the VM reported through Azure's control plane.
 $hostKey = ($hostKeyLine.Substring(8).Trim() -split '\s+')[0..1] -join ' '
+$khDir = Split-Path $KnownHostsPath
+if (-not (Test-Path $khDir)) { New-Item -ItemType Directory -Path $khDir -Force | Out-Null }
 Set-Content -Path $KnownHostsPath -Value "$ip $hostKey" -Encoding ascii
 
 Write-Step 'autologon for the admin'

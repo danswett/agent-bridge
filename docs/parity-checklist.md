@@ -113,7 +113,8 @@ send SSH out from addresses other than its web traffic. Entra Global Secure Acce
 for example. So the machine that runs the script may not be able to SSH to VM-W even when
 `-AllowedSshCidr` is its web egress. The script copies Hyperloop's binaries over SSH when it
 can, and otherwise warns. In that case copy them from a machine that VM-W does accept, such as
-VM-M with `scp` as `rehearsal`, and move them into `C:\Tools` with `az vm run-command`.
+VM-M with `scp` as `rehearsal` into its drop folder (below). Then move them into `C:\Tools`
+with `az vm run-command`. Only Microsoft-signed binaries are started.
 
 **Security posture:**
 
@@ -125,9 +126,12 @@ VM-M with `scp` as `rehearsal`, and move them into `C:\Tools` with `az vm run-co
   user `rehearsal` has only VM-M's key. That key may forward only to `127.0.0.1:8123` and
   use SFTP, so `ssh -N -L` and `scp` work, for A-04 and G-01. It gets no shell
   (`ForceCommand internal-sftp`), because a process it ran could reach Hyperloop, which has no
-  PIN, on loopback, where `PermitOpen` does not apply. A file it fetches, such as A-04's
-  token, needs an explicit read grant for `rehearsal` (`icacls <file> /grant rehearsal:R`);
-  its SSH sign-in cannot even list `C:\Users\Public`.
+  PIN, on loopback, where `PermitOpen` does not apply. Its SFTP is confined to
+  `C:\RehearsalDrop`, which it sees as `/`, so it cannot plant or read files anywhere else.
+  Files it exchanges go through there. For A-04, the admin copies the token to
+  `C:\RehearsalDrop\ha.token`, and VM-M fetches it with
+  `scp rehearsal@<ip>:/ha.token C:\rehearsal\ha.token`. For G-01, VM-M runs
+  `scp -r <run folder> rehearsal@<ip>:/`.
 * Hyperloop's server, Home Assistant and Mosquitto are also blocked inbound by Windows
   Firewall. They are reached only through a tunnel.
 * The admin password exists only as a DPAPI-protected file on the machine that ran the
