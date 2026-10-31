@@ -59,6 +59,19 @@ public interface IHomeAssistant
 
     // image/delete: the uploaded image is no longer needed (Remove-BridgeHomeAssistantImage).
     Task DeleteImageAsync(string imageId, CancellationToken cancellationToken = default);
+
+    // input_boolean/list: the ids of the helpers in Home Assistant's storage.
+    Task<IReadOnlyList<string>> ListInputBooleansAsync(CancellationToken cancellationToken = default);
+
+    // input_boolean/create: a new helper, named so Home Assistant makes its id from the name; returns
+    // the id it was given, which is not the one asked for when that one was taken.
+    Task<string> CreateInputBooleanAsync(string name, string icon, CancellationToken cancellationToken = default);
+
+    // input_boolean/delete: one helper, by its id.
+    Task DeleteInputBooleanAsync(string id, CancellationToken cancellationToken = default);
+
+    // config/entity_registry/update with name: one entity's display name, by its id.
+    Task SetEntityNameAsync(string entityId, string name, CancellationToken cancellationToken = default);
 }
 
 // An id from Home Assistant's image store, as the reply card names it: letters and digits only,
@@ -72,7 +85,10 @@ public static class HaImageId
 // when there was one: a press from the dashboard carries the person's, one through an agent's
 // token the agent's. LastChanged is when the state itself last changed, on Home Assistant's clock,
 // the clock its press timestamps are on too; LastUpdated when its state or attributes last did.
-public sealed record HaState(string EntityId, string State, JsonElement Attributes, string? UserId = null, DateTimeOffset? LastChanged = null, DateTimeOffset? LastUpdated = null);
+// LastReported is last_reported as Home Assistant wrote it, compared, never parsed: when it last took
+// a message for the entity, which only moves for a message that changed something
+// (Get-DaemonStateReportedAt).
+public sealed record HaState(string EntityId, string State, JsonElement Attributes, string? UserId = null, DateTimeOffset? LastChanged = null, DateTimeOffset? LastUpdated = null, string? LastReported = null);
 
 // One event, with the account behind it (context.user_id) when there was one, and what tells it
 // from every other event: its context id, or the time it was fired when it has none.
@@ -81,7 +97,8 @@ public sealed record HaEvent(string EventType, JsonElement Data, string? UserId,
 // One change a watch reported. A removed entity is not a change (Get-BridgeStateTriggerHit).
 public sealed record HaTrigger(string EntityId, HaState State);
 
-public sealed record HaRegistryEntry(string EntityId, string? UniqueId);
+// Name is the name given in the registry, null when the entity goes by its own.
+public sealed record HaRegistryEntry(string EntityId, string? UniqueId, string? Name = null);
 
 // A dashboard as read: its config as JSON text, or that Home Assistant has none at that path.
 public sealed record HaDashboard(bool Found, string? Json)
@@ -209,13 +226,37 @@ public sealed class HomeAssistantClient : IHomeAssistant
         foreach (var e in result.EnumerateArray())
         {
             if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty("entity_id", out var id) || id.ValueKind != JsonValueKind.String) { continue; }
-            entries.Add(new HaRegistryEntry(id.GetString()!, e.TryGetProperty("unique_id", out var u) && u.ValueKind == JsonValueKind.String ? u.GetString() : null));
+            entries.Add(new HaRegistryEntry(id.GetString()!, e.TryGetProperty("unique_id", out var u) && u.ValueKind == JsonValueKind.String ? u.GetString() : null,
+                e.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null));
         }
         return entries;
     }
 
     public Task RenameEntityAsync(string entityId, string newEntityId, CancellationToken cancellationToken = default) =>
         CommandAsync(new JsonObject { ["type"] = "config/entity_registry/update", ["entity_id"] = entityId, ["new_entity_id"] = newEntityId }, cancellationToken);
+
+    public Task SetEntityNameAsync(string entityId, string name, CancellationToken cancellationToken = default) =>
+        CommandAsync(new JsonObject { ["type"] = "config/entity_registry/update", ["entity_id"] = entityId, ["name"] = name }, cancellationToken);
+
+    public async Task<IReadOnlyList<string>> ListInputBooleansAsync(CancellationToken cancellationToken = default)
+    {
+        var result = await CommandAsync(new JsonObject { ["type"] = "input_boolean/list" }, cancellationToken);
+        if (result.ValueKind != JsonValueKind.Array) { throw new InvalidDataException("the input_boolean list is not a list"); }
+        return [.. result.EnumerateArray()
+            .Where(e => e.ValueKind == JsonValueKind.Object && e.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+            .Select(e => e.GetProperty("id").GetString()!)];
+    }
+
+    public async Task<string> CreateInputBooleanAsync(string name, string icon, CancellationToken cancellationToken = default)
+    {
+        var result = await CommandAsync(new JsonObject { ["type"] = "input_boolean/create", ["name"] = name, ["icon"] = icon }, cancellationToken);
+        return result.ValueKind == JsonValueKind.Object && result.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String
+            ? id.GetString()!
+            : throw new InvalidDataException("input_boolean/create did not say what it created");
+    }
+
+    public Task DeleteInputBooleanAsync(string id, CancellationToken cancellationToken = default) =>
+        CommandAsync(new JsonObject { ["type"] = "input_boolean/delete", ["input_boolean_id"] = id }, cancellationToken);
 
     public async Task<HaDashboard> ReadDashboardAsync(string urlPath, CancellationToken cancellationToken = default)
     {
@@ -306,7 +347,8 @@ public sealed class HomeAssistantClient : IHomeAssistant
     static HaState? State(JsonElement e) =>
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty("entity_id", out var id) && id.ValueKind == JsonValueKind.String
             ? new HaState(id.GetString()!, e.TryGetProperty("state", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString()! : "",
-                e.TryGetProperty("attributes", out var a) ? a.Clone() : default, UserId(e), Instant(e, "last_changed"), Instant(e, "last_updated"))
+                e.TryGetProperty("attributes", out var a) ? a.Clone() : default, UserId(e), Instant(e, "last_changed"), Instant(e, "last_updated"),
+                e.TryGetProperty("last_reported", out var r) && r.ValueKind == JsonValueKind.String && r.GetString() is { Length: > 0 } reported ? reported : null)
             : null;
 
     static DateTimeOffset? Instant(JsonElement state, string name) =>

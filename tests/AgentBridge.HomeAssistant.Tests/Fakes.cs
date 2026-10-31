@@ -32,6 +32,10 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     public Action<string>? BeforePublish { get; set; }
     // An entity whose state Home Assistant fails to return.
     public Func<string, bool>? GetFailsFor { get; set; }
+    // Entities a Home Assistant still starting answers 404 for: registered, not loaded yet.
+    public HashSet<string> Loading { get; } = new(StringComparer.Ordinal);
+    // Entities Home Assistant reports unavailable, whatever they hold.
+    public HashSet<string> Unavailable { get; } = new(StringComparer.Ordinal);
     public int RegistryLists { get; private set; }
 
     public Task PublishAsync(string topic, string payload, bool retain, CancellationToken cancellationToken = default)
@@ -42,6 +46,13 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         lock (gate)
         {
             Log.Add(new Published(topic, payload, retain));
+            // Home Assistant writes a message only when it changes something, and last_reported
+            // records when it last did; an entity it has stopped listening to records nothing.
+            if (!lastPayload.TryGetValue(topic, out var previous) || previous != payload)
+            {
+                lastPayload[topic] = payload;
+                if (!Deaf.Any(u => Topics(u).Contains(topic))) { reportedAt[topic] = (++reports).ToString(System.Globalization.CultureInfo.InvariantCulture); }
+            }
             if (retain)
             {
                 // When a state topic's value last changed, as an entity's last_changed, on this
@@ -54,7 +65,13 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
             {
                 if (payload.Length == 0)
                 {
-                    if (discovered.Remove(topic, out var gone)) { Registry.Remove(gone); optimistic.Remove(gone); }
+                    if (discovered.Remove(topic, out var gone))
+                    {
+                        Registry.Remove(gone);
+                        optimistic.Remove(gone);
+                        // Built anew when its config comes again: listening, unless it never will.
+                        if (!StaysDeaf) { Deaf.Remove(gone); }
+                    }
                 }
                 else
                 {
@@ -73,6 +90,23 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         return Task.CompletedTask;
     }
 
+    readonly Dictionary<string, string> lastPayload = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string> reportedAt = new(StringComparer.Ordinal);
+    long reports;
+    // Entities (by unique_id) Home Assistant has stopped applying messages to (agent-ha-bridge #177).
+    public HashSet<string> Deaf { get; } = new(StringComparer.Ordinal);
+    // Whether one stays deaf when it is built again.
+    public bool StaysDeaf { get; set; }
+
+    // The state and attribute topics an entity's config names.
+    IEnumerable<string> Topics(string uniqueId)
+    {
+        if (discovered.FirstOrDefault(p => p.Value == uniqueId).Key is not { } topic || !Retained.TryGetValue(topic, out var json)) { yield break; }
+        var config = JsonNode.Parse(json)!.AsObject();
+        if (config["state_topic"]?.GetValue<string>() is { } st) { yield return st; }
+        if (config["json_attributes_topic"]?.GetValue<string>() is { } at) { yield return at; }
+    }
+
     string Unique(string entityId)
     {
         var taken = Registry.Values.ToHashSet(StringComparer.Ordinal);
@@ -85,11 +119,35 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
 
     static string Slugify(string text) => NotSlug().Replace(text.ToLowerInvariant(), "_").Trim('_');
 
+    // Something that happens on the card just after an entity is read (the read returns what it held).
+    public Action<string>? AfterRead { get; set; }
+
     public Task<HaState?> GetStateAsync(string entityId, CancellationToken cancellationToken = default)
     {
+        var read = Read(entityId);
+        AfterRead?.Invoke(entityId);
+        return read;
+    }
+
+    Task<HaState?> Read(string entityId)
+    {
+        lock (gate) { reads[entityId] = reads.GetValueOrDefault(entityId) + 1; }
         if (GetFailsFor?.Invoke(entityId) == true) { throw new HttpRequestException($"{entityId}: Home Assistant answered 502 Bad Gateway"); }
+        if (Loading.Contains(entityId)) { return Task.FromResult<HaState?>(null); }
+        if (Unavailable.Contains(entityId))
+        {
+            lock (gate)
+            {
+                var held = States.TryGetValue(entityId, out var s) ? s : Derived(entityId);
+                return Task.FromResult<HaState?>(held is null ? null : held with { State = "unavailable" });
+            }
+        }
         lock (gate) { return Task.FromResult(States.TryGetValue(entityId, out var s) ? s : Derived(entityId)); }
     }
+
+    readonly Dictionary<string, int> reads = new(StringComparer.Ordinal);
+    // How many times an entity's state has been asked for.
+    public int ReadsOf(string entityId) { lock (gate) { return reads.GetValueOrDefault(entityId); } }
 
     // States Home Assistant keeps for optimistic MQTT entities (selects, buttons, text with no
     // state topic), by unique_id so a rename keeps them.
@@ -304,7 +362,9 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         if (optimistic.TryGetValue(uniqueId, out var o)) { (state, user) = o; }
         var attributes = config["json_attributes_topic"]?.GetValue<string>() is { } at && Retained.TryGetValue(at, out var a) ? JsonNode.Parse(a)!.AsObject() : [];
         if (config["options"] is JsonArray options) { attributes["options"] = options.DeepClone(); }
-        return new HaState(entityId, state, JsonDocument.Parse(attributes.ToJsonString()).RootElement.Clone(), user, changed, updated);
+        var reported = Topics(uniqueId).Select(t => reportedAt.TryGetValue(t, out var r) ? long.Parse(r, System.Globalization.CultureInfo.InvariantCulture) : 0).DefaultIfEmpty(0).Max();
+        return new HaState(entityId, state, JsonDocument.Parse(attributes.ToJsonString()).RootElement.Clone(), user, changed, updated,
+            reported == 0 ? null : reported.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     public Task<IReadOnlyList<HaRegistryEntry>> ListEntityRegistryAsync(CancellationToken cancellationToken = default)
@@ -312,7 +372,87 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         lock (gate)
         {
             RegistryLists++;
-            return Task.FromResult<IReadOnlyList<HaRegistryEntry>>([.. Registry.Select(p => new HaRegistryEntry(p.Value, p.Key))]);
+            return Task.FromResult<IReadOnlyList<HaRegistryEntry>>([.. Registry.Select(p => new HaRegistryEntry(p.Value, p.Key)),
+                .. Helpers.Keys.Select(id => new HaRegistryEntry("input_boolean." + id, id, HelperNames.GetValueOrDefault("input_boolean." + id)))]);
+        }
+    }
+
+    // Home Assistant's input_boolean helpers in storage (id -> name), what was asked of them, and
+    // the names the registry gives entities.
+    public Dictionary<string, string> Helpers { get; } = new(StringComparer.Ordinal);
+    public List<string> HelperCalls { get; } = [];
+    public Dictionary<string, string> HelperNames { get; } = new(StringComparer.Ordinal);
+    public Exception? HelperListFails { get; set; }
+    // A list that answers empty although helpers are stored (Home Assistant still starting).
+    public bool HelperListEmpty { get; set; }
+    // Whether a helper created has a state at once.
+    public bool HelperStateless { get; set; }
+    // The id Home Assistant gives a helper it creates, when not the one its name makes.
+    public Func<string, string>? CreateAs { get; set; }
+
+    // A Home Assistant restart: the optimistic entities (no state topic) come back with no value.
+    public void ForgetOptimistic() { lock (gate) { optimistic.Clear(); } }
+
+    // A restart that brings some of them back with their values and not these.
+    public void ForgetOptimistic(params string[] entityIds)
+    {
+        lock (gate)
+        {
+            foreach (var unique in Registry.Where(r => entityIds.Contains(r.Value, StringComparer.Ordinal)).Select(r => r.Key).ToList()) { optimistic.Remove(unique); }
+        }
+    }
+
+    public Task<IReadOnlyList<string>> ListInputBooleansAsync(CancellationToken cancellationToken = default)
+    {
+        lock (gate)
+        {
+            HelperCalls.Add("list");
+            if (HelperListFails is { } e) { throw e; }
+            return Task.FromResult<IReadOnlyList<string>>(HelperListEmpty ? [] : [.. Helpers.Keys]);
+        }
+    }
+
+    public Task<string> CreateInputBooleanAsync(string name, string icon, CancellationToken cancellationToken = default)
+    {
+        lock (gate)
+        {
+            HelperCalls.Add($"create {name} {icon}");
+            var id = CreateAs?.Invoke(name) ?? HaContract.HelperIdOf(name);
+            if (Helpers.ContainsKey(id)) { for (var i = 2; ; i++) { if (!Helpers.ContainsKey($"{id}_{i}")) { id = $"{id}_{i}"; break; } } }
+            Helpers[id] = name;
+            if (!HelperStateless) { States["input_boolean." + id] = new HaState("input_boolean." + id, "off", JsonDocument.Parse("{}").RootElement.Clone()); }
+            return Task.FromResult(id);
+        }
+    }
+
+    public Task DeleteInputBooleanAsync(string id, CancellationToken cancellationToken = default)
+    {
+        lock (gate)
+        {
+            HelperCalls.Add($"delete {id}");
+            Helpers.Remove(id);
+            States.Remove("input_boolean." + id);
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task SetEntityNameAsync(string entityId, string name, CancellationToken cancellationToken = default)
+    {
+        lock (gate)
+        {
+            HelperCalls.Add($"name {entityId} {name}");
+            HelperNames[entityId] = name;
+        }
+        return Task.CompletedTask;
+    }
+
+    // A helper as Home Assistant already holds it, with its value.
+    public void Helper(string id, string name, string state = "off")
+    {
+        lock (gate)
+        {
+            Helpers[id] = name;
+            States["input_boolean." + id] = new HaState("input_boolean." + id, state, JsonDocument.Parse("{}").RootElement.Clone());
         }
     }
 

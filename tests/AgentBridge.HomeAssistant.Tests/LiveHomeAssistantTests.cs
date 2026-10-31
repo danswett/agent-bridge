@@ -487,6 +487,175 @@ public sealed class LiveHomeAssistantTests : IDisposable
         await Until(entity, s => s.Attributes.TryGetProperty("stage", out var st) && st.GetString() == "restarting");
     }
 
+    [HomeAssistantFact]
+    public async Task The_detailed_activity_switch_is_made_once_named_for_its_machine_and_a_second_start_keeps_its_value()
+    {
+        var slug = HaContract.MachineSlug("CI-UPKEEP");
+        var toggle = HaContract.MachineEntityId("input_boolean", "detailed_activity", slug);
+        await using (var c = Connector("CI-UPKEEP"))
+        {
+            c.Start();
+            await Until(toggle, s => s.State == "off");
+            await Until(HaContract.MachineEntityId("sensor", "sessions", slug), s => s.Attributes.GetProperty("capabilities").GetProperty("detailed").GetBoolean());
+        }
+        var registry = (await ha.ListEntityRegistryAsync()).Single(e => e.EntityId == toggle);
+        Assert.Equal(HaContract.DetailedHelperDisplayName("CI-UPKEEP"), registry.Name);
+
+        // Switched on from the dashboard, then the host starts again: the same switch, still on.
+        await ha.CallServiceAsync("input_boolean", "turn_on", new JsonObject { ["entity_id"] = toggle });
+        await Until(toggle, s => s.State == "on");
+        await using (var again = Connector("CI-UPKEEP"))
+        {
+            again.Start();
+            await Until(HaContract.MachineEntityId("binary_sensor", "online", slug), s => s.State == "on", seconds: 30);
+            await Task.Delay(TimeSpan.FromSeconds(2));
+        }
+        Assert.Equal("on", (await ha.GetStateAsync(toggle))!.State);
+        Assert.Equal([HaContract.DetailedHelperId(slug)], (await ha.ListInputBooleansAsync()).Where(id => id.StartsWith(HaContract.DetailedHelperId(slug), StringComparison.Ordinal)));
+    }
+
+    [HomeAssistantFact]
+    public async Task A_machine_forgotten_from_the_dashboard_while_its_host_runs_is_published_again_whole()
+    {
+        var id = Session();
+        var node = HaContract.NodeId(id);
+        sessions.Set(FakeSessions.Copilot(id, status: SessionStatus.Working, response: "Halfway there"));
+        var slug = HaContract.MachineSlug("CI-FORGET");
+        // The daemon's timings, shortened: a beat every two seconds, a stall after three of them.
+        await using var c = new HaConnector(new HaConnectorOptions
+        {
+            MachineName = "CI-FORGET", Version = "0.1.0", Dev = true,
+            Tick = TimeSpan.FromMilliseconds(250), Reconcile = TimeSpan.FromSeconds(2), RetireGrace = TimeSpan.FromSeconds(2),
+            Heartbeat = TimeSpan.FromSeconds(2), OnlineStall = TimeSpan.FromSeconds(6), EntityRestore = TimeSpan.FromSeconds(4),
+        }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } });
+        c.Start();
+        var wanted = new[]
+        {
+            HaContract.MachineEntityId("binary_sensor", "online", slug), HaContract.MachineEntityId("sensor", "sessions", slug),
+            HaContract.MachineEntityId("update", "update", slug), $"sensor.{node}_status", $"sensor.{node}_activity",
+        };
+        foreach (var entity in wanted) { await Until(entity, _ => true); }
+        await Until(HaContract.MachineEntityId("binary_sensor", "online", slug), s => s.State == "on");
+
+        // The machine row's X: an empty retained message on every topic the writer lists for it.
+        foreach (var topic in HaContract.ForgetTopics(slug, [node])) { await ha.PublishAsync(topic, "", true); }
+        await Until(() => ha.GetStateAsync(wanted[0]).GetAwaiter().GetResult() is null, "the forget did not remove the machine", 30);
+
+        foreach (var entity in wanted) { await Until(entity, _ => true, seconds: 120); }
+        await Until($"sensor.{node}_status", s => s.State == "working");
+        await Until(HaContract.MachineEntityId("binary_sensor", "online", slug), s => s.State == "on");
+        Assert.Contains(log.ToArray(), l => l.Contains("publishing the machine again", StringComparison.Ordinal));
+    }
+
+    // This restarts the one Home Assistant every live test shares. The live tests are one class, so
+    // none runs beside it, and it finishes only once Home Assistant has this machine's MQTT entities
+    // back, so a test after it still finds a working one.
+    [HomeAssistantFact]
+    public async Task After_Home_Assistant_restarts_the_card_is_put_back_on_the_same_ids_and_its_question_still_answers()
+    {
+        var id = Session();
+        var node = HaContract.NodeId(id);
+        Ask(id, Form("q1", Release));
+        var slug = HaContract.MachineSlug("CI-RESTART");
+        var online = HaContract.MachineEntityId("binary_sensor", "online", slug);
+        await using var c = new HaConnector(new HaConnectorOptions
+        {
+            MachineName = "CI-RESTART", Version = "0.1.0", Dev = true,
+            Tick = TimeSpan.FromMilliseconds(250), Reconcile = TimeSpan.FromSeconds(2), RetireGrace = TimeSpan.FromSeconds(2),
+            EntityRestore = TimeSpan.FromSeconds(10),
+        }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } }, answer: (r, _) =>
+        {
+            lock (answered) { answered.Add(r); }
+            return Task.FromResult(new AnswerResult(AnswerOutcome.Delivered));
+        });
+        c.Start();
+        await Until(SessionEntities.Field(node, 1), s => s.State == HaDecision.Choose);
+        await Until(SessionEntities.Reply(node), _ => true);
+        await Until(online, s => s.State == "on");
+        var before = (await ha.ListEntityRegistryAsync()).Select(e => e.EntityId).Where(e => e.Contains(node, StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList();
+
+        // Restarted as Settings > Restart does it. The call itself may not survive the restart.
+        try { await ha.CallServiceAsync("homeassistant", "restart", new JsonObject()); }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { }
+        await Until(() =>
+        {
+            try { return ha.GetStateAsync(online).GetAwaiter().GetResult() is null; }
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { return true; }
+        }, "Home Assistant never went down", 120);
+
+        // Back, with the reply box holding a value again and the question on the card again.
+        async Task<HaState> Back(string entityId, Func<HaState, bool> condition, int seconds = 240)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(seconds);
+            while (true)
+            {
+                try { return await Until(entityId, condition, 15); }
+                catch (Exception e) when (DateTime.UtcNow < deadline && e is HttpRequestException or TaskCanceledException or Xunit.Sdk.FailException) { }
+            }
+        }
+        await Back(online, s => s.State == "on");
+        await Back(SessionEntities.Reply(node), s => s.State != "unknown" && s.State != "unavailable");
+        await Back(SessionEntities.Decision(node), s => s.State == HaDecision.Awaiting
+            && s.Attributes.TryGetProperty("decision_id", out var d) && d.GetString() == "q1");
+        await Back(SessionEntities.Field(node, 1), s => s.State == HaDecision.Choose);
+
+        // And it still answers, through the same ids the dashboard draws.
+        await ha.CallServiceAsync("select", "select_option", new JsonObject { ["entity_id"] = SessionEntities.Field(node, 1), ["option"] = "Wait for the fix" });
+        await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = SessionEntities.Submit(node) });
+        try { await Until(() => { lock (answered) { return answered.Count == 1; } }, "the answer never arrived"); }
+        catch (Xunit.Sdk.XunitException)
+        {
+            string history;
+            lock (log) { history = string.Join("\n", log.TakeLast(30)); }
+            Assert.Fail($"the answer never arrived\n{history}");
+        }
+        Assert.Equal("wait", answered[0].Fields!["release"].GetString());
+        var after = (await ha.ListEntityRegistryAsync()).Select(e => e.EntityId).Where(e => e.Contains(node, StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList();
+        Assert.Equal(before, after);
+    }
+
+    [HomeAssistantFact]
+    public async Task A_choice_on_a_card_that_stays_while_only_its_machines_liveness_sensor_goes_is_still_answered()
+    {
+        var id = Session();
+        var node = HaContract.NodeId(id);
+        Ask(id, Form("q1", Release));
+        var slug = HaContract.MachineSlug("CI-SENSOR");
+        var online = HaContract.MachineEntityId("binary_sensor", "online", slug);
+        // The daemon's timings, shortened: a beat every two seconds, a stall after three of them.
+        await using var c = new HaConnector(new HaConnectorOptions
+        {
+            MachineName = "CI-SENSOR", Version = "0.1.0", Dev = true,
+            Tick = TimeSpan.FromMilliseconds(250), Reconcile = TimeSpan.FromSeconds(2), RetireGrace = TimeSpan.FromSeconds(2),
+            Heartbeat = TimeSpan.FromSeconds(2), OnlineStall = TimeSpan.FromSeconds(6), EntityRestore = TimeSpan.FromSeconds(4),
+        }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } }, answer: (r, _) =>
+        {
+            lock (answered) { answered.Add(r); }
+            return Task.FromResult(new AnswerResult(AnswerOutcome.Delivered));
+        });
+        c.Start();
+        await Until(SessionEntities.Field(node, 1), s => s.State == HaDecision.Choose);
+        await Until(online, s => s.State == "on");
+
+        // A choice made, then only the liveness sensor's config goes: the machine is published again
+        // around the card.
+        await ha.CallServiceAsync("select", "select_option", new JsonObject { ["entity_id"] = SessionEntities.Field(node, 1), ["option"] = "Wait for the fix" });
+        await ha.PublishAsync(HaContract.OnlineConfig(slug, "CI-SENSOR").Topic, "", true);
+        await Until(() => { lock (log) { return log.Any(l => l.Contains("publishing the machine again", StringComparison.Ordinal)); } }, "the machine was never published again", 60);
+        await Until(online, s => s.State == "on", seconds: 60);
+        Assert.Equal("Wait for the fix", (await ha.GetStateAsync(SessionEntities.Field(node, 1)))!.State);
+
+        await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = SessionEntities.Submit(node) });
+        try { await Until(() => { lock (answered) { return answered.Count == 1; } }, "the answer never arrived"); }
+        catch (Xunit.Sdk.XunitException)
+        {
+            string history;
+            lock (log) { history = string.Join("\n", log.TakeLast(30)); }
+            Assert.Fail($"the answer never arrived\n{history}");
+        }
+        Assert.Equal("wait", answered[0].Fields!["release"].GetString());
+    }
+
     sealed record Notification(string Title, string Message);
 
     async Task<Notification> UntilNotified(Func<Notification, bool> match, int skip, int seconds = 60)

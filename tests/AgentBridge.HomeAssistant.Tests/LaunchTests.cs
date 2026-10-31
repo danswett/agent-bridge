@@ -154,7 +154,8 @@ public sealed class LaunchTests : IDisposable
         // The capability flags of a machine serving the card, as the daemon reports them.
         var global = JsonNode.Parse(ha.Retained[HaContract.GlobalAttributesTopic(Slug)])!;
         var expected = Loaded.Value["capabilities"]!.DeepClone().AsObject();
-        expected["detailed"] = false;
+        // The connector made the machine's Detailed activity switch (stage 7), so the row has one.
+        expected["detailed"] = true;
         expected["dev"] = false;
         Contract.AssertJson(expected, global["capabilities"]);
     }
@@ -648,6 +649,30 @@ public sealed class LaunchTests : IDisposable
         await c.DeliveredAsync();
         await Pass(c, 0.01);
         lock (launched) { Assert.Single(launched); }
+    }
+
+    [Fact]
+    public async Task A_Launch_pressed_just_as_the_machine_is_published_again_is_launched()
+    {
+        await using var c = await Ready();
+        // Only the liveness sensor's config goes; the machine is published again around the card,
+        // and Launch is pressed just then, with the watch down.
+        var (topic, _) = HaContract.OnlineConfig(Slug, Machine);
+        await ha.PublishAsync(topic, "", true);
+        var pressed = false;
+        ha.BeforePublish = t =>
+        {
+            if (t != topic || pressed) { return; }
+            pressed = true;
+            ha.Press(Entity("button", "new_session"));
+        };
+        for (var i = 0; i < 400 && launchedCount == 0; i++)
+        {
+            await Pass(c);
+            await c.DeliveredAsync();
+        }
+        Assert.True(pressed);
+        Assert.Equal(1, launchedCount);
     }
 
     [Fact]

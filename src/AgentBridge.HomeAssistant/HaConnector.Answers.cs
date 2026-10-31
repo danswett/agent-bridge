@@ -58,6 +58,15 @@ public sealed partial class HaConnector
         public string? BoxAtHold;
         // Said once, not on every hit.
         public string? Told;
+        // Home Assistant lost the card's controls or their values (stage 7): put on screen again,
+        // with fresh baselines, keeping what this question has been through (settled, attempts,
+        // what was used), so an answer that may have reached the terminal is never typed again.
+        public bool Rearm;
+        // Rearm for controls that may still hold what was being answered on them (a restart that
+        // lost only the reply box, say, or the machine published again around a card that stayed):
+        // the card is read once with the baselines it was armed with before new ones are taken, so
+        // an answer given on it in the meantime is not taken for the baseline and lost.
+        public bool ReadFirst;
     }
 
     // Get-CopilotDecisionChannelObservation: present (with a value), absent (determinately
@@ -148,7 +157,11 @@ public sealed partial class HaConnector
     {
         if (!ServesAnswers) { return; }
         var question = full.Question;
-        if (question is not null && p.Armed?.Question.Id == question.Id) { return; }
+        if (question is not null && p.Armed?.Question.Id == question.Id)
+        {
+            if (p.Armed.Rearm && !p.Armed.ReadFirst) { await RearmAsync(full, p, name, ct); }
+            return;
+        }
         if (question is null)
         {
             if (p.Armed is null && p.Cleared) { return; }
@@ -221,6 +234,106 @@ public sealed partial class HaConnector
         log($"Home Assistant connector armed {p.Node} for its question{(plan.TerminalOnly ? " (answered at the machine)" : "")}");
     }
 
+    // What a card's answer channels held just before it was read ahead of a re-arm.
+    sealed record CardSeen(Observation Payload, Observation Submit, Observation Reply, string? Decision);
+
+    static bool Same(CardSeen a, CardSeen b) =>
+        Same(a.Payload, b.Payload) && Same(a.Submit, b.Submit) && Same(a.Reply, b.Reply) && a.Decision == b.Decision;
+
+    static bool Same(Observation a, Observation b) => a.Kind == b.Kind && a.Value == b.Value;
+
+    async Task<CardSeen> SeeCardAsync(string node, CancellationToken ct) => new(
+        await ObserveAsync(SessionEntities.ReplyPayload(node), ct),
+        await ObserveAsync(SessionEntities.Submit(node), ct),
+        await ObserveAsync(SessionEntities.Reply(node), ct),
+        (await ha.GetStateAsync(SessionEntities.Decision(node), ct))?.State);
+
+    // The question already armed, put on screen again after Home Assistant lost it: the controls and
+    // the baselines are new, everything the question has been through is kept. Given what the card
+    // held before it was read (seen), the new baselines are that, not a read taken afterwards: a
+    // Send between the two would otherwise become the baseline and never be read.
+    async Task RearmAsync(Session full, Published p, string name, CancellationToken ct, CardSeen? seen = null)
+    {
+        var armed = p.Armed!;
+        var payload = seen?.Payload ?? await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
+        var submit = seen?.Submit ?? await ObserveAsync(SessionEntities.Submit(p.Node), ct);
+        var reply = seen?.Reply ?? await ObserveAsync(SessionEntities.Reply(p.Node), ct);
+        if (payload.Kind == "unknown" || submit.Kind == "unknown" || reply.Kind == "unknown")
+        {
+            lock (gate) { dirty.Add(full.Id); }
+            return;
+        }
+        // Anything given on the card since it was read (a Send, a tap, words, a reply-card publish) is
+        // read first on the next pass, not armed over: arming resets the choices it would need.
+        if (seen is not null && !Same(seen, await SeeCardAsync(p.Node, ct))) { return; }
+        var armedSlots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
+        // Controls that came through the loss keep what is on them: a choice slot holding a choice
+        // of this question, and a selector holding a tap under it. Decided as each would be reset,
+        // after the arm's wait for the slots to register, so what is given during it is kept too.
+        Func<string, Task<bool>>? keep = seen is null ? null : entity => HoldsAnswerAsync(armed, p.Node, entity, ct);
+        var unset = await RunAsync(HaDecision.Arm(armed.Plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow()), p.Node, ct, keep);
+        if (seen is not null)
+        {
+            // Anything given while it ran (a Send, words, a publish, a tap) is read on the next pass
+            // with the baselines the card was armed with, before any are taken anew, the boundary
+            // moved past it or the selector set waiting over it.
+            var after = await SeeCardAsync(p.Node, ct);
+            if (!Same(seen.Payload, after.Payload) || !Same(seen.Submit, after.Submit) || !Same(seen.Reply, after.Reply)
+                || UnusedTap(armed, after.Decision))
+            {
+                lock (gate) { dirty.Add(full.Id); }
+                return;
+            }
+        }
+        // Reply-card words held for a press of Send (HeldStamp) are still there to be sent: the
+        // baseline stays the one before them, or they would read as nothing new.
+        if (!(armed.HeldStamp is { } held && payload.Present && payload.Value == held)) { armed.PayloadBaseline = payload; }
+        armed.SubmitBaseline = submit;
+        // Words still in the box survived the loss (only the selector lost its value, say): they
+        // are measured against what the box held when the question was armed, or a form's text
+        // field would go empty with the words in plain sight.
+        if (!reply.Present) { armed.ReplyBaseline = reply; }
+        armed.Boundary = Interlocked.Read(ref hitSeq);
+        // A Send read after a failure is compared with what Send shows now, not before the loss.
+        if (armed.SubmitAtFailure is not null) { armed.SubmitAtFailure = submit; }
+        var waiting = await ShowsWaitingAsync(p.Node, armed.Question.Id, ct);
+        armed.AwaitTap = armed.Plan.AnswerOnTap && !waiting;
+        // An approval whose tap reached nothing, seen waiting again: the same option may be tapped
+        // again, as it may once the selector is read waiting after a failure. (One whose tap may
+        // have reached the terminal is Settled, and never read again.)
+        if (waiting && armed.UsedPress?.StartsWith("tap:", StringComparison.Ordinal) == true) { armed.UsedPress = null; }
+        armed.StaleSlots = await StaleSlotsAsync(armed.Plan, p.Node, unset, ct);
+        armed.Rearm = false;
+        p.ArmedSlots = armed.Plan.UsesFieldSlots ? armed.Plan.Fields.Count : 0;
+        p.Cleared = false;
+        log($"Home Assistant connector armed {p.Node} again for its question{(armed.Settled ? " (already answered: check the terminal)" : "")}");
+    }
+
+    // Whether a control holds an answer to this question that arming would reset: a choice slot
+    // with a choice (not a placeholder, nothing, or the last question's choice it could not reset),
+    // or a selector with a tap under this question not yet used.
+    async Task<bool> HoldsAnswerAsync(Armed armed, string node, string entityId, CancellationToken ct)
+    {
+        if (entityId == SessionEntities.Decision(node))
+        {
+            if (!armed.Plan.AnswerOnTap) { return false; }
+            var decision = await ha.GetStateAsync(entityId, ct);
+            return UnusedTap(armed, decision?.State) && DecisionIdOf(decision) == armed.Question.Id;
+        }
+        if (!armed.Plan.UsesFieldSlots) { return false; }
+        for (var i = 1; i <= armed.Plan.Fields.Count; i++)
+        {
+            if (entityId != SessionEntities.Field(node, i)) { continue; }
+            if (armed.Plan.Fields[i - 1].IsText || armed.StaleSlots.ContainsKey(i)) { return false; }
+            var shown = (await ha.GetStateAsync(entityId, ct))?.State;
+            return shown is not (null or HaDecision.Choose or HaDecision.Idle or "unknown" or Unavailable or "");
+        }
+        return false;
+    }
+
+    static bool UnusedTap(Armed armed, string? state) =>
+        armed.Plan.AnswerOnTap && state is "Approve" or "Deny" && "tap:" + state != armed.UsedPress;
+
     // Whether the selector waits under this question; if it shows a choice, it is set waiting again.
     async Task<bool> ShowsWaitingAsync(string node, string questionId, CancellationToken ct)
     {
@@ -285,7 +398,7 @@ public sealed partial class HaConnector
 
     // The steps in order; returns the selects Home Assistant would not set, with what they were
     // to show.
-    async Task<Dictionary<string, string>> RunAsync(IReadOnlyList<DecisionStep> steps, string node, CancellationToken ct)
+    async Task<Dictionary<string, string>> RunAsync(IReadOnlyList<DecisionStep> steps, string node, CancellationToken ct, Func<string, Task<bool>>? keep = null)
     {
         var unset = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var step in steps)
@@ -300,6 +413,7 @@ public sealed partial class HaConnector
                     await PinNowAsync(Enumerable.Range(1, f.Slots).ToDictionary(i => $"{node}_f{i}", i => SessionEntities.Field(node, i)), time.GetUtcNow(), ct);
                     break;
                 case SelectStep s:
+                    if (keep is not null && await keep(s.EntityId)) { break; }
                     if (!await SelectAsync(s.EntityId, s.Option, ct)) { unset[s.EntityId] = s.Option; }
                     break;
             }
@@ -339,13 +453,25 @@ public sealed partial class HaConnector
         }
     }
 
+    // Observations nobody could make, ever: a card read is determinate only if this did not move
+    // while it was read.
+    long indeterminate;
+
     async Task<Observation> ObserveAsync(string entityId, CancellationToken ct)
     {
         HaState? state;
         try { state = await ha.GetStateAsync(entityId, ct); }
-        catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { return Observation.Unknown; }
+        catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
+        {
+            Interlocked.Increment(ref indeterminate);
+            return Observation.Unknown;
+        }
         if (state is null) { return new Observation("absent", "", null, false); }
-        if (state.State == "unavailable") { return new Observation("unknown", "", state, true); }
+        if (state.State == "unavailable")
+        {
+            Interlocked.Increment(ref indeterminate);
+            return new Observation("unknown", "", state, true);
+        }
         if (state.State == "unknown" || string.IsNullOrWhiteSpace(state.State)) { return new Observation("absent", "", state, true); }
         return new Observation("present", state.State, state, true);
     }
@@ -384,6 +510,13 @@ public sealed partial class HaConnector
                 }
             }
         }
+        lock (gate)
+        {
+            foreach (var p in published.Values)
+            {
+                if (p.Armed is { ReadFirst: true }) { touched.TryAdd(p.Node, []); }
+            }
+        }
         // Every card, every few seconds, for a reply or an End session press: one made while the
         // watch was down reports nothing.
         var controlSweep = now >= nextReplySweep;
@@ -399,7 +532,28 @@ public sealed partial class HaConnector
             {
                 // End session first: it is answered whatever else the card holds.
                 if (ServesStops) { await StopPressAsync(e.Id, e.P, now, ct); }
+                var settled = e.P.Armed?.Settled;
+                var unread = Interlocked.Read(ref indeterminate);
+                var held = e.P.Armed is { ReadFirst: true } ? await SeeCardAsync(e.P.Node, ct) : null;
                 await CardAsync(e.Id, e.P, seen, now, ct);
+                if (e.P.Armed is { ReadFirst: true } first)
+                {
+                    if (settled == false && first.Settled)
+                    {
+                        // Answered on the card as Home Assistant brought it back: nothing to put back.
+                        first.Rearm = false;
+                        first.ReadFirst = false;
+                    }
+                    // A read that could not see Send (or the box, or the reply card) cannot tell an
+                    // answer waiting there from none, and the re-arm would take that answer for its
+                    // new baseline: the card is read again on the next pass instead.
+                    else if (Interlocked.Read(ref indeterminate) != unread) { }
+                    else if (source.Get(e.Id) is { } full)
+                    {
+                        await RearmAsync(full, e.P, e.P.Name, ct, held);
+                        if (!first.Rearm) { first.ReadFirst = false; }
+                    }
+                }
             }
             catch
             {
@@ -633,6 +787,8 @@ public sealed partial class HaConnector
         var fresh = since.Any(h => h.EntityId == SessionEntities.Submit(node) || h.EntityId == SessionEntities.Reply(node))
             || await PressedSinceFailureAsync(node, armed, ct);
         var decision = await ha.GetStateAsync(SessionEntities.Decision(node), ct);
+        // Unavailable says nothing about a tap on it: not determinate, so no re-arm follows this read.
+        if (decision?.State == "unavailable") { Interlocked.Increment(ref indeterminate); }
         if (decision?.State == HaDecision.Cancel)
         {
             // The host has no way to withdraw a question; the selector goes back to waiting.
@@ -733,6 +889,13 @@ public sealed partial class HaConnector
                 continue;
             }
             var slot = (await ha.GetStateAsync(SessionEntities.Field(node, i + 1), ct))?.State ?? "";
+            if (slot == "unavailable")
+            {
+                // Not unanswered but unreadable: nothing is decided and no press is spent on it, so a
+                // Send waits for the next read rather than being refused as incomplete and lost.
+                Interlocked.Increment(ref indeterminate);
+                return null;
+            }
             if (armed.StaleSlots.TryGetValue(i + 1, out var stale))
             {
                 if (stale.Stale is not null && slot != stale.Stale) { armed.StaleSlots.Remove(i + 1); }

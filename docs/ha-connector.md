@@ -13,7 +13,10 @@ and a migrated machine's cards render unchanged.
 It is built in stages. **Stage 1 is read-only status; stage 2 adds answering questions from the
 card**, and a read-only shadow that compares the connector with a daemon still running; **stage
 3 adds replies, with images and files, from the card; stage 4 adds End session; stage 5 adds
-Launch, from the card and from an agent's request**. The plan for the later stages is below.
+Launch, from the card and from an agent's request; stage 5b phone notifications; stage 6 the
+update buttons; stage 7 the daemon's upkeep** (the Detailed activity switch, the liveness
+sensor's repair, a live session's entities put back) and what forgetting a machine means here.
+The plan, with every stage done, is below.
 
 ## What it never does
 
@@ -157,8 +160,8 @@ Per machine:
 that launches here the connector reports `newSession`, `profile`, `resume`, `agent`, `tuning`,
 `permissions`, `resumeShare` false, `launchRequest` 0 and `fleet` empty, so no launch card is
 drawn for it (stage 5, below, for a machine that launches); `detailed` true only while the machine's
-`input_boolean.agent_bridge_<slug>_detailed_activity` exists (agent-ha-bridge created it), so
-the Detail switch is drawn only when it has something to switch; `dev` true for a development
+`input_boolean.agent_bridge_<slug>_detailed_activity` exists (the connector creates it when it is
+missing, from stage 7), so the Detail switch is drawn only when it has something to switch; `dev` true for a development
 build, so the machine row says `(dev)`.
 
 Per session:
@@ -215,8 +218,8 @@ retained payload), so the dashboard never offers a control that silently does no
 The generated dashboard draws "Entity not found" for those controls until the stage that serves
 them lands. With stage 6 every control a machine row draws for an installed host is served; the
 transfer request stays withdrawn because sharing a session between machines is not a host
-feature yet, and the upkeep of stage 7 (the Detailed activity helper, liveness repair,
-forget-machine) is still to come, so a real machine waits for stage 7 (see the plan).
+feature yet. With stage 7 the daemon's upkeep is ported too, so what is left before a real
+machine moves is the rehearsal ([parity-checklist.md](parity-checklist.md)).
 
 ### Stage 2: answering from the card
 
@@ -224,7 +227,8 @@ With an answerer, a session's first publication is agent-ha-bridge's full set in
 (`Publish-CopilotMqttSession`): availability, the decision selector (`Idle`), the reply box,
 the reply payload sensor, status, activity, the twelve field slots (`Idle`, `Field <i>`) and
 Send; everything but stop. 900 ms later (`FieldPinDelay`, the daemon's wait for discovery) the
-controls are pinned to their ids. `HaDecision` is the port of `Set-CopilotMqttDecision`,
+controls are pinned to their ids, and the reply box, if it holds no value, is primed to `' '`
+as `Add-DaemonSession` primes it, so the card shows an empty field rather than `unknown`. `HaDecision` is the port of `Set-CopilotMqttDecision`,
 `Publish-CopilotMqttDecisionFields` and `Clear-CopilotMqttDecision`, and
 `Fixtures/ha-decisions.json` records the originals on ten questions (free text, approval, a
 long question, single choice, yes/no, text, a form, a twelve-slot multi-select, unsafe and
@@ -649,6 +653,156 @@ Where stage 6 knowingly differs from the daemon:
 | An agent may not press Install: a press made with an account in `agentUserIds` starts nothing and gets **Bridge update not started on `<machine>`**, saying a person must press it. Check is still an agent's to press | Design §6.3 invariant 13: no agent stops or restarts its host. An update does both, and Velopack stops every profile's host running from the package folder while it applies it. The daemon (`Sync-DaemonUpdateStatus`) does not ask who pressed |
 | A read-only host (`delivery.readOnly`) serves neither button, as a copy its updater did not install | It acts on nothing from another device, and an update restarts it |
 
+### Stage 7: upkeep, and forgetting a machine
+
+The daemon does more than publish: it keeps a machine's entities working when Home Assistant
+loses them. Stage 7 ports that upkeep, recorded from the daemon's own functions in
+`Fixtures/ha-upkeep.json`. That covers the Detailed activity switch provisioning, the liveness
+judgement replayed beat by beat over scripted reads, the rebuild's messages, and the timings.
+
+* **The Detailed activity switch** (`Initialize-CopilotVerboseToggle`). At each start the
+  connector lists Home Assistant's `input_boolean` helpers, and creates
+  `input_boolean.agent_bridge_<slug>_detailed_activity` only when there is none. It uses the
+  daemon's name (`Agent Bridge <slug with spaces> Detailed Activity`, from which Home Assistant
+  makes the id) and icon (`mdi:brain`), then names it `Detailed activity (<machine>)` through
+  the registry.
+  * It never deletes and creates again a switch Home Assistant holds: Home Assistant keeps the
+    value across a restart, and a new switch starts off.
+  * If a list came back empty while Home Assistant was starting, Home Assistant numbers the new
+    switch beside the old one (`…_2`). That numbered copy, which was just made, is deleted, and
+    the original and its value are kept.
+  * A create that comes back under any other id is left alone and logged.
+  * A list that fails means nothing is created: the machine keeps the
+    `homeAssistant.detailedActivity` fallback and draws no Detail switch.
+  * From now on `capabilities.detailed` is true for a machine on the host, as it is on the
+    daemon.
+* **The liveness sensor's repair** (`Confirm-DaemonOnlineHeartbeat`, agent-ha-bridge #177 and
+  #202). `mqtt.publish` answers 200 even for a topic Home Assistant has stopped applying, and
+  such an entity runs no expiry timer. So after each beat the connector reads
+  `binary_sensor.agent_bridge_<slug>_online` and compares its `last_reported`, which the beat's
+  changing time moves (`HaLiveness`).
+  * **When it is rebuilt.** Only when two things both hold: the sensor has taken no beat for
+    180 s, and it has missed 3 beats.
+  * **How.** The connector publishes an empty retained config, waits 1.5 s, publishes the config
+    again, pins the id, waits up to 12 × 250 ms for the entity, and only then beats. A rebuild
+    whose declaration failed after the retraction is declared again on the next beat, whatever
+    the count, so a publish that failed once cannot leave the machine without its sensor.
+  * **When it stops.** After 3 rebuilds in a row it stops and says once which topic nothing
+    reaches. Only two beats landing in a row reset that count; the one beat a rebuild sends
+    itself does not.
+  * **Reads that decide nothing.** A read that fails starts and stops no clock. A sensor that
+    does not report `last_reported` is never rebuilt.
+  * **When agent-ha-bridge has had the machine.** The count is kept across a pause. The daemon
+    having had the machine is no sign the sensor was mended, and starting again on every
+    hand-back would tear a sensor that never takes a beat down three more times each time. Two
+    beats landing in a row still reset it, whoever sent them.
+* **A live session's entities** (`Repair-CopilotSessionEntities`,
+  `Restore-DaemonSessionEntities`). On every reconcile the connector checks each session it has
+  published for at least 60 s (sooner, its entities may not have registered yet). It reads the
+  session's reply box, or its status sensor when this host serves no answers.
+  * **Not there** (a 404) for at least 60 s while the session runs here: the whole set is
+    published again, its status and activity from what the session holds. A shorter absence is
+    left alone: a Home Assistant that is still starting answers 404 until MQTT has loaded the
+    entities again, and republishing then would reset a question somebody may be answering. A question on the card goes
+    on screen again. This is said the first time and every tenth attempt.
+  * **Read failed:** nothing happens. A republish parks the selector on Idle, which would blank a
+    question somebody is answering.
+  * **Reply box or selector reads `unknown`:** these have no state topic, so a Home Assistant
+    restart can bring them back with no value. `unavailable` is not `unknown`: it is Home
+    Assistant not answering for the entity yet, and the entity comes back holding its value, so
+    nothing is repaired on it.
+    * Only the box lost its value: it gets `' '` again, and nothing else is touched. The
+      selector and the choices kept their values and their options, so the question is still on
+      screen, and arming it again would only reset choices somebody may be making.
+    * The selector lost its value: words in the box are somebody's and are left (they keep the
+      baseline they had, so a form's text field still takes them at Send), and the question goes
+      on screen again. When there is no question, the selector is parked on Idle; under a
+      question already answered, it is put back on `Awaiting answer...` and nothing is armed.
+    * Before the question is armed again, the card is read once with the baselines it was armed
+      with, because the choices may have come through and an answer given on them since is still
+      an answer. It is delivered rather than taken for the new baseline, and a question answered
+      that way is not put on screen again. What the card's channels held (Send, the reply
+      payload, the box, the selector) is noted just before that read, and the new baselines are
+      that. Anything given on the card after it, a Send, a tap, words or a publish, holds the
+      re-arm off until the next read takes it.
+    * Only a read that could see every control counts: one that could not read Send, say, or
+      found the selector or a choice `unavailable`, cannot tell an answer from none, so the card
+      is read again on the next pass before anything is re-armed. A Send made while a choice
+      reads `unavailable` is not refused as incomplete either; it waits for a read that can see
+      the choice.
+    * Arming again keeps what came through on the card: a choice slot holding a choice of this
+      question (its options are this question's, as they were), and a selector holding a tap
+      under it not yet used. This is decided as each would be reset, after the arm's wait for
+      the slots to register, so a choice made during that wait is kept too. A slot still showing
+      the last question's choice is reset as usual. Anything given while the arm runs (a Send,
+      words, a publish, a tap) stops it before new baselines are taken, the event boundary moves
+      or the selector is set waiting, and the next pass reads it with the old baselines.
+  * In both cases the question keeps what it has been through: answered, its attempts, what was
+    used. An answer that may have reached the terminal is never typed again because the card was
+    put back (`An_answer_that_may_have_landed_is_not_given_again_once_the_card_is_put_back`). An
+    approval's tap that reached nothing may be tapped again once the card waits again, as after
+    any failure.
+  * A selector removed on its own, with the reply box still there, is declared again alone and
+    pinned, after the same 60 s of absence. The rest of the card is left as it is, choices
+    included (published again, its choice slots would get the first publication's options), and
+    the question is armed again as above, read first.
+
+**Forgetting a machine.** The machine row's X is the generated status card's own: two taps on
+the row of a machine that is offline and not part-way through an update. Those taps publish an
+empty retained message from the person's browser to each topic of
+`Get-BridgeMachineForgetTopic`, which the writer lists for that row: the machine's own topics,
+and every session its retained session list names. The connector therefore deletes nothing when
+a machine is forgotten, and has no forget command an agent, a press or a payload could reach:
+
+* `mqtt.publish` is administrator-only. The agent's own token (`agentTokenEnvVar`) belongs to
+  an account that is not an administrator, which is why agent-ha-bridge sends the one
+  administrator-only publish agents need (a long launch prompt) through the user's token. An
+  agent that has been handed an administrator's token is beyond what any bridge can stop.
+* The X is never offered for a machine whose host is running: the beat keeps it online, and
+  stage 6 keeps an update's stage on the entity through its restart.
+* What the X removes is only this machine's own:
+  `Everything_this_connector_keeps_in_Home_Assistant_is_on_the_list_the_dashboards_forget_clears`
+  runs a connector with answers, End session, Launch, updates, two Copilot logins' usage, a
+  question and a retired session. It checks that every retained topic it leaves is on that list,
+  and that pressing the X then leaves nothing of the machine in the broker or the registry.
+  The one exception is the Detailed activity switch, which is Home Assistant's helper and not
+  MQTT's; the daemon's X leaves it too.
+* An ended session still waiting for retirement is not on the machine's retained list (listed,
+  the writer would draw it as a live card, and its retirement, which waits until no dashboard
+  draws it, would never come). So a host stopped with one waiting and then forgotten leaves that
+  session's entities behind, as the daemon does. The next bridge to start anywhere, host or
+  daemon, finds them listed by no machine and retires them through the orphan sweep
+  (`A_session_waiting_for_retirement_when_its_forgotten_host_stopped_is_retired_by_the_next_bridge_to_start`).
+  Clearing them with the X itself needs the writer to read such sessions from an attribute of
+  their own, which is agent-ha-bridge's to add.
+
+A machine is forgotten because it is gone: renamed, reimaged or thrown away. Two cases are not:
+
+* **A host that was only off.** Its row comes back when the host starts, which is what the card
+  says of the daemon ("the cost of a mistake is a row that returns").
+* **A host that was running when its row was forgotten.** That can happen only after its liveness
+  had lapsed for three minutes. The connector finds its online sensor gone for 180 s and three
+  beats, and publishes the whole machine again, as a start does. It is not a restart, though: its
+  sessions keep what they know (who drives each, a thought on the card, a question's history),
+  and only the cards that went with it are published again. A card still in Home Assistant (only
+  the liveness sensor's config went) is left as it is, choices and words included: published
+  again, its selectors would get the first publication's options. What Launch was last read as
+  is kept, so a press made just then still launches. The daemon here rebuilds only the sensor, and the rest comes back piecemeal.
+
+Where stage 7 knowingly differs from the daemon:
+
+| Difference | Why |
+|---|---|
+| The daemon's one-time move off the pre-1.2x shared switch `input_boolean.agent_bridge_detailed_activity`, which deletes that switch, is not ported | Every machine of the fleet shared it, and a machine comes to this host from agent-ha-bridge 1.33, which made the move long since. The connector deletes no helper but a numbered copy of its own switch that it has just made |
+| A create that comes back as anything but the switch's id or a numbered copy of it is left alone; the daemon deletes whatever came back | Only what the connector can show is its own is ever deleted |
+| An online sensor that is absent, rather than present and silent, is answered by publishing the whole machine again, not only the sensor | It is absent because its config went, most likely to the X pressed while the machine's liveness had lapsed, which removed every entity of the machine; a running machine was not gone. Bounded by the same three attempts. A session whose card is still there is left as it is |
+| The rebuild count is kept when the connector resumes after agent-ha-bridge had the machine; a daemon starting has a count of its own | A hand-back is no sign the sensor was mended, and a fresh count on each would undo the limit (#202). Two beats landing in a row still reset it |
+| The session check waits until 60 s after a session's entities were published, and republishes only an absence that has lasted 60 s | Before then a missing entity may only be one Home Assistant has not registered yet, or has not loaded again while it starts; the daemon publishes and pins in one step and republishes on the first 404 |
+| The reply box is primed, and put back to `' '` after a restart, only when it holds no value; the daemon blanks it at every session add and every repair | Words in the box are somebody's reply, not yet sent. A machine published again around a card that stayed, or a selector that lost its value on its own, leaves them |
+| A reply box or selector that reads `unavailable` is not repaired; the daemon repairs `unavailable` as it repairs `unknown` | `unavailable` is Home Assistant still starting, or an availability lapse, not a lost value. Repairing it would re-arm a question over a choice being made and blank words not yet sent, for an entity that comes back holding both |
+| After a restart, a question is armed again only when its selector lost its value, never for the reply box alone, and an answered question's selector is put back on `Awaiting answer...` without arming; a choice slot still holding this question's choice keeps it. The daemon re-arms whenever either lost its value (`Restore-DaemonSessionQuestion`) | Arming resets the choices: re-arming a question still on screen would only reset choices somebody may be making, and lose a Send made while it ran |
+| A selector removed on its own is declared again alone; the daemon publishes the session's whole set again | The rest of the card is still there: published again, its choice slots would get the first publication's options, and a choice made on them would read as none |
+| A switch present but with no state yet is not waited for; it is named and left | The daemon only warns. There is nothing to do until Home Assistant finishes starting, and waiting would hold every start for four seconds |
 ### The shadow: comparing with a running daemon
 
 `agent-bridge-host ha shadow [--json] [--window <seconds>]` runs one connector pass against a
@@ -671,7 +825,8 @@ files; `ha shadow` compares what each would *publish* to Home Assistant.
 **Start**, and again after a pause:
 
 1. Declare the online sensor and pin it; the first beat follows two seconds later.
-2. Read the Detailed activity switch (`on`, `off`, or absent: the setting `detailedActivity`).
+2. Create the Detailed activity switch if Home Assistant has none (stage 7), then read it
+   (`on`, `off`, or absent: the setting `detailedActivity`).
 3. Withdraw this machine's unserved controls; publish the update entity (and, on a host its
    updater installed, the Install and Check buttons) and pin them; announce how an update the
    host restarted for ended, if it did (stage 6).
@@ -686,9 +841,10 @@ files; `ha shadow` compares what each would *publish* to Home Assistant.
    activity), then the session list.
 
 **Steady state**, one pass a second: changed sessions; the session list on a change or every
-300 s; the beat every 60 s; usage on a new reading; pending pins; and every 15 s (the daemon's
-reconcile) the Detailed activity switch and the retirement queue. A failing call is retried on
-the next pass and logged once per kind of failure until it clears.
+300 s; the beat every 60 s, each followed by the liveness check (stage 7); usage on a new
+reading; pending pins; and every 15 s (the daemon's reconcile) the Detailed activity switch, the
+check of each live session's entities (stage 7) and the retirement queue. A failing call is
+retried on the next pass and logged once per kind of failure until it clears.
 
 **A session ending** leaves the session list at once, so the writer regenerates the dashboard
 without its card. Its entities are retired only when **the dashboard served to browsers no
@@ -706,8 +862,9 @@ is retired leaves the queue.
 **A host restart** re-runs the start: live sessions are republished onto their existing,
 pinned entities (no new ones), and the remembered queue is carried over. **A Home Assistant
 restart** loses nothing retained; the 300 s re-assert of the session list covers a broker that
-lost retained state. The daemon's repair of a liveness sensor Home Assistant has stopped
-listening to (#177, #202) is stage 7.
+lost retained state. The reply boxes and selectors come back with no value, and the session
+check puts them back, a waiting question armed again. A liveness sensor Home Assistant has
+stopped listening to is rebuilt (#177, #202). Both are stage 7.
 
 **A pause** (agent-ha-bridge started for this user) stops every write: the write that finds it
 is not made, nor anything after it in that pass. Within the probe's five-second cache, one
@@ -730,8 +887,9 @@ direction replaces entities rather than adding any.
    unique ids, already registered); every running session's sensors are republished in place;
    the daemon's controls the stage does not serve are withdrawn; the sessions the daemon's list
    still names but that are not running, and orphans the daemon never swept, are retired once
-   their cards have gone. The `Detailed activity` helper is left as it is (it is Home
-   Assistant's, not MQTT's) and read.
+   their cards have gone. The `Detailed activity` helper is kept as it is (it is Home
+   Assistant's, not MQTT's, and its value is the person's) and read; a machine without one gets
+   one, as the daemon would have made it.
 3. Nothing in `~/.agent-ha-bridge` changes, and agent hook registrations are not touched (G4).
    Until *Migrate* re-points them, agent-ha-bridge's hooks may still publish a session's
    question entities on demand; stage 2 owns those entities and replaces them, and the rehearsal
@@ -797,7 +955,7 @@ does), never by subscribing to the broker.
 | 5 Launch (done) | The launch card's controls (`Publish-CopilotMqttNewSession`) from the host's approved workspaces and agents; the 255-character limit lifted through the retained `newsession/promptpayload` (`{at, text, request, settings}`); `new_session_result` with `recent` per request (its attributes, on the retained `newsession/outcome`); `capabilities.newSession`/`launchRequest`; the purple edge for a session an agent launched (above). The transfer request stays withdrawn | `daemon-launch.ps1`, `Publish-DaemonNewSessionControls`, `Resolve-DaemonRequestedLaunch` |
 | 5b Phone notifications (done) | `notify.mobile_app_*` with the question's answer buttons, and the `mobile_app_notification_action` events back through `AnswerService`; the response notification when a turn ends | `daemon-decision-notify.ps1`, `Send-BridgeResponseNotification` |
 | 6 Update buttons (done) | `button.agent_bridge_<slug>_check_updates` forces a fresh release check, and `button.agent_bridge_<slug>_install_update` starts the product's own update (the app's Velopack update on Windows), with `stage`/`stage_detail` and `update_percentage` from it, and `latest_version` from this product's release feed — never agent-ha-bridge's (G2) | `Publish-CopilotMqttUpdate`, `daemon-maintenance.ps1` |
-| 7 Upkeep | The Detailed activity helper created when absent (`input_boolean/create`, never recreated); the liveness repair for a sensor Home Assistant has stopped applying, with its attempt limit (#177, #202); forget-machine (the card's X clears this machine's topics from the browser; the connector must not resurrect a machine that was forgotten while it was off) | `Initialize-CopilotVerboseToggle`, `Confirm-DaemonOnlineHeartbeat`, `Get-BridgeMachineForgetTopic` |
+| 7 Upkeep (done) | The Detailed activity helper created when absent (`input_boolean/create`, never recreated); the liveness repair for a sensor Home Assistant has stopped applying, with its attempt limit (#177, #202); a live session's entities put back, and its reply box and question after a Home Assistant restart; forget-machine: the card's X clears this machine's topics from the browser, the connector's own topics are all on its list, and the connector itself deletes nothing (a machine forgotten while its host runs is published again, one forgotten while it was off comes back when it starts, as with the daemon) (above) | `Initialize-CopilotVerboseToggle`, `Confirm-DaemonOnlineHeartbeat`, `Repair-CopilotSessionEntities`, `Restore-DaemonSessionEntities`, `Get-BridgeMachineForgetTopic` |
 
 ## Validation: a disposable Home Assistant and Mosquitto
 
@@ -847,6 +1005,18 @@ Assistant itself rather than a fake:
   installed version; a press of Check asks the feed again; a press of Install shows
   `downloading` at 42% with the spinner, a second press gets the busy notice, and the release
   reaches the updater with the entity at `restarting`;
+* the machine's Detailed activity switch is created off and named for its machine, and a second
+  start, after it was switched on through Home Assistant, keeps that switch and its value;
+* a machine forgotten as the row's X forgets it (an empty retained message on every topic of
+  `Get-BridgeMachineForgetTopic`) while its host runs, with the beat shortened, is published
+  again whole: online, sessions, update and its session's card, showing what the session does;
+* only the machine's liveness sensor's config removed, with a choice made on a waiting question:
+  the machine is published again around the card, the choice is still there, and a Send press
+  reaches the host's answerer with it;
+* Home Assistant restarted through `homeassistant.restart` while a question waits on a card: once
+  it is back, the reply box holds a value again, the question is armed on the card again, a
+  choice and a Send press reach the host's answerer, and the session's entity ids are exactly
+  those it had before (nothing made again under a new id);
 * with no dashboard at all, an ended session is retired, and nothing it published is left
   retained;
 * the shadow, against the daemon's own recorded publications seeded into the broker, reports
@@ -916,7 +1086,8 @@ for retained state, and `config/entity_registry/list` for ids:
 3. Host restart (kill the process, start it): no new entities; a session that ended while the
    host was down is retired after its card has gone.
 4. Home Assistant restart: everything comes back from retained messages; the machine is online
-   again within a minute.
+   again within a minute; the reply boxes are blank rather than `unknown` within a reconcile,
+   and a question that was waiting is armed again and answerable.
 5. G5: start agent-ha-bridge for the migrating user while the host runs: the connector logs that
    it paused and the broker shows no message from it; stop it and the connector resumes.
 6. Host → daemon: the daemon adopts the running sessions, republishes its full set and launch

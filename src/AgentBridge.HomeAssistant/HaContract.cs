@@ -32,6 +32,24 @@ public static partial class HaContract
     // Republishing the machine's session list this often even when nothing changed, so a Home
     // Assistant restart that drops retained values heals within the window (GlobalReassertSeconds).
     public static readonly TimeSpan GlobalReassert = TimeSpan.FromSeconds(300);
+    // Confirm-DaemonOnlineHeartbeat: the liveness sensor is rebuilt once it has taken no beat for
+    // this long and this many beats (DetachedEntitySeconds, DetachedEntityBeats), and at most this
+    // many times in a row (DetachedEntityRepairLimit), since a rebuild that does not hold flaps the
+    // machine offline on every attempt (agent-ha-bridge #177, #202).
+    public static readonly TimeSpan OnlineStall = TimeSpan.FromSeconds(180);
+    public const int OnlineStallBeats = 3;
+    public const int OnlineRepairLimit = 3;
+    // Reset-CopilotMqttDiscoveryConfig: the gap between retracting a config and publishing it again
+    // ($script:CopilotMqttDiscoveryResetMs).
+    public static readonly TimeSpan DiscoveryReset = TimeSpan.FromMilliseconds(1500);
+    // Wait-DaemonEntityRegistered: how long a rebuilt entity is waited for before its first message.
+    public const int RegisteredAttempts = 12;
+    public static readonly TimeSpan RegisteredDelay = TimeSpan.FromMilliseconds(250);
+    // Restore-DaemonSessionEntities: a live session whose entities are gone is published again at
+    // most this often (EntityRestoreSeconds).
+    public static readonly TimeSpan EntityRestore = TimeSpan.FromSeconds(60);
+    // Initialize-CopilotVerboseToggle's icon for the Detailed activity switch.
+    public const string DetailedHelperIcon = "mdi:brain";
     public const string Manufacturer = "AI CLI bridge";
     public const string UpdateTitle = "AI coding agent Home Assistant bridge";
 
@@ -55,6 +73,17 @@ public static partial class HaContract
         if (clean.Length > 24) { clean = clean[..24].Trim('_'); }
         return string.IsNullOrWhiteSpace(clean) ? "machine" : clean;
     }
+
+    // The machine's Detailed activity switch, as agent-bridge-daemon.ps1 provisions it
+    // (VerboseHelperId, VerboseHelperName and the display name it passes to
+    // Initialize-CopilotVerboseToggle). Home Assistant makes the id from the name, so the two move
+    // together.
+    public static string DetailedHelperId(string slug) => $"agent_bridge_{slug}_detailed_activity";
+    public static string DetailedHelperName(string slug) => $"Agent Bridge {slug.Replace('_', ' ')} Detailed Activity";
+    public static string DetailedHelperDisplayName(string machineName) => $"Detailed activity ({machineName})";
+
+    // The id Home Assistant makes of a helper's name: its slugify, for the plain names used here.
+    public static string HelperIdOf(string name) => SlugRun().Replace(name.ToLowerInvariant(), "_").Trim('_');
 
     // Get-CopilotMqttNodeId: the session id's letters and digits, at most 16, lowercased; an id
     // with none gets the first 12 hex digits of its SHA-256 so distinct ids stay distinct.

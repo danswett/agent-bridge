@@ -40,6 +40,7 @@ $names = [ordered]@{
     LaunchOutput    = 'ha-launch.json'
     NotifyOutput    = 'ha-notify.json'
     UpdateOutput    = 'ha-update.json'
+    UpkeepOutput    = 'ha-upkeep.json'
 }
 
 $OutDir = [IO.Path]::GetFullPath($OutDir)

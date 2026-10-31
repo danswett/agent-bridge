@@ -204,6 +204,49 @@ public class ClientTests
         Contract.AssertJson(JsonNode.Parse("""{"id":1,"type":"config/entity_registry/update","entity_id":"sensor.ai_agent_bridge_x_status","new_entity_id":"sensor.agent_bridge_x_status"}"""), received[1]);
     }
 
+    // Initialize-CopilotVerboseToggle's own commands, from the recording, field for field.
+    [Fact]
+    public async Task The_switchs_commands_are_the_daemons_and_a_create_reads_back_the_id_Home_Assistant_chose()
+    {
+        var upkeep = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ha-upkeep.json")))!["helperCases"]!;
+        JsonObject Recorded(string helperCase, string type)
+        {
+            var command = upkeep[helperCase]!["commands"]!.AsArray().Single(c => c!["type"]!.GetValue<string>() == type)!.DeepClone().AsObject();
+            command["id"] = 1;
+            return command;
+        }
+        var helper = HaContract.DetailedHelperId("dswett_dev_vm1");
+
+        var (lister, listed, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonArray(new JsonObject { ["id"] = helper, ["name"] = "x" }, new JsonObject { ["name"] = "no id" }) });
+        Assert.Equal([helper], await lister.ListInputBooleansAsync());
+        Contract.AssertJson(Recorded("present", "input_boolean/list"), listed[1]);
+
+        var (creator, created, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonObject { ["id"] = helper + "_2", ["name"] = "x" } });
+        Assert.Equal(helper + "_2", await creator.CreateInputBooleanAsync(HaContract.DetailedHelperName("dswett_dev_vm1"), HaContract.DetailedHelperIcon));
+        Contract.AssertJson(Recorded("absent", "input_boolean/create"), created[1]);
+
+        var (deleter, deleted, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = null });
+        await deleter.DeleteInputBooleanAsync(helper + "_2");
+        Contract.AssertJson(Recorded("deduplicated", "input_boolean/delete"), deleted[1]);
+
+        var (namer, named, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonObject() });
+        await namer.SetEntityNameAsync("input_boolean." + helper, HaContract.DetailedHelperDisplayName("DSWETT-DEV-VM1"));
+        Contract.AssertJson(Recorded("absent", "config/entity_registry/update"), named[1]);
+
+        var (registry, _, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonArray(new JsonObject { ["entity_id"] = "input_boolean." + helper, ["unique_id"] = helper, ["name"] = "Detailed activity" }) });
+        Assert.Equal([new HaRegistryEntry("input_boolean." + helper, helper, "Detailed activity")], await registry.ListEntityRegistryAsync());
+    }
+
+    [Fact]
+    public async Task When_Home_Assistant_last_took_a_message_is_read_as_it_wrote_it()
+    {
+        var handler = new Handler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"entity_id":"binary_sensor.agent_bridge_x_online","state":"on","attributes":{},"last_reported":"2026-10-31T08:00:00.123456+00:00"}"""),
+        });
+        var client = new HomeAssistantClient(new Uri("http://ha.test:8123/"), Token, new HttpClient(handler));
+        Assert.Equal("2026-10-31T08:00:00.123456+00:00", (await client.GetStateAsync("binary_sensor.agent_bridge_x_online"))!.LastReported);
+    }
     [Fact]
     public async Task An_image_is_fetched_from_the_store_by_id_and_a_missing_or_oversized_one_is_not_taken()
     {

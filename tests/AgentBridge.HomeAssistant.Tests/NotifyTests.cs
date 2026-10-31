@@ -376,6 +376,36 @@ public sealed class NotifyTests : IDisposable
     }
 
     [Fact]
+    public async Task A_host_stopped_while_an_ended_sessions_phones_are_cleared_still_retires_it_and_clears_them_next_time()
+    {
+        Ask(Form("q1", Release));
+        var c = Connector();
+        await Pass(c);
+        Assert.Single(Buttons());
+
+        // The host stops while the first phone is being cleared.
+        using var stopping = new CancellationTokenSource();
+        ha.NotifyThrows = _ =>
+        {
+            stopping.Cancel();
+            return new OperationCanceledException(stopping.Token);
+        };
+        sessions.End(A);
+        time.Advance(TimeSpan.FromSeconds(1));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => c.TickAsync(stopping.Token));
+        await c.DisposeAsync();
+        ha.NotifyThrows = null;
+
+        var ledger = JsonNode.Parse(File.ReadAllText(Path.Combine(folder, "ha-connector.json")))!;
+        Assert.Contains(HaContract.NodeId(A), ledger["retiring"]!.AsArray().Select(n => n!.GetValue<string>()));
+
+        await using var again = Connector();
+        await Pass(again);
+        Assert.Equal(1, Clears());
+        Assert.Contains(HaContract.NodeId(A), again.PendingRetirement);
+    }
+
+    [Fact]
     public async Task An_approval_gets_no_buttons_a_terminal_only_question_is_a_notice_and_without_phones_nothing_is_sent()
     {
         Ask(new Question { Id = "q1", Kind = QuestionKind.Approval, Message = "rm -rf build", AskedAt = FakeSessions.T0 }, AgentKind.Codex);
@@ -686,6 +716,9 @@ public sealed class NotifyTests : IDisposable
     [Fact]
     public async Task A_reply_that_changes_between_reading_the_session_and_pushing_it_is_still_pushed()
     {
+        // Detailed activity on, so a new thought is a change to publish.
+        var slug = HaContract.MachineSlug(Machine);
+        ha.Helper(HaContract.DetailedHelperId(slug), HaContract.DetailedHelperName(slug), "on");
         Ask(null, response: null);
         await using var c = Connector(new HaNotifySettings { Enabled = true });
         await Pass(c);

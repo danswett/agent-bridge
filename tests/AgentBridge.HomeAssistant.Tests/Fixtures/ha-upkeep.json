@@ -1,0 +1,1145 @@
+{
+  "source": {
+    "repository": "danswett/agent-ha-bridge",
+    "commit": "42fc551c1c6184797520c18f4b75457ff08a9276",
+    "dirty": false,
+    "generator": "tools/ha-contract/Export-HaContract.ps1",
+    "note": "Recorded by running agent-ha-bridge's own functions with a recording transport. Regenerate; do not edit by hand."
+  },
+  "machine": "DSWETT-DEV-VM1",
+  "helper": {
+    "id": "agent_bridge_dswett_dev_vm1_detailed_activity",
+    "name": "Agent Bridge dswett dev vm1 Detailed Activity",
+    "displayName": "Detailed activity (DSWETT-DEV-VM1)",
+    "legacyId": "agent_bridge_detailed_activity",
+    "entityId": "input_boolean.agent_bridge_dswett_dev_vm1_detailed_activity",
+    "icon": "mdi:brain"
+  },
+  "helperCases": {
+    "absent": {
+      "result": true,
+      "commands": [
+        {
+          "type": "input_boolean/list"
+        },
+        {
+          "icon": "mdi:brain",
+          "name": "Agent Bridge dswett dev vm1 Detailed Activity",
+          "type": "input_boolean/create"
+        },
+        {
+          "type": "config/entity_registry/list"
+        },
+        {
+          "entity_id": "input_boolean.agent_bridge_dswett_dev_vm1_detailed_activity",
+          "name": "Detailed activity (DSWETT-DEV-VM1)",
+          "type": "config/entity_registry/update"
+        }
+      ]
+    },
+    "present": {
+      "result": true,
+      "commands": [
+        {
+          "type": "input_boolean/list"
+        },
+        {
+          "type": "config/entity_registry/list"
+        }
+      ]
+    },
+    "renamed": {
+      "result": true,
+      "commands": [
+        {
+          "type": "input_boolean/list"
+        },
+        {
+          "type": "config/entity_registry/list"
+        },
+        {
+          "entity_id": "input_boolean.agent_bridge_dswett_dev_vm1_detailed_activity",
+          "name": "Detailed activity (DSWETT-DEV-VM1)",
+          "type": "config/entity_registry/update"
+        }
+      ]
+    },
+    "starting": {
+      "result": true,
+      "commands": [
+        {
+          "type": "input_boolean/list"
+        },
+        {
+          "type": "config/entity_registry/list"
+        }
+      ]
+    },
+    "deduplicated": {
+      "result": true,
+      "commands": [
+        {
+          "type": "input_boolean/list"
+        },
+        {
+          "icon": "mdi:brain",
+          "name": "Agent Bridge dswett dev vm1 Detailed Activity",
+          "type": "input_boolean/create"
+        },
+        {
+          "input_boolean_id": "agent_bridge_dswett_dev_vm1_detailed_activity_2",
+          "type": "input_boolean/delete"
+        }
+      ]
+    },
+    "noState": {
+      "result": false,
+      "commands": [
+        {
+          "type": "input_boolean/list"
+        },
+        {
+          "icon": "mdi:brain",
+          "name": "Agent Bridge dswett dev vm1 Detailed Activity",
+          "type": "input_boolean/create"
+        }
+      ]
+    },
+    "listFails": {
+      "result": false,
+      "commands": [
+        {
+          "type": "input_boolean/list"
+        }
+      ]
+    }
+  },
+  "liveness": {
+    "DetachedEntitySeconds": 180,
+    "DetachedEntityBeats": 3,
+    "DetachedEntityRepairLimit": 3,
+    "OnlineExpireSeconds": 180,
+    "OnlineHeartbeatSeconds": 60,
+    "EntityRestoreSeconds": 60,
+    "WaitAttempts": 12,
+    "WaitDelayMs": 250,
+    "DiscoveryResetMs": 1500
+  },
+  "rebuild": [
+    {
+      "topic": "homeassistant/binary_sensor/agent_bridge_dswett_dev_vm1/online/config",
+      "retain": true,
+      "qos": 1,
+      "json": false,
+      "payload": ""
+    },
+    {
+      "topic": "homeassistant/binary_sensor/agent_bridge_dswett_dev_vm1/online/config",
+      "retain": true,
+      "qos": 1,
+      "json": true,
+      "payload": {
+        "device": {
+          "identifiers": [
+            "agent_bridge_dswett_dev_vm1"
+          ],
+          "manufacturer": "AI CLI bridge",
+          "name": "AI Agent Bridge (DSWETT-DEV-VM1)"
+        },
+        "device_class": "connectivity",
+        "expire_after": 180,
+        "json_attributes_topic": "copilot/cli/machine/dswett_dev_vm1/online/attr",
+        "name": "Online",
+        "object_id": "agent_bridge_dswett_dev_vm1_online",
+        "payload_off": "offline",
+        "payload_on": "online",
+        "state_topic": "copilot/cli/machine/dswett_dev_vm1/online/state",
+        "unique_id": "agent_bridge_dswett_dev_vm1_online"
+      }
+    }
+  ],
+  "scenarios": {
+    "healthy": [
+      {
+        "at": 0,
+        "read": "beat 0",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 60,
+        "read": "beat 60",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 120,
+        "read": "beat 120",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 180,
+        "read": "beat 180",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 240,
+        "read": "beat 240",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 300,
+        "read": "beat 300",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      }
+    ],
+    "stalled": [
+      {
+        "at": 0,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 60,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 120,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 180,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+        ]
+      },
+      {
+        "at": 240,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 300,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 360,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+        ]
+      },
+      {
+        "at": 420,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 480,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 540,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+        ]
+      },
+      {
+        "at": 600,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 660,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 720,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has ignored 3 rebuilds; leaving it alone rather than flapping it. Nothing is reaching it from copilot/cli/machine/dswett_dev_vm1/online/state - check that the beat still carries a changing payload, then the broker and Home Assistant's MQTT integration."
+        ]
+      },
+      {
+        "at": 780,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 840,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 900,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 960,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 1020,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 1080,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 1140,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 1200,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      }
+    ],
+    "absent": [
+      {
+        "at": 0,
+        "read": "absent",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 60,
+        "read": "absent",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 120,
+        "read": "absent",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 180,
+        "read": "absent",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+        ]
+      },
+      {
+        "at": 240,
+        "read": "absent",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 300,
+        "read": "absent",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 360,
+        "read": "absent",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+        ]
+      }
+    ],
+    "unreadable": [
+      {
+        "at": 0,
+        "read": "error",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 60,
+        "read": "error",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 120,
+        "read": "error",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 180,
+        "read": "error",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 240,
+        "read": "error",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 300,
+        "read": "error",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 360,
+        "read": "error",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 420,
+        "read": "error",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 480,
+        "read": "error",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 540,
+        "read": "error",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 600,
+        "read": "error",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      }
+    ],
+    "noField": [
+      {
+        "at": 0,
+        "read": "nofield",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 60,
+        "read": "nofield",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 120,
+        "read": "nofield",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 180,
+        "read": "nofield",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 240,
+        "read": "nofield",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 300,
+        "read": "nofield",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 360,
+        "read": "nofield",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 420,
+        "read": "nofield",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 480,
+        "read": "nofield",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 540,
+        "read": "nofield",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 600,
+        "read": "nofield",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      }
+    ],
+    "recovers": [
+      {
+        "at": 0,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 60,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 120,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 180,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+        ]
+      },
+      {
+        "at": 240,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 300,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 360,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+        ]
+      },
+      {
+        "at": 420,
+        "read": "moving 1",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 480,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 540,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 600,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 660,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+        ]
+      },
+      {
+        "at": 720,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 780,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 840,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+        ]
+      },
+      {
+        "at": 900,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 960,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 1020,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+        ]
+      },
+      {
+        "at": 1080,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 1140,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 1200,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has ignored 3 rebuilds; leaving it alone rather than flapping it. Nothing is reaching it from copilot/cli/machine/dswett_dev_vm1/online/state - check that the beat still carries a changing payload, then the broker and Home Assistant's MQTT integration."
+        ]
+      },
+      {
+        "at": 1260,
+        "read": "moving 2",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      }
+    ],
+    "oneMove": [
+      {
+        "at": 0,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 60,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 120,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 180,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+        ]
+      },
+      {
+        "at": 240,
+        "read": "once",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 300,
+        "read": "once",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 360,
+        "read": "once",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 420,
+        "read": "once",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+        ]
+      },
+      {
+        "at": 480,
+        "read": "once",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 540,
+        "read": "once",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 600,
+        "read": "once",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it"
+        ]
+      },
+      {
+        "at": 660,
+        "read": "once",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 720,
+        "read": "once",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 780,
+        "read": "once",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has ignored 3 rebuilds; leaving it alone rather than flapping it. Nothing is reaching it from copilot/cli/machine/dswett_dev_vm1/online/state - check that the beat still carries a changing payload, then the broker and Home Assistant's MQTT integration."
+        ]
+      },
+      {
+        "at": 840,
+        "read": "once",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 900,
+        "read": "once",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      }
+    ],
+    "asleep": [
+      {
+        "at": 0,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 10800,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 10860,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 10920,
+        "read": "stuck",
+        "back": "present",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": true,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 10920s; rebuilding it"
+        ]
+      }
+    ],
+    "neverBack": [
+      {
+        "at": 0,
+        "read": "stuck",
+        "back": "absent",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 60,
+        "read": "stuck",
+        "back": "absent",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 120,
+        "read": "stuck",
+        "back": "absent",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      },
+      {
+        "at": 180,
+        "read": "stuck",
+        "back": "absent",
+        "rebuilt": true,
+        "pinned": true,
+        "beat": false,
+        "logs": [
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online has taken no beat for 180s; rebuilding it",
+          "binary_sensor.agent_bridge_dswett_dev_vm1_online did not come back after the rebuild; trying again next beat"
+        ]
+      },
+      {
+        "at": 240,
+        "read": "stuck",
+        "back": "absent",
+        "rebuilt": false,
+        "pinned": false,
+        "beat": false,
+        "logs": []
+      }
+    ]
+  }
+}
