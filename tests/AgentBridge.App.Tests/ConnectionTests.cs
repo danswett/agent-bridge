@@ -31,6 +31,27 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_connection_that_follows_no_sessions_stops_when_disposed_rather_than_spinning()
+    {
+        // The relay loopback's kind (Subscribes = false). Disposed while connected, its wait for a
+        // gap completed cancelled at once, every time round, and recovering did nothing without
+        // sessions to resubscribe, so the loop spun a thread at full speed and DisposeAsync never
+        // returned (#129). Which of the cancelled waits wins is a race, hence several.
+        var connections = Enumerable.Range(0, 20).Select(_ =>
+        {
+            var c = new HostConnection(ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100), Subscribes = false };
+            c.Start();
+            return c;
+        }).ToList();
+        await Wait.UntilAsync(() => connections.All(c => c.State == LinkState.Connected), "every connection");
+
+        foreach (var c in connections)
+        {
+            await c.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    [Fact]
     public async Task Connecting_says_hello_and_subscribes_to_the_sessions_the_usage_and_the_hosts_status()
     {
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Get("s1") is not null, "the snapshot");
