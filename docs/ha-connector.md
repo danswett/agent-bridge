@@ -696,13 +696,16 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
   published for at least 60 s (sooner, its entities may not have registered yet). It reads the
   session's reply box, or its status sensor when this host serves no answers.
   * **Not there** (a 404) while the session runs here: the whole set is published again on the
-    next pass, its status and activity from what the session holds. A question on the card is
-    armed again. This is said the first time and every tenth attempt.
+    next pass, its status and activity from what the session holds. A question on the card goes
+    on screen again. This is said the first time and every tenth attempt.
   * **Read failed:** nothing happens. A republish parks the selector on Idle, which would blank a
     question somebody is answering.
   * **Reply box or selector reads `unknown`:** these have no state topic, so a Home Assistant
-    restart brings them back with no value. The box gets `' '` again, and the question is armed
-    again with fresh baselines. When there is no question, the selector is parked on Idle.
+    restart brings them back with no value. The box gets `' '` again, and the question goes on
+    screen again with fresh baselines. When there is no question, the selector is parked on Idle.
+  * In both cases the question keeps what it has been through: answered, its attempts, what was
+    used. An answer that may have reached the terminal is never typed again because the card was
+    put back (`An_answer_that_may_have_landed_is_not_given_again_once_the_card_is_put_back`).
 
 **Forgetting a machine.** The machine row's X is the generated status card's own: two taps on
 the row of a machine that is offline and not part-way through an update. Those taps publish an
@@ -731,8 +734,10 @@ A machine is forgotten because it is gone: renamed, reimaged or thrown away. Two
   says of the daemon ("the cost of a mistake is a row that returns").
 * **A host that was running when its row was forgotten.** That can happen only after its liveness
   had lapsed for three minutes. The connector finds its online sensor gone for 180 s and three
-  beats, and publishes the whole machine again, as a start does. The daemon here rebuilds only
-  the sensor, and the rest comes back piecemeal.
+  beats, and publishes the whole machine again, as a start does. It is not a restart, though: its
+  sessions keep what they know (who drives each, a thought on the card, a question's history),
+  and only their entities go again. The daemon here rebuilds only the sensor, and the rest comes
+  back piecemeal.
 
 Where stage 7 knowingly differs from the daemon:
 

@@ -58,6 +58,10 @@ public sealed partial class HaConnector
         public string? BoxAtHold;
         // Said once, not on every hit.
         public string? Told;
+        // Home Assistant lost the card's controls or their values (stage 7): put on screen again,
+        // with fresh baselines, keeping what this question has been through (settled, attempts,
+        // what was used), so an answer that may have reached the terminal is never typed again.
+        public bool Rearm;
     }
 
     // Get-CopilotDecisionChannelObservation: present (with a value), absent (determinately
@@ -148,7 +152,11 @@ public sealed partial class HaConnector
     {
         if (!ServesAnswers) { return; }
         var question = full.Question;
-        if (question is not null && p.Armed?.Question.Id == question.Id) { return; }
+        if (question is not null && p.Armed?.Question.Id == question.Id)
+        {
+            if (p.Armed.Rearm) { await RearmAsync(full, p, name, ct); }
+            return;
+        }
         if (question is null)
         {
             if (p.Armed is null && p.Cleared) { return; }
@@ -219,6 +227,35 @@ public sealed partial class HaConnector
             StaleSlots = await StaleSlotsAsync(plan, p.Node, unset, ct),
         };
         log($"Home Assistant connector armed {p.Node} for its question{(plan.TerminalOnly ? " (answered at the machine)" : "")}");
+    }
+
+    // The question already armed, put on screen again after Home Assistant lost it: the controls and
+    // the baselines are new, everything the question has been through is kept.
+    async Task RearmAsync(Session full, Published p, string name, CancellationToken ct)
+    {
+        var armed = p.Armed!;
+        var payload = await ObserveAsync(SessionEntities.ReplyPayload(p.Node), ct);
+        var submit = await ObserveAsync(SessionEntities.Submit(p.Node), ct);
+        var reply = await ObserveAsync(SessionEntities.Reply(p.Node), ct);
+        if (payload.Kind == "unknown" || submit.Kind == "unknown" || reply.Kind == "unknown")
+        {
+            lock (gate) { dirty.Add(full.Id); }
+            return;
+        }
+        var armedSlots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
+        var unset = await RunAsync(HaDecision.Arm(armed.Plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow()), p.Node, ct);
+        armed.PayloadBaseline = payload;
+        armed.SubmitBaseline = submit;
+        armed.ReplyBaseline = reply;
+        armed.Boundary = Interlocked.Read(ref hitSeq);
+        // A Send read after a failure is compared with what Send shows now, not before the loss.
+        if (armed.SubmitAtFailure is not null) { armed.SubmitAtFailure = submit; }
+        armed.AwaitTap = armed.Plan.AnswerOnTap && !await ShowsWaitingAsync(p.Node, armed.Question.Id, ct);
+        armed.StaleSlots = await StaleSlotsAsync(armed.Plan, p.Node, unset, ct);
+        armed.Rearm = false;
+        p.ArmedSlots = armed.Plan.UsesFieldSlots ? armed.Plan.Fields.Count : 0;
+        p.Cleared = false;
+        log($"Home Assistant connector armed {p.Node} again for its question{(armed.Settled ? " (already answered: check the terminal)" : "")}");
     }
 
     // Whether the selector waits under this question; if it shows a choice, it is set waiting again.

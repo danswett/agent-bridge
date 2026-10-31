@@ -30,6 +30,8 @@ public sealed class UpkeepTests : IDisposable
     readonly List<AnswerRequest> answered = [];
     // agent-ha-bridge running for this user, as G5 sees it.
     string? daemon;
+    // What the host's answerer says of each answer.
+    AnswerOutcome answerOutcome = AnswerOutcome.Delivered;
 
     public void Dispose()
     {
@@ -52,7 +54,7 @@ public sealed class UpkeepTests : IDisposable
         answer: answers ? (r, _) =>
         {
             lock (answered) { answered.Add(r); }
-            return Task.FromResult(new AnswerResult(AnswerOutcome.Delivered));
+            return Task.FromResult(new AnswerResult(answerOutcome));
         } : null,
         stop: answers ? (_, _) => Task.FromResult(new StopResult(StopOutcome.Ended)) : null,
         launch: launch, updates: updates);
@@ -346,6 +348,62 @@ public sealed class UpkeepTests : IDisposable
         c.Observe(ha.Press(SessionEntities.Submit(NodeA)));
         await Run(c, 5);
         Assert.Single(answered);
+    }
+
+    // An answer that may have reached the terminal is never typed again: not after a Home Assistant
+    // restart lost the card's values, nor after its entities were lost and published again.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_answer_that_may_have_landed_is_not_given_again_once_the_card_is_put_back(bool entitiesLost)
+    {
+        answerOutcome = AnswerOutcome.Unconfirmed;
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 5);
+        c.Observe(ha.Choose(SessionEntities.Field(NodeA, 1), "Cut the release now"));
+        await Run(c, 1);
+        c.Observe(ha.Press(SessionEntities.Submit(NodeA)));
+        await Run(c, 2);
+        Assert.Single(answered);
+
+        if (entitiesLost)
+        {
+            foreach (var topic in HaContract.ForgetTopics(Slug, [NodeA]).Where(t => t.Contains(NodeA, StringComparison.Ordinal))) { await ha.PublishAsync(topic, "", true); }
+        }
+        else { ha.ForgetOptimistic(); }
+        await Run(c, 90);
+        Assert.Equal(HaDecision.Awaiting, (await ha.GetStateAsync(SessionEntities.Decision(NodeA)))!.State);
+
+        // The question is still the one asked, and the card shows it; a second Send is not a
+        // second answer.
+        c.Observe(ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix"));
+        await Run(c, 1);
+        c.Observe(ha.Press(SessionEntities.Submit(NodeA)));
+        await Run(c, 5);
+        Assert.Single(answered);
+    }
+
+    [Fact]
+    public async Task A_machine_published_again_while_its_host_runs_keeps_what_its_sessions_were_showing()
+    {
+        ha.Helper(HaContract.DetailedHelperId(Slug), HaContract.DetailedHelperName(Slug), "on");
+        sessions.Set(FakeSessions.Copilot(A, response: "First answer"));
+        await using var c = Connector();
+        await Run(c, 5);
+        // A new turn thinking over the last turn's reply: the card shows the thought.
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Working) with { Activity = new Activity { Response = "First answer", Reasoning = "Weighing the second" } });
+        await Run(c, 2);
+        JsonElement Detail() => JsonDocument.Parse(ha.Retained[HaContract.Topics(NodeA).ActivityAttributes]).RootElement;
+        Assert.Equal("reasoning", Detail().GetProperty("response_kind").GetString());
+
+        foreach (var topic in HaContract.ForgetTopics(Slug, [NodeA])) { await ha.PublishAsync(topic, "", true); }
+        await Run(c, 260);
+        Assert.Equal(1, Logged("publishing the machine again"));
+        // Not a restart: the session is still the one thinking, not one first seen with a reply.
+        Assert.Equal("reasoning", Detail().GetProperty("response_kind").GetString());
+        Assert.Equal("Weighing the second", Detail().GetProperty("response").GetString());
     }
 
     // ---- Forget -------------------------------------------------------------------------------

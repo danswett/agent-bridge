@@ -13,12 +13,16 @@ namespace AgentBridge.HomeAssistant;
 public sealed partial class HaConnector
 {
     HaLiveness? liveness;
+    // The next start publishes the machine again for a host that never stopped (its online sensor
+    // went, most likely to the dashboard's X): its sessions keep what they know.
+    bool republishing;
     // Restore-DaemonSessionEntities' attempts, by session: said the first time and every tenth.
     readonly Dictionary<string, int> restores = new(StringComparer.Ordinal);
 
     void ResetUpkeep()
     {
         liveness = null;
+        republishing = false;
         lock (gate) { restores.Clear(); }
     }
 
@@ -146,6 +150,7 @@ public sealed partial class HaConnector
         if (read.Absent)
         {
             log($"Home Assistant connector: {entityId} has been gone from Home Assistant for {stalled}s while this machine runs (forgotten, or its retained config lost); publishing the machine again");
+            republishing = true;
             started = false;
             retryAt = now;
             return;
@@ -245,17 +250,17 @@ public sealed partial class HaConnector
         if (!lost) { return; }
         var shortId = id[..Math.Min(8, id.Length)];
         await ResetReplyBoxAsync(p.Node, ct);
-        if (p.Armed is not null)
+        if (p.Armed is { } armed)
         {
-            // Asked again on the next pass, with fresh baselines: the question is still waiting on
-            // an answer nobody could give on a selector that has forgotten it.
+            // On screen again on the next pass, with fresh baselines: the question is still waiting
+            // on an answer nobody could give on a selector that has forgotten it. What it has been
+            // through is kept, so one already answered is not answered twice.
             lock (gate)
             {
-                p.Armed = null;
-                p.Cleared = false;
+                armed.Rearm = true;
                 dirty.Add(id);
             }
-            log($"Home Assistant connector: armed {p.Node}'s question again, which Home Assistant had lost (restarted?)");
+            log($"Home Assistant connector: {p.Node}'s question goes on screen again, which Home Assistant had lost (restarted?)");
             return;
         }
         var slots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);

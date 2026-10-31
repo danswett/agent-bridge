@@ -486,16 +486,27 @@ public sealed partial class HaConnector : IAsyncDisposable
             foreach (var node in starting.Values) { inherited.Add(node); }
             starting.Clear();
             foreach (var node in inherited.Where(n => !live.Contains(n))) { retiring.TryAdd(node, new Retiring()); }
-            published.Clear();
+            if (republishing)
+            {
+                // The host did not restart, nor did its sessions: each keeps everything it knows (who
+                // drives it, what it was thinking, its question's history) and only its entities
+                // go again (SessionAsync's Lost path).
+                foreach (var p in published.Values) { p.Lost = true; }
+            }
+            else
+            {
+                published.Clear();
+                // Sent again to every phone, as the daemon does after a restart: the same tag
+                // replaces what is there, and a question answered meanwhile is withdrawn.
+                buttonsSent.Clear();
+                // Taken while agent-ha-bridge had the machine, or before: its own listener had them too.
+                taps.Clear();
+            }
             usageSignatures.Clear();
-            // Sent again to every phone, as the daemon does after a restart: the same tag replaces
-            // what is there, and a question answered meanwhile is withdrawn.
-            buttonsSent.Clear();
-            // Taken while agent-ha-bridge had the machine, or before: its own listener had them too.
-            taps.Clear();
             allDirty = true;
         }
-        baselinePass = true;
+        baselinePass = !republishing;
+        republishing = false;
         SaveLedger();
         globalSignature = null;
         usageVersion = -1;
@@ -702,7 +713,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             p.PublishedAt = now;
             p.Status = null;
             p.Activity = null;
-            p.Armed = null;
+            if (p.Armed is { } armed) { armed.Rearm = true; }
             p.ArmedSlots = -1;
             p.Cleared = false;
         }
