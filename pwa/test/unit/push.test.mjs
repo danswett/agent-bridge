@@ -290,3 +290,16 @@ test('signing out while the permission prompt is up leaves notifications off and
   assert.equal(pm.subscribed.length, 0);
   assert.deepEqual(host.requests, []);
 });
+test('a machine slow to answer its registration holds up no other machine\'s', async () => {
+  const { r, win } = registrar();
+  win.Notification.permission = 'granted';
+  await r.enable();
+  let answer;
+  const slow = { ...client(), requests: [], request(op, data) { this.requests.push({ op, data }); return new Promise((res) => { answer = res; }); } };
+  const quick = client();
+  const slowDone = r.register(slow, slow.capabilities);
+  assert.equal(await r.register(quick, quick.capabilities), true);
+  assert.equal(quick.requests.length, 1);
+  answer({ subscribed: true, count: 1 });
+  assert.equal(await slowDone, true);
+});

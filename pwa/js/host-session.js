@@ -200,7 +200,16 @@ export class HostSession {
     this.#emit();
   }
 
-  // One machine's device id, or ALL.
+  // A notification's machine, shown on its own without changing what is remembered.
+  visit(id) {
+    if (id === this.selection) { this.select(id); return; }
+    this.selection = id;
+    this.#linked = null;
+    this.#reconcile();
+    this.#emit();
+  }
+
+  // One machine's device id, or ALL, as picked in the Machines panel: remembered.
   select(choice) {
     if (choice === this.selection) {
       // Chosen again while it can't be reached: try now rather than at the next retry.
@@ -225,7 +234,7 @@ export class HostSession {
     const single = this.#single;
     if (single && !this.isOnline(single.id) && (single.client || single.attempt)) {
       // The host left: its end of the channel is gone. Keep the last list on screen.
-      single.attempt = null;
+      this.#cancel(single);
       this.#detach(single);
       this.#set(single, 'waiting');
     }
@@ -250,7 +259,7 @@ export class HostSession {
   #drop(id) {
     const link = this.#links.get(id);
     if (!link) { return; }
-    link.attempt = null; // an attempt in flight is now stale and closes its own channel
+    this.#cancel(link);
     clearTimeout(link.timer);
     link.timer = null;
     this.#detach(link);
@@ -268,7 +277,7 @@ export class HostSession {
 
   #detachAll(reason) {
     for (const link of this.#links.values()) {
-      link.attempt = null;
+      this.#cancel(link);
       clearTimeout(link.timer);
       link.timer = null;
       this.#detach(link);
@@ -284,16 +293,32 @@ export class HostSession {
     for (const link of this.links()) {
       if (this.#opening >= this.maxOpening) { return; }
       if (link.client || link.attempt || link.timer || link.phase === 'unsupported' || !this.isOnline(link.id)) { continue; }
-      const attempt = {};
+      const attempt = { abort: new AbortController(), released: false };
       link.attempt = attempt;
       this.#opening++;
       this.#set(link, 'opening');
       this.#open(link, attempt).finally(() => {
-        this.#opening--;
+        this.#release(attempt);
         if (link.attempt === attempt) { link.attempt = null; }
         this.#pump();
       });
     }
+  }
+
+  // An attempt no longer wanted: its handshake is abandoned and its place among the handshakes
+  // under way goes at once to a machine still shown, rather than when it would have timed out.
+  #cancel(link) {
+    const attempt = link.attempt;
+    if (!attempt) { return; }
+    link.attempt = null;
+    attempt.abort?.abort();
+    this.#release(attempt);
+  }
+
+  #release(attempt) {
+    if (attempt.released) { return; }
+    attempt.released = true;
+    this.#opening--;
   }
 
   // Tries the link again after a wait that doubles with each failure in a row.
@@ -309,18 +334,19 @@ export class HostSession {
     const stale = () => this.#links.get(link.id) !== link || link.attempt !== attempt;
     let client;
     try {
-      const channel = await this.connection.openChannel(link.id);
+      const channel = await this.connection.openChannel(link.id, { signal: attempt.abort?.signal });
       if (stale()) { channel.close(); return; }
       client = this.makeClient(channel, link.store);
       link.channel = channel;
       link.client = client;
       client.on('close', () => {
         if (link.client !== client) { return; }
-        const wasOpen = link.phase === 'open';
+        // Set up: open, or found not to support sessions (which may change once it restarts).
+        const settled = link.phase === 'open' || (link.phase === 'unsupported' && !link.attempt);
         link.client = null;
         link.channel = null;
         // One closing while it is being set up fails that attempt, which retries it once.
-        if (!wasOpen) { return; }
+        if (!settled) { return; }
         this.#set(link, 'waiting', 'The channel to this machine closed; reopening.');
         // A close without a relay drop (the host restarted) reopens as soon as it can.
         this.#later(link, this.reopenMs);

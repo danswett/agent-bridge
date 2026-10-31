@@ -210,3 +210,13 @@ test('the launch machine picked holds even where the device cannot store it', as
   await expect(panel.locator('select[name="machine"]')).toHaveValue(LAPTOP);
   await expect(panel.locator('.launch-title')).toHaveText('Start a session on Laptop');
 });
+
+test('a machine remembered from a demo with more machines says it is offline, and the demo still starts', async ({ page }) => {
+  await openDemo(page);
+  await row(page, LAPTOP).click();
+  await page.goto('?demo=1&static=1');
+  await page.waitForSelector('html[data-demo-ready]');
+  await expect(page.locator('#host-state')).toContainText('is offline');
+  await row(page, 'demo').click();
+  await expect(page.locator('.session')).toHaveCount(4);
+});

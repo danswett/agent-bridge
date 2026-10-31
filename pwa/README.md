@@ -90,7 +90,8 @@ once more than one machine is online, and shows every online machine's sessions 
 It is what the app shows when nothing has been chosen; picking one machine shows that one
 alone, as before; and the choice, one machine or All, is remembered on the device. A
 notification's link (`?host=`) shows its machine among the others when All was chosen, and
-alone otherwise, or when its machine turns out to be offline. Folded, the panel reads
+alone otherwise, or when its machine turns out to be offline; either way what is remembered
+stays as picked in the panel. Folded, the panel reads
 "Viewing all · 4 online".
 
 * **The list.** Every machine's sessions together, most recently updated first (ties by
@@ -112,7 +113,8 @@ alone otherwise, or when its machine turns out to be offline. Folded, the panel 
   own machine's hello, so a read-only shadow such as "DSWETT-DEV-VM1 (shadow)" shows its
   sessions read-only, saying why, beside machines that take answers.
 * **Connections.** A machine is connected to only while it is shown: one channel per
-  machine, at most three handshakes under way at once, each machine retried on its own after
+  machine, at most three handshakes under way at once (one for a machine no longer shown is
+  given up at once, and the host told), each machine retried on its own after
   a failure (5 s, doubling to a minute) and reopened a second after its channel closes. A
   relay drop keeps every machine's cards and reopens them all when it is back. Machines not
   shown are looked at by `fleet.js`'s short once-a-minute channel, as before; with All there
@@ -122,7 +124,7 @@ alone otherwise, or when its machine turns out to be offline. Folded, the panel 
   listing the machines that can (`sessions.launch`), as the app's launch page does. It starts
   from the machine last launched on or picked there, remembered on the device.
 * **Notifications** are as before: each machine opened registers this device. With All, that
-  is every machine shown.
+  is every machine shown, each on its own, so one slow or failing machine holds up no other.
 
 ### Answering
 

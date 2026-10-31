@@ -9,6 +9,8 @@ import { StopService } from '../../js/stop-service.js';
 import { LaunchService } from '../../js/launch-service.js';
 import { prepareAttachment } from '../../js/attachments.js';
 import { DemoBlobStore, DemoConnection, DemoHost } from '../../js/demo.js';
+import { ChannelSet, KIND } from '../../js/channels.js';
+import { P256KeyPair } from '../../js/noise-p256.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 
@@ -22,11 +24,13 @@ function fakeConnection(presence) {
     opens,
     emit(type, detail) { for (const fn of listeners.get(type) ?? []) { fn(detail); } },
     on(type, fn) { (listeners.get(type) ?? listeners.set(type, []).get(type)).push(fn); },
-    openChannel(peerId) {
+    openChannel(peerId, { signal = null } = {}) {
       let resolve, reject;
       const p = new Promise((res, rej) => { resolve = res; reject = rej; });
       const channel = { peerId, peerName: peerId, closed: false, close() { this.closed = true; } };
-      opens.push({ peerId, channel, resolve: () => resolve(channel), reject });
+      // As ChannelSet does: a handshake no longer wanted is closed, and its open fails.
+      signal?.addEventListener('abort', () => { channel.close(); reject(new Error('no longer wanted')); });
+      opens.push({ peerId, channel, signal, resolve: () => resolve(channel), reject });
       return p;
     },
   };
@@ -376,6 +380,73 @@ test('a channel that closes while it is being set up is retried once, after the 
   t.mock.timers.tick(1);
   await flush();
   assert.equal(connection.opens.length, 2);
+});
+
+test('a machine no longer shown gives up its handshake and its place among those under way at once', async () => {
+  const connection = fakeConnection(hosts('m0', 'm1', 'm2', 'm3'));
+  const s = new HostSession({ connection, storage: null, makeClient: (ch) => fakeClient(ch) });
+  s.select(ALL);
+  await flush();
+  assert.deepEqual(connection.opens.map((o) => o.peerId), ['m0', 'm1', 'm2']);
+  s.select('m3');
+  await flush();
+  assert.deepEqual(connection.opens.map((o) => o.peerId), ['m0', 'm1', 'm2', 'm3'], 'not held up behind handshakes nobody wants');
+  assert.deepEqual(connection.opens.slice(0, 3).map((o) => o.signal.aborted), [true, true, true]);
+  connection.opens[3].resolve();
+  await flush();
+  await flush();
+  assert.equal(s.phase, 'open');
+});
+
+test('a machine found not to support sessions is tried again once its channel closes, as it may have been updated', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const connection = fakeConnection(hosts('a'));
+  let supports = false;
+  const closers = [];
+  const s = new HostSession({
+    connection, storage: null, reopenMs: 1000,
+    makeClient: (ch) => ({
+      ...fakeClient(ch),
+      on: (type, fn) => { if (type === 'close') { closers.push(fn); } },
+      hello: async () => ({ protocol: 1, machine: { name: 'a' }, capabilities: supports ? ['sessions.read'] : [] }),
+    }),
+  });
+  s.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  for (let i = 0; i < 4; i++) { await flush(); }
+  assert.equal(s.phase, 'unsupported');
+  supports = true;
+  closers[0](new Error('the host closed the channel'));
+  assert.equal(s.phase, 'waiting');
+  t.mock.timers.tick(1000);
+  await flush();
+  connection.opens[1].resolve();
+  for (let i = 0; i < 4; i++) { await flush(); }
+  assert.equal(s.phase, 'open');
+});
+
+test('a notification shows its machine without changing what was picked in the Machines panel', () => {
+  const connection = fakeConnection(hosts('a', 'b'));
+  const storage = memory();
+  const s = new HostSession({ connection, storage, makeClient: (ch) => fakeClient(ch) });
+  s.select(ALL);
+  s.visit('gone');
+  assert.equal(s.selection, 'gone');
+  assert.equal(storage.saved['agent-bridge.app.lastHost'], ALL);
+});
+
+test('a handshake given up tells the host at once and fails, rather than waiting out its timeout', async () => {
+  const sent = [];
+  const set = new ChannelSet({ key: await P256KeyPair.generate(), deviceId: 'me', name: 'phone' });
+  set.attach({ open: true, send: (peer, payload) => sent.push([peer, payload[0]]) });
+  const abort = new AbortController();
+  const opening = set.open('host-a', { signal: abort.signal, timeoutMs: 60000 });
+  await assert.doesNotReject(until(() => sent.length > 0, 'the first handshake message'));
+  abort.abort();
+  await assert.rejects(opening, /closed/);
+  assert.deepEqual(sent, [['host-a', KIND.msg1], ['host-a', KIND.close]]);
+  assert.equal(set.channels.size, 0);
 });
 
 // ---- two machines, each card's actions to its own ----

@@ -208,9 +208,10 @@ async function startDemo() {
   $('machines').hidden = false;
   hosts.restoreTarget(null);
   fleet.start();
-  // Ready once every machine shown has sent what it has.
+  // Ready once every machine shown has sent what it has. One remembered from a demo with more
+  // machines is not there to send anything, and says it is offline.
   await new Promise((resolve) => {
-    const check = () => { if (hosts.links().every((l) => l.phase === 'open' && l.client?.synced)) { resolve(); } };
+    const check = () => { if (hosts.links().every((l) => !hosts.isOnline(l.id) || (l.phase === 'open' && l.client?.synced))) { resolve(); } };
     hosts.onChange(check);
     hosts.sessions.onChange(check);
     check();
@@ -308,10 +309,11 @@ function begin(account) {
   const hosts = new HostSession({ connection, me: identity.deviceId });
   const link = takeLink();
   linked = link?.host && link.session ? { host: link.host, session: link.session } : null;
-  // A link's machine is shown: with every other when every machine is, else on its own.
+  // A link's machine is shown: with every other when every machine is, else on its own. A
+  // notification is not a choice in the Machines panel, so what is remembered stays.
   followLink = ({ host, session }) => {
     linked = session ? { host, session } : null;
-    if (!hosts.all || !hosts.isOnline(host)) { hosts.select(host); }
+    if (!hosts.all || !hosts.isOnline(host)) { hosts.visit(host); }
     focusLinked();
   };
   const fleet = new FleetStatus({ connection, hosts, book, me: identity.deviceId });
