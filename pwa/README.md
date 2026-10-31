@@ -258,7 +258,9 @@ across every machine, fullest first, each window a bar with an even-pace mark, i
 when it resets and how old the reading is. Folded, it is one line of figures in their own
 colours; whether it is folded is remembered. It shows once any machine offers `usage`.
 Each machine in the list says how many sessions it has, its version, and `(dev)` for a
-build from a working copy. Demo mode has usage too (`window.agentBridgeDemo.usage(report)`
+build from a working copy. The **Machines** panel folds the same way, to one line naming
+the machine being viewed and how many are online; it starts open, and whether it is folded
+is remembered. Demo mode has usage too (`window.agentBridgeDemo.usage(report)`
 sends a new one; `?usage=0` plays a host without it).
 
 ### Markdown

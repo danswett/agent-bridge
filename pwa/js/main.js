@@ -32,7 +32,7 @@ import { LAUNCH } from './launch.js';
 import { TRANSFER, collectRemote, signTransfer } from './transfer.js';
 import { PushRegistrar, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities } from './protocol.js';
-import { SessionListView, renderMachines } from './ui/views.js';
+import { SessionListView, MachinesFold, renderMachines } from './ui/views.js';
 import { UsageBook, USAGE, machineStatus } from './usage.js';
 import { FleetStatus } from './fleet.js';
 import { UsageView } from './ui/usage-view.js';
@@ -49,6 +49,7 @@ const store = new SessionsStore();
 // Every machine's latest usage report, drawn as one row per allowance.
 const book = new UsageBook();
 new UsageView($('usage'), book);
+const machinesFold = new MachinesFold($('machines'));
 let currentClient = null;
 let machineName = '';
 // Who answers questions, sends replies and ends sessions now: { service, replies, stops,
@@ -213,13 +214,13 @@ async function startDemo() {
   const largeAttachments = () => largeLimit(hello.capabilities, blobStore.max);
   answering = () => ({ service: answers, replies, stops, hostId: hello.machine.id, capabilities: hello.capabilities, readOnly: hello.machine.readOnly, largeAttachments });
   $('machines').hidden = false;
-  const drawMachine = () => renderMachines($('machine-list'), {
+  const drawMachine = () => machinesFold.update(renderMachines($('machine-list'), {
     presence: [{ id: hello.machine.id, name: hello.machine.name, kind: 'host' }],
     me: null,
     current: hello.machine.id,
     onSelect: () => {},
     status: () => machineStatus({ ...hello.machine, sessions: client.synced ? store.size : hello.machine.sessions, held: client.synced ? store.held?.reason : null }),
-  });
+  }), hello.machine.name);
   drawMachine();
   store.onChange(drawMachine);
   showSessionsFor(hello.machine.name);
@@ -412,6 +413,7 @@ function begin(account) {
       status: (id) => fleet.status(id),
     });
     $('machines-empty').hidden = n !== 0 || !connection.ready;
+    machinesFold.update(n, n ? nameOf(hosts.targetId) : null);
   };
   fleet.onChange(drawMachines);
   fleet.start();

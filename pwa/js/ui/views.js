@@ -63,6 +63,46 @@ export class SessionListView {
   card(id) { return this.#cards.get(id) ?? null; }
 }
 
+// The Machines panel folds to one line, as the usage panel does: with several machines the
+// list pushes the sessions below the fold on a phone. Open unless folded, kept across reloads.
+const MACHINES_OPEN = 'agent-bridge.app.machines.open';
+
+export class MachinesFold {
+  #count = 0;
+  #viewing = null;
+
+  constructor(section, { storage = globalThis.localStorage } = {}) {
+    Object.assign(this, { section, storage });
+    this.toggle = section.querySelector('.machines-toggle');
+    this.summary = section.querySelector('.machines-summary');
+    this.body = section.querySelector('.machines-body');
+    let saved = null;
+    try { saved = storage?.getItem(MACHINES_OPEN) ?? null; } catch { /* a nicety */ }
+    this.open = saved !== '0';
+    this.toggle.addEventListener('click', () => {
+      this.open = !this.open;
+      try { this.storage?.setItem(MACHINES_OPEN, this.open ? '1' : '0'); } catch { /* a nicety */ }
+      this.render();
+    });
+    this.render();
+  }
+
+  // count: machines listed; viewing: the name of the one whose sessions are shown, if any.
+  update(count, viewing) {
+    this.#count = count;
+    this.#viewing = viewing ?? null;
+    this.render();
+  }
+
+  render() {
+    this.toggle.setAttribute('aria-expanded', String(this.open));
+    this.body.hidden = !this.open;
+    this.summary.hidden = this.open;
+    const online = this.#count === 0 ? 'No machines online' : `${this.#count} online`;
+    this.summary.textContent = this.#viewing ? `Viewing ${this.#viewing} \u00b7 ${online}` : online;
+  }
+}
+
 // status(id) -> "3 sessions · 0.1.0 (dev)", or '' while nothing is known (fleet.js).
 export function renderMachines(list, { presence, me, current, onSelect, status = () => '' }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
