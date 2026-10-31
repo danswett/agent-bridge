@@ -151,6 +151,14 @@ param(
 
     [Parameter(Mandatory, ParameterSetName = 'JumpSetup')]
     [ValidatePattern('^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$')]
+    # The pattern alone admits 999.0.0.0/99; the setup disables the jump host's other SSH rules
+    # before adding this one, so a range Windows rejects there would leave sshd unreachable.
+    [ValidateScript({
+            $address, $prefix = $_.Split('/')
+            $ip = $null
+            [ipaddress]::TryParse($address, [ref] $ip) -and $ip.AddressFamily -eq 'InterNetwork' -and
+            ($address.Split('.') | ForEach-Object { [int] $_ -le 255 }) -notcontains $false -and [int] $prefix -le 32
+        })]
     [string] $JumpAllowedCidr,
 
     [Parameter(Mandatory, ParameterSetName = 'Deallocate')]
@@ -869,8 +877,9 @@ New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
 # A host key someone else planted is not one to vouch for, so check owners before taking them over.
 $hostKeys = @(Get-ChildItem $sshDir -File -Force | Where-Object { $_.Name -like 'ssh_host_*_key' })
 foreach ($hostKeyFile in $hostKeys) {
-    $owner = (Get-Acl $hostKeyFile.FullName).Owner
-    if ($owner -notin 'NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators') { throw "$($hostKeyFile.Name) is owned by $owner; refusing to trust it" }
+    $owner = (Get-Acl $hostKeyFile.FullName).GetOwner([Security.Principal.SecurityIdentifier]).Value
+    # By SID: the account names are localized.
+    if ($owner -notin 'S-1-5-18', 'S-1-5-32-544') { throw "$($hostKeyFile.Name) is owned by $owner; refusing to trust it" }
 }
 # Private host keys first, so no later step can expose them even briefly: sshd requires them to be
 # readable by SYSTEM and Administrators only.
@@ -893,14 +902,19 @@ if (-not $svc) { throw 'sshd is not installed: add the OpenSSH.Server capability
 $sshd = $svc.PathName.Trim('"')
 
 # Firewall first: whatever rule the installer added would allow 22 from anywhere. Only this
-# host's Hyper-V switch subnet, only on the interface and profile that subnet arrives on.
-Get-NetFirewallPortFilter -Protocol TCP | Where-Object { @($_.LocalPort) -contains '22' } | Get-NetFirewallRule |
-    Where-Object { $_.Name -ne 'Rehearsal-Jump-SSH-In' -and "$($_.Direction)" -eq 'Inbound' -and "$($_.Enabled)" -eq 'True' } |
-    Disable-NetFirewallRule
-$route = Find-NetRoute -RemoteIPAddress ($allowedRemote.Split('/')[0]) | Select-Object -First 1
+# host's Hyper-V switch subnet, only on the interface and profile that subnet arrives on. Work all
+# of that out before disabling anything, so a bad range or a missing route stops here with sshd
+# still reachable as it was.
+$cidrAddress, $cidrPrefix = $allowedRemote.Split('/')
+$parsed = $null
+if (-not [ipaddress]::TryParse($cidrAddress, [ref] $parsed) -or [int] $cidrPrefix -gt 32) { throw "$allowedRemote is not an IPv4 CIDR" }
+$route = Find-NetRoute -RemoteIPAddress $cidrAddress | Select-Object -First 1
 $alias = (Get-NetIPInterface -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4).InterfaceAlias
 $category = (Get-NetConnectionProfile -InterfaceAlias $alias).NetworkCategory
 $fwProfile = if ("$category" -eq 'DomainAuthenticated') { 'Domain' } else { "$category" }
+Get-NetFirewallPortFilter -Protocol TCP | Where-Object { @($_.LocalPort) -contains '22' } | Get-NetFirewallRule |
+    Where-Object { $_.Name -ne 'Rehearsal-Jump-SSH-In' -and "$($_.Direction)" -eq 'Inbound' -and "$($_.Enabled)" -eq 'True' } |
+    Disable-NetFirewallRule
 Get-NetFirewallRule -Name 'Rehearsal-Jump-SSH-In' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 New-NetFirewallRule -Name 'Rehearsal-Jump-SSH-In' -DisplayName 'Rehearsal: SSH jump from the Hyper-V host only' `
     -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22 -RemoteAddress $allowedRemote `
@@ -964,8 +978,11 @@ Set-Service sshd -StartupType Automatic
 Restart-Service sshd
 
 "firewall=$alias/$fwProfile from $allowedRemote"
-# Algorithm and key only, the form -JumpHostKey accepts; the file's trailing comment is dropped.
-"HOSTKEY=$(((Get-Content (Join-Path $sshDir 'ssh_host_ed25519_key.pub')).Trim() -split '\s+')[0..1] -join ' ')"
+# Algorithm and key only, the form -JumpHostKey accepts. Derived from the private key sshd actually
+# serves, not read from the .pub beside it, which nothing ties to that key.
+$derived = & (Join-Path (Split-Path $sshd) 'ssh-keygen.exe') -y -f (Join-Path $sshDir 'ssh_host_ed25519_key')
+if ($LASTEXITCODE -ne 0 -or "$derived" -notmatch '^ssh-ed25519 ') { throw 'could not derive the host public key from ssh_host_ed25519_key' }
+"HOSTKEY=$((("$derived").Trim() -split '\s+')[0..1] -join ' ')"
 '@
 
 function Expand-Guest([string] $Script) {
