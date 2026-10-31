@@ -302,6 +302,9 @@ public sealed partial class HaConnector
             lock (gate)
             {
                 armed.Rearm = true;
+                // Read first where it can be read: Home Assistant may have kept the selector and
+                // the choices, and an answer given on them since it came back is still an answer.
+                armed.ReadFirst = ServesAnswers && options.ConsumeAnswers;
                 dirty.Add(id);
             }
             log($"Home Assistant connector: {p.Node}'s question goes on screen again, which Home Assistant had lost (restarted?)");

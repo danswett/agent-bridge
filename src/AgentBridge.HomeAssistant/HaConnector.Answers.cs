@@ -62,6 +62,11 @@ public sealed partial class HaConnector
         // with fresh baselines, keeping what this question has been through (settled, attempts,
         // what was used), so an answer that may have reached the terminal is never typed again.
         public bool Rearm;
+        // Rearm for controls Home Assistant brought back by itself, values and all (a restart that
+        // lost only the reply box, say): the card is read once with the baselines it was armed
+        // with before new ones are taken, so an answer given on it in the meantime is not taken
+        // for the baseline and lost.
+        public bool ReadFirst;
     }
 
     // Get-CopilotDecisionChannelObservation: present (with a value), absent (determinately
@@ -154,7 +159,7 @@ public sealed partial class HaConnector
         var question = full.Question;
         if (question is not null && p.Armed?.Question.Id == question.Id)
         {
-            if (p.Armed.Rearm) { await RearmAsync(full, p, name, ct); }
+            if (p.Armed.Rearm && !p.Armed.ReadFirst) { await RearmAsync(full, p, name, ct); }
             return;
         }
         if (question is null)
@@ -428,6 +433,13 @@ public sealed partial class HaConnector
                 }
             }
         }
+        lock (gate)
+        {
+            foreach (var p in published.Values)
+            {
+                if (p.Armed is { ReadFirst: true }) { touched.TryAdd(p.Node, []); }
+            }
+        }
         // Every card, every few seconds, for a reply or an End session press: one made while the
         // watch was down reports nothing.
         var controlSweep = now >= nextReplySweep;
@@ -443,7 +455,22 @@ public sealed partial class HaConnector
             {
                 // End session first: it is answered whatever else the card holds.
                 if (ServesStops) { await StopPressAsync(e.Id, e.P, now, ct); }
+                var settled = e.P.Armed?.Settled;
                 await CardAsync(e.Id, e.P, seen, now, ct);
+                if (e.P.Armed is { ReadFirst: true } first)
+                {
+                    if (settled == false && first.Settled)
+                    {
+                        // Answered on the card as Home Assistant brought it back: nothing to put back.
+                        first.Rearm = false;
+                        first.ReadFirst = false;
+                    }
+                    else if (source.Get(e.Id) is { } full)
+                    {
+                        await RearmAsync(full, e.P, e.P.Name, ct);
+                        if (!first.Rearm) { first.ReadFirst = false; }
+                    }
+                }
             }
             catch
             {

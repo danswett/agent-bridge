@@ -373,6 +373,15 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     // A Home Assistant restart: the optimistic entities (no state topic) come back with no value.
     public void ForgetOptimistic() { lock (gate) { optimistic.Clear(); } }
 
+    // A restart that brings some of them back with their values and not these.
+    public void ForgetOptimistic(params string[] entityIds)
+    {
+        lock (gate)
+        {
+            foreach (var unique in Registry.Where(r => entityIds.Contains(r.Value, StringComparer.Ordinal)).Select(r => r.Key).ToList()) { optimistic.Remove(unique); }
+        }
+    }
+
     public Task<IReadOnlyList<string>> ListInputBooleansAsync(CancellationToken cancellationToken = default)
     {
         lock (gate)

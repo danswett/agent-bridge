@@ -227,7 +227,8 @@ With an answerer, a session's first publication is agent-ha-bridge's full set in
 (`Publish-CopilotMqttSession`): availability, the decision selector (`Idle`), the reply box,
 the reply payload sensor, status, activity, the twelve field slots (`Idle`, `Field <i>`) and
 Send; everything but stop. 900 ms later (`FieldPinDelay`, the daemon's wait for discovery) the
-controls are pinned to their ids. `HaDecision` is the port of `Set-CopilotMqttDecision`,
+controls are pinned to their ids, and the reply box is primed to `' '` as `Add-DaemonSession`
+primes it, so the card shows an empty field rather than `unknown`. `HaDecision` is the port of `Set-CopilotMqttDecision`,
 `Publish-CopilotMqttDecisionFields` and `Clear-CopilotMqttDecision`, and
 `Fixtures/ha-decisions.json` records the originals on ten questions (free text, approval, a
 long question, single choice, yes/no, text, a form, a twelve-slot multi-select, unsafe and
@@ -705,6 +706,12 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
   * **Reply box or selector reads `unknown`:** these have no state topic, so a Home Assistant
     restart brings them back with no value. The box gets `' '` again, and the question goes on
     screen again with fresh baselines. When there is no question, the selector is parked on Idle.
+    Home Assistant may bring the selector and the choices back with their values while the box
+    comes back empty, so the card looks answerable before the question is armed again. The card
+    is therefore read once with the baselines it was armed with before new ones are taken. An
+    answer given on it in the meantime is delivered rather than taken for the new baseline, and a
+    question answered that way is not put on screen again. A card whose entities were published
+    again from nothing is armed at once, since there is nothing on it to read.
   * In both cases the question keeps what it has been through: answered, its attempts, what was
     used. An answer that may have reached the terminal is never typed again because the card was
     put back (`An_answer_that_may_have_landed_is_not_given_again_once_the_card_is_put_back`). An

@@ -416,6 +416,52 @@ public sealed class UpkeepTests : IDisposable
         Assert.Single(answered);
     }
 
+    [Fact]
+    public async Task A_new_cards_reply_box_is_blank_from_the_start_and_its_question_is_not_armed_again_a_minute_later()
+    {
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 1);
+        Assert.Equal(HaDecision.ReplyBlank, (await ha.GetStateAsync(SessionEntities.Reply(NodeA)))!.State);
+
+        // Somebody choosing an answer over the first minutes keeps the choice.
+        ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
+        await Run(c, 150);
+        Assert.Equal("Wait for the fix", (await ha.GetStateAsync(SessionEntities.Field(NodeA, 1)))!.State);
+        Assert.Equal(0, Logged("goes on screen again"));
+        Assert.Equal(0, Logged("armed " + NodeA + " again"));
+    }
+
+    [Fact]
+    public async Task A_Send_pressed_on_the_card_Home_Assistant_brought_back_by_itself_is_read_before_the_question_is_armed_again()
+    {
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 90);
+
+        // A restart that keeps the selector and the choice but not the reply box. Once the box is
+        // put back, the card looks as it did, and an answer is given on it before the next pass,
+        // with the watch still down after the restart.
+        ha.ForgetOptimistic(SessionEntities.Reply(NodeA));
+        for (var i = 0; i < 30 && (await ha.GetStateAsync(SessionEntities.Reply(NodeA)))!.State != HaDecision.ReplyBlank; i++) { await Run(c, 1); }
+        Assert.Equal(HaDecision.ReplyBlank, (await ha.GetStateAsync(SessionEntities.Reply(NodeA)))!.State);
+        var rearmed = Logged("armed " + NodeA + " again");
+        ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
+        ha.Press(SessionEntities.Submit(NodeA));
+        await Run(c, 10);
+        var given = Assert.Single(answered);
+        Assert.Equal("wait", given.Fields!["release"].GetString());
+
+        // Answered there, it is not put on screen again over the answer, however the session moves
+        // on before the question goes.
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Working) with { Question = question });
+        await Run(c, 60);
+        Assert.Single(answered);
+        Assert.Equal(rearmed, Logged("armed " + NodeA + " again"));
+    }
+
     // An answer that may have reached the terminal is never typed again: not after a Home Assistant
     // restart lost the card's values, nor after its entities were lost and published again.
     [Theory]

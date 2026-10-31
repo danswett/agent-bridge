@@ -602,7 +602,13 @@ public sealed class LiveHomeAssistantTests : IDisposable
         // And it still answers, through the same ids the dashboard draws.
         await ha.CallServiceAsync("select", "select_option", new JsonObject { ["entity_id"] = SessionEntities.Field(node, 1), ["option"] = "Wait for the fix" });
         await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = SessionEntities.Submit(node) });
-        await Until(() => { lock (answered) { return answered.Count == 1; } }, "the answer never arrived");
+        try { await Until(() => { lock (answered) { return answered.Count == 1; } }, "the answer never arrived"); }
+        catch (Xunit.Sdk.XunitException)
+        {
+            string history;
+            lock (log) { history = string.Join("\n", log.TakeLast(30)); }
+            Assert.Fail($"the answer never arrived\n{history}");
+        }
         Assert.Equal("wait", answered[0].Fields!["release"].GetString());
         var after = (await ha.ListEntityRegistryAsync()).Select(e => e.EntityId).Where(e => e.Contains(node, StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList();
         Assert.Equal(before, after);

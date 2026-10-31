@@ -717,7 +717,12 @@ public sealed partial class HaConnector : IAsyncDisposable
             p.PublishedAt = now;
             p.Status = null;
             p.Activity = null;
-            if (p.Armed is { } armed) { armed.Rearm = true; }
+            // Entities made anew hold nothing to read: armed again at once.
+            if (p.Armed is { } armed)
+            {
+                armed.Rearm = true;
+                armed.ReadFirst = false;
+            }
             p.ArmedSlots = -1;
             p.Cleared = false;
         }
@@ -786,6 +791,11 @@ public sealed partial class HaConnector : IAsyncDisposable
             // (Publish-CopilotMqttSession forces them at once, after a moment to register).
             await Task.Delay(options.FieldPinDelay, time, ct);
             await PinNowAsync(SessionIds(node), now, ct);
+            // Add-DaemonSession primes the reply box blank, so the card shows an empty field rather
+            // than "unknown" before the box has ever been used. Left unknown, the box would also
+            // read as lost to a Home Assistant restart a minute later (SessionUpkeepAsync), and the
+            // question be armed again under somebody choosing an answer.
+            await ResetReplyBoxAsync(node, ct);
         }
         else
         {
