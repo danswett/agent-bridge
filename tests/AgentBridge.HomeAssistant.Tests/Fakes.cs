@@ -119,10 +119,15 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
 
     public Task<HaState?> GetStateAsync(string entityId, CancellationToken cancellationToken = default)
     {
+        lock (gate) { reads[entityId] = reads.GetValueOrDefault(entityId) + 1; }
         if (GetFailsFor?.Invoke(entityId) == true) { throw new HttpRequestException($"{entityId}: Home Assistant answered 502 Bad Gateway"); }
         if (Loading.Contains(entityId)) { return Task.FromResult<HaState?>(null); }
         lock (gate) { return Task.FromResult(States.TryGetValue(entityId, out var s) ? s : Derived(entityId)); }
     }
+
+    readonly Dictionary<string, int> reads = new(StringComparer.Ordinal);
+    // How many times an entity's state has been asked for.
+    public int ReadsOf(string entityId) { lock (gate) { return reads.GetValueOrDefault(entityId); } }
 
     // States Home Assistant keeps for optimistic MQTT entities (selects, buttons, text with no
     // state topic), by unique_id so a rename keeps them.

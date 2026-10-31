@@ -232,6 +232,45 @@ public sealed class UpkeepTests : IDisposable
     }
 
     [Fact]
+    public async Task A_rebuilt_sensor_Home_Assistant_does_not_take_back_is_waited_for_a_bounded_while_and_sent_no_beat_until_it_returns()
+    {
+        await using var c = Connector();
+        await Run(c, 5);
+        var (topic, _) = HaContract.OnlineConfig(Slug, Machine);
+        ha.Deaf.Add(OnlineUnique);
+        // Retracted for the rebuild, and not taken back when it is declared again.
+        ha.BeforePublish = t => { if (t == topic) { ha.Loading.Add(Online); } };
+
+        var readsBefore = 0;
+        var logBefore = 0;
+        for (var i = 0; i < 400 && Retractions(topic) == 0; i++)
+        {
+            readsBefore = ha.ReadsOf(Online);
+            logBefore = ha.Log.Count;
+            await Run(c, 1);
+        }
+        Assert.Equal(1, Retractions(topic));
+        ha.BeforePublish = null;
+        // The beat's own read, then one per registration attempt and no more.
+        Assert.Equal(1 + HaContract.RegisteredAttempts, ha.ReadsOf(Online) - readsBefore);
+        Assert.Equal(1, Logged("did not come back after the rebuild"));
+        // Declared again, and no beat after it: one that outruns discovery is dropped.
+        var pass = ha.Log.Skip(logBefore).ToList();
+        var redeclared = pass.FindLastIndex(p => p.Topic == topic && p.Payload.Length > 0);
+        Assert.True(redeclared >= 0, "the sensor was declared again");
+        Assert.DoesNotContain(pass.Skip(redeclared), p => p.Topic == HaContract.OnlineStateTopic(Slug));
+
+        // Home Assistant takes it back before the next beat: that beat goes, and it holds.
+        ha.Loading.Remove(Online);
+        var beatsBefore = ha.To(HaContract.OnlineStateTopic(Slug)).Count();
+        await Run(c, 60);
+        Assert.True(ha.To(HaContract.OnlineStateTopic(Slug)).Count() > beatsBefore, "the next beat was sent");
+        await Run(c, 600);
+        Assert.Equal(1, Retractions(topic));
+        Assert.Equal(0, Logged("publishing the machine again"));
+    }
+
+    [Fact]
     public async Task A_rebuild_that_does_not_hold_is_tried_three_times_then_left_alone_and_said_once()
     {
         await using var c = Connector();
