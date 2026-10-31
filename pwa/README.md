@@ -28,7 +28,7 @@ Larger files come next.
 | `js/main.js` | Boot and wiring: demo or live, sign-in, the views |
 | `js/identity.js` | This device's P-256 key, generated non-extractable and kept in IndexedDB; its device id |
 | `js/signin.js` | GitHub device flow through the relay; the stored account |
-| `js/relay.js` | One relay WebSocket: hello, key proof, presence, routed frames. A send on a dead socket throws |
+| `js/relay.js` | One relay WebSocket: hello, key proof, presence (with the account's offline machines, `known`), routed frames, `forget`. A send on a dead socket throws |
 | `js/connection.js` | The relay over time: reconnect with backoff, at once on `visibilitychange`/`pageshow`/`online`; stop on a refused sign-in or a takeover by another window |
 | `js/channels.js` | Noise_XX_P256 channels to hosts, as the initiator, with the peer's key checked against its id |
 | `js/noise-p256.js` | Vendored copy of `spikes/s2-noise-interop/web/noise-p256.js` |
@@ -48,9 +48,10 @@ Larger files come next.
 | `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
 | `js/usage.js` | Agent usage: the tolerant reader, merging every machine's reports into one row per allowance (a reading beats a failure, then the freshest wins), and the card's words: colours at 75% and 90%, pace, resets, ages |
 | `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`) and usage: the viewed machine's on its channel (`usage.subscribe`), every other online machine's by a short channel (`hello`, `usage.get`) once a minute while the app is in front |
+| `js/forget.js` | Forgetting an offline machine ([roster.md](../docs/protocol/roster.md)): two presses, the first arming for 5 seconds; an arm goes with a machine that comes back; the relay's refusals in words |
 | `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
-| `js/ui/*` | Session cards, the question and its answer form, the reply box, End session, the Start a session panel (agent-ha-bridge's launch card, without its 255-character prompt), machines list, the usage panel, fold state, relative times |
+| `js/ui/*` | Session cards, the question and its answer form, the reply box, End session, the Start a session panel (agent-ha-bridge's launch card, without its 255-character prompt), machines list (offline machines after the online ones, with when each was last seen and Forget), the usage panel, fold state, relative times |
 | `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering, replying, ending and launching sessions and usage included |
 | `tools/build-site.mjs` | Assembles the site for Pages: `config.js` with the relay, CSP in the page, and `sw.js` stamped with a hash of everything served, so any change reaches an open app as an update (the app then offers Reload) |
 

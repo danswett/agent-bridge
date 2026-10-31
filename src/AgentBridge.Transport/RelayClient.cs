@@ -8,6 +8,10 @@ namespace AgentBridge.Transport;
 
 public sealed record PresenceEntry(string Id, string Name, string Kind, DateTimeOffset Since);
 
+// One of the account's machines that is not connected, as the relay's roster remembers it
+// (docs/protocol/roster.md).
+public sealed record KnownMachine(string Id, string Name, string Kind, DateTimeOffset LastSeen);
+
 public sealed record PushResult(int Status, string? Error);
 
 public sealed class RelayRefusedException(WebSocketCloseStatus? status, string? reason)
@@ -43,6 +47,9 @@ public sealed class RelayClient : IAsyncDisposable
     public long BlobMaxBytes { get; private set; }
     public string Login { get; private set; } = "";
     public IReadOnlyList<PresenceEntry> Presence { get; private set; } = [];
+    // The account's machines that are offline, most recently seen first; null while the relay
+    // keeps no roster (an older relay, or one with it off), so nothing can be forgotten either.
+    public IReadOnlyList<KnownMachine>? Known { get; private set; }
 
     // Called in order, one frame at a time, so frames from one sender are handled in the
     // order they were sent, which Noise transport messages require. Set once.
@@ -61,6 +68,7 @@ public sealed class RelayClient : IAsyncDisposable
     readonly ConcurrentDictionary<long, TaskCompletionSource<PushResult>> pushes = new();
     long nextPush;
     readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> blobRequests = new();
+    readonly ConcurrentDictionary<long, TaskCompletionSource<string?>> forgets = new();
 
     // Frames held for a handler that is not attached yet.
     internal int QueuedFrames => inbound.Reader.Count;
@@ -116,6 +124,23 @@ public sealed class RelayClient : IAsyncDisposable
             return r;
         }
         finally { blobRequests.TryRemove(id, out _); }
+    }
+
+    // Asks the relay to forget one of the account's machines that is offline: null when it has,
+    // or the relay's reason (not-allowed, online, not-found, rate-limited, disabled). Only a
+    // person's device (app, pwa, phone) may; the relay refuses any other.
+    public async Task<string?> ForgetAsync(string machine, CancellationToken ct = default)
+    {
+        if (Known is null) { return "unsupported"; }
+        var id = Interlocked.Increment(ref nextPush);
+        var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        forgets[id] = tcs;
+        try
+        {
+            await SendTextAsync(new { t = "forget", id, machine }, ct);
+            return await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+        }
+        finally { forgets.TryRemove(id, out _); }
     }
 
     // Ends, never faults, when the connection does; the caller then reconnects.
@@ -306,6 +331,12 @@ public sealed class RelayClient : IAsyncDisposable
                         case "blob-result":
                             if (blobRequests.TryRemove(j.GetProperty("id").GetInt64(), out var b)) { b.TrySetResult(j.Clone()); }
                             break;
+                        case "forget-result":
+                            if (forgets.TryRemove(j.GetProperty("id").GetInt64(), out var f))
+                            {
+                                f.TrySetResult(j.TryGetProperty("error", out var why) && why.ValueKind == JsonValueKind.String ? why.GetString() : null);
+                            }
+                            break;
                     }
                 }
                 else { Enqueue(data); }
@@ -329,6 +360,7 @@ public sealed class RelayClient : IAsyncDisposable
         handler.TrySetResult((_, _) => Task.CompletedTask);
         foreach (var p in pushes.Values) { p.TrySetException(new IOException("relay connection ended")); }
         foreach (var b in blobRequests.Values) { b.TrySetException(new IOException("relay connection ended")); }
+        foreach (var f in forgets.Values) { f.TrySetException(new IOException("relay connection ended")); }
         if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {
             try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, default); }
@@ -341,6 +373,11 @@ public sealed class RelayClient : IAsyncDisposable
         Presence = [.. j.GetProperty("devices").EnumerateArray().Select(d => new PresenceEntry(
             d.GetProperty("id").GetString()!, d.GetProperty("name").GetString()!,
             d.GetProperty("kind").GetString()!, d.GetProperty("since").GetDateTimeOffset()))];
+        Known = j.TryGetProperty("known", out var known) && known.ValueKind == JsonValueKind.Array
+            ? [.. known.EnumerateArray().Select(d => new KnownMachine(
+                d.GetProperty("id").GetString()!, d.GetProperty("name").GetString()!,
+                d.GetProperty("kind").GetString()!, d.GetProperty("lastSeen").GetDateTimeOffset()))]
+            : null;
         PresenceChanged?.Invoke(Presence);
     }
 

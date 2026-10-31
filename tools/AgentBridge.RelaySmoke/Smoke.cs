@@ -140,8 +140,9 @@ public sealed class Smoke(Uri relay, TextWriter output)
         {
             Handler = (_, op, data) => Task.FromResult<object?>(op == "echo" ? data : null),
         };
-        await using var app = await RelayClient.ConnectAsync(relay, token, appKey, "smoke app", "test", Timeout());
-        var appHub = new ChannelHub(app, appKey, "smoke app", "test");
+        // An app, a person's kind, so it may forget the host once it has gone (the roster, below).
+        await using var app = await RelayClient.ConnectAsync(relay, token, appKey, "smoke app", "app", Timeout());
+        var appHub = new ChannelHub(app, appKey, "smoke app", "app");
         await app.WaitForPeerAsync(p => p.Id == host.DeviceId, StepTimeout);
 
         var sw = Stopwatch.StartNew();
@@ -170,6 +171,23 @@ public sealed class Smoke(Uri relay, TextWriter output)
         while (app.Presence.Any(p => p.Id == host.DeviceId))
         {
             Expect(deadline.Elapsed < StepTimeout, "the host never left presence");
+            await Task.Delay(50);
+        }
+
+        // The roster (docs/protocol/roster.md): the host that left is listed as offline, with when
+        // it was last seen, and the app forgets it, which leaves the throwaway account empty.
+        Expect(app.Known is not null, "presence carries no roster (known)");
+        deadline.Restart();
+        while (app.Known?.Any(k => k.Id == host.DeviceId) != true)
+        {
+            Expect(deadline.Elapsed < StepTimeout, "the host that left was never listed as offline");
+            await Task.Delay(50);
+        }
+        Expect(await app.ForgetAsync(host.DeviceId, Timeout()) is null, "the app could not forget the host that left");
+        deadline.Restart();
+        while (app.Known?.Any(k => k.Id == host.DeviceId) != false)
+        {
+            Expect(deadline.Elapsed < StepTimeout, "the forgotten host is still listed");
             await Task.Delay(50);
         }
     }

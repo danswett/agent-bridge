@@ -61,6 +61,11 @@ public interface IFleetLink : IAsyncDisposable
     // command this app signs for one of them. None in a stand-in.
     Task<IReadOnlyList<TransferSource>> TransferSourcesAsync(string target, CancellationToken ct) => Task.FromResult<IReadOnlyList<TransferSource>>([]);
     SignedCommand? SignTransfer(TransferSource from, string session, string to) => null;
+    // The account's machines that are offline, as the relay's roster remembers them; null while
+    // the relay keeps none (an older relay), so none can be forgotten either.
+    IReadOnlyList<KnownMachine>? Offline => null;
+    // Asks the relay to forget one of them: null when it has, or why not (OfflineMachineViewModel.Explain).
+    Task<string?> ForgetAsync(string machineId, CancellationToken ct) => Task.FromResult<string?>("unsupported");
 }
 
 // The account's other machines, kept in step with the relay's presence: a machine for each
@@ -74,16 +79,18 @@ public sealed class Fleet : IAsyncDisposable
     readonly MainViewModel main;
     readonly IUiDispatcher ui;
     readonly Func<FleetHost, Machine> create;
+    readonly TimeProvider time;
     readonly Dictionary<string, Machine> machines = new(StringComparer.Ordinal);
     bool disposed;
     int account;
 
-    public Fleet(IFleetLink link, MainViewModel main, IUiDispatcher ui, Func<FleetHost, Machine> create)
+    public Fleet(IFleetLink link, MainViewModel main, IUiDispatcher ui, Func<FleetHost, Machine> create, TimeProvider? time = null)
     {
         this.link = link;
         this.main = main;
         this.ui = ui;
         this.create = create;
+        this.time = time ?? TimeProvider.System;
         link.Changed += () => ui.Post(Sync);
         main.LocalChanged += Sync;
         main.AttachFleet(this);
@@ -123,6 +130,7 @@ public sealed class Fleet : IAsyncDisposable
     public void Start() => link.Start();
 
     public Task<IReadOnlyList<TransferSource>> TransferSourcesAsync(string target, CancellationToken ct) => link.TransferSourcesAsync(target, ct);
+    public Task<string?> ForgetAsync(string machineId, CancellationToken ct) => link.ForgetAsync(machineId, ct);
     public SignedCommand? SignTransfer(TransferSource from, string session, string to) => link.SignTransfer(from, session, to);
 
     // This machine's own host reached through the relay, as a device reaches it, for what the pipe
@@ -176,6 +184,9 @@ public sealed class Fleet : IAsyncDisposable
         var now = link.Account;
         var state = link.State;
         var present = link.Hosts;
+        // Inside the same reading: one taken after the recheck could be a dropped link's null
+        // with the state still read as Connected, and clear the list it should keep.
+        var offline = link.Offline;
         var hosts = present.Where(h => h.Id != me).ToDictionary(h => h.Id, StringComparer.Ordinal);
         if (link.Account != now || link.State != state) { return; }
         var presence = string.Join(',', present.Select(h => h.Id).Order(StringComparer.Ordinal));
@@ -197,6 +208,8 @@ public sealed class Fleet : IAsyncDisposable
         account = now;
         if (switched) { DropLoopback(); AccountChanged?.Invoke(); }
         if (state == FleetState.Connecting && !switched) { return; }
+        // This machine's own host is never listed: the banner says when it is not running.
+        main.SetOffline(state == FleetState.Connected ? [.. (offline ?? []).Where(k => k.Id != me && !hosts.ContainsKey(k.Id))] : [], ForgetAsync, time, fresh: switched);
         foreach (var id in machines.Keys.Where(id => !hosts.ContainsKey(id)).ToList())
         {
             machines.Remove(id, out var gone);
@@ -298,6 +311,12 @@ public sealed class RelayFleetLink : IFleetLink
     public IReadOnlyList<FleetHost> Hosts => current is { } c
         ? [.. c.Relay.Presence.Where(p => p.Kind == "host" && p.Id != c.Relay.DeviceId).Select(p => new FleetHost(p.Id, p.Name))]
         : [];
+
+    public IReadOnlyList<KnownMachine>? Offline => current?.Relay.Known;
+
+    // As a person's device (kind "app"), which the relay requires of a forget.
+    public async Task<string?> ForgetAsync(string machineId, CancellationToken ct) =>
+        current is { } c ? await c.Relay.ForgetAsync(machineId, ct) : "unreachable";
 
     public void Start() => loop = Task.Run(() => RunAsync(stop.Token));
 

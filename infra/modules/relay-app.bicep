@@ -42,6 +42,9 @@ param domainState string = 'none'
 @description('Create this app\'s blob store (app.blobStorageName) and point the relay at it. Production\'s waits for the cutover flag, like the app itself, so a staging deploy never touches it.')
 param deployBlobStore bool = false
 
+@description('Create this app\'s machine roster store (app.rosterStorageName) and point the relay at it. Production\'s waits for the cutover flag, as the blob store\'s does.')
+param deployRosterStore bool = false
+
 @description('Tags for every resource.')
 param tags object
 
@@ -58,6 +61,8 @@ var roles = {
 var customDomain = app.?customDomain ?? ''
 var blobStorageName = app.?blobStorageName ?? ''
 var blobsOn = deployBlobStore && !empty(blobStorageName)
+var rosterStorageName = app.?rosterStorageName ?? ''
+var rosterOn = deployRosterStore && !empty(rosterStorageName)
 var domainOn = !empty(customDomain) && domainState != 'none'
 var environmentName = last(split(environmentId, '/'))
 var certificateName = 'mc-${replace(customDomain, '.', '-')}'
@@ -192,6 +197,27 @@ var blobEnv = blobsOn
     ]
   : []
 
+// Before the app too, for the same reason.
+module rosterStore 'roster-store.bicep' = if (rosterOn) {
+  name: '${app.name}-roster'
+  params: {
+    location: location
+    name: rosterStorageName
+    relayPrincipalId: identity.properties.principalId
+    tags: tags
+  }
+}
+
+// Ids and a URL, no secret, as for the blob store (Roster.cs).
+var rosterEnv = rosterOn
+  ? [
+      { name: 'Relay__Roster__Backend', value: 'azure' }
+      { name: 'Relay__Roster__AccountUrl', value: rosterStore!.outputs.accountUrl }
+      { name: 'Relay__Roster__Container', value: rosterStore!.outputs.container }
+      { name: 'Relay__Roster__ManagedIdentityClientId', value: identity.properties.clientId }
+    ]
+  : []
+
 resource relay 'Microsoft.App/containerApps@2025-01-01' = if (deployApp) {
   name: app.name
   location: location
@@ -248,7 +274,8 @@ resource relay 'Microsoft.App/containerApps@2025-01-01' = if (deployApp) {
             ],
             app.?githubClientSecret == true ? [{ name: 'Relay__GitHubClientSecret', secretRef: 'github-client-secret' }] : [],
             originEnv,
-            blobEnv
+            blobEnv,
+            rosterEnv
           )
           probes: [
             {
@@ -301,3 +328,4 @@ output customDomain string = customDomain
 output identityPrincipalId string = identity.properties.principalId
 output vaultName string = vault.name
 output blobAccountUrl string = blobsOn ? blobStore!.outputs.accountUrl : ''
+output rosterAccountUrl string = rosterOn ? rosterStore!.outputs.accountUrl : ''

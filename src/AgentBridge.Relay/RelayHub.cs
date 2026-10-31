@@ -8,9 +8,12 @@ namespace AgentBridge.Relay;
 
 // Routes opaque frames between the devices of one account. It sees routing ids, sizes and
 // timing, and nothing a session says: payloads are Noise ciphertext end to end.
-public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, BlobService blobs, RelayMetrics metrics, ILogger<RelayHub> log)
+public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, BlobService blobs, MachineRoster roster, RelayMetrics metrics, ILogger<RelayHub> log)
 {
     static readonly HashSet<string> Kinds = ["host", "app", "pwa", "phone", "test"];
+    // The kinds a person uses. Only these may forget a machine: never a host, which is where an
+    // agent acts, nor a test device, nor any kind added later until it is put here.
+    static readonly HashSet<string> PersonKinds = ["app", "pwa", "phone"];
     readonly ConcurrentDictionary<string, ConcurrentDictionary<string, Connection>> accounts = new();
 
     public int Online => accounts.Values.Sum(a => a.Count);
@@ -19,11 +22,15 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     // so a device told to reconnect (1012) lands on a replica that is staying, not this one.
     public bool Draining { get; private set; }
 
+    // The roster's last write comes after this, when the app stops its writer (RosterWriter).
     public Task DrainAsync()
     {
         Draining = true;
         return CloseAllAsync();
     }
+
+    // The roster read an account's stored list late (MachineRoster.Changed): tell its devices.
+    public Task RosterChangedAsync(string accountId) => BroadcastPresenceAsync(accountId);
 
     // On shutdown, tell every device to reconnect now. A rolling deploy otherwise leaves old
     // sockets on the draining replica for up to its drain timeout (about 90 s observed on
@@ -100,6 +107,8 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             return;
         }
         if (replaced != null) { await replaced.CloseAsync(CloseCodes.Replaced, "replaced"); }
+        // A host is recorded as itself: the id it proved and the name it gave, nothing a message says.
+        await roster.ConnectedAsync(conn.Account.Id, conn.DeviceId, conn.Name, conn.Kind);
 
         metrics.Connected(conn.Kind);
         log.LogInformation("connect {Conn} {Kind}; {Count} online in account", conn.Tag, conn.Kind, devices.Count);
@@ -115,6 +124,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         {
             // Only remove this connection: a replacement may already hold the slot.
             lock (devices) { ((ICollection<KeyValuePair<string, Connection>>)devices).Remove(new(conn.DeviceId, conn)); }
+            roster.Disconnected(conn.Account.Id, conn.DeviceId, conn.Kind);
             await conn.CloseAsync((int)WebSocketCloseStatus.NormalClosure, "");
             metrics.Disconnected(end);
             log.LogInformation("disconnect {Conn} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}",
@@ -192,6 +202,10 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                     var message = m.Clone();
                     _ = Task.Run(async () => await c.SendJsonAsync(await blobs.HandleAsync(c.Account, c.DeviceId, kind, message)));
                 }
+                else if (m.TryGetProperty("t", out var ft) && ft.GetString() == "forget")
+                {
+                    await ForgetAsync(conn, devices, m);
+                }
                 continue;
             }
             if (type != WebSocketMessageType.Binary) { continue; }
@@ -227,6 +241,23 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         return "closed";
     }
 
+    // A person's device forgetting one of the account's machines that is gone (docs/protocol/roster.md).
+    async Task ForgetAsync(Connection conn, ConcurrentDictionary<string, Connection> devices, JsonElement m)
+    {
+        var id = m.TryGetProperty("id", out var i) && i.TryGetInt64(out var n) ? n : 0;
+        var machine = m.TryGetProperty("machine", out var mm) && mm.ValueKind == JsonValueKind.String ? mm.GetString() : null;
+        string? error;
+        if (!PersonKinds.Contains(conn.Kind))
+        {
+            metrics.Roster("forget", "not-allowed");
+            error = "not-allowed";
+        }
+        else { error = roster.Forget(conn.Account.Id, machine, devices.ContainsKey); }
+        log.LogInformation("forget {Conn} {Kind}: {Outcome}", conn.Tag, conn.Kind, error ?? "ok");
+        await conn.SendJsonAsync(new { t = "forget-result", id, machine = Wire.IsDeviceId(machine) ? machine!.ToLowerInvariant() : null, error });
+        if (error is null) { await BroadcastPresenceAsync(conn.Account.Id); }
+    }
+
     bool WithinRate(Connection c)
     {
         var now = Environment.TickCount64;
@@ -256,7 +287,11 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     {
         if (!accounts.TryGetValue(accountId, out var devices)) { return; }
         var list = devices.Values.Select(c => new { id = c.DeviceId, name = c.Name, kind = c.Kind, since = c.Since }).ToArray();
-        var message = new { t = "presence", devices = list };
+        // known: the account's machines that are not here, with when each was last seen. Only
+        // with a roster; older clients read devices alone and ignore it.
+        object message = roster.Known(accountId, devices.ContainsKey) is { } known
+            ? new { t = "presence", devices = list, known = known.Select(k => new { id = k.Id, name = k.Name, kind = k.Kind, lastSeen = k.LastSeen }).ToArray() }
+            : new { t = "presence", devices = list };
         await Task.WhenAll(devices.Values.Select(c => c.SendJsonAsync(message)));
     }
 

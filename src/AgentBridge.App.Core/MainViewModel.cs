@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 
 namespace AgentBridge.App.Core;
 
@@ -117,6 +118,28 @@ public sealed class MainViewModel : Observable
         }
     }
     public bool IsHeld => HeldWhy is not null;
+
+    // The account's machines that are offline (the relay's roster), each with a two-press Forget.
+    public ObservableCollection<OfflineMachineViewModel> OfflineMachines { get; } = [];
+    public bool ShowOfflineMachines => OfflineMachines.Count > 0;
+
+    // On the UI thread, from the fleet: entries for machines still offline are kept (an arm with
+    // them), a machine no longer listed goes, and a new one is added. fresh: the list is another
+    // account's (or relay's), so nothing is kept, an arm least of all.
+    internal void SetOffline(IReadOnlyList<KnownMachine> known, Func<string, CancellationToken, Task<string?>> forget, TimeProvider time, bool fresh = false)
+    {
+        if (fresh) { OfflineMachines.Clear(); }
+        var now = known.ToDictionary(k => k.Id, StringComparer.Ordinal);
+        foreach (var gone in OfflineMachines.Where(o => !now.ContainsKey(o.Id)).ToList()) { OfflineMachines.Remove(gone); }
+        for (var i = 0; i < known.Count; i++)
+        {
+            var at = OfflineMachines.ToList().FindIndex(o => o.Id == known[i].Id);
+            if (at < 0) { OfflineMachines.Insert(i, new OfflineMachineViewModel(known[i], forget, time)); continue; }
+            OfflineMachines[at].Update(known[i]);
+            if (at != i) { OfflineMachines.Move(at, i); }
+        }
+        Raise(nameof(ShowOfflineMachines));
+    }
 
     // What the Sessions page says about the account's other machines, when there is something.
     public string? FleetNote => fleet?.Note;
@@ -385,6 +408,7 @@ public sealed class MainViewModel : Observable
     public void Tick()
     {
         foreach (var m in machines) { m.Toasts?.Tick(); }
+        foreach (var o in OfflineMachines) { o.Tick(); }
         if (++ticks % 5 == 0) { foreach (var c in byId.Values) { c.RefreshTimes(); } }
         if (ticks % 30 == 0) { Usage.Refresh(); }
     }

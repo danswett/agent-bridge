@@ -44,6 +44,10 @@ public sealed class RelayOptions
     // The blob store for files over 256 KiB (design §4.6; Blobs.cs). Off unless configured.
     public BlobOptions Blobs { get; set; } = new();
 
+    // The account's machines, online or not (Roster.cs, docs/protocol/roster.md). In memory
+    // unless a store is configured.
+    public RosterOptions Roster { get; set; } = new();
+
     // Test hooks. Tap observes every forwarded payload; Route lets a test play a hostile
     // relay that redirects or forges routing.
     public Action<string, string, byte[]>? Tap { get; set; }

@@ -431,6 +431,18 @@ public sealed class DemoFleetLink(DemoHost remote) : IFleetLink
     public IReadOnlyList<FleetHost> Hosts => State == FleetState.Connected ? [new FleetHost(remote.MachineId, remote.MachineName)] : [];
     public event Action? Changed;
 
+    // A machine the account has had that is offline, as the relay's roster lists one; Forget
+    // takes it off, as the relay would.
+    volatile IReadOnlyList<KnownMachine> offline = [new KnownMachine("d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f", "Travel laptop", "host", DateTimeOffset.UtcNow.AddDays(-3))];
+    public IReadOnlyList<KnownMachine>? Offline => State == FleetState.Connected ? offline : null;
+
+    public Task<string?> ForgetAsync(string machineId, CancellationToken ct)
+    {
+        offline = [.. offline.Where(m => m.Id != machineId)];
+        Changed?.Invoke();
+        return Task.FromResult<string?>(null);
+    }
+
     public void Start()
     {
         State = FleetState.Connected;

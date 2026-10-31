@@ -40,7 +40,7 @@ public sealed class FleetTests : IAsyncLifetime
         link.Endpoints["remote-id"] = remoteHost.Endpoint;
         local = localHost.Connect(ui);
         main = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel(clock));
-        fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100) }));
+        fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100) }), clock);
         return Task.CompletedTask;
     }
 
@@ -441,9 +441,212 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal("rate limited", Assert.Single(UsageMerge.Merge([new UsageReport([failure])]).Agents).Error);
     }
 
+    OfflineMachineViewModel[] Offline()
+    {
+        OfflineMachineViewModel[] now = [];
+        ui.Post(() => now = [.. main.OfflineMachines]);
+        return now;
+    }
+
+    static KnownMachine Gone(string id, string name, int minutesAgo) => new(id, name, "host", Make.T0.AddMinutes(-minutesAgo));
+
+    [Fact]
+    public async Task The_accounts_offline_machines_are_listed_most_recent_first_with_when_each_was_last_seen_but_never_this_machines_own_or_one_online()
+    {
+        await BothMachinesAsync();
+
+        link.Known = [Gone("laptop-id", "Travel laptop", 5), Gone("host-id", "Test PC", 1), Gone("remote-id", "Build server", 2), Gone("old-id", "Old desktop", 3 * 24 * 60)];
+        link.Raise();
+
+        await Wait.UntilAsync(() => Offline().Length == 2, "the offline machines");
+        Assert.Equal(["Travel laptop", "Old desktop"], Offline().Select(o => o.Name));
+        Assert.Equal(["Offline \u00b7 last seen 5m ago", "Offline \u00b7 last seen 3d ago"], Offline().Select(o => o.LastSeenText));
+        Assert.True(main.ShowOfflineMachines);
+        // Not machines with cards: nothing is reachable there.
+        Assert.Equal(2, main.AllMachines.Count);
+    }
+
+    [Fact]
+    public async Task Forget_takes_two_presses_and_asks_the_relay_for_that_machine_alone()
+    {
+        await BothMachinesAsync();
+        link.Known = [Gone("laptop-id", "Travel laptop", 5), Gone("old-id", "Old desktop", 60)];
+        link.Raise();
+        await Wait.UntilAsync(() => Offline().Length == 2, "the offline machines");
+        var laptop = Offline()[0];
+
+        await laptop.PressAsync();
+        Assert.True(laptop.Armed);
+        Assert.Equal("Press again to forget", laptop.ForgetText);
+        Assert.Empty(link.Forgotten);
+
+        // An arm lapses after five seconds, and the next press arms again rather than forgetting.
+        clock.Advance(TimeSpan.FromSeconds(OfflineMachineViewModel.ConfirmSeconds));
+        ui.Post(main.Tick);
+        Assert.False(laptop.Armed);
+        await laptop.PressAsync();
+        Assert.Empty(link.Forgotten);
+        // Even when the tick that would lapse it has not come yet.
+        clock.Advance(TimeSpan.FromSeconds(OfflineMachineViewModel.ConfirmSeconds));
+        await laptop.PressAsync();
+        Assert.Empty(link.Forgotten);
+        Assert.True(laptop.Armed);
+
+        await laptop.PressAsync();
+
+        Assert.Equal(["laptop-id"], link.Forgotten);
+        await Wait.UntilAsync(() => Offline().Select(o => o.Name).SequenceEqual(["Old desktop"]), "the forgotten machine to go");
+        Assert.False(Offline()[0].Armed);
+    }
+
+    [Fact]
+    public async Task A_refused_forget_says_why_and_keeps_the_machine()
+    {
+        await BothMachinesAsync();
+        link.Known = [Gone("laptop-id", "Travel laptop", 5)];
+        link.Refusal = "online";
+        link.Raise();
+        await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
+        var laptop = Offline()[0];
+
+        await laptop.PressAsync();
+        await laptop.PressAsync();
+
+        Assert.Equal("It is back online, so it was not forgotten.", laptop.Error);
+        Assert.Single(Offline());
+        Assert.False(laptop.Armed);
+    }
+
+    [Fact]
+    public async Task A_forget_whose_connection_drops_mid_send_ends_and_says_the_relay_did_not_answer()
+    {
+        await BothMachinesAsync();
+        link.Known = [Gone("laptop-id", "Travel laptop", 5)];
+        link.Throw = new System.Net.WebSockets.WebSocketException("the socket dropped");
+        link.Raise();
+        await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
+        var laptop = Offline()[0];
+
+        await laptop.PressAsync();
+        await laptop.PressAsync();
+
+        Assert.False(laptop.Busy);
+        Assert.True(laptop.CanForget);
+        Assert.Equal("The relay did not answer. Try again when connected.", laptop.Error);
+    }
+
+    [Fact]
+    public async Task A_machine_that_comes_back_takes_its_arm_with_it_and_is_not_armed_when_it_goes_again()
+    {
+        await BothMachinesAsync();
+        link.Known = [Gone("laptop-id", "Travel laptop", 5)];
+        link.Raise();
+        await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
+        await Offline()[0].PressAsync();
+        Assert.True(Offline()[0].Armed);
+
+        // Back: the relay no longer lists it as offline, and it is online.
+        link.Known = [];
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"), ("laptop-id", "Travel laptop"));
+        await Wait.UntilAsync(() => Offline().Length == 0, "the machine to leave the offline list");
+
+        link.Known = [Gone("laptop-id", "Travel laptop", 0)];
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        await Wait.UntilAsync(() => Offline().Length == 1, "the machine offline again");
+        Assert.False(Offline()[0].Armed);
+        Assert.Empty(link.Forgotten);
+    }
+
+    [Fact]
+    public async Task An_arm_goes_when_the_machine_was_seen_again_or_the_list_is_another_accounts()
+    {
+        await BothMachinesAsync();
+        link.Known = [Gone("laptop-id", "Travel laptop", 5)];
+        link.Raise();
+        await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
+        await Offline()[0].PressAsync();
+
+        // Back and gone again before the app looked: only its last-seen time says so.
+        link.Known = [Gone("laptop-id", "Travel laptop", 0)];
+        link.Raise();
+        await Wait.UntilAsync(() => !Offline()[0].Armed, "the arm to go");
+        await Offline()[0].PressAsync();
+        Assert.True(Offline()[0].Armed);
+        Assert.Empty(link.Forgotten);
+
+        // Another account, seen first already connected, with a machine of the same id.
+        link.Switch(announce: false);
+        link.Known = [Gone("laptop-id", "Travel laptop", 0)];
+        link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        await Wait.UntilAsync(() => Offline().Length == 1 && !Offline()[0].Armed, "a new entry, not armed");
+        await Offline()[0].PressAsync();
+        Assert.Empty(link.Forgotten);
+    }
+
+    [Fact]
+    public async Task Offline_machines_stay_while_the_relay_drops_for_a_moment_and_go_with_the_account_or_a_relay_without_a_roster()
+    {
+        await BothMachinesAsync();
+        link.Known = [Gone("laptop-id", "Travel laptop", 5)];
+        link.Raise();
+        await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
+
+        link.Set(FleetState.Connecting);
+        await Task.Delay(200);
+        Assert.Single(Offline());
+
+        // A drop between reading the state and reading the list is the same.
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
+        link.BeforeOfflineRead = () => link.Quietly(FleetState.Connecting, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        link.Raise();
+        await Task.Delay(200);
+        Assert.Single(Offline());
+
+        // An older relay keeps no roster: nothing listed, and nothing to forget.
+        link.Known = null;
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        await Wait.UntilAsync(() => Offline().Length == 0, "no offline machines");
+        Assert.False(main.ShowOfflineMachines);
+
+        link.Known = [Gone("laptop-id", "Travel laptop", 5)];
+        link.Raise();
+        await Wait.UntilAsync(() => Offline().Length == 1, "the offline machine");
+        link.Switch();
+        await Wait.UntilAsync(() => Offline().Length == 0, "the other account's offline machines to go");
+    }
+
     // The relay's presence as the test says, and channels to the fake hosts on their pipes.
     internal sealed class FakeFleetLink : IFleetLink
     {
+        // The relay's roster: offline machines, null for a relay without one.
+        public IReadOnlyList<KnownMachine>? Known { get; set; }
+        // Runs once, as the next read of the offline machines starts: a drop just before it.
+        public Action? BeforeOfflineRead { get; set; }
+        public IReadOnlyList<KnownMachine>? Offline
+        {
+            get
+            {
+                var then = BeforeOfflineRead;
+                BeforeOfflineRead = null;
+                then?.Invoke();
+                return State == FleetState.Connected ? Known : null;
+            }
+        }
+        public string? Refusal { get; set; }
+        public Exception? Throw { get; set; }
+        public List<string> Forgotten { get; } = [];
+
+        public Task<string?> ForgetAsync(string machineId, CancellationToken ct)
+        {
+            if (Throw is { } e) { return Task.FromException<string?>(e); }
+            if (Refusal is { } why) { return Task.FromResult<string?>(why); }
+            Forgotten.Add(machineId);
+            Known = [.. (Known ?? []).Where(k => k.Id != machineId)];
+            Changed?.Invoke();
+            return Task.FromResult<string?>(null);
+        }
+
         public Dictionary<string, LocalEndpoint> Endpoints { get; } = [];
         public FleetState State { get; private set; } = FleetState.Connecting;
         public string? Detail => null;
@@ -555,6 +758,25 @@ public sealed class RelayFleetLinkTests
         await Wait.UntilAsync(() => host.Relay.Presence.Any(p => p.Id == link.DeviceId), "the app in the host's presence", Patience);
         Assert.Equal("app", host.Relay.Presence.Single(p => p.Id == link.DeviceId).Kind);
         Assert.Equal(1, Volatile.Read(ref asked));
+    }
+
+    [Fact]
+    public async Task The_app_lists_a_machine_that_has_gone_offline_and_as_a_persons_device_can_forget_it()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(7, "octo");
+        var host = await relay.ConnectAsync(token, "Build server", "host");
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), P256KeyPair.Generate(), "Test PC · Agent Bridge app");
+        link.Start();
+        await Wait.UntilAsync(() => link.State == FleetState.Connected && link.Hosts.Any(h => h.Id == host.Id), "the other machine in presence", Patience);
+        Assert.Empty(link.Offline!);
+
+        await host.DisposeAsync();
+
+        await Wait.UntilAsync(() => link.Offline?.Any(k => k.Id == host.Id) == true, "the machine listed as offline", Patience);
+        Assert.Equal("Build server", link.Offline!.Single().Name);
+        Assert.Null(await link.ForgetAsync(host.Id, default));
+        await Wait.UntilAsync(() => link.Offline is { Count: 0 }, "the forgotten machine to go", Patience);
     }
 
     [Fact]

@@ -30,11 +30,12 @@ import { StopService } from './stop-service.js';
 import { LaunchService } from './launch-service.js';
 import { LAUNCH } from './launch.js';
 import { TRANSFER, collectRemote, signTransfer } from './transfer.js';
-import { PushRegistrar, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
+import { PushRegistrar, closeMachineNotices, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities } from './protocol.js';
-import { SessionListView, MachinesFold, renderMachines } from './ui/views.js';
+import { SessionListView, MachinesFold, renderMachines, offlineMachines } from './ui/views.js';
 import { UsageBook, USAGE, machineStatus } from './usage.js';
 import { FleetStatus } from './fleet.js';
+import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UsageView } from './ui/usage-view.js';
 import { LaunchPanel } from './ui/launch-view.js';
 import { DemoBlobStore, DemoHost, demoTransfers, runScript } from './demo.js';
@@ -214,13 +215,33 @@ async function startDemo() {
   const largeAttachments = () => largeLimit(hello.capabilities, blobStore.max);
   answering = () => ({ service: answers, replies, stops, hostId: hello.machine.id, capabilities: hello.capabilities, readOnly: hello.machine.readOnly, largeAttachments });
   $('machines').hidden = false;
+  // The relay's roster, in the page (?offline=1): one of the account's machines that is offline,
+  // which Forget takes off as the relay would. ?forgetMs= shortens how long an arm lasts.
+  let demoKnown = params.get('offline') === '1'
+    ? [{ id: 'd0e1f2a3b4c5d6e7f8091a2b3c4d5e6f', name: 'Travel laptop', kind: 'host', lastSeen: new Date(Date.now() - 3 * 86400000).toISOString() }]
+    : null;
+  const forgetOutcomes = [];
+  const demoForget = new ForgetControl({
+    connection: {
+      forget: async (id) => {
+        const scripted = forgetOutcomes.shift();
+        if (scripted) { return scripted; }
+        demoKnown = demoKnown.filter((k) => k.id !== id);
+        return null;
+      },
+    },
+    confirmMs: Number(params.get('forgetMs')) || CONFIRM_MS,
+  });
   const drawMachine = () => machinesFold.update(renderMachines($('machine-list'), {
     presence: [{ id: hello.machine.id, name: hello.machine.name, kind: 'host' }],
     me: null,
     current: hello.machine.id,
     onSelect: () => {},
     status: () => machineStatus({ ...hello.machine, sessions: client.synced ? store.size : hello.machine.sessions, held: client.synced ? store.held?.reason : null }),
+    known: demoKnown,
+    forget: demoForget,
   }), hello.machine.name);
+  demoForget.onChange(drawMachine);
   drawMachine();
   store.onChange(drawMachine);
   showSessionsFor(hello.machine.name);
@@ -253,6 +274,16 @@ async function startDemo() {
     // The same, for the next launches: 'started' (the default), 'unconfirmed', 'busy', 'refused',
     // 'failed', an unknown one, or { outcome, reason, drop: true }.
     scriptLaunches: (...outcomes) => host.scriptLaunches(outcomes),
+    // The next forgets' refusals, in order ('online', 'rate-limited', ...); none scripted, forgotten.
+    scriptForgets: (...outcomes) => forgetOutcomes.push(...outcomes),
+    // The offline machine back online: the relay stops listing it.
+    reconnectOffline: () => { demoKnown = []; demoForget.reconcile([]); drawMachine(); },
+    // The offline machine back and gone again between two lists: seen later than when pressed.
+    bounceOffline: () => {
+      demoKnown = demoKnown.map((k) => ({ ...k, lastSeen: new Date().toISOString() }));
+      demoForget.reconcile(demoKnown);
+      drawMachine();
+    },
     upsert: (s) => host.upsert(s),
     remove: (id) => host.remove(id),
     hold: (held) => host.hold(held),
@@ -406,11 +437,25 @@ function begin(account) {
 
   const nameOf = (id) => connection.presence.find((d) => d.id === id)?.name;
   const fleet = new FleetStatus({ connection, hosts, store, book, me: identity.deviceId });
+  // Forgetting an offline machine (#50): what this app keeps about it goes with it. Its push
+  // subscription is on that machine, which is gone; the notices it left here are closed.
+  const dropMachine = (id) => {
+    fleet.forget(id);
+    if (hosts.targetId === id) { hosts.forget(); }
+    worker().then((r) => closeMachineNotices(r, id)).catch(() => {});
+  };
+  const forgets = new ForgetControl({ connection, onForgotten: dropMachine });
+  // The same for a machine forgotten from another of the account's devices: it leaves the
+  // offline list without coming online.
+  let lastKnown = null;
+  const offlineNow = () => offlineMachines({ presence: connection.presence, known: connection.known, me: identity.deviceId });
   const drawMachines = () => {
     const n = renderMachines($('machine-list'), {
       presence: connection.presence, me: identity.deviceId, current: hosts.targetId,
       onSelect: (id) => { hosts.select(id); $('sessions').focus(); },
       status: (id) => fleet.status(id),
+      known: connection.known,
+      forget: forgets,
     });
     $('machines-empty').hidden = n !== 0 || !connection.ready;
     // The machine whose sessions are on screen stays named after it drops out of presence,
@@ -419,7 +464,17 @@ function begin(account) {
   };
   fleet.onChange(drawMachines);
   fleet.start();
+  forgets.onChange(drawMachines);
+  // "last seen 5m ago" moves on with nothing else to redraw the list: every machine may be offline.
+  setInterval(() => { if (document.visibilityState !== 'hidden' && connection.known?.length) { drawMachines(); } }, 30000);
 
+  connection.on('presence', () => {
+    const now = connection.known ? offlineNow() : null;
+    for (const id of vanished(lastKnown, now, connection.presence.map((d) => d.id))) { dropMachine(id); }
+    lastKnown = now;
+    // A machine that comes back takes its arm, and any refusal shown for it, with it.
+    forgets.reconcile(now ?? []);
+  });
   connection.on('presence', drawMachines);
   connection.on('log', (line) => console.log(line));
   connection.on('state', ({ state }) => {
@@ -438,6 +493,8 @@ function begin(account) {
     // same sign-in keeps them, but a new sign-in may be a different account.
     hosts.forget();
     fleet.clear();
+    forgets.clear();
+    lastKnown = null;
     answers.clear();
     replies.clear();
     stops.clear();

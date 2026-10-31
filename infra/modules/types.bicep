@@ -27,4 +27,6 @@ type appConfig = {
   keepSystemIdentity: bool?
   @description('Storage account for this app\'s blob store (modules/blob-store.bicep): globally unique, 3-24 lowercase letters and digits. Unset: no blob store, and devices keep files under 256 KiB.')
   blobStorageName: string?
+  @description('Storage account for this app\'s machine roster (modules/roster-store.bicep): globally unique, 3-24 lowercase letters and digits. Unset: the relay keeps the roster in memory, and a restart forgets every offline machine.')
+  rosterStorageName: string?
 }

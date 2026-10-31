@@ -219,6 +219,14 @@ export async function closeStaleNotices(registration, hostId, store) {
   }
 }
 
+// Closes every notification from one machine: forgotten, so nothing it said is to be acted on.
+export async function closeMachineNotices(registration, hostId) {
+  const shown = await registration?.getNotifications?.() ?? [];
+  for (const n of shown) {
+    if ((n.data ?? {}).machine === hostId) { n.close(); }
+  }
+}
+
 // Closes every notification about one session: answered here, so there is nothing to say.
 export async function closeNotices(registration, hostId, sessionId) {
   const shown = await registration?.getNotifications?.({ tag: noticeTag(hostId, sessionId) }) ?? [];

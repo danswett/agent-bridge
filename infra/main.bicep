@@ -163,6 +163,7 @@ module stagingApp 'modules/relay-app.bicep' = {
     deployerPrincipalId: stagingDeployerPrincipalId
     deployerReadsSecrets: true
     deployBlobStore: true
+    deployRosterStore: true
     domainState: stagingDomainState
     operatorPrincipalId: operatorPrincipalId
     tags: union(tags, { 'agent-bridge-env': 'staging' })
@@ -184,6 +185,7 @@ module productionApp 'modules/relay-app.bicep' = {
     deployerPrincipalId: productionDeployerPrincipalId
     deployerReadsSecrets: false
     deployBlobStore: deployProduction
+    deployRosterStore: deployProduction
     domainState: productionDomainState
     operatorPrincipalId: operatorPrincipalId
     tags: union(tags, { 'agent-bridge-env': 'production' })
@@ -201,3 +203,5 @@ output stagingVault string = stagingApp.outputs.vaultName
 output productionVault string = productionApp.outputs.vaultName
 output stagingBlobAccountUrl string = stagingApp.outputs.blobAccountUrl
 output productionBlobAccountUrl string = productionApp.outputs.blobAccountUrl
+output stagingRosterAccountUrl string = stagingApp.outputs.rosterAccountUrl
+output productionRosterAccountUrl string = productionApp.outputs.rosterAccountUrl

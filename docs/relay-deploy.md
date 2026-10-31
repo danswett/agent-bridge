@@ -95,7 +95,9 @@ replicas no stable addresses to forward to, so that step is the `standard` size 
    store, refused to another device of the account and to another account, fetched,
    opened and checked by its recipient, deleted, and then not found; then a 10 MiB file
    streamed from disk as a host sends a session bundle ([host-transfer.md](host-transfer.md)),
-   fetched, checked and deleted the same way.
+   fetched, checked and deleted the same way. The two-device step also checks the machine
+   roster ([protocol/roster.md](protocol/roster.md)): the host that left is listed as offline in
+   the app's presence, and the app (kind `app`, a person's device) forgets it.
 4. **production** (`main` only, environment `production`): waits for approval by the
    required reviewer. `infra/roll-production.sh` refuses an app `infra/` has not adopted,
    writes the image it replaces to the job summary, rolls the digest, and the smoke test
@@ -220,7 +222,10 @@ REST API, and compare only hash prefixes.
 
 **Token key** (`token-key`: signs account tokens). Every account token becomes invalid: each
 host exits with "refused … run sign-in again" and needs `agent-bridge-host sign-in --relay <url>`,
-and each PWA needs Sign in again. Push subscriptions are unaffected.
+and each PWA needs Sign in again. Push subscriptions are unaffected. Each account's machine
+roster is stored under a name derived from the token key, so every roster starts again empty:
+hosts are listed again as they reconnect, and the old blobs age out under the lifecycle rule
+(or delete the `roster` container's contents).
 
 ```powershell
 $h = @{ Authorization = 'Bearer ' + (az account get-access-token --resource https://vault.azure.net --query accessToken -o tsv) }
@@ -327,6 +332,63 @@ Until then production's image runs without a blob store, and the PWA (whose Cont
 Security Policy already allows `https://abblobprodwus2.blob.core.windows.net`, set in
 `pages.yml`) falls back to 256 KiB. The role assignments can take a few minutes to apply; a
 `blob-put` before then answers `unavailable`.
+
+## Machine roster
+
+Each account's hosts, online or not, so the PWA and the app can list a machine that is offline
+with when it was last seen, and a person can forget one that is gone (#50,
+[protocol/roster.md](protocol/roster.md)). The relay holds it in memory and writes it behind,
+at most once every 30 seconds per account, and everything left when it stops: after the drain,
+within the 20-second shutdown timeout (10 seconds for the roster).
+
+`infra/modules/roster-store.bicep`, one per app (`deployRosterStore`), next to it:
+
+* A StorageV2 account of its own, **Standard_LRS, hot**, HTTPS and TLS 1.2 only, **shared keys
+  off**, no public blob access, no CORS (no browser reaches it), no soft delete or versioning.
+  Not the blob store's account: its lifecycle rule deletes every blob a day after it is written.
+* One private container, `roster`, holding one small JSON blob per account, named by an HMAC of
+  the account id under a key from the token key. A **lifecycle rule** deletes a blob not
+  modified for 180 days: an online host's roster is rewritten every 10 minutes, so only an
+  account none of whose hosts has connected for half a year loses its list (and throwaway smoke
+  accounts go).
+* For the app's user-assigned identity: **Storage Blob Data Contributor on the container only**.
+  No delegator role (nothing is signed), and nothing on the account or any other container.
+* Environment for the app: `Relay__Roster__Backend=azure`, `Relay__Roster__AccountUrl`,
+  `Relay__Roster__Container`, `Relay__Roster__ManagedIdentityClientId`. No key or secret.
+  Without them the relay keeps the roster in memory, so a restart forgets every offline machine
+  until each reconnects; `Relay__Roster__Backend=off` turns it off (no `known` in presence).
+
+Names: `abrosterstgwus2` (staging), `abrosterprodwus2` (production). The change is additive:
+nothing existing is modified, and an older client ignores `known` and never sends `forget`.
+
+### Deploying it
+
+Production needs a person, as any infra change does; the steps after the merge:
+
+1. **Staging infra:** `./infra/deploy.ps1 -WhatIf`, check it creates only `abrosterstgwus2`, its
+   container, lifecycle rule and the one role assignment, and adds the four `Relay__Roster__*`
+   variables to the staging app; then `./infra/deploy.ps1`. A taken storage account name shows
+   in the what-if; pick another in `regions/westus2.bicepparam`.
+2. **Staging image:** `relay.yml` rolls the merge commit to staging and runs the smoke test,
+   which now checks the roster. The role assignment can take a few minutes to apply; until then
+   writes fail (`relay.roster` outcome `error`, logged by type only) and the roster is held in
+   memory and written once they succeed.
+3. **Production infra** (approved): `./infra/deploy.ps1 -WhatIf -Production -ProductionImage <running digest> -ProductionVersion <sha>`,
+   then the same without `-WhatIf`. It re-states the image already running, so this step only
+   adds the account, the role and the variables (a new revision of the same image).
+4. **Production image** (approved): the `relay.yml` production job, as for any build.
+
+Until step 3, production runs the new image with the roster in memory, which is correct, only
+forgetful across restarts.
+
+### Rolling it back
+
+* **The image:** `relay.yml` with `rollback_to=<previous SHA>`, as for any build. An older relay
+  sends no `known` and ignores `forget`; clients then list only what is online and offer no
+  Forget.
+* **The infra:** nothing has to be undone. Left in place, the account is unused by an older image
+  (it ignores the `Relay__Roster__*` variables). To remove it: delete the `Relay__Roster__*`
+  variables from the app (a new revision), the role assignment, and the storage account.
 
 ## Production behaviour in the code
 

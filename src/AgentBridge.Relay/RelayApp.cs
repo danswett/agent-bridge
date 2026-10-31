@@ -29,12 +29,20 @@ public static class RelayApp
         // ObjectDisposedException out of MeterListener.RecordObservableInstruments. Until the hub
         // exists, no socket has been admitted.
         RelayHub? theHub = null;
-        builder.Services.AddSingleton(sp => theHub = ActivatorUtilities.CreateInstance<RelayHub>(sp));
+        builder.Services.AddSingleton(sp =>
+        {
+            var hub = ActivatorUtilities.CreateInstance<RelayHub>(sp);
+            sp.GetRequiredService<MachineRoster>().Changed = hub.RosterChangedAsync;
+            return theHub = hub;
+        });
         builder.Services.AddSingleton<PushGateway>();
         // The backend is made once, here, so a misconfigured store fails at start, not at the
         // first upload.
         var blobBackend = BlobService.CreateBackend(options.Blobs);
         builder.Services.AddSingleton(sp => new BlobService(options, sp.GetRequiredService<RelayMetrics>(), sp.GetRequiredService<ILogger<BlobService>>(), blobBackend));
+        var rosterStore = MachineRoster.CreateStore(options.Roster);
+        builder.Services.AddSingleton(sp => new MachineRoster(options, sp.GetRequiredService<RelayMetrics>(), sp.GetRequiredService<ILogger<MachineRoster>>(), rosterStore));
+        builder.Services.AddHostedService<RosterWriter>();
         builder.Services.AddSingleton(sp => new RelayMetrics(sp.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(), () => Volatile.Read(ref theHub)?.Online ?? 0));
         // The slim builder's console logger stays on the simple formatter whatever the configuration
         // says, so a deployment that asks for JSON lines (infra/ does) got plain text, silently.

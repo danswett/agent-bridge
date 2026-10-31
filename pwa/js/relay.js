@@ -19,10 +19,16 @@ export class Relay {
   // Blob store requests waiting for their blob-result, by id.
   #blobRequests = new Map();
   #nextBlob = 0;
+  // Forget requests waiting for their forget-result, by id.
+  #forgets = new Map();
+  #nextForget = 0;
   // { max } from ready when the relay has a blob store (blobs.js); null otherwise.
   blobs = null;
   onData = null;      // (fromDeviceId, payload: Uint8Array) => Promise|void
-  onPresence = null;  // (devices: {id, name, kind, since}[]) => void
+  // (devices: {id, name, kind, since}[], known: {id, name, kind, lastSeen}[] | null) => void.
+  // known: the account's machines that are offline, from the relay's roster
+  // (docs/protocol/roster.md); null from a relay that keeps none.
+  onPresence = null;
   onClose = null;     // ({code, reason}) => void, once, after ready
   onLog = null;
 
@@ -45,6 +51,8 @@ export class Relay {
         const info = { code: e.code, reason: e.reason ?? '' };
         for (const [, p] of this.#blobRequests) { p.reject(new Error('the relay connection ended')); }
         this.#blobRequests.clear();
+        for (const [, p] of this.#forgets) { p.reject(new Error('the relay connection ended')); }
+        this.#forgets.clear();
         if (!ready) { reject(Object.assign(new Error(`the relay closed the connection (${e.code}${e.reason ? ` ${e.reason}` : ''})`), info)); }
         else { this.onClose?.(info); }
       };
@@ -72,7 +80,13 @@ export class Relay {
         this.blobs = m.blobs && Number.isFinite(m.blobs.max) && m.blobs.max > 0 ? { max: m.blobs.max } : null;
         ready();
       } else if (m.t === 'presence') {
-        this.onPresence?.(Array.isArray(m.devices) ? m.devices : []);
+        this.onPresence?.(Array.isArray(m.devices) ? m.devices : [], Array.isArray(m.known) ? m.known : null);
+      } else if (m.t === 'forget-result') {
+        const p = this.#forgets.get(m.id);
+        if (p) {
+          this.#forgets.delete(m.id);
+          p.resolve(typeof m.error === 'string' ? m.error : null);
+        }
       } else if (m.t === 'blob-result') {
         const p = this.#blobRequests.get(m.id);
         if (p) {
@@ -112,6 +126,19 @@ export class Relay {
       const timer = setTimeout(() => { if (this.#blobRequests.delete(id)) { reject(new Error('the relay did not answer the blob request')); } }, timeoutMs);
       this.#blobRequests.set(id, { resolve: (r) => { clearTimeout(timer); resolve(r); }, reject: (e) => { clearTimeout(timer); reject(e); } });
       this.#ws.send(JSON.stringify({ ...message, id }));
+    });
+  }
+
+  // Asks the relay to forget one of the account's machines that is offline. Resolves to null
+  // once forgotten, or the relay's reason (not-allowed, online, not-found, rate-limited,
+  // disabled). The relay takes it only from a person's device: this one is.
+  forget(machine, timeoutMs = 30000) {
+    if (!this.open) { return Promise.reject(new Error('not connected to the relay')); }
+    const id = ++this.#nextForget;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { if (this.#forgets.delete(id)) { reject(new Error('the relay did not answer')); } }, timeoutMs);
+      this.#forgets.set(id, { resolve: (r) => { clearTimeout(timer); resolve(r); }, reject: (e) => { clearTimeout(timer); reject(e); } });
+      this.#ws.send(JSON.stringify({ t: 'forget', id, machine }));
     });
   }
 
