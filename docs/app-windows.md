@@ -139,7 +139,7 @@ into one folder with one version. An app update is a host update, so they never 
   The app also stops the host itself before `ApplyUpdatesAndRestart`, and starts it on
   launch if it is not running.
 * Feed: GitHub Releases of `danswett/agent-bridge` (pre-releases included unless turned
-  off), or a folder or URL holding `releases.win.json` in
+  off; every merge to main publishes one, below), or a folder or URL holding `releases.win.json` in
   `%LOCALAPPDATA%\AgentBridge\app\feed.txt` (for testing on a VM).
 * The host can start an update too: the Home Assistant connector's Install button
   ([ha-connector.md](ha-connector.md), stage 6) for a machine driven from the dashboard. It
@@ -158,13 +158,105 @@ into one folder with one version. An app update is a host update, so they never 
   account, `config.json`, logs) stays in `%LOCALAPPDATA%\AgentBridge`, like any app's
   data, so a reinstall picks up where it was.
 
+### Releases and updates: every merge to main is a pre-release
+
+CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` a GitHub
+pre-release, `v0.1.<n>`, of the whole package. Installed copies include pre-releases by
+default: Settings, **Check for updates**, offers the newest and **Install** applies it (as does
+the Home Assistant connector's Install button on a machine the dashboard drives). Nothing
+installs an update unasked.
+
+* **Version** `0.1.<CI run number>`. The number is the CI workflow's own count, shared by pull
+  requests and pushes, so main's versions only rise, with gaps; a re-run keeps its number.
+  Renaming or recreating `ci.yml` starts the count at 1 again, below every release, and no
+  installed copy would ever take one: move the minor version up (`0.2.<n>`) in the same change.
+* **When:** after the `product` tests (both systems) and the `app` job (build, pack, self-test)
+  pass, for pushes to `danswett/agent-bridge`'s `main` only: never a pull request or a fork. It
+  is the only job with `contents: write`, and runs one at a time (concurrency group
+  `publish-prerelease`). Before it, `publish-gate` lets through only the commit `main` is at
+  now: GitHub keeps one waiting job per concurrency group and cancels the older waiting one, so
+  a slow build of an older merge must not reach the group and evict a newer one. A run whose
+  commit main has moved past publishes nothing, and the newer commit's run publishes instead
+  (re-run it if it failed).
+* **What:** `build/publish-prerelease.ps1` uploads the app job's folder with `vpk upload github
+  --pre` as a draft, adds `assets.win.json` and the notes, and only then publishes it, creating
+  the tag `v<version>` on the exact commit; a client never sees half a release. Assets:
+  `AgentBridgeApp-<v>-full.nupkg`, `AgentBridgeApp-<v>-delta.nupkg`,
+  `AgentBridgeApp-win-Setup.exe`, `AgentBridgeApp-win-Portable.zip`, `releases.win.json`
+  (this version's packages), `RELEASES` and `assets.win.json`, as on the first release
+  (`v0.1.583`, published by hand) plus the delta.
+* **Release notes:** `build/release-notes.ps1` lists the commits since the latest release, newest
+  first (GitHub's compare API; the commit alone when that cannot be read), and `pack-app.ps1
+  -ReleaseNotes` packs them (`vpk pack --releaseNotes`), so they are in the feed's
+  `NotesMarkdown` for an installed copy to show after it updates.
+* **Deltas:** `pack-app.ps1 -DeltaFrom` empties its releases folder, downloads the latest
+  release's full package (`vpk download github --pre`) and, if it is older, puts it there, so
+  `vpk pack` builds a delta from it. Another merge may publish between that pack and this one's
+  publish, so under the lock the script checks the delta again: `vpk delta patch` on the latest
+  release's full package must rebuild this version's full package byte for byte. If it does not
+  (or there is no delta), it is rebuilt from that release with `vpk delta generate` and checked
+  the same way; if that fails too, the full package is published alone, with a warning, since a
+  wrong delta would cost every copy a failed patch first. A copy on the previous version
+  downloads only the delta rather than the ~100 MB full package; one further behind applies the
+  chain of deltas, as far back as the newest ten releases Velopack's GitHub source reads, or
+  else the full package.
+* **Once per version:** a version whose tag exists is skipped, so re-running a run publishes
+  nothing twice. A version older than one already published is skipped (two merges close
+  together, the later one's build first). A draft left by a failed attempt is deleted and the
+  version uploaded again.
+* **Pruning:** the newest 20 pre-releases stay; older ones are deleted with their assets, and
+  their tags stay. A full (non-pre-release) release, a draft, or a release not tagged
+  `v<major>.<minor>.<patch>` is never touched.
+* **Pull requests** prove it without publishing: the app job runs the same script with
+  `-DryRun`, which checks the folder and its delta against the latest release as above, has vpk
+  read it into a scratch feed (`vpk upload local`),
+  and prints what it would upload, publish and prune against the real releases (in the job
+  summary too), writing nothing.
+* **Release builds only.** The app job packs with `pack-app.ps1 -Release` exactly when the run
+  publishes (`APP_RELEASE`: a push to `danswett/agent-bridge`'s main), which builds the host with
+  `-p:AgentBridgeRelease=true`, so it carries the assembly metadata `AgentBridgeRelease=true`.
+  Every pull request and fork packs a dev host. Three checks hold that: `pack-app.ps1` reads the
+  host it published (`build/host-identity.ps1`) and stops if it is not the build asked for; the
+  app job asserts the packed host is a release build exactly when the run publishes, and that
+  the property makes one; and `publish-prerelease.ps1` refuses to publish a package whose host
+  is a dev build (a dry run only says so). What a release build changes, all keyed off the host's
+  `IsDevBuild()`:
+  * The Home Assistant connector may write to a Home Assistant not marked
+    `homeAssistant.disposable` (`HaGate`, design G6). Everything else in its gate still holds:
+    enabled, a base URL and token, and agent-ha-bridge not running for this user (G5).
+  * hello's `machine.dev` is left out, so the PWA's and app's machine status and the app's
+    Settings show the version without "(dev)"; the local API's status `dev` is false.
+  * The connector's capabilities attribute `dev` is false.
+  * The shadow ledger records `hostDev` false (`ha shadow` reports it), and `ha status` no
+    longer gives the G6 refusal.
+
+  Nothing else reads it: not updates, delivery, migration or the relay.
+* A pre-release is unsigned (below).
+
+To install the latest, download `AgentBridgeApp-win-Setup.exe` from the newest pre-release at
+<https://github.com/danswett/agent-bridge/releases> and run it (SmartScreen: More info, then Run
+anyway). From a shell:
+
+```powershell
+$tag = gh release list -R danswett/agent-bridge -L 1 --exclude-drafts --json tagName --jq '.[0].tagName'
+gh release download $tag -R danswett/agent-bridge -p AgentBridgeApp-win-Setup.exe
+.\AgentBridgeApp-win-Setup.exe
+```
+
+(`gh release download` without a tag takes the latest full release, and there is none yet.)
+From then on, Settings, **Check for updates**, then **Install**, takes it to the newest
+pre-release; turning off "Include pre-releases" in Settings stops it finding them until there
+are full releases.
+
 ### Signing (later)
 
-CI builds an unsigned Velopack artifact only. A release needs `vpk pack --signParams`
-(signtool arguments) or `--azureTrustedSignFile` with the certificate or Trusted Signing
-account held as a repository secret, signing every executable in the package and
-`Setup.exe`, and a release workflow that publishes GitHub releases as drafts. Until then a
-downloaded `Setup.exe` meets SmartScreen and, where it is on, Smart App Control.
+Releases are unsigned for now. The hook is in place: `build/pack-app.ps1` passes
+`-SignParams` (signtool arguments) or `-AzureTrustedSignFile` (an Azure Trusted Signing
+`metadata.json`) to `vpk pack`, which signs every executable in the package and `Setup.exe`
+before the delta and installer are built. To turn it on, hold the certificate or Trusted Signing
+account as a repository secret and add the argument to the app job's pack step for pushes to
+main only (a pull request from a fork gets no secrets). Until then a downloaded `Setup.exe` meets
+SmartScreen and, where it is on, Smart App Control.
 
 ### Starting with Windows
 
@@ -261,13 +353,18 @@ reaches the real host or its profile.
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
 * CI (`app` job) runs `build/pack-app.ps1`: publishes the app, host, launcher, injector and hook
-  into one folder, checks for the app's `.pri` and the executables, packs it with `vpk`
-  and uploads `Setup.exe` and the packages as an artifact. It then starts the published
+  into one folder, checks for the app's `.pri` and the executables, and packs it with `vpk`,
+  with a delta from the latest release. It then starts the published
   app with `--self-test`, which runs the demo, finds the cards by automation id, answers a
   question on each machine by invoking its button's automation peer, narrows the list with
   the machine picker, launches a session from the Launch page and waits for its card,
   checks Codex on the other machine is not launched without a prompt, and saves a picture
-  of each page.
+  of each page. Last, it dry-runs publishing the package (`build/publish-prerelease.ps1
+  -DryRun`) and uploads `Setup.exe` and the packages as an artifact, which the `publish` job
+  publishes for a push to main.
+* `build/test-publish-prerelease.ps1` (the `product` job, on Windows): publishing and pruning,
+  refusing a dev build, and the delta base and build identity `pack-app.ps1` gives the package,
+  against stand-ins for gh, vpk and dotnet.
 * Live checks run by the coordinator on a disposable VM (the checklist in the pull
   request).
 
