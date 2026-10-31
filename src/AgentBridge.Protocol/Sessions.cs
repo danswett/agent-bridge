@@ -82,6 +82,7 @@ public static class Limits
     public const int Reasoning = 4 * 1024;
     public const int UserMessage = 2 * 1024;
     public const int ToolSummary = 200;
+    public const int DriverPrincipal = 128;
     public const int QuestionMessage = 8 * 1024;
     public const int History = 50;
     // Free text in an answer (session.answer's text, or a field's other), and the request.
@@ -173,6 +174,12 @@ public enum AgentKind { Copilot, Claude, Codex, Unknown }
 // Ending: the host is ending the session (session.stop), until its process has gone.
 public enum SessionStatus { Working, Waiting, Idle, Ending }
 
+// Who drives the session's current turn: the person, or an agent acting through the host (the
+// purple edge). Absent on the wire means Person, and a host sends it only as Agent, so an older
+// client, which ignores it, shows every session as the person's: the safe way round.
+[UnknownAs(Person)]
+public enum DriverKind { Person, Agent }
+
 [UnknownAs(Done)]
 public enum ToolStatus { Running, Done, Failed }
 
@@ -213,6 +220,13 @@ public sealed record Session
     public int? ProcessId { get; init; }
     public required Activity Activity { get; init; }
     public Question? Question { get; init; }
+    // Agent while an agent drives the current turn: it launched the session, or answered or
+    // replied to it, and nobody has taken it back since with an answer, a reply or input at the
+    // machine. Null (absent) for the person.
+    public DriverKind? Driver { get; init; }
+    // With Driver Agent, which agent, when the host knows (within Limits.DriverPrincipal):
+    // "homeassistant:<user id>" for a press by one of homeAssistant.agentUserIds.
+    public string? DriverPrincipal { get; init; }
 
     // The list and event form: everything but the tool history.
     public Session WithoutHistory() => Activity.History is null ? this : this with { Activity = Activity with { History = null } };

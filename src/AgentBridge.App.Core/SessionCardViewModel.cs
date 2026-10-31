@@ -85,6 +85,13 @@ public sealed class SessionCardViewModel : Observable
 
     public string View => State.View;
     public string StatusText => State.Text;
+
+    // An agent launched it, or answered or replied to it, and nobody has taken it back since: the
+    // purple edge, said in words too. An older host never says so, and then it is the person's.
+    public bool Driven => session.Driver == DriverKind.Agent;
+    public string DriverText => Driven ? "Driven by an agent" : "";
+    // Which agent, when the host knows ("homeassistant:<user id>").
+    public string? DriverPrincipal => Driven ? session.DriverPrincipal : null;
     public string SinceText { get; private set; } = "";
     public string UpdatedText { get; private set; } = "";
 

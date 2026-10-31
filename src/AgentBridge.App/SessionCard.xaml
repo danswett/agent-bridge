@@ -7,7 +7,8 @@
     xmlns:core="using:AgentBridge.App.Core">
     <UserControl.Resources>
         <!-- The PWA's glow (pwa/app.css .glow): a halo that breathes while the session works or
-             waits on you. Still, at 0.6, when Windows has animations turned off. -->
+             waits on you, purple while an agent drives it. Still, at 0.6, when Windows has
+             animations turned off. -->
         <Storyboard x:Name="Pulse" RepeatBehavior="Forever" AutoReverse="True">
             <DoubleAnimation Storyboard.TargetName="Glow" Storyboard.TargetProperty="Opacity" From="0.1" To="0.9" Duration="0:0:0.8" />
         </Storyboard>
@@ -22,7 +23,7 @@
             StrokeThickness="4"
             Opacity="0"
             IsHitTestVisible="False"
-            Stroke="{x:Bind local:Ui.StateBrush(Card.View), Mode=OneWay}" />
+            Stroke="{x:Bind local:Ui.EdgeBrush(Card.View, Card.Driven), Mode=OneWay}" />
         <Border Background="{ThemeResource AbSurface}" CornerRadius="14" Padding="16,12,16,12">
             <StackPanel Spacing="6">
                 <!-- Header: the title folds the card. -->
@@ -65,6 +66,13 @@
                     <TextBlock FontWeight="SemiBold" Text="{x:Bind Card.StatusText, Mode=OneWay}" AutomationProperties.AutomationId="Status" />
                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Card.SinceText, Mode=OneWay}" />
                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Card.UpdatedText, Mode=OneWay}" />
+                    <TextBlock
+                        FontWeight="SemiBold"
+                        Foreground="{ThemeResource AbAgent}"
+                        Text="{x:Bind Card.DriverText, Mode=OneWay}"
+                        ToolTipService.ToolTip="{x:Bind Card.DriverPrincipal, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Show(Card.Driven), Mode=OneWay}"
+                        AutomationProperties.AutomationId="Driver" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasTool), Mode=OneWay}">
                     <ProgressRing Width="12" Height="12" IsActive="{x:Bind Card.HasTool, Mode=OneWay}" />
@@ -255,7 +263,7 @@
             RadiusX="14"
             RadiusY="14"
             IsHitTestVisible="False"
-            Stroke="{x:Bind local:Ui.StateBrush(Card.View), Mode=OneWay}"
+            Stroke="{x:Bind local:Ui.EdgeBrush(Card.View, Card.Driven), Mode=OneWay}"
             StrokeThickness="{x:Bind local:Ui.StateThickness(Card.View), Mode=OneWay}"
             StrokeDashArray="{x:Bind local:Ui.StateDash(Card.View), Mode=OneWay}" />
     </Grid>

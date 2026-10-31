@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.HomeAssistant;
+using AgentBridge.Host.Core;
 using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
@@ -26,12 +27,18 @@ public sealed class AnswerTests : IDisposable
         if (Directory.Exists(folder)) { Directory.Delete(folder, true); }
     }
 
+    // Shared with the host's session source in the host itself, which shows the same driver.
+    readonly SessionDrivers drivers = new();
+    // A connector that keeps a record of its own, as one over a source that does not observe.
+    bool ownDrivers;
+
     HaConnector Connector(params string[] agents) => new(new HaConnectorOptions
     {
         MachineName = Machine,
         Version = "0.1.0",
         StateFile = Path.Combine(folder, "ha-connector.json"),
         AgentUserIds = agents,
+        Drivers = ownDrivers ? null : drivers,
         FieldPinDelay = TimeSpan.Zero,
         SelectDelay = TimeSpan.Zero,
     }, ha, sessions, () => null, log: m => { lock (log) { log.Add(m); } }, time: time, answer: (r, _) =>
@@ -231,7 +238,7 @@ public sealed class AnswerTests : IDisposable
     }
 
     [Fact]
-    public async Task An_agents_press_drives_the_next_turn_and_a_person_at_the_machine_takes_it_back()
+    public async Task An_agents_answer_makes_the_turn_it_answers_the_agents_and_the_persons_next_prompt_is_theirs()
     {
         Ask(Form("q1", Release));
         await using var c = Connector("agent-user");
@@ -239,13 +246,68 @@ public sealed class AnswerTests : IDisposable
         await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut the release now", "agent-user"));
         await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
         Assert.Single(answered);
+        // The host's own clients see it at once, with the account that pressed.
+        Assert.Equal((DriverKind.Agent, "homeassistant:agent-user"), drivers.Shown(A));
 
-        Ask(null, turn: 2, message: "the agent's answer");
+        // The answer carries on the turn it was asked in, which is the agent's from now on.
+        Ask(null, turn: 1, message: "go");
         await Pass(c);
         Assert.Equal("agent", Detail.GetProperty("driver").GetString());
 
-        // A turn nobody armed is the person's at the machine.
-        Ask(null, turn: 3, message: "typed in the terminal");
+        // It arms nothing beyond it: the person's next prompt, typed at the machine moments later, is
+        // theirs.
+        Ask(null, turn: 2, message: "typed in the terminal");
+        await Pass(c);
+        Assert.Equal("human", Detail.GetProperty("driver").GetString());
+        Assert.Equal((null, null), drivers.Shown(A));
+    }
+
+    [Fact]
+    public async Task Beside_the_hosts_session_source_only_the_source_judges_turns_and_a_press_reaches_the_record_even_for_a_session_that_came_back()
+    {
+        // As the host's SessionSource sets it, for the record it observes and shares.
+        drivers.SourceObserves = true;
+        Ask(Form("q1", Release));
+        await using var c = Connector("agent-user");
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut the release now", "agent-user"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        Assert.Equal((DriverKind.Agent, "homeassistant:agent-user"), drivers.Shown(A));
+
+        // A later turn the source has not observed, after the arm would have lapsed: the connector
+        // reads it, but does not judge it.
+        await Pass(c, drivers.Arm.TotalSeconds + 1);
+        Ask(null, turn: 5, message: "a turn only the connector has seen");
+        await Pass(c);
+        Assert.Equal((DriverKind.Agent, "homeassistant:agent-user"), drivers.Shown(A));
+        Assert.Equal("agent", Detail.GetProperty("driver").GetString());
+
+        // The source forgets a session that goes; the same one back has a new record, which the
+        // next press reaches.
+        drivers.Forget(A);
+        Ask(Form("q2", Release), turn: 5, message: "a turn only the connector has seen");
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut the release now", "agent-user"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        Assert.Equal((DriverKind.Agent, "homeassistant:agent-user"), drivers.Shown(A));
+    }
+
+    [Fact]
+    public async Task A_session_that_ends_and_comes_back_under_a_connector_with_its_own_record_starts_again_as_the_persons()
+    {
+        ownDrivers = true;
+        Ask(Form("q1", Release));
+        await using var c = Connector("agent-user");
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut the release now", "agent-user"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node), "agent-user"));
+        Ask(null, turn: 1, message: "go");
+        await Pass(c);
+        Assert.Equal("agent", Detail.GetProperty("driver").GetString());
+
+        sessions.End(A);
+        await Pass(c);
+        Ask(null, turn: 1, message: "go");
         await Pass(c);
         Assert.Equal("human", Detail.GetProperty("driver").GetString());
     }
@@ -258,6 +320,7 @@ public sealed class AnswerTests : IDisposable
         await Pass(c);
         await Do(c, ha.Choose(SessionEntities.Field(Node, 1), "Cut the release now", "person"));
         await Do(c, ha.Press(SessionEntities.Submit(Node), "person"));
+        Assert.Equal((null, null), drivers.Shown(A));
         Ask(null, turn: 2, message: "next");
         await Pass(c);
         Assert.Equal("human", Detail.GetProperty("driver").GetString());

@@ -2,7 +2,8 @@
 // whose edge and glow say what the session is doing (blue and breathing while it works,
 // amber while it waits on you, calm when idle, a still, dashed blue edge while it is
 // idle but delegating: its own turn is over and work it started in the background is not,
-// and a dotted grey one while the machine ends it), with a header that stays visible when
+// and a dotted grey one while the machine ends it), purple in place of the colour while an
+// agent drives it rather than you, with a header that stays visible when
 // the card is folded, and the response, reasoning, history and question below it, a box to
 // reply to the session, and End session at the foot.
 import { h, icon } from './dom.js';
@@ -74,8 +75,10 @@ export class SessionCard {
     e.statusText = h('span', { class: 'status-text' });
     e.since = h('span', { class: 'since' });
     e.updated = h('time', { class: 'updated' });
+    // Said in words, not only by the edge's colour.
+    e.driver = h('span', { class: 'driver', hidden: true }, 'Driven by an agent');
     e.statusLine = h('p', { class: 'status-line' },
-      h('span', { class: 'dot', 'aria-hidden': 'true' }), e.statusText, e.since, e.updated);
+      h('span', { class: 'dot', 'aria-hidden': 'true' }), e.statusText, e.since, e.updated, e.driver);
     e.toolName = h('span', { class: 'tool-name' });
     e.toolSummary = h('span', { class: 'tool-summary' });
     e.tool = h('p', { class: 'tool-line', hidden: true },
@@ -124,6 +127,12 @@ export class SessionCard {
     root.dataset.view = state.view;
     // Toggled, not assigned: the frame also carries 'collapsed', which only folding changes.
     for (const st of ['working', 'waiting', 'idle', 'delegating', 'ending']) { e.frame.classList.toggle(st, st === state.view); }
+    // An agent launched it, or answered or replied to it, and nobody has taken it back since.
+    const agent = s.driver === 'agent';
+    root.dataset.driver = agent ? 'agent' : 'person';
+    e.frame.classList.toggle('agent', agent);
+    e.driver.hidden = !agent;
+    if (agent && s.driverPrincipal) { e.driver.title = s.driverPrincipal; } else { e.driver.removeAttribute('title'); }
 
     if (this.#changed('agent', s.agent)) {
       e.badge.className = `agent-badge agent-${s.agent}`;

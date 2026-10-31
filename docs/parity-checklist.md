@@ -523,7 +523,8 @@ These rows have no step. Each has its reason. A row moves into a step when its i
 
 | Rows | Why no step |
 |---|---|
-| §1 "Purple edge", §1 "Spinner verbs" | Missing (#46, #53). The step would only confirm absence |
+| §1 "Purple edge" | Set only by an agent's press on the Home Assistant cards until agents have a principal on the pipe (#45), and the rehearsal drives none |
+| §1 "Spinner verbs" | Missing (#53). The step would only confirm absence |
 | §1 "Unknown statuses" | Only seen when two versions meet: the first update after the rehearsal, E9-02 |
 | §2 "Cancel request", §2 "Claude free text" | Missing (#56, #42) |
 | §8 "usage.keychain" | Missing (#52) |

@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using AgentBridge.HomeAssistant;
+using AgentBridge.Host.Core;
 using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
@@ -49,6 +50,8 @@ public sealed class LaunchTests : IDisposable
         if (Directory.Exists(folder)) { Directory.Delete(folder, true); }
     }
 
+    readonly SessionDrivers drivers = new();
+
     HaConnector Connector(bool launches = true) => new(new HaConnectorOptions
     {
         MachineName = Machine,
@@ -57,6 +60,7 @@ public sealed class LaunchTests : IDisposable
         FieldPinDelay = TimeSpan.Zero,
         SelectDelay = TimeSpan.Zero,
         AgentUserIds = [AgentUser],
+        Drivers = drivers,
     }, ha, sessions, () => daemon, log: m => { lock (log) { log.Add(m); } }, time: time,
         answer: (_, _) => Task.FromResult(new AnswerResult(AnswerOutcome.Delivered)),
         launch: launches ? new HaLauncher(() => available, _ => Task.FromResult(offered), (r, _) =>
@@ -516,10 +520,12 @@ public sealed class LaunchTests : IDisposable
         await Pass(c);
         var topic = HaContract.Topics(HaContract.NodeId(id)).ActivityAttributes;
         Assert.Equal("agent", JsonNode.Parse(ha.Retained[topic])!["driver"]!.GetValue<string>());
+        Assert.Equal((DriverKind.Agent, "homeassistant:" + AgentUser), drivers.Shown(id));
         // The person at the machine types next.
         sessions.Set(session with { Activity = new Activity { TurnCount = 2, UserMessage = "Now the tests", Response = "On it" } });
         await Pass(c);
         Assert.Equal("human", JsonNode.Parse(ha.Retained[topic])!["driver"]!.GetValue<string>());
+        Assert.Equal((null, null), drivers.Shown(id));
     }
 
     [Fact]

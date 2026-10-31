@@ -283,9 +283,16 @@ a press is spent. A question that ends is cleared (selector `Idle`, attributes `
 it used reset); a question the card still shows when the connector takes over, but which the
 session no longer asks, is cleared too.
 
-**Driver.** A press whose `context.user_id` is in `homeAssistant.agentUserIds`, or a reply
-payload saying `driver: agent`, makes the next turn agent-driven (the purple edge), if that
-turn starts within 600 s (`DriverArmSeconds`); otherwise it reads `human`.
+**Driver.** An answer whose press's `context.user_id` is in `homeAssistant.agentUserIds`, or
+whose reply payload says `driver: agent`, makes the turn it answers agent-driven (the purple
+edge) at once. An answer continues that turn, so it arms nothing for the next prompt, which is
+whoever's it is (the daemon does not attribute answers at all; below). Replies and launches arm
+the next turn: it is agent-driven if it starts within 600 s (`DriverArmSeconds`), otherwise it
+reads `human`. The host keeps it in
+one record (`SessionDrivers`) for the cards and its own clients alike, so the phone and the app
+show the same edge (`Session.driver`, with `driverPrincipal` `homeassistant:<user id>` for the
+account that pressed), and a person's answer or reply from either takes it back as one on the
+card does.
 
 Where stage 2 knowingly differs from the daemon:
 
@@ -300,6 +307,7 @@ Where stage 2 knowingly differs from the daemon:
 | `Cancel request` says `Answer NOT sent` and resets the selector | The host has no way to cancel an agent's question |
 | A reply while a question is open answers the question; at a question only the terminal can answer, it says `Reply NOT sent` (`the session is waiting on a question`) | The host refuses a reply while its session asks a question |
 | A free-text answer from the reply box must differ from the box at arming | The box keeps the previous reply; the daemon reads it the same way through its baseline |
+| An answer from the card makes the turn it answers its sender's (the purple edge for an agent), arming nothing for the next prompt | The daemon attributes only replies and launches, so an agent answering from the card never showed purple. An arm left for the next prompt, as a reply's is, would mark the person's own next prompt at the machine as the agent's |
 | Baselines, `answer_consumed_at` and a pending driver are kept in memory | A host restart re-arms every open question with a fresh baseline, so a press before it is not replayed |
 
 ### Stage 3: replies from the card

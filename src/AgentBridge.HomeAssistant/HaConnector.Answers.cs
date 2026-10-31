@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AgentBridge.Host.Core;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.HomeAssistant;
@@ -637,7 +638,7 @@ public sealed partial class HaConnector
         {
             // Who sent it (the press carries the account behind it, a publish names its driver),
             // and which reply-card words were used, only for an answer that may have arrived.
-            p.ArmDriver(outcome.Driver, now);
+            p.Answered(outcome.Driver, outcome.Principal);
             if (outcome.Stamp is { } stamp) { p.LastPayloadStamp = stamp; }
         }
         switch (result.Outcome)
@@ -769,6 +770,8 @@ public sealed partial class HaConnector
         public string? Stamp { get; init; }
         public string? Press { get; init; }
         public string Driver { get; init; } = "human";
+        // Which agent, for an agent's press (SessionDrivers.HomeAssistantPrincipal).
+        public string? Principal { get; init; }
         // Words from the reply box, and an approval tap: how a failed one may be given again.
         public bool Box { get; init; }
         public bool Tap { get; init; }
@@ -833,7 +836,7 @@ public sealed partial class HaConnector
             if (tap == armed.UsedPress) { return null; }
             var field = armed.Question.Fields.FirstOrDefault()?.Name ?? "decision";
             var value = tapped == "Approve" ? "approve" : "deny";
-            return Answer(sessionId, armed, new Dictionary<string, JsonElement> { [field] = JsonSerializer.SerializeToElement(value) }, null, tapped, null, tap, DriverOf(decision!.UserId)) with { Tap = true };
+            return Answer(sessionId, armed, new Dictionary<string, JsonElement> { [field] = JsonSerializer.SerializeToElement(value) }, null, tapped, null, tap, DriverOf(decision!.UserId), PrincipalOf(decision!.UserId)) with { Tap = true };
         }
 
         if (!plan.UsesFieldSlots)
@@ -845,7 +848,7 @@ public sealed partial class HaConnector
             if (box.Present && !string.IsNullOrWhiteSpace(box.Value) && Changed(armed.ReplyBaseline, box) && box.Value != armed.UsedPress
                 && (box.Value != armed.FailedBox || fresh))
             {
-                return Answer(sessionId, armed, null, box.Value, box.Value, null, box.Value, DriverOf(box.Snapshot?.UserId)) with { Box = true };
+                return Answer(sessionId, armed, null, box.Value, box.Value, null, box.Value, DriverOf(box.Snapshot?.UserId), PrincipalOf(box.Snapshot?.UserId)) with { Box = true };
             }
             return null;
         }
@@ -975,7 +978,7 @@ public sealed partial class HaConnector
             if (typed.Present && !string.IsNullOrWhiteSpace(typed.Value) && Changed(armed.ReplyBaseline, typed))
             {
                 var typedAnswer = new Dictionary<string, JsonElement> { [fields[0].Source!.Name] = JsonSerializer.SerializeToElement(new { other = typed.Value }) };
-                return Answer(sessionId, armed, typedAnswer, null, typed.Value, null, submit.Value, DriverOf(submit.Snapshot?.UserId));
+                return Answer(sessionId, armed, typedAnswer, null, typed.Value, null, submit.Value, DriverOf(submit.Snapshot?.UserId), PrincipalOf(submit.Snapshot?.UserId));
             }
         }
         if (pressed && !complete)
@@ -1022,7 +1025,8 @@ public sealed partial class HaConnector
             };
         }
         var driver = pressed ? DriverOf(submit.Snapshot?.UserId) : card!.Value.Driver;
-        return Answer(sessionId, armed, values, null, string.Join(" + ", picked), takesText && card is { } used ? used.Stamp : null, pressed ? submit.Value : null, driver);
+        var principal = pressed ? PrincipalOf(submit.Snapshot?.UserId) : null;
+        return Answer(sessionId, armed, values, null, string.Join(" + ", picked), takesText && card is { } used ? used.Stamp : null, pressed ? submit.Value : null, driver, principal);
     }
 
     // What the reply card published for the armed question, if anything new
@@ -1049,7 +1053,7 @@ public sealed partial class HaConnector
         return (text, current.Value, driver, current.Value == armed.HeldStamp);
     }
 
-    Read Answer(string sessionId, Armed armed, IReadOnlyDictionary<string, JsonElement>? fields, string? text, string shown, string? stamp, string? press, string driver) => new()
+    Read Answer(string sessionId, Armed armed, IReadOnlyDictionary<string, JsonElement>? fields, string? text, string shown, string? stamp, string? press, string driver, string? principal = null) => new()
     {
         Request = new AnswerRequest
         {
@@ -1066,6 +1070,7 @@ public sealed partial class HaConnector
         Stamp = stamp,
         Press = press,
         Driver = driver,
+        Principal = driver == SessionDrivers.Agent ? principal : null,
     };
 
     async Task<string?> BoxValueAsync(string node, CancellationToken ct)
@@ -1098,6 +1103,9 @@ public sealed partial class HaConnector
     // (Test-BridgeAgentUserId, homeAssistant.agentUserIds), else "human".
     string DriverOf(string? userId) =>
         !string.IsNullOrWhiteSpace(userId) && options.AgentUserIds.Contains(userId.Trim(), StringComparer.Ordinal) ? "agent" : "human";
+
+    // Which agent pressed, for the host's own clients (Session.DriverPrincipal); null for a person.
+    string? PrincipalOf(string? userId) => DriverOf(userId) == SessionDrivers.Agent ? SessionDrivers.HomeAssistantPrincipal(userId!) : null;
 
     static string RequestId(string sessionId, string questionId, string what)
     {

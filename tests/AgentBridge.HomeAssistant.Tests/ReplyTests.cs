@@ -594,7 +594,7 @@ public sealed partial class ReplyTests : IDisposable
     }
 
     [Fact]
-    public async Task A_reply_that_fails_after_an_agents_answer_leaves_the_answers_arm_alone()
+    public async Task A_reply_that_fails_after_an_agents_answer_leaves_the_session_with_the_agent()
     {
         var release = new TaskCompletionSource<ReplyResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -621,7 +621,9 @@ public sealed partial class ReplyTests : IDisposable
         await Pass(c);
         Assert.Equal("Reply NOT sent", Activity);
 
-        Idle(turn: 2, message: "Cut it");
+        // The session records the answer: its question goes, on the turn it was asked in, which the
+        // agent's answer drives.
+        Idle();
         await Pass(c);
         Assert.Equal("agent", Detail.GetProperty("driver").GetString());
     }
