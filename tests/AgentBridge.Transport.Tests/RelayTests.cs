@@ -122,6 +122,8 @@ public class RelayTests
     {
         await using var relay = await TestRelay.StartAsync();
         var c = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "aborted");
+        // Aborted before the loop's first receive, the loop never runs and the test proves nothing.
+        await c.Relay.Receiving.WaitAsync(TimeSpan.FromSeconds(10));
 
         c.Relay.AbortSocket();
         await c.Relay.Completion.WaitAsync(TimeSpan.FromSeconds(10));

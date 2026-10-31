@@ -240,8 +240,10 @@ public sealed class RelayClient : IAsyncDisposable
         return TimeSpan.FromMilliseconds(window - (now - recentSends.Peek()) + 1);
     }
 
-    // Test use: what the keep-alive does when no pong comes back.
+    // Test use: what the keep-alive does when no pong comes back, to a receive already waiting.
     internal void AbortSocket() => ws.Abort();
+    internal Task Receiving => receiving.Task;
+    readonly TaskCompletionSource receiving = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     // Test use: send raw bytes the relay must refuse.
     internal async Task SendRawAsync(byte[] data, WebSocketMessageType type)
@@ -283,7 +285,9 @@ public sealed class RelayClient : IAsyncDisposable
         {
             while (ws.State == WebSocketState.Open)
             {
-                var frame = await Wire.ReceiveAsync(ws, Wire.MaxFrame, default);
+                var pending = Wire.ReceiveAsync(ws, Wire.MaxFrame, default);
+                if (!pending.IsCompleted) { receiving.TrySetResult(); }
+                var frame = await pending;
                 if (frame is null) { break; }
                 var (type, data) = frame.Value;
                 if (type == WebSocketMessageType.Text)
