@@ -131,7 +131,8 @@ public sealed partial class HaConnector
                 await UpdateOutcomeAsync(now, ct);
                 Resolved("update-outcome");
             }
-            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
+            // A request that timed out among them (HttpClient's timeout is a cancellation).
+            catch (Exception e) when (e is not AgentHaBridgeRunning && !ct.IsCancellationRequested)
             {
                 nextOutcomeTry = now + options.ButtonsRetry;
                 Problem("update-outcome", $"Home Assistant connector could not tell how the update ended: {Describe(e)}; trying again");
@@ -192,7 +193,7 @@ public sealed partial class HaConnector
     {
         nextUpdateCheck = now + options.UpdateCheck;
         if (pressed) { updateCheckPressed = true; }
-        updateCheck ??= Begin(() => updates!.CheckAsync(updateCancel.Token));
+        updateCheck ??= Begin(() => updates!.CheckAsync(updateCancel.Token).WaitAsync(options.UpdateCheckTimeout, time));
     }
 
     static Task<T> Begin<T>(Func<Task<T>> start)
@@ -275,7 +276,7 @@ public sealed partial class HaConnector
                 await NoticeAsync($"Bridge update already running on {options.MachineName}",
                     $"This press did not start an update: {detail}. That update reports here when it finishes.", ct);
             }
-            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
+            catch (Exception e) when (e is not AgentHaBridgeRunning && !ct.IsCancellationRequested)
             {
                 log($"Home Assistant connector could not say the update is already running: {Describe(e)}");
             }
@@ -312,7 +313,7 @@ public sealed partial class HaConnector
         string? target = null;
         try
         {
-            var release = await updates!.CheckAsync(ct);
+            var release = await updates!.CheckAsync(ct).WaitAsync(options.UpdateCheckTimeout, time, ct);
             if (release is null)
             {
                 var detail = $"{Installed} is already installed, and it is the latest release";

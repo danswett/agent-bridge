@@ -30,6 +30,27 @@ public sealed class HostUpdatesTests : IDisposable
     }
 
     [Fact]
+    public void Pre_releases_follow_the_apps_setting_for_the_profile_read_as_the_app_reads_it()
+    {
+        var updates = new VelopackHostUpdates(root, "work", () => { }, _ => { });
+        Assert.True(updates.Prereleases());
+        var file = Path.Combine(root, "app", "work-settings.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, """{"prereleases": false}""");
+        Assert.False(updates.Prereleases());
+        File.WriteAllText(file, """{"Prereleases": false}""");
+        Assert.False(updates.Prereleases());
+        File.WriteAllText(file, """{"prereleases": true}""");
+        Assert.True(updates.Prereleases());
+        File.WriteAllText(file, "not json");
+        Assert.True(updates.Prereleases());
+        // Another profile's choice is its own.
+        File.WriteAllText(Path.Combine(root, "app", "default-settings.json"), """{"prereleases": false}""");
+        File.WriteAllText(file, "{}");
+        Assert.True(updates.Prereleases());
+    }
+
+    [Fact]
     public async Task A_feed_that_is_configured_but_cannot_be_read_fails_the_check_rather_than_falling_back_to_github()
     {
         // A file another process holds without sharing: Windows refuses the read; elsewhere such

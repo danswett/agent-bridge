@@ -199,6 +199,22 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task A_check_that_never_answers_counts_as_one_that_could_not_reach_the_feed()
+    {
+        updates.CheckGate = new TaskCompletionSource<UpdateRelease?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var c = await Ready();
+        Assert.Equal(1, updates.Checks);
+        await Pass(c, TimeSpan.FromMinutes(2).TotalSeconds);
+        await Pass(c);
+        Assert.False(State.ContainsKey("latest_version"));
+        Assert.StartsWith("The latest release could not be established", State["release_summary"]!.GetValue<string>(), StringComparison.Ordinal);
+        await Pass(c, TimeSpan.FromMinutes(6).TotalSeconds);
+        await Pass(c);
+        Assert.Equal(2, updates.Checks);
+        Assert.Equal("0.1.0", State["latest_version"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_check_that_cannot_reach_the_feed_says_why_and_is_not_called_a_failed_update()
     {
         updates.ReleasesUrl = null;
@@ -526,6 +542,23 @@ public sealed class UpdateTests : IDisposable
         await Pass(c, 16);
         var (_, data) = Assert.Single(ha.NotifiedNow());
         Assert.Equal($"Bridge installer completed on {Machine}", data["title"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task An_outcome_whose_notice_times_out_holds_up_nothing_else_in_the_pass()
+    {
+        Attempt("0.2.0", FakeSessions.T0.AddMinutes(-1));
+        updates.Installed = "0.2.0";
+        // HttpClient's timeout is a cancellation, not an error.
+        ha.NotifyThrows = s => s == "persistent_notification.create" ? new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 15 seconds elapsing.") : null;
+        await using var c = await Ready();
+        var checks = updates.Checks;
+        await Press(c, "check_updates");
+        await Pass(c);
+        Assert.Equal(checks + 1, updates.Checks);
+        ha.NotifyThrows = null;
+        await Pass(c, 16);
+        Assert.Single(ha.NotifiedNow());
     }
 
     [Fact]

@@ -95,6 +95,9 @@ public sealed record HaConnectorOptions
     // after it could not be reached.
     public TimeSpan UpdateCheck { get; init; } = TimeSpan.FromMinutes(30);
     public TimeSpan UpdateRetry { get; init; } = TimeSpan.FromMinutes(5);
+    // How long a check may take before it counts as one that could not reach the feed: one that
+    // hangs must not stop every check after it.
+    public TimeSpan UpdateCheckTimeout { get; init; } = TimeSpan.FromMinutes(2);
     // How long a press's verdict stays on the entity (DaemonUpdateVerdictMinutes), and an update's
     // outcome once the host is back (the hour its progress record would have lasted).
     public TimeSpan UpdateVerdict { get; init; } = TimeSpan.FromMinutes(10);

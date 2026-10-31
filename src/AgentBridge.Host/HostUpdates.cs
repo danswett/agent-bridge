@@ -27,6 +27,9 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
     // while one is being installed (or a feed changed in between) must not take away the release
     // the install downloads and applies.
     readonly Dictionary<string, (UpdateManager Manager, UpdateInfo Info)> found = new(StringComparer.Ordinal);
+    // What was downloaded, which is what is applied: never a same-numbered release another check
+    // found since, from another feed.
+    (UpdateManager Manager, UpdateInfo Info)? downloaded;
 
     string AppFolder => Path.Combine(dataRoot, "app");
 
@@ -39,17 +42,22 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
         return File.Exists(file) ? File.ReadAllText(file).Trim() : "";
     }
 
-    // The app's "Include pre-releases" for this profile (AppPreferences.Prereleases, on unless
-    // turned off).
-    bool Prereleases()
+    // The app's "Include pre-releases" for this profile, read as the app reads it
+    // (AppPreferences.Load: web defaults, so any case; on unless turned off, and the defaults when
+    // the file cannot be read).
+    internal bool Prereleases()
     {
         var file = Path.Combine(AppFolder, $"{profile}-settings.json");
         try
         {
             if (!File.Exists(file)) { return true; }
             using var doc = JsonDocument.Parse(File.ReadAllText(file));
-            return !(doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("prereleases", out var p) && p.ValueKind == JsonValueKind.False);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) { return true; }
+            foreach (var p in doc.RootElement.EnumerateObject())
+            {
+                if (string.Equals(p.Name, "prereleases", StringComparison.OrdinalIgnoreCase)) { return p.Value.ValueKind != JsonValueKind.False; }
+            }
+            return true;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return true; }
     }
@@ -117,10 +125,12 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
         }
     }
 
-    public Task DownloadAsync(UpdateRelease release, Action<int> progress, CancellationToken cancellationToken)
+    public async Task DownloadAsync(UpdateRelease release, Action<int> progress, CancellationToken cancellationToken)
     {
-        var (m, info) = Found(release);
-        return m.DownloadUpdatesAsync(info, progress, cancellationToken);
+        var entry = Found(release);
+        lock (gate) { downloaded = null; }
+        await entry.Manager.DownloadUpdatesAsync(entry.Info, progress, cancellationToken);
+        lock (gate) { downloaded = entry; }
     }
 
     // What the app is started with after the update: in the background, for this host's profile
@@ -129,8 +139,14 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
 
     public void ApplyAndRestart(UpdateRelease release)
     {
-        var (m, info) = Found(release);
-        m.WaitExitThenApplyUpdates(info.TargetFullRelease, silent: true, restart: true, RestartArguments(profile));
+        (UpdateManager Manager, UpdateInfo Info) entry;
+        lock (gate)
+        {
+            entry = downloaded is { } d && d.Info.TargetFullRelease.Version.ToString() == release.Version
+                ? d
+                : throw new InvalidOperationException($"{release.Version} has not been downloaded here");
+        }
+        entry.Manager.WaitExitThenApplyUpdates(entry.Info.TargetFullRelease, silent: true, restart: true, RestartArguments(profile));
         log($"updating to {release.Version}: Velopack applies it once this host has exited, and starts the app again, which starts the host");
         stop();
     }

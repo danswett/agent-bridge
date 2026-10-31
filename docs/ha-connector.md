@@ -588,7 +588,8 @@ looks nothing up.
   Home Assistant shows an update. A check that cannot reach the feed leaves `latest_version`
   out, with `The latest release could not be established: <why>` in the notes, and is tried
   again after five minutes: not `failed`, because a check that could not be made is not a
-  failed update (agent-ha-bridge #92). So does a configured `feed.txt` that cannot be read:
+  failed update (agent-ha-bridge #92). So does a check that has not answered within two
+  minutes, and a configured `feed.txt` that cannot be read:
   it is never taken for GitHub, which would be another channel. A press of Check that finds
   nothing newer says `current`, `Checked just now; <version> is the latest release.` for ten
   minutes, until a check finds a newer one.
