@@ -462,7 +462,8 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Contains("still running", report.ToString());
         Assert.Equal(before, _f.Listing());
         Assert.Equal((true, true), _f.Runtime_.Tasks[$"AgentBridgeDaemon_{FakeAgentHaBridge.Id}"]);
-        Assert.Equal(["disable AgentBridgeDaemon_" + FakeAgentHaBridge.Id, "stop", "enable AgentBridgeDaemon_" + FakeAgentHaBridge.Id, "start AgentBridgeDaemon_" + FakeAgentHaBridge.Id], _f.Runtime_.Calls);
+        // Its task is turned back on, but the daemon that never stopped is not started twice.
+        Assert.Equal(["disable AgentBridgeDaemon_" + FakeAgentHaBridge.Id, "stop", "enable AgentBridgeDaemon_" + FakeAgentHaBridge.Id], _f.Runtime_.Calls);
     }
 
     [Fact]
@@ -1073,6 +1074,300 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.False(report.Ok);
         Assert.Contains("was not seen running", report.ToString());
         Assert.NotNull(MigrationRecord.Load(_f.Profile).Record);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_daemon_task_registered_from_an_administrator_prompt_is_refused_before_anything_changes(bool dryRun)
+    {
+        _f.Runtime_.Refused.Add($"AgentBridgeDaemon_{_f.InstallationId}");
+        var listing = _f.Listing();
+
+        var report = await _f.Migrator().MigrateAsync(dryRun);
+
+        Assert.False(report.Ok);
+        Assert.Contains("registered from an administrator (elevated) prompt", report.ToString());
+        Assert.Contains($"Unregister-ScheduledTask -TaskName AgentBridgeDaemon_{_f.InstallationId}", report.ToString());
+        Assert.Equal(listing, _f.Listing());
+        Assert.Empty(_f.Runtime_.Calls);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+    }
+
+    [Fact]
+    public async Task A_migration_Task_Scheduler_refuses_part_way_is_undone_completely_and_can_be_tried_again()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        _f.Runtime_.Refused.Add(daemon);
+        _f.Runtime_.RefusalVisible = false;
+        var listing = _f.Listing();
+
+        var report = (await _f.Migrator().MigrateAsync(dryRun: false)).ToString();
+
+        Assert.Contains("Access is denied", report);
+        // The task was never turned off, so there is nothing to turn back on, and the undo says so.
+        Assert.DoesNotContain("could not be turned back on", report);
+        Assert.DoesNotContain("Re-enabled", report);
+        Assert.Contains($"{daemon} was never turned off, and agent-ha-bridge is running.", report);
+        Assert.Contains("Rolled back.", report);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+        Assert.Equal(listing, _f.Listing());
+        Assert.True(_f.Runtime_.DaemonRunning);
+        Assert.DoesNotContain($"enable {daemon}", _f.Runtime_.Calls);
+        Assert.DoesNotContain($"start {daemon}", _f.Runtime_.Calls);
+
+        _f.Runtime_.Refused.Clear();
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+    }
+
+    [Fact]
+    public async Task A_rollback_turns_back_on_only_the_tasks_the_migration_turned_off()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        _f.Runtime_.Calls.Clear();
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.Contains($"* Re-enabled {daemon}; agent-ha-bridge is running again.", report.ToString());
+        Assert.Equal([$"enable {daemon}", $"start {daemon}"], _f.Runtime_.Calls);
+    }
+
+    [Fact]
+    public async Task A_keep_awake_task_the_scheduler_refused_to_disable_is_neither_enabled_nor_started_by_the_undo()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        _f.Runtime_.Refused.Add(keepAwake);
+        _f.Runtime_.RefusalVisible = false;
+        var listing = _f.Listing();
+
+        var report = (await _f.Migrator().MigrateAsync(dryRun: false)).ToString();
+
+        Assert.Contains("Access is denied", report);
+        Assert.Contains($"* Re-enabled {daemon}; agent-ha-bridge is running again.", report);
+        Assert.Contains("Rolled back.", report);
+        Assert.Equal([$"disable {daemon}", $"disable {keepAwake}", $"enable {daemon}"], _f.Runtime_.Calls);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+        Assert.Equal(listing, _f.Listing());
+    }
+
+    [Fact]
+    public async Task A_daemon_that_outlived_its_supervisor_has_its_task_started_again_by_the_undo()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        var listing = _f.Listing();
+        _f.Runtime_.OutlivesSupervisor = true;
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("did not stop", report.ToString());
+        Assert.Contains("Rolled back.", report.ToString());
+        // Started for its supervisor: the daemon still running is not what decides it.
+        Assert.Equal([$"disable {daemon}", "stop", $"enable {daemon}", $"start {daemon}"], _f.Runtime_.Calls);
+        Assert.True(_f.Runtime_.SupervisorRunning);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+        Assert.Equal(listing, _f.Listing());
+    }
+
+    [Fact]
+    public async Task A_daemon_the_probe_cannot_see_either_way_is_recorded_as_unknown_not_stopped()
+    {
+        _f.Runtime_.DaemonRunning = false;
+        _f.Runtime_.Unknown = true;
+        bool? recorded = true;
+        _f.Runtime_.OnStop = () => recorded = MigrationRecord.Load(_f.Profile).Record!.DaemonRunning;
+
+        await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.Null(recorded);
+    }
+
+    [Fact]
+    public async Task A_migration_cut_short_before_it_turned_off_a_stopped_daemons_task_rolls_back_without_waiting_for_that_daemon()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        _f.Runtime_.Tasks[daemon] = (true, false);
+        _f.Runtime_.DaemonRunning = false;
+        var listing = _f.Listing();
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        Assert.False(MigrationRecord.Load(_f.Profile).Record!.DaemonRunning);
+        // As a migration cut short between its snapshot and turning the task off leaves it.
+        var path = MigrationRecord.PathIn(_f.Profile);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        json["tasks"]![0]!["disabled"] = false;
+        File.WriteAllText(path, json.ToJsonString());
+        _f.Runtime_.Tasks[daemon] = (true, false);
+        _f.Runtime_.Calls.Clear();
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.Contains("was not running when the migration began; it is left as it was", report.ToString());
+        Assert.Empty(_f.Runtime_.Calls);
+        Assert.False(_f.Runtime_.DaemonRunning);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+        Assert.Equal(listing, _f.Listing());
+    }
+
+    [Fact]
+    public async Task A_task_that_could_not_be_turned_back_on_is_never_reported_as_still_enabled()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        _f.Runtime_.Refused.Add(daemon);
+        _f.Runtime_.DaemonRunning = true;
+
+        var report = (await _f.Migrator().RollbackAsync(dryRun: false)).ToString();
+
+        Assert.Contains($"* {daemon} could not be turned back on", report);
+        Assert.DoesNotContain("still enabled", report);
+        Assert.DoesNotContain("Re-enabled", report);
+        Assert.NotNull(MigrationRecord.Load(_f.Profile).Record);
+    }
+
+    [Fact]
+    public async Task A_record_says_which_tasks_the_migration_turned_off()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (false, false);
+
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+
+        var record = MigrationRecord.Load(_f.Profile).Record!;
+        Assert.True(record.Tasks.Single(t => t.Name == daemon).Disabled);
+        Assert.False(record.Tasks.Single(t => t.Name == keepAwake).Disabled);
+    }
+
+    [Fact]
+    public async Task A_record_from_a_build_that_did_not_say_which_tasks_it_turned_off_still_rolls_back()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var path = MigrationRecord.PathIn(_f.Profile);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        foreach (var t in json["tasks"]!.AsArray()) { t!.AsObject().Remove("disabled"); }
+        File.WriteAllText(path, json.ToJsonString());
+        _f.Runtime_.Calls.Clear();
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.Equal([$"enable {daemon}", $"start {daemon}"], _f.Runtime_.Calls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_task_Task_Scheduler_cannot_be_asked_about_refuses_the_migration_before_anything_changes(bool dryRun)
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        _f.Runtime_.Unreadable.Add(daemon);
+        var listing = _f.Listing();
+
+        var report = await _f.Migrator().MigrateAsync(dryRun);
+
+        Assert.False(report.Ok);
+        Assert.Contains($"Refused: Task Scheduler could not be asked about {daemon}", report.ToString());
+        Assert.Empty(_f.Runtime_.Calls);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+        Assert.Equal(listing, _f.Listing());
+    }
+
+    [Fact]
+    public async Task An_older_records_task_turned_back_on_by_a_failed_rollback_is_still_started_by_the_next()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var path = MigrationRecord.PathIn(_f.Profile);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        foreach (var t in json["tasks"]!.AsArray()) { t!.AsObject().Remove("disabled"); }
+        File.WriteAllText(path, json.ToJsonString());
+        _f.Runtime_.StartRefused.Add(keepAwake);
+
+        Assert.False((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        Assert.True(_f.Runtime_.Tasks[keepAwake].Enabled);
+        _f.Runtime_.StartRefused.Clear();
+        _f.Runtime_.Calls.Clear();
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.Contains($"start {keepAwake}", _f.Runtime_.Calls);
+        Assert.DoesNotContain($"start {daemon}", _f.Runtime_.Calls);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+    }
+
+    [Fact]
+    public async Task An_older_records_task_whose_turning_back_on_cannot_be_recorded_is_left_disabled_for_a_retry()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var path = MigrationRecord.PathIn(_f.Profile);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        foreach (var t in json["tasks"]!.AsArray()) { t!.AsObject().Remove("disabled"); }
+        File.WriteAllText(path, json.ToJsonString());
+        File.SetAttributes(path, FileAttributes.ReadOnly);
+        _f.Runtime_.Calls.Clear();
+        try
+        {
+            var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+            Assert.False(report.Ok);
+            Assert.Contains($"* {daemon} was left disabled", report.ToString());
+            Assert.DoesNotContain($"enable {daemon}", _f.Runtime_.Calls);
+            Assert.False(_f.Runtime_.Tasks[daemon].Enabled);
+        }
+        finally { File.SetAttributes(path, FileAttributes.Normal); }
+    }
+
+    [Fact]
+    public async Task A_task_marked_turned_off_but_never_touched_and_not_this_users_to_change_is_not_started()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        // As a migration cut short between marking the task and asking the scheduler leaves it.
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        _f.Runtime_.Refused.Add(keepAwake);
+        _f.Runtime_.Calls.Clear();
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.Equal([$"enable {daemon}", $"start {daemon}"], _f.Runtime_.Calls);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+    }
+
+    [Fact]
+    public async Task An_older_records_task_still_enabled_is_not_started_by_a_rollback_unless_it_is_the_daemon()
+    {
+        var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        var path = MigrationRecord.PathIn(_f.Profile);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        foreach (var t in json["tasks"]!.AsArray()) { t!.AsObject().Remove("disabled"); }
+        json.AsObject().Remove("daemonRunning");
+        File.WriteAllText(path, json.ToJsonString());
+        // As an older build left a keep-awake task the scheduler refused to disable.
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        _f.Runtime_.Refused.Add(keepAwake);
+        _f.Runtime_.Calls.Clear();
+
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.Equal([$"enable {daemon}", $"start {daemon}"], _f.Runtime_.Calls);
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
     }
 
     [Theory]

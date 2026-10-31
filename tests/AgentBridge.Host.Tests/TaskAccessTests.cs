@@ -1,0 +1,111 @@
+using System.Runtime.Versioning;
+using System.Security.Principal;
+using AgentBridge.Host.Migration;
+using Xunit;
+
+
+public class TaskAccessTests
+{
+    [SupportedOSPlatform("windows")] static SecurityIdentifier User => new("S-1-5-21-1-2-3-1000");
+    [SupportedOSPlatform("windows")] static SecurityIdentifier Administrators => new("S-1-5-32-544");
+
+    // As the rehearsal's VM found them (#114): from an elevated prompt, Administrators own the
+    // task and the user may only read it; from a normal one, the user owns it with full access.
+    const string FromElevatedPrompt = "O:BAG:S-1-5-21-1-2-3-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;S-1-5-21-1-2-3-1000)";
+    const string FromNormalPrompt = "O:S-1-5-21-1-2-3-1000G:S-1-5-21-1-2-3-513D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;S-1-5-21-1-2-3-1000)(A;;FR;;;S-1-5-21-1-2-3-1000)";
+
+    [Fact]
+    public void A_task_registered_from_an_elevated_prompt_cannot_be_changed_by_its_user_unelevated()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.False(TaskAccess.CanModify(FromElevatedPrompt, User, []));
+    }
+
+    [Fact]
+    public void The_same_task_can_be_changed_with_the_administrators_group_enabled()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.True(TaskAccess.CanModify(FromElevatedPrompt, User, [Administrators]));
+    }
+
+    [Fact]
+    public void A_task_registered_from_a_normal_prompt_can_be_changed_by_its_user()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.True(TaskAccess.CanModify(FromNormalPrompt, User, []));
+    }
+
+    [Fact]
+    public void A_conditional_entry_that_could_decide_write_leaves_the_answer_to_the_scheduler()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        // Whether the condition holds is the token's business, so neither a yes nor a no is known.
+        Assert.Null(TaskAccess.CanModify("D:(XA;;FA;;;S-1-5-21-1-2-3-1000;(WIN://SYSAPPID Contains \"x\"))", User, []));
+        Assert.Null(TaskAccess.CanModify("D:(XD;;GW;;;S-1-5-21-1-2-3-1000;(WIN://SYSAPPID Contains \"x\"))(A;;FA;;;S-1-5-21-1-2-3-1000)", User, []));
+    }
+
+    [Fact]
+    public void A_conditional_entry_after_write_is_decided_changes_nothing()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.True(TaskAccess.CanModify("D:(A;;FA;;;S-1-5-21-1-2-3-1000)(XD;;GW;;;S-1-5-21-1-2-3-1000;(WIN://SYSAPPID Contains \"x\"))", User, []));
+        Assert.False(TaskAccess.CanModify("D:(A;;FR;;;S-1-5-21-1-2-3-1000)(XA;;FR;;;S-1-5-21-1-2-3-1000;(WIN://SYSAPPID Contains \"x\"))", User, []));
+    }
+
+    [Fact]
+    public void An_owner_rights_entry_applies_to_the_user_who_owns_the_task_and_no_one_else()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.True(TaskAccess.CanModify("O:S-1-5-21-1-2-3-1000D:(A;;FA;;;OW)", User, []));
+        Assert.False(TaskAccess.CanModify("O:BAD:(A;;FA;;;OW)(A;;FR;;;S-1-5-21-1-2-3-1000)", User, []));
+        // Owned through Administrators held for denial only: its denial still applies.
+        Assert.False(TaskAccess.CanModify("O:BAD:(D;;GW;;;OW)(A;;FA;;;S-1-5-21-1-2-3-1000)", User, [], [Administrators]));
+    }
+
+    [Fact]
+    public void An_owner_rights_entry_read_without_the_owner_leaves_the_answer_to_the_scheduler()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.Null(TaskAccess.CanModify("D:(A;;FA;;;OW)", User, []));
+        Assert.True(TaskAccess.CanModify("D:(A;;FA;;;S-1-5-21-1-2-3-1000)(D;;GW;;;OW)", User, []));
+    }
+
+    [Fact]
+    public void A_denial_listed_before_an_allowance_wins()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.False(TaskAccess.CanModify("D:(D;;GW;;;S-1-5-21-1-2-3-1000)(A;;FA;;;S-1-5-21-1-2-3-1000)", User, []));
+    }
+
+    [Fact]
+    public void A_generic_write_allowance_counts_as_write()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.True(TaskAccess.CanModify("D:(A;;GW;;;S-1-5-21-1-2-3-1000)", User, []));
+    }
+
+    [Fact]
+    public void A_denial_to_a_group_held_for_denial_only_still_refuses()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        // An unelevated administrator: Administrators is deny-only, so it matches the denial
+        // though the user is granted full access after it.
+        const string sddl = "D:(D;;GW;;;BA)(A;;FA;;;S-1-5-21-1-2-3-1000)";
+        Assert.False(TaskAccess.CanModify(sddl, User, [], [Administrators]));
+        Assert.True(TaskAccess.CanModify(sddl, User, [], []));
+    }
+
+    [Fact]
+    public void A_group_held_for_denial_only_never_grants()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.False(TaskAccess.CanModify(FromElevatedPrompt, User, [], [Administrators]));
+    }
+
+    [Fact]
+    public void A_descriptor_that_cannot_be_read_leaves_the_answer_unknown()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.Null(TaskAccess.CanModify("not a descriptor", User, []));
+    }
+}

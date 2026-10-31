@@ -76,6 +76,15 @@ second snapshot the first's changes as the state to restore; the second is refus
    * a hook settings file is there but cannot be read as JSON: whether it holds
      agent-ha-bridge's entries, and a session started with them, cannot be told;
    * no host is serving the profile;
+   * agent-ha-bridge's daemon or keep-awake task is enabled and this user may not change it. One
+     registered from an administrator (elevated) prompt is owned by Administrators and leaves
+     the user only read access; unelevated, that membership is deny-only, so Task Scheduler
+     would refuse to disable it part-way through (#114). It is read from the task's
+     owner and discretionary list, as Windows' access check reads them. The fix is to re-register it as the
+     user: remove it from an elevated prompt and run agent-ha-bridge's installer again from a
+     normal one. When that cannot be told (a conditional entry that could decide it, whose
+     condition is the token's to evaluate, is one way), the migration goes ahead, and a refusal part-way is
+     undone (below);
    * the settings to carry over would leave the profile's `config.json` with problems, in
      launching or in the Home Assistant connector (a `baseUrl` it could not use, say).
 2. **Snapshot.** Writes `migration.json` in the profile's folder (state `migrating`) and a copy
@@ -256,11 +265,23 @@ snapshot to roll back by hand, rather than skipping a file or a task and deletin
    its report, and the record and snapshot for `rollback`.
 4. Checks the files recorded by hash, and reports any that changed while migrated (by someone
    else; neither step writes them).
-5. Re-enables each task that was enabled before, starts it, and waits until the G5 probe sees
+5. Re-enables each task that was enabled before and is disabled now, starts it unless its daemon
+   and its supervisor (`CopilotBridgeSupervisor_<id>`) are both already running, and waits until the G5 probe sees
    agent-ha-bridge's daemon running again: that installation's own mutex
    (`AgentBridgeDaemon_<id>`) seen, since a probe that cannot tell, a supervisor or task running
    while the daemon fails to start, or another installation's daemon would otherwise pass for it,
    and the record and snapshot would go with nothing running. A task that was disabled before stays disabled.
+   A daemon that refused to stop after its supervisor did still has its task started, so it is
+   restarted if it fails: the new supervisor's daemon exits at once on the running daemon's mutex,
+   and the supervisor retries until it is the only one.
+   Only what the migration turned off is put back: the record marks each task as it is
+   disabled, and one the scheduler refused to disable is neither enabled nor started, since
+   with read access alone both fail and every rollback would keep the record (#114). In a
+   record from an older build, which does not say, a task still enabled is left alone.
+   The record also says whether the daemon was running when the migration began (unknown when the
+   probe could not tell). A rollback does
+   not wait for a daemon that was known to be stopped then and whose task the migration never turned
+   off (it was cut short first): nothing stopped it, and waiting would time out on every attempt.
 6. Deletes `migration.json` and the snapshot. If anything above went wrong they are kept, and
    the report says what to do. A migration cut short (`migration status` says "part-way") is
    rolled back the same way.

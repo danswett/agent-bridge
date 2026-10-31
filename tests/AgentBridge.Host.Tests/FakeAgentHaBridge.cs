@@ -215,26 +215,43 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
         [$"AgentBridgeDaemon_{fake.InstallationId}"] = (true, true),
     };
     public bool DaemonRunning { get; set; } = true;
+    public bool SupervisorRunning { get; set; } = true;
     // A daemon that does not stop when it is told to.
     public bool Stubborn { get; set; }
+    // A daemon that does not stop, after its supervisor did.
+    public bool OutlivesSupervisor { get; set; }
     // A task that starts, but no daemon that is seen.
     public bool StartsNothing { get; set; }
+    // Tasks Task Scheduler refuses to change or run for this user (registered from an elevated
+    // prompt). With RefusalVisible, Task reports them as not modifiable; without, it cannot tell.
+    public HashSet<string> Refused { get; } = [];
+    public bool RefusalVisible { get; set; } = true;
+    // Tasks Task Scheduler cannot be asked about at all (its service refusing the query).
+    public HashSet<string> Unreadable { get; } = [];
+    // Tasks it refuses to run, for now.
+    public HashSet<string> StartRefused { get; } = [];
     public List<string> Calls { get; } = [];
 
-    public ScheduledTaskState? Task(string name) => Tasks.TryGetValue(name, out var t) ? new(t.Enabled, t.Running) : null;
+    public ScheduledTaskState? Task(string name) => Unreadable.Contains(name)
+        ? throw new IOException($"Task Scheduler refused {name}: The RPC server is unavailable.")
+        : Tasks.TryGetValue(name, out var t)
+        ? new(t.Enabled, t.Running, RefusalVisible ? !Refused.Contains(name) : null)
+        : null;
 
     public void SetEnabled(string name, bool enabled)
     {
         Calls.Add($"{(enabled ? "enable" : "disable")} {name}");
+        if (Refused.Contains(name)) { throw new IOException($"Task Scheduler refused {name}: Access is denied."); }
         Tasks[name] = (enabled, Tasks[name].Running);
     }
 
     public void Start(string name)
     {
         Calls.Add($"start {name}");
+        if (Refused.Contains(name) || StartRefused.Contains(name)) { throw new IOException($"Task Scheduler refused {name}: Access is denied."); }
         if (!Tasks[name].Enabled) { throw new IOException("disabled"); }
         Tasks[name] = (true, true);
-        if (name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal) && !StartsNothing) { DaemonRunning = true; }
+        if (name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal) && !StartsNothing) { DaemonRunning = true; SupervisorRunning = true; }
     }
 
     // Runs as the daemon is stopped: after the snapshot, before any settings file is written.
@@ -246,6 +263,8 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
         Calls.Add("stop");
         OnStop?.Invoke();
         if (Stubborn) { return; }
+        SupervisorRunning = false;
+        if (OutlivesSupervisor) { throw new IOException("agent-ha-bridge's daemon (process 4242) did not stop"); }
         DaemonRunning = false;
         foreach (var name in Tasks.Keys.ToList()) { Tasks[name] = (Tasks[name].Enabled, false); }
     }
@@ -260,6 +279,8 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
     public string? OtherDaemon { get; set; }
 
     public bool Seen(string installationId) => (DaemonRunning && installationId == fake.InstallationId) || installationId == OtherDaemon;
+
+    public bool SupervisorSeen(string installationId) => SupervisorRunning && installationId == fake.InstallationId;
 
     // Each agent's running processes (none unless set); null when they could not all be identified.
     public Dictionary<AgentBridge.Protocol.AgentKind, int?> Agents { get; } = [];
