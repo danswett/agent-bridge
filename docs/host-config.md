@@ -44,7 +44,8 @@ follow.
       "claude": { "model": "opus" },
       "codex": { }
     },
-    "transfer": { "serve": true, "receive": true, "maxBytes": 26214400, "maxSourceBytes": null }
+    "transfer": { "serve": true, "receive": true, "maxBytes": 26214400, "maxSourceBytes": null },
+    "remoteFolderTrust": false
   },
   "homeAssistant": {
     "enabled": false,
@@ -92,6 +93,7 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `launch.transfer.receive` | `true` | Bring sessions here from the account's other machines (`sessions.transfer`) |
 | `launch.transfer.maxBytes` | `26214400` (25 MiB) | The largest session bundle, compressed, this machine sends or takes: 1 MiB to 200 MiB. A transfer needs it on both machines |
 | `launch.transfer.maxSourceBytes` | 10 × `maxBytes` | The most read from disk to pack one, and unpacked to install one: from `maxBytes` to 20 GiB |
+| `launch.remoteFolderTrust` | `false` | A person may answer a launched agent's folder-trust question (Trust or Quit) from their phone, browser or Windows app, with a command that device signs ([v1-launch.md](protocol/v1-launch.md#folder-trust)). Off: the question is shown on those devices read-only, to answer at the machine. Set it here, with `agent-bridge-host config set launch.remoteFolderTrust true`, or in the Windows app's Settings; never from another device. Trusting a folder lets the agent run what is in it |
 | `homeAssistant.enabled` | `false` | The Home Assistant connector ([ha-connector.md](ha-connector.md)): this machine's sessions on the existing agent-ha-bridge dashboard. Runs only while agent-ha-bridge does not, and only with a token (`agent-bridge-host ha token set`, kept protected beside the device key, never in this file) |
 | `homeAssistant.baseUrl` | none | The Home Assistant, `http` or `https`, with no credentials in it. Required when enabled |
 | `homeAssistant.dashboardUrlPath` | `agent-decisions` | The dashboard agent-ha-bridge's writer generates. Only read, to know when an ended session's card has gone |

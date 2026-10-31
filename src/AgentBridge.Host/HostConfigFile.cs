@@ -36,10 +36,10 @@ public static class HostConfigFile
         return clean.TrimEnd();
     }
 
-    // Sets permissions.remoteApproval and name (an empty name removes it). A file that is not
-    // valid JSON is left alone and the change refused, rather than replaced by one that has
-    // lost whatever the person meant it to say.
-    public static void Patch(string folder, bool? remoteApproval, string? name)
+    // Sets permissions.remoteApproval, launch.remoteFolderTrust and name (an empty name removes
+    // it). A file that is not valid JSON is left alone and the change refused, rather than
+    // replaced by one that has lost whatever the person meant it to say.
+    public static void Patch(string folder, bool? remoteApproval, string? name, bool? remoteFolderTrust = null)
     {
         var path = Path.Combine(folder, HostSettings.FileName);
         JsonObject root;
@@ -66,6 +66,15 @@ public static class HostConfigFile
                 root["permissions"] = permissions = [];
             }
             permissions["remoteApproval"] = approve;
+        }
+        if (remoteFolderTrust is { } trust)
+        {
+            if (root["launch"] is not JsonObject launch)
+            {
+                if (root["launch"] is not null) { throw new InvalidOperationException($"launch in {path} is not an object; fix it by hand first"); }
+                root["launch"] = launch = [];
+            }
+            launch["remoteFolderTrust"] = trust;
         }
         if (name is not null)
         {

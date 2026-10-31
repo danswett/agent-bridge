@@ -20,6 +20,7 @@ offered. The relay sees none of it.
 | Capability | Ops |
 |---|---|
 | `sessions.launch` | `launch.options`, `session.launch`. Left out while the machine cannot start sessions: agent-ha-bridge running for the user (as for `sessions.answer`), launching turned off in its config, a host that is elevated or not on the person's desktop, or a platform without it yet. A client then offers no Launch |
+| `launch.trust` | `launch.trust.answer` ([Folder trust](#folder-trust)). Offered with `sessions.launch`, on a channel through the relay only. Whether a question can be answered is its own `answerable` |
 
 A host with `sessions.launch` and no approved workspace still offers it, so a client can say
 how to approve one.
@@ -63,6 +64,7 @@ Request `data`: `{}`. Result, what `session.launch` can name on this machine now
 | `resumable` | Sessions that can be resumed, newest first, at most 50 (12 by default): ended (never live), and only those whose folder is in an approved workspace or a worktree the host made for one. None of an agent whose discovery is held ([below](#while-discovery-is-held)). `launcher` resumes it; `title` is at most 120 characters, unique in the list |
 | `defaults` | `agent` and `workspace` a launch gets when it names none, and `permissions`, `ask` or `allowAll` |
 | `busy` | Present when a launch now would be `busy`, saying why |
+| `trust` | Present when launched agents are waiting on folder-trust questions: at most 4 [`TrustQuestion`s](#folder-trust), newest first |
 
 The result fits 40 KiB: a host drops the oldest resumable sessions, then the longest model
 lists, until it does.
@@ -122,20 +124,23 @@ Result: `{ "outcome", "reason", "session", "launched" }`:
 | `busy` | A session launched earlier on this machine is waiting for a person to answer whether to trust its folder, or the host's discovery is held ([below](#while-discovery-is-held)). `reason` says which. Nothing was started | No |
 | `refused` | Nothing was started: an invalid request, a value the machine does not offer (`reason` lists what it does), no approved workspace, a session to resume that is not on the list or is running, its folder no longer approved, worktree isolation that failed or is at its cap, a session from another machine that could not be brought (the reason says why, the other machine's words included), a prompt too long for the command line, attachments the agent cannot take, launching off, agent-ha-bridge active for the user, an elevated host or one not on the desktop, or a platform without launching | No |
 
-`reason` is present for anything but `started`. `launched` says what was settled on, after the
+`reason` is present for anything but `started`. With `unconfirmed` or `busy` because a launched
+agent is asking whether to trust its folder, `trust` is that [question](#folder-trust). `launched` says what was settled on, after the
 machine's defaults: `{ agent, workspace, resume, cwd, worktree, profile, model, effort,
 context, permissions, transfer }`, where `cwd` is where the agent starts (a new worktree for an
 isolated workspace, with `worktree: true`), and `transfer`, for a session brought from another
 machine, is `{ from, session, bytes }` with `resume` its new id here. A client treats an outcome it does not know as
 `unconfirmed`: something may have started.
 
-**Trust is answered only at the machine.** An agent may ask, before its session registers,
-whether to trust the folder (Copilot's "Confirm folder trust", Claude's "Do you trust this
-folder?" and its Bypass Permissions warning, Codex's "Trust this folder?"). A host reads the agent's window to see it, says
-so in `unconfirmed`, and never types into it. For the next two minutes, while the question
-shows, other launches on that machine are `busy`, so no later press is ever taken as its
-answer and nothing new starts over it, as agent-ha-bridge does. Once a person answers at the
-machine the session registers and appears like any other.
+**Trust is a person's to answer.** An agent may ask, before its session registers, whether to
+trust the folder (Copilot's "Confirm folder trust", Claude's "Do you trust this folder?" and
+its Bypass Permissions warning, Codex's "Trust this folder?"). A host reads the agent's window
+to see it, says so in `unconfirmed` with the [question](#folder-trust), and never answers it on
+its own. For the next two minutes, while the question shows, other launches on that machine are
+`busy`, so no later press is ever taken as its answer and nothing new starts over it, as
+agent-ha-bridge does. A person answers it at the machine or, where the machine allows it, from
+their phone, browser or Windows app ([Folder trust](#folder-trust)); the session then registers
+and appears like any other.
 
 **One start at a time.** A host starts one launch at a time (worktree, then the agent's
 process); a second press waits its turn. Each launch is bound to its session by the id it was
@@ -145,6 +150,87 @@ one under it. Only when that cannot be told is a session started after the launc
 then only if no other Codex launch could claim it; no session is ever bound to two launches.
 While a launch's agent runs, the session it was started on is not resumable: it is left out of
 `resumable`, and a resume of it is `refused`, even after its launch has answered.
+
+## Folder trust
+
+A pending folder-trust question, in `launch.options`' `trust` and a launch result's `trust`:
+
+```json
+{
+  "id": "5d0c9f3e-2b1a-4c8d-9e7f-6a5b4c3d2e1f",
+  "agent": "codex", "kind": "codex", "label": "Codex",
+  "workspace": "Bridge",
+  "folder": "C:\\Users\\me\\repos\\bridge\\web",
+  "root": "c:\\users\\me\\repos\\bridge",
+  "rootNote": "Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:",
+  "warning": "Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. …",
+  "askedAt": "2026-10-31T16:31:30Z",
+  "answerable": false,
+  "atMachine": "Answer at the machine. To answer from your devices, turn on \"Answer folder-trust questions from my devices\" in the Agent Bridge app's Settings on that machine, or run agent-bridge-host config set launch.remoteFolderTrust true there and restart the host."
+}
+```
+
+| Field | Notes |
+|---|---|
+| `id` | Names this question while it waits |
+| `agent`, `kind`, `label` | The launcher that started the agent, its agent, and its name |
+| `workspace`, `folder` | The workspace the launch named, and the exact folder the agent was started in, which its window shows. A client shows the whole path, never shortened |
+| `root`, `rootNote` | When trusting applies to an enclosing repository instead (Codex): that folder, and the agent's note saying so |
+| `warning` | The agent's own words, from its window (paragraphs separated by `\n`), at most 2 KiB. Absent when its window could not be read in full |
+| `askedAt` | When it was first seen |
+| `answerable` | Whether `launch.trust.answer` can answer it now. When not, `atMachine` says why, and how to change that where a person can: the machine's setting is off (the default), the machine is read-only or agent-ha-bridge runs there, or its window could not be read in full |
+
+A client that does not know these fields ignores them, as it ignores any; old hosts send none.
+
+### `launch.trust.answer`
+
+Only with `launch.trust`, on a channel through the relay. Request `data`:
+
+```json
+{
+  "question": "5d0c9f3e-2b1a-4c8d-9e7f-6a5b4c3d2e1f",
+  "choice": "trust",
+  "command": { "body": "…", "by": "…", "mac": "…" }
+}
+```
+
+`choice` is `trust` or `quit`. `command` is a signed command
+([v1-transfer.md](v1-transfer.md#the-signed-command)) the answering device made for exactly this:
+`action` `launch.trust:trust` or `launch.trust:quit` (so one choice cannot be sent as the
+other), `principal` the device itself, `target.machine` this machine, `target.session` the
+question's `id`, and `to` this machine. Its `request` is the press: a repeat gets the first
+outcome and types nothing.
+
+A host acts on it only if all of these hold, and otherwise answers `refused` and types nothing:
+
+* the machine allows it: `launch.remoteFolderTrust` is on in its `config.json`, which only a
+  person at the machine changes (its terminal, or the Windows app's Settings, a trusted local
+  caller, §6.3 invariant 13); the machine is not read-only (`delivery.readOnly`), and
+  agent-ha-bridge is not running for the user (design G5);
+* it came through the relay, on a channel from the device that signed it, and the relay lists
+  that device as a person's (`pwa` or `app`), not a machine. A host's own pipe (agents, the MCP
+  server) and the Home Assistant connector cannot send it at all, and no Home Assistant entity,
+  notification button or launch payload answers one;
+* the command verifies for this machine, choice and question, within its lifetime;
+* the question still waits, and nobody else is answering it.
+
+The answer goes only into that agent's own console, by its process, as replies do. **Trust**
+moves the highlight to the option that trusts (Copilot "Yes", this session only; Claude "Yes, I
+trust this folder"; Codex "Trust and continue"), reads the window to see it there, and presses
+Enter. **Quit** presses Esc, which each of them reads as no. Every key goes only while the
+folder and every option, highlight included, still read exactly as they did, and nothing is
+ever typed twice.
+
+Result: `{ "outcome", "reason", "session" }`:
+
+| `outcome` | Meaning |
+|---|---|
+| `started` | Trusted: the question has gone and the session registered (for Copilot, its window ready). `session` is its id. Other launches are no longer `busy` for it |
+| `declined` | Quit: the agent closed. Nothing was launched |
+| `unconfirmed` | A key was typed, but its effect was not seen within the host's wait (60 s): "Not confirmed: answer at the machine. …". Never retried |
+| `refused` | Nothing was typed. `reason` says why |
+
+A client treats an outcome it does not know as `unconfirmed`.
 
 ### While discovery is held
 

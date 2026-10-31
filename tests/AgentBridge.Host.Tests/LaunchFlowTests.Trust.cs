@@ -1,0 +1,295 @@
+using System.Text.Json;
+using AgentBridge.Host;
+using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Protocol;
+using AgentBridge.Transport;
+using Xunit;
+
+// launch.trust end to end: a person answering a launched agent's folder-trust question from their
+// phone, through the relay, with a command it signed. The agent is played by the fake screens and
+// starter: what it draws, and what it does with keys that reach it.
+public sealed partial class LaunchFlowTests
+{
+    // Codex's question as 0.165 drew it on the test VM (2026-10-31), blank rows and all.
+    string[] CodexAsks(string root) =>
+    [
+        "",
+        "  Folder access",
+        $"  {app}",
+        "",
+        "  Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:",
+        $"  {root}",
+        "",
+        "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings",
+        "  can run code automatically, even without a model request. Continue only if you trust these files. Your trust",
+        "  decision will be saved.",
+        "",
+        "› 1. Trust and continue",
+        "  2. Quit",
+        "",
+        "  enter continue · esc quit",
+    ];
+
+    // Claude's, as 2.x drew it there: "No, exit" first, and highlighted.
+    string[] ClaudeAsks(bool onYes = false) =>
+    [
+        "────────────────────",
+        " Accessing workspace:",
+        "",
+        $" {app}",
+        "",
+        " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+        " project, or work from your team). If not, take a moment to review what's in this folder first.",
+        "",
+        " Claude Code'll be able to read, edit, and execute files here.",
+        "",
+        " Security guide",
+        "",
+        onYes ? "   No, exit" : " > No, exit",
+        onYes ? " > Yes, I trust this folder" : "   Yes, I trust this folder",
+        "",
+        " Enter to confirm · Esc to cancel",
+    ];
+
+    string[] CopilotAsks() =>
+    [
+        "╭──────────────────────────╮",
+        "│ Confirm folder trust     │",
+        "│ ╭──────────────────────╮ │",
+        $"│ │ {app} │ │",
+        "│ ╰──────────────────────╯ │",
+        "│                          │",
+        "│ Copilot can read files in this folder and, with your permission, edit them or run code and shell commands. It will   │",
+        "│ remember your permissions for the rest of this session.                                                              │",
+        "│                          │",
+        "│ Do you trust the files in this folder?                                                                               │",
+        "│                          │",
+        "│ ❯ 1. Yes                 │",
+        "│   2. Yes, and remember this folder for future sessions │",
+        "│   3. No (Esc)            │",
+        "│                          │",
+        "│ ↑/↓ to navigate · enter to select · esc to cancel │",
+        "╰──────────────────────────╯",
+    ];
+
+    FolderTrustAnswers ServeTrust(LaunchConfig config, TimeSpan? trustConfirm = null)
+    {
+        var launcher = Launcher(config, trustConfirm: trustConfirm);
+        var answers = new FolderTrustAnswers(host.Key, launcher);
+        answers.Attach(host.Relay);
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: launcher) { TrustAnswers = answers }.HandleAsync;
+        return answers;
+    }
+
+    LaunchConfig Trusting() => Config(c => c with { RemoteFolderTrust = true });
+
+    // What the phone sends: the question, the choice, and a command it signed for exactly that.
+    static object Answer(SecureChannel ch, string question, string choice, P256KeyPair signer, string? signedChoice = null, string? request = null, string? signedQuestion = null)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var command = SignedCommands.Sign(signer, ch.PeerStatic!, new CommandBody
+        {
+            V = 1,
+            Action = TrustProtocol.Action(signedChoice ?? choice),
+            Request = request ?? Guid.NewGuid().ToString(),
+            Principal = new CommandPrincipal { Kind = "user", Device = Wire.DeviceId(signer.Public) },
+            Target = new CommandTarget { Machine = ch.PeerId, Session = signedQuestion ?? question },
+            To = ch.PeerId,
+            IssuedAt = now.ToUnixTimeSeconds(),
+            ExpiresAt = now.AddMinutes(5).ToUnixTimeSeconds(),
+        });
+        return new { question, choice, command };
+    }
+
+    static async Task<(string Outcome, string? Reason, string? Session)> AnswerAsync(SecureChannel ch, object answer)
+    {
+        var r = await RequestAsync(ch, TrustProtocol.Answer, answer);
+        return (r.GetProperty("outcome").GetString()!, r.TryGetProperty("reason", out var why) ? why.GetString() : null, r.TryGetProperty("session", out var s) ? s.GetString() : null);
+    }
+
+    static async Task<JsonElement> LaunchTrustAsync(SecureChannel ch, object settings)
+    {
+        var data = JsonSerializer.SerializeToNode(settings, ProtocolJson.Options)!.AsObject();
+        data["request"] = Guid.NewGuid().ToString();
+        return await RequestAsync(ch, LaunchProtocol.Launch, data);
+    }
+
+    [Fact]
+    public async Task A_person_trusts_a_waiting_Codex_folder_from_their_phone_and_the_launch_completes()
+    {
+        locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        starter.Registers = false;
+        var root = Path.GetDirectoryName(app)!.ToLowerInvariant();
+        screens.Rows = CodexAsks(root);
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        Assert.Contains(TrustProtocol.Capability, await CapabilitiesAsync(ch));
+
+        var launched = await LaunchTrustAsync(ch, new { agent = "codex", workspace = "App", prompt = "add pagination" });
+        Assert.Equal("unconfirmed", launched.GetProperty("outcome").GetString());
+        Assert.Contains("A person can answer that here or at the machine", launched.GetProperty("reason").GetString());
+        var q = launched.GetProperty("trust");
+        Assert.True(q.GetProperty("answerable").GetBoolean());
+        Assert.Equal(("codex", "codex", "Codex", "App", app), (q.GetProperty("agent").GetString(), q.GetProperty("kind").GetString(), q.GetProperty("label").GetString(), q.GetProperty("workspace").GetString(), q.GetProperty("folder").GetString()));
+        Assert.Equal(root, q.GetProperty("root").GetString());
+        Assert.Equal("Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:", q.GetProperty("rootNote").GetString());
+        Assert.Equal("Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a model request. Continue only if you trust these files. Your trust decision will be saved.",
+            q.GetProperty("warning").GetString());
+        var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
+        Assert.Equal(q.GetProperty("id").GetString(), Assert.Single(options.GetProperty("trust").EnumerateArray()).GetProperty("id").GetString());
+        Assert.True(options.TryGetProperty("busy", out _));
+
+        // Codex takes the Enter, its question goes, and its session starts.
+        screens.OnTyped = plan =>
+        {
+            screens.Rows = ["› add pagination"];
+            starter.RegisterCodex(starter.Specs[0], starter.Pids[0], 7001, starter.CodexId);
+        };
+        var answer = await AnswerAsync(ch, Answer(ch, q.GetProperty("id").GetString()!, "trust", client.Key));
+
+        Assert.Equal(("started", null, starter.CodexId), answer);
+        var typed = Assert.Single(screens.Plans);
+        var send = Assert.Single(typed.Sends);
+        Assert.Equal(("", true), (send.Text, send.Enter));
+        // Only while the folder and the options read exactly as they were, highlight and all.
+        Assert.Equal([2, 11, 12], send.Expect!.Select(e => e.Row));
+        Assert.Equal(starter.Pids[0], Assert.Single(screens.Typed));
+        await WaitAsync(async () =>
+        {
+            var now = await RequestAsync(ch, LaunchProtocol.Options, new { });
+            return !now.TryGetProperty("busy", out _) && !now.TryGetProperty("trust", out _);
+        });
+    }
+
+    [Fact]
+    public async Task Trusting_from_a_phone_moves_Claudes_highlight_to_trust_and_sees_it_there_before_Enter()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        starter.Registers = false;
+        screens.Rows = ClaudeAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var q = (await LaunchTrustAsync(ch, new { agent = "claude", workspace = "App", prompt = "go" })).GetProperty("trust");
+        Assert.Equal("Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this folder first.\nClaude Code'll be able to read, edit, and execute files here.",
+            q.GetProperty("warning").GetString());
+        Assert.False(q.TryGetProperty("root", out _));
+
+        screens.OnTyped = plan =>
+        {
+            if (!plan.Sends[0].Enter) { screens.Rows = ClaudeAsks(onYes: true); return; }
+            screens.Rows = ["> go"];
+            starter.Register(starter.Specs[0]);
+        };
+        var answer = await AnswerAsync(ch, Answer(ch, q.GetProperty("id").GetString()!, "trust", client.Key));
+
+        Assert.Equal("started", answer.Outcome);
+        Assert.Equal(2, screens.Plans.Count);
+        Assert.Equal((KeyPlan.Down, false), (screens.Plans[0].Sends[0].Text, screens.Plans[0].Sends[0].Enter));
+        Assert.Equal(("", true), (screens.Plans[1].Sends[0].Text, screens.Plans[1].Sends[0].Enter));
+        // The Enter waited for the highlight to be seen on "Yes, I trust this folder".
+        Assert.Contains(screens.Plans[1].Sends[0].Expect!, e => e.Text == " > Yes, I trust this folder");
+    }
+
+    [Fact]
+    public async Task Quitting_from_a_phone_closes_the_agent_and_the_launch_reads_declined()
+    {
+        screens.Rows = CopilotAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var q = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust");
+        Assert.Equal("Copilot can read files in this folder and, with your permission, edit them or run code and shell commands. It will remember your permissions for the rest of this session.\nDo you trust the files in this folder?",
+            q.GetProperty("warning").GetString());
+
+        screens.OnTyped = _ => starter.Exit(starter.Pids[0]);
+        var answer = await AnswerAsync(ch, Answer(ch, q.GetProperty("id").GetString()!, "quit", client.Key));
+
+        Assert.Equal(("declined", "Copilot was not trusted with App, and closed; nothing was launched", null), answer);
+        var send = Assert.Single(Assert.Single(screens.Plans).Sends);
+        Assert.Equal((KeyPlan.Escape, false), (send.Text, send.Enter));
+    }
+
+    [Fact]
+    public async Task With_the_setting_off_a_trust_question_is_shown_read_only_and_answering_it_is_refused()
+    {
+        screens.Rows = CopilotAsks();
+        ServeTrust(Config());
+        var ch = await OpenAsync();
+        var launched = await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" });
+        Assert.Contains("Only a person at the machine can answer that", launched.GetProperty("reason").GetString());
+        var q = launched.GetProperty("trust");
+        Assert.False(q.GetProperty("answerable").GetBoolean());
+        Assert.Contains("agent-bridge-host config set launch.remoteFolderTrust true", q.GetProperty("atMachine").GetString());
+        Assert.Equal(app, q.GetProperty("folder").GetString());
+
+        var answer = await AnswerAsync(ch, Answer(ch, q.GetProperty("id").GetString()!, "trust", client.Key));
+        Assert.Equal("refused", answer.Outcome);
+        Assert.StartsWith("Answer at the machine. To answer from your devices", answer.Reason);
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task Only_the_persons_own_device_with_a_command_for_that_choice_and_question_can_answer()
+    {
+        screens.Rows = CopilotAsks();
+        var answers = ServeTrust(Trusting());
+        await using var other = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "Other host", "host");
+        var ch = await OpenAsync();
+        var id = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+
+        // Signed for quit, sent as trust; signed for another question.
+        Assert.Equal(("refused", "the command is for launch.trust:quit, not launch.trust:trust", null), await AnswerAsync(ch, Answer(ch, id, "trust", client.Key, signedChoice: "quit")));
+        Assert.Equal(("refused", "the command is for another question", null), await AnswerAsync(ch, Answer(ch, id, "trust", client.Key, signedQuestion: Guid.NewGuid().ToString())));
+
+        // Another machine of the account: carrying the phone's command, or signing its own.
+        await other.Relay.WaitForPeerAsync(p => p.Id == host.Id, Patience);
+        var fromOther = await other.Hub.OpenAsync(host.Id);
+        Assert.Equal(("refused", "the command must come from the device that signed it", null), await AnswerAsync(fromOther, Answer(ch, id, "trust", client.Key)));
+        Assert.Equal(("refused", "only a person's phone, browser or Windows app can answer a folder-trust question", null), await AnswerAsync(fromOther, Answer(fromOther, id, "trust", other.Key)));
+
+        // Not through anything but the relay: this machine's pipe is where agents and the MCP server are.
+        var piped = await new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { TrustAnswers = answers }.HandleAsync(new PipeChannel(), TrustProtocol.Answer, JsonSerializer.SerializeToElement(Answer(ch, id, "trust", client.Key), ProtocolJson.Options));
+        Assert.Equal(TrustAnswerOutcome.Refused, Assert.IsType<TrustAnswerResult>(piped).Outcome);
+
+        // Nor while agent-ha-bridge runs here (or the machine is read-only).
+        probe.Reason = "agent-ha-bridge is running for this user";
+        Assert.Equal("refused", (await AnswerAsync(ch, Answer(ch, id, "trust", client.Key))).Outcome);
+        Assert.DoesNotContain(TrustProtocol.Capability, await CapabilitiesAsync(ch));
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task A_window_that_changed_before_the_key_went_is_refused_and_an_answer_not_seen_to_work_is_never_typed_again()
+    {
+        screens.Rows = CopilotAsks();
+        ServeTrust(Trusting(), trustConfirm: TimeSpan.FromMilliseconds(500));
+        var ch = await OpenAsync();
+        var id = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+
+        screens.Fails = new InjectionResult(InjectionStatus.NothingTyped, "fail screen 0");
+        var changed = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key));
+        Assert.Equal("refused", changed.Outcome);
+        Assert.Contains("its window changed before anything was typed", changed.Reason);
+
+        // Typed, but the question stays: said so, and left for the machine.
+        screens.Fails = null;
+        var request = Guid.NewGuid().ToString();
+        var stuck = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key, request: request));
+        Assert.Equal(("unconfirmed", "Not confirmed: answer at the machine. The question is still in Copilot's window.", null), stuck);
+        Assert.Equal(2, screens.Plans.Count);
+        // The same press again gets the same outcome, and types nothing.
+        Assert.Equal(stuck, await AnswerAsync(ch, Answer(ch, id, "trust", client.Key, request: request)));
+        Assert.Equal(2, screens.Plans.Count);
+    }
+
+    // A channel on this machine's pipe, as an agent or the MCP server would open one.
+    sealed class PipeChannel : IProtocolChannel
+    {
+        public string PeerId => "local-1234";
+        public string PeerName => "agent";
+        public string PeerKind => "local";
+        public bool IsOpen => true;
+        public Task Closed => Task.Delay(Timeout.Infinite);
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
+    }
+}

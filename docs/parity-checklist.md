@@ -618,7 +618,7 @@ These rows have no step. Each has its reason. A row moves into a step when its i
 | 8 Reclaim only finished, marked trees | E6-07, F-09 |
 | 9 Protected attachment staging | E4-05 (`staging`) |
 | 10 Live sessions never resumed | E6-04 |
-| 11 Folder trust never answered remotely | E6-05 |
+| 11 Folder trust answered only by a person (at the machine, or signed from their PWA or app where allowed) | E6-05 |
 | 12 End session one or two presses | E5-01, E5-02 |
 | 13 No session restarts the host | E15-01 |
 | 14 Hooks never fail the agent | E12-02 |

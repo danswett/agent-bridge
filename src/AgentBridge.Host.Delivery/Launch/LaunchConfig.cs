@@ -32,6 +32,10 @@ public sealed record LaunchConfig
     public IReadOnlyDictionary<string, AgentConfig> Agents { get; init; } = new Dictionary<string, AgentConfig>();
     // Moving ended sessions between this account's machines (docs/host-transfer.md).
     public TransferConfig Transfer { get; init; } = TransferConfig.Default;
+    // Whether a person may answer a launched agent's folder-trust question from one of their
+    // devices (launch.trust). Off unless a person at the machine turns it on: trusting a folder
+    // lets the agent run what is in it.
+    public bool RemoteFolderTrust { get; init; }
 
     public AgentConfig Agent(string id) => Agents.TryGetValue(id, out var a) ? a : AgentConfig.Default;
 
@@ -71,6 +75,7 @@ public sealed record LaunchConfig
             if (Get(l, "defaultProfile") is { } dp) { config = config with { DefaultProfile = Text(dp, "launch.defaultProfile") }; }
             if (Get(l, "resumeCount") is { } rc) { config = config with { ResumeCount = (int)Number(rc, "launch.resumeCount", 0, LaunchProtocol.MaxResumable, whole: true) }; }
             if (Get(l, "transfer") is { } tr) { config = config with { Transfer = ReadTransfer(tr) }; }
+            if (Get(l, "remoteFolderTrust") is { } rft) { config = config with { RemoteFolderTrust = Bool(rft, "launch.remoteFolderTrust") }; }
             if (Get(l, "agents") is { } agents)
             {
                 if (agents.ValueKind != JsonValueKind.Object) { throw new FormatException("launch.agents is not an object"); }

@@ -203,6 +203,22 @@ public sealed class LocalApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Answering_folder_trust_from_a_persons_devices_is_turned_on_from_the_app_beside_the_launch_settings_there()
+    {
+        File.WriteAllText(Path.Combine(profile, "config.json"), """{ "launch": { "workspaces": ["C:\\src"] } }""");
+        var ch = await ConnectAsync();
+        Assert.False((await ch.CallAsync<HostStatus>(HostOps.Status)).Settings.RemoteFolderTrust);
+
+        var result = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrust = true });
+
+        Assert.True(result.Settings.RemoteFolderTrust);
+        Assert.True(result.RestartRequired);
+        var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(profile, "config.json")))!;
+        Assert.Equal("C:\\src", saved["launch"]!["workspaces"]![0]!.GetValue<string>());
+        Assert.True(HostSettings.Load(profile).Settings.Launch.RemoteFolderTrust);
+    }
+
+    [Fact]
     public async Task Settings_are_never_written_over_a_config_file_that_cannot_be_read()
     {
         File.WriteAllText(Path.Combine(profile, "config.json"), "{ not json");

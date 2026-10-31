@@ -79,6 +79,9 @@ public sealed class SessionService
         Drivers!.TakeBack(entry.Session, Time.GetUtcNow(), entry.Generation, answer);
     }
 
+    // launch.trust.answer, through the relay only (FolderTrustAnswers).
+    public FolderTrustAnswers? TrustAnswers { get; init; }
+
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
         UsageService? usage = null, ISessionLauncher? launcher = null, SessionTransfers? transfers = null)
@@ -137,6 +140,13 @@ public sealed class SessionService
             // session with a command a person's device signed.
             case TransferProtocol.Op when transfers is not null && channel is SecureChannel secure:
                 return await transfers.ServeAsync(secure, data);
+            // A person's device through the relay, with a command it signed. Never this machine's
+            // pipe, which agents and the MCP server reach, nor the Home Assistant connector.
+            case TrustProtocol.Answer when TrustAnswers is not null && channel is SecureChannel secure:
+                return await TrustAnswers.AnswerAsync(secure.PeerId, data);
+            case TrustProtocol.Answer:
+                return new TrustAnswerResult(TrustAnswerOutcome.Refused,
+                    "a folder-trust question is answered by a person, at the machine or from their phone, browser or Windows app through the relay");
             case UsageProtocol.Get or UsageProtocol.Subscribe when usage is not null:
                 return await usage.HandleAsync(channel, op, data);
             case Ops.SessionsList:
@@ -250,6 +260,7 @@ public sealed class SessionService
         if (push is not null && channel is SecureChannel) { offered.Add(Capabilities.Push); }
         if (usage is not null) { offered.Add(UsageProtocol.Capability); }
         if (launcher?.Available == true) { offered.Add(LaunchProtocol.Capability); }
+        if (TrustAnswers?.Available == true && channel is SecureChannel) { offered.Add(TrustProtocol.Capability); }
         // Transfers are signed by a device through the relay, and go through its blob store.
         if (transfers is not null && channel is SecureChannel)
         {
