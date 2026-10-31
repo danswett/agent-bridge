@@ -219,19 +219,27 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
     public bool Stubborn { get; set; }
     // A task that starts, but no daemon that is seen.
     public bool StartsNothing { get; set; }
+    // Tasks Task Scheduler refuses to change or run for this user (registered from an elevated
+    // prompt). With RefusalVisible, Task reports them as not modifiable; without, it cannot tell.
+    public HashSet<string> Refused { get; } = [];
+    public bool RefusalVisible { get; set; } = true;
     public List<string> Calls { get; } = [];
 
-    public ScheduledTaskState? Task(string name) => Tasks.TryGetValue(name, out var t) ? new(t.Enabled, t.Running) : null;
+    public ScheduledTaskState? Task(string name) => Tasks.TryGetValue(name, out var t)
+        ? new(t.Enabled, t.Running, RefusalVisible ? !Refused.Contains(name) : null)
+        : null;
 
     public void SetEnabled(string name, bool enabled)
     {
         Calls.Add($"{(enabled ? "enable" : "disable")} {name}");
+        if (Refused.Contains(name)) { throw new IOException($"Task Scheduler refused {name}: Access is denied."); }
         Tasks[name] = (enabled, Tasks[name].Running);
     }
 
     public void Start(string name)
     {
         Calls.Add($"start {name}");
+        if (Refused.Contains(name)) { throw new IOException($"Task Scheduler refused {name}: Access is denied."); }
         if (!Tasks[name].Enabled) { throw new IOException("disabled"); }
         Tasks[name] = (true, true);
         if (name.StartsWith("AgentBridgeDaemon_", StringComparison.Ordinal) && !StartsNothing) { DaemonRunning = true; }

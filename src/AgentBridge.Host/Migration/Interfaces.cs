@@ -1,7 +1,9 @@
 namespace AgentBridge.Host.Migration;
 
-// A scheduled task as Task Scheduler reports it.
-public sealed record ScheduledTaskState(bool Enabled, bool Running);
+// A scheduled task as Task Scheduler reports it. Modifiable is whether this user may change it
+// (disable, enable): false for one registered from an administrator prompt, which leaves the user
+// only read access; null when that could not be told.
+public sealed record ScheduledTaskState(bool Enabled, bool Running, bool? Modifiable = null);
 
 // What migration does to agent-ha-bridge's running pieces, behind an interface so tests drive a
 // fake and never this machine's scheduler or processes. WindowsAgentHaBridgeRuntime is the real

@@ -76,6 +76,14 @@ second snapshot the first's changes as the state to restore; the second is refus
    * a hook settings file is there but cannot be read as JSON: whether it holds
      agent-ha-bridge's entries, and a session started with them, cannot be told;
    * no host is serving the profile;
+   * agent-ha-bridge's daemon or keep-awake task is enabled and this user may not change it. One
+     registered from an administrator (elevated) prompt is owned by Administrators and leaves
+     the user only read access; unelevated, that membership is deny-only, so Task Scheduler
+     would refuse to disable it part-way through (#114). It is read from the task's
+     discretionary list, as Windows' access check reads it. The fix is to re-register it as the
+     user: remove it from an elevated prompt and run agent-ha-bridge's installer again from a
+     normal one. When that cannot be told, the migration goes ahead, and a refusal part-way is
+     undone (below);
    * the settings to carry over would leave the profile's `config.json` with problems, in
      launching or in the Home Assistant connector (a `baseUrl` it could not use, say).
 2. **Snapshot.** Writes `migration.json` in the profile's folder (state `migrating`) and a copy
@@ -256,11 +264,15 @@ snapshot to roll back by hand, rather than skipping a file or a task and deletin
    its report, and the record and snapshot for `rollback`.
 4. Checks the files recorded by hash, and reports any that changed while migrated (by someone
    else; neither step writes them).
-5. Re-enables each task that was enabled before, starts it, and waits until the G5 probe sees
+5. Re-enables each task that was enabled before and is disabled now, starts it unless its daemon
+   is already running, and waits until the G5 probe sees
    agent-ha-bridge's daemon running again: that installation's own mutex
    (`AgentBridgeDaemon_<id>`) seen, since a probe that cannot tell, a supervisor or task running
    while the daemon fails to start, or another installation's daemon would otherwise pass for it,
    and the record and snapshot would go with nothing running. A task that was disabled before stays disabled.
+   A task still enabled is left alone: a migration the scheduler refused before it could
+   disable one left it so, and enabling it again needs the same write access, so asking failed
+   every rollback and kept the record for good (#114).
 6. Deletes `migration.json` and the snapshot. If anything above went wrong they are kept, and
    the report says what to do. A migration cut short (`migration status` says "part-way") is
    rolled back the same way.

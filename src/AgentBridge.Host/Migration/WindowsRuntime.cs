@@ -39,7 +39,15 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
             : null;
     }
 
-    public ScheduledTaskState? Task(string name) => WithTask(name, task => new ScheduledTaskState((bool)Get(task, "Enabled")!, (int)Get(task, "State")! == 4), missing: true);
+    public ScheduledTaskState? Task(string name) => WithTask(name, task => new ScheduledTaskState((bool)Get(task, "Enabled")!, (int)Get(task, "State")! == 4, Modifiable(task)), missing: true);
+
+    // From the discretionary list alone: owning a task implies no right to write it.
+    static bool? Modifiable(object task)
+    {
+        const int DaclSecurityInformation = 4;
+        try { return Call(task, "GetSecurityDescriptor", DaclSecurityInformation) is string sddl ? TaskAccess.CanModify(sddl) : null; }
+        catch (Exception e) when (e is TargetInvocationException or MissingMethodException or COMException or InvalidCastException) { return null; }
+    }
 
     public void SetEnabled(string name, bool enabled) => WithTask(name, task => { task.GetType().InvokeMember("Enabled", BindingFlags.SetProperty, null, task, [enabled]); return true; });
 
