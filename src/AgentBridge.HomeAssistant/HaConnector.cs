@@ -717,11 +717,14 @@ public sealed partial class HaConnector : IAsyncDisposable
             p.PublishedAt = now;
             p.Status = null;
             p.Activity = null;
-            // Entities made anew hold nothing to read: armed again at once.
+            // Read before it is armed again, as after a restart: the whole machine is published again
+            // when only its liveness sensor went, and then the card's controls are still there with
+            // whatever was being answered on them. Entities that are new hold nothing that reads as
+            // an answer.
             if (p.Armed is { } armed)
             {
                 armed.Rearm = true;
-                armed.ReadFirst = false;
+                armed.ReadFirst = ServesAnswers && options.ConsumeAnswers;
             }
             p.ArmedSlots = -1;
             p.Cleared = false;

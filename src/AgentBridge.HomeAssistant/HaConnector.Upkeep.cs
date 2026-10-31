@@ -21,9 +21,12 @@ public sealed partial class HaConnector
     // When each session's entities were first read as gone, this time.
     readonly Dictionary<string, DateTimeOffset> absentSince = new(StringComparer.Ordinal);
 
+    // The liveness judgement is kept: agent-ha-bridge having had the machine meanwhile is no sign the
+    // sensor was mended, and starting the count again on every hand-back would let a sensor that
+    // never takes a beat be torn down three more times each time (#202). Two beats landing in a
+    // row still count as recovery, whoever sent them.
     void ResetUpkeep()
     {
-        liveness = null;
         republishing = false;
         lock (gate)
         {

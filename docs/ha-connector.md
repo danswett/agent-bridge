@@ -690,8 +690,10 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
     itself does not.
   * **Reads that decide nothing.** A read that fails starts and stops no clock. A sensor that
     does not report `last_reported` is never rebuilt.
-  * **When agent-ha-bridge has had the machine.** A pause resets the count, because the daemon
-    had the sensor meanwhile.
+  * **When agent-ha-bridge has had the machine.** The count is kept across a pause. The daemon
+    having had the machine is no sign the sensor was mended, and starting again on every
+    hand-back would tear a sensor that never takes a beat down three more times each time. Two
+    beats landing in a row still reset it, whoever sent them.
 * **A live session's entities** (`Repair-CopilotSessionEntities`,
   `Restore-DaemonSessionEntities`). On every reconcile the connector checks each session it has
   published for at least 60 s (sooner, its entities may not have registered yet). It reads the
@@ -751,8 +753,9 @@ A machine is forgotten because it is gone: renamed, reimaged or thrown away. Two
   had lapsed for three minutes. The connector finds its online sensor gone for 180 s and three
   beats, and publishes the whole machine again, as a start does. It is not a restart, though: its
   sessions keep what they know (who drives each, a thought on the card, a question's history),
-  and only their entities go again. The daemon here rebuilds only the sensor, and the rest comes
-  back piecemeal.
+  and only their entities go again. A card that stayed is read with its old baselines before its
+  question is armed again, so an answer given on it just then is delivered rather than lost. The
+  daemon here rebuilds only the sensor, and the rest comes back piecemeal.
 
 Where stage 7 knowingly differs from the daemon:
 
@@ -761,7 +764,7 @@ Where stage 7 knowingly differs from the daemon:
 | The daemon's one-time move off the pre-1.2x shared switch `input_boolean.agent_bridge_detailed_activity`, which deletes that switch, is not ported | Every machine of the fleet shared it, and a machine comes to this host from agent-ha-bridge 1.33, which made the move long since. The connector deletes no helper but a numbered copy of its own switch that it has just made |
 | A create that comes back as anything but the switch's id or a numbered copy of it is left alone; the daemon deletes whatever came back | Only what the connector can show is its own is ever deleted |
 | An online sensor that is absent, rather than present and silent, is answered by publishing the whole machine again, not only the sensor | It is absent because its config went, most likely to the X pressed while the machine's liveness had lapsed, which removed every entity of the machine; a running machine was not gone. Bounded by the same three attempts |
-| The rebuild count starts again when the connector resumes after agent-ha-bridge had the machine | The daemon had the sensor meanwhile; a daemon starting has a count of its own too |
+| The rebuild count is kept when the connector resumes after agent-ha-bridge had the machine; a daemon starting has a count of its own | A hand-back is no sign the sensor was mended, and a fresh count on each would undo the limit (#202). Two beats landing in a row still reset it |
 | The session check waits until 60 s after a session's entities were published, and republishes only an absence that has lasted 60 s | Before then a missing entity may only be one Home Assistant has not registered yet, or has not loaded again while it starts; the daemon publishes and pins in one step and republishes on the first 404 |
 | A switch present but with no state yet is not waited for; it is named and left | The daemon only warns. There is nothing to do until Home Assistant finishes starting, and waiting would hold every start for four seconds |
 ### The shadow: comparing with a running daemon

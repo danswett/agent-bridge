@@ -62,10 +62,10 @@ public sealed partial class HaConnector
         // with fresh baselines, keeping what this question has been through (settled, attempts,
         // what was used), so an answer that may have reached the terminal is never typed again.
         public bool Rearm;
-        // Rearm for controls Home Assistant brought back by itself, values and all (a restart that
-        // lost only the reply box, say): the card is read once with the baselines it was armed
-        // with before new ones are taken, so an answer given on it in the meantime is not taken
-        // for the baseline and lost.
+        // Rearm for controls that may still hold what was being answered on them (a restart that
+        // lost only the reply box, say, or the machine published again around a card that stayed):
+        // the card is read once with the baselines it was armed with before new ones are taken, so
+        // an answer given on it in the meantime is not taken for the baseline and lost.
         public bool ReadFirst;
     }
 

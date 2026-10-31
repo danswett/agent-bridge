@@ -282,13 +282,14 @@ public sealed class UpkeepTests : IDisposable
         Assert.Equal(HaContract.OnlineRepairLimit, Retractions(topic));
         Assert.Equal(1, Logged("leaving it alone rather than flapping it"));
 
-        // agent-ha-bridge had the machine for a while: what it did to the sensor is its own, so
-        // the count starts again when this host takes the machine back.
+        // agent-ha-bridge had the machine for a while and handed it back with the sensor still deaf:
+        // the count is kept, so the hand-back is not three more rebuilds.
         daemon = "agent-ha-bridge is running for this user (AgentBridgeDaemon_0123)";
         await Run(c, 5);
         daemon = null;
-        await Run(c, 300);
-        Assert.Equal(HaContract.OnlineRepairLimit + 1, Retractions(topic));
+        await Run(c, 900);
+        Assert.Equal(HaContract.OnlineRepairLimit, Retractions(topic));
+        Assert.Equal(1, Logged("leaving it alone rather than flapping it"));
     }
 
     [Fact]
@@ -468,6 +469,33 @@ public sealed class UpkeepTests : IDisposable
         await Run(c, 60);
         Assert.Single(answered);
         Assert.Equal(rearmed, Logged("armed " + NodeA + " again"));
+    }
+
+    [Fact]
+    public async Task An_answer_given_just_as_the_machine_is_published_again_around_its_card_is_delivered()
+    {
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 70);
+
+        // Only the liveness sensor's config goes; the card stays, values and all. The answer is
+        // given just as the machine is published again, with the watch down.
+        var (topic, _) = HaContract.OnlineConfig(Slug, Machine);
+        await ha.PublishAsync(topic, "", true);
+        var given = false;
+        ha.BeforePublish = t =>
+        {
+            if (t != topic || given) { return; }
+            given = true;
+            ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix");
+            ha.Press(SessionEntities.Submit(NodeA));
+        };
+        await Run(c, 400);
+        Assert.True(given);
+        Assert.Equal(1, Logged("publishing the machine again"));
+        var request = Assert.Single(answered);
+        Assert.Equal("wait", request.Fields!["release"].GetString());
     }
 
     // An answer that may have reached the terminal is never typed again: not after a Home Assistant
