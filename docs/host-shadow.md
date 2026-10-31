@@ -140,6 +140,7 @@ from a checkout of the commit to be compared, in PowerShell 7, not elevated, and
 pwsh build/shadow-week.ps1 -Install -WhatIf   # what it would do
 pwsh build/shadow-week.ps1 -Install           # this machine only
 pwsh build/shadow-week.ps1 -Install -Relay    # and on the phone, read-only
+pwsh build/shadow-week.ps1 -Update            # later: a new build only, tasks and config as they are
 ```
 
 `-Install` prepares everything while a previous install keeps running, and swaps only once
@@ -195,6 +196,16 @@ way, and writes to stderr anything it could not. An install cut short harder tha
 machine losing power mid-swap) leaves `bin.swapping` beside `bin.previous`; the next `-Install`
 then keeps `bin.previous`, the last build known to serve, as the one to fall back to, and
 drops the unfinished `bin`.
+**A new build only (`-Update`).** Publishes the checkout and swaps it in under the tasks
+already registered, the same all-or-nothing way (steps 1, 3 and 4, with nothing registered),
+and changes nothing else: no config, no workspace, no sign-in. It therefore runs inside an
+agent session too, where `-Install` stops at its first config change (#44), and the guard
+stays as it is. A swap that fails puts back the previous build and starts the tasks that
+were running, without re-registering them. With no install to update (either task or the
+build missing), it refuses and changes nothing. It also leaves the profile as it was, so
+re-run `-Install` from an ordinary terminal after agent-ha-bridge's workspaces or logins
+change, or to change this script's options (`-Relay`, `-Interval`, `-Grace`). Added after
+the 2026-10-30 redeploy on DEV-VM1 had to be a binary swap done by hand.
 `pwsh build/test-shadow-week.ps1` checks each of those against stand-ins for the tasks,
 `dotnet` and the host, and CI runs it on Windows. `-WhatIf` shows the whole plan and changes
 nothing.

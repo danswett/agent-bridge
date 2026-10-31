@@ -51,11 +51,12 @@ function Unregister-ScheduledTask { [CmdletBinding()] param([string]$TaskName, [
 function Start-ScheduledTask {
     [CmdletBinding()] param([string]$TaskName)
     $global:SwCalls.Add("start $TaskName")
-    $xml = $global:SwTasks[$TaskName].Xml
+    # Which build the task runs is whatever is in bin when it starts (-Update keeps the task as it is).
+    $new = (Get-Content (Join-Path $bin 'agent-bridge-host.exe') -ErrorAction SilentlyContinue) -eq 'NEW'
     # A new build that exits at once leaves its task Ready; one that serves writes its log.
-    if ($global:SwFail['exit'] -and $xml -notlike 'PREVIOUS*' -and $TaskName -like $global:SwFail['exit']) { return }
+    if ($global:SwFail['exit'] -and $new -and $TaskName -like $global:SwFail['exit']) { return }
     $global:SwTasks[$TaskName].State = 'Running'
-    if ($TaskName -like 'AgentBridgeShadowHost_*' -and $xml -notlike 'PREVIOUS*') {
+    if ($TaskName -like 'AgentBridgeShadowHost_*' -and $new) {
         New-Item -ItemType Directory -Force (Join-Path $profileFolder 'logs') | Out-Null
         Add-Content (Join-Path $profileFolder 'logs\host.log') 'serving'
     }
@@ -116,6 +117,10 @@ function Reset-World([switch]$Previous) {
         Set-Content $profileConfig 'PREVIOUS CONFIG'
         foreach ($t in $script:hostTask, $script:runTask) { $global:SwTasks[$t] = @{ Xml = "PREVIOUS $t"; State = 'Running' } }
     }
+}
+function Invoke-Update([hashtable]$Extra = @{}) {
+    $p = @{ Update = $true; HostProfile = 'shadowtest'; Bin = $bin; AgentHaBridgeHome = $ahb } + $Extra
+    try { $null = & $target @p; $null } catch { "$_" }
 }
 function Invoke-Install([hashtable]$Extra = @{}) {
     $p = @{ Install = $true; HostProfile = 'shadowtest'; Bin = $bin; AgentHaBridgeHome = $ahb } + $Extra
@@ -310,6 +315,45 @@ Write-Output '-WhatIf changes nothing'
 $err = Invoke-Install @{ Relay = $true; WhatIf = $true }
 Assert ($null -eq $err) "it succeeds ($err)"
 Assert (-not ($global:SwCalls -match '^(stop|register|start|unregister|dotnet) |^host (config|workspace (add|remove)|sign-in)')) 'nothing was published, configured, signed in or stopped'
+Test-PreviousUntouched
+
+# -Update: what the user's reinstall from an agent session needed (#44 refused -Install's config
+# changes), done by hand once as a binary-only swap.
+Reset-World -Previous
+Write-Output '-Update swaps in a new build under the tasks as they are, and touches no config'
+$err = Invoke-Update
+Assert ($null -eq $err) "it succeeds ($err)"
+Assert ((Get-Content (Join-Path $bin 'agent-bridge-host.exe')) -eq 'NEW') 'the new build is in place'
+Assert (-not (Test-Path "$bin.new") -and -not (Test-Path "$bin.previous")) 'nothing is left beside it'
+foreach ($t in $script:hostTask, $script:runTask) { Assert ($global:SwTasks[$t].Xml -eq "PREVIOUS $t" -and $global:SwTasks[$t].State -eq 'Running') "$t is as it was registered, running" }
+Assert (-not ($global:SwCalls -match '^(register|unregister) |^host ')) 'no task was registered and the host was not asked to change anything'
+Assert ((Get-Content -Raw $profileConfig).Trim() -eq 'PREVIOUS CONFIG') "the profile's config is as it was"
+
+Reset-World -Previous
+Write-Output '-Update when agent-bridge-host refuses config changes still works: it makes none'
+$global:SwFail['config'] = 'config set*'
+$err = Invoke-Update
+Assert ($null -eq $err) "it succeeds ($err)"
+
+Reset-World
+Write-Output '-Update with nothing installed changes nothing'
+$err = Invoke-Update
+Assert ($err -match 'nothing to update') "it refuses, saying why ($err)"
+Assert ($global:SwCalls.Count -eq 0 -and $global:SwTasks.Count -eq 0) 'nothing was published, registered or started'
+
+Reset-World -Previous
+Write-Output '-Update with a new host that exits at once puts the previous build back under the same tasks'
+$global:SwFail['exit'] = 'AgentBridgeShadowHost_*'
+$err = Invoke-Update
+Assert ($err -match 'wrote nothing' -and $err -match 'put back') "it fails, saying why ($err)"
+Assert (-not ($global:SwCalls -match '^(register|unregister) ')) 'no task was registered, even to put it back'
+Test-PreviousUntouched
+
+Reset-World -Previous
+Write-Output '-Update -WhatIf changes nothing'
+$err = Invoke-Update @{ WhatIf = $true }
+Assert ($null -eq $err) "it succeeds ($err)"
+Assert (-not ($global:SwCalls -match '^(stop|register|start|unregister|dotnet) |^host ')) 'nothing was published or stopped'
 Test-PreviousUntouched
 
 Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue

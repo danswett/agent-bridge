@@ -4,12 +4,18 @@
 #
 #   pwsh build/shadow-week.ps1 -Install [-WhatIf]   # publish, mirror the workspaces, register and start both
 #   pwsh build/shadow-week.ps1 -Install -Relay      # the same, and the host on the relay, so the phone sees it
+#   pwsh build/shadow-week.ps1 -Update              # a new build only: the tasks and the profile's config as they are
 #   pwsh build/shadow-week.ps1 -Status              # the tasks, the relay, and the summary so far
 #   pwsh build/shadow-week.ps1 -Uninstall           # stop and remove both tasks; reports and profile stay
 #
 # Needs the .NET 10 SDK for -Install. Run it from the checkout to be compared, in a terminal of
 # your own: it changes the host's config and may sign in, which agent-bridge-host refuses inside an
 # agent session. Re-running -Install publishes that checkout again and restarts both.
+#
+# -Update publishes the checkout and swaps the build in under the tasks already registered, the
+# same all-or-nothing way, and changes nothing else: no config, no workspace, no sign-in, no task
+# registered. So it runs inside an agent session too, without the config guard giving way. Run
+# -Install instead after changing agent-ha-bridge's workspaces or logins, or this script's options.
 #
 # The profile is made read-only (delivery.readOnly): it takes no answer, reply, stop, launch,
 # approval or transfer from any device, whether or not agent-ha-bridge is running.
@@ -30,6 +36,7 @@
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Status')]
 param(
     [Parameter(ParameterSetName = 'Install', Mandatory)][switch]$Install,
+    [Parameter(ParameterSetName = 'Update', Mandatory)][switch]$Update,
     [Parameter(ParameterSetName = 'Status')][switch]$Status,
     [Parameter(ParameterSetName = 'Uninstall', Mandatory)][switch]$Uninstall,
     # Not "default": a profile of its own, so the comparison never shares a device key, an
@@ -340,8 +347,9 @@ function Get-ShadowTaskState {
 
 # Puts back what a failed swap replaced: the previous build, the profile's config and the tasks,
 # and starts the tasks that were running. Each step is tried whatever the others do; what could
-# not be put back is said, with the reason.
-function Restore-ShadowInstall($Previous, $Config) {
+# not be put back is said, with the reason. -BinariesOnly (-Update): only the build was replaced,
+# so the config and the tasks' definitions are not touched at all.
+function Restore-ShadowInstall($Previous, $Config, [switch]$BinariesOnly) {
     $problems = @()
     foreach ($name in $runTask, $hostTask) {
         try { if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $name } } catch { $problems += "stopping $name`: $_" }
@@ -354,8 +362,10 @@ function Restore-ShadowInstall($Previous, $Config) {
         }
     }
     catch { $problems += "putting back the previous build: $_" }
-    try { Restore-ShadowConfig $Config } catch { $problems += "putting back the profile's config: $_" }
-    foreach ($t in $Previous) {
+    if (-not $BinariesOnly) {
+        try { Restore-ShadowConfig $Config } catch { $problems += "putting back the profile's config: $_" }
+    }
+    foreach ($t in $Previous | Where-Object { -not $BinariesOnly }) {
         try {
             if ($t.Xml) { Register-ScheduledTask -TaskName $t.Name -Xml $t.Xml -Force | Out-Null }
             elseif (Get-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $t.Name -Confirm:$false }
@@ -413,15 +423,21 @@ function Move-ShadowFolder([string]$From, [string]$To) {
     }
 }
 
-if ($Install) {
+if ($Install -or $Update) {
     # 1. Everything that can fail, while the previous install keeps running.
-    if (-not (Test-Path $ahb)) { throw "agent-ha-bridge is not installed for this user ($ahb); there is nothing to compare with" }
-    if ($RelayUrl) { Assert-ShadowRelayUrl $RelayUrl }
-    if ($Relay) { Assert-ShadowRelayUrl (Get-ShadowRelayUrl) }
+    if ($Install) {
+        if (-not (Test-Path $ahb)) { throw "agent-ha-bridge is not installed for this user ($ahb); there is nothing to compare with" }
+        if ($RelayUrl) { Assert-ShadowRelayUrl $RelayUrl }
+        if ($Relay) { Assert-ShadowRelayUrl (Get-ShadowRelayUrl) }
+    }
     # What to put back, read before anything changes: a task that cannot be exported stops the
     # install here, with nothing touched.
     $previous = @(Get-ShadowTaskState)
-    $config = Save-ShadowConfig
+    # -Update replaces a build under tasks that exist; what they run is -Install's to decide.
+    if ($Update -and (@($previous | Where-Object { -not $_.Xml }).Count -or -not (Test-Path -LiteralPath $exe))) {
+        throw "nothing to update: $hostTask and $runTask, and a build in $Bin, come from -Install first (nothing was changed)"
+    }
+    $config = if ($Install) { Save-ShadowConfig } else { $null }
     if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
     $serveArguments = @('serve', '--profile', $HostProfile)
     # prepare: only bin.new and the profile's config have changed. swap: the previous install has
@@ -436,29 +452,32 @@ if ($Install) {
             }
         }
         $exe = Join-Path $staging 'agent-bridge-host.exe'
-        Sync-AgentHaBridgeWorkspace
-        # Read-only whatever agent-ha-bridge is doing: G5 alone lasts only while its daemon runs, and an
-        # update, a crash or a logoff race restarting it would leave this host acting in the gap.
-        if ($PSCmdlet.ShouldProcess("profile $HostProfile", 'make it read-only (delivery.readOnly true)')) {
-            Invoke-ShadowHost config set delivery.readOnly true --profile $HostProfile
-            if ($LASTEXITCODE) { throw (Get-ConfigRefusal "could not make profile $HostProfile read-only") }
+        if ($Install) {
+            Sync-AgentHaBridgeWorkspace
+            # Read-only whatever agent-ha-bridge is doing: G5 alone lasts only while its daemon runs, and an
+            # update, a crash or a logoff race restarting it would leave this host acting in the gap.
+            if ($PSCmdlet.ShouldProcess("profile $HostProfile", 'make it read-only (delivery.readOnly true)')) {
+                Invoke-ShadowHost config set delivery.readOnly true --profile $HostProfile
+                if ($LASTEXITCODE) { throw (Get-ConfigRefusal "could not make profile $HostProfile read-only") }
+            }
+            if ($Relay) {
+                Set-ShadowRelay
+                # Named apart from the machine's own host, on the phone's machine list.
+                $serveArguments += @('--name', "$env:COMPUTERNAME (shadow)")
+                if ($script:ShadowRelay) { $serveArguments += @('--relay', $script:ShadowRelay) }
+            }
+            else { $serveArguments += '--local-only' }
+            $runArguments = @('shadow', 'run', '--profile', $HostProfile, '--interval', "$Interval", '--grace', "$Grace")
+            # The daemon compared is the one the workspaces were copied from.
+            if ($PSBoundParameters.ContainsKey('AgentHaBridgeHome')) { $runArguments += @('--agent-ha-bridge-home', (Resolve-Path -LiteralPath $ahb).ProviderPath) }
+            $serve = New-ShadowTaskXml "Agent Bridge host, profile $HostProfile, read-only beside agent-ha-bridge for the shadow comparison (docs/host-shadow.md)" $serveArguments $null
+            $run = New-ShadowTaskXml "Agent Bridge shadow comparison with agent-ha-bridge, profile $HostProfile (docs/host-shadow.md)" $runArguments 'PT1M'
         }
-        if ($Relay) {
-            Set-ShadowRelay
-            # Named apart from the machine's own host, on the phone's machine list.
-            $serveArguments += @('--name', "$env:COMPUTERNAME (shadow)")
-            if ($script:ShadowRelay) { $serveArguments += @('--relay', $script:ShadowRelay) }
-        }
-        else { $serveArguments += '--local-only' }
-        $runArguments = @('shadow', 'run', '--profile', $HostProfile, '--interval', "$Interval", '--grace', "$Grace")
-        # The daemon compared is the one the workspaces were copied from.
-        if ($PSBoundParameters.ContainsKey('AgentHaBridgeHome')) { $runArguments += @('--agent-ha-bridge-home', (Resolve-Path -LiteralPath $ahb).ProviderPath) }
-        $serve = New-ShadowTaskXml "Agent Bridge host, profile $HostProfile, read-only beside agent-ha-bridge for the shadow comparison (docs/host-shadow.md)" $serveArguments $null
-        $run = New-ShadowTaskXml "Agent Bridge shadow comparison with agent-ha-bridge, profile $HostProfile (docs/host-shadow.md)" $runArguments 'PT1M'
 
         # 2. The swap: stop the previous install, put the new build in its place, register, start,
         # and see both running before the previous build is let go.
-        if (-not $PSCmdlet.ShouldProcess("$hostTask, $runTask", 'stop the previous install, swap in the new build, register and start the logon tasks')) { return }
+        $plan = if ($Install) { 'stop the previous install, swap in the new build, register and start the logon tasks' } else { 'stop the tasks, swap in the new build, and start them as they are registered' }
+        if (-not $PSCmdlet.ShouldProcess("$hostTask, $runTask", $plan)) { return }
         $phase = 'swap'
         Set-Content -LiteralPath $swapMarker -Value (Get-Date -Format o)
         Stop-ShadowProcess
@@ -471,8 +490,10 @@ if ($Install) {
         if (Test-Path $Bin) { Move-ShadowFolder $Bin $previousBin }
         Move-ShadowFolder $staging $Bin
         $exe = Join-Path $Bin 'agent-bridge-host.exe'
-        Register-ScheduledTask -TaskName $hostTask -Xml $serve -Force | Out-Null
-        Register-ScheduledTask -TaskName $runTask -Xml $run -Force | Out-Null
+        if ($Install) {
+            Register-ScheduledTask -TaskName $hostTask -Xml $serve -Force | Out-Null
+            Register-ScheduledTask -TaskName $runTask -Xml $run -Force | Out-Null
+        }
         $started = Get-Date
         Start-ScheduledTask -TaskName $hostTask
         Wait-ShadowHostReady $started
@@ -484,11 +505,11 @@ if ($Install) {
         $failure = $_
         $handled = $true
         if ($phase -eq 'prepare') {
-            Restore-ShadowConfig $config
+            if ($Install) { Restore-ShadowConfig $config }
             Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
             throw "$failure (nothing was stopped or replaced: the previous install is still running, unchanged)"
         }
-        $problems = @(Restore-ShadowInstall $previous $config)
+        $problems = @(Restore-ShadowInstall $previous $config -BinariesOnly:$Update)
         Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
         if ($problems.Count) { throw "$failure; and the previous install could not all be put back: $($problems -join '; ')" }
         throw "$failure (the previous install was put back, and the tasks that were running were started again)"
@@ -498,11 +519,11 @@ if ($Install) {
         # same, and say what could not be, on stderr, since nothing else is left to say it.
         if (-not $handled -and $phase -ne 'done') {
             if ($phase -eq 'prepare') {
-                Restore-ShadowConfig $config
+                if ($Install) { Restore-ShadowConfig $config }
                 Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
             }
             else {
-                foreach ($problem in @(Restore-ShadowInstall $previous $config)) { [Console]::Error.WriteLine("shadow-week: not put back: $problem") }
+                foreach ($problem in @(Restore-ShadowInstall $previous $config -BinariesOnly:$Update)) { [Console]::Error.WriteLine("shadow-week: not put back: $problem") }
                 Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
