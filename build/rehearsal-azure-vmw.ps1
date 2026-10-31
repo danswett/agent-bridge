@@ -1,4 +1,4 @@
-#Requires -Version 7.2
+#Requires -Version 7.3
 <#
 .SYNOPSIS
     Provisions VM-W for the migration rehearsal (docs/parity-checklist.md) as an Azure VM, or
@@ -159,12 +159,15 @@ function Get-VmPublicIp {
 }
 
 function Get-TunnelCommand([string] $Ip) {
-    $ssh = "ssh -i `"$AdminKeyPath`" -o IdentitiesOnly=yes -o UserKnownHostsFile=`"$KnownHostsPath`""
+    $ssh = "ssh -i `"$AdminKeyPath`" -o IdentitiesOnly=yes -o UserKnownHostsFile=`"$KnownHostsPath`" -o StrictHostKeyChecking=yes"
+    $hostKey = if (Test-Path $KnownHostsPath) { (Get-Content $KnownHostsPath -Raw).Trim() } else { '<run a provision first>' }
     return [pscustomobject]@{
         HyperloopTunnel = "$ssh -N -L 4851:127.0.0.1:${HyperloopPort} $AdminUser@$Ip"
         HyperloopServer = 'hyperloop servers add rehearsal-w --scheme tcp --authority 127.0.0.1:4851'
         AdminShell      = "$ssh $AdminUser@$Ip"
-        VmMTunnel       = "ssh -i <VM-M key> -N -L 8123:127.0.0.1:8123 $TunnelUser@$Ip"
+        # VM-M must not trust on first use: append KnownHostsLine to its ~/.ssh/known_hosts first.
+        KnownHostsLine  = $hostKey
+        VmMTunnel       = "ssh -i <VM-M key> -o StrictHostKeyChecking=yes -N -L 8123:127.0.0.1:8123 $TunnelUser@$Ip"
     }
 }
 
@@ -216,8 +219,22 @@ function Invoke-VmRunCommand {
     in: run-command keeps the script in the VM's extension settings.
     #>
     param([string] $Script)
+    # Every staging folder lives under Program Files, where only administrators can create, and
+    # is re-ACLed regardless: one in ProgramData could be pre-created, and so owned, by
+    # `rehearsal`, letting it swap a script or installer before SYSTEM or the admin runs it.
+    $protected = @'
+function Get-ProtectedDirectory([string] $Leaf) {
+    $root = Join-Path $env:ProgramFiles 'AgentBridgeRehearsal'
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    & icacls.exe $root /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls $root failed" }
+    $dir = Join-Path $root $Leaf
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    return $dir
+}
+'@
     $body = "`$ErrorActionPreference = 'Stop'`r`n`$ProgressPreference = 'SilentlyContinue'`r`n" +
-        "try {`r`n$Script`r`n} catch { 'GUEST-ERROR: ' + (`$_ | Out-String) }"
+        "try {`r`n$protected`r`n$Script`r`n} catch { 'GUEST-ERROR: ' + (`$_ | Out-String) }"
     if (-not (Test-Path $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
     $file = Join-Path $StateDir "guest-$([guid]::NewGuid().ToString('n')).ps1"
     Set-Content -Path $file -Value $body -Encoding utf8
@@ -262,8 +279,7 @@ function Invoke-VmAsAdmin {
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Script))
     $runner = @'
 $id = [guid]::NewGuid().ToString('n')
-$dir = Join-Path $env:ProgramData 'rehearsal-jobs'
-New-Item -ItemType Directory -Path $dir -Force | Out-Null
+$dir = Get-ProtectedDirectory 'jobs'
 $job = Join-Path $dir "$id.ps1"; $log = Join-Path $dir "$id.log"
 $inner = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__B64__'))
 $wrapped = "`$ErrorActionPreference = 'Continue'`r`n`$ProgressPreference = 'SilentlyContinue'`r`ntry {`r`n& {`r`n$inner`r`n} *>&1 | Out-File -FilePath '$log' -Encoding utf8 -Append`r`nAdd-Content -Path '$log' -Value 'JOB-DONE'`r`n} catch { Add-Content -Path '$log' -Value ('JOB-ERROR: ' + (`$_ | Out-String)) }"
@@ -351,13 +367,12 @@ function Set-KeyFile([string] $Path, [string] $Content, [string] $ReaderSid) {
     if ($LASTEXITCODE -ne 0) { throw "icacls $Path failed" }
 }
 Set-KeyFile (Join-Path $sshDir 'administrators_authorized_keys') $adminKey $null
-if ($tunnelKey) {
-    $sid = (Get-LocalUser -Name $tunnelUser).SID.Value
-    Set-KeyFile (Join-Path $sshDir "${tunnelUser}_authorized_keys") $tunnelKey $sid
-}
+# Written even when empty, so dropping -TunnelPublicKeyPath on a rerun revokes the old key.
+$sid = (Get-LocalUser -Name $tunnelUser).SID.Value
+Set-KeyFile (Join-Path $sshDir "${tunnelUser}_authorized_keys") $tunnelKey $sid
 
 $config = @"
-# Written by build/rehearsal-azure-vmw.ps1. Key-only; the rehearsal user may only forward to HA.
+# Written by build/rehearsal-azure-vmw.ps1. Key-only; the rehearsal user may only forward to HA and use SFTP.
 Port 22
 PubkeyAuthentication yes
 PasswordAuthentication no
@@ -374,6 +389,9 @@ Match User $tunnelUser
     AuthorizedKeysFile __PROGRAMDATA__/ssh/${tunnelUser}_authorized_keys
     AllowTcpForwarding local
     PermitOpen 127.0.0.1:8123
+    # No shell: a process it could run would reach Hyperloop (no PIN) on loopback, where
+    # PermitOpen does not apply. 'ssh -N -L' and scp (SFTP) still work.
+    ForceCommand internal-sftp
 
 Match Group administrators
     AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys
@@ -501,7 +519,7 @@ Register-ScheduledTask -TaskName 'Rehearsal Hyperloop Server' -Action $action -T
 $GuestHyperloopCheck = @'
 if (-not (Test-Path 'C:\Tools\hyperloop.exe')) { 'hyperloop=absent'; return }
 function Invoke-Bounded([string[]] $Arguments) {
-    $o = Join-Path $env:TEMP 'hl-check-out.txt'; $e = Join-Path $env:TEMP 'hl-check-err.txt'
+    $o = Join-Path (Get-ProtectedDirectory 'jobs') 'hl-check-out.txt'; $e = Join-Path (Get-ProtectedDirectory 'jobs') 'hl-check-err.txt'
     $p = Start-Process 'C:\Tools\hyperloop.exe' -ArgumentList $Arguments -RedirectStandardOutput $o `
         -RedirectStandardError $e -RedirectStandardInput "$env:SystemRoot\win.ini" -PassThru -WindowStyle Hidden
     if (-not $p.WaitForExit(60000)) { $p.Kill(); $t = 'TIMEOUT' } else { $t = (Get-Content $o -Raw) + (Get-Content $e -Raw) }
@@ -527,8 +545,7 @@ if ($status -notmatch '"interactive":true') { throw "Hyperloop is not serving th
 # installer's Authenticode signature is checked before it runs.
 $GuestTools = @'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$dl = Join-Path $env:ProgramData 'rehearsal-downloads'
-New-Item -ItemType Directory -Path $dl -Force | Out-Null
+$dl = Get-ProtectedDirectory 'downloads'
 function Get-Release([string] $Repo, [string] $Pattern) {
     $rel = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ 'User-Agent' = 'rehearsal-azure-vmw' }
     $asset = $rel.assets | Where-Object { $_.name -match $Pattern } | Select-Object -First 1
@@ -688,6 +705,8 @@ if ($Start) {
 # ---------------------------------------------------------------------------------------------
 # Provision
 # ---------------------------------------------------------------------------------------------
+# The password file relies on DPAPI, which ConvertFrom-SecureString uses only on Windows.
+if (-not $IsWindows) { throw 'provisioning stores the admin password with DPAPI, so it runs only on Windows' }
 $prefix = [int]($AllowedSshCidr.Split('/')[1])
 if ($prefix -lt 16) { throw "-AllowedSshCidr $AllowedSshCidr is wider than /16; refusing to open SSH that far" }
 if ($TunnelPublicKeyPath -and -not (Test-Path $TunnelPublicKeyPath)) { throw "$TunnelPublicKeyPath not found" }
@@ -702,6 +721,11 @@ $adminPub = (Get-Content "$AdminKeyPath.pub" -Raw).Trim()
 $tunnelPub = if ($TunnelPublicKeyPath) { (Get-Content $TunnelPublicKeyPath -Raw).Trim() } else { '' }
 
 Write-Step "resource group $ResourceGroup"
+# `group create` would retag an existing group, which -Remove would then accept as ours.
+if (Test-AzResource @('group', 'show', '-n', $ResourceGroup)) {
+    $purpose = (Invoke-Az group show -n $ResourceGroup --query 'tags.purpose' -o tsv).Trim()
+    if ($purpose -ne 'rehearsal-39') { throw "$ResourceGroup exists without the purpose=rehearsal-39 tag; refusing to adopt it" }
+}
 Invoke-Az group create -n $ResourceGroup -l $Location --tags @Tags -o none | Out-Null
 
 Write-Step 'network security group'
@@ -719,8 +743,14 @@ $extra = Invoke-Az network nsg rule list -g $ResourceGroup --nsg-name "$VmName-n
     --query "[?direction=='Inbound' && access=='Allow' && name!='Allow-SSH-From-Corp-Egress'].name" -o tsv
 if ($extra.Trim()) { throw "unexpected inbound allow rules on the NSG: $extra" }
 
+$vmExists = Test-AzResource @('vm', 'show', '-g', $ResourceGroup, '-n', $VmName)
+if ($vmExists -and -not (Test-Path $SecretFile)) {
+    # A new password would not match the account the VM was created with, and autologon would
+    # then fail at the next restart.
+    throw "$VmName exists but $SecretFile does not. Restore the original DPAPI file (same Windows user and machine) or -Remove and start again."
+}
 $password = Get-AdminPassword
-if (-not (Test-AzResource @('vm', 'show', '-g', $ResourceGroup, '-n', $VmName))) {
+if (-not $vmExists) {
     $created = $false
     foreach ($size in $Sizes) {
         Write-Step "creating $VmName ($size)"

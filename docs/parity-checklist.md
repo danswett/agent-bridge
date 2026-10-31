@@ -105,7 +105,8 @@ It creates only the resource group `rg-agent-bridge-rehearsal` (westus2, tagged
 `purpose=rehearsal-39`). That group holds a Windows 11 Pro VM `REHEARSAL-W` (Standard_D4s_v5,
 which runs nested virtualization for WSL2, with Standard_D4as_v5 as the fallback), a static
 public IP and an NSG. It refuses to run if `az` is signed in as anyone other than
-`-ExpectedAzureUser`.
+`-ExpectedAzureUser`, or if an existing group of that name lacks the tag. It needs Windows
+(the password file is DPAPI) and PowerShell 7.3 or later.
 
 Everything inside the VM is done through `az vm run-command`, not SSH. A proxied network can
 send SSH out from addresses other than its web traffic. Entra Global Secure Access does this,
@@ -121,8 +122,10 @@ VM-M with `scp` as `rehearsal`, and move them into `C:\Tools` with `az vm run-co
 * sshd is key-only. The host key is pinned from the VM's own run-command output into
   `~/.ssh/known_hosts_agentbridge-rehearsal`, so it is never trusted on first use.
 * The admin, `rehearsaladmin`, signs in with `~/.ssh/agentbridge-rehearsal`. The standard
-  user `rehearsal` has only VM-M's key, and that key may forward only to `127.0.0.1:8123`.
-  `scp` as `rehearsal` still works, for A-04 and G-01. A file it fetches, such as A-04's
+  user `rehearsal` has only VM-M's key. That key may forward only to `127.0.0.1:8123` and
+  use SFTP, so `ssh -N -L` and `scp` work, for A-04 and G-01. It gets no shell
+  (`ForceCommand internal-sftp`), because a process it ran could reach Hyperloop, which has no
+  PIN, on loopback, where `PermitOpen` does not apply. A file it fetches, such as A-04's
   token, needs an explicit read grant for `rehearsal` (`icacls <file> /grant rehearsal:R`);
   its SSH sign-in cannot even list `C:\Users\Public`.
 * Hyperloop's server, Home Assistant and Mosquitto are also blocked inbound by Windows
@@ -143,11 +146,13 @@ it again with `-Start`. A deallocated VM bills only its disk and IP.
 ```powershell
 # This host: Hyperloop to VM-W's interactive desktop
 ssh -i ~/.ssh/agentbridge-rehearsal -o UserKnownHostsFile=~/.ssh/known_hosts_agentbridge-rehearsal `
+    -o StrictHostKeyChecking=yes `
     -N -L 4851:127.0.0.1:4850 rehearsaladmin@<ip>
 hyperloop servers add rehearsal-w --scheme tcp --authority 127.0.0.1:4851
 
-# VM-M (A-04): Home Assistant on VM-M's loopback
-ssh -N -L 8123:127.0.0.1:8123 rehearsal@<ip>
+# VM-M (A-04): Home Assistant on VM-M's loopback. Append the KnownHostsLine the script
+# prints to VM-M's ~/.ssh/known_hosts first, so the host key is never trusted on first use.
+ssh -o StrictHostKeyChecking=yes -N -L 8123:127.0.0.1:8123 rehearsal@<ip>
 ```
 
 If the operator's own SSH arrives from outside `-AllowedSshCidr`, the first tunnel cannot be
