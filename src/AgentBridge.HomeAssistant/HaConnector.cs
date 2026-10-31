@@ -87,6 +87,20 @@ public sealed record HaConnectorOptions
     // How long a session must stay at rest after a turn before the turn is pushed as finished (the
     // host's own notifier waits as long): a question answered at the machine passes through idle.
     public TimeSpan FinishedDelay { get; init; } = TimeSpan.FromSeconds(3);
+    // The host's own updates through the machine's update entity (homeAssistant.updates.checkForUpdates,
+    // agent-ha-bridge's updates.checkForUpdates): off, nothing is looked up and the Install and
+    // Check buttons are not served.
+    public bool CheckForUpdates { get; init; } = true;
+    // How often the release feed is asked (updates.checkHours, 0.5 by default), and how soon again
+    // after it could not be reached.
+    public TimeSpan UpdateCheck { get; init; } = TimeSpan.FromMinutes(30);
+    public TimeSpan UpdateRetry { get; init; } = TimeSpan.FromMinutes(5);
+    // How long a press's verdict stays on the entity (DaemonUpdateVerdictMinutes), and an update's
+    // outcome once the host is back (the hour its progress record would have lasted).
+    public TimeSpan UpdateVerdict { get; init; } = TimeSpan.FromMinutes(10);
+    public TimeSpan UpdateOutcomeShown { get; init; } = TimeSpan.FromHours(1);
+    // An outcome older than this is not announced (Invoke-DaemonUpdateOutcome's six hours).
+    public TimeSpan UpdateOutcomeAge { get; init; } = TimeSpan.FromHours(6);
 }
 
 // The Home Assistant connector (docs/ha-connector.md): this machine's sessions, liveness,
@@ -94,8 +108,9 @@ public sealed record HaConnectorOptions
 // agent-ha-bridge's own per-machine contract (HaContract), so a machine moved off the
 // PowerShell daemon keeps its cards; and, given the host's answer, reply and stop delivery, the
 // answers, replies and End session presses given on those cards (HaConnector.Answers.cs,
-// HaConnector.Replies.cs, HaConnector.Stops.cs), and, given its launcher, the launch card
-// (HaConnector.Launch.cs).
+// HaConnector.Replies.cs, HaConnector.Stops.cs); given its launcher, the launch card
+// (HaConnector.Launch.cs); and, given its updater, the machine's Install and Check buttons
+// (HaConnector.Updates.cs).
 //
 // What it never does, and why:
 //   * write the shared card, dashboard or publication policy. The writer is configured and fenced
@@ -105,8 +120,9 @@ public sealed record HaConnectorOptions
 //   * run while agent-ha-bridge runs for this user (design G5). Two publishers of one machine's
 //     entities would fight over every retained topic. Checked before every write, so the
 //     daemon starting part-way through a pass stops the rest of it;
-//   * update, or bring a session over from another machine: later stages. Until they land,
-//     entities only those would serve are withdrawn rather than left as controls nothing acts on.
+//   * bring a session over from another machine: a later stage. Until it lands, entities only it
+//     would serve are withdrawn rather than left as controls nothing acts on, as the update
+//     buttons are on a host its updater did not install.
 public sealed partial class HaConnector : IAsyncDisposable
 {
     readonly HaConnectorOptions options;
@@ -254,10 +270,11 @@ public sealed partial class HaConnector : IAsyncDisposable
         Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer = null,
         Func<HaReply, CancellationToken, Task<ReplyResult>>? reply = null,
         Func<StopRequest, CancellationToken, Task<StopResult>>? stop = null,
-        HaLauncher? launch = null)
+        HaLauncher? launch = null, IHostUpdates? updates = null)
     {
         this.options = options;
         launcher = launch;
+        this.updates = updates;
         this.answer = answer;
         this.reply = reply;
         stopper = stop;
@@ -345,6 +362,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             await Step("buttons", () => ButtonsAsync(now, cancellationToken));
             await Step("finished", () => FinishedAsync(now, cancellationToken));
             await Step("launch", () => LaunchAsync(now, cancellationToken));
+            await Step("update", () => UpdatesAsync(now, cancellationToken));
             await Step("global", () => GlobalAsync(now, cancellationToken));
             await Step("heartbeat", () => HeartbeatAsync(now, cancellationToken));
             await Step("usage", () => UsageAsync(now, cancellationToken));
@@ -406,13 +424,12 @@ public sealed partial class HaConnector : IAsyncDisposable
         launchDefaultsPending = null;
         launchPressBaselined = false;
         launchOutcomesRestored = false;
+        // The update buttons only where the host's updater can act on them.
+        updateInstalled = options.CheckForUpdates ? updates?.Installed : null;
+        updateServing = updateInstalled is not null;
         foreach (var topic in Unserved()) { await ha.PublishAsync(topic, "", true, ct); }
 
-        var (updateTopic, updateConfig) = HaContract.UpdateConfig(Slug, options.MachineName);
-        await PublishAsync(updateTopic, updateConfig, true, ct);
-        await PublishAsync(HaContract.UpdateStateTopic(Slug), HaPayloads.UpdateState(options.Version), true, ct);
-        await PublishAsync(HaContract.UpdateAttributesTopic(Slug), HaPayloads.UpdateAttributes(), true, ct);
-        AddPin($"agent_bridge_{Slug}_update", HaContract.MachineEntityId("update", "update", Slug), now);
+        await UpdateStartupAsync(now, ct);
 
         // Sessions this machine published before, by whichever bridge, that are not running now:
         // the ones its retained session list names, and the remembered ones whose retirement was
@@ -470,6 +487,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         };
         // The launch card, when it is served (the transfer request is a later stage). Its note,
         // outcomes and prompt payload are left as they are: the payload is the card's.
+        if (updateServing) { served.UnionWith(HaContract.UpdateButtonConfigs(Slug, options.MachineName).Select(c => c.Topic)); }
         if (launchServing)
         {
             served.UnionWith(HaContract.LaunchConfigs(Slug, options.MachineName, new HaContract.LaunchCard()).Select(c => c.Topic));
@@ -926,7 +944,11 @@ public sealed partial class HaConnector : IAsyncDisposable
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             if (doc.RootElement.ValueKind != JsonValueKind.Object) { return []; }
-            lock (gate) { LoadOnPhones(doc.RootElement); }
+            lock (gate)
+            {
+                LoadOnPhones(doc.RootElement);
+                LoadUpdateAttempt(doc.RootElement);
+            }
             return [.. new[] { "retiring", "starting" }
                 .SelectMany(key => doc.RootElement.TryGetProperty(key, out var list) && list.ValueKind == JsonValueKind.Array ? list.EnumerateArray().ToArray() : [])
                 .Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!)
@@ -950,6 +972,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 ["retiring"] = new JsonArray([.. retiring.Keys.Order(StringComparer.Ordinal).Select(n => (JsonNode)n)]),
                 ["starting"] = new JsonArray([.. starting.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(n => (JsonNode)n)]),
                 ["onPhones"] = OnPhonesLedger(),
+                ["update"] = UpdateAttemptLedger(),
             });
         }
         try
@@ -999,10 +1022,13 @@ public sealed partial class HaConnector : IAsyncDisposable
             stop.Dispose();
         }
         await StopRepliesAsync();
+        await StopUpdatesAsync();
         // Nothing is withdrawn on the way out, as the daemon withdraws nothing: liveness lapses on
         // its own (expire_after), the cards stay, and whichever bridge starts next takes them over.
         SaveLedger();
         passes.Dispose();
+        updateCancel.Dispose();
+        updatePublish.Dispose();
     }
 
     // agent-ha-bridge is running for this user: the message says how it was found.

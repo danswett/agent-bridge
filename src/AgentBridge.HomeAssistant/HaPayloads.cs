@@ -293,19 +293,33 @@ public static class HaPayloads
     }
 
     // Publish-CopilotMqttUpdate's state and attributes, for a host that offers no update through
-    // Home Assistant yet: the version it runs, reported as current, so the dashboard shows the
-    // version and draws no install button (there is nothing here to press it).
-    public static JsonObject UpdateState(string installedVersion) => new()
-    {
-        ["installed_version"] = installedVersion,
-        ["title"] = HaContract.UpdateTitle,
-        ["release_summary"] = "",
-        ["in_progress"] = false,
-        ["update_percentage"] = null,
-        ["latest_version"] = installedVersion,
-    };
+    // Home Assistant: the version it runs, reported as current, so the dashboard shows the version
+    // and draws no install button (there is nothing here to press it).
+    public static JsonObject UpdateState(string installedVersion) =>
+        UpdateState(installedVersion, installedVersion, null, "", false, null);
 
-    public static JsonObject UpdateAttributes() => new() { ["stage"] = "", ["stage_detail"] = "" };
+    // The whole state. latest_version only when known: stock MQTT update rejects a null version,
+    // and its absence is what takes the entity's availability away ("not established").
+    // update_percentage always present, null when there is none, as an omitted key keeps the last
+    // one shown. Notes capped as the daemon caps them, because the payload travels through MQTT.
+    public static JsonObject UpdateState(string installedVersion, string? latestVersion, string? releaseUrl, string? notes, bool inProgress, double? proportion)
+    {
+        var summary = notes ?? "";
+        if (summary.Length > 2000) { summary = summary[..1997] + "..."; }
+        var state = new JsonObject
+        {
+            ["installed_version"] = installedVersion,
+            ["title"] = HaContract.UpdateTitle,
+            ["release_summary"] = summary,
+            ["in_progress"] = inProgress,
+            ["update_percentage"] = proportion is { } p ? Math.Round(p * 100, 0, MidpointRounding.ToEven) : null,
+        };
+        if (!string.IsNullOrWhiteSpace(latestVersion)) { state["latest_version"] = latestVersion; }
+        if (!string.IsNullOrEmpty(releaseUrl)) { state["release_url"] = releaseUrl; }
+        return state;
+    }
+
+    public static JsonObject UpdateAttributes(string stage = "", string detail = "") => new() { ["stage"] = stage, ["stage_detail"] = detail };
 
     // [DateTimeOffset]::Now.ToString('o'), as every daemon timestamp is written.
     public static string Stamp(DateTimeOffset now) => now.ToLocalTime().ToString("o", CultureInfo.InvariantCulture);

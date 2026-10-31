@@ -37,7 +37,9 @@ param(
     # Launch: the launch card, an agent's launch request, its refusals and outcomes.
     [string]$LaunchOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-launch.json'),
     # Notifications: a question's answer buttons on a phone, and the notify service's pushes.
-    [string]$NotifyOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-notify.json')
+    [string]$NotifyOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-notify.json'),
+    # Updates: the update entity through a check, a download and a verdict, and the busy notice.
+    [string]$UpdateOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-update.json')
 )
 
 Set-StrictMode -Version Latest
@@ -123,7 +125,7 @@ function script:Invoke-HomeAssistantService {
     param([string]$Domain, [string]$Service, [hashtable]$Data, [hashtable]$Headers, [int]$TimeoutSec = 15)
     Assert-HomeAssistantServiceTarget -Data $Data
     if ("$Domain.$Service" -notin $script:RecordedServices) { throw "the contract does not call $Domain.$Service here" }
-    if ($Domain -in @('notify', 'ticker')) {
+    if ($Domain -in @('notify', 'ticker', 'persistent_notification')) {
         # A notification is its whole body: title, message and the phone's data.
         $script:Recorded.Add([ordered]@{ service = "$Domain.$Service"; data = $Data })
     }
@@ -1090,4 +1092,34 @@ $notify = [ordered]@{
 }
 $full = [IO.Path]::GetFullPath($NotifyOutput)
 [IO.File]::WriteAllText($full, ((ConvertTo-Stable $notify) | ConvertTo-Json -Depth 30) + "`n", [Text.UTF8Encoding]::new($false))
+Write-Host "wrote $full"
+
+# ---- Updates -----------------------------------------------------------------------------------
+# The update entity as Publish-CopilotMqttUpdate publishes it through an update's life (a release
+# found, its download under way, a release that could not be established, a verdict), and the
+# notice an install press gets while an update is already running (Send-DaemonUpdateBusyNotice).
+Import-SpecFunction 'hooks\daemon-maintenance.ps1' @('Send-DaemonUpdateBusyNotice')
+function script:Write-DaemonLog { param([string]$Message) }
+$script:DaemonMachineName = $machine
+$script:DaemonMachineSlug = $slug
+$script:RecordedServices = @('mqtt.publish', 'persistent_notification.create')
+$releaseUrl = 'https://github.com/danswett/agent-bridge/releases'
+$longNotes = '## What changed' + "`n" + ('Notes. ' * 400)
+$updates = [ordered]@{
+    available   = Get-Published { Publish-CopilotMqttUpdate -InstalledVersion '0.1.0' -LatestVersion '0.2.0' -ReleaseUrl $releaseUrl -ReleaseNotes $longNotes -Slug $slug -Headers $headers }
+    checking    = Get-Published { Publish-CopilotMqttUpdate -InstalledVersion '0.1.0' -LatestVersion '0.2.0' -ReleaseUrl $releaseUrl -InProgress -Stage 'checking' -Slug $slug -Headers $headers }
+    downloading = Get-Published { Publish-CopilotMqttUpdate -InstalledVersion '0.1.0' -LatestVersion '0.2.0' -ReleaseUrl $releaseUrl -InProgress -Stage 'downloading' -Proportion 0.424 -Slug $slug -Headers $headers }
+    unknown     = Get-Published { Publish-CopilotMqttUpdate -InstalledVersion '0.1.0' -LatestVersion '' -ReleaseNotes 'The latest release could not be established: rate limited' -Slug $slug -Headers $headers }
+    current     = Get-Published { Publish-CopilotMqttUpdate -InstalledVersion '0.1.0' -LatestVersion '0.1.0' -Stage 'current' -StageDetail 'Checked just now; 0.1.0 is the latest release.' -Slug $slug -Headers $headers }
+    completed   = Get-Published { Publish-CopilotMqttUpdate -InstalledVersion '0.2.0' -LatestVersion '0.2.0' -ReleaseUrl $releaseUrl -Stage 'completed' -StageDetail 'Updated to 0.2.0' -Slug $slug -Headers $headers }
+}
+$updateFixture = [ordered]@{
+    source  = $fixture.source
+    machine = $machine
+    updates = $updates
+    notes   = $longNotes
+    busy    = Get-Published { Send-DaemonUpdateBusyNotice -Detail 'an update started moments ago is still starting' -Headers $headers }
+}
+$full = [IO.Path]::GetFullPath($UpdateOutput)
+[IO.File]::WriteAllText($full, ((ConvertTo-Stable $updateFixture) | ConvertTo-Json -Depth 30) + "`n", [Text.UTF8Encoding]::new($false))
 Write-Host "wrote $full"

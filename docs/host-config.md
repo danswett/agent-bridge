@@ -53,7 +53,8 @@ follow.
     "detailedActivity": true,
     "machineName": null,
     "disposable": false,
-    "agentUserIds": []
+    "agentUserIds": [],
+    "updates": { "checkForUpdates": true, "checkHours": 0.5 }
   },
   "usage": {
     "publish": true,
@@ -106,6 +107,8 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `homeAssistant.answerButtons.services` | `[]` | The `notify.mobile_app_*` services to send them to. None: nothing is sent |
 | `homeAssistant.answerButtons.maxButtons` | `6` | Buttons per notification, besides "Type an answer" |
 | `homeAssistant.answerButtons.icon`, `iconColor`, `color`, `interruptionLevel` | `mdi:chat-question`, `#FFFFFF`, `#FF9F0A`, `time-sensitive` | The notification's styling; an empty `icon` or `interruptionLevel` leaves it out |
+| `homeAssistant.updates.checkForUpdates` | `true` | Whether the machine's update entity looks for this host's own releases and serves its Install and Check buttons (stage 6), as agent-ha-bridge's `updates.checkForUpdates`. Only on a copy its updater installed |
+| `homeAssistant.updates.checkHours` | `0.5` | How often, in hours (0.1 to 168), as agent-ha-bridge's `updates.checkHours`; a press of Check looks at once |
 | `usage.publish` | `true` | Reading the agents' allowances at all ([v1-usage.md](protocol/v1-usage.md)). `false` asks no vendor anything: `hello` leaves `usage` out, and the Home Assistant connector withdraws this machine's usage sensors rather than leave their last readings with nothing to refresh them (agent-ha-bridge leaves them) |
 | `usage.intervalSeconds` | `120` | How often an agent's allowance is read while a session of that agent is open here, from 30 to 86400. While agent-ha-bridge runs for this user the host reads only at `idleIntervalSeconds`, since that bridge is already asking |
 | `usage.idleIntervalSeconds` | `900` | How often it is read while none is, from 30 to 86400, and never more often than `intervalSeconds` |
