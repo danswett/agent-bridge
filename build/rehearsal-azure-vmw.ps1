@@ -1021,6 +1021,30 @@ foreach ($agent in 'copilot', 'claude', 'codex') {
     if ($LASTEXITCODE -ne 0 -or -not $version) { throw "$agent --version failed (exit $LASTEXITCODE): $version" }
     "$agent=$version"
 }
+# The checklist types `copilot`, `claude` and `codex` in an ordinary PowerShell window, where npm's
+# .ps1 shims win over its .cmd ones. Windows PowerShell's client default, Restricted, refuses them
+# (Azure's image happens to ship Unrestricted). So where local scripts are refused, this user gets
+# RemoteSigned, PowerShell 7's own default; otherwise the image's policy is left as it is.
+# Everything below runs without the Bypass this job was started with, which -ExecutionPolicy hands
+# to child processes through this variable; in this process it would also turn the policy change
+# into an override error.
+Remove-Item Env:PSExecutionPolicyPreference -ErrorAction SilentlyContinue
+$winps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+$effective = (& $winps -NoProfile -Command 'Get-ExecutionPolicy' | Out-String).Trim()
+if ($effective -in 'Restricted', 'AllSigned', 'Undefined') {
+    & $winps -NoProfile -Command 'Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force'
+}
+"execution-policy=$((& $winps -NoProfile -Command 'Get-ExecutionPolicy' | Out-String).Trim()) (was $effective)"
+# Checked the way a person runs them: unqualified, in both shells.
+foreach ($shell in "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe", "$env:ProgramFiles\PowerShell\7\pwsh.exe") {
+    foreach ($agent in 'copilot', 'claude', 'codex') {
+        $text = (& $shell -NoProfile -Command "$agent --version" 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $text -or $text -match 'running scripts is disabled') {
+            throw "$agent does not run in $(Split-Path $shell -Leaf): $text"
+        }
+    }
+    "shell-ok=$(Split-Path $shell -Leaf)"
+}
 '@
 
 # VM-M, as `rehearsal`: the key and ssh config for the checklist's `ssh -N -L 8123:127.0.0.1:8123
