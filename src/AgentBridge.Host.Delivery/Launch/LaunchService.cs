@@ -1107,8 +1107,7 @@ public sealed partial class LaunchService : ISessionLauncher
         Pending? p;
         lock (pendingGate) { p = pending.FirstOrDefault(x => x.Trust?.Id == questionId); }
         if (p is null || p.Question != StartupQuestion.Trust) { return TrustRefused("that question is no longer waiting: it was answered, or the agent closed"); }
-        if (!RemoteFolderTrust || probe.Active() is not null || TrustDevices.Count == 0) { return TrustRefused(AtMachine(null, null)!); }
-        if (!TrustDevices.Contains(device)) { return TrustRefused(NotApproved(device)); }
+        if (Stopped(device) is not null) { return TrustRefused(Refusal(device)); }
         if (Interlocked.CompareExchange(ref p.Answering, 1, 0) != 0) { return TrustRefused("that question is being answered from another device"); }
         var label = p.Launcher.Label;
         var choice = trust ? "trust" : "quit";
@@ -1134,15 +1133,19 @@ public sealed partial class LaunchService : ISessionLauncher
             {
                 var steps = screen.TrustAt - screen.Selected;
                 var move = string.Concat(Enumerable.Repeat(steps > 0 ? KeyPlan.Down : KeyPlan.Up, Math.Abs(steps)));
-                // Asked again at every key: agent-ha-bridge starting, or the setting turned off,
-                // while the window was read stops it there.
-                if (Stopped() is not null) { return TrustRefused(AtMachine(null, null)!); }
+                // Asked again at every key, and again once the injector holds the typing slot:
+                // agent-ha-bridge starting, the setting turned off or this device no longer
+                // approved, while the window was read or another delivery typed, stops it there.
+                if (Stopped(device) is not null) { return TrustRefused(Refusal(device)); }
                 wrote = true;
-                var moved = await injector.InjectAsync(window, new KeyPlan([new KeySend(move, false, 0, TrustKeyPauseMs, screen.Hold)]));
+                var moved = await injector.InjectAsync(window, new KeyPlan([new KeySend(move, false, 0, TrustKeyPauseMs, screen.Hold)]) { Proceed = () => Stopped(device) });
                 wrote = moved.Status != InjectionStatus.NothingTyped;
                 p.TrustTyped |= wrote;
                 log($"launch {Short(p.Key)}: folder trust for {by}: {Math.Abs(steps)} {(steps > 0 ? "down" : "up")} -> {moved.Status} {moved.Detail}");
-                if (moved.Status == InjectionStatus.NothingTyped) { return TrustRefused($"its window changed before anything was typed ({moved.Detail}); answer at the machine"); }
+                if (moved.Status == InjectionStatus.NothingTyped)
+                {
+                    return Stopped(device) is not null ? TrustRefused(Refusal(device)) : TrustRefused($"its window changed before anything was typed ({moved.Detail}); answer at the machine");
+                }
                 if (moved.Status != InjectionStatus.Typed) { return TrustUnconfirmed("the highlight may have moved, but whether it did is not known"); }
                 var asked = screen;
                 screen = await ReadTrustAsync(p, window);
@@ -1151,8 +1154,8 @@ public sealed partial class LaunchService : ISessionLauncher
                 // was signed for: the same as before the move, and still under that id.
                 if (!StartupQuestions.SameQuestion(screen, asked) || !Shown(p, questionId, screen)) { return TrustUnconfirmed("the question in its window changed after the highlight moved, so Enter was not pressed"); }
             }
-            if (Stopped() is { } halt) { return wrote ? TrustUnconfirmed($"the highlight was moved, but Enter was not pressed: {halt}") : TrustRefused(AtMachine(null, null)!); }
-            var plan = new KeyPlan([new KeySend(trust ? "" : KeyPlan.Escape, trust, 0, 0, screen.Hold)]);
+            if (Stopped(device) is { } halt) { return wrote ? TrustUnconfirmed($"the highlight was moved, but Enter was not pressed: {halt}") : TrustRefused(Refusal(device)); }
+            var plan = new KeyPlan([new KeySend(trust ? "" : KeyPlan.Escape, trust, 0, 0, screen.Hold)]) { Proceed = () => Stopped(device) };
             var before = wrote;
             wrote = true;
             var typed = await injector.InjectAsync(window, plan);
@@ -1161,11 +1164,15 @@ public sealed partial class LaunchService : ISessionLauncher
             log($"launch {Short(p.Key)}: folder trust for {by}: {choice}: {plan.Describe()} -> {typed.Status} {typed.Detail}");
             if (typed.Status == InjectionStatus.NothingTyped)
             {
+                var stopped = Stopped(device);
                 return before
-                    ? TrustUnconfirmed("the highlight was moved, but its window changed before Enter, so Enter was not pressed")
-                    : TrustRefused($"its window changed before anything was typed ({typed.Detail}); answer at the machine");
+                    ? TrustUnconfirmed(stopped is not null ? $"the highlight was moved, but Enter was not pressed: {stopped}" : "the highlight was moved, but its window changed before Enter, so Enter was not pressed")
+                    : stopped is not null ? TrustRefused(Refusal(device)) : TrustRefused($"its window changed before anything was typed ({typed.Detail}); answer at the machine");
             }
-            if (typed.Status != InjectionStatus.Typed) { return TrustUnconfirmed($"the {choice} may not have reached {label}"); }
+            // Esc that closed the agent can end the worker's attach before it says it is done
+            // (interrupted): whether Quit worked is then what the agent did, which is looked for.
+            // A Trust not known to have gone whole is not.
+            if (typed.Status != InjectionStatus.Typed && trust) { return TrustUnconfirmed($"the {choice} may not have reached {label}"); }
             if (!trust) { p.Declined = by; }
             return await ConfirmTrustAsync(p, trust);
         }
@@ -1187,9 +1194,15 @@ public sealed partial class LaunchService : ISessionLauncher
     static bool Shown(Pending p, string questionId, StartupQuestions.TrustScreen screen) =>
         p.Trust is { } now && now.Id == questionId && StartupQuestions.SameQuestion(screen, now.Screen);
 
-    // Why no key may go now, asked just before each one.
-    string? Stopped() =>
-        probe.Active() ?? (!RemoteFolderTrust ? "answering from devices was turned off at the machine" : TrustDevices.Count == 0 ? "no device is approved to answer from any more" : null);
+    // Why no key may go now for this device, asked before each one.
+    string? Stopped(string device) =>
+        probe.Active() ?? (!RemoteFolderTrust ? "answering from devices was turned off at the machine"
+            : TrustDevices.Count == 0 ? "no device is approved to answer from any more"
+            : !TrustDevices.Contains(device) ? "this device is no longer approved to answer from" : null);
+
+    // What a refused device is told: the machine's reason, or how to approve this device.
+    string Refusal(string device) =>
+        !RemoteFolderTrust || probe.Active() is not null || TrustDevices.Count == 0 ? AtMachine(null, null)! : NotApproved(device);
 
     // For a device not approved: what a person at the machine does to approve it.
     public static string NotApproved(string device) =>

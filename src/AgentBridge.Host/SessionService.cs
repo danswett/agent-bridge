@@ -340,6 +340,10 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
         {
             why = "Answer at the machine, or from a phone, browser or Windows app through the relay.";
         }
+        else if (TrustAnswers.NotAPerson(secure.PeerId) is { } who)
+        {
+            why = $"Answer at the machine: {who}.";
+        }
         else if (launcher!.TrustDevices.Count > 0 && !launcher.TrustDevices.Contains(secure.PeerId))
         {
             why = LaunchService.NotApproved(secure.PeerId);

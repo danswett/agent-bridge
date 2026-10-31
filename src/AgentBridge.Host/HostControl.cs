@@ -173,8 +173,14 @@ public sealed class HostControl
     object Settings(SettingsRequest request)
     {
         if (request.Name is { } name && name.Length > 0 && HostConfigFile.CleanName(name) is null) { throw new ArgumentException("the name has no visible characters"); }
-        if (request.RemoteFolderTrustDevices?.FirstOrDefault(d => !TransferProtocol.IsDeviceId(d)) is { } bad) { throw new ArgumentException($"'{bad}' is not a device id"); }
+        // Every entry checked, a missing one too, and no more than config.json is read back with:
+        // a list saved that the host then could not read would turn launching off at its next start.
+        if (request.RemoteFolderTrustDevices is { } asked && asked.ToList().FindIndex(d => !TransferProtocol.IsDeviceId(d)) is var at and >= 0)
+        {
+            throw new ArgumentException(asked[at] is { } bad ? $"'{bad}' is not a device id" : "a device id is missing");
+        }
         var devices = request.RemoteFolderTrustDevices?.Distinct(StringComparer.Ordinal).ToList();
+        if (devices is { Count: > LaunchProtocol.MaxChoices }) { throw new ArgumentException($"at most {LaunchProtocol.MaxChoices} devices can be approved"); }
         HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices);
         // Answering folder-trust questions from devices applies at once, so it can be allowed
         // while a question waits; the rest when the host restarts.

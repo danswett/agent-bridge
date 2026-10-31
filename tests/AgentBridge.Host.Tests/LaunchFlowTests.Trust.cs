@@ -284,6 +284,11 @@ public sealed partial class LaunchFlowTests
         var fromOther = await other.Hub.OpenAsync(host.Id);
         Assert.Equal(("refused", "the command must come from the device that signed it", null), await AnswerAsync(fromOther, Answer(ch, id, "trust", client.Key)));
         Assert.Equal(("refused", "only a person's phone, browser or Windows app can answer a folder-trust question", null), await AnswerAsync(fromOther, Answer(fromOther, id, "trust", other.Key)));
+        // Even approved, a machine is shown the question read-only, saying why.
+        trustLauncher.TrustDevices = [Wire.DeviceId(client.Key.Public), Wire.DeviceId(other.Key.Public)];
+        var shownToMachine = (await RequestAsync(fromOther, LaunchProtocol.Options, new { })).GetProperty("trust")[0];
+        Assert.False(shownToMachine.GetProperty("answerable").GetBoolean());
+        Assert.Equal("Answer at the machine: only a person's phone, browser or Windows app can answer a folder-trust question.", shownToMachine.GetProperty("atMachine").GetString());
 
         // Not through anything but the relay: this machine's pipe is where agents and the MCP server are.
         var piped = await new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { TrustAnswers = answers }.HandleAsync(new PipeChannel(), TrustProtocol.Answer, JsonSerializer.SerializeToElement(Answer(ch, id, "trust", client.Key), ProtocolJson.Options));
@@ -336,11 +341,67 @@ public sealed partial class LaunchFlowTests
         var id = (await LaunchTrustAsync(ch, new { agent = "claude", workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
 
         // The highlight lands on trust, but the words above it are no longer the ones shown.
-        screens.OnTyped = _ => screens.Rows = [.. ClaudeAsks(onYes: true).Select(r => r.Replace("execute files here", "execute anything here"))];
+        screens.OnTyped = _ => screens.Rows = [.. ClaudeAsks(onYes: true).Select(r => r.Replace("your own code", "someone else's code"))];
         var answer = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key));
 
         Assert.Equal(("unconfirmed", "Not confirmed: answer at the machine. The question in its window changed after the highlight moved, so Enter was not pressed.", null), answer);
         Assert.False(Assert.Single(screens.Plans).Sends[0].Enter);
+    }
+
+    [Fact]
+    public async Task A_device_unapproved_after_the_highlight_moved_does_not_get_Enter_pressed()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        starter.Registers = false;
+        screens.Rows = ClaudeAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var id = (await LaunchTrustAsync(ch, new { agent = "claude", workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+
+        // Another device stays approved: the list is not empty, but this one is not on it.
+        screens.OnTyped = _ =>
+        {
+            screens.Rows = ClaudeAsks(onYes: true);
+            trustLauncher.TrustDevices = [new string('b', 32)];
+        };
+        var answer = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key));
+
+        Assert.Equal(("unconfirmed", "Not confirmed: answer at the machine. The highlight was moved, but Enter was not pressed: this device is no longer approved to answer from.", null), answer);
+        Assert.False(Assert.Single(screens.Plans).Sends[0].Enter);
+    }
+
+    [Fact]
+    public async Task What_changes_while_an_answer_waits_for_the_typing_slot_stops_it_before_any_key()
+    {
+        screens.Rows = CopilotAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var id = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+
+        // Another delivery held the slot, and agent-ha-bridge started meanwhile.
+        screens.BeforeTyping = () => probe.Reason = "agent-ha-bridge is running for this user";
+        var typed = false;
+        screens.OnTyped = _ => typed = true;
+        var answer = await AnswerAsync(ch, Answer(ch, id, "quit", client.Key));
+
+        Assert.Equal("refused", answer.Outcome);
+        Assert.Contains("agent-ha-bridge is running for this user", answer.Reason);
+        Assert.False(typed);
+    }
+
+    [Fact]
+    public async Task A_Quit_whose_Esc_closed_the_agent_before_the_worker_said_so_is_still_seen_as_declined()
+    {
+        screens.Rows = CopilotAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var id = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+
+        screens.OnTyped = _ => starter.Exit(starter.Pids[0]);
+        screens.Then = new InjectionResult(InjectionStatus.Interrupted, "the console closed");
+        var answer = await AnswerAsync(ch, Answer(ch, id, "quit", client.Key));
+
+        Assert.Equal("declined", answer.Outcome);
     }
 
     [Fact]
