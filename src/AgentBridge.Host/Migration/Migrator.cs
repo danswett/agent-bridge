@@ -235,7 +235,9 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             {
                 if (runtime.Task(name) is { } task) { record.Tasks.Add(new(name, task.Enabled) { Disabled = false }); }
             }
-            record.DaemonRunning = runtime.Seen(install.Id);
+            // Known stopped only when nothing of agent-ha-bridge's is seen for this user; a probe
+            // that cannot tell, or another daemon, leaves it unknown, and a rollback waits.
+            record.DaemonRunning = runtime.Seen(install.Id) ? true : runtime.Active() is null ? false : null;
             record.Save(options.ProfileFolder);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)

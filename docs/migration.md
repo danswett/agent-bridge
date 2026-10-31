@@ -278,8 +278,9 @@ snapshot to roll back by hand, rather than skipping a file or a task and deletin
    disabled, and one the scheduler refused to disable is neither enabled nor started, since
    with read access alone both fail and every rollback would keep the record (#114). In a
    record from an older build, which does not say, a task still enabled is left alone.
-   The record also says whether the daemon was running when the migration began. A rollback does
-   not wait for a daemon that was already stopped then and whose task the migration never turned
+   The record also says whether the daemon was running when the migration began (unknown when the
+   probe could not tell). A rollback does
+   not wait for a daemon that was known to be stopped then and whose task the migration never turned
    off (it was cut short first): nothing stopped it, and waiting would time out on every attempt.
 6. Deletes `migration.json` and the snapshot. If anything above went wrong they are kept, and
    the report says what to do. A migration cut short (`migration status` says "part-way") is

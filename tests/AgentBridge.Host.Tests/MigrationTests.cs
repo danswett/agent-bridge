@@ -1174,6 +1174,19 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_daemon_the_probe_cannot_see_either_way_is_recorded_as_unknown_not_stopped()
+    {
+        _f.Runtime_.DaemonRunning = false;
+        _f.Runtime_.Unknown = true;
+        bool? recorded = true;
+        _f.Runtime_.OnStop = () => recorded = MigrationRecord.Load(_f.Profile).Record!.DaemonRunning;
+
+        await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.Null(recorded);
+    }
+
+    [Fact]
     public async Task A_migration_cut_short_before_it_turned_off_a_stopped_daemons_task_rolls_back_without_waiting_for_that_daemon()
     {
         var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
