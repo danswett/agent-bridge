@@ -50,11 +50,13 @@ public static class TaskAccess
             var mask = Map(ace.AccessMask);
             var applies = ace.AceQualifier == AceQualifier.AccessDenied ? denied.Contains(ace.SecurityIdentifier)
                 : ace.AceQualifier == AceQualifier.AccessAllowed && who.Contains(ace.SecurityIdentifier);
+            // An OWNER RIGHTS entry in a descriptor read without its owner may or may not apply.
+            var ownerUnknown = descriptor.Owner is null && ace.SecurityIdentifier == ownerRights;
             // A conditional entry (XA, XD) counts only when its expression holds for the token,
-            // which is not evaluated here. One that could still decide write leaves it unknown,
-            // so the scheduler decides instead: a false yes or no would mislead the preflight.
-            if (applies && ace.IsCallback && (mask & FileWriteData & ~(granted | refused)) != 0) { return null; }
-            if (!applies || ace.IsCallback) { continue; }
+            // which is not evaluated here. Either one that could still decide write leaves it
+            // unknown, so the scheduler decides instead: a false yes or no would mislead the preflight.
+            if (((applies && ace.IsCallback) || ownerUnknown) && (mask & FileWriteData & ~(granted | refused)) != 0) { return null; }
+            if (!applies || ace.IsCallback || ownerUnknown) { continue; }
             if (ace.AceQualifier == AceQualifier.AccessDenied) { refused |= mask & ~granted; }
             else { granted |= mask & ~refused; }
         }

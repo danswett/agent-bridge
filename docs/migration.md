@@ -80,7 +80,7 @@ second snapshot the first's changes as the state to restore; the second is refus
      registered from an administrator (elevated) prompt is owned by Administrators and leaves
      the user only read access; unelevated, that membership is deny-only, so Task Scheduler
      would refuse to disable it part-way through (#114). It is read from the task's
-     discretionary list, as Windows' access check reads it. The fix is to re-register it as the
+     owner and discretionary list, as Windows' access check reads them. The fix is to re-register it as the
      user: remove it from an elevated prompt and run agent-ha-bridge's installer again from a
      normal one. When that cannot be told (a conditional entry that could decide it, whose
      condition is the token's to evaluate, is one way), the migration goes ahead, and a refusal part-way is

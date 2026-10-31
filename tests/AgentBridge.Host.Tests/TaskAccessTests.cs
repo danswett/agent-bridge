@@ -63,6 +63,14 @@ public class TaskAccessTests
     }
 
     [Fact]
+    public void An_owner_rights_entry_read_without_the_owner_leaves_the_answer_to_the_scheduler()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.Null(TaskAccess.CanModify("D:(A;;FA;;;OW)", User, []));
+        Assert.True(TaskAccess.CanModify("D:(A;;FA;;;S-1-5-21-1-2-3-1000)(D;;GW;;;OW)", User, []));
+    }
+
+    [Fact]
     public void A_denial_listed_before_an_allowance_wins()
     {
         if (!OperatingSystem.IsWindows()) { return; }

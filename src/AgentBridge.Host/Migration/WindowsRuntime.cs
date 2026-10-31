@@ -43,12 +43,18 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
 
     public ScheduledTaskState? Task(string name) => WithTask(name, task => new ScheduledTaskState((bool)Get(task, "Enabled")!, (int)Get(task, "State")! == 4, Modifiable(task)), missing: true);
 
-    // From the discretionary list alone: owning a task implies no right to write it.
+    // From the owner and discretionary list: owning a task implies no right to write it, but an
+    // OWNER RIGHTS entry applies only to its owner. Without the owner (one this user may not
+    // read), the list alone, and such an entry leaves the answer unknown.
     static bool? Modifiable(object task)
     {
-        const int DaclSecurityInformation = 4;
-        try { return Call(task, "GetSecurityDescriptor", DaclSecurityInformation) is string sddl ? TaskAccess.CanModify(sddl) : null; }
-        catch (Exception e) when (e is TargetInvocationException or MissingMethodException or COMException or InvalidCastException) { return null; }
+        const int OwnerSecurityInformation = 1, DaclSecurityInformation = 4;
+        foreach (var information in new[] { OwnerSecurityInformation | DaclSecurityInformation, DaclSecurityInformation })
+        {
+            try { return Call(task, "GetSecurityDescriptor", information) is string sddl ? TaskAccess.CanModify(sddl) : null; }
+            catch (Exception e) when (e is TargetInvocationException or MissingMethodException or COMException or InvalidCastException) { }
+        }
+        return null;
     }
 
     public void SetEnabled(string name, bool enabled) => WithTask(name, task => { task.GetType().InvokeMember("Enabled", BindingFlags.SetProperty, null, task, [enabled]); return true; });
