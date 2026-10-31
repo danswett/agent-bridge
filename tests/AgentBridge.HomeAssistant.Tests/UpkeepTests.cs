@@ -498,6 +498,33 @@ public sealed class UpkeepTests : IDisposable
     }
 
     [Fact]
+    public async Task A_forms_words_kept_in_the_box_through_a_selector_only_loss_are_still_its_answer()
+    {
+        var note = new Field { Name = "note", Title = "Note", Type = FieldType.Text };
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release, note] };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { Question = question });
+        await using var c = Connector(answers: true);
+        await Run(c, 70);
+        await ha.CallServiceAsync("text", "set_value", new JsonObject { ["entity_id"] = SessionEntities.Reply(NodeA), ["value"] = "after the fix lands" });
+
+        // A restart that loses the selector's value but not the box's: the question goes on
+        // screen again around the words.
+        var rearmed = Logged("armed " + NodeA + " again");
+        ha.ForgetOptimistic(SessionEntities.Decision(NodeA));
+        for (var i = 0; i < 30 && Logged("armed " + NodeA + " again") == rearmed; i++) { await Run(c, 1); }
+        Assert.Equal(rearmed + 1, Logged("armed " + NodeA + " again"));
+        Assert.Equal("after the fix lands", (await ha.GetStateAsync(SessionEntities.Reply(NodeA)))!.State);
+
+        c.Observe(ha.Choose(SessionEntities.Field(NodeA, 1), "Wait for the fix"));
+        await Run(c, 1);
+        c.Observe(ha.Press(SessionEntities.Submit(NodeA)));
+        await Run(c, 5);
+        var given = Assert.Single(answered);
+        Assert.Equal("wait", given.Fields!["release"].GetString());
+        Assert.Equal("after the fix lands", given.Fields!["note"].GetString());
+    }
+
+    [Fact]
     public async Task An_answer_given_just_as_the_machine_is_published_again_around_its_card_is_delivered()
     {
         var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Cut the release?", AskedAt = FakeSessions.T0, Fields = [Release] };

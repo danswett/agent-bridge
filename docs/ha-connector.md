@@ -708,7 +708,8 @@ judgement replayed beat by beat over scripted reads, the rebuild's messages, and
   * **Reply box or selector reads `unknown`:** these have no state topic, so a Home Assistant
     restart brings them back with no value. A box that lost its value gets `' '` again (words in
     a box whose selector alone was lost are somebody's, and are left), and the question goes on
-    screen again with fresh baselines. When there is no question, the selector is parked on Idle.
+    screen again with fresh baselines. Words left in the box keep the baseline they had, so a
+    form's text field still takes them at Send. When there is no question, the selector is parked on Idle.
     Home Assistant may bring the selector and the choices back with their values while the box
     comes back empty, so the card looks answerable before the question is armed again. The card
     is therefore read once with the baselines it was armed with before new ones are taken. An

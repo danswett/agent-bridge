@@ -253,7 +253,10 @@ public sealed partial class HaConnector
         // baseline stays the one before them, or they would read as nothing new.
         if (!(armed.HeldStamp is { } held && payload.Present && payload.Value == held)) { armed.PayloadBaseline = payload; }
         armed.SubmitBaseline = submit;
-        armed.ReplyBaseline = reply;
+        // Words still in the box survived the loss (only the selector lost its value, say): they
+        // are measured against what the box held when the question was armed, or a form's text
+        // field would go empty with the words in plain sight.
+        if (!reply.Present) { armed.ReplyBaseline = reply; }
         armed.Boundary = Interlocked.Read(ref hitSeq);
         // A Send read after a failure is compared with what Send shows now, not before the loss.
         if (armed.SubmitAtFailure is not null) { armed.SubmitAtFailure = submit; }
