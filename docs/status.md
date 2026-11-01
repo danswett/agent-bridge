@@ -200,14 +200,28 @@ agent-ha-bridge releases from this work:
   [release](https://github.com/danswett/agent-bridge/releases); they are all
   pre-releases, so `releases/latest` does not work. Run it, then sign in from the app.
   A plain install is read-only beside agent-ha-bridge and registers no hooks.
-- **View only** (e.g. HOME), run at the machine, not from an agent session:
-  `agent-bridge-host config set delivery.readOnly true`, `push.enabled false`,
-  `homeAssistant.enabled false`; then restart the host from the app.
-- **Migrate** a machine: `agent-bridge-host migrate --dry-run`, then `migrate`
-  ([migration.md](migration.md)). Then turn the HA connector on at the machine:
-  `config set homeAssistant.enabled true` and `ha token set` (paste a Home Assistant
-  long-lived token), then restart the host. Migrate refuses on the publication writer.
-- **Rollback:** `agent-bridge-host rollback`.
+- **View only** (e.g. HOME), run at the machine in a normal PowerShell window, not from
+  an agent session, then restart the host from the app:
+  ```
+  $h="$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h config set delivery.readOnly true; & $h config set push.enabled false; & $h config set homeAssistant.enabled false
+  ```
+- **Migrate** a machine ([migration.md](migration.md)); migrate refuses on the
+  publication writer. Check first, then migrate:
+  ```
+  $h="$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h migrate --dry-run
+  ```
+  ```
+  $h="$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h migrate
+  ```
+  Then turn the HA connector on. `ha token set` asks for a Home Assistant long-lived
+  token. Restart the host from the app afterwards:
+  ```
+  $h="$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h config set homeAssistant.enabled true; & $h ha token set; & $h ha status
+  ```
+- **Rollback:**
+  ```
+  $h="$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h rollback
+  ```
 - **Commands for the owner** go as plain text one-liners. They are often read on a phone
   and copied with the PWA's Copy button. Encoded commands don't wrap, so avoid them.
 - **Owner-only actions:** config changes, sign-in and `-Install` (the #67 guard refuses

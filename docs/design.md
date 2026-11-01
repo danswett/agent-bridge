@@ -141,8 +141,8 @@ Two side effects are worth stating plainly:
      ┌───────────────────────────────────────────────────────────────┐
      │  Agent Bridge Relay (untrusted)                               │
      │  GitHub sign-in · device directory (signed roster) · frame    │
-     │  relay · push gateway (Web Push now; APNs/FCM later) · serves │
-     │  the PWA                                                      │
+     │  relay · push gateway (Web Push now; APNs/FCM later). Serves  │
+     │  no app code: the PWA comes from GitHub Pages (§8)            │
      └───────────────────────────────┬───────────────────────────────┘
                                      │
                               ┌──────┴──────┐
@@ -158,7 +158,7 @@ Two side effects are worth stating plainly:
 | **Bridge Host** (C#, .NET 10) | One per machine, per user, at logon. Windows: `WinExe`, no console, scheduled task. macOS: background-only signed `.app`, LaunchAgent. Linux: systemd user service | Everything the daemon does today: spool intake, discovery, transcript tailing, activity, decisions, replies and injection, launch/stop/resume, usage, worktree isolation and reclaim, transfers, self-maintenance. Also the protocol server (pipe or Unix socket, LAN, relay) and the connectors. **All product logic lives here**, so every client behaves the same |
 | **Agent Bridge app**: WinUI 3 (Windows) and SwiftUI (macOS) | Per user, one per desktop OS | UI, tray or menu-bar icon, notifications with typed answers, installer/manager for the host and agent hooks, pairing UX. A thin client of Bridge Protocol v1 over the local socket: it renders protocol state and sends commands, and holds no product rules, so the two apps cannot drift. Both are held to one feature list (§7.1) and one set of protocol contract tests. **Optional at run time**: closing it never stops the bridge |
 | **Relay** (ASP.NET Core) | Cloud, run by the project; self-host container available | Account sign-in, signed device directory, opaque frame forwarding, push gateway. Serves no app code. Holds no keys capable of reading content |
-| **PWA** | Phone/browser, served from the relay origin | Session list/cards, answer, reply, launch, Web Push |
+| **PWA** | Phone/browser, served from GitHub Pages, never from the relay (§8) | Session list/cards, answer, reply, launch, Web Push |
 | **MCP server** (Node, existing) | Launched by MCP clients | Re-targeted from HA REST to the **local host pipe** with a scoped agent token. Tool names stay, with an alias for `ask_via_home_assistant` |
 | **HA connector** (in host, optional) | Host plug-in | **During the transition: wire-compatible** with today's per-machine and per-session MQTT entities and inputs (G9), so the existing dashboard keeps working for migrated machines. Also sends actionable phone notifications and receives taps. **Never** publishes the dashboard, Lovelace resources or the publication policy (G7). After P7 it can shrink to a slim status + notifications set |
 
