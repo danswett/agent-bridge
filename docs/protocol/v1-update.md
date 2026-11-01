@@ -88,7 +88,12 @@ An install restarts the app and host, so its outcome is reported by the new vers
 keeps the press it is carrying out in its preferences when it hands over to the updater, and its
 first start on the new release reports `updated` (or `failed`, "the update did not take") with
 that `request`. A device following the machine sees its channel close as the host stops, and
-the outcome when it reconnects.
+the outcome when it reconnects. An update from the machine's own Settings answers an Install a
+device pressed and the app had not yet carried out, and one that fails there is reported
+`failed` like an automatic one. A press the app took and had not finished when it stopped for
+anything else (quit, sign-out, the machine restarting) is not carried out by its next start,
+which reports it `refused`, "the app on this machine restarted before carrying it out; press it
+again": an install pressed hours before must not go ahead on sessions never watched for it.
 
 ### `UpdateCommandResult`
 

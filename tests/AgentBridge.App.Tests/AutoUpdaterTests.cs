@@ -549,6 +549,10 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var last = prefs.LastUpdate!;
         Assert.Equal((UpdateOutcome.Updated, "0.1.0", "0.2.0", Press, time.GetUtcNow()), (last.Outcome, last.From, last.To, last.Request, last.At));
         Assert.Null(prefs.UpdateRequest);
+        // Its updater then starts, and the press the update answered stays answered.
+        var restarted = new AutoUpdater(updater, connection, manager, () => prefs, p => prefs = p, log.Add, _ => null, time);
+        Assert.Equal(UpdateOutcome.Updated, restarted.State.Last!.Outcome);
+        Assert.Null(prefs.UpdateInstallAsked);
     }
 
     [Fact]
@@ -865,6 +869,28 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         time.Advance(AutoUpdater.DownloadAgainAfter);
         await AskedAsync(UpdateAskKind.Check, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
         Assert.Equal(2, updater.Downloads);
+    }
+
+    [Fact]
+    public async Task An_install_pressed_and_not_carried_out_when_the_app_restarts_is_reported_as_such_and_not_installed()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await AskedAsync(UpdateAskKind.Install);
+        Assert.Equal((UpdatePhase.Waiting, Press), (auto.State.Phase, auto.State.Request));
+
+        // The app quit, or the machine restarted, while the turn ran.
+        var restarted = new AutoUpdater(updater, connection, manager, () => prefs, p => prefs = p, log.Add, _ => null, time);
+        await GoIdleAsync("s1");
+        await restarted.TickAsync();
+        time.Advance(AutoUpdater.IdleFor);
+        await restarted.TickAsync();
+
+        var last = restarted.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, AutoUpdater.Restarted, Press), (last.Outcome, last.Reason, last.Request));
+        Assert.Null(restarted.State.Request);
+        Assert.False(updater.Applied);
+        Assert.Null(prefs.UpdateInstallAsked);
     }
 
     [Fact]

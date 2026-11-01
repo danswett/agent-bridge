@@ -551,6 +551,37 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_update_from_Settings_that_fails_is_reported_to_the_devices_and_leaves_their_press_to_the_app()
+    {
+        await Connected();
+        prefs = prefs with { UpdateInstallAsked = "a-device-press" };
+        updater.ApplyFails = new InvalidOperationException("no downloaded update to install; check for updates again");
+
+        await settings.CheckForUpdatesAsync();
+        await settings.InstallUpdateAsync();
+
+        var last = prefs.LastUpdate!;
+        Assert.Equal((UpdateOutcome.Failed, "0.1.0", "0.2.0", (string?)null), (last.Outcome, last.From, last.To, last.Request));
+        Assert.Equal(settings.Error, last.Reason);
+        Assert.StartsWith("no downloaded update to install", last.Reason);
+        Assert.Null(prefs.UpdateRequest);
+        Assert.Equal("a-device-press", prefs.UpdateInstallAsked);
+    }
+
+    [Fact]
+    public async Task An_update_from_Settings_answers_the_install_a_device_pressed_and_the_app_had_not_yet_carried_out()
+    {
+        await Connected();
+        prefs = prefs with { UpdateInstallAsked = "a-device-press" };
+
+        await settings.CheckForUpdatesAsync();
+        await settings.InstallUpdateAsync();
+
+        Assert.True(updater.Applied);
+        Assert.Equal("a-device-press", prefs.UpdateRequest);
+    }
+
+    [Fact]
     public async Task An_update_check_that_cannot_reach_the_network_says_so_on_the_page()
     {
         await Connected();

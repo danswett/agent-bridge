@@ -359,8 +359,8 @@ public sealed class SettingsViewModel : Observable
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
             // Still this version: the host stopped for it is back (HostManager), and the failure is
-            // shown.
-            savePrefs(prefs() with { UpdatedFrom = null, UpdateNotes = null });
+            // shown, and reported to the account's devices.
+            AutoUpdater.Failed(prefs, savePrefs, updater, updateVersion, e.Message);
             updateVersion = null;
             UpdateStatus = "";
             throw;

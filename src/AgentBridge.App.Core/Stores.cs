@@ -100,6 +100,10 @@ public sealed record AppPreferences
     // The presses from other devices this app has taken on, the latest last: one the host still
     // lists after the app restarts (its report that it took them lost) is not carried out twice.
     public IReadOnlyList<string>? UpdateTaken { get; init; }
+    // The presses from other devices being carried out (AutoUpdater): one the app had not finished
+    // when it last stopped is reported as such by its next start.
+    public string? UpdateInstallAsked { get; init; }
+    public string? UpdateCheckAsked { get; init; }
     public string? Relay { get; init; }
     // The installed app's first run turned on starting at sign-in (the host's logon task and
     // the app's Run entry); after that they are the person's to turn off and stay off.

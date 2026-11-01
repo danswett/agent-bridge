@@ -43,6 +43,9 @@ public sealed class AutoUpdater
     public static readonly TimeSpan DownloadAgainAfter = TimeSpan.FromMinutes(10);
     // How many presses are remembered as taken, across restarts.
     public const int TakenKept = 32;
+    // How a press the app took and had not carried out when it last stopped (quit, signed out, the
+    // machine restarted) ends: the next start says so, rather than leaving it to vanish.
+    public const string Restarted = "the app on this machine restarted before carrying it out; press it again";
 
     // Shared with Settings, whose checks and downloads it reports too.
     readonly ObservedUpdater updater;
@@ -97,6 +100,33 @@ public sealed class AutoUpdater
         // Nothing installs while one is being read (Due), and every reconnect ends in one.
         host.Sessions.Upserted += s => { if (Busy(s)) { idleSince = null; } };
         host.Sessions.Synced += () => idleSince = null;
+        Resume();
+    }
+
+    // The presses the app before this start had taken and not finished (UpdateInstallAsked,
+    // UpdateCheckAsked). One an update answered was reported by Announce, with its request; any
+    // other is ended as Restarted, not carried out now: an install pressed hours ago must not go
+    // ahead on a machine whose sessions were never watched for it.
+    void Resume()
+    {
+        var p = prefs();
+        if (p.UpdateInstallAsked is null && p.UpdateCheckAsked is null) { return; }
+        var left = p.UpdateInstallAsked ?? p.UpdateCheckAsked;
+        save(p with { UpdateInstallAsked = null, UpdateCheckAsked = null });
+        if (left != p.LastUpdate?.Request)
+        {
+            log("update: a press taken before the app restarted was not carried out");
+            Remember(UpdateOutcome.Refused, Restarted, null, left);
+        }
+    }
+
+    // The presses being carried out, kept in the preferences for Resume.
+    void Keep()
+    {
+        string? install, check;
+        lock (asks) { (install, check) = (installRequest, checkRequest); }
+        var p = prefs();
+        if (p.UpdateInstallAsked != install || p.UpdateCheckAsked != check) { save(p with { UpdateInstallAsked = install, UpdateCheckAsked = check }); }
     }
 
     // The release found and downloaded, waiting to be installed.
@@ -161,6 +191,7 @@ public sealed class AutoUpdater
             if (kind == UpdateAskKind.Install) { installRequest = request; installVetted = null; installAskedAt = time.GetUtcNow(); }
             else { checkRequest = request; }
         }
+        Keep();
         log($"update: {(kind == UpdateAskKind.Install ? "install" : "check")} asked for");
         checkNow = true;
         Changed();
@@ -179,6 +210,7 @@ public sealed class AutoUpdater
             if (field != request) { return; }
             field = null;
         }
+        Keep();
         log($"update: asked {outcome.ToString().ToLowerInvariant()}{(reason is null ? "" : $": {reason}")}");
         Remember(outcome, reason, to, request);
     }
@@ -391,6 +423,7 @@ public sealed class AutoUpdater
         else
         {
             lock (asks) { if (checkRequest == check) { checkRequest = null; } }
+            Keep();
         }
         Changed();
     }
@@ -461,9 +494,26 @@ public sealed class AutoUpdater
     }
 
     // Before an update is applied, by the app or from Settings: what the new version's first start
-    // announces, and the press from another device it answers, if one asked for it.
+    // announces, and the press from another device it answers, if one asked for it. From Settings,
+    // that is the Install a device pressed and the app has not yet carried out: Settings installs
+    // the release it would have.
     public static void Record(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, string? request = null) =>
-        save(prefs() with { UpdatedFrom = updater.InstalledVersion, UpdateNotes = updater.PendingNotes, UpdateRequest = request });
+        save(prefs() with { UpdatedFrom = updater.InstalledVersion, UpdateNotes = updater.PendingNotes, UpdateRequest = request ?? prefs().UpdateInstallAsked });
+
+    // Settings' Update and restart failed, the old release still running: kept for the devices as
+    // an automatic install that fails is. The press a device made, if Settings took it on, is left
+    // to the app, which still carries it out.
+    public static void Failed(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, string? to, string reason, TimeProvider? time = null)
+    {
+        save(prefs() with
+        {
+            UpdatedFrom = null,
+            UpdateNotes = null,
+            UpdateRequest = null,
+            LastUpdate = new UpdateResult { Outcome = UpdateOutcome.Failed, From = updater.InstalledVersion, To = to, Reason = reason, At = (time ?? TimeProvider.System).GetUtcNow() },
+        });
+        (updater as ObservedUpdater)?.Noted();
+    }
 
     // The first start after an update: a toast saying what changed, once, and how it went kept for
     // the account's other devices (State.Last), the press it answers with it.
