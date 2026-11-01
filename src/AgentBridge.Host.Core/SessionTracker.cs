@@ -192,6 +192,7 @@ internal sealed class SessionTracker
         // sub-agent's (source names it), or none at all where the host has the main agent's
         // only from the part of the transcript it skimmed.
         var (ownResponse, ownCut) = source?.Response is not null || _state.Response is null ? Limits.KeepEnd(_state.OwnResponse, Limits.Response) : (null, false);
+        ownCut |= ownResponse is not null && _state.OwnResponseCut;
         var ownReasoning = source?.Reasoning is not null || _state.Reasoning is null ? Limits.KeepEnd(_state.OwnReasoning, Limits.Reasoning).Text : null;
         var own = ownResponse is null && ownReasoning is null ? null
             : new OwnActivity { Response = ownResponse, ResponseTruncated = ownCut ? true : null, Reasoning = ownReasoning, At = _state.OwnAt };

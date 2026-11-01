@@ -333,6 +333,20 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task A_main_turn_that_gave_its_answer_and_ended_while_a_delegate_asked_is_a_finished_turn()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working, response: "All done.", turns: 0));
+        source.Upsert(S("s1", SessionStatus.Waiting, response: "All done.", question: Q("q1", "Allow?", QuestionKind.Approval) with { Agent = "agent-1" }, turns: 0) with { WaitingOn = "agent-1" });
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "All done."));
+        await After(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("DEV · finished\nAll done.", Received()[^1].Notification.GetProperty("body").GetString());
+    }
+
+    [Fact]
     public async Task A_finished_turn_replaces_the_answered_question_instead_of_adding_a_notice()
     {
         Start();

@@ -18,6 +18,8 @@ internal sealed class SessionState
     public string? ReasoningBy;
     // The main agent's own latest text, and when it wrote it: activity.own.
     public string? OwnResponse;
+    // OwnResponse was cut as the skim took it: kept bounded, since only the skim holds it.
+    public bool OwnResponseCut;
     public string? OwnReasoning;
     public DateTimeOffset? OwnAt;
     public string? Model;
@@ -50,7 +52,7 @@ internal sealed class SessionState
     {
         FirstUserMessage = null;
         AgentTitle = null; UserMessage = null; Response = null; Reasoning = null; Model = null;
-        ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnReasoning = null; OwnAt = null;
+        ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnResponseCut = false; OwnReasoning = null; OwnAt = null;
         Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null;
         Prompts = 0; Compactions = 0; Seen = false;
         Status = SessionStatus.Idle; StatusSince = null; EffectiveSince = null;
@@ -88,7 +90,7 @@ internal sealed class SessionState
     public void MainSaid(string? content, string? reasoning, DateTimeOffset? at)
     {
         if (reasoning is not null) { Reasoning = OwnReasoning = reasoning; ReasoningBy = null; OwnAt = at ?? OwnAt; }
-        if (content is not null) { Response = OwnResponse = content; ResponseBy = null; OwnAt = at ?? OwnAt; }
+        if (content is not null) { Response = OwnResponse = content; OwnResponseCut = false; ResponseBy = null; OwnAt = at ?? OwnAt; }
     }
 
     // What a sub-agent wrote: the latest text still, as on agent-ha-bridge's card, now

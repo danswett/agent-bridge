@@ -105,6 +105,7 @@ public sealed class PushNotifier : IAsyncDisposable
         // The main agent's answer as last seen outside a wait on a delegate: answering a
         // delegate's question while the main agent stayed idle ends no turn of its.
         public string? MainKey;
+        public bool MainRunning;
         public readonly HashSet<string> Notified = new(StringComparer.Ordinal);
         public readonly Queue<string> NotifiedOrder = new();
     }
@@ -144,7 +145,7 @@ public sealed class PushNotifier : IAsyncDisposable
             foreach (var s in source.Snapshot())
             {
                 if (sessions.ContainsKey(s.Id)) { continue; }
-                var t = sessions[s.Id] = new Tracked { Last = s, MainKey = MainKey(s) };
+                var t = sessions[s.Id] = new Tracked { Last = s, MainKey = MainKey(s), MainRunning = s.WaitingOn is null && s.Status is SessionStatus.Working or SessionStatus.Waiting };
                 if (s.Question is { } q) { t.Due = new Due(NoticeKind.Question, now + this.options.QuestionDelay, q.Id); }
             }
         }
@@ -306,9 +307,15 @@ public sealed class PushNotifier : IAsyncDisposable
         var prev = t.Last;
         t.Last = s;
         t.Removed = false;
-        // The main agent's answer as it stood before any wait on a delegate began.
+        // The main agent's answer as it stood before any wait on a delegate began, and whether
+        // its turn was running then.
         var baseline = t.MainKey;
-        if (s.WaitingOn is null) { t.MainKey = MainKey(s); }
+        var wasRunning = t.MainRunning;
+        if (s.WaitingOn is null)
+        {
+            t.MainKey = MainKey(s);
+            t.MainRunning = s.Status is SessionStatus.Working or SessionStatus.Waiting;
+        }
         if (s.Question is { } q)
         {
             // Back before its resolution went out (it flickered while an answer was typed):
@@ -329,12 +336,13 @@ public sealed class PushNotifier : IAsyncDisposable
         }
         // Answered (or gone) before it was notified: nothing to say.
         if (t.Due is { Kind: NoticeKind.Question }) { t.Due = null; }
-        // Waiting on a delegate (status rule 2) says nothing of the main agent's turn: a turn
-        // finished then only if the main agent's answer is seen to have changed since before
-        // the wait. With no answer seen before it (a session first seen already waiting on
-        // one), nothing says a turn ran. Sessions present at startup are seeded with theirs.
+        // Waiting on a delegate (status rule 2) hides the main agent's turn: a turn finished
+        // then if it was running when the wait began (it may have ended, its answer already
+        // given, while the delegate asked), or if its answer is seen to have changed since.
+        // With neither (a session first seen already waiting on one), nothing says a turn
+        // ran. Sessions present at startup are seeded with theirs.
         var turnRan = prev is { Status: SessionStatus.Waiting, WaitingOn: not null }
-            ? baseline is { } before && MainKey(s) != before
+            ? wasRunning || (baseline is { } before && MainKey(s) != before)
             : prev is { Status: SessionStatus.Working or SessionStatus.Waiting };
         if (s.Status == SessionStatus.Idle && turnRan
             && !string.IsNullOrWhiteSpace(OwnResponse(s)) && FinishedKey(s) != t.FinishedKey)

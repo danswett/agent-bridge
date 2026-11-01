@@ -586,7 +586,7 @@ agent-ha-bridge notifies a phone through Home Assistant.
 | `kind` | When | Once per |
 |---|---|---|
 | `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it |
-| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Waiting on a sub-agent's question (`waitingOn`) counts only if the main agent's own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified | Finished turn: the same `turnCount` and response seen ending again is not repeated |
+| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified | Finished turn: the same `turnCount` and response seen ending again is not repeated |
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead | Question |
 
 A question answered before its 2 s are up is never notified. A notice that cannot be sent
@@ -939,19 +939,23 @@ that added `background`).
   * The starting `task` call, the first stamped `user.message`, `subagent.started` and the
     model events are read from the skimmed part of the transcript too, so an agent started
     before the parsed window keeps its name, task, parent and model. A model is dropped
-    when the host could not read everything before the window, as the session's is.
+    when the host could not read everything before the window, as the session's is. The
+    latest 64 sub-agent tool calls are read there too, so a permission prompt in the window
+    for one whose call is not is still that agent's.
   * An agent of a CLI process that has since been replaced is `ended`: mid-run with no
     `outcome` or `endedAt`, since nothing will say how it went; between runs keeping both.
   * A run ends as for background agents above, with outcome `done`. A run whose start
     the host only skimmed still gets the `outcome` and `endedAt` of the event in the window
-    that ends it (a `task` call completing, `subagent.completed`). A task agent is
+    that ends it (a `task` call completing, `subagent.completed`, a late `agent_idle`). A task agent is
     `ended` when its run ends, or when its `task` call completes (`failed` if the call
     failed), or when the main agent's turn is aborted (`failed`) while it was that turn's:
     a task agent the main agent's `task` started, or one nested only under such agents. One a
     background agent started belongs to that agent's run, and the main agent's abort leaves
     it alone. `subagent.failed` or the
     agent's own `abort` ends it `failed`, even when no run of it was seen going, and clears
-    any question of its still pending; its own
+    any question of its still pending; the task agents it was itself waiting on (down to a
+    background one) end `failed` with it, as does a failed `task` call's, with their
+    questions. Its own
     `session.shutdown` ends it, `failed` only if mid-run. The session's
     `session.shutdown` ends every entry: `failed` if it was mid-run.
   * Its shells are read from its own tool results with the same markers, skimmed ones

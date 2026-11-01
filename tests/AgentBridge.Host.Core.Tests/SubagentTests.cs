@@ -520,4 +520,62 @@ public class SubagentTests
 
         Assert.Equal((SubagentStatus.Ended, SubagentOutcome.Done, Fixture.T0.AddSeconds(5)), (Entry(resumed, "a1").Status, Entry(resumed, "a1").Outcome, Entry(resumed, "a1").EndedAt));
     }
+
+    [Fact]
+    public async Task A_background_agent_that_aborts_takes_the_task_agent_it_was_waiting_on_and_its_question_with_it()
+    {
+        await using var s = new Live();
+        var asking = await s.After([.. Delegate("t1", "bg", 1),
+            Copilot.ToolStart("t2", "task", new { description = "Nested", prompt = "p" }, 3, "bg"), Copilot.SubagentStarted("t2", "nested", 3, mode: "sync"), Copilot.TurnStart(3, "nested"),
+            Copilot.ToolStart("c9", "powershell", new { command = "gh pr checks" }, 4, "nested"), Copilot.Permission("r1", "c9", Copilot.Prompts["commands"], 4)]);
+        Assert.Equal("nested", asking.WaitingOn);
+
+        var aborted = await s.After(Copilot.Event("abort", new { reason = "user initiated" }, 5, "bg"));
+
+        var nested = Entry(aborted, "nested");
+        Assert.Equal((SubagentStatus.Ended, SubagentOutcome.Failed, (ToolCall?)null), (nested.Status, nested.Outcome, nested.CurrentTool));
+        Assert.Null(aborted.Question);
+        Assert.Null(aborted.WaitingOn);
+    }
+
+    [Fact]
+    public async Task A_task_agent_whose_call_fails_while_it_asks_leaves_nothing_pending()
+    {
+        await using var s = new Live();
+        var asking = await s.After(Copilot.User("go", 1), Copilot.TurnStart(1),
+            Copilot.ToolStart("t1", "task", new { description = "Check", prompt = "p" }, 2), Copilot.SubagentStarted("t1", "s1", 2, mode: "sync"), Copilot.TurnStart(2, "s1"),
+            Copilot.ToolStart("c9", "powershell", new { command = "gh pr checks" }, 3, "s1"), Copilot.Permission("r1", "c9", Copilot.Prompts["commands"], 3));
+        Assert.Equal("s1", asking.WaitingOn);
+
+        var failed = await s.After(Copilot.ToolDone("t1", 4, success: false));
+
+        Assert.Null(failed.Question);
+        Assert.Null(failed.WaitingOn);
+        Assert.Equal((SubagentStatus.Ended, SubagentOutcome.Failed), (Entry(failed, "s1").Status, Entry(failed, "s1").Outcome));
+    }
+
+    [Fact]
+    public async Task A_host_starting_after_a_delegates_run_began_takes_its_late_idle_notice_as_how_it_ended()
+    {
+        await using var s = new Live(tailBytes: 4096);
+        var filler = Enumerable.Range(0, 8).Select(i => Copilot.Assistant("", 40 + i, reasoning: new string('x', 1000), agentId: "elsewhere")).ToArray();
+
+        var cold = await s.After([.. Delegate("t1", "a1", 1), .. filler,
+            Copilot.Event("system.notification", new { content = "idle", kind = new { type = "agent_idle", agentId = "a1" } }, 60)]);
+
+        Assert.Equal((SubagentOutcome.Done, Fixture.T0.AddSeconds(60)), (Entry(cold, "a1").Outcome, Entry(cold, "a1").EndedAt));
+    }
+
+    [Fact]
+    public async Task A_host_starting_between_a_delegates_call_and_its_permission_prompt_still_knows_whose_prompt_it_is()
+    {
+        await using var s = new Live(tailBytes: 4096);
+        var filler = Enumerable.Range(0, 8).Select(i => Copilot.Assistant("", 40 + i, reasoning: new string('x', 1000), agentId: "elsewhere")).ToArray();
+
+        var cold = await s.After([.. Delegate("t1", "a1", 1),
+            Copilot.ToolStart("c9", "powershell", new { command = "gh pr checks" }, 30, "a1"), .. filler,
+            Copilot.Permission("r1", "c9", Copilot.Prompts["commands"], 60)]);
+
+        Assert.Equal(("a1", "a1"), (cold.Question!.Agent, cold.WaitingOn));
+    }
 }

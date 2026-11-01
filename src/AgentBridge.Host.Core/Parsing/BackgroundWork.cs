@@ -74,6 +74,8 @@ internal sealed class BackgroundWork
     readonly Dictionary<string, Agent> _agents = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> _agentByCall = new(StringComparer.Ordinal);
     readonly Dictionary<string, TaskCall> _calls = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string> _callAgents = new(StringComparer.Ordinal);
+    readonly Queue<string> _callOrder = new();
     readonly Dictionary<string, DateTimeOffset?> _shells = new(StringComparer.Ordinal);
     long _order;
 
@@ -82,13 +84,15 @@ internal sealed class BackgroundWork
     public int Version { get; private set; }
 
     // Every id held, for checking that a long session cannot grow it without bound.
-    internal int Tracked => _agents.Count + _agentByCall.Count + _calls.Count + _shells.Count;
+    internal int Tracked => _agents.Count + _agentByCall.Count + _calls.Count + _shells.Count + _callAgents.Count;
 
     public void Clear()
     {
         _agents.Clear();
         _agentByCall.Clear();
         _calls.Clear();
+        _callAgents.Clear();
+        _callOrder.Clear();
         _shells.Clear();
         Version++;
     }
@@ -216,6 +220,7 @@ internal sealed class BackgroundWork
         EndRun(agent, at, SubagentOutcome.Failed);
         if (aborted && agent.Outcome != SubagentOutcome.Failed) { agent.Outcome = SubagentOutcome.Failed; agent.EndedAt = at ?? agent.EndedAt; Version++; }
         Finish(agent);
+        EndTurnOf(agentId, at);
     }
 
     // subagent.failed, by the task call that started it (stamped with its id since 1.0.10x).
@@ -226,15 +231,17 @@ internal sealed class BackgroundWork
         EndRun(agent, at, SubagentOutcome.Failed);
         if (agent.Outcome != SubagentOutcome.Failed) { agent.Outcome = SubagentOutcome.Failed; agent.EndedAt = at ?? agent.EndedAt; Version++; }
         Finish(agent);
+        EndTurnOf(key, at);
     }
 
     // agent_idle: spent on the oldest run still owed one; only a notice no run is owed
-    // ends the current run (one whose end its own events never showed).
+    // ends the current run (one whose end its own events never showed), or says how one
+    // ended whose start was only skimmed.
     public void AgentIdle(string? agentId, DateTimeOffset? at = null)
     {
         if (agentId is null || !_agents.TryGetValue(agentId, out var agent)) { return; }
         if (agent.IdleOwed > 0) { agent.IdleOwed--; return; }
-        if (!agent.Working) { return; }
+        if (!agent.Working) { Outcome(agent, at, SubagentOutcome.Done); return; }
         Stop(agent, at, SubagentOutcome.Done);
     }
 
@@ -257,6 +264,7 @@ internal sealed class BackgroundWork
         Outcome(agent, at, outcome);
         if (!succeeded && agent.Outcome != outcome) { agent.Outcome = outcome; Version++; }
         Finish(agent);
+        if (!succeeded) { EndTurnOf(key, at); }
     }
 
     // How a run ended. One the window never saw start (its start only skimmed on a cold
@@ -274,32 +282,52 @@ internal sealed class BackgroundWork
     // The agent a task call started, if known.
     public string? AgentOf(string? callId) => callId is not null && _agentByCall.TryGetValue(callId, out var key) ? key : null;
 
+    // Whether an agent can never run again, so nothing it asked is still asked.
+    public bool HasEnded(string agentId) => _agents.TryGetValue(agentId, out var agent) && agent.Ended;
+
     // The main agent's turn was interrupted: a task agent it started is part of that turn, and
     // so is one such an agent started, so they went with it. A background agent carries on,
     // and so does everything under it.
-    public void MainAborted(DateTimeOffset? at)
+    public void MainAborted(DateTimeOffset? at) => EndTurnOf(null, at);
+
+    // An agent's turn ended for good (root: null for the main agent's): the task agents it
+    // was waiting on, and theirs, went with it, as far down as a background agent, which
+    // runs on its own. Left alone, they and their tools read as running for good.
+    void EndTurnOf(string? root, DateTimeOffset? at)
     {
-        foreach (var agent in _agents.Values.Where(a => a.Working && InMainTurn(a)).ToList())
+        foreach (var agent in _agents.Values.Where(a => a.Working && InTurnOf(a, root)).ToList())
         {
             EndRun(agent, at, SubagentOutcome.Failed);
             Finish(agent);
         }
     }
 
-    // Task agents all the way up to the main agent. A parent no longer known says nothing, so
-    // nothing is ended on its account.
-    bool InMainTurn(Agent agent)
+    // Task agents all the way up to root. A parent no longer known says nothing, so nothing
+    // is ended on its account.
+    bool InTurnOf(Agent agent, string? root)
     {
         var a = agent;
         for (var depth = 0; depth < 64; depth++)
         {
             if (a.Background) { return false; }
-            if (a.Parent is null) { return true; }
-            if (!_agents.TryGetValue(a.Parent, out var parent)) { return false; }
+            if (a.Parent == root) { return true; }
+            if (a.Parent is null || !_agents.TryGetValue(a.Parent, out var parent)) { return false; }
             a = parent;
         }
         return false;
     }
+
+    // A delegate's tool call whose start only the skim saw: a permission prompt for it in the
+    // window is still that delegate's. Only the latest few are kept, as a prompt follows its
+    // call at once.
+    public void RememberCall(string? callId, string agentId)
+    {
+        if (callId is null) { return; }
+        if (!_callAgents.ContainsKey(callId) && _callAgents.Count >= KeepCalls) { _callAgents.Remove(_callOrder.Dequeue()); }
+        if (_callAgents.TryAdd(callId, agentId)) { _callOrder.Enqueue(callId); }
+    }
+
+    public string? CallAgent(string? callId) => callId is not null && _callAgents.TryGetValue(callId, out var agent) ? agent : null;
 
     public void AgentToolStarted(string agentId, string id, string name, string? summary, DateTimeOffset at)
     {

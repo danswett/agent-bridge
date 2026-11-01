@@ -51,15 +51,18 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     bool _turnAskedForTools;
     readonly Dictionary<string, string> _permissionQuestion = new(StringComparer.Ordinal);
     static readonly byte[] AssistantMessage = Marker("\"assistant.message\"");
+    static readonly byte[] ToolStart = Marker("\"tool.execution_start\"");
     static readonly byte[] Stamped = Marker("\"agentId\"");
 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;
 
     // The main agent's replies too, for activity.own: a session whose delegates filled the
     // parsed window had no reply of the main agent's in it. A delegate's carries an agentId,
-    // and is not wanted; a main reply quoting that word is merely missed.
+    // and is not wanted; a main reply quoting that word is merely missed. And a delegate's
+    // tool calls, whose permission prompts can fall in the window when the calls do not.
     protected override bool SkimWants(ReadOnlySpan<byte> line) =>
-        base.SkimWants(line) || (line.IndexOf(AssistantMessage) >= 0 && line.IndexOf(Stamped) < 0);
+        base.SkimWants(line) || (line.IndexOf(AssistantMessage) >= 0 && line.IndexOf(Stamped) < 0)
+        || (line.IndexOf(ToolStart) >= 0 && line.IndexOf(Stamped) >= 0);
 
     public override void Reset()
     {
@@ -85,12 +88,16 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 }
                 break;
             // Only the main agent's own text, never the legacy fields: those are the window's
-            // to say, as they always were.
+            // to say, as they always were. Cut as taken: nothing else holds these strings.
             case "assistant.message" when !IsSubagent(e):
-                S.OwnReasoning = Text.NonBlank(Json.Str(data, "reasoningText")) ?? S.OwnReasoning;
-                S.OwnResponse = Text.NonBlank(Json.Str(data, "content")) ?? S.OwnResponse;
-                if (Text.NonBlank(Json.Str(data, "reasoningText")) is not null || Text.NonBlank(Json.Str(data, "content")) is not null) { S.OwnAt = Json.Time(e, "timestamp"); }
-                break;
+                {
+                    var reasoning = Text.NonBlank(Json.Str(data, "reasoningText"));
+                    var content = Text.NonBlank(Json.Str(data, "content"));
+                    if (reasoning is not null) { S.OwnReasoning = Limits.KeepEnd(reasoning, Limits.Reasoning).Text; }
+                    if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); }
+                    if (reasoning is not null || content is not null) { S.OwnAt = Json.Time(e, "timestamp"); }
+                    break;
+                }
             case "session.compaction_complete" when Json.Bool(data, "success") == true:
                 S.Compactions++;
                 break;
@@ -117,6 +124,10 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             // The label and prompt of the agent it starts next, and who started it; not work.
             case "tool.execution_start" when Json.Str(data, "toolName") == "task":
                 S.Background.TaskCalled(Json.Str(data, "toolCallId"), Json.Str(e, "agentId") is { Length: > 0 } starter ? starter : null, Json.Get(data, "arguments"));
+                break;
+            // Whose a delegate's call is, for a permission prompt the window has for it.
+            case "tool.execution_start" when IsSubagent(e):
+                S.Background.RememberCall(Json.Str(data, "toolCallId"), Json.Str(e, "agentId")!);
                 break;
             // A delegate's first message is the prompt it was started with.
             case "user.message":
@@ -169,6 +180,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         S.Background.ForgetModels();
         S.Model = null;
         S.OwnResponse = null;
+        S.OwnResponseCut = false;
         S.OwnReasoning = null;
         S.OwnAt = null;
     }
@@ -356,7 +368,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 }
             // A subagent's abort or shutdown ends its own work, not the session's turn:
             // abandoning on it set the session idle and failed the parent's running tools.
-            // Whatever it was asking goes with it.
+            // Whatever it, or a task agent it was waiting on, was asking goes with it.
             case "abort" when !sub:
                 S.Abandon(at);
                 _turnAskedForTools = false;
@@ -364,7 +376,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "abort" or "session.shutdown" when sub:
                 {
                     var agent = Json.Str(e, "agentId");
-                    if (S.Pending.RemoveAll(q => q.Agent == agent) == 0) { return false; }
+                    if (S.Pending.RemoveAll(q => q.Agent is { } a && (a == agent || S.Background.HasEnded(a))) == 0) { return false; }
                     break;
                 }
             // A sub-agent that failed asks nothing any more either; its failure is written
@@ -372,7 +384,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "subagent.failed":
                 {
                     var agent = Json.Str(e, "agentId") is { Length: > 0 } a ? a : S.Background.AgentOf(Json.Str(data, "toolCallId"));
-                    if (agent is null || S.Pending.RemoveAll(q => q.Agent == agent) == 0) { return false; }
+                    if (agent is null || S.Pending.RemoveAll(q => q.Agent is { } p && (p == agent || S.Background.HasEnded(p))) == 0) { return false; }
                     break;
                 }
             case "session.shutdown" when !sub:
@@ -403,6 +415,10 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     var failed = Json.Bool(data, "success") == false || Json.Get(data, "error") is not null;
                     S.Tools.End(id, !failed, at);
                     S.Answer(id);
+                    // A task call returning ends its agent, failed or not, and whatever that
+                    // agent was still asking is asked of no one: left pending, the session and
+                    // the failed delegate read waiting.
+                    S.Pending.RemoveAll(q => q.Agent is { } a && S.Background.HasEnded(a));
                     S.Activity(at);
                     break;
                 }
@@ -438,7 +454,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         if (CopilotPermission.Describe(data) is not { } prompt) { return; }
         var id = prompt.QuestionId;
         _permissionQuestion[prompt.RequestId] = id;
-        var agent = stamped ?? (prompt.ToolCallId is { } call ? S.Tools.Find(call)?.Agent : null);
+        var agent = stamped ?? (prompt.ToolCallId is { } call ? S.Tools.Find(call)?.Agent ?? S.Background.CallAgent(call) : null);
         S.Ask(QuestionMapper.Approval(id, prompt.Message, at, atMachine: !remoteApproval || prompt.AtMachine is not null) with { Agent = agent });
     }
 
