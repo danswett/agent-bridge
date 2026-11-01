@@ -516,11 +516,22 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
      - no `account/updated` notification arrived during the probe;
      - the snapshot has `accountId`, and its `ordinaryUsageAllowed` is non-null, which
        means the handler matched the snapshot to the active login.
-     Otherwise the reading has no key and isn't grouped.
+     Otherwise the reading has no key.
    - `source` is `api`.
-3. Keep the transcript reading. The newer of the two readings wins, and a transcript
-   reading stays ungrouped, as today.
-4. **Fallback:** transcripts only, as today. That covers a missing Codex, an API-key
+3. Keep the transcript reading. The newer of the two readings wins. A transcript reading
+   has no key, as today.
+4. **A reading without a key must stay on its own.**
+   - Today a missing key doesn't isolate a reading. `UsageMerge`
+     (`src/AgentBridge.App.Core/Machines.cs:548`) and `mergeUsage` (`pwa/js/usage.js:71`)
+     fall back to `account` and then to an empty string. So every keyless reading of an
+     agent shares one row, and the newest replaces another user's allowance. Every Codex
+     reading has worked that way so far, because none of them carries a key.
+   - The build must keep keyless readings from different machines apart:
+     - clients bucket a keyless reading by agent and machine, not by agent alone;
+     - under #172, hosts never share a keyless reading with peers.
+   - The cost: one person on two machines without a key sees two rows until the probe
+     supplies a key.
+5. **Fallback:** transcripts only, as today. That covers a missing Codex, an API-key
    login, a session running without the daemon, failures and back-off.
 
 ---
@@ -553,7 +564,7 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 | E10 | Codex keyring mode | `cli_auth_credentials_store = "keyring"`, then E7 | Same result as E7, with no `auth.json` present |
 | E11 | Invisible to the bridges | Run both probes with an agent-bridge dev host and agent-ha-bridge hooks installed on the VM | No session appears in either, and the host's worktree accounting ignores the probes |
 | E12 | Codex half-written `auth.json` | Make the standalone probe refresh: expire the token, and slow the token response through `mitmdump` so the save lands while another process is reading. Start `codex` or `codex login status` in a loop meanwhile, 50 times | Record any load or parse failure in the reading process. If any occur, the build must not probe while another Codex process could start, beyond what X-3 already rules out |
-| E13 | Codex outstanding refresh at EOF (**on the Linux VM**, since the 45 s watchdog is Unix-only) | Hold the token response for 50 s. (a) Close standard input as soon as the request is sent. (b) Close it only after the responses. (c) Expire the access token so the start-up model-catalogue fetch starts the refresh, let both probe responses complete while that refresh is held, then close. (d) Repeat (b) on the Windows VM | (a) Expected to **fail**: the process exits at 45 s, the rotated token is lost, and Codex signs out. (b) No loss. (c) Record whether the token is lost, which decides between a grace period and the daemon route (X-4). (d) The process exits by itself after EOF. The owner signs in again after each failure |
+| E13 | Codex outstanding refresh at EOF (**on the Linux VM**, since the 45 s watchdog is Unix-only) | Hold the token response for 50 s. (a) Close standard input as soon as the request is sent. (b) Close it only after the responses. (c) **Start with a fresh access token, outside the proactive-refresh window,** so `auth()` doesn't wait. Make `mitmdump` answer the start-up model-catalogue fetch with a 401, which forces a background refresh, and hold that token response for 90 s. Check that all the probe's responses arrive while the refresh is still held, close standard input, and keep holding past the 45 s watchdog. (d) Repeat (b) on the Windows VM | (a) Expected to **fail**: the process exits at 45 s, the rotated token is lost, and Codex signs out. (b) No loss. (c) Record whether the process exits with the refresh unsaved and the token is lost. That decides between a grace period and the daemon route (X-4). (d) The process exits by itself after EOF. The owner signs in again after each failure |
 | E14 | Codex sign-out signal | Revoke the session from ChatGPT's security settings. Separately, make a refresh token reused (E8's forced race). Probe after each | Record the exact `account/rateLimits/read` error for each. `codex login status` still says logged in, which confirms X-5 |
 
 ---
@@ -616,9 +627,13 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 >       same non-null email in both `account/read` answers, no `account/updated`, and a
 >       non-null `accountId` and `ordinaryUsageAllowed`. Otherwise it's absent. `source`
 >       is `api`.
-> - [ ] Transcripts stay, and a transcript reading stays ungrouped. The newest reading
+> - [ ] Transcripts stay, and a transcript reading has no key. The newest reading
 >       wins. An API-key login or a missing `codex` falls back to transcripts without an
 >       error row.
+> - [ ] Keyless readings stay on their own (spike Codex recommendation, step 4).
+>       `UsageMerge` and `mergeUsage` bucket a reading with no `accountKey` and no
+>       `account` by agent and machine. #172's peer sharing never takes a keyless
+>       reading.
 > - [ ] Same pace, single flight and back-off as Claude.
 >
 > **Both**
@@ -626,7 +641,8 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 > - [ ] While agent-ha-bridge's daemon runs for the user, probes use only the idle pace.
 > - [ ] `docs/protocol/v1-usage.md`: the "Where a host gets each figure" table, the pace
 >       section, and "Leaving the agents' credentials alone" are rewritten. `source:
->       cache` for Claude. A Codex `accountKey`.
+>       cache` for Claude. A Codex `accountKey`. The keyless-reading rule in "What a
+>       client shows".
 > - [ ] `docs/parity.md` and `docs/status.md` are updated.
 > - [ ] Independent review before merge, because this spawns credential-using agent
 >       processes.
@@ -650,6 +666,9 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 > - [ ] A login switch during the probe withholds the `accountKey`: the fake answers
 >       the two `account/read` calls with different emails, or sends `account/updated`
 >       between them.
+> - [ ] Two keyless Codex readings from different machines merge into two rows, not
+>       one, in both `UsageMerge` and `mergeUsage`. A keyed reading still merges across
+>       machines as before. A host doesn't take a keyless reading from a peer.
 > - [ ] The Codex probe sends only `initialize`, `initialized`,
 >       `account/rateLimits/read` (with `excludeResetCreditDetails: true` and no
 >       `supportsLunaReserve`) and `account/read`, and never `thread/*` or `turn/*`.
