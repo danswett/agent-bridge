@@ -83,14 +83,21 @@ export class ChannelSet {
     for (const ch of [...this.channels.values()]) { ch.fail(error); }
   }
 
-  async open(peerId, { timeoutMs = 20000 } = {}) {
+  // signal: aborted when the channel is no longer wanted (its machine is no longer shown); the
+  // handshake is given up, and the host told, rather than left to time out.
+  async open(peerId, { timeoutMs = 20000, signal = null } = {}) {
     if (!this.relay?.open) { throw new Error('not connected to the relay'); }
     const id = crypto.getRandomValues(new Uint8Array(8));
     const ch = new Channel(this, peerId, id, await XXHandshake.create(true, this.key, prologue(this.deviceId, peerId, id)));
     this.channels.set(ch.key, ch);
     const timer = setTimeout(() => ch.fail(new Error('the handshake timed out')), timeoutMs);
+    const abandon = () => ch.close();
+    if (signal?.aborted) { abandon(); } else { signal?.addEventListener('abort', abandon, { once: true }); }
     try {
-      ch.frame(KIND.msg1, await ch.hs.writeMessage(EMPTY));
+      const msg1 = await ch.hs.writeMessage(EMPTY);
+      // Given up while it was being written: nothing goes to the host.
+      if (ch.closed) { await ch.ready; }
+      ch.frame(KIND.msg1, msg1);
       await ch.ready;
       return ch;
     } catch (e) {
@@ -98,6 +105,7 @@ export class ChannelSet {
       throw e;
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abandon);
     }
   }
 

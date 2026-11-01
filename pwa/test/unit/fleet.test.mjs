@@ -47,18 +47,35 @@ function fakeClient(connection) {
   });
 }
 
+// The machines shown, as HostSession has them: each a link with its own channel and store.
 function fakeHosts() {
   const l = listeners();
-  return { onChange: (fn) => l.on('change', fn), change() { l.emit('change'); }, targetId: null, phase: 'none', client: null, machine: null, capabilities: [] };
+  const s = listeners();
+  return {
+    shown: [],
+    onChange: (fn) => l.on('change', fn),
+    change() { l.emit('change'); },
+    sessions: { onChange: (fn) => s.on('change', fn) },
+    links() { return this.shown; },
+    link(id) { return this.shown.find((x) => x.id === id) ?? null; },
+    shows(id) { return this.shown.some((x) => x.id === id); },
+    // Shows a machine, open, as when its channel is up and subscribed.
+    view(link) {
+      const store = link.store ?? new SessionsStore();
+      store.onChange((c) => s.emit('change', c));
+      this.shown.push({ phase: 'open', store, ...link });
+      this.change();
+      return this.shown.at(-1);
+    },
+  };
 }
 
 function fleetWith(hostsById, { now = () => 0 } = {}) {
   const connection = fakeConnection(hostsById);
   const hosts = fakeHosts();
-  const store = new SessionsStore();
   const book = new UsageBook();
-  const fleet = new FleetStatus({ connection, hosts, store, book, me: 'me', now, doc: null, makeClient: fakeClient(connection) });
-  return { connection, hosts, store, book, fleet };
+  const fleet = new FleetStatus({ connection, hosts, book, me: 'me', now, doc: null, makeClient: fakeClient(connection) });
+  return { connection, hosts, book, fleet };
 }
 
 test('every other online machine is asked once, one at a time, for its status and usage', async () => {
@@ -126,11 +143,10 @@ test('a machine that does not answer is not asked again in a hot loop, and its c
 });
 
 test('the machine being viewed is never probed; its usage comes on its own channel and its count is live', async () => {
-  const { connection, hosts, store, book, fleet } = fleetWith({ v: { machine: {}, capabilities: [] } });
+  const { connection, hosts, book, fleet } = fleetWith({ v: { machine: {}, capabilities: [] } });
   let onUsage = null;
   const client = { synced: true, on: (type, fn) => { if (type === 'usage') { onUsage = fn; } }, subscribeUsage: async () => usage(10) };
-  Object.assign(hosts, { targetId: 'v', phase: 'open', client, machine: { hostVersion: '0.1.0', dev: true, sessions: 0 }, capabilities: ['sessions.read', 'usage'] });
-  hosts.change();
+  const { store } = hosts.view({ id: 'v', client, machine: { hostVersion: '0.1.0', dev: true, sessions: 0 }, capabilities: ['sessions.read', 'usage'] });
   await flush();
 
   assert.deepEqual(connection.opened, []);
@@ -150,7 +166,7 @@ test('a machine left alone is looked at again every minute while the app is in f
   let now = 0;
   const doc = { visibilityState: 'visible', listeners: [], addEventListener(type, fn) { this.listeners.push(fn); } };
   const connection = fakeConnection({ a: { machine: { hostVersion: '0.1.0', sessions: 1 }, capabilities: [] } });
-  const fleet = new FleetStatus({ connection, hosts: fakeHosts(), store: new SessionsStore(), book: new UsageBook(), me: 'me', now: () => now, doc, makeClient: fakeClient(connection) });
+  const fleet = new FleetStatus({ connection, hosts: fakeHosts(), book: new UsageBook(), me: 'me', now: () => now, doc, makeClient: fakeClient(connection) });
   fleet.start();
   fleet.probe();
   await fleet.idle();
@@ -184,8 +200,7 @@ test("a look still under way when its machine is chosen does not overwrite what 
   await flush();
 
   const client = { synced: true, on: () => {}, subscribeUsage: async () => usage(55) };
-  Object.assign(hosts, { targetId: 'a', phase: 'open', client, machine: { hostVersion: '0.1.0' }, capabilities: ['sessions.read', 'usage'] });
-  hosts.change();
+  hosts.view({ id: 'a', client, machine: { hostVersion: '0.1.0' }, capabilities: ['sessions.read', 'usage'] });
   await flush();
   release();
   await fleet.idle();
@@ -198,15 +213,12 @@ test('the machine being viewed is asked again on its own channel every minute, a
   const { connection, hosts, fleet } = fleetWith({ v: { machine: {}, capabilities: [] } }, { now: () => now });
   let refreshed = 0;
   const client = { synced: false, on() {}, subscribeUsage: async () => usage(10) };
-  Object.assign(hosts, {
-    targetId: 'v', phase: 'open', client, machine: { hostVersion: '0.1.0' }, capabilities: ['sessions.read'],
-    refresh: async () => {
-      refreshed++;
-      hosts.machine = { hostVersion: '0.1.0', readOnly: 'agent-ha-bridge is running for this user' };
-      hosts.change();
-    },
-  });
-  hosts.change();
+  hosts.refresh = async (id) => {
+    refreshed++;
+    hosts.link(id).machine = { hostVersion: '0.1.0', readOnly: 'agent-ha-bridge is running for this user' };
+    hosts.change();
+  };
+  hosts.view({ id: 'v', client, machine: { hostVersion: '0.1.0' }, capabilities: ['sessions.read'] });
   await flush();
   assert.equal(refreshed, 0);
 
@@ -250,4 +262,30 @@ test('a forgotten machine whose look then fails is not remembered as looked at',
 
   // Not held off for a minute as a machine that failed would be: nothing about it is kept.
   assert.deepEqual(connection.opened, ['a', 'a']);
+});
+
+test('with every machine shown none is probed: each one\'s usage and live count come on the channel already open to it', async () => {
+  const { connection, hosts, book, fleet } = fleetWith({ a: { machine: {}, capabilities: [] }, b: { machine: {}, capabilities: [] } });
+  const client = (percent) => ({ synced: true, on() {}, subscribeUsage: async () => usage(percent) });
+  hosts.view({ id: 'a', client: client(10), machine: { hostVersion: '0.1.0' }, capabilities: ['sessions.read', 'usage'] });
+  const b = hosts.view({ id: 'b', client: client(30), machine: { hostVersion: '0.2.0' }, capabilities: ['sessions.read', 'usage'] });
+  fleet.probe();
+  await fleet.idle();
+  await flush();
+
+  assert.deepEqual(connection.opened, []);
+  assert.equal(book.size, 2);
+  b.store.upsert({ id: 's1', agent: 'copilot', status: 'idle', updatedAt: '2026-10-28T20:00:00.000Z', activity: {} });
+  assert.equal(fleet.status('a'), '0 sessions \u00b7 0.1.0');
+  assert.equal(fleet.status('b'), '1 session \u00b7 0.2.0');
+});
+
+test('a machine shown that cannot show sessions is still looked at for its status and usage', async () => {
+  const { connection, hosts, book, fleet } = fleetWith({ old: { machine: { hostVersion: '0.0.9' }, capabilities: ['usage'], usage: usage(25) } });
+  hosts.view({ id: 'old', phase: 'unsupported', client: null, machine: null, capabilities: [] });
+  fleet.probe();
+  await fleet.idle();
+  assert.deepEqual(connection.opened, ['old']);
+  assert.equal(fleet.status('old'), '0.0.9');
+  assert.equal(book.entries()[0].windows[0].percent, 25);
 });

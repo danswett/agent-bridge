@@ -260,6 +260,8 @@ a { color: var(--primary); }
 .meta { margin: 0 0 2px; color: var(--muted); font-size: .88rem; display: flex; flex-wrap: wrap; gap: 0 6px; }
 .meta > * + *::before { content: "·"; margin-right: 6px; }
 .agent-name { color: var(--text); font-weight: 600; }
+/* With every machine shown, the machine a card is on leads its meta line. */
+.machine-label { color: var(--primary); font-weight: 600; overflow-wrap: anywhere; }
 .repo, .branch, .model { overflow-wrap: anywhere; }
 .branch { font-family: ui-monospace, monospace; font-size: .82rem; }
 
@@ -388,6 +390,10 @@ summary {
 /* ---- starting a session: agent-ha-bridge's launch card ---- */
 .launch h2 { margin: 0; }
 .launch-body { margin-top: 6px; }
+.launch-machine { margin-bottom: 10px; }
+.launch-machine[hidden] { display: none; }
+/* One line per machine that can't be reached, with every machine shown. */
+.host-note { display: block; }
 .launch-form { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
 .launch-form > .row, .launch-field:has(textarea), .launch-field:has(select[name="resume"]), .launch-field:has(select[name="workspace"]) { grid-column: 1 / -1; }
 .launch-field { display: grid; gap: 4px; min-width: 0; }

@@ -3,6 +3,7 @@
 // docs/demo-light.png and docs/demo-dark.png: the sessions list, light and dark.
 // docs/answer.png: answering the worked example's question, on its way to the machine.
 // docs/approval.png: a permission request, answered with a tap.
+// docs/all-machines.png: every machine at once, each card (folded here) naming its machine.
 import { webkit, devices } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,6 +75,22 @@ try {
     await card.locator('.frame').screenshot({ path: out('approval.png') });
     await context.close();
     console.log('docs/approval.png');
+  }
+
+  {
+    const { context, page } = await open('light', '&machines=3');
+    // Folded, so the picture holds the machines and every card's machine and status.
+    for (const fold of await page.locator('.session .fold').all()) { await fold.click(); }
+    await fixTimes(page);
+    await hideBar(page);
+    // In the page's own coordinates: folding scrolled it.
+    const [top, bottom] = await page.evaluate(() => ['machines', 'sessions'].map((id) => {
+      const r = document.getElementById(id).getBoundingClientRect();
+      return { y: r.top + scrollY, end: r.bottom + scrollY };
+    }));
+    await page.screenshot({ path: out('all-machines.png'), fullPage: true, clip: { x: 0, y: top.y - 8, width: page.viewportSize().width, height: bottom.end - top.y + 16 } });
+    await context.close();
+    console.log('docs/all-machines.png');
   }
 } finally {
   await browser.close();

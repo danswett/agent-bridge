@@ -19,8 +19,10 @@
 // one), 'failed' (the host answered the op with an error, not an outcome; resendable as
 // is), 'done' (outcome and reason set).
 //
-// `current()` says which host is connected and its HostClient, or null. Call ready()
-// whenever a new client for a host is up, and resends go out on it.
+// `current(hostId)` says whether that host is connected, and its HostClient: { client, hostId }
+// or null. Each entry goes to the host it was given for and to no other, so with several
+// machines shown at once an answer can never reach a session of the same id on another one.
+// Call ready() whenever a new client for a host is up, and resends go out on it.
 //
 // ReplyService (reply-service.js) and StopService (stop-service.js) are this with three things
 // swapped: the op it sends, the request it builds, and which outcomes are final. A settled
@@ -95,10 +97,11 @@ export class AnswerService {
     return this.#snapshot(entry);
   }
 
-  // A client for a host is up: anything waiting to be resent to that host goes now.
-  ready() {
+  // A client for a host is up: anything waiting to be resent to that host goes now. Without
+  // a host, every host's.
+  ready(hostId = null) {
     for (const entry of this.#entries.values()) {
-      if (entry.state === 'waiting') { this.#attempt(entry); }
+      if (entry.state === 'waiting' && (hostId === null || entry.hostId === hostId)) { this.#attempt(entry); }
     }
   }
 
@@ -136,7 +139,7 @@ export class AnswerService {
       this.#set(entry, { state: 'done', outcome: 'unconfirmed', reason: NO_OUTCOME });
       return;
     }
-    const cur = this.current();
+    const cur = this.current(entry.hostId);
     if (!cur?.client || cur.client.closed || cur.hostId !== entry.hostId) {
       this.#wait(entry, 'not connected');
       return;
@@ -159,7 +162,7 @@ export class AnswerService {
       }
       // No outcome: the response was lost or the channel went. If another channel is
       // already up (the reconnect beat this rejection), resend on it now; otherwise later.
-      const now = this.current();
+      const now = this.current(entry.hostId);
       if (now?.client && !now.client.closed && now.client !== client && now.hostId === entry.hostId) { this.#attempt(entry); return; }
       this.#wait(entry, e?.message ?? 'no response');
       if (!client.closed) { entry.timer = setTimeout(() => this.#attempt(entry), this.retryMs); }

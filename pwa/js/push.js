@@ -61,6 +61,7 @@ export class PushRegistrar {
   #listeners = new Set();
   #key = null;
   #chain = Promise.resolve();
+  #hosts = new WeakMap();
   // Goes up when signing out; every operation still in flight checks it before going on.
   #generation = 0;
   // 'on' or 'off' while turning notifications on or off, '' otherwise; error is the last
@@ -128,6 +129,8 @@ export class PushRegistrar {
       try {
         const sub = await this.#subscription(false).catch(() => null);
         if (client) {
+          // After any registration still on its way to that machine, so it hears off last.
+          await this.#hosts.get(client);
           await client.request(Ops.pushUnsubscribe, sub ? { endpoint: sub.endpoint } : {}).catch(() => {});
         }
         await sub?.unsubscribe().catch(() => {});
@@ -140,8 +143,21 @@ export class PushRegistrar {
 
   // Sent on every channel to a machine that offers push while notifications are on: a
   // machine that dropped the subscription, or a browser that renewed it, is caught up.
-  // Resolves to whether it registered.
-  register(client, capabilities) { return this.#serial(() => this.#register(client, capabilities)); }
+  // Resolves to whether it registered. Only the browser's subscription is made in turn with
+  // turning on and off; the request then waits only for that machine's earlier ones, so a
+  // machine slow to answer holds up no other (every machine is shown at once).
+  register(client, capabilities) {
+    const generation = this.#generation;
+    return this.#serial(() => (this.enabled && capabilities.includes(Capabilities.push) ? this.#subscription(true, generation) : null))
+      .then((sub) => (!sub || generation !== this.#generation ? false : this.#forHost(client, () => this.#send(client, sub)).then(() => true)));
+  }
+
+  // Each machine's requests in the order made, apart from every other machine's.
+  #forHost(client, fn) {
+    const run = (this.#hosts.get(client) ?? Promise.resolve()).then(fn, fn);
+    this.#hosts.set(client, run.catch(() => {}));
+    return run;
+  }
 
   // One at a time, in the order asked: a registration still waiting for the relay's key
   // when notifications are turned off must finish before the turning off does, or it would
@@ -156,6 +172,11 @@ export class PushRegistrar {
     if (!this.enabled || !capabilities.includes(Capabilities.push)) { return false; }
     const sub = await this.#subscription(true, this.#generation);
     if (!sub) { return false; }
+    await this.#forHost(client, () => this.#send(client, sub));
+    return true;
+  }
+
+  async #send(client, sub) {
     const json = sub.toJSON();
     await client.request(Ops.pushSubscribe, {
       endpoint: json.endpoint,
@@ -163,7 +184,6 @@ export class PushRegistrar {
       app: this.appUrl,
       device: this.device,
     });
-    return true;
   }
 
   // Signing out: this account's machines must not keep notifying this device. Not queued
@@ -209,8 +229,12 @@ export class PushRegistrar {
 
 // Closes this machine's question notifications that are no longer true: the session has
 // gone, or is not asking that question any more. Called with the machine's complete list.
-export async function closeStaleNotices(registration, hostId, store) {
+// current(): whether the store still holds that machine's synced list, asked once the
+// notifications are in hand: a machine no longer shown has an empty store meanwhile, which
+// says nothing about its questions.
+export async function closeStaleNotices(registration, hostId, store, current = () => true) {
   const shown = await registration?.getNotifications?.() ?? [];
+  if (!current()) { return; }
   for (const n of shown) {
     const d = n.data ?? {};
     if (d.machine !== hostId || d.kind !== 'question') { continue; }
