@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Status glyph</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<span style="display: inline-grid; place-items: center; width: {{px}}; height: {{px}}; flex: none; vertical-align: middle; line-height: 0">
+<svg width="{{size}}" height="{{size}}" viewBox="0 0 16 16" aria-hidden="true">
+  <sc-if value="{{isIdle}}" hint-placeholder-val="{{false}}"><circle cx="8" cy="8" r="5.6" fill="none" stroke="{{c.neutral}}" stroke-width="1.6"></circle></sc-if>
+  <sc-if value="{{isWorking}}" hint-placeholder-val="{{true}}"><circle cx="8" cy="8" r="5.8" fill="none" stroke="{{c.track}}" stroke-width="2"></circle><path d="M8 2.2a5.8 5.8 0 0 1 5.8 5.8" fill="none" stroke="{{c.main}}" stroke-width="2" stroke-linecap="round"></path></sc-if>
+  <sc-if value="{{isDelegating}}" hint-placeholder-val="{{false}}"><circle cx="8" cy="8" r="6.6" fill="none" stroke="{{c.main}}" stroke-width="1" stroke-dasharray="1.6 1.9" opacity="0.7"></circle><circle cx="8" cy="8" r="3" fill="none" stroke="{{c.main}}" stroke-width="1.8"></circle><circle cx="14.6" cy="8" r="1.5" fill="{{c.main}}"></circle><circle cx="4.7" cy="2.3" r="1.2" fill="{{c.main}}"></circle></sc-if>
+  <sc-if value="{{isNeeds}}" hint-placeholder-val="{{false}}"><circle cx="8" cy="8" r="6.6" fill="{{c.amber}}"></circle><path d="M8 4.6v4.2" stroke="{{c.ink}}" stroke-width="1.9" stroke-linecap="round"></path><circle cx="8" cy="11.3" r="1.1" fill="{{c.ink}}"></circle></sc-if>
+  <sc-if value="{{isDone}}" hint-placeholder-val="{{false}}"><circle cx="8" cy="8" r="5.8" fill="none" stroke="{{c.neutral}}" stroke-width="1.5"></circle><path d="M5.3 8.2l1.9 1.9 3.6-3.8" fill="none" stroke="{{c.neutral}}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></sc-if>
+  <sc-if value="{{isFailed}}" hint-placeholder-val="{{false}}"><circle cx="8" cy="8" r="5.8" fill="none" stroke="{{c.red}}" stroke-width="1.6"></circle><path d="M5.9 5.9l4.2 4.2M10.1 5.9l-4.2 4.2" stroke="{{c.red}}" stroke-width="1.6" stroke-linecap="round"></path></sc-if>
+  <sc-if value="{{isEnded}}" hint-placeholder-val="{{false}}"><circle cx="8" cy="8" r="5.6" fill="none" stroke="{{c.neutral}}" stroke-width="1.4" stroke-dasharray="0.1 2.6" stroke-linecap="round"></circle></sc-if>
+  <sc-if value="{{driven}}" hint-placeholder-val="{{false}}"><rect x="11.2" y="11.2" width="4.2" height="4.2" rx="0.8" transform="rotate(45 13.3 13.3)" fill="{{c.violet}}" stroke="{{c.ground}}" stroke-width="1.2"></rect></sc-if>
+</svg>
+</span>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"kind":{"editor":"enum","options":["idle","working","delegating","needs","done","failed","ended"],"default":"working"},"driven":{"editor":"boolean","default":false},"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"size":{"editor":"int","default":16},"$preview":{"width":64,"height":64}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const kind = this.props.kind ?? 'working';
+    const theme = this.props.theme ?? 'dark';
+    const driven = this.props.driven === true || this.props.driven === 'true';
+    const size = Number(this.props.size ?? 16);
+    const dark = {
+      neutral: '#8B949E', blue: '#4C9AFF', blueTrack: '#1E3556', amber: '#FFB224', ink: '#14100A',
+      violet: '#A78BFA', violetTrack: '#33285A', red: '#FF6B6B', ground: '#16181D'
+    };
+    const light = {
+      neutral: '#6E7781', blue: '#0B63E5', blueTrack: '#CFE0FA', amber: '#E8A10C', ink: '#1A1200',
+      violet: '#6D4AE0', violetTrack: '#E3DBFB', red: '#C9302C', ground: '#FFFFFF'
+    };
+    const p = theme === 'light' ? light : dark;
+    const c = { ...p, main: driven ? p.violet : p.blue, track: driven ? p.violetTrack : p.blueTrack };
+    return {
+      c, size, px: size + 'px', driven,
+      isIdle: kind === 'idle', isWorking: kind === 'working', isDelegating: kind === 'delegating',
+      isNeeds: kind === 'needs', isDone: kind === 'done', isFailed: kind === 'failed', isEnded: kind === 'ended'
+    };
+  }
+}
+</script>
+</body>
+</html>

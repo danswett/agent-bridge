@@ -103,7 +103,11 @@ current. The sources:
   layout, surfaces, platform shells);
 - [design/subagents.md](design/subagents.md): the sub-agent model and protocol (#84);
 - [design/ui-plan.md](design/ui-plan.md): the slices, their order and how to do one;
-- [/design](../design/README.md): `tokens.json`, the status glyphs and the icons.
+- [/design](../design/README.md): `tokens.json`, the status glyphs, the icons and the
+  Agent Bridge Mono font;
+- [design/mockups](design/mockups/README.md): every design-canvas board rendered as an
+  image, for reference only (ui.md stays the spec). The source is in `/design/canvas` and
+  the renderer in `tools/design-mockups`.
 
 | Slice | Issue | What |
 |---|---|---|

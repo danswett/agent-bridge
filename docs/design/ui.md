@@ -8,9 +8,11 @@ iOS and Android apps.
 - Machine-readable values (colours, type, spacing, glyphs, icons): [`/design`](../../design/README.md).
 
 *Status: proposed by the design session on 2026-11-01 and signed off by the owner the
-same day (status.md §5). Two light-theme tokens are corrected for contrast in #183.* The owner's mock-ups live in a private design canvas, "Agent Bridge —
-Session Workbench". This page is the spec, and it is complete without them: where the two
-disagree, this page wins and the canvas gets fixed.
+same day (status.md §5). Two light-theme tokens are corrected for contrast in #183.* The
+owner's mock-ups live in a private design canvas, "Agent Bridge — Session Workbench".
+Every board is also rendered in [mockups/](mockups/README.md), and its source is in
+[`/design/canvas`](../../design/canvas/README.md). This page is the spec, and it is complete
+without them: where they disagree, this page wins and the mock-ups get fixed.
 
 ## 1. Principles
 
@@ -327,7 +329,8 @@ Sections, top to bottom:
 
 ## 10. Mock-up index
 
-The canvas has these boards. Each platform board has a light/dark switch.
+The canvas has these boards, rendered as images in [mockups/](mockups/README.md). On the
+canvas, each platform board has a light/dark switch.
 
 | Board | Shows |
 |---|---|

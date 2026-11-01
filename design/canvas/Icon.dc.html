@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Icon</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<span style="display: inline-grid; place-items: center; width: {{px}}; height: {{px}}; flex: none; vertical-align: middle; line-height: 0">
+<svg width="{{size}}" height="{{size}}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="{{sw}}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <sc-if value="{{i.sessions}}" hint-placeholder-val="{{true}}"><rect x="3" y="3.5" width="14" height="5.5" rx="1.8"></rect><rect x="3" y="11" width="14" height="5.5" rx="1.8"></rect></sc-if>
+  <sc-if value="{{i.machine}}" hint-placeholder-val="{{false}}"><rect x="2.5" y="3.5" width="15" height="10" rx="2"></rect><path d="M7 16.5h6"></path></sc-if>
+  <sc-if value="{{i.launch}}" hint-placeholder-val="{{false}}"><circle cx="10" cy="10" r="7"></circle><path d="M10 6.5v7M6.5 10h7"></path></sc-if>
+  <sc-if value="{{i.usage}}" hint-placeholder-val="{{false}}"><path d="M3.5 14a6.5 6.5 0 1 1 13 0"></path><path d="M10 14l3.2-4.2"></path><path d="M3.5 17h13"></path></sc-if>
+  <sc-if value="{{i.settings}}" hint-placeholder-val="{{false}}"><path d="M3.5 6h7.5M15.5 6h1M3.5 14h1M9 14h7.5"></path><circle cx="13.2" cy="6" r="2.1"></circle><circle cx="6.8" cy="14" r="2.1"></circle></sc-if>
+  <sc-if value="{{i.send}}" hint-placeholder-val="{{false}}"><path d="M10 16V4.5M5 9.2l5-5 5 5"></path></sc-if>
+  <sc-if value="{{i.attach}}" hint-placeholder-val="{{false}}"><path d="M15 9.4l-5.7 5.7a3.6 3.6 0 0 1-5.1-5.1l6.3-6.3a2.4 2.4 0 0 1 3.4 3.4l-6.1 6.1a1.2 1.2 0 0 1-1.7-1.7l5.5-5.5"></path></sc-if>
+  <sc-if value="{{i.stop}}" hint-placeholder-val="{{false}}"><rect x="5" y="5" width="10" height="10" rx="2.2"></rect></sc-if>
+  <sc-if value="{{i.pin}}" hint-placeholder-val="{{false}}"><path d="M7 3h6M8 3v4.6L5.2 10.4h9.6L12 7.6V3M10 10.4V17"></path></sc-if>
+  <sc-if value="{{i.delegate}}" hint-placeholder-val="{{false}}"><circle cx="10" cy="10" r="3"></circle><path d="M16.6 7.4a7 7 0 1 1-2.3-3"></path><circle cx="16" cy="4.6" r="1.3" fill="currentColor"></circle></sc-if>
+  <sc-if value="{{i.search}}" hint-placeholder-val="{{false}}"><circle cx="8.8" cy="8.8" r="5.3"></circle><path d="M12.8 12.8L17 17"></path></sc-if>
+  <sc-if value="{{i.more}}" hint-placeholder-val="{{false}}"><circle cx="4.5" cy="10" r="0.6" fill="currentColor"></circle><circle cx="10" cy="10" r="0.6" fill="currentColor"></circle><circle cx="15.5" cy="10" r="0.6" fill="currentColor"></circle></sc-if>
+  <sc-if value="{{i.back}}" hint-placeholder-val="{{false}}"><path d="M12.5 4.5L7 10l5.5 5.5"></path></sc-if>
+  <sc-if value="{{i.chevron}}" hint-placeholder-val="{{false}}"><path d="M8 5l5 5-5 5"></path></sc-if>
+  <sc-if value="{{i.plus}}" hint-placeholder-val="{{false}}"><path d="M10 4v12M4 10h12"></path></sc-if>
+  <sc-if value="{{i.reasoning}}" hint-placeholder-val="{{false}}"><path d="M4 5.5h12M4 10h8M4 14.5h5"></path></sc-if>
+  <sc-if value="{{i.tools}}" hint-placeholder-val="{{false}}"><path d="M5 6.5l3 3-3 3M10 14h5"></path></sc-if>
+  <sc-if value="{{i.sidebar}}" hint-placeholder-val="{{false}}"><rect x="2.5" y="3.5" width="15" height="13" rx="2.2"></rect><path d="M7.5 3.5v13"></path></sc-if>
+  <sc-if value="{{i.inspector}}" hint-placeholder-val="{{false}}"><rect x="2.5" y="3.5" width="15" height="13" rx="2.2"></rect><path d="M12.5 3.5v13"></path></sc-if>
+</svg>
+</span>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"icon":{"editor":"enum","options":["sessions","machine","launch","usage","settings","send","attach","stop","pin","delegate","search","more","back","chevron","plus","reasoning","tools","sidebar","inspector"],"default":"sessions"},"size":{"editor":"int","default":20},"$preview":{"width":64,"height":64}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const icon = this.props.icon ?? 'sessions';
+    const size = Number(this.props.size ?? 20);
+    const names = ['sessions','machine','launch','usage','settings','send','attach','stop','pin','delegate','search','more','back','chevron','plus','reasoning','tools','sidebar','inspector'];
+    const i = {};
+    names.forEach((n) => { i[n] = n === icon; });
+    const sw = size <= 16 ? 1.7 : size >= 24 ? 1.4 : 1.5;
+    return { i, size, px: size + 'px', sw };
+  }
+}
+</script>
+</body>
+</html>
