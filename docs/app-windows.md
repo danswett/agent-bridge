@@ -141,6 +141,40 @@ into one folder with one version. An app update is a host update, so they never 
 * Feed: GitHub Releases of `danswett/agent-bridge` (pre-releases included unless turned
   off; every merge to main publishes one, below), or a folder or URL holding `releases.win.json` in
   `%LOCALAPPDATA%\AgentBridge\app\feed.txt` (for testing on a VM).
+* **Automatic updates** (`AutoUpdater`): Settings has "Include pre-releases in updates" and
+  "Install updates automatically", both per profile (`<profile>-settings.json`) and both on by
+  default. The installed app checks on start and every 30 minutes, and downloads a release it
+  finds at once. It installs it once this machine's host has been idle (no session with a turn
+  running or a question waiting) for two minutes without a break, seen at every minute's tick
+  and every session change, and since its sessions were last read in full (a reconnect starts
+  the wait again), or six hours after it first found one, whatever the sessions are
+  doing (though still only once they are read in full, so not in the middle of a reconnect).
+  The path is that of "Update and restart": the host stopped over the pipe, then
+  `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
+  host again. The new version's first start shows a toast: the version it came from, and the
+  release's notes.
+  * A read-only host (`delivery.readOnly`) and one beside a running agent-ha-bridge (G5) update
+    like any other: those rules guard what other devices may do (the Home Assistant Install
+    button below), and replacing the app and host touches neither the agents' consoles nor
+    agent-ha-bridge. That is how a shadow beside agent-ha-bridge keeps itself current.
+  * It never installs while another profile's app or host runs from this installation (Velopack
+    stops every process in the package and restarts only this profile), or while the host is not
+    running or its sessions are not yet read in full (`sessions.synced`), so that it cannot say
+    whether they are busy. Just before stopping the host it asks again: `host.status` from the
+    host itself, and the processes running from the package.
+  * Settings and the automatic updates share one updater, and only the release actually
+    downloaded is applied (`IUpdater.Ready`), checked again immediately before the host stops: a
+    release replaced since (a check from Settings, or "Include pre-releases" or `feed.txt`
+    changed, which drops the downloaded release, and any check still running against the old
+    source finds nothing) is checked for and downloaded again first.
+  * The host is never left down (`HostManager.StopAndApplyAsync`, one install at a time: Update
+    and restart pressed while the automatic one installs is refused): an install that fails starts
+    it again and waits for the next check; quitting the app while the host is stopping for an
+    update, or stopped and not yet updated, waits for the stop to finish, applies nothing, and
+    starts the host on the way out; and an app killed meanwhile starts it at its next start, as
+    every start does, with the host's logon task at sign-in behind that.
+  * Only the app's own timer starts it, so nothing an agent can reach does. A development copy
+    and the demo never update.
 * The host can start an update too: the Home Assistant connector's Install button
   ([ha-connector.md](ha-connector.md), stage 6) for a machine driven from the dashboard. It
   uses the same feed and the app's "Include pre-releases" for its profile
@@ -162,9 +196,9 @@ into one folder with one version. An app update is a host update, so they never 
 
 CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` a GitHub
 pre-release, `v0.1.<n>`, of the whole package. Installed copies include pre-releases by
-default: Settings, **Check for updates**, offers the newest and **Install** applies it (as does
-the Home Assistant connector's Install button on a machine the dashboard drives). Nothing
-installs an update unasked.
+default and install them by themselves once their host is idle (Automatic updates, above);
+Settings, **Check for updates** and **Install**, does it at once, as does the Home Assistant
+connector's Install button on a machine the dashboard drives.
 
 * **Version** `0.1.<CI run number>`. The number is the CI workflow's own count, shared by pull
   requests and pushes, so main's versions only rise, with gaps; a re-run keeps its number.
@@ -244,9 +278,9 @@ gh release download $tag -R danswett/agent-bridge -p AgentBridgeApp-win-Setup.ex
 ```
 
 (`gh release download` without a tag takes the latest full release, and there is none yet.)
-From then on, Settings, **Check for updates**, then **Install**, takes it to the newest
-pre-release; turning off "Include pre-releases" in Settings stops it finding them until there
-are full releases.
+From then on it keeps itself on the newest pre-release ("Install updates automatically"), or
+Settings, **Check for updates**, then **Install**, takes it there at once; turning off "Include
+pre-releases" in Settings stops it finding them until there are full releases.
 
 ### Signing (later)
 
@@ -349,7 +383,7 @@ reaches the real host or its profile.
   page's choices, every setting and the whole prompt sent, resume, Codex's first prompt,
   busy, failed and Try again, a lost response sent again with the same request, no approved folder,
   profile and context, and a launch on another machine, including one whose machine leaves or drops out; and the app reaching another
-  host through the in-process relay with the host's account), toast plans and activation handling, host lifecycle with a
+  host through the in-process relay with the host's account), toast plans and activation handling, automatic updates (`AutoUpdaterTests`: when one waits for the sessions, when it goes anyway, a read-only host beside agent-ha-bridge updating like any other, the other profiles it never stops, and the host never left down), host lifecycle with a
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
 * CI (`app` job) runs `build/pack-app.ps1`: publishes the app, host, launcher, injector and hook

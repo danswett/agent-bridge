@@ -23,11 +23,13 @@ public sealed class SettingsTests : IAsyncLifetime
     {
         public Action? OnApply;
         public Exception? CheckFails;
+        public Exception? ApplyFails;
         public bool Applied;
+        public string? Ready { get; private set; }
         public string? InstalledVersion => "0.1.0";
         public Task<string?> CheckAsync() => CheckFails is { } e ? Task.FromException<string?>(e) : Task.FromResult<string?>("0.2.0");
-        public Task DownloadAsync(Action<int> progress) { progress(100); return Task.CompletedTask; }
-        public void ApplyAndRestart() { OnApply?.Invoke(); Applied = true; }
+        public Task DownloadAsync(Action<int> progress) { progress(100); Ready = "0.2.0"; return Task.CompletedTask; }
+        public void ApplyAndRestart() { OnApply?.Invoke(); if (ApplyFails is { } e) { throw e; } Applied = true; }
     }
 
     sealed class AtSignIn : IAppAtSignIn
@@ -158,6 +160,25 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Null(settings.Error);
         Assert.True(updater.Applied);
         Assert.True(stoppedFirst);
+    }
+
+    [Fact]
+    public async Task An_update_that_cannot_be_applied_starts_the_host_again_and_says_why()
+    {
+        await Connected();
+        settings.StartAtSignIn = true;
+        await Wait.UntilAsync(() => tasks.Registered.Count == 1, "the task");
+        tasks.OnRun = () => host.Start();
+        updater.ApplyFails = new InvalidOperationException("no downloaded update to install; check for updates again");
+
+        await settings.CheckForUpdatesAsync();
+        await settings.InstallUpdateAsync();
+
+        Assert.Equal("no downloaded update to install; check for updates again", settings.Error);
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.Single(tasks.Ran);
+        Assert.False(settings.UpdateAvailable);
+        Assert.Null(prefs.UpdatedFrom);
     }
 
     [Fact]

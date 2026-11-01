@@ -186,7 +186,7 @@ if ($publishing) {
         $notes = @(
             "Pre-release of the Agent Bridge Windows app and host, built from main at $Commit$run."
             ''
-            "Unsigned: Windows SmartScreen warns on first install (More info, then Run anyway). To install, run $packId-win-Setup.exe. An installed copy finds it under Settings, Check for updates (pre-releases included)$(if ($hasDelta) { ', and downloads only the delta from the previous one' })."
+            "Unsigned: Windows SmartScreen warns on first install (More info, then Run anyway). To install, run $packId-win-Setup.exe. An installed copy installs it by itself once its host is idle, or at once from Settings, Check for updates (pre-releases included)$(if ($hasDelta) { ', downloading only the delta from the previous one' })."
         ) -join "`n"
         Invoke-Gh api -X PATCH "repos/$Repository/releases/$($draft[0].id)" -f "body=$notes" -F draft=false -F prerelease=true | Out-Null
     }

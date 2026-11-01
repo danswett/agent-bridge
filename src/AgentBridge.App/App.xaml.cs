@@ -18,6 +18,8 @@ public partial class App : Application
     MainWindow? window;
     TrayIcon? tray;
     DispatcherTimer? timer;
+    DispatcherTimer? updateTimer;
+    AutoUpdater? autoUpdater;
     HostConnection? connection;
     DemoHost? demo;
     DemoHost? remoteDemo;
@@ -78,7 +80,7 @@ public partial class App : Application
             try { next.Save(prefsFile); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { AppLog.Write($"settings not saved: {e.Message}"); }
         }
 
-        var updater = new VelopackUpdater(() => prefs.Prereleases, ui);
+        var updater = new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile);
         IAppAtSignIn atSignIn = installed ? new RunKey(Paths.Exe) : new NoRunKey();
         var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay);
 
@@ -176,6 +178,19 @@ public partial class App : Application
 
         if (!options.Background && !options.ToastActivated) { window.Activate(); }
         if (!options.Demo) { _ = StartHostAsync(); }
+
+        // Updates without being asked (AutoUpdater): any installed copy of the real app, whatever
+        // its profile, never the demo or a development copy. The first start after one says what
+        // changed.
+        if (!options.Demo && updater.InstalledVersion is not null)
+        {
+            AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write);
+            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others);
+            updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+            updateTimer.Tick += (_, _) => _ = autoUpdater.TickAsync();
+            updateTimer.Start();
+            _ = autoUpdater.TickAsync();
+        }
     }
 
     // The app starts the host when it is not running: at first run, after an update, or after
@@ -309,6 +324,11 @@ public partial class App : Application
         if (quitting) { return; }
         quitting = true;
         timer?.Stop();
+        updateTimer?.Stop();
+        // Quit while an update stops the host, or before it is applied: the host comes back now, not
+        // at the next sign-in, and no update stops it from here on. (Killed instead, the app's next
+        // start does it.)
+        manager?.Quit(TimeSpan.FromSeconds(25), AppLog.Write);
         showWait?.Unregister(null);
         tray?.Dispose();
         tray = null;

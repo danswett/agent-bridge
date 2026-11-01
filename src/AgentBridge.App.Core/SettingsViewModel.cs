@@ -9,7 +9,12 @@ public interface IUpdater
     // Null when this copy was not installed by Velopack (a build folder): no updates then.
     string? InstalledVersion { get; }
     Task<string?> CheckAsync();
+    // The release notes of the release the last check found, when it has any.
+    string? PendingNotes => null;
     Task DownloadAsync(Action<int> progress);
+    // The release downloaded and ready to apply: the one the last check found, once downloaded.
+    // Null when a later check (or a change of feed) has found another since, or none.
+    string? Ready { get; }
     // Exits the app, replaces it, and starts the new version.
     void ApplyAndRestart();
 }
@@ -121,6 +126,8 @@ public sealed class SettingsViewModel : Observable
     public bool ShowDetail { get => prefs().ShowDetail; set { if (value != ShowDetail) { Save(prefs() with { ShowDetail = value }); } } }
     public bool Toasts { get => prefs().Toasts; set { if (value != Toasts) { Save(prefs() with { Toasts = value }); } } }
     public bool FinishedToasts { get => prefs().FinishedToasts; set { if (value != FinishedToasts) { Save(prefs() with { FinishedToasts = value }); } } }
+    public bool Prereleases { get => prefs().Prereleases; set { if (value != Prereleases) { Save(prefs() with { Prereleases = value }); } } }
+    public bool AutoUpdate { get => prefs().AutoUpdate; set { if (value != AutoUpdate) { Save(prefs() with { AutoUpdate = value }); } } }
 
     public string? Error { get => error; private set { if (Set(ref error, value)) { Raise(nameof(HasError)); } } }
     public bool HasError => error is not null;
@@ -190,10 +197,37 @@ public sealed class SettingsViewModel : Observable
         if (updateVersion is null) { return; }
         UpdateStatus = $"Downloading {updateVersion}…";
         await updater.DownloadAsync(p => UpdateStatus = $"Downloading {updateVersion}… {p}%");
+        // Another check (the automatic one shares this updater) may have found a different release
+        // since: the host is stopped only for the one downloaded.
+        if (updater.Ready != updateVersion)
+        {
+            updateVersion = null;
+            throw new InvalidOperationException("the update found has changed since; check for updates again");
+        }
         UpdateStatus = "Stopping the host to update it…";
-        await manager.StopAsync();
-        UpdateStatus = "Restarting…";
-        updater.ApplyAndRestart();
+        try
+        {
+            await manager.StopAndApplyAsync(() => AutoUpdater.Record(prefs, savePrefs, updater), () =>
+            {
+                UpdateStatus = "Restarting…";
+                updater.ApplyAndRestart();
+            });
+        }
+        // The automatic update got there first, and is installing (and recorded) it.
+        catch (UpdateUnderWayException)
+        {
+            UpdateStatus = "";
+            throw;
+        }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            // Still this version: the host stopped for it is back (HostManager), and the failure is
+            // shown.
+            savePrefs(prefs() with { UpdatedFrom = null, UpdateNotes = null });
+            updateVersion = null;
+            UpdateStatus = "";
+            throw;
+        }
     });
 
     // Every action here ends up behind an async void click handler, where an escaping exception
