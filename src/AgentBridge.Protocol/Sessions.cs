@@ -141,74 +141,83 @@ public static class SessionBudget
     // Sub-agent entries left once everything else about them has been trimmed.
     public const int SubagentsCap = 8;
 
-    // Trims in the order that loses least for a reader: oldest tool history, then the
-    // sub-agents (finished entries, every line, every task, then all but SubagentsCap),
-    // reasoning, the user's message, the response (to 4 KiB, end kept), the question's
-    // message (to 2 KiB), and only then the question's fields, marking the question
-    // truncated so a client says to answer elsewhere. The main agent's own text (own) goes
-    // with the legacy field it stands beside: an emoji-heavy 16 KiB response is 48 KiB of
-    // JSON on its own, so keeping either whole would break the budget.
+    // Additive first: everything an older client ignores goes before anything it shows, so a
+    // session carrying sub-agent fields (subagents.md) never shows an older reader less than
+    // the same session would without them. The sub-agents (finished entries, every line,
+    // every task, all but SubagentsCap), the main agent's own reasoning, its own response (to
+    // 4 KiB, then gone, still marked truncated), the entries' tools, and the entries, each
+    // counted in subagentsMore. Then, as before them: oldest tool history, reasoning, the
+    // user's message, the response (to 4 KiB, end kept), the question's message (to 2 KiB),
+    // and only then the question's fields, marking the question truncated so a client says
+    // to answer elsewhere.
     public static Session Fit(Session s, int maxBytes = MaxSessionBytes)
     {
         bool Fits(Session x) => ProtocolJson.ByteCount(x) <= maxBytes;
         if (Fits(s)) { return s; }
 
+        s = Subagents(s, a => a.Where(e => !e.Finished));
+        if (!Fits(s)) { s = Subagents(s, a => a.Select(e => e with { Line = null })); }
+        if (!Fits(s)) { s = Subagents(s, a => a.Select(e => e with { Task = null })); }
+        if (!Fits(s)) { s = Subagents(s, a => a.Take(SubagentsCap)); }
+        if (!Fits(s)) { s = WithOwn(s, o => o with { Reasoning = null }); }
+        if (!Fits(s))
+        {
+            s = WithOwn(s, o =>
+            {
+                var (own, cut) = Limits.KeepEnd(o.Response, 4 * 1024);
+                return o with { Response = own, ResponseTruncated = cut || o.ResponseTruncated == true ? true : null };
+            });
+        }
+        if (!Fits(s)) { s = WithOwn(s, o => o with { Response = null, ResponseTruncated = o.Response is null ? o.ResponseTruncated : true }); }
+        if (!Fits(s)) { s = Subagents(s, a => a.Select(e => e with { CurrentTool = null })); }
+        if (!Fits(s)) { s = Subagents(s, _ => []); }
+        if (Fits(s)) { return s; }
+
+        // What is left of them is a few ids and flags. The older fields are trimmed exactly as
+        // they would be without them, then, should those few bytes still overflow, further.
+        s = Older(s, x => Fits(WithoutSubagentFields(x)));
+        return Older(s, Fits);
+    }
+
+    static Session Older(Session s, Func<Session, bool> fits)
+    {
         var history = s.Activity.History?.ToList();
-        while (history is { Count: > 0 } && !Fits(s))
+        while (history is { Count: > 0 } && !fits(s))
         {
             history.RemoveAt(0);
             s = s with { Activity = s.Activity with { History = history.Count == 0 ? null : [.. history] } };
         }
-        if (!Fits(s)) { s = Subagents(s, a => a.Where(e => !e.Finished)); }
-        if (!Fits(s)) { s = Subagents(s, a => a.Select(e => e with { Line = null })); }
-        if (!Fits(s)) { s = Subagents(s, a => a.Select(e => e with { Task = null })); }
-        if (!Fits(s)) { s = Subagents(s, a => a.Take(SubagentsCap)); }
-        if (!Fits(s)) { s = s with { Activity = s.Activity with { Reasoning = null, Own = OwnWith(s.Activity.Own, o => o with { Reasoning = null }) } }; }
-        if (!Fits(s)) { s = s with { Activity = s.Activity with { UserMessage = null } }; }
-        if (!Fits(s))
+        if (!fits(s)) { s = s with { Activity = s.Activity with { Reasoning = null } }; }
+        if (!fits(s)) { s = s with { Activity = s.Activity with { UserMessage = null } }; }
+        if (!fits(s))
         {
             var (r, cut) = Limits.KeepEnd(s.Activity.Response, 4 * 1024);
-            s = s with
-            {
-                Activity = s.Activity with
-                {
-                    Response = r,
-                    ResponseTruncated = cut || s.Activity.ResponseTruncated == true ? true : null,
-                    Own = OwnWith(s.Activity.Own, o =>
-                    {
-                        var (own, ownCut) = Limits.KeepEnd(o.Response, 4 * 1024);
-                        return o with { Response = own, ResponseTruncated = ownCut || o.ResponseTruncated == true ? true : null };
-                    }),
-                },
-            };
+            s = s with { Activity = s.Activity with { Response = r, ResponseTruncated = cut || s.Activity.ResponseTruncated == true ? true : null } };
         }
-        if (!Fits(s) && s.Question is { } q1)
+        if (!fits(s) && s.Question is { } q1)
         {
             s = s with { Question = q1 with { Message = Limits.KeepStart(q1.Message, 2 * 1024)!, Truncated = true } };
         }
-        if (!Fits(s) && s.Question is { } q2)
+        if (!fits(s) && s.Question is { } q2)
         {
             s = s with { Question = q2 with { Fields = [], Truncated = true } };
         }
-        if (!Fits(s))
+        if (!fits(s))
         {
-            s = s with
-            {
-                Activity = s.Activity with
-                {
-                    Response = null,
-                    ResponseTruncated = true,
-                    CurrentTool = null,
-                    Own = OwnWith(s.Activity.Own, o => o with { Response = null, ResponseTruncated = o.Response is null ? o.ResponseTruncated : true }),
-                },
-            };
+            s = s with { Activity = s.Activity with { Response = null, ResponseTruncated = true, CurrentTool = null } };
         }
-        // Past every step the contract names, and only for a session no real one comes near:
-        // the entries' own tools, then the entries, counted in subagentsMore.
-        if (!Fits(s)) { s = Subagents(s, a => a.Select(e => e with { CurrentTool = null })); }
-        if (!Fits(s)) { s = Subagents(s, _ => []); }
         return s;
     }
+
+    // The session as a client that predates sub-agents reads it.
+    internal static Session WithoutSubagentFields(Session s) => s with
+    {
+        Subagents = null,
+        SubagentsMore = null,
+        WaitingOn = null,
+        Activity = s.Activity with { Source = null, Own = null },
+        Question = s.Question is { } q ? q with { Agent = null } : null,
+    };
 
     // Trims the list, counting whatever it drops in subagentsMore.
     static Session Subagents(Session s, Func<IEnumerable<Subagent>, IEnumerable<Subagent>> trim)
@@ -219,7 +228,8 @@ public static class SessionBudget
         return s with { Subagents = kept.Count == 0 ? null : kept, SubagentsMore = more > 0 ? more : null };
     }
 
-    static OwnActivity? OwnWith(OwnActivity? own, Func<OwnActivity, OwnActivity> change) => own is null ? null : change(own);
+    static Session WithOwn(Session s, Func<OwnActivity, OwnActivity> change) =>
+        s.Activity.Own is { } own ? s with { Activity = s.Activity with { Own = change(own) } } : s;
 
     // session.get { id, agent }: one sub-agent in full, within the same budget. Its oldest
     // tools go first, then its reasoning, its response to 4 KiB, then everything but the entry.

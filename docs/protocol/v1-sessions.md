@@ -746,7 +746,7 @@ alone.
 | `compactions` | number? | Context compactions so far |
 | `background` | Background? | Work the session started that is still running after its own turn. Absent when there is none |
 | `source` | `{ "response"?: string, "reasoning"?: string }`? | Which sub-agent wrote the top-level `response` and `reasoning`, each on its own, by its `subagents` id: a main-agent reply can sit beside a delegate's reasoning. A field left out is the main agent's own. Absent while both are. Older clients ignore it and keep the last-writer-wins text |
-| `own` | `{ "response"?, "responseTruncated"?, "reasoning"?, "at"? }`? | The main agent's own text for each field whose top-level text is not it: one `source` names a sub-agent for, or one that is absent while the host has the main agent's from the part of the transcript it only skimmed (a host starting after delegates filled what it parses). 16 KiB and 4 KiB, the end kept, as above; `at` is when the main agent last wrote either. A field `source` names but `own` lacks means the main agent has none. So a newer client shows, for each of `response` and `reasoning`, `own`'s when `source` names an agent for it, otherwise the top-level one, or `own`'s when that is absent; and never shows a delegate's words as the main agent's. Absent when it would be empty |
+| `own` | `{ "response"?, "responseTruncated"?, "reasoning"?, "at"? }`? | The main agent's own text for each field whose top-level text is not it: one `source` names a sub-agent for, or one that is absent while the host has the main agent's from the part of the transcript it only skimmed (a host starting after delegates filled what it parses). 16 KiB and 4 KiB, the end kept, as above; `at` is when the main agent last wrote either. A field `source` names but `own` lacks means the main agent has none, unless `own.responseTruncated` is set, which means the [session budget](#session-budget) dropped its response. So a newer client shows, for each of `response` and `reasoning`, `own`'s when `source` names an agent for it, otherwise the top-level one, or `own`'s when that is absent; and never shows a delegate's words as the main agent's. Absent when it would be empty |
 
 ### Background
 
@@ -842,22 +842,33 @@ to show; if it's absent, show `value`.
 
 After applying the field limits, a host checks the size of each `Session` it sends. If
 it is over 40 KiB, the host trims in this order until it fits, which loses the least for
-a reader (`SessionBudget.Fit` in C#):
+a reader (`SessionBudget.Fit` in C#). Everything a client that predates sub-agents ignores
+goes first, so such a client, and the HA connector, never sees less of a session because
+of fields it doesn't read:
 
-1. Tool history, oldest first.
-2. `subagents`: finished entries (`idle` and `ended`), then every `line`, then every
+1. `subagents`: finished entries (`idle` and `ended`), then every `line`, then every
    `task`, then all but the first 8; each entry dropped is counted in `subagentsMore`.
-3. `reasoning`, with `own.reasoning`.
-4. `userMessage`.
-5. `response`, to its last 4 KiB (`responseTruncated` set), and `own.response` likewise.
-6. The question's `message`, to its first 2 KiB (`truncated` set).
-7. The question's `fields` (`truncated` set).
-8. `response` and `currentTool`, and `own.response`.
+2. `own.reasoning`.
+3. `own.response`, to its last 4 KiB (`own.responseTruncated` set), then the whole of it,
+   keeping `own.responseTruncated`.
+4. Every entry's `currentTool`.
+5. The remaining entries, counted in `subagentsMore`.
 
-`own` is trimmed with the legacy field it stands beside, since keeping either whole could
-break the budget alone: 16 KiB of emoji is 48 KiB of JSON. Past step 8, a host drops the
-sub-agents' `currentTool`, then the remaining entries (into `subagentsMore`); no real session
-comes near that.
+Then the session's older fields, trimmed exactly as for the same session without any of
+the above, and further only if the few ids and flags left (`source`, `waitingOn`,
+`subagentsMore`, a question's `agent`) still overflow:
+
+6. Tool history, oldest first.
+7. `reasoning`.
+8. `userMessage`.
+9. `response`, to its last 4 KiB (`responseTruncated` set).
+10. The question's `message`, to its first 2 KiB (`truncated` set).
+11. The question's `fields` (`truncated` set).
+12. `response` and `currentTool`.
+
+`own` cannot simply stay whole: 16 KiB of emoji is 48 KiB of JSON on its own. A field
+`source` names with `own.responseTruncated` set but no `own.response` was the main agent's,
+dropped for the budget.
 
 A list page holds as many sessions as fit in 48 KiB, and always at least one, since every
 session is at most 40 KiB.

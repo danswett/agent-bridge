@@ -111,15 +111,20 @@ Rules 3–6 are exactly today's behaviour. Rule 2 is new and needs `Session.wait
   - render the sub-agent's words only from `subagents[]` or `session.get`.
 - **Full detail for one sub-agent:** `session.get { id, agent }` returns its `response`
   (≤ 16 KiB), `reasoning` (≤ 4 KiB) and `history` (latest 50). Lists never carry these.
-- **`SessionBudget.Fit`:** after "tool history" (step 1), trim `subagents` in this order:
+- **`SessionBudget.Fit`:** every field here is trimmed before any field an older client
+  reads, so a session with sub-agents never shows an older client (or the HA connector) less
+  than it would without them. In this order:
   - drop finished entries (`idle` and `ended`);
   - drop every `line`;
   - drop every `task`;
-  - cap the list at 8 entries and set `subagentsMore`.
+  - cap the list at 8 entries and set `subagentsMore`;
+  - drop `own.reasoning`;
+  - cut `own.response` to 4 KiB, then drop it, keeping `own.responseTruncated`;
+  - drop every entry's `currentTool`;
+  - drop the remaining entries, counted in `subagentsMore`.
 
-  `own` goes with the legacy field beside it: `own.reasoning` with `reasoning`, and
-  `own.response` to 4 KiB and then away with `response`. Keeping either whole could break
-  the 40 KiB on its own (16 KiB of emoji is 48 KiB of JSON).
+  Only then the older steps, from tool history on, exactly as for the same session without
+  these fields. `own` cannot simply stay whole: 16 KiB of emoji is 48 KiB of JSON.
 - **Changes that move `updatedAt`:** an entry starting, ending, or changing status or
   outcome. A `line` changing does **not** move it, so busy delegates don't flood upserts.
   The latest line arrives with the next change, or on `session.get`.
@@ -139,7 +144,8 @@ Rules 3–6 are exactly today's behaviour. Rule 2 is new and needs `Session.wait
    `own` carries the main agent's text for the fields `source` attributes, and for one the
    host has only from its skim of the transcript (the top-level field then absent).
 4. *Budget for `own`:* its field limits are the legacy ones, `own.responseTruncated` is
-   its cut signal, and it is trimmed with the legacy field beside it.
+   its cut signal, and it is trimmed before any legacy field, with the rest of the
+   sub-agent fields (§5), so older clients never lose text to it.
 
 The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the host change.
 
