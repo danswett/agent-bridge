@@ -106,9 +106,11 @@ public sealed partial class TranscriptEvidence(string path)
         public long DroppedThrough = -1;
         public long Last;
 
-        public void Started(long at, bool subagent, StartKind kind)
+        // since: where the session last shut down; a start after it begins a run of its own, as the
+        // host ends every shell there (found in review, #162).
+        public void Started(long at, bool subagent, StartKind kind, long since)
         {
-            if (Runs.Count > 0 && Runs[^1] is { } run && run.Subagent == subagent && run.Kind == kind && (Ends.Count == 0 || Ends[^1] < run.Last))
+            if (Runs.Count > 0 && Runs[^1] is { } run && run.Subagent == subagent && run.Kind == kind && (Ends.Count == 0 || Ends[^1] < run.Last) && since < run.Last)
             {
                 run.Last = at;
                 return;
@@ -118,7 +120,19 @@ public sealed partial class TranscriptEvidence(string path)
         }
 
         // Only the latest ends matter: an end counts against the starts before it.
-        public void Ended(long at) { Ends.Add(at); if (Ends.Count > Recent) { Ends.RemoveAt(0); } }
+        public void Ended(long at)
+        {
+            Ends.Add(at);
+            if (Ends.Count > Recent) { EndsDroppedThrough = Math.Max(EndsDroppedThrough, Ends[0]); Ends.RemoveAt(0); }
+        }
+
+        // Where the latest end dropped for room was: no end after a start can be ruled out before it.
+        public long EndsDroppedThrough = -1;
+
+        // The ends agent-bridge's host takes (ShellMarkers.Read, the session's own results only,
+        // and shell_completed): the daemon's Ends also hold quoted lines and subagents' results.
+        // Only the latest matters.
+        public long HostEnd = -1;
     }
     // A background agent's runs, the way agent-bridge's host follows them (BackgroundWork).
     sealed class Agent
@@ -134,6 +148,8 @@ public sealed partial class TranscriptEvidence(string path)
     }
 
     readonly Dictionary<string, Shell> shells = new(StringComparer.Ordinal);
+    // Where the session itself last shut down: the host ends every shell there (BackgroundWork.EndAll).
+    long shutdownAt = -1;
     readonly Dictionary<string, Agent> agents = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> agentByCall = new(StringComparer.Ordinal);
     // Each tool call's first subagent.completed, where the daemon stops counting its agent.
@@ -222,6 +238,7 @@ public sealed partial class TranscriptEvidence(string path)
         asks.Clear();
         waiting = 0;
         offset = 0;
+        shutdownAt = -1;
     }
 
     static readonly byte[][] Wanted =
@@ -298,11 +315,13 @@ public sealed partial class TranscriptEvidence(string path)
                         break;
                     case "shell_completed" when Str(kind, "shellId") is { } id:
                         ShellFor(id, at).Ended(at);
+                        ShellFor(id, at).HostEnd = at;
                         break;
                 }
                 break;
             case "session.shutdown" when agentId is null:
                 foreach (var a in agents.Values) { a.Working = false; a.AskedForTools = false; a.IdleOwed = 0; }
+                shutdownAt = at;
                 break;
             case "abort" or "session.shutdown" when agentId is not null && agents.TryGetValue(agentId, out var ended):
                 EndRun(ended);
@@ -357,24 +376,50 @@ public sealed partial class TranscriptEvidence(string path)
         if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Object) { return; }
         if (Str(result, "content") is not { } content) { return; }
         var whole = content.Trim();
+        // What the host would take from this result were it the session's own (a subagent's start
+        // is still proper or quoted by the same shape), and the end it takes from the session's own.
+        var (hostStart, hostEnd) = HostRead(whole);
+        if (!subagent && hostEnd is not null) { ShellFor(hostEnd, at).HostEnd = at; }
         foreach (Match m in Completed().Matches(content)) { ShellFor(m.Groups[1].Value, at).Ended(at); }
         if (Stopped().Match(whole) is { Success: true } stop) { ShellFor(stop.Groups[1].Value, at).Ended(at); return; }
-        var last = whole[(whole.LastIndexOf('\n') + 1)..].TrimEnd('\r');
+        // Proper when the host takes a start of the same id from the result: a quoted start line
+        // before a genuine last-line poll of that id is one (found in review, #162).
         if (Started().Match(content) is { Success: true } started)
         {
             var id = started.Groups[1].Value.Trim();
-            var proper = StartedWhole().IsMatch(whole);
-            ShellFor(id, at).Started(at, subagent, proper ? StartKind.Proper : StartKind.QuotedOther);
+            ShellFor(id, at).Started(at, subagent, hostStart == id ? StartKind.Proper : StartKind.QuotedOther, shutdownAt);
             return;
         }
         if (StillRunning().Match(content) is { Success: true } running)
         {
             var id = running.Groups[1].Value;
-            var proper = StillRunningLast().Match(last) is { Success: true } l && l.Groups[1].Value == id;
-            ShellFor(id, at).Started(at, subagent, proper ? StartKind.Proper : StartKind.QuotedStillRunning);
+            ShellFor(id, at).Started(at, subagent, hostStart == id ? StartKind.Proper : StartKind.QuotedStillRunning, shutdownAt);
             return;
         }
-        if (Moved().Match(whole) is { Success: true } moved) { ShellFor(moved.Groups[1].Value, at).Started(at, subagent, StartKind.Proper); }
+        if (Moved().Match(whole) is { Success: true } moved)
+        {
+            var id = moved.Groups[1].Value;
+            ShellFor(id, at).Started(at, subagent, hostStart == id ? StartKind.Proper : StartKind.QuotedOther, shutdownAt);
+        }
+    }
+
+    // agent-bridge's host's reading of one tool result (ShellMarkers.Read), its length gates
+    // included: a whole start, move or stop, else a last line still running or completed.
+    const int HostMaxMarker = 1024;
+    static (string? Started, string? Ended) HostRead(string whole)
+    {
+        if (whole.Length <= HostMaxMarker && whole.StartsWith("<command ", StringComparison.Ordinal))
+        {
+            if (StartedWhole().Match(whole) is { Success: true } a) { return (a.Groups[1].Value.Trim(), null); }
+            if (Moved().Match(whole) is { Success: true } m) { return (m.Groups[1].Value, null); }
+            if (Stopped().Match(whole) is { Success: true } s) { return (null, s.Groups[1].Value); }
+        }
+        var newline = whole.LastIndexOf('\n');
+        var last = (newline < 0 ? whole : whole[(newline + 1)..]).TrimEnd('\r');
+        if (last.Length > HostMaxMarker || !last.StartsWith('<')) { return (null, null); }
+        if (StillRunningLast().Match(last) is { Success: true } r) { return (r.Groups[1].Value, null); }
+        if (CompletedLast().Match(last) is { Success: true } c) { return (null, c.Groups[1].Value); }
+        return (null, null);
     }
 
     // The daemon lists more (or fewer) background shells than the host. Known when every listed
@@ -382,6 +427,9 @@ public sealed partial class TranscriptEvidence(string path)
     //   #259  an end the daemon has read past and not applied;
     //   #261  only a subagent ever started it (since its last end);
     //   #262  besides a subagent's, only a quoted "still running" line started it;
+    // and, of the shells the host counts that the daemon does not list:
+    //   #276  the session started it again under the same id after it ended, the daemon has read
+    //         both, and folding them as one batch, it took the old end for the new start's;
     // and what is left is exactly the host's count.
     public string? Shells(ShadowSession daemon, ShadowSession host)
     {
@@ -390,6 +438,7 @@ public sealed partial class TranscriptEvidence(string path)
         if (daemon.ShellIds.Distinct(StringComparer.Ordinal).Count() != daemon.Shells) { return null; }
         var issues = new SortedSet<int>();
         var explained = 0;
+        var explainedIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var id in daemon.ShellIds.Distinct(StringComparer.Ordinal))
         {
             if (!shells.TryGetValue(id, out var shell)) { continue; }
@@ -398,7 +447,7 @@ public sealed partial class TranscriptEvidence(string path)
             if (starts.Count == 0) { continue; }
             // A run the daemon has read only part of may hold a start just short of its offset.
             var latestStart = starts.Max(s => s.Last < through ? s.Last : through - 1);
-            if (ends.Count > 0 && ends.Max() > latestStart) { issues.Add(259); explained++; continue; }
+            if (ends.Count > 0 && ends.Max() > latestStart) { issues.Add(259); explained++; explainedIds.Add(id); continue; }
             var lastEnd = ends.Count > 0 ? ends.Max() : -1;
             if (shell.DroppedThrough > lastEnd) { continue; }
             var holding = starts.Where(s => s.Last > lastEnd).ToList();
@@ -406,8 +455,45 @@ public sealed partial class TranscriptEvidence(string path)
             if (holding.Any(s => s.Subagent)) { issues.Add(261); }
             if (holding.Any(s => !s.Subagent)) { issues.Add(262); }
             explained++;
+            explainedIds.Add(id);
         }
-        return explained > 0 && daemon.ShellIds.Distinct(StringComparer.Ordinal).Count() - explained == host.Shells ? Name(issues) : null;
+        var listed = daemon.ShellIds.ToHashSet(StringComparer.Ordinal);
+        var restarted = shells.Count(s => !listed.Contains(s.Key) && Restarted(s.Value, through, shutdownAt));
+        if (restarted > 0)
+        {
+            // The host's ids are not known here, only its count, so a restart is put down to #276
+            // only when every shell the daemon lists and no signature explains is one the host runs
+            // too: otherwise a daemon extra and a host extra of other causes could cancel out
+            // (found in review, #162).
+            if (listed.Any(id => !explainedIds.Contains(id) && !(shells.TryGetValue(id, out var s) && HostRuns(s, shutdownAt)))) { return null; }
+            issues.Add(276);
+        }
+        return explained + restarted > 0 && listed.Count - explained + restarted == host.Shells ? Name(issues) : null;
+    }
+
+    // Running again since an end of the same id, as the host counts it, and both read by the daemon:
+    // an end the host takes, then a start of the session's own that both take, before the daemon's
+    // offset; since that start, no end the host takes (so it still runs) and none the daemon has
+    // read (an end after the start drops it for another reason), and no shutdown, which ends every
+    // shell on the host. Other starts for the id since (a quoted line, a subagent's) the host
+    // ignores, and any the daemon took in a later batch would have listed it again. Seen on DEV-VM1
+    // (#40): a pr-watch watcher completed and was restarted 40 s later, with the daemon listing
+    // nothing from then on while its process ran (agent-ha-bridge#276).
+    // A shell the host counts as running: a start of the session's own that it takes, after the last
+    // end it takes and the last shutdown.
+    static bool HostRuns(Shell shell, long shutdownAt) =>
+        shell.Runs.Any(r => !r.Subagent && r.Kind == StartKind.Proper && r.Last > shell.HostEnd && r.Last > shutdownAt);
+
+    static bool Restarted(Shell shell, long through, long shutdownAt)
+    {
+        if (shell.HostEnd < 0 || shell.HostEnd >= through || shell.DroppedThrough > shell.HostEnd) { return false; }
+        // An end the host takes is one the daemon takes too, at the same place; one no longer held
+        // proves nothing.
+        if (!shell.Ends.Contains(shell.HostEnd)) { return false; }
+        // An end dropped for room after the start may have been one the daemon read (found in
+        // review, #162): then nothing is known.
+        return shell.Runs.Any(r => r.First > shell.HostEnd && r.First > shutdownAt && r.First < through && !r.Subagent && r.Kind == StartKind.Proper
+            && shell.EndsDroppedThrough < r.First && !shell.Ends.Any(e => e > r.First && e < through));
     }
 
     // The daemon counts fewer (or more) background agents than the host. Known when the host's
@@ -518,6 +604,9 @@ public sealed partial class TranscriptEvidence(string path)
     // agent-ha-bridge 1.33.32's patterns (Get-ActivityFromEvents), and the host's for the last line.
     [GeneratedRegex(@"(?m)^<shellId: (\S+?) completed with exit code", RegexOptions.CultureInvariant)]
     private static partial Regex Completed();
+
+    [GeneratedRegex(@"\A<shellId: (\S+?) completed with exit code", RegexOptions.CultureInvariant)]
+    private static partial Regex CompletedLast();
 
     [GeneratedRegex(@"\A<command with id: (\S+?) stopped>\z", RegexOptions.CultureInvariant)]
     private static partial Regex Stopped();

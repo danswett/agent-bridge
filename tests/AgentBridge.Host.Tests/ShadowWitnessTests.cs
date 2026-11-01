@@ -87,6 +87,121 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Null(Known(Daemon(beforeEnd, shells: ["own1", "ended1"]), Host(shells: 1), ShadowKinds.BackgroundShells));
     }
 
+    // Seen on DEV-VM1 (#40): a watcher completed, was started again under the same id 40 s later,
+    // and the daemon, folding both into one batch, listed nothing while it ran (agent-ha-bridge#276).
+    [Fact]
+    public void A_shell_the_daemon_does_not_list_is_put_down_to_a_restart_under_the_same_id_only_when_it_read_both()
+    {
+        Write(Result("<command with shellId: watch is still running after 3 seconds. The command is still running.>"));
+        Write(
+            Event("system.notification", new { kind = new { type = "shell_completed", shellId = "watch", exitCode = 0 } }),
+            Result("<shellId: watch completed with exit code 0>"));
+        var beforeRestart = Write(Result("<shellId: other completed with exit code 0>"));
+        var through = Write(Result("<command started in background with shellId: watch>"));
+
+        Assert.Equal("agent-ha-bridge#276", Known(Daemon(through), Host(shells: 1), ShadowKinds.BackgroundShells));
+        // Not read the restart yet: the daemon is behind.
+        Assert.Null(Known(Daemon(beforeRestart), Host(shells: 1), ShadowKinds.BackgroundShells));
+        // One more on the host than the restart accounts for.
+        Assert.Null(Known(Daemon(through), Host(shells: 2), ShadowKinds.BackgroundShells));
+
+        // A shell started once and never ended, missing on the daemon, is no restart.
+        var fresh = Write(Result("<command started in background with shellId: fresh>"));
+        Assert.Null(Known(Daemon(fresh, shells: ["watch"]), Host(shells: 2), ShadowKinds.BackgroundShells));
+    }
+
+    [Fact]
+    public void A_restart_by_a_subagent_one_ended_again_or_one_before_a_shutdown_is_not_put_down_to_the_daemon()
+    {
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Result("<shellId: watch completed with exit code 0>"));
+        var bySubagent = Write(Result("<command started in background with shellId: watch>", agentId: "agent-a"));
+        Assert.Null(Known(Daemon(bySubagent), Host(shells: 1), ShadowKinds.BackgroundShells));
+        Write(Result("<shellId: watch completed with exit code 0>", agentId: "agent-a"));
+
+        // Found in review (#162): the session's own restart counts whatever is quoted about the id
+        // after it, and stops counting at the end that follows it, not at an earlier run's.
+        Write(Result("<command started in background with shellId: watch>"));
+        var quoted = Write(Result("1. a line of the file\n<command with shellId: watch is still running after 30 seconds>\n3. and more of it"));
+        Assert.Equal("agent-ha-bridge#276", Known(Daemon(quoted), Host(shells: 1), ShadowKinds.BackgroundShells));
+        var endedAgain = Write(Result("<shellId: watch completed with exit code 0>"));
+        Assert.Null(Known(Daemon(endedAgain), Host(shells: 1), ShadowKinds.BackgroundShells));
+
+        // Found in review (#162): a restart before the session shut down is over; a fresh shell
+        // after it that the daemon does not list is a mismatch, not this restart.
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Event("session.shutdown", new { }));
+        var fresh = Write(Event("session.resume", new { }), Result("<command started in background with shellId: fresh>"));
+        Assert.Null(Known(Daemon(fresh), Host(shells: 1), ShadowKinds.BackgroundShells));
+    }
+
+    // Found in review (#162): only the ends the host takes make a restart, and a quoted start line
+    // before a genuine last-line poll of the same id is a start the host takes.
+    [Fact]
+    public void A_restart_is_judged_by_the_ends_and_starts_the_host_takes()
+    {
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Result("<shellId: watch completed with exit code 0>"));
+        var mixed = Write(Result("a quoted line:\n<command started in background with shellId: watch>\noutput\n<command with shellId: watch is still running after 30 seconds>"));
+        Assert.Equal("agent-ha-bridge#276", Known(Daemon(mixed), Host(shells: 1), ShadowKinds.BackgroundShells));
+        // A completion quoted after the daemon's offset is not one it has read.
+        Write(Result("1. a line\n<shellId: watch completed with exit code 0>\n3. another"));
+        Assert.Equal("agent-ha-bridge#276", Known(Daemon(mixed), Host(shells: 1), ShadowKinds.BackgroundShells));
+    }
+
+    [Fact]
+    public void A_quoted_completion_between_two_polls_is_no_restart()
+    {
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Result("1. a line\n<shellId: watch completed with exit code 0>\n3. another"));
+        var polled = Write(Result("<command with shellId: watch is still running after 30 seconds>"));
+        Assert.Null(Known(Daemon(polled), Host(shells: 1), ShadowKinds.BackgroundShells));
+    }
+
+    // Found in review (#162): the host takes no marker longer than it reads one, and an end the
+    // witness dropped for room may be one that rules a restart out.
+    [Fact]
+    public void An_over_long_completion_line_is_no_host_end_and_a_dropped_end_leaves_a_restart_unknown()
+    {
+        Write(Result("<command started in background with shellId: long>"));
+        Write(Result("output\n<shellId: long completed with exit code 0> " + new string('x', 1100)));
+        var polled = Write(Result("<command with shellId: long is still running after 30 seconds>"));
+        Assert.Null(Known(Daemon(polled), Host(shells: 1), ShadowKinds.BackgroundShells));
+
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Result("<shellId: watch completed with exit code 0>"));
+        Write(Result("<command started in background with shellId: watch>"));
+        var blocked = Write(Result("1. a line\n<shellId: watch completed with exit code 0>\n3. another"));
+        Assert.Null(Known(Daemon(blocked, shells: ["long"]), Host(shells: 2), ShadowKinds.BackgroundShells));
+        Write([.. Enumerable.Range(0, 40).Select(_ => Result("1. a line\n<shellId: watch completed with exit code 0>\n3. another"))]);
+        Assert.Null(Known(Daemon(blocked, shells: ["long"]), Host(shells: 2), ShadowKinds.BackgroundShells));
+    }
+
+    // Found in review (#162): with only the host's count to go on, a daemon extra and a host extra of
+    // other causes must not cancel out into a restart.
+    [Fact]
+    public void A_restart_is_not_put_down_to_the_daemon_when_it_lists_a_shell_the_host_does_not_run()
+    {
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Result("<shellId: watch completed with exit code 0>"));
+        var through = Write(Result("<command started in background with shellId: watch>"), Result("<command started in background with shellId: other>"));
+        Assert.Equal("agent-ha-bridge#276", Known(Daemon(through, shells: ["other"]), Host(shells: 2), ShadowKinds.BackgroundShells));
+        Assert.Null(Known(Daemon(through, shells: ["mystery"]), Host(shells: 2), ShadowKinds.BackgroundShells));
+    }
+
+    // Found in review (#162): the same id started again after a shutdown is a run of its own, not
+    // the end of the one before it.
+    [Fact]
+    public void A_restart_under_the_same_id_after_a_shutdown_and_resume_is_put_down_to_the_daemon()
+    {
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Result("<shellId: watch completed with exit code 0>"));
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Event("session.shutdown", new { }), Event("session.resume", new { }));
+        var again = Write(Result("<command started in background with shellId: watch>"));
+        Assert.Equal("agent-ha-bridge#276", Known(Daemon(again), Host(shells: 1), ShadowKinds.BackgroundShells));
+    }
+
     [Fact]
     public void Missing_agents_are_put_down_to_the_daemon_only_when_they_are_exactly_those_woken_again_after_completing()
     {
