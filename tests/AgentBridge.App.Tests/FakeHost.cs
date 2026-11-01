@@ -61,8 +61,9 @@ sealed class FakeHost : IAsyncDisposable
 
     public async Task StopAsync()
     {
-        if (server is { } s) { await s.DisposeAsync(); }
-        server = null;
+        // Taken before stopping it: a host started while this one stops (a failed update's
+        // restart) must not be forgotten when this one has gone, and left running.
+        if (Interlocked.Exchange(ref server, null) is { } s) { await s.DisposeAsync(); }
     }
 
     Task<object?> HandleAsync(IProtocolChannel ch, string op, JsonElement data)

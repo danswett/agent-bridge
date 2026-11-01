@@ -240,6 +240,24 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_server_started_while_the_last_one_on_its_endpoint_is_still_stopping_can_be_reached()
+    {
+        // A pipe name has no file to remove: it goes with its last instance.
+        if (OperatingSystem.IsWindows()) { return; }
+        var old = LocalServer.Start(Endpoint, Echo);
+        await ConnectAsync();
+
+        // The next server starts as soon as the old one stops listening, before it has finished
+        // closing its connections: a test's fake host restarted after a failed update (#151).
+        var stopping = old.DisposeAsync();
+        Serve(Echo);
+        await stopping;
+
+        var ch = await ConnectAsync();
+        Assert.Equal("Here", (await ch.HelloAsync()).Machine.Name);
+    }
+
+    [Fact]
     public async Task Closing_the_server_ends_its_connections_and_fails_what_is_outstanding()
     {
         var release = new TaskCompletionSource();

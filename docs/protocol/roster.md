@@ -57,6 +57,12 @@ forgotten, and arrives in a later `presence` once read. A client infers that a m
 forgotten (from another device) only from two `known` lists in a row. A client that predates the
 roster reads `devices` and ignores `known`.
 
+Each `presence` is the account as the relay saw it at one moment, and a device never receives
+one older than a `presence` it already has: the relay drops an older one rather than send it
+after a newer one. So the last `presence` a device has received is the account as it now is, and
+two in a row are in the order things happened. (Before #151 they could arrive out of order, and an
+older one arriving last listed a machine forgotten a moment earlier until the next change.)
+
 ## `forget` and `forget-result`
 
 ```json

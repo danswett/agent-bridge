@@ -27,6 +27,7 @@ public sealed class LocalServer : IAsyncDisposable
     Task loop = Task.CompletedTask;
     Socket? listener;
     int unixPeers;
+    int disposed;
 
     public LocalEndpoint Endpoint => endpoint;
     public int Connections { get { lock (gate) { return channels.Count; } } }
@@ -202,15 +203,22 @@ public sealed class LocalServer : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        // The name goes first, while this server still listens on it and nobody else can take it
+        // (Bind would find it in use). Deleted last, it could be the next server's: once the
+        // listener closed, a server started meanwhile found the old file dead, replaced it with
+        // its own, and this then deleted that, leaving it listening where no client can reach it.
+        // The host's host.lock keeps two of its own apart; a test's fake host had nothing to (#151).
+        // Once only: a second disposal would delete whatever is there by then.
+        if (Interlocked.Exchange(ref disposed, 1) == 1) { return; }
+        if (!OperatingSystem.IsWindows())
+        {
+            try { File.Delete(endpoint.Address); } catch (IOException) { }
+        }
         stop.Cancel();
         listener?.Dispose();
         try { await loop; } catch (Exception) { }
         LocalChannel[] open;
         lock (gate) { open = [.. channels]; }
         foreach (var c in open) { await c.DisposeAsync(); }
-        if (!OperatingSystem.IsWindows())
-        {
-            try { File.Delete(endpoint.Address); } catch (IOException) { }
-        }
     }
 }

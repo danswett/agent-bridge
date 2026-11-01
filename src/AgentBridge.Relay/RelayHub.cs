@@ -15,6 +15,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     // agent acts, nor a test device, nor any kind added later until it is put here.
     static readonly HashSet<string> PersonKinds = ["app", "pwa", "phone"];
     readonly ConcurrentDictionary<string, ConcurrentDictionary<string, Connection>> accounts = new();
+    long presenceVersion;
 
     public int Online => accounts.Values.Sum(a => a.Count);
 
@@ -56,6 +57,30 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         public async Task SendAsync(byte[] data, WebSocketMessageType type)
         {
             await sendLock.WaitAsync();
+            try { await SendLockedAsync(data, type); }
+            finally { sendLock.Release(); }
+        }
+
+        // The newest presence this device has been sent. Announcements are taken in order but
+        // sent concurrently, so an older one could reach a device after a newer one and stay its
+        // last word: a machine forgotten a moment earlier listed again (#151), or a device that
+        // left listed as here. One older than what was sent is dropped instead.
+        long presenceSent;
+
+        public async Task SendPresenceAsync(byte[] data, long version)
+        {
+            await sendLock.WaitAsync();
+            try
+            {
+                if (version <= presenceSent) { return; }
+                presenceSent = version;
+                await SendLockedAsync(data, WebSocketMessageType.Text);
+            }
+            finally { sendLock.Release(); }
+        }
+
+        async Task SendLockedAsync(byte[] data, WebSocketMessageType type)
+        {
             try
             {
                 if (ws.State != WebSocketState.Open) { return; }
@@ -63,7 +88,6 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                 await ws.SendAsync(data, type, true, cts.Token);
             }
             catch (Exception e) when (e is WebSocketException or OperationCanceledException) { }
-            finally { sendLock.Release(); }
         }
 
         public Task SendJsonAsync(object message) => SendAsync(JsonSerializer.SerializeToUtf8Bytes(message), WebSocketMessageType.Text);
@@ -286,13 +310,24 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     async Task BroadcastPresenceAsync(string accountId)
     {
         if (!accounts.TryGetValue(accountId, out var devices)) { return; }
-        var list = devices.Values.Select(c => new { id = c.DeviceId, name = c.Name, kind = c.Kind, since = c.Since }).ToArray();
-        // known: the account's machines that are not here, with when each was last seen. Only
-        // with a roster; older clients read devices alone and ignore it.
-        object message = roster.Known(accountId, devices.ContainsKey) is { } known
-            ? new { t = "presence", devices = list, known = known.Select(k => new { id = k.Id, name = k.Name, kind = k.Kind, lastSeen = k.LastSeen }).ToArray() }
-            : new { t = "presence", devices = list };
-        await Task.WhenAll(devices.Values.Select(c => c.SendJsonAsync(message)));
+        byte[] message;
+        long version;
+        Connection[] to;
+        // Taken and numbered under the lock admission and removal hold, so a higher number is
+        // always a later view of the account (Connection.SendPresenceAsync).
+        lock (devices)
+        {
+            version = Interlocked.Increment(ref presenceVersion);
+            to = [.. devices.Values];
+            var list = to.Select(c => new { id = c.DeviceId, name = c.Name, kind = c.Kind, since = c.Since }).ToArray();
+            // known: the account's machines that are not here, with when each was last seen. Only
+            // with a roster; older clients read devices alone and ignore it.
+            object snapshot = roster.Known(accountId, devices.ContainsKey) is { } known
+                ? new { t = "presence", devices = list, known = known.Select(k => new { id = k.Id, name = k.Name, kind = k.Kind, lastSeen = k.LastSeen }).ToArray() }
+                : new { t = "presence", devices = list };
+            message = JsonSerializer.SerializeToUtf8Bytes(snapshot);
+        }
+        await Task.WhenAll(to.Select(c => c.SendPresenceAsync(message, version)));
     }
 
     static string Clean(string? name)

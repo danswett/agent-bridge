@@ -37,7 +37,8 @@ The name is not a secret. What keeps others out:
   host. A process it cannot identify is refused.
 
 One host runs per profile: `serve` holds `<profile>/host.lock`, and a second one exits
-with code 3.
+with code 3. On macOS and Linux a stopping host removes its socket file before it stops
+listening, never after, so it cannot remove the file of a host started just after it.
 
 ## Framing
 
