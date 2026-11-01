@@ -371,7 +371,7 @@ public sealed partial class LaunchFlowTests
         var id = (await LaunchTrustAsync(ch, new { agent = "claude", workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
 
         // The highlight lands on trust, but the words above it are no longer the ones shown.
-        screens.OnTyped = _ => screens.Rows = [.. ClaudeAsks(onYes: true).Select(r => r.Replace("your own code", "someone else's code"))];
+        screens.OnTyped = _ => screens.Rows = [.. ClaudeAsks(onYes: true).Select(r => r.Replace("Claude Code'll be able", "Claude Code will be able"))];
         var answer = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key));
 
         Assert.Equal(("unconfirmed", "Not confirmed: answer at the machine. The question in its window changed after the highlight moved, so Enter was not pressed.", null), answer);

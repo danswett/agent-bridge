@@ -30,6 +30,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     readonly Callers callers = new();
     readonly List<string> logged = [];
     readonly List<bool> applied = [];
+    Action<bool>? onApply;
     readonly List<IReadOnlyList<string>> approved = [];
     Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> signIn = (_, _, _) => Task.FromException<SignInResult>(new InvalidOperationException("no relay in these tests"));
     (SignInResult Account, Uri Relay)? saved;
@@ -59,7 +60,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             Dev = true,
             Machine = machine,
             Running = new HostSettingsView(RemoteApproval: true),
-            ApplyRemoteFolderTrust = on => { lock (applied) { applied.Add(on); } },
+            ApplyRemoteFolderTrust = on => { onApply?.Invoke(on); lock (applied) { applied.Add(on); } },
             ApplyRemoteFolderTrustDevices = ids => { lock (applied) { approved.Add(ids); } },
             Relay = () => new Uri("https://relay.example/"),
             Credential = () => credential,
@@ -237,6 +238,28 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.False(devices.RestartRequired);
         Assert.Equal([phone], HostSettings.Load(profile).Settings.Launch.RemoteFolderTrustDevices);
         Assert.Equal([phone], (await ch.CallAsync<HostStatus>(HostOps.Status)).Settings.RemoteFolderTrustDevices!);
+    }
+
+    [Fact]
+    public async Task Two_changes_to_folder_trust_at_once_go_one_after_the_other_so_what_runs_is_what_is_saved()
+    {
+        var first = await ConnectAsync();
+        var second = await ConnectAsync();
+        using var inFirst = new ManualResetEventSlim();
+        using var secondDone = new ManualResetEventSlim();
+        // The first change is held just before it applies; the second may finish meanwhile only
+        // if nothing makes it wait.
+        onApply = on => { if (on) { inFirst.Set(); secondDone.Wait(TimeSpan.FromMilliseconds(500)); } };
+
+        var on = first.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrust = true });
+        Assert.True(inFirst.Wait(TimeSpan.FromSeconds(5)));
+        var off = second.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrust = false });
+        _ = off.ContinueWith(_ => secondDone.Set(), TaskScheduler.Default);
+        await Task.WhenAll(on, off);
+
+        var saved = HostSettings.Load(profile).Settings.Launch.RemoteFolderTrust;
+        lock (applied) { Assert.Equal(saved, applied[^1]); }
+        Assert.False((await first.CallAsync<HostStatus>(HostOps.Status)).RestartRequired);
     }
 
     [Fact]

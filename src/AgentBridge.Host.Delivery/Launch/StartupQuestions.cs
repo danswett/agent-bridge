@@ -71,14 +71,20 @@ public static class StartupQuestions
         _ => null,
     };
 
-    // What each agent says trusting lets it do, as it draws it: a read without all of it is not
-    // the whole question, and a person is not asked to answer part of one. An agent that changes
-    // its words leaves its question to be answered at the machine until this learns them.
+    // What each agent says trusting lets it do, every sentence of it as it draws it (live, Copilot
+    // 1.0.105, Claude Code, Codex 0.165): a read missing any of it, its end included, is not the
+    // whole question, and a person is not asked to answer part of one. An agent that changes its
+    // words leaves its question to be answered at the machine until this learns them.
     static string[] WarningOf(AgentKind kind) => kind switch
     {
-        AgentKind.Copilot => ["Copilot can read files in this folder and, with your permission, edit them or run code and shell commands.", "Do you trust the files in this folder?"],
-        AgentKind.Claude => ["Quick safety check:", "be able to read, edit, and execute files here."],
-        AgentKind.Codex => ["Trust this folder? Codex can read, edit, and run files here"],
+        AgentKind.Copilot => ["Copilot can read files in this folder and, with your permission, edit them or run code and shell commands.",
+            "It will remember your permissions for the rest of this session.", "Do you trust the files in this folder?"],
+        AgentKind.Claude => ["Quick safety check: Is this a project you created or one you trust?",
+            "(Like your own code, a well-known open source project, or work from your team).",
+            "If not, take a moment to review what's in this folder first.", "be able to read, edit, and execute files here."],
+        AgentKind.Codex => ["Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.",
+            "Folder settings can run code automatically, even without a model request.", "Continue only if you trust these files.",
+            "Your trust decision will be saved."],
         _ => [],
     };
 
@@ -136,6 +142,9 @@ public static class StartupQuestions
         var from = -1;
         for (var k = 0; k < paragraphs.Count && at < 0; k++)
         {
+            // Never the repository root under Codex's note: for a launch at the root, a question
+            // about a folder under it would otherwise read as this folder's.
+            if (Enumerable.Range(paragraphs[k].First, paragraphs[k].Last - paragraphs[k].First + 1).Any(r => clean[r].EndsWith("repository root:", StringComparison.Ordinal))) { continue; }
             for (var s = paragraphs[k].First; s <= paragraphs[k].Last; s++)
             {
                 if (string.Equals(Joined(clean, s, paragraphs[k].Last), folder, StringComparison.OrdinalIgnoreCase)) { at = k; from = s; break; }

@@ -181,6 +181,15 @@ public sealed class HostControl
         }
         var devices = request.RemoteFolderTrustDevices?.Distinct(StringComparer.Ordinal).ToList();
         if (devices is { Count: > LaunchProtocol.MaxChoices }) { throw new ArgumentException($"at most {LaunchProtocol.MaxChoices} devices can be approved"); }
+        // One change at a time, saved and applied together: two at once could save off and then
+        // apply the other's on, leaving devices able to answer that the file says may not.
+        lock (settingsGate) { return SettingsLocked(request, devices); }
+    }
+
+    readonly object settingsGate = new();
+
+    SettingsResult SettingsLocked(SettingsRequest request, List<string>? devices)
+    {
         HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices);
         // Answering folder-trust questions from devices applies at once, so it can be allowed
         // while a question waits; the rest when the host restarts.

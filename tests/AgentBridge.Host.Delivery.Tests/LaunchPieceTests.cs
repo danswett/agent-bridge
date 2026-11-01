@@ -573,7 +573,7 @@ public sealed class LaunchPieceTests : IDisposable
             "",
             " C:\\w",
             "",
-            " Quick safety check: " + new string('x', TrustProtocol.MaxText + 10) + tail,
+            " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this folder first. " + new string('x', TrustProtocol.MaxText + 10) + tail,
             "",
             " Claude Code'll be able to read, edit, and execute files here.",
             "",
@@ -602,6 +602,18 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Null(StartupQuestions.ReadTrust(AgentKind.Claude, [.. ClaudeAsks.Where(r => !r.Contains("execute files here", StringComparison.Ordinal))], "C:\\Users\\me\\agent-tests\\untrusted-4"));
         // Codex's, cut to its first sentence's end.
         Assert.Null(StartupQuestions.ReadTrust(AgentKind.Codex, [.. CodexAsks.Select(r => r.Replace("Trust this folder? Codex can read, edit, and run files here", "Trust this folder?"))], "C:\\Users\\me\\agent-tests\\claude-test"));
+        // Codex's, with its first sentence whole but the rest gone: that folder settings can run
+        // code without a model request is part of what a person is asked to accept.
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Codex, [.. CodexAsks[..7], "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.", .. CodexAsks[10..]], "C:\\Users\\me\\agent-tests\\claude-test"));
+    }
+
+    [Fact]
+    public void A_repository_root_under_Codexs_note_is_never_taken_for_the_folder_launched_in()
+    {
+        // Launched at the root, while the question on screen is for a folder under it.
+        string[] under = [.. CodexAsks.Select(r => r.Replace("C:\\Users\\me\\agent-tests\\claude-test", "C:\\Users\\me\\agent-tests\\claude-test\\web"))];
+        Assert.NotNull(StartupQuestions.ReadTrust(AgentKind.Codex, under, "C:\\Users\\me\\agent-tests\\claude-test\\web"));
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Codex, under, "C:\\Users\\me\\agent-tests"));
     }
 
     [Fact]
