@@ -774,6 +774,28 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_install_pressed_while_another_is_looked_at_is_looked_at_too_before_anything_downloads()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync();
+        const string Second = "9b8c7d6e-5f40-4321-8abc-def012345678";
+        others = "another profile's host (pid 77) runs from this installation";
+        var pressed = false;
+        // The second press comes while the first is being looked at.
+        othersProbe = () =>
+        {
+            if (!pressed) { pressed = true; _ = auto.Ask(UpdateAskKind.Install, Second); }
+            return others;
+        };
+
+        await auto.Ask(UpdateAskKind.Install, Press);
+        await Wait.UntilAsync(() => auto.State.Last?.Request == Second, "the second press answered");
+
+        Assert.Equal((0, 0), (updater.Checks, updater.Downloads));
+        Assert.Equal((UpdateOutcome.Refused, others), (auto.State.Last!.Outcome, auto.State.Last.Reason));
+    }
+
+    [Fact]
     public async Task A_development_copy_refuses_what_it_is_asked()
     {
         updater.InstalledVersion = null;

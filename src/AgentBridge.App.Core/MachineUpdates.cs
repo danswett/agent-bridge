@@ -40,7 +40,10 @@ public sealed class MachineUpdateViewModel : Observable
                 UpdatePhase.Installing => $"Installing {s.Available ?? "the update"}: its app and host restart\u2026",
                 UpdatePhase.Waiting => $"{s.Available ?? "The update"} installs when it can: {s.Waiting ?? "a session is busy"}.",
                 _ when s.Available is { } next => $"{next} is available (running {s.Current}).",
-                _ => $"Up to date: {s.Current}{(s.CheckedAt is { } at ? $", checked {Words.Ago(at, time.GetUtcNow())}" : "")}.",
+                // No check has finished there yet (automatic updates off, or the first one failed):
+                // nothing newer found is not the same as nothing newer.
+                _ when s.CheckedAt is null => $"Running {s.Current}; not checked for updates yet.",
+                _ => $"Up to date: {s.Current}, checked {Words.Ago(s.CheckedAt.Value, time.GetUtcNow())}.",
             };
         }
     }

@@ -443,3 +443,24 @@ test('a look that finds no updates, ending after its machine is shown, leaves wh
   assert.equal(fleet.update('a').available, '0.5.0');
   fleet.clear();
 });
+
+test("a machine shown whose update subscription failed is subscribed again at its next minute's look", async () => {
+  let now = 0;
+  const { hosts, fleet } = fleetWith({}, { now: () => now });
+  let tries = 0;
+  const client = {
+    synced: true,
+    on() {},
+    subscribeUpdate: async () => { tries++; if (tries === 1) { throw new Error('timed out'); } return readUpdateState(found); },
+  };
+  hosts.view({ id: 'v', client, machine: {}, capabilities: ['sessions.read', 'update'] });
+  await flush();
+  assert.equal(fleet.update('v'), null);
+
+  now = 60000;
+  fleet.probe();
+  await flush();
+  assert.equal(tries, 2);
+  assert.equal(fleet.update('v').available, '0.5.0');
+  fleet.clear();
+});

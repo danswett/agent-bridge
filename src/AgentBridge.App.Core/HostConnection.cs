@@ -220,9 +220,16 @@ public sealed class HostConnection : IAsyncDisposable
     // Events were dropped, and any of them may have been the host's status or usage, not
     // only sessions: all three are read again, each applied only if no newer event of its
     // kind arrived meanwhile, as when connecting.
-    async Task RecoverAsync(IClientChannel ch, HelloResult hello, CancellationToken ct)
+    async Task RecoverAsync(IClientChannel ch, HelloResult first, CancellationToken ct)
     {
         if (!Subscribes) { return; }
+        // What the host offers now, not at the connection's first hello: updates offered since
+        // (agent-ha-bridge stopped there) are read again, and ones withdrawn are not asked for.
+        var hello = await ch.HelloAsync(ct);
+        ui.Post(() =>
+        {
+            if (Hello is not null && !Hello.Capabilities.SequenceEqual(hello.Capabilities)) { Hello = hello; Changed?.Invoke(); }
+        });
         if (hello.Capabilities.Contains(HostOps.Capability))
         {
             var heardStatus = Interlocked.Read(ref statusEvents);
@@ -237,10 +244,13 @@ public sealed class HostConnection : IAsyncDisposable
         }
         if (hello.Capabilities.Contains(UpdateProtocol.Capability))
         {
+            // Subscribed again rather than read: a host first seen without updates was followed
+            // only from a refresh, and subscribing where it already is changes nothing there.
             var heardUpdate = Interlocked.Read(ref updateEvents);
-            var update = await ch.CallAsync<UpdateState>(UpdateProtocol.Get, ct: ct);
+            var update = await ch.CallAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
             ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; Changed?.Invoke(); } });
         }
+        else { ui.Post(() => { if (Update is not null) { Update = null; Changed?.Invoke(); } }); }
         await SubscribeSessionsAsync(ch, ct);
     }
     // What the host offers now, and its status (whose agent-ha-bridge note the host works out

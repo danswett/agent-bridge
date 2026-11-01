@@ -211,7 +211,8 @@ export class FleetStatus {
       this.#updateHeard.add(client);
       client.on('update', (s) => { if (mine()) { this.#setUpdate(id, s); } });
     }
-    client.subscribeUpdate().then((s) => { if (mine()) { this.#setUpdate(id, s); } }, () => {});
+    // One that failed (timed out, say) is tried again at the machine's next minute's look.
+    client.subscribeUpdate().then((s) => { if (mine()) { this.#setUpdate(id, s); } }, () => { if (mine()) { this.#updateFollowed.delete(id); } });
   }
 
   #note(id, machine) {
@@ -229,6 +230,7 @@ export class FleetStatus {
       if (link.phase !== 'open' || !link.client || this.now() - (this.#viewedAt.get(link.id) ?? 0) < this.probeEveryMs) { continue; }
       this.#viewedAt.set(link.id, this.now());
       this.hosts.refresh?.(link.id)?.catch(() => {});
+      this.#followUpdates(link);
     }
     for (const d of this.connection.presence) {
       if (d.kind !== 'host' || d.id === this.me || this.#followed(d.id) || this.#queued.has(d.id)) { continue; }

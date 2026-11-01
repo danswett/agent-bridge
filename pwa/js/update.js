@@ -76,7 +76,10 @@ export function updateLine(s, now = Date.now()) {
     case 'waiting': return `${s.available ?? 'The update'} installs when it can: ${sentence(s.waiting ?? 'a session is busy')}`;
     default:
       if (s.available) { return `${s.available} is available (running ${s.current ?? 'an older release'}).`; }
-      return `Up to date: ${s.current ?? 'unknown'}${s.checkedAt ? `, checked ${ago(s.checkedAt, now)}` : ''}.`;
+      // No check has finished there yet (automatic updates off, or the first one failed): nothing
+      // newer found is not the same as nothing newer.
+      if (!s.checkedAt) { return `Running ${s.current ?? 'an unknown release'}; not checked for updates yet.`; }
+      return `Up to date: ${s.current ?? 'unknown'}, checked ${ago(s.checkedAt, now)}.`;
   }
 }
 

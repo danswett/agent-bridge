@@ -243,6 +243,9 @@ public sealed class AutoUpdater
             {
                 installVetted = install;
                 if (await WhyNotNowAsync(asked: true) is { } refused) { Finish(ref installRequest, install, UpdateOutcome.Refused, refused); }
+                // Another press came while this one was looked at: it is looked at first, by the
+                // tick queued for it, before anything is downloaded for it.
+                if (Asked(UpdateAskKind.Install) is { } replaced && replaced != install) { return; }
             }
             var asked = Asked(UpdateAskKind.Install) is not null;
             var why = WhyNot(asked);

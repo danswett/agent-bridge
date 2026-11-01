@@ -95,6 +95,47 @@ public sealed class MachineUpdateTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_machine_whose_app_has_not_checked_yet_is_not_called_up_to_date()
+    {
+        var row = await ListedAsync();
+
+        // Automatic updates off there, and no check yet (or the first one failed).
+        await remoteHost.SendAsync(UpdateProtocol.Event, Found with { Available = null, CheckedAt = null });
+
+        await Wait.UntilAsync(() => row.StatusText == "Running 0.4.0; not checked for updates yet.", "the unchecked state");
+        Assert.True(TestUi.Read(() => row.CanCheck));
+    }
+
+    [Fact]
+    public async Task A_gap_after_updates_were_offered_on_a_refresh_reads_them_again()
+    {
+        await using var other = new FakeHost();
+        other.Capabilities.Remove(UpdateProtocol.Capability);
+        other.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("other-id", "Other PC", "windows", "0.4.0"), [.. other.Capabilities]));
+        other.On(UpdateProtocol.Subscribe, _ => Found);
+        other.Start();
+        await using var conn = new HostConnection(ct => LocalClient.ConnectAsync(other.Endpoint, TimeSpan.FromSeconds(1), ct), ui)
+        {
+            RetryDelay = TimeSpan.FromMilliseconds(100),
+            CapabilityRefresh = TimeSpan.FromMilliseconds(200),
+        };
+        conn.Start();
+        await Wait.UntilAsync(() => conn.State == LinkState.Connected && conn.Sessions.Complete, "the connection");
+        Assert.Null(TestUi.Read(() => conn.Update));
+
+        // agent-ha-bridge stopped there: the refresh follows its updates.
+        other.Capabilities.Add(UpdateProtocol.Capability);
+        await Wait.UntilAsync(() => conn.Update is not null, "updates followed from the refresh");
+
+        // Events lost, a progress among them: read again, though the first hello offered none.
+        other.On(UpdateProtocol.Subscribe, _ => Found with { Phase = UpdatePhase.Downloading, Progress = 70 });
+        foreach (var ch in other.Channels.OfType<LocalChannel>().Where(c => c.IsOpen).Distinct()) { ch.SkipEventSeq(3); }
+        await other.SendAsync(Events.SessionUpsert, Make.Session("s2"));
+
+        await Wait.UntilAsync(() => conn.Update?.Progress == 70, "the update state read again");
+    }
+
+    [Fact]
     public async Task Install_sends_the_machine_a_press_of_its_own_and_shows_why_it_was_refused()
     {
         remoteHost.On(UpdateProtocol.Install, _ => new UpdateCommandResult(UpdateAck.Refused, "only a person's phone, browser or Windows app can ask a machine to update"));
