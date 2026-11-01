@@ -238,6 +238,12 @@ a { color: var(--primary); }
 }
 .session.drop-before::before { top: -8px; }
 .session.drop-after::after { bottom: -8px; }
+/* High contrast drops background images and colours: the grip and the drop line keep system
+   colours so they can still be seen. */
+@media (forced-colors: active) {
+  .drag-handle { forced-color-adjust: none; color: CanvasText; }
+  .session.drop-before::before, .session.drop-after::after { forced-color-adjust: none; background: Highlight; }
+}
 .row-menu {
   position: absolute; right: 8px; top: 48px; z-index: 5; min-width: 168px;
   display: grid; padding: 4px; background: var(--surface); border: 1px solid var(--border);

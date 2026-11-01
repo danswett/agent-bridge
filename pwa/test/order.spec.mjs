@@ -194,17 +194,43 @@ test('blocked storage lists sessions most recent first, and Your order cannot be
   await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
 });
 
+test('storage that fills up while a card is drawn turns the list to Most recent at once', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__full = false;
+    const set = Storage.prototype.setItem;
+    Storage.prototype.setItem = function setItem(k, v) {
+      if (window.__full && String(k).endsWith('agent-bridge.app.order')) { throw new DOMException('full', 'QuotaExceededError'); }
+      return set.call(this, k, v);
+    };
+  });
+  await openDemo(page);
+  await page.evaluate(() => { window.__full = true; });
+  // An open card's update marks it seen, and that write is the one that fails.
+  await upsert(page, CODEX, { updatedAt: later() });
+  await expect(page.locator('#session-sort')).toHaveValue('recent');
+  await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
+});
+
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
-  async function longPress(page, id) {
+  async function longPress(page, id, holdMs = 650) {
     const fold = card(page, id).locator('.fold');
     const box = await fold.boundingBox();
     const at = { clientX: box.x + box.width / 2, clientY: box.y + box.height / 2, pointerId: 7, pointerType: 'touch', isPrimary: true, bubbles: true };
     await fold.dispatchEvent('pointerdown', at);
-    await page.waitForTimeout(650);
+    await page.waitForTimeout(holdMs);
     await fold.dispatchEvent('pointerup', at);
   }
+
+  test('a press held long after the menu opens still does not fold the card when the finger lifts', async ({ page }) => {
+    await openDemo(page);
+    await longPress(page, CODEX, 1800);
+    await expect(card(page, CODEX).getByRole('menu')).toBeVisible();
+    // The click a real finger's release brings.
+    await card(page, CODEX).locator('.fold').dispatchEvent('click');
+    await expect(card(page, CODEX).locator('.fold')).toHaveAttribute('aria-expanded', 'true');
+  });
 
   test('a long press opens Move up, Move down and Pin, and the moves survive a reload', async ({ page }) => {
     await openDemo(page);
@@ -283,6 +309,17 @@ for (const width of [900, 1440]) {
       const sort = await page.locator('#session-sort').boundingBox();
       expect(sort.x + sort.width).toBeLessThanOrEqual(head.x + head.width + 0.5);
       expect(sort.x).toBeGreaterThan(head.x + head.width / 2);
+    });
+
+    test('in high contrast the grip and the drop line keep system colours', async ({ page, browserName }) => {
+      test.skip(browserName !== 'chromium', 'forced colours are emulated in Chromium only');
+      await page.emulateMedia({ forcedColors: 'active' });
+      await openDemo(page);
+      await card(page, CLAUDE).hover();
+      const grip = card(page, CLAUDE).locator('.drag-handle');
+      expect(await grip.evaluate((e) => getComputedStyle(e).forcedColorAdjust)).toBe('none');
+      await card(page, CLAUDE).evaluate((e) => e.classList.add('drop-before'));
+      expect(await card(page, CLAUDE).evaluate((e) => getComputedStyle(e, '::before').forcedColorAdjust)).toBe('none');
     });
 
     test('group headings and Ended span the whole list, never sharing a row with a card', async ({ page }) => {

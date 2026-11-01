@@ -68,6 +68,7 @@ export class SessionListView {
 
   render() {
     const entries = this.sessions.list();
+    const sort = this.order.sort;
     const { pinned, sessions, ended } = this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, shows: this.shows, settled: this.settled });
     this.container.dataset.sort = this.order.sort;
     this.onSorted?.();
@@ -124,6 +125,8 @@ export class SessionListView {
       if (caret) { try { focused.setSelectionRange(...caret); } catch { /* not a text control */ } }
     }
     this.onRender?.(entries.length);
+    // A save that failed while drawing (storage full) turned the list to Most recent: draw it so.
+    if (this.order.sort !== sort) { this.schedule(); }
   }
 
   #head(id, text) {
@@ -229,8 +232,16 @@ export class SessionListView {
       press.off();
       this.#press = null;
       this.#swallowClick = true;
-      // A click may never come (the finger slid off): don't let one swallow the next tap.
-      setTimeout(() => { this.#swallowClick = false; }, 800);
+      // The tap the finger ends with must not fold the card, however long it is held; once it has
+      // lifted, a click that never came (the finger slid off) mustn't swallow the next tap.
+      const lifted = (ev) => {
+        if (ev.pointerId !== press.id) { return; }
+        document.removeEventListener('pointerup', lifted, true);
+        document.removeEventListener('pointercancel', lifted, true);
+        setTimeout(() => { this.#swallowClick = false; }, 400);
+      };
+      document.addEventListener('pointerup', lifted, true);
+      document.addEventListener('pointercancel', lifted, true);
       if (!this.#menu.open) { this.openMenu(card); }
     }, LONG_PRESS_MS);
     const moved = (ev) => {
