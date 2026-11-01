@@ -32,7 +32,7 @@ public sealed class UsageCache
             if (path is not null && File.Exists(path) && JsonSerializer.Deserialize<Saved>(File.ReadAllText(path), ProtocolJson.Options) is { Account: { Length: > 0 } a } s)
             {
                 account = a;
-                entries = [.. (s.Readings ?? []).Where(e => e is not null).Take(MaxAllowances)];
+                entries = [.. (s.Readings ?? []).Where(e => e is not null).Take(2 * MaxAllowances)];
                 saved = Serialize();
             }
         }
@@ -42,14 +42,19 @@ public sealed class UsageCache
 
     // live, every machine's readings now, with what is kept for the account. account: the one this
     // machine's host is signed in to, "" when it is signed out (nothing kept is shown), null while
-    // that is not known yet (what is kept is shown, and nothing is written). Returns the merge.
-    public UsageReport Merge(UsageReport live, string? account)
+    // that is not known yet (what is kept is shown, and nothing is written). members: the account's
+    // machines as the relay's roster has them (online or not), when it keeps one and it is this
+    // account's; a reading by any other was taken by a machine forgotten, perhaps while this app
+    // was closed. Returns each allowance's reading and any newer failure, not yet combined.
+    public UsageReport Merge(UsageReport live, string? account, IReadOnlySet<string>? members = null)
     {
         var oldest = time.GetUtcNow() - Kept;
         // Whatever passes on a forgotten machine's readings (another host that has not heard yet)
         // brings none of them back; and none past their 14 days takes part. Both are left out before
         // anything is merged: chosen first and dropped after, either would hide one that stands.
-        live = new UsageReport([.. live.Agents.Where(a => a.MeasuredAt >= oldest && (a.ReadBy is not { } by || !forgotten.Contains(by.Id)))]);
+        bool Stands(AgentUsage a) => a.MeasuredAt >= oldest
+            && (a.ReadBy is not { } by || (!forgotten.Contains(by.Id) && (members is null || members.Contains(by.Id))));
+        live = new UsageReport([.. live.Agents.Where(Stands)]);
         // Signed out: what was kept is the account's, and goes, file and all.
         if (account is "")
         {
@@ -64,8 +69,11 @@ public sealed class UsageCache
         }
         else if (account is null && this.account is null) { return live; }
         // Live first: of two readings taken at the same moment, the one a machine is offering now.
-        var merged = UsageMerge.Combine([live, new UsageReport([.. entries.Where(e => e.MeasuredAt >= oldest)])])
-            .OrderByDescending(e => e.MeasuredAt).Take(MaxAllowances).ToList();
+        // A reading and a newer failure are kept apart, each with its own time; as many allowances
+        // as a host keeps, the one read longest ago going first.
+        var merged = UsageMerge.Latest([live, new UsageReport([.. entries.Where(Stands)])])
+            .GroupBy(UsageShare.Key).OrderByDescending(g => g.Max(e => e.MeasuredAt)).Take(MaxAllowances)
+            .SelectMany(g => g).ToList();
         if (account is null) { return new UsageReport(merged); }
         entries = merged;
         Save();

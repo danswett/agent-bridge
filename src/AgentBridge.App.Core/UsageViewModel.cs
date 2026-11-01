@@ -28,22 +28,25 @@ public sealed class UsageViewModel : Observable
     public string Summary { get => summary; private set => Set(ref summary, value); }
     public bool IsEmpty => Rows.Count == 0;
 
-    // next: every machine's readings merged, each marked with the machine that took it. here: this
+    // next: every machine's readings, each marked with the machine that took it. here: this
     // machine's device id, whose own readings need no "read on". account: the account this
-    // machine's host is signed in to, "" signed out, null not known yet (UsageCache.Merge).
-    public void Update(UsageReport next, string? here = null, string? account = null)
+    // machine's host is signed in to, "" signed out, null not known yet. members: the account's
+    // machines by the relay's roster, when known (UsageCache.Merge).
+    public void Update(UsageReport next, string? here = null, string? account = null, IReadOnlySet<string>? members = null)
     {
-        (live, this.account, this.here) = (next, account, here);
-        report = cache?.Merge(next, account) ?? next;
+        (live, this.account, this.here, this.members) = (next, account, here, members);
+        report = cache?.Merge(next, account, members) ?? next;
         Refresh();
     }
+
+    IReadOnlySet<string>? members;
 
     // A machine forgotten from the account's roster: what it read is shown and kept no more (#50).
     public void Forget(string machineId)
     {
         if (cache is null) { return; }
         cache.Forget(machineId);
-        report = cache.Merge(live, account);
+        report = cache.Merge(live, account, members);
         Refresh();
     }
 
@@ -57,9 +60,12 @@ public sealed class UsageViewModel : Observable
         Rows.Clear();
         // One row per allowance even from one machine: a further Copilot account listed that is, or
         // becomes, the signed-in one (usage.copilotAccounts) is one allowance read twice. Where
-        // readings are kept, none past their 14 days, whether or not anything has been heard since.
+        // readings are kept, none past their 14 days, whether or not anything has been heard since:
+        // left out before they are merged, so a reading that has just passed them does not take a
+        // newer failure kept beside it along.
         var oldest = now - UsageCache.Kept;
-        foreach (var a in UsageMerge.Merge([report]).Agents.Where(a => cache is null || a.MeasuredAt >= oldest).OrderByDescending(a => Headline(a) ?? 0)) { Rows.Add(new UsageRowViewModel(a, now, here)); }
+        var shown = cache is null ? report : new UsageReport([.. report.Agents.Where(a => a.MeasuredAt >= oldest)]);
+        foreach (var a in UsageMerge.Merge([shown]).Agents.OrderByDescending(a => Headline(a) ?? 0)) { Rows.Add(new UsageRowViewModel(a, now, here)); }
         var figures = Rows.Where(r => r.Headline is not null).Select(r => $"{r.Label} {Math.Round(r.Headline!.Value)}%").ToList();
         Summary = figures.Count > 0 ? string.Join(" · ", figures) : "No usage reported yet";
         Raise(nameof(IsEmpty));

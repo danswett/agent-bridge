@@ -132,15 +132,17 @@ Agent-ha-bridge's usage card, kept exactly:
 * Times move on without updates: a client redraws relative times at least every 30 s while
   visible.
 * **Kept readings and where they came from** (#172). A client marks each host's own readings
-  with that host (`readBy`), and keeps the last reading of each allowance for the signed-in
-  account between runs: the Windows app in its local state (`<profile>-usage.json`), the PWA in
-  IndexedDB. Kept readings merge with live ones by the rules above, live first, and go after 14
-  days (none is shown past that, whether or not anything has been heard since, and none that old
-  takes part in the merge, so it never hides a current failure; at most 32 are kept). Only another
-  machine the client lists for the signed-in account adds to what is kept, and once the Windows
-  app's own host has changed account, what it passed on before waits for its next report; a forgotten machine's
-  go with it, even where another host still passes them on, and
-  signing out deletes them. Each row says
+  with that host (`readBy`), and keeps the last reading of each allowance, and any failure newer
+  than it, apart and each with its own time, for the signed-in account between runs: the Windows
+  app in its local state (`<profile>-usage.json`), the PWA in IndexedDB. Kept readings merge with
+  live ones by the rules above, live first, and go after 14 days (none is shown past that, whether
+  or not anything has been heard since, and none that old takes part in the merge, so it never
+  hides a current failure; at most 32 allowances are kept). Only another machine the client lists
+  for the signed-in account adds to what is kept, and once the Windows app's own host has changed
+  account, what it passed on before waits for its next report. A forgotten machine's go with it,
+  even where another host still passes them on; where the relay keeps a roster, so do those of any
+  machine in neither the roster nor presence (one forgotten while the client was closed). Signing
+  out deletes them. Each row says
   `read on <machine>` beside its age, in the stale colour when the reading is stale; the Windows
   app leaves it out for the machine it runs on. A device that has never seen a reading of an
   allowance shows nothing for it.

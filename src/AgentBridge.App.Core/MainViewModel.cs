@@ -380,13 +380,37 @@ public sealed partial class MainViewModel : Observable
                     m.IsLocal && heldOver is not null ? new UsageReport([.. m.Host.Usage.Agents.Where(a => a.ReadBy is null)]) : m.Host.Usage,
                     m.Host.Hello?.Machine).Agents)]),
             LocalMachineId,
-            account);
+            account,
+            roster is { } r && account is { Length: > 0 } && (r.From is null || r.From == account) ? r.Members : null);
     }
 
     // The account usage was last kept for, and this machine's host's report from before it named
     // the one it is on now (UpdateUsage).
     string? usageAccount;
     UsageReport? heldOver;
+    // The account's machines as the relay's roster last had them, online or not, and the account
+    // that roster is of (null: a link that does not say).
+    (IReadOnlySet<string> Members, string? From)? roster;
+
+    // On the UI thread, from the fleet, whenever it lists the account's machines: what was read by
+    // any machine not in a relay's roster was read by one forgotten, perhaps while this app was
+    // closed, and is shown and kept no more (#50, #172). members: null while there is no current
+    // roster, which then holds nothing back.
+    internal void Roster(IEnumerable<string>? members, string? from)
+    {
+        if (members is null)
+        {
+            if (roster is null) { return; }
+            roster = null;
+            UpdateUsage();
+            return;
+        }
+        var next = new HashSet<string>(members, StringComparer.Ordinal);
+        if (LocalMachineId is { } me) { next.Add(me); }
+        if (roster is { } r && r.From == from && r.Members.SetEquals(next)) { return; }
+        roster = (next, from);
+        UpdateUsage();
+    }
 
     // On the UI thread, from the fleet: a machine forgotten from the account's roster, from this
     // device or another, takes its usage readings with it (#50, #172).

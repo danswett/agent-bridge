@@ -213,6 +213,41 @@ test('a machine forgotten while what was kept is being read is not brought back 
   assert.deepEqual(kept, []);
 });
 
+test('a machine forgotten while the page was closed goes once the roster is known, whichever comes first', () => {
+  const byGone = { readBy: { id: 'gone-id', name: 'Old laptop' } };
+  const byVm = { readBy: { id: 'vm-id', name: 'Rehearsal VM' } };
+  for (const rosterFirst of [false, true]) {
+    const book = new UsageBook({ now: () => NOW });
+    let kept = null;
+    if (rosterFirst) { book.roster(['desk-id', 'vm-id']); }
+    book.useCache({ entries: [claude(byGone), claude({ ...byVm, accountKey: 'aaaabbbbcccc' })], save: (e) => { kept = e; } });
+    if (!rosterFirst) { book.roster(['desk-id', 'vm-id']); }
+    assert.deepEqual(book.entries().map(readOn), ['read on Rehearsal VM']);
+    assert.deepEqual(kept.map(readOn), ['read on Rehearsal VM']);
+  }
+  // A relay without a roster says nothing either way.
+  const book = new UsageBook({ now: () => NOW });
+  book.useCache({ entries: [claude(byGone)], save: () => {} });
+  book.roster(null);
+  assert.equal(book.entries().length, 1);
+});
+
+test('a failure kept beside a reading keeps its own time, and stands once the reading has passed two weeks', () => {
+  let kept = null;
+  const book = new UsageBook({ now: () => NOW });
+  book.useCache({ entries: [], save: (e) => { kept = e; } });
+  book.set('vm-id', { agents: [claude({ measuredAt: iso(-14 * 24 * H + H) })] }, 'Rehearsal VM');
+  book.set('desk-id', { agents: [claude({ windows: [], source: 'none', measuredAt: iso(-60000), error: 'rate limited' })] }, 'Desk');
+  assert.deepEqual(kept.map((e) => [hasWindows(e), e.measuredAt]), [[true, iso(-14 * 24 * H + H)], [false, iso(-60000)]]);
+
+  // Two hours on, another visit: the reading has gone, its failure has not.
+  const later = new UsageBook({ now: () => NOW + 2 * H });
+  later.useCache({ entries: JSON.parse(JSON.stringify(kept)), save: () => {} });
+  assert.deepEqual(later.entries().map((e) => e.error), ['rate limited']);
+});
+
+const hasWindows = (e) => e.windows.length > 0;
+
 test('a machine whose discovery is held says so on its status line, as agent-ha-bridge did', () => {
   assert.equal(machineStatus({ sessions: 2, hostVersion: '0.1.0', held: 'an unrecognised copilot process (pid 4120)' }),
     '2 sessions \u00b7 0.1.0 \u00b7 discovery held: an unrecognised copilot process (pid 4120)');

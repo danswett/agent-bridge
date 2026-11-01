@@ -528,6 +528,9 @@ function begin(account) {
     const now = connection.known ? offlineNow() : null;
     for (const id of vanished(lastKnown, now, connection.presence.map((d) => d.id))) { dropMachine(id); }
     lastKnown = now;
+    // The account's machines, online or not, in one reading: usage read by any other was read by a
+    // machine forgotten, perhaps while this page was closed (#172). None where the relay keeps no roster.
+    book.roster(connection.known ? [...connection.presence.map((d) => d.id), ...connection.known.map((k) => k.id)] : null);
     // A machine that comes back takes its arm, and any refusal shown for it, with it.
     forgets.reconcile(now ?? []);
   });

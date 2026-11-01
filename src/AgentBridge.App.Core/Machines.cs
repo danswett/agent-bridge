@@ -213,6 +213,18 @@ public sealed class Fleet : IAsyncDisposable
         if (link.Account != now || link.State != state) { return; }
         var presence = string.Join(',', present.Select(h => h.Id).Order(StringComparer.Ordinal));
         if (presence != Presence) { Presence = presence; PresenceChanged?.Invoke(); }
+        // Another account's machines all go before this one's are listed: a device id in both would
+        // otherwise stay as it was, listed for the last account, with what it reported for that one.
+        var switched = now != account;
+        if (switched)
+        {
+            foreach (var (id, gone) in machines.ToList())
+            {
+                machines.Remove(id);
+                main.Remove(gone.Key);
+                _ = gone.DisposeAsync().AsTask();
+            }
+        }
         foreach (var (id, h) in hosts)
         {
             if (machines.TryGetValue(id, out var known)) { known.PresenceName = h.Name; continue; }
@@ -229,9 +241,13 @@ public sealed class Fleet : IAsyncDisposable
         // it was. Otherwise the list is the answer: presence while connected, and none when there is
         // no account to find them through (signed out, refused), the account is another one now, or
         // another copy of the app shows them instead.
-        var switched = now != account;
         account = now;
         if (switched) { DropLoopback(); AccountChanged?.Invoke(); }
+        // The roster and presence of one reading: every machine the account has, online or not, so
+        // usage read by any other (forgotten while this app was closed, too) goes. None while there
+        // is no current one (reconnecting, elsewhere, refused): an old list would hide a machine that
+        // joined since, and the hosts already leave out what forgotten machines read.
+        main.Roster(state == FleetState.Connected && offline is not null ? [.. present.Select(h => h.Id), .. offline.Select(k => k.Id)] : null, from);
         if (state == FleetState.Connecting && !switched) { return; }
         // This machine's own host is never listed: the banner says when it is not running.
         var listed = state == FleetState.Connected ? (offline ?? []).Where(k => k.Id != me && !hosts.ContainsKey(k.Id)).ToList() : [];
@@ -578,7 +594,19 @@ public static class UsageMerge
     }
 
     // One entry per allowance, as Merge, without the names it adds for showing them.
-    public static List<AgentUsage> Combine(IEnumerable<UsageReport> reports)
+    public static List<AgentUsage> Combine(IEnumerable<UsageReport> reports) =>
+        [.. Slots(reports).Select(s => s.Reading is not { } r ? s.Failure!
+            : s.Failure is { Error: { Length: > 0 } why } f && f.MeasuredAt > r.MeasuredAt ? r with { Error = why } : r)];
+
+    // Each allowance's latest reading, and its latest failure where that is newer, as separate
+    // entries with their own times: what is kept (#172). Combined into one, a failure's error would
+    // take the reading's time, and go with it at 14 days while the failure itself still stands.
+    public static List<AgentUsage> Latest(IEnumerable<UsageReport> reports) =>
+        [.. Slots(reports).SelectMany(s => s.Reading is not { } r ? [s.Failure!]
+            : s.Failure is { } f && f.MeasuredAt > r.MeasuredAt ? new[] { r, f } : [r])];
+
+    // Of two taken at the same moment, the one from the report given first.
+    static IEnumerable<(AgentUsage? Reading, AgentUsage? Failure)> Slots(IEnumerable<UsageReport> reports)
     {
         var slots = new Dictionary<string, (AgentUsage? Reading, AgentUsage? Failure)>(StringComparer.Ordinal);
         var order = new List<string>();
@@ -593,8 +621,7 @@ public static class UsageMerge
             else if (slot.Failure is null || slot.Failure.MeasuredAt < a.MeasuredAt) { slot.Failure = a; }
             slots[key] = slot;
         }
-        return [.. order.Select(k => slots[k]).Select(s => s.Reading is not { } r ? s.Failure!
-            : s.Failure is { Error: { Length: > 0 } why } f && f.MeasuredAt > r.MeasuredAt ? r with { Error = why } : r)];
+        return order.Select(k => slots[k]);
     }
 
     // A machine's own readings, marked as taken by it, so a client can say where each one came from

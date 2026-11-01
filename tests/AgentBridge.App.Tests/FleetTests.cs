@@ -509,6 +509,62 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_reading_kept_from_a_machine_the_first_roster_does_not_list_goes()
+    {
+        // This machine's host once passed on a reading by a laptop; it has been forgotten since,
+        // while this app was closed, so no later list of offline machines will ever drop it.
+        var byGone = new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = "c1a0de000000", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }], ReadBy = new UsageReader(new string('a', 32), "Old laptop") };
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        localHost.On(UsageProtocol.Subscribe, _ => new UsageReport([byGone]));
+        await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await localHost.SendAsync(UsageProtocol.Update, new UsageReport([byGone]));
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 1 && local.Status?.Account?.AccountId == "1", "the laptop's reading, kept");
+        await localHost.SendAsync(UsageProtocol.Update, UsageReport.Empty);
+
+        // The relay's roster: the build server online, nothing offline.
+        link.Known = [];
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 0, "the forgotten laptop's reading to go");
+        var restarted = new UsageViewModel(clock, new UsageCache(cacheFile, clock));
+        restarted.Update(UsageReport.Empty, "host-id", account: "1");
+        Assert.Empty(restarted.Rows);
+
+        // Another copy of the app takes the relay link: with no current roster, a machine that joins
+        // meanwhile is not held back by the old one.
+        link.Set(FleetState.Elsewhere);
+        var byNew = byGone with { AccountKey = "c1a0de000002", ReadBy = new UsageReader(new string('c', 32), "New desktop") };
+        await localHost.SendAsync(UsageProtocol.Update, new UsageReport([byNew]));
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 1, "the new machine's reading");
+    }
+
+    [Fact]
+    public async Task A_machine_listed_for_both_accounts_shows_its_usage_for_the_next_when_the_switch_is_first_seen_connected()
+    {
+        var claude = new UsageReport([new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = "c1a0de000000", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }] }]);
+        link.AccountId = "1";
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        localHost.On(UsageProtocol.Subscribe, _ => UsageReport.Empty);
+        remoteHost.On(UsageProtocol.Subscribe, _ => claude);
+        await BothMachinesAsync();
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await remoteHost.SendAsync(UsageProtocol.Update, claude);
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 1 && local.Status?.Account?.AccountId == "1", "the build server's reading, for account 1");
+
+        // Both this machine's host and the fleet are on account 2 by the time the fleet looks, and
+        // the build server is listed there too.
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("other", "2") };
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await Wait.UntilAsync(() => local.Status?.Account?.AccountId == "2", "this machine's new account");
+        link.Switch(announce: false);
+        link.AccountId = "2";
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 1, "the build server's reading, for account 2");
+    }
+
+    [Fact]
     public async Task Other_machines_readings_are_not_kept_for_the_account_this_machine_switched_to_while_the_fleet_follows()
     {
         // Two other machines on account 1, each reading its own Claude account.

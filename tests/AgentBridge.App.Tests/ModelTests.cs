@@ -162,6 +162,30 @@ public sealed class UsageTests
     }
 
     [Fact]
+    public void A_failure_kept_beside_a_reading_stands_once_the_reading_has_passed_two_weeks_on_redraw_and_after_a_restart()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "abuf-" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            var clock = new FakeTimeProvider(Now);
+            var vm = new UsageViewModel(clock, new UsageCache(file, clock));
+            var reading = Agent("Laptop", 30, Now - UsageCache.Kept + TimeSpan.FromHours(1)) with { ReadBy = new UsageReader(new string('a', 32), "Laptop") };
+            var failed = Agent("Laptop", -1, Now.AddMinutes(-1), "rate limited") with { ReadBy = new UsageReader(new string('b', 32), "Desk") };
+            vm.Update(new UsageReport([reading, failed]), account: "1");
+            Assert.Equal((30d, "rate limited"), (Assert.Single(vm.Rows).Headline, vm.Rows[0].Error));
+
+            // Two hours on, nothing heard since: the reading has passed its two weeks, the failure has not.
+            clock.Advance(TimeSpan.FromHours(2));
+            vm.Refresh();
+            Assert.Equal((null, "rate limited"), (Assert.Single(vm.Rows).Headline, vm.Rows[0].Error));
+            var restarted = new UsageViewModel(clock, new UsageCache(file, clock));
+            restarted.Update(UsageReport.Empty, account: "1");
+            Assert.Equal("rate limited", Assert.Single(restarted.Rows).Error);
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
     public void A_reading_past_two_weeks_does_not_hide_a_current_failure_of_the_same_allowance()
     {
         var clock = new FakeTimeProvider(Now);

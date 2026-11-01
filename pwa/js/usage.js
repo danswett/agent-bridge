@@ -96,6 +96,29 @@ export function mergeUsage(reports) {
 // app keeps of an account's usage between visits. Of two readings taken at the same moment, the
 // one from the report given first.
 export function combineUsage(reports) {
+  const entries = [];
+  for (const { reading, failure } of usageSlots(reports)) {
+    if (!reading) { entries.push(failure); continue; }
+    // The reading is drawn; a failure newer than it is still the latest word on why nothing
+    // fresher exists, shown only once the reading is stale.
+    entries.push(failure?.error && failure.at > reading.at ? { ...reading, error: failure.error } : reading);
+  }
+  return entries;
+}
+
+// Each allowance's latest reading, and its latest failure where that is newer, as separate entries
+// with their own times: what is kept (#172). Combined into one, a failure's error would take the
+// reading's time, and go with it at 14 days while the failure itself still stands.
+export function latestUsage(reports) {
+  const entries = [];
+  for (const { reading, failure } of usageSlots(reports)) {
+    if (reading) { entries.push(reading); }
+    if (failure && (!reading || failure.at > reading.at)) { entries.push(failure); }
+  }
+  return entries;
+}
+
+function usageSlots(reports) {
   const slots = new Map();
   for (const report of reports) {
     for (const a of report?.agents ?? []) {
@@ -107,14 +130,7 @@ export function combineUsage(reports) {
       slots.set(key, slot);
     }
   }
-  const entries = [];
-  for (const { reading, failure } of slots.values()) {
-    if (!reading) { entries.push(failure); continue; }
-    // The reading is drawn; a failure newer than it is still the latest word on why nothing
-    // fresher exists, shown only once the reading is stale.
-    entries.push(failure?.error && failure.at > reading.at ? { ...reading, error: failure.error } : reading);
-  }
-  return entries;
+  return slots.values();
 }
 
 export function severity(percent) {
@@ -205,6 +221,7 @@ export class UsageBook {
   // Machines forgotten (#50) while this page is open: what they read is dropped even where another
   // host still passes it on, until they come back.
   #forgotten = new Set();
+  #members = null;
 
   constructor({ now = () => Date.now() } = {}) { this.now = now; }
 
@@ -244,8 +261,27 @@ export class UsageBook {
     return [...this.#reports].map(([id, { report, name }]) => ({
       agents: report.agents
         .map((a) => (a.readBy ? a : { ...a, readBy: { id, name: name ?? id.slice(0, 8) } }))
-        .filter((a) => !this.#forgotten.has(a.readBy.id)),
+        .filter((a) => this.#stands(a)),
     }));
+  }
+
+  // Whether what a machine read is still the account's: not forgotten while this page is open, and,
+  // where the relay keeps a roster, one of its machines (one forgotten while the page was closed is
+  // in neither presence nor the roster).
+  #stands(a) {
+    const id = a.readBy?.id;
+    return !id || (!this.#forgotten.has(id) && (!this.#members || this.#members.has(id)));
+  }
+
+  // The account's machines, online or not, as the relay's roster and presence have them; null
+  // where the relay keeps no roster.
+  roster(ids) {
+    const next = Array.isArray(ids) ? new Set(ids) : null;
+    const same = next === null ? this.#members === null : this.#members !== null && next.size === this.#members.size && [...next].every((id) => this.#members.has(id));
+    if (same) { return; }
+    this.#members = next;
+    this.#keep();
+    this.#emit();
   }
 
   // None past its 14 days goes into a merge: chosen first and dropped after, an expired reading
@@ -255,20 +291,25 @@ export class UsageBook {
     return agents.filter((a) => (Date.parse(a.measuredAt ?? '') || 0) >= oldest);
   }
 
+  #current() {
+    return [...this.#live().map((r) => ({ agents: this.#fresh(r.agents) })), { agents: this.#fresh(this.#kept).filter((a) => this.#stands(a)) }];
+  }
+
   // Where readings are kept, none past their 14 days, whether or not anything has been heard since:
   // the view redraws on a timer, and a machine that went offline sends nothing more.
   entries() {
     if (!this.#cache) { return mergeUsage([...this.#live(), { agents: this.#kept }]); }
-    return mergeUsage([...this.#live().map((r) => ({ agents: this.#fresh(r.agents) })), { agents: this.#fresh(this.#kept) }]);
+    return mergeUsage(this.#current());
   }
 
   // What is kept for the signed-in account (as the store gave it back), and where to keep it:
   // save(entries) is called with every change to what is kept.
   useCache({ entries = [], save = () => {} } = {}) {
-    const loaded = readUsage({ agents: Array.isArray(entries) ? entries.slice(0, KEPT_MAX) : [] }).agents;
+    // A reading and a newer failure of each allowance.
+    const loaded = readUsage({ agents: Array.isArray(entries) ? entries.slice(0, 2 * KEPT_MAX) : [] }).agents;
     // A machine forgotten while the store was being read takes what it read with it here too, and
     // the store hears of that: what was saved is what was loaded, not what is kept.
-    this.#kept = this.#fresh(loaded).filter((a) => !this.#forgotten.has(a.readBy?.id));
+    this.#kept = this.#fresh(loaded).filter((a) => this.#stands(a));
     this.#saved = JSON.stringify(loaded);
     this.#cache = { save };
     this.#keep();
@@ -277,11 +318,17 @@ export class UsageBook {
 
   #keep() {
     if (!this.#cache) { return; }
-    this.#kept = combineUsage([...this.#live().map((r) => ({ agents: this.#fresh(r.agents) })), { agents: this.#fresh(this.#kept) }])
-      // As many allowances as a host keeps (PeerUsage), the one read longest ago going first.
-      .sort((x, y) => y.at - x.at)
-      .slice(0, KEPT_MAX)
-      .map(({ key, at, ...a }) => a);
+    // Each allowance's reading and any newer failure, apart, each with its own time; as many
+    // allowances as a host keeps (PeerUsage), the one read longest ago going first.
+    const groups = new Map();
+    for (const e of latestUsage(this.#current())) {
+      const g = groups.get(e.key) ?? { at: 0, entries: [] };
+      g.at = Math.max(g.at, e.at);
+      g.entries.push(e);
+      groups.set(e.key, g);
+    }
+    this.#kept = [...groups.values()].sort((x, y) => y.at - x.at).slice(0, KEPT_MAX)
+      .flatMap((g) => g.entries).map(({ key, at, ...a }) => a);
     const text = JSON.stringify(this.#kept);
     // Every report from every machine passes through here; most change nothing kept.
     if (text === this.#saved) { return; }
@@ -297,6 +344,7 @@ export class UsageBook {
     this.#cache = null;
     this.#saved = '[]';
     this.#forgotten.clear();
+    this.#members = null;
     if (had) { this.#emit(); }
   }
 }
