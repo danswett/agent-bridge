@@ -61,8 +61,8 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         }
         finally
         {
-            Interlocked.Decrement(ref downloads);
-            Progress = null;
+            // Settings' and the automatic one's may overlap: the progress goes with the last.
+            if (Interlocked.Decrement(ref downloads) == 0) { Progress = null; }
             Raise();
         }
     }

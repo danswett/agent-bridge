@@ -38,6 +38,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public string? Ready { get; set; }
         public Exception? ApplyFails;
         public Exception? DownloadFails;
+        public Exception? CheckFails;
         // Held until released, as a check that takes its time.
         public TaskCompletionSource? CheckGate;
         public string? InstalledVersion { get; set; } = "0.1.0";
@@ -46,6 +47,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         {
             Checks++;
             if (CheckGate is { } gate) { await gate.Task; }
+            if (CheckFails is { } e) { throw e; }
             return Found;
         }
         public Task DownloadAsync(Action<int> progress)
@@ -899,6 +901,61 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         time.Advance(AutoUpdater.CheckAgainAfter);
         await AskedAsync(UpdateAskKind.Check, "1b2c3d4e-5f60-4b7c-8d9e-0f1a2b3c4d5e");
         Assert.Equal(2, updater.Checks);
+    }
+
+    [Fact]
+    public async Task A_check_from_Settings_that_succeeds_ends_the_failure_a_press_soon_after_would_be_answered_with()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        shared = new ObservedUpdater(updater, time);
+        updater.CheckFails = new HttpRequestException("No such host is known.");
+        await StartAsync();
+        await AskedAsync(UpdateAskKind.Check);
+        Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
+
+        // Settings checks, a few seconds on, and the feed answers this time.
+        updater.CheckFails = null;
+        time.Advance(TimeSpan.FromSeconds(5));
+        Assert.Equal("0.2.0", await shared.CheckAsync());
+        await AskedAsync(UpdateAskKind.Check, "9b8c7d6e-5f40-4321-8abc-def012345678");
+
+        Assert.Equal(Press, auto.State.Last!.Request);
+        Assert.Equal("0.2.0", auto.State.Available);
+        Assert.Equal(2, updater.Checks);
+    }
+
+    sealed class GatedDownloads : IUpdater
+    {
+        public readonly Queue<TaskCompletionSource> Gates = new();
+        public string? InstalledVersion => "0.1.0";
+        public string? PendingNotes => null;
+        public string? Ready => null;
+        public Task<string?> CheckAsync() => Task.FromResult<string?>("0.2.0");
+        public async Task DownloadAsync(Action<int> progress)
+        {
+            var gate = new TaskCompletionSource();
+            Gates.Enqueue(gate);
+            progress(40);
+            await gate.Task;
+        }
+        public void ApplyAndRestart() { }
+    }
+
+    [Fact]
+    public async Task Overlapping_downloads_from_Settings_and_the_app_keep_reporting_progress_until_the_last_ends()
+    {
+        var inner = new GatedDownloads();
+        var observed = new ObservedUpdater(inner, time);
+        var first = observed.DownloadAsync(_ => { });
+        var second = observed.DownloadAsync(_ => { });
+
+        inner.Gates.Dequeue().SetResult();
+        await first;
+
+        Assert.Equal((UpdatePhase.Downloading, (int?)40), (observed.Phase, observed.Progress));
+        inner.Gates.Dequeue().SetResult();
+        await second;
+        Assert.Equal((UpdatePhase.Idle, (int?)null), (observed.Phase, observed.Progress));
     }
 
     [Fact]

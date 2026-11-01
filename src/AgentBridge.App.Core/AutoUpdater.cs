@@ -371,10 +371,11 @@ public sealed class AutoUpdater
         string? found;
         try
         {
-            // A check a moment ago answers: its release, or its failure.
+            // A check a moment ago answers: its release, or its failure, unless one from Settings
+            // has succeeded since.
             if (lastCheckAt is { } at && now - at < CheckAgainAfter)
             {
-                if (lastCheckFailed is { } failed) { throw new InvalidOperationException(failed); }
+                if (lastCheckFailed is { } failed && !(updater.CheckedAt >= at)) { throw new InvalidOperationException(failed); }
                 found = updater.Found;
             }
             else
