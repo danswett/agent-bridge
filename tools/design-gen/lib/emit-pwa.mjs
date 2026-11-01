@@ -55,15 +55,15 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').repl
 // A part's markup in the sprite: as written, but with token-class colours drawn from the
 // token's custom property, which crosses into a <use> where a class selector cannot.
 function partMarkup(node, indent) {
-  if (node.tag === 'g') {
-    const attrs = Object.entries(node.attrs).map(([k, v]) => ` ${k}="${esc(v)}"`).join('');
-    return `${indent}<g${attrs}>\n${node.children.map((c) => partMarkup(c, `${indent}  `)).join('\n')}\n${indent}</g>`;
-  }
-  const token = node.classes.find((c) => c in TOKEN_CLASSES);
+  // A group's own paint is substituted too: its class reaches the parts that inherit it.
+  const token = (node.allClasses ?? node.classes).find((c) => c in TOKEN_CLASSES);
   const attrs = Object.entries(node.attrs).map(([k, v]) => {
     if (token && (k === 'fill' || k === 'stroke') && v !== 'none' && v !== 'currentColor') { return ` ${k}="var(--ab-glyph-${TOKEN_CLASSES[token]})"`; }
     return ` ${k}="${esc(v)}"`;
   }).join('');
+  if (node.tag === 'g') {
+    return `${indent}<g${attrs}>\n${node.children.map((c) => partMarkup(c, `${indent}  `)).join('\n')}\n${indent}</g>`;
+  }
   return `${indent}<${node.tag}${attrs}/>`;
 }
 

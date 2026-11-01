@@ -4,6 +4,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parsePathData, formatCommands, readDesignSvg, parts } from '../lib/svg.mjs';
 import { repoRoot } from '../generate.mjs';
+import { spriteSvg } from '../lib/emit-pwa.mjs';
 
 const scratch = path.join(repoRoot, 'tools', 'design-gen', '.scratch', 'svg');
 function svgFile(name, body, root = 'viewBox="0 0 16 16"') {
@@ -47,4 +48,22 @@ test('a class the design README does not define is refused, since it would quiet
 test('a closed shape with no fill is refused, since SVG would fill it black', () => {
   assert.throws(() => readDesignSvg(svgFile('nofill', '<circle cx="8" cy="8" r="5" stroke="currentColor"/>'), 'glyph'), /needs a fill/);
   assert.doesNotThrow(() => readDesignSvg(svgFile('line', '<path d="M2 2l4 4" stroke="currentColor"/>'), 'glyph'));
+});
+
+test('numbers after a Z are refused, rather than read as a Z repeated without end', () => {
+  assert.throws(() => parsePathData('M0 0Z1 1'), /expected a command/);
+  assert.equal(formatCommands(parsePathData('M0 0L1 1ZM2 2L3 3Z')), 'M0,0 L1,1 Z M2,2 L3,3 Z');
+});
+
+test('a part keeps the paint opacity it inherits from its group, and one XAML cannot reproduce is refused', () => {
+  const faint = readDesignSvg(svgFile('faint', '<g stroke-opacity="0.3"><circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" opacity="0.5"/></g>'), 'glyph');
+  assert.equal(parts(faint)[0].opacity, 0.15);
+  assert.throws(() => readDesignSvg(svgFile('mixed', '<circle cx="8" cy="8" r="5" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-opacity="0.8"/>'), 'glyph'), /opacities must match/);
+});
+
+test('a token class on a group draws the group\'s paint from the token in the sprite', () => {
+  const svg = readDesignSvg(svgFile('inkgroup', '<g class="ink" stroke="#14100A"><path d="M8 4v4"/></g>'), 'glyph');
+  const sprite = spriteSvg([svg], []);
+  assert.match(sprite, /<g class="ink" stroke="var\(--ab-glyph-ink\)">/);
+  assert.ok(!sprite.includes('#14100A'));
 });

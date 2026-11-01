@@ -73,11 +73,12 @@ export function parsePathData(d, file = 'path') {
   let x = 0, y = 0, sx = 0, sy = 0, cmd = null;
   skip();
   while (i < d.length) {
-    if (/[a-zA-Z]/.test(d[i])) { cmd = d[i++]; } else if (!cmd) { throw new Error(`${file}: path data must start with a command: "${d}"`); } else if (cmd === 'M') { cmd = 'L'; } else if (cmd === 'm') { cmd = 'l'; }
+    if (/[a-zA-Z]/.test(d[i])) { cmd = d[i++]; } else if (!cmd) { throw new Error(`${file}: expected a command at ${i} in "${d}"`); } else if (cmd === 'M') { cmd = 'L'; } else if (cmd === 'm') { cmd = 'l'; }
     const C = cmd.toUpperCase();
     if (!(C in ARGS) || 'STQ'.includes(C)) { throw new Error(`${file}: path command ${cmd} is not in the design subset`); }
     const rel = cmd !== C;
-    if (C === 'Z') { out.push({ c: 'Z', p: [] }); x = sx; y = sy; skip(); continue; }
+    // Z takes no numbers, so one after it is an error, not a Z repeated without end.
+    if (C === 'Z') { out.push({ c: 'Z', p: [] }); x = sx; y = sy; cmd = null; skip(); continue; }
     if (C === 'A') {
       const [rx, ry, rot] = [number(), number(), number()];
       const [large, sweep] = [flag(), flag()];
@@ -241,7 +242,7 @@ export function readDesignSvg(file, kind) {
     const myOps = node.attrs.transform ? [...ops, ...parseTransform(node.attrs.transform, file)] : ops;
     if (node.tag === 'g') {
       if (node.attrs.opacity !== undefined) { throw new Error(`${file}: opacity on a group is not in the design subset`); }
-      return { tag: 'g', attrs: node.attrs, classes: own, children: node.children.map((c) => walk(c, style, all, myOps)) };
+      return { tag: 'g', attrs: node.attrs, classes: own, allClasses: all, children: node.children.map((c) => walk(c, style, all, myOps)) };
     }
     if (!SHAPES.has(node.tag)) { throw new Error(`${file}: <${node.tag}> is not in the design subset`); }
     if (node.children.length) { throw new Error(`${file}: <${node.tag}> may not have children`); }
@@ -250,7 +251,13 @@ export function readDesignSvg(file, kind) {
       throw new Error(`${file}: a closed <${node.tag}> needs a fill (currentColor or none)`);
     }
     for (const k of ['opacity', 'stroke-opacity', 'fill-opacity']) { delete style[k]; }
-    const opacity = ['opacity', 'stroke-opacity', 'fill-opacity'].reduce((o, k) => o * (node.attrs[k] !== undefined ? Number(node.attrs[k]) : 1), 1);
+    // XAML has one opacity per Path. Paint opacities inherit from groups; opacity does not.
+    const paints = ['fill', 'stroke'].filter((p) => style[p] !== undefined && style[p] !== 'none');
+    const paintOpacity = paints.map((p) => Number(node.attrs[`${p}-opacity`] ?? inherited[`${p}-opacity`] ?? 1));
+    if (paintOpacity.length === 2 && paintOpacity[0] !== paintOpacity[1]) {
+      throw new Error(`${file}: a part's fill and stroke opacities must match, since XAML has one opacity per path`);
+    }
+    const opacity = Number(node.attrs.opacity ?? 1) * (paintOpacity[0] ?? 1);
     return { tag: node.tag, attrs: node.attrs, style, opacity, classes: all, ownClasses: own, commands: transformCommands(shapeCommands(node, file), myOps) };
   };
   const tree = root.children.map((c) => walk(c, rootStyle, [], []));
