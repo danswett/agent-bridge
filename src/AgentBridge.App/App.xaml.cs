@@ -333,6 +333,8 @@ public partial class App : Application
         quitting = true;
         timer?.Stop();
         updateTimer?.Stop();
+        // What was seen since the last tick's flush (SessionOrder.MarkSeen).
+        main?.Order.Flush();
         // Quit while an update stops the host, or before it is applied: the host comes back now, not
         // at the next sign-in, and no update stops it from here on. (Killed instead, the app's next
         // start does it.)

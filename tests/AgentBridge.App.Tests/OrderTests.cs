@@ -185,6 +185,17 @@ public sealed class OrderTests : IDisposable
     }
 
     [Fact]
+    public void Seen_marks_are_written_by_a_flush_rather_than_on_every_update()
+    {
+        var o = new SessionOrder(File);
+        o.Arrange([E("a", 1)]);
+        o.MarkSeen(K("a"), Make.T0.AddMinutes(5));
+        Assert.True(new SessionOrder(File).Unread(K("a"), Make.T0.AddMinutes(5)));
+        o.Flush();
+        Assert.False(new SessionOrder(File).Unread(K("a"), Make.T0.AddMinutes(5)));
+    }
+
+    [Fact]
     public void A_machines_complete_list_forgets_rows_of_its_sessions_that_ended_unseen()
     {
         var o = new SessionOrder(File);

@@ -47,6 +47,7 @@ public sealed partial class MainViewModel : Observable
         Usage = usage;
         Settings = settings;
         Order = order ?? new SessionOrder(null);
+        toldSort = Order.Sort;
         Machines.Add(new MachineChoice(null, "All machines"));
         selected = Machines[0];
         Add(local);
@@ -427,6 +428,7 @@ public sealed partial class MainViewModel : Observable
         {
             foreach (var c in byId.Values) { c.RefreshTimes(); }
             RefreshEnded();
+            Order.Flush();
         }
         if (ticks % 30 == 0)
         {

@@ -11,6 +11,9 @@ public sealed partial class MainViewModel
     public static IReadOnlyList<string> SortChoices { get; } = ["Your order", "Most recent", "Machine"];
 
     public SessionOrder Order { get; }
+    // The sort the picker was last told of: a failed save anywhere (a pin, a drop, a host's list)
+    // turns the list to Most recent, and the next arrangement says so.
+    SessionSort toldSort;
 
     // The sort menu's choice: Your order, Most recent, Machine. Where the order can't be kept,
     // it reads Most recent whatever was picked.
@@ -22,6 +25,7 @@ public sealed partial class MainViewModel
             if (value < 0 || value >= SortChoices.Count) { return; }
             Order.Sort = (SessionSort)value;
             Rearrange(chosen: true);
+            toldSort = Order.Sort;
             Raise();
         }
     }
@@ -52,6 +56,8 @@ public sealed partial class MainViewModel
     public bool Place(string dragged, SessionCardViewModel target, bool after)
     {
         if (!Order.Place(dragged, KeyOf(target), after)) { return false; }
+        // The dragged card keeps focus, as after a keyboard or menu move, so the next Alt+Up/Down moves it.
+        if (byId.TryGetValue(dragged, out var moved)) { moved.WantsFocus = true; }
         Rearrange(chosen: true);
         return true;
     }
@@ -64,10 +70,8 @@ public sealed partial class MainViewModel
         {
             if (e.PropertyName == nameof(SessionCardViewModel.Folded) && !card.Folded && owner.ContainsKey(card))
             {
-                var sort = Order.Sort;
                 Order.MarkSeen(KeyOf(card), card.Session.UpdatedAt);
                 card.Unread = false;
-                if (Order.Sort != sort) { Raise(nameof(SortIndex)); Rearrange(); }
             }
         };
     }
@@ -108,12 +112,14 @@ public sealed partial class MainViewModel
             if (c.Pinned) { pinnedSeen = true; } else { restSeen = true; }
         }
         SyncEnded(a.Ended);
-        // Saving failed (the file can't be written): the list is Most recent now, and says so.
-        if (Order.Sort != sort)
+        // Saving failed (the file can't be written), here or in the change before: the list is Most
+        // recent now, and says so.
+        if (Order.Sort != toldSort)
         {
+            toldSort = Order.Sort;
             Raise(nameof(SortIndex));
-            Rearrange(chosen);
         }
+        if (Order.Sort != sort) { Rearrange(chosen); }
     }
     void SyncEnded(IReadOnlyList<EndedSession> ended)
     {

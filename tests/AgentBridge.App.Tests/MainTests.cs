@@ -122,6 +122,8 @@ public sealed class MainTests : IAsyncLifetime
         // A drag of the top card onto the foot of the other.
         ui.Post(() => Assert.True(old.Row!.Drop(asking.Row!.Key, after: true)));
         Assert.Equal(["old", "asking"], Order());
+        // The dragged card takes focus, as after a keyboard move.
+        Assert.True(TestUi.Read(() => asking.WantsFocus));
     }
 
     [Fact]
@@ -218,11 +220,10 @@ public sealed class MainTests : IAsyncLifetime
             var told = 0;
             other.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MainViewModel.SortIndex)) { told++; } };
 
-            // The file's place taken by a folder: the next save fails.
+            // The file's place taken by a folder: the next save fails. A pin saves at once.
             File.Delete(file);
             Directory.CreateDirectory(file);
-            await host.SendAsync(Events.SessionUpsert, Make.Session("new", updated: Make.T0.AddMinutes(4)));
-            await Wait.UntilAsync(() => other.Sessions.Any(c => c.Id == "new"), "the new card");
+            ui.Post(() => other.Sessions.Single(c => c.Id == "old").Row!.TogglePin());
 
             TestUi.Read(() =>
             {

@@ -56,6 +56,7 @@ public sealed class SessionOrder
     List<string> shownSessions = [];
     // Rows shown whose machine hasn't sent its whole list: they have no place yet to move from or to.
     HashSet<string> pending = new(StringComparer.Ordinal);
+    bool seenDirty;
 
     sealed class State
     {
@@ -247,12 +248,19 @@ public sealed class SessionOrder
 
     public bool Unread(string key, DateTimeOffset updatedAt) => state.Seen.TryGetValue(key, out var seen) && updatedAt > seen;
 
-    // The row is open on screen: what it shows now has been seen.
+    // The row is open on screen: what it shows now has been seen. Kept with the next save, or by
+    // Flush: an open card's every update would otherwise rewrite the file on the UI thread.
     public void MarkSeen(string key, DateTimeOffset updatedAt)
     {
         if (state.Seen.TryGetValue(key, out var seen) && seen >= updatedAt) { return; }
         state.Seen[key] = updatedAt;
-        Save();
+        seenDirty = true;
+    }
+
+    // Writes what MarkSeen noted, if anything: every few seconds and when the app quits.
+    public void Flush()
+    {
+        if (seenDirty) { Save(); }
     }
 
     // A session a host removed has ended.
@@ -279,6 +287,7 @@ public sealed class SessionOrder
 
     void Save()
     {
+        seenDirty = false;
         if (!Usable || path is null) { return; }
         try
         {
