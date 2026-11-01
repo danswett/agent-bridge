@@ -82,9 +82,9 @@ export function parseMarkdown(src) {
   return parseBlocks(raw.map(expandTabs), raw, 0);
 }
 
-// lines: what structure is read from, leading tabs expanded. raw: the same lines as written,
-// differing only in those tabs; a fenced block's body is taken from it, so its tabs are shown
-// and copied as the agent wrote them.
+// lines: what structure is read from, leading tabs expanded and blank lines in list items
+// emptied. raw: the same lines as written, cut at the same columns; a fenced block's body is
+// taken from it, so its tabs and whitespace are shown and copied as the agent wrote them.
 function parseBlocks(lines, raw, depth) {
   const out = [];
   let i = 0;
@@ -180,7 +180,14 @@ function parseList(lines, raw, i, depth, out) {
         // A blank line continues the item only if what follows is indented under it.
         let j = i;
         while (j < lines.length && blank(lines[j])) { j++; }
-        if (j < lines.length && indentOf(lines[j]) > base) { body.push(''); bodyRaw.push(''); i++; continue; }
+        if (j < lines.length && indentOf(lines[j]) > base) {
+          body.push('');
+          // A blank line in a fence may still hold spaces or tabs that matter (a heredoc);
+          // only the list's own indentation comes off.
+          bodyRaw.push(dropColumns(raw[i], Math.min(indentOf(expandTabs(raw[i])), contentIndent)));
+          i++;
+          continue;
+        }
         break;
       }
       const ind = indentOf(line);

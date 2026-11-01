@@ -108,6 +108,12 @@ test('a Makefile in a list item keeps its recipe tab', () => {
   assert.equal(textOf(pre), 'all:\n\techo hello');
 });
 
+test('whitespace-only lines in a list item\'s code block keep what is past the list\'s indentation', () => {
+  const [list] = parseMarkdown('- a heredoc:\n\n  ```\n  cat <<EOF\n  \t\n      \n  EOF\n  ```');
+  const pre = list.children[0].children.find((n) => n.tag === 'pre');
+  assert.equal(textOf(pre), 'cat <<EOF\n\t\n    \nEOF');
+});
+
 test('anything that is not a string renders as nothing', () => {
   assert.deepEqual(parseMarkdown(null), []);
   assert.deepEqual(parseMarkdown({ toString: () => '<b>' }), []);
