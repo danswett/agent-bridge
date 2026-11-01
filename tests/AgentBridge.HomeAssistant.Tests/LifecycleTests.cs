@@ -497,6 +497,51 @@ public sealed class LifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task While_delegates_run_the_card_shows_the_main_agents_own_text_and_lists_the_delegates_beside_it()
+    {
+        // The latest text is a delegate's (source names it); the main agent's own is in own.
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Working) with
+        {
+            Activity = new Activity
+            {
+                Response = "Delegate: all 40 tests pass",
+                Reasoning = "Delegate: checking the log",
+                Source = new ActivitySource { Response = "agent-3a91", Reasoning = "agent-3a91" },
+                Own = new OwnActivity { Response = "Main answer.\nMore of it", Reasoning = "**Main thinking**" },
+                Background = Background.Of(1, 0),
+            },
+            Subagents =
+            [
+                new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "Run full test suite", Status = SubagentStatus.Working, Line = "Delegate: all 40 tests pass" },
+                new Subagent { Id = "agent-c204", Kind = SubagentKind.Task, Name = "Read the {{ log }}", Status = SubagentStatus.Ended, Outcome = SubagentOutcome.Done },
+            ],
+        });
+        await using var c = Connector();
+        await Run(c, 3);
+        var t = HaContract.Topics(NodeA);
+        Assert.Equal("Main answer.", ha.Retained[t.ActivityState]);
+        var detail = JsonDocument.Parse(ha.Retained[t.ActivityAttributes]).RootElement;
+        Assert.Equal("Main answer.\nMore of it", detail.GetProperty("response").GetString());
+        Assert.Contains("Main answer.", detail.GetProperty("history").EnumerateArray().Select(e => e.GetString()));
+        Assert.DoesNotContain(detail.GetProperty("history").EnumerateArray(), e => e.GetString()!.Contains("Delegate", StringComparison.Ordinal));
+
+        var listed = detail.GetProperty("subagents").EnumerateArray().ToList();
+        Assert.Equal(2, listed.Count);
+        Assert.Equal(("Run full test suite", "working", "Delegate: all 40 tests pass"),
+            (listed[0].GetProperty("name").GetString(), listed[0].GetProperty("status").GetString(), listed[0].GetProperty("line").GetString()));
+        Assert.Equal(("Read the {\u200B{ log }}", "ended"), (listed[1].GetProperty("name").GetString(), listed[1].GetProperty("status").GetString()));
+        Assert.False(listed[1].TryGetProperty("line", out _));
+        Assert.False(detail.TryGetProperty("subagents_more", out _));
+
+        // The main agent writes again: its own words are the top-level ones and nothing is attributed.
+        sessions.Set(FakeSessions.Copilot(A, response: "Final answer.") with { Subagents = null });
+        await Pass(c, 1);
+        detail = JsonDocument.Parse(ha.Retained[t.ActivityAttributes]).RootElement;
+        Assert.Equal("Final answer.", detail.GetProperty("response").GetString());
+        Assert.False(detail.TryGetProperty("subagents", out _));
+    }
+
+    [Fact]
     public async Task Detailed_activity_follows_the_machines_switch_and_falls_back_to_the_setting_without_one()
     {
         sessions.Set(FakeSessions.Copilot(A) with { Activity = new Activity { Reasoning = "**Weighing it**", Response = null } });

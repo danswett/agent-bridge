@@ -233,6 +233,49 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Null(Known(Daemon(through, agents: ["c2"]) with { Agents = 2 }, Host(agents: 3), ShadowKinds.BackgroundAgents));
     }
 
+    // #175: with the host's subagents list, the agents behind its count are checked one by one, so a
+    // count that adds up from the wrong agents is no longer put down to the daemon.
+    [Fact]
+    public void The_hosts_listed_agents_are_matched_to_the_daemons_one_by_one_before_a_difference_is_put_down_to_it()
+    {
+        Write(
+            Event("subagent.started", new { toolCallId = "c1", executionMode = "background" }, agentId: "a1"),
+            Event("assistant.turn_end", new { }, agentId: "a1"),
+            Event("subagent.completed", new { toolCallId = "c1" }),
+            Event("user.message", new { content = "carry on" }, agentId: "a1"),
+            Event("assistant.turn_start", new { }, agentId: "a1"),
+            Event("subagent.started", new { toolCallId = "c2", executionMode = "background" }, agentId: "a2"));
+        var through = Write(
+            Event("subagent.started", new { toolCallId = "c3", executionMode = "background" }, agentId: "a3"),
+            Event("assistant.turn_end", new { }, agentId: "a3"),
+            Event("subagent.completed", new { toolCallId = "c3" }),
+            Event("subagent.started", new { toolCallId = "c4", executionMode = "background" }, agentId: "a4"),
+            Event("assistant.turn_end", new { }, agentId: "a4"),
+            Event("subagent.completed", new { toolCallId = "c4" }));
+
+        // a1 woken again (#258) and a2 running: the daemon counts a2 only.
+        Assert.Equal("agent-ha-bridge#258", Known(Daemon(through, agents: ["c2"]), Host(agents: 2) with { RunningSubagents = ["a1", "a2"] }, ShadowKinds.BackgroundAgents));
+        // The same counts, but the host's second agent is a3, which ended, and a2 is not counted:
+        // the arithmetic alone would put that down to #258.
+        Assert.Equal("agent-ha-bridge#258", Known(Daemon(through, agents: ["c2"]), Host(agents: 2), ShadowKinds.BackgroundAgents));
+        Assert.Null(Known(Daemon(through, agents: ["c2"]), Host(agents: 2) with { RunningSubagents = ["a1", "a3"] }, ShadowKinds.BackgroundAgents));
+        // The daemon still listing a3 and a4, whose completions it read past (#259), beside the woken a1.
+        Assert.Equal("agent-ha-bridge#258, agent-ha-bridge#259", Known(Daemon(through, agents: ["c2", "c3", "c4"]), Host(agents: 2) with { RunningSubagents = ["a1", "a2"] }, ShadowKinds.BackgroundAgents));
+        // A list that disagrees with the host's own count explains nothing.
+        Assert.Null(Known(Daemon(through, agents: ["c2"]), Host(agents: 2) with { RunningSubagents = ["a1"] }, ShadowKinds.BackgroundAgents));
+
+        // The same number on both sides is still compared agent by agent: a woken a1 (#258) where
+        // the daemon keeps a3, whose end it read past (#259), is two known bugs cancelling out...
+        Assert.Equal("agent-ha-bridge#258, agent-ha-bridge#259", Known(Daemon(through, agents: ["c2", "c3"]), Host(agents: 2) with { RunningSubagents = ["a1", "a2"] }, ShadowKinds.BackgroundAgents));
+        // ...and the host counting a3, which ended, in place of a2 is a mismatch.
+        var other = Known(Daemon(through, agents: ["c2"]), Host(agents: 1) with { RunningSubagents = ["a3"] }, ShadowKinds.BackgroundAgents);
+        Assert.Null(other);
+        // The same agents on both sides are no difference at all.
+        var (d, h) = (new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Daemon(through, agents: ["c2"]) } },
+            new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Host(agents: 1) with { RunningSubagents = ["a2"] } }, SeesAgentHaBridge = true });
+        Assert.Empty(new ShadowWitness(Paths).Explain(d, h, ShadowCompare.Compare(d, h).Differences));
+    }
+
     // Found in review (#77): a shell polled more often than the witness kept starts lost the start
     // that ruled the signature out.
     [Fact]

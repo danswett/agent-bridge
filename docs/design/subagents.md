@@ -8,7 +8,8 @@ client shows, and the additive protocol that carries it. It supersedes #20.
 
 *Status: the owner answered §8 on 2026-11-01, all as proposed. S1 (#173) implements §2,
 §4 and §5 for Copilot, settling the four review points recorded on #173 (§5); the wire
-contract is [v1-sessions.md](../protocol/v1-sessions.md).*
+contract is [v1-sessions.md](../protocol/v1-sessions.md). S5 (#175) implements §7's Home
+Assistant and shadow parts.*
 
 **Words.** The UI says *delegate*; specs and code say *sub-agent*. The *main agent* is the
 session's own agent.
@@ -167,13 +168,25 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
 **HA connector (single-slot entity attributes, 16 KB limit):**
 - `response` and `reasoning` publish the main agent's own text (`own` for a field `source`
   attributes to a sub-agent), so the HA card never shows a delegate's line as the main
-  agent's.
-- A new `subagents` attribute carries name, status and line for at most 5 entries.
-- Whether agent-ha-bridge adopts the same rules or records them as known differences is
-  decided in the HA slice (ui-plan.md, slice S5).
+  agent's. The activity line, the trail and the "finished" push follow the same rule.
+- A new `subagents` attribute on the activity sensor carries name, status and line for at
+  most 5 entries, and `subagents_more` counts the rest. Each field keeps its protocol
+  limit, so five stay a few KiB however many delegates there are. The card draws neither yet.
+- A sub-agent's question is armed and answered through the session's own question path.
+  Its name leads the question text ("*name* asks:"), and the decision entity gains `agent`
+  and `agent_name` beside it. Its pushes keep the session's tag.
+- **agent-ha-bridge keeps its behaviour** (the owner's decision, 2026-11-01): its card shows
+  whichever agent wrote last, a delegate's text included. This is a known, intentional
+  difference between the two cards, not something either side will converge on.
 
-**Shadow (#40):** once the host stops last-writer-wins, response mismatches against the
-daemon become intentional differences, and are documented in host-shadow.md.
+Details: [ha-connector.md](../ha-connector.md), stage 1 and stage 2.
+
+**Shadow (#40):** the top-level `response` stays last-writer-wins (§5), and that is what the
+shadow compares with the daemon's, so a real parser mismatch is never waived. What changed
+is what the HA connector projects. While the two sides agree on the latest writer's text
+and it is a sub-agent's, the host's card shows the main agent's instead. The shadow labels
+that `main-agent-only (#175)`, as an intentional known difference
+([host-shadow.md](../host-shadow.md)). `reasoning` is not compared.
 
 ## 8. Questions for the owner (decided)
 

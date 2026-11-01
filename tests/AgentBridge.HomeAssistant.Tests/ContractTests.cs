@@ -226,6 +226,65 @@ public class ContractTests
         }
     }
 
+    // subagents.md §7: the card is the main agent's. A delegate's words, the latest on the session,
+    // never stand in for its reply or its reasoning, in the state, the card text or the trail.
+    [Fact]
+    public void The_cards_text_is_the_main_agents_own_while_a_delegate_wrote_last()
+    {
+        var name = Contract.Text("session.sessionName");
+        var s = FakeSessions.Copilot(SessionId, status: SessionStatus.Working) with
+        {
+            Activity = new Activity
+            {
+                Response = "Delegate: the suite passed",
+                Reasoning = "Delegate: reading the log",
+                Source = new ActivitySource { Response = "agent-1", Reasoning = "agent-1" },
+                Own = new OwnActivity { Response = "Main: cutting the release", Reasoning = "Main: which tag" },
+            },
+            Subagents = [new Subagent { Id = "agent-1", Kind = SubagentKind.Background, Name = "Run the suite", Status = SubagentStatus.Working }],
+        };
+        Assert.Equal("Main: cutting the release", HaPayloads.ActivitySummary(s));
+        var detail = HaPayloads.ActivityAttributes(s, name, Machine, verbose: true, DateTimeOffset.Now);
+        Assert.Equal("Main: cutting the release", detail["response"]!.GetValue<string>());
+        Assert.Equal(["Thinking: Main: which tag", "Main: cutting the release"], detail["history"]!.AsArray().Select(h => h!.GetValue<string>()));
+        // Only its reasoning is a delegate's: the reply shown is the main agent's, which is also the
+        // top-level one, and the thought is the main agent's own.
+        var mixed = s with { Activity = s.Activity with { Response = "Main: cutting the release", Source = new ActivitySource { Reasoning = "agent-1" }, Own = new OwnActivity { Reasoning = "Main: which tag" } } };
+        detail = HaPayloads.ActivityAttributes(mixed, name, Machine, verbose: true, DateTimeOffset.Now, thinking: true);
+        Assert.Equal(("Main: which tag", "reasoning"), (detail["response"]!.GetValue<string>(), detail["response_kind"]!.GetValue<string>()));
+        // A main agent with no words of its own shows none, not the delegate's.
+        var silent = s with { Activity = s.Activity with { Own = null } };
+        Assert.Equal("Thinking", HaPayloads.ActivitySummary(silent));
+        Assert.False(HaPayloads.ActivityAttributes(silent, name, Machine, verbose: true, DateTimeOffset.Now).ContainsKey("response"));
+    }
+
+    // Home Assistant keeps at most 16 KiB of a state's attributes. The subagents attribute lists
+    // five of however many there are, each bounded, so it stays far inside that even with twenty
+    // whose names and lines are the longest and most expensive text there is.
+    [Fact]
+    public void The_subagents_attribute_stays_well_inside_home_assistants_limit_with_twenty_delegates()
+    {
+        var emoji = string.Concat(Enumerable.Repeat("\U0001F680", 400));
+        var templates = string.Concat(Enumerable.Repeat("{{", 2000));
+        var s = FakeSessions.Copilot(SessionId, status: SessionStatus.Working) with
+        {
+            Subagents = [.. Enumerable.Range(0, 20).Select(i => new Subagent
+            {
+                Id = $"agent-{i}", Kind = SubagentKind.Background, Status = SubagentStatus.Working,
+                Name = i % 2 == 0 ? emoji : templates, Line = i % 2 == 0 ? templates : emoji, Task = emoji,
+            })],
+            SubagentsMore = 7,
+        };
+        var detail = HaPayloads.ActivityAttributes(s, Contract.Text("session.sessionName"), Machine, verbose: true, DateTimeOffset.Now);
+        var listed = detail["subagents"]!.AsArray();
+        Assert.Equal(HaPayloads.SubagentsShown, listed.Count);
+        Assert.Equal(15 + 7, detail["subagents_more"]!.GetValue<int>());
+        Assert.All(listed, e => Assert.Equal(["name", "status", "line"], e!.AsObject().Select(p => p.Key)));
+        var bytes = System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(listed));
+        Assert.True(bytes < 8 * 1024, $"{bytes} bytes");
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(detail)) < 16 * 1024);
+    }
+
     // The readings the usage contract was recorded from.
     internal static readonly AgentUsage[] UsageReadings =
     {

@@ -186,7 +186,7 @@ ui.md §2.2 rule 7 becomes an overlay after rules 1–6 while rule 8 refines rul
   - #128: Forget;
   - #134: driver edge on answers.
 - **Design:**
-  - #20 and #84: sub-agents on the card. The design is [design/subagents.md](design/subagents.md), with §8 answered by the owner on 2026-11-01. The host and protocol for Copilot are S1 (#173); Claude and Codex are #174, HA and shadow #175, the clients #176;
+  - #20 and #84: sub-agents on the card. The design is [design/subagents.md](design/subagents.md), with §8 answered by the owner on 2026-11-01. The host and protocol for Copilot are S1 (#173); Claude and Codex are #174, HA and shadow #175, the clients #176. agent-ha-bridge keeps its card as it is (the latest writer's text): a known, intentional difference from the HA connector's main-agent-only card, labelled by the shadow;
   - #55: device approval with a matching code. Until then a device's kind is self-declared to the relay, which folder trust and remote update both rely on;
   - #164 to #168: UI.
 
@@ -296,3 +296,4 @@ agent-ha-bridge releases from this work:
 | 11-01 | Track B order: U1→U2 and U3→U4 in parallel, then U5 and U6, then U7, then U8 after S1 |
 | 11-01 | UI PRs no longer wait for overlapping backend PRs (#186); they merge when ready and the backend PR rebases (overall coordinator, 16:05) |
 | 11-01 | Usage belongs to an account: hosts share readings with each other, any online host serves the freshest per account, and the app and PWA keep the last one (#172) |
+| 11-01 | Sub-agents in HA (#175): agent-ha-bridge keeps its behaviour, its card showing the latest writer's text, a delegate's included. The HA connector shows the main agent's own and lists delegates in a `subagents` attribute; the difference is known and intentional (subagents.md §7, host-shadow.md) |

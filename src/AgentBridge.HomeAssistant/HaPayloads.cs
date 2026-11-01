@@ -17,6 +17,10 @@ public static class HaPayloads
     public const int HistoryDepth = 12;
     public const int HistoryDepthDetailed = 24;
     public const string TruncatedNote = "\n\n_(truncated - see terminal)_";
+    // The subagents attribute (docs/design/subagents.md §7): the first entries of the session's
+    // list, running ones first. Each is bounded by the protocol's own limits, so five stay a few
+    // KiB, far inside Home Assistant's 16 KiB for a state's attributes, however many there are.
+    public const int SubagentsShown = 5;
 
     // Remove-CopilotTemplateMarkup. A session's name comes from its task or its folder, which
     // anyone can choose, and Home Assistant renders templates in the text a dashboard shows:
@@ -96,7 +100,7 @@ public static class HaPayloads
     {
         string summary;
         if (s.Activity.CurrentTool is { Status: ToolStatus.Running } tool) { summary = "Running: " + tool.Name; }
-        else if (FirstLine(s.Activity.Response) is { } line) { summary = line; }
+        else if (FirstLine(MainResponse(s.Activity)) is { } line) { summary = line; }
         else if (s.Status == SessionStatus.Working) { summary = "Thinking"; }
         else { summary = "Idle"; }
         return CapState(summary);
@@ -104,6 +108,14 @@ public static class HaPayloads
 
     public static string CapState(string text) =>
         text.Length > HaContract.StateMaxChars ? text[..(HaContract.StateMaxChars - 3)] + "..." : text;
+
+    // The main agent's own response and reasoning (docs/design/subagents.md §5, §7): own's for a
+    // field source attributes to a sub-agent, else the top-level text, else own's when the host
+    // has the main agent's only from its skim. The card is the main agent's, so a delegate's line
+    // never stands in for its answer; agent-ha-bridge's card shows whichever wrote last.
+    public static string? MainResponse(Activity a) => a.Source?.Response is null ? a.Response ?? a.Own?.Response : a.Own?.Response;
+
+    public static string? MainReasoning(Activity a) => a.Source?.Reasoning is null ? a.Reasoning ?? a.Own?.Reasoning : a.Own?.Reasoning;
 
     // Inline agents show their thinking in the reply stream, in order; anything else keeps a
     // separate reasoning expander (InlineReasoning in hooks/daemon-agents.ps1).
@@ -126,15 +138,40 @@ public static class HaPayloads
             ["driver"] = driver,
             ["history"] = History(full, verbose),
         };
-        var response = full.Activity.Response;
-        var reasoning = full.Activity.Reasoning;
+        var response = MainResponse(full.Activity);
+        var reasoning = MainReasoning(full.Activity);
         var isThinking = !string.IsNullOrWhiteSpace(reasoning) && (thinking ?? string.IsNullOrWhiteSpace(response));
         AddCardText(detail, InlineReasoning(full.Agent), verbose, response, isThinking ? reasoning : response, isThinking, reasoning);
         // Add-DaemonAnswerStamp: the reply-card publish last used, on every update, so a card
         // that sent it can tell it was.
         if (!string.IsNullOrWhiteSpace(answerConsumedAt)) { detail["answer_consumed_at"] = answerConsumedAt; }
+        AddSubagents(detail, full);
         return detail;
     }
+
+    // An addition to agent-ha-bridge's attributes, only on a session that has sub-agents: what
+    // its delegates are doing, so the main agent's text can stay its own. subagents_more counts
+    // the entries left out, here or by the host. The card draws neither yet.
+    internal static void AddSubagents(JsonObject detail, Session full)
+    {
+        if (full.Subagents is not { Count: > 0 } list) { return; }
+        var shown = new JsonArray();
+        foreach (var a in list.Take(SubagentsShown))
+        {
+            var entry = new JsonObject
+            {
+                ["name"] = NeutraliseTemplates(Limits.KeepStart(Flatten(a.Name), Limits.SubagentName) ?? ""),
+                ["status"] = a.Status.ToString().ToLowerInvariant(),
+            };
+            if (Limits.KeepEnd(Flatten(a.Line), Limits.SubagentLine).Text is { Length: > 0 } line) { entry["line"] = NeutraliseTemplates(line); }
+            shown.Add(entry);
+        }
+        detail["subagents"] = shown;
+        var more = list.Count - shown.Count + (full.SubagentsMore ?? 0);
+        if (more > 0) { detail["subagents_more"] = more; }
+    }
+
+    static string Flatten(string? text) => string.IsNullOrWhiteSpace(text) ? "" : string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     // Add-DaemonCardText, from the remembered text: the response (or, for an inline agent with
     // Detailed activity on, the newest line of either kind, with response_kind saying which),
@@ -170,8 +207,8 @@ public static class HaPayloads
         var items = new List<string>();
         if (!string.IsNullOrWhiteSpace(full.Activity.UserMessage)) { items.Add("Reading your message"); }
         foreach (var tool in full.Activity.History ?? []) { items.Add("Running: " + tool.Name); }
-        if (verbose && ThoughtLine(full.Activity.Reasoning) is { Length: > 0 } thought) { items.Add(thought); }
-        if (FirstLine(full.Activity.Response) is { } line) { items.Add(line); }
+        if (verbose && ThoughtLine(MainReasoning(full.Activity)) is { Length: > 0 } thought) { items.Add(thought); }
+        if (FirstLine(MainResponse(full.Activity)) is { } line) { items.Add(line); }
         var depth = verbose ? HistoryDepthDetailed : HistoryDepth;
         return [.. items.Skip(Math.Max(0, items.Count - depth)).Select(i => (JsonNode)i)];
     }

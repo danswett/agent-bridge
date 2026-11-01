@@ -25,6 +25,7 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
     public IReadOnlyList<ShadowDifference> Explain(ShadowView daemon, ShadowView host, IReadOnlyList<ShadowDifference> differences)
     {
         foreach (var gone in evidence.Keys.Where(k => !daemon.Sessions.ContainsKey(k)).ToList()) { evidence.Remove(gone); }
+        differences = [.. differences, .. OtherAgents(daemon, host, differences)];
         if (!differences.Any(Explainable)) { return differences; }
         var ids = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var id in daemon.Sessions.Keys) { ids.TryAdd(ShadowHash.Session(id), id); }
@@ -63,6 +64,25 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
     static bool Explainable(ShadowDifference d) =>
         d.Known is null && d.Session is not null && d.Kind is ShadowKinds.BackgroundAgents or ShadowKinds.BackgroundShells or ShadowKinds.Model
             or ShadowKinds.QuestionMissingOnHost or ShadowKinds.Status;
+
+    // Background agents compared entry by entry (#175): the same number on both sides can still be
+    // different agents, a daemon bug on each side cancelling out, or a host bug hidden behind one.
+    // Only the transcript maps the daemon's tool calls to the agents the host lists, so this is
+    // looked at only for a Copilot session whose host lists every agent it counts.
+    IEnumerable<ShadowDifference> OtherAgents(ShadowView daemon, ShadowView host, IReadOnlyList<ShadowDifference> differences)
+    {
+        foreach (var (id, ds) in daemon.Sessions)
+        {
+            if (ds.Agent != "copilot" || ds.Agents == 0 || !host.Sessions.TryGetValue(id, out var hs) || hs.Agents != ds.Agents
+                || hs.RunningSubagents is not { } running || ds.AgentIds.Distinct(StringComparer.Ordinal).Count() != ds.Agents) { continue; }
+            var s = ShadowHash.Session(id);
+            if (differences.Any(d => d.Kind == ShadowKinds.BackgroundAgents && d.Session == s)) { continue; }
+            if (Evidence(id)?.SameAgents(ds.AgentIds, running) == false)
+            {
+                yield return new(ShadowKinds.BackgroundAgents, s, $"daemon={ds.Agents} host={hs.Agents}, not the same agents");
+            }
+        }
+    }
 
     TranscriptEvidence? Evidence(string id)
     {
@@ -500,7 +520,10 @@ public sealed partial class TranscriptEvidence(string path)
     // The daemon counts fewer (or more) background agents than the host. Known when the host's
     // extra agents are exactly those working again after their first subagent.completed, which
     // the daemon stops counting there (#258), and the daemon's extra ones exactly those whose
-    // subagent.completed it has read past (#259).
+    // subagent.completed it has read past (#259). When the host lists the agents it counts
+    // (subagents, #84), each is checked as well, entry by entry: every one the daemon does not
+    // count must be such a woken one, and every one the daemon counts that the host does not must
+    // be one whose end it read past. Counts that add up from the wrong agents never pass.
     public string? Agents(ShadowSession daemon, ShadowSession host)
     {
         if (daemon.Offset is not { } through) { return null; }
@@ -513,10 +536,40 @@ public sealed partial class TranscriptEvidence(string path)
             .Select(a => a.Key).ToHashSet(StringComparer.Ordinal);
         // The daemon counts by tool call; none of those it lists may be one of the woken agents.
         if (listed.Any(c => agentByCall.TryGetValue(c, out var key) && woken.Contains(key))) { return null; }
+        if (host.RunningSubagents is { } running && !EachAgent(listed, running, woken, through, host.Agents)) { return null; }
         var issues = new SortedSet<int>();
         if (missed > 0) { issues.Add(259); }
         if (woken.Count > 0) { issues.Add(258); }
         return issues.Count > 0 && listed.Count - missed == host.Agents - woken.Count ? Name(issues) : null;
+    }
+
+    // The host's agents against the daemon's, by agent: the daemon's tool calls are each mapped to
+    // the agent they started.
+    bool EachAgent(IReadOnlyList<string> listed, IReadOnlyList<string> running, HashSet<string> woken, long through, int hostCount)
+    {
+        var hostIds = running.ToHashSet(StringComparer.Ordinal);
+        if (hostIds.Count != hostCount) { return false; }
+        var daemonIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var call in listed)
+        {
+            if (!agentByCall.TryGetValue(call, out var key)) { return false; }
+            daemonIds.Add(key);
+            if (!hostIds.Contains(key) && !(completed.TryGetValue(call, out var at) && at < through)) { return false; }
+        }
+        return hostIds.All(id => daemonIds.Contains(id) || woken.Contains(id));
+    }
+
+    // Whether the daemon's tool calls started exactly the agents the host lists; null when a call is
+    // one this transcript does not map to an agent, which says nothing either way.
+    public bool? SameAgents(IReadOnlyList<string> calls, IReadOnlyList<string> running)
+    {
+        var daemonIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var call in calls)
+        {
+            if (!agentByCall.TryGetValue(call, out var key)) { return null; }
+            daemonIds.Add(key);
+        }
+        return daemonIds.SetEquals(running);
     }
 
     // The daemon's model is the one a subagent's message named, the last message it has read

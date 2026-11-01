@@ -778,7 +778,7 @@ public sealed partial class HaConnector : IAsyncDisposable
 
         var summary = HaPayloads.ActivitySummary(full);
         var detail = HaPayloads.ActivityAttributes(full, name, options.MachineName, verbose, now, driver: p.Driver,
-            thinking: p.Observe(full.Activity.Response, full.Activity.Reasoning), answerConsumedAt: p.LastPayloadStamp);
+            thinking: p.Observe(HaPayloads.MainResponse(full.Activity), HaPayloads.MainReasoning(full.Activity)), answerConsumedAt: p.LastPayloadStamp);
         // Get-DaemonCardSummary: while End session waits for its second press, the card keeps
         // asking for it over whatever the session does meanwhile.
         if (p.Stop.Asking(now)) { summary = HaStop.ConfirmNote; detail["hint"] = p.Stop.Hint; }

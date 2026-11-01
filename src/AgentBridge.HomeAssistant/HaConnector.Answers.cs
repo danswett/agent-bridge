@@ -199,7 +199,7 @@ public sealed partial class HaConnector
         }
         // The last question's buttons, still on the phones: gone with it.
         if (p.Notify.Shown is { } shown && shown != question.Id) { await ClearButtonsAsync(full.Id, p.Notify, forget: true, ct); }
-        var plan = HaDecision.Plan(question, full.Agent);
+        var plan = HaDecision.Plan(question, full);
         var armedSlots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
         var unset = await RunAsync(HaDecision.Arm(plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow()), p.Node, ct);
         // Everything the card is told about this question is out; nothing reported before now was

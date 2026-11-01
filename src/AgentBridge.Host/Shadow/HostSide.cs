@@ -1,3 +1,4 @@
+using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Local;
@@ -24,9 +25,21 @@ public static class HostSide
         Model = string.IsNullOrEmpty(s.Model) ? null : s.Model,
         Compactions = s.Activity.Compactions ?? 0,
         ResponseTail = ShadowHash.Tail(s.Activity.Response),
+        CardResponseTail = s.Activity.Source?.Response is null ? null : ShadowHash.Tail(HaPayloads.MainResponse(s.Activity)) ?? ShadowCompare.NoResponse,
+        RunningSubagents = RunningSubagents(s),
         Question = Question(s.Question),
         PermissionPending = s.Question?.Kind == QuestionKind.Approval,
     };
+
+    // What background.agents counts, entry by entry: background sub-agents working or waiting, at
+    // any depth (subagents.md §2). Running ones are listed first, so the list holds them all unless
+    // nothing finished follows them and some were left out.
+    static IReadOnlyList<string>? RunningSubagents(Session s)
+    {
+        var list = s.Subagents ?? [];
+        if (s.SubagentsMore is > 0 && !list.Any(a => a.Finished)) { return null; }
+        return [.. list.Where(a => a.Kind == SubagentKind.Background && !a.Finished).Select(a => a.Id)];
+    }
 
     // Permission prompts are not compared: agent-ha-bridge only mirrors them as an alert and arms
     // no question for them, where this host offers them to approve (parity §3, beyond parity).

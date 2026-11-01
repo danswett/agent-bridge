@@ -456,6 +456,50 @@ public sealed class NotifyTests : IDisposable
         Assert.Empty(Buttons());
     }
 
+    // subagents.md §7: "finished" is the main agent's turn, told in its own words, and a
+    // delegate's question says whose it is.
+    [Fact]
+    public async Task A_finished_turn_is_pushed_in_the_main_agents_words_and_a_delegates_question_says_who_asks()
+    {
+        var notify = new HaNotifySettings { Enabled = true };
+        Ask(null, response: null);
+        await using var c = Connector(notify);
+        await Pass(c);
+        var delegated = sessions.Get(A)! with
+        {
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "Run full test suite", Status = SubagentStatus.Waiting }],
+            WaitingOn = "agent-3a91",
+            Question = new Question
+            {
+                Id = "p1", Kind = QuestionKind.Approval, Message = "Allow dotnet test?", AskedAt = FakeSessions.T0, Agent = "agent-3a91",
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")] }],
+            },
+            Status = SessionStatus.Waiting,
+        };
+        sessions.Set(delegated);
+        await Pass(c);
+        var asked = Assert.Single(Pushes());
+        Assert.Equal("Run full test suite asks:\n\nAllow dotnet test?", asked["message"]!.GetValue<string>());
+
+        sessions.Set(delegated with
+        {
+            Question = null,
+            WaitingOn = null,
+            Status = SessionStatus.Idle,
+            Activity = new Activity
+            {
+                Response = "Delegate: all 40 tests pass", TurnCount = 1, UserMessage = "go",
+                Source = new ActivitySource { Response = "agent-3a91" },
+                Own = new OwnActivity { Response = "Done: the release is cut." },
+            },
+        });
+        await Pass(c);
+        await Pass(c, 5);
+        var done = Pushes()[^1];
+        Assert.Equal("Copilot response: Copilot: Fix the relay", done["title"]!.GetValue<string>());
+        Assert.Equal("Done: the release is cut.", done["message"]!.GetValue<string>());
+    }
+
     [Fact]
     public async Task A_question_and_a_finished_turn_are_pushed_once_each_as_the_hooks_push_them()
     {
