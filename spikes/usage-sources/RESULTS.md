@@ -548,12 +548,23 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
      is shown to be stable across the read:
      - both `account/read` answers give the same non-null email;
      - the snapshot has `accountId`, and its `ordinaryUsageAllowed` is non-null, which
-       means the handler matched the snapshot to the active login when it answered.
-     A login switch at any point changes one of these. A switch before or after the
-     usage read changes the second email, and a switch during it nulls
-     `ordinaryUsageAllowed`. `account/updated` notifications don't count either way:
-     routing discovery sends one to a newly initialized connection even when nothing has
-     changed (`workspace_routing.rs:230-253`).
+       means the handler matched the snapshot to the active login when it answered;
+     - **and the route rules out a switch and a switch back.** These checks don't catch a
+       switch from A to B and back to A during the probe. The usage read would then be
+       B's, checked as B's, while both emails say A. 0.166's stable API gives neither a
+       user id on the snapshot nor a login generation, and `account/updated` carries only
+       `authMode` and `planType` (`account.rs:618-621`). So:
+       - **Standalone route:** a login change needs another Codex process, because the
+         probe sends no login requests. The host checks the process list just before the
+         first `account/read` and just after the second, and watches for sessions in
+         between. If any other Codex process appears, there's no key.
+       - **Daemon route:** another client can switch the daemon's login, and nothing
+         visible shows it. Daemon-route readings have no key until Codex exposes a
+         snapshot-bound user id. The backend already returns one, and the handler drops
+         it (`account_processor.rs:1245-1265`). That's worth an upstream request.
+     `account/updated` notifications don't count either way: routing discovery sends one
+     to a newly initialized connection even when nothing has changed
+     (`workspace_routing.rs:230-253`).
      Otherwise the reading has no key.
    - `source` is `api`.
 3. Keep the transcript reading. The newer of the two readings wins. A transcript reading
@@ -603,7 +614,7 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 | E11 | Invisible to the bridges | Run both probes with an agent-bridge dev host and agent-ha-bridge hooks installed on the VM | No session appears in either, and the host's worktree accounting ignores the probes |
 | E12 | Codex half-written `auth.json` | Make the standalone probe refresh: expire the token, and slow the token response through `mitmdump` so the save lands while another process is reading. Start `codex` or `codex login status` in a loop meanwhile, 50 times | Record any load or parse failure in the reading process. If any occur, the build must not probe while another Codex process could start, beyond what X-3 already rules out |
 | E13 | Codex outstanding refresh at EOF (**on the Linux VM**, since the 45 s watchdog is Unix-only) | Hold the token response for 50 s. (a) Close standard input as soon as the request is sent. (b) Close it only after the responses. (c) **Find a background refresh before trying to cut one off.** Two runs. (c1) Proactive: using the token lifetime from E8, start probes 50 times with the access token from 6 min to 4 min before its `exp`, so the 5-minute window opens during the probe. (c2) Routing recovery: with a fresh token and a selected workspace, have `mitmdump` answer `/accounts/check` with one 401, which makes routing discovery refresh outside the window. Hold the token response for 10 s, 20 s and 30 s in separate runs, and in each close standard input (i) as soon as the probe's responses arrive and (ii) after the 20 s grace period. In every run, log the time of every token-endpoint request and every probe response, including both `account/read` answers, plus the process exit time. If a token request is still open after the last probe response in (c1), hold it past the 45 s watchdog in a repeat run and record whether the token is lost. (d) Repeat (b) on the Windows VM | (a) Expected to **fail**: the process exits at 45 s, the rotated token is lost, and Codex signs out. (b) No loss. (c) For each run: either the caller and outcome of a refresh that outlived the responses, or the finding that none does. In particular, whether the second `account/read` waits for routing discovery's refresh. For (c2), record for each run whether the rotated token was saved, and which cancellation happened, if any: runtime teardown at EOF, discovery's 15 s timeout, or the watchdog. Together these decide whether the grace period holds, whether to use the daemon route, or whether to drop the standalone route (X-4). (d) The process exits by itself after EOF. The owner signs in again after each failure |
-| E14 | Codex sign-out signal | Revoke the session from ChatGPT's security settings. Separately, make a refresh token reused (E8's forced race). Probe after each, with and without a selected workspace | Record the exact `account/rateLimits/read` and `account/read` errors for each. `codex login status` still says logged in, which confirms X-5 |
+| E14 | Codex sign-out signal | (a) Revoked: revoke the session from ChatGPT's security settings, so the stored refresh token really is revoked, then probe. (b) Reused: expire the access token so the probe has to refresh, and have `mitmdump` answer that token request with HTTP 400 and `{"error":"refresh_token_reused"}`. That's the code Codex classifies (`manager.rs:1760-1790`), and nothing new gets saved. Run each with and without a selected workspace | Record the exact `account/rateLimits/read` and `account/read` errors for each. `codex login status` still says logged in, which confirms X-5 |
 
 ---
 
@@ -663,9 +674,11 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 >       `accountKey` is the first 12 hex digits of
 >       `sha256("codex:" + lower(email) + ":" + accountId)`. It's set only when the
 >       identity held steady across the probe (spike Codex recommendation, step 2): the
->       same non-null email in both `account/read` answers, and a non-null `accountId`
->       and `ordinaryUsageAllowed`. `account/updated` notifications aren't used.
->       Otherwise it's absent. `source` is `api`.
+>       same non-null email in both `account/read` answers, a non-null `accountId` and
+>       `ordinaryUsageAllowed`, the standalone route, and no other Codex process seen from
+>       just before the first `account/read` to just after the second. Daemon-route
+>       readings have no key. `account/updated` notifications aren't used. Otherwise
+>       there's no key. `source` is `api`.
 > - [ ] Transcripts stay, and a transcript reading has no key. The newest reading
 >       wins. An API-key login or a missing `codex` falls back to transcripts without an
 >       error row.
@@ -707,6 +720,10 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 >       with a null `ordinaryUsageAllowed`.
 > - [ ] An unchanged login keeps its `accountKey` when the fake sends the
 >       initialization `account/updated` during the probe.
+> - [ ] A switch and a switch back (A, then B, then A) withholds the key: a fake whose
+>       two `account/read` answers both say A, with a valid snapshot, gets no key when
+>       the process watcher reports another Codex process during the probe. A
+>       daemon-route reading never gets a key.
 > - [ ] Two keyless Codex readings from different machines merge into two rows, not
 >       one, in both `UsageMerge` and `mergeUsage`. A keyed reading still merges across
 >       machines as before. A host doesn't take a keyless reading from a peer.
