@@ -146,7 +146,7 @@ export class FleetStatus {
     this.#updates.delete(id);
     this.#updateFollowed.delete(id);
     this.#watchUntil.delete(id);
-    this.book.delete(id);
+    this.book.delete(id, { forget: true });
     this.#retime();
     this.#emit();
   }
@@ -180,8 +180,11 @@ export class FleetStatus {
       this.#viewedAt.set(id, this.now());
       const mine = () => this.#viewed.get(id) === client;
       if (link.capabilities.includes(USAGE.capability)) {
-        client.on('usage', (r) => { if (mine()) { this.book.set(id, r); } });
-        client.subscribeUsage().then((r) => { if (mine()) { this.book.set(id, r); } }, () => {});
+        // The account's other machines' readings too, where this one keeps them (#172).
+        const shared = link.capabilities.includes(USAGE.shared);
+        const name = () => link.machine?.name ?? this.hosts.nameOf?.(id) ?? null;
+        client.on('usage', (r) => { if (mine()) { this.book.set(id, r, name()); } });
+        client.subscribeUsage({ shared }).then((r) => { if (mine()) { this.book.set(id, r, name()); } }, () => {});
       } else { this.book.delete(id); }
     }
     // A machine no longer shown is looked at as the others are; its last report stays until then.
@@ -261,8 +264,8 @@ export class FleetStatus {
       if (viewed() || forgotten()) { return; }
       this.#note(id, hello.machine);
       if (hello.capabilities.includes(USAGE.capability)) {
-        const report = await client.usage();
-        if (!viewed() && !forgotten()) { this.book.set(id, report); }
+        const report = await client.usage({ shared: hello.capabilities.includes(USAGE.shared) });
+        if (!viewed() && !forgotten()) { this.book.set(id, report, hello.machine?.name); }
       } else {
         // Said by the machine itself, so its last report goes; one that cannot be reached keeps it.
         this.book.delete(id);

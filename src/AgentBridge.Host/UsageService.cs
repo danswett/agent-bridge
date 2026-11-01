@@ -10,27 +10,97 @@ namespace AgentBridge.Host;
 // answers with the current report and then sends usage.update on that channel whenever the
 // monitor announces a change. Usage moves slowly, so this is never more than one small event
 // per change, and nothing at all while it holds still.
+//
+// With peers (usage.shared, #172), a request that asks for { shared: true } also gets the readings
+// this host keeps from the account's other machines, after its own; one that does not gets exactly
+// the host's own report, as before.
 public sealed class UsageService
 {
-    readonly UsageMonitor monitor;
-    readonly Action<string> log;
-    readonly ConcurrentDictionary<IProtocolChannel, Subscriber> subscribers = new();
+    // A change in other machines' readings is sent at most this often to each subscriber.
+    public static readonly TimeSpan PeerPace = TimeSpan.FromSeconds(15);
 
-    public UsageService(UsageMonitor monitor, Action<string>? log = null)
+    readonly UsageMonitor monitor;
+    readonly PeerUsage? peers;
+    readonly Action<string> log;
+    readonly TimeProvider time;
+    readonly ConcurrentDictionary<IProtocolChannel, Subscriber> subscribers = new();
+    readonly object pace = new();
+    DateTimeOffset peersSentAt = DateTimeOffset.MinValue;
+    bool peersPending;
+
+    public UsageService(UsageMonitor monitor, Action<string>? log = null, PeerUsage? peers = null, TimeProvider? time = null)
     {
         this.monitor = monitor;
+        this.peers = peers;
         this.log = log ?? (_ => { });
-        monitor.Changed += (_, _) => { foreach (var (channel, subscriber) in subscribers) { _ = PushAsync(channel, subscriber); } };
+        this.time = time ?? TimeProvider.System;
+        monitor.Changed += (_, _) => PushAll(sharedOnly: false);
+        if (peers is not null) { peers.Changed += OnPeersChanged; }
     }
 
     public int Subscribers => subscribers.Count;
 
+    // hello's usage.shared: other machines' readings are served to whoever asks for them.
+    public bool Shares => peers is not null;
+
     public Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data) => op switch
     {
-        UsageProtocol.Get => Task.FromResult<object?>(monitor.Current.Report),
-        UsageProtocol.Subscribe => SubscribeAsync(channel),
+        UsageProtocol.Get => Task.FromResult<object?>(Current(Shared(data)).Report),
+        UsageProtocol.Subscribe => SubscribeAsync(channel, Shared(data)),
         _ => Task.FromResult<object?>(null),
     };
+
+    bool Shared(JsonElement data)
+    {
+        if (peers is null || data.ValueKind != JsonValueKind.Object) { return false; }
+        return data.TryGetProperty("shared", out var s) && s.ValueKind == JsonValueKind.True;
+    }
+
+    // The report a subscriber is sent and its version: both versions only go up, so their sum does.
+    (UsageReport Report, long Version) Current(bool shared)
+    {
+        var (own, version) = monitor.Current;
+        if (!shared || peers is null) { return (own, version); }
+        var peerVersion = peers.Version;
+        return (UsageShare.Serve(own, peers.Entries), version + peerVersion);
+    }
+
+    void PushAll(bool sharedOnly)
+    {
+        foreach (var (channel, subscriber) in subscribers)
+        {
+            if (sharedOnly && !subscriber.Shared) { continue; }
+            _ = PushAsync(channel, subscriber);
+        }
+    }
+
+    // Under the existing pacing: other machines' readings arrive a few at a time, minutes apart,
+    // and are sent at most every PeerPace, the latest always.
+    void OnPeersChanged()
+    {
+        TimeSpan wait;
+        lock (pace)
+        {
+            if (peersPending) { return; }
+            wait = peersSentAt + PeerPace - time.GetUtcNow();
+            if (wait <= TimeSpan.Zero)
+            {
+                peersSentAt = time.GetUtcNow();
+                wait = TimeSpan.Zero;
+            }
+            else { peersPending = true; }
+        }
+        if (wait == TimeSpan.Zero) { PushAll(sharedOnly: true); return; }
+        _ = Task.Delay(wait, time).ContinueWith(_ =>
+        {
+            lock (pace)
+            {
+                peersPending = false;
+                peersSentAt = time.GetUtcNow();
+            }
+            PushAll(sharedOnly: true);
+        }, TaskScheduler.Default);
+    }
 
     // A second subscribe on a channel replaces the first rather than running beside it: the
     // client has the report it was just given, and later changes arrive once.
@@ -38,7 +108,7 @@ public sealed class UsageService
     // The subscriber is held from taking the report until the response has gone. Otherwise a
     // change announced in between could be sent as an update ahead of the response, and the
     // client, taking the response as current, would keep the older report over it.
-    async Task<object?> SubscribeAsync(IProtocolChannel channel)
+    async Task<object?> SubscribeAsync(IProtocolChannel channel, bool shared)
     {
         var added = false;
         var current = subscribers.AddOrUpdate(channel, _ => { added = true; return new Subscriber(); }, (_, existing) => existing);
@@ -50,8 +120,8 @@ public sealed class UsageService
         try
         {
             long version;
-            (report, version) = monitor.Current;
-            lock (current) { current.Sent = version; current.Open = false; }
+            (report, version) = Current(shared);
+            lock (current) { current.Sent = version; current.Open = false; current.Shared = shared; }
         }
         finally { current.Gate.Release(); }
         // After the response has gone: anything announced since the report was taken follows it.
@@ -67,7 +137,9 @@ public sealed class UsageService
         await subscriber.Gate.WaitAsync();
         try
         {
-            var (report, version) = monitor.Current;
+            bool shared;
+            lock (subscriber) { shared = subscriber.Shared; }
+            var (report, version) = Current(shared);
             lock (subscriber) { if (!subscriber.Open || version <= subscriber.Sent) { return; } }
             if (!channel.IsOpen) { return; }
             await channel.SendEventAsync(UsageProtocol.Update, report);
@@ -84,5 +156,7 @@ public sealed class UsageService
         public long Sent;
         // Whether updates may go: not between taking a subscribe's report and sending its response.
         public bool Open;
+        // Whether it asked for other machines' readings too (usage.shared).
+        public bool Shared;
     }
 }

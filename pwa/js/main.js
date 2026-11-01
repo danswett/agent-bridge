@@ -20,7 +20,7 @@
 //                    the machine each is for
 //   demo.js          ?demo=1: simulated machines (?machines=2 or 3), no relay
 import { RELAY } from '../config.js';
-import { loadIdentity, deviceName } from './identity.js';
+import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js';
 import { accountStore, startDeviceFlow } from './signin.js';
 import { BridgeConnection } from './connection.js';
 import { ALL, HostSession } from './host-session.js';
@@ -46,6 +46,27 @@ const BASE = RELAY || location.origin;
 // Every machine's latest usage report, drawn as one row per allowance.
 const book = new UsageBook();
 new UsageView($('usage'), book);
+
+// The account's usage readings this device keeps between visits (#172): in IndexedDB beside its
+// key, for one account. Another account's are never shown, and signing out deletes them.
+const USAGE_KEPT = 'usage-kept';
+let usageEpoch = 0;
+function keepUsage(account) {
+  const epoch = ++usageEpoch;
+  const who = String(account?.accountId ?? account?.login ?? '');
+  if (!who) { return; }
+  kvGet(USAGE_KEPT).catch(() => null).then((saved) => {
+    if (epoch !== usageEpoch) { return; }
+    book.useCache({
+      entries: saved?.account === who && Array.isArray(saved.entries) ? saved.entries : [],
+      save: (entries) => { if (epoch === usageEpoch) { kvPut(USAGE_KEPT, { account: who, entries }).catch(() => {}); } },
+    });
+  });
+}
+function dropKeptUsage() {
+  usageEpoch++;
+  return kvDelete(USAGE_KEPT).catch(() => {});
+}
 const machinesFold = new MachinesFold($('machines'));
 // The sessions on screen and what their cards and the launch panel send, once begun.
 let page = null;
@@ -199,6 +220,15 @@ async function startDemo() {
     confirmMs: Number(params.get('forgetMs')) || CONFIRM_MS,
   });
   const fleet = new FleetStatus({ connection, hosts, book, me: null });
+  // ?keep=1: usage readings kept between visits (#172), in the demo's own storage.
+  if (params.get('keep') === '1') {
+    let kept = null;
+    try { kept = JSON.parse(demoStorage.getItem(USAGE_KEPT) ?? 'null'); } catch { /* none kept */ }
+    book.useCache({
+      entries: Array.isArray(kept?.entries) ? kept.entries : [],
+      save: (entries) => { try { demoStorage.setItem(USAGE_KEPT, JSON.stringify({ account: 'demo', entries })); } catch { /* a nicety */ } },
+    });
+  }
   const demoUpdates = new UpdateControl({ fleet });
   const transfers = new Map();
   for (const m of machines) {
@@ -346,6 +376,7 @@ function begin(account) {
     focusLinked();
   };
   const fleet = new FleetStatus({ connection, hosts, book, me: identity.deviceId });
+  keepUsage(account);
   // Forgetting an offline machine (#50): what this app keeps about it goes with it. Its push
   // subscription is on that machine, which is gone; the notices it left here are closed.
   // Each machine's updates (#51): Check and Install, from a person's device, which this is.
@@ -523,6 +554,7 @@ function begin(account) {
     lastKnown = null;
     page.clear();
     accountStore.clear();
+    dropKeptUsage();
     connection.stop();
     // This account's machines must not go on notifying this device.
     notices.forget().catch(() => {});
@@ -542,7 +574,7 @@ function begin(account) {
     accountStore.clear();
     connection.stop();
     // Not for long: signing out must not wait on a service worker that isn't running.
-    await Promise.race([notices.forget().catch(() => {}), new Promise((r) => { setTimeout(r, 2000); })]);
+    await Promise.race([Promise.all([notices.forget().catch(() => {}), dropKeptUsage()]), new Promise((r) => { setTimeout(r, 2000); })]);
     location.replace(location.pathname);
   };
 

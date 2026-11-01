@@ -145,7 +145,7 @@ public sealed class HostConnection : IAsyncDisposable
                 if (!Subscribes) { }
                 else if (hello.Capabilities.Contains(UsageProtocol.Capability))
                 {
-                    var usage = await ch.CallAsync<UsageReport>(UsageProtocol.Subscribe, ct: ct);
+                    var usage = await ch.CallAsync<UsageReport>(UsageProtocol.Subscribe, UsageAsk(hello), ct: ct);
                     ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; } });
                 }
                 // A host that reports no usage now (usage.publish off) has no figure to keep showing.
@@ -217,6 +217,9 @@ public sealed class HostConnection : IAsyncDisposable
         await ch.CallAsync<SubscribeResult>(Ops.SessionsSubscribe, ct: ct);
     }
 
+    // The account's other machines' readings too, where the host keeps them (usage.shared, #172).
+    static UsageRequest UsageAsk(HelloResult hello) => new() { Shared = hello.Capabilities.Contains(UsageProtocol.SharedCapability) };
+
     // Events were dropped, and any of them may have been the host's status or usage, not
     // only sessions: all three are read again, each applied only if no newer event of its
     // kind arrived meanwhile, as when connecting.
@@ -239,7 +242,7 @@ public sealed class HostConnection : IAsyncDisposable
         if (hello.Capabilities.Contains(UsageProtocol.Capability))
         {
             var heardUsage = Interlocked.Read(ref usageEvents);
-            var usage = await ch.CallAsync<UsageReport>(UsageProtocol.Get, ct: ct);
+            var usage = await ch.CallAsync<UsageReport>(UsageProtocol.Get, UsageAsk(hello), ct: ct);
             ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; Changed?.Invoke(); } });
         }
         if (hello.Capabilities.Contains(UpdateProtocol.Capability))

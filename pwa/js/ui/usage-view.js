@@ -3,7 +3,7 @@
 // even-pace mark, the amounts, when it resets, how old the reading is, and the error when
 // there is nothing fresher to show.
 import { h } from './dom.js';
-import { ago, amount, elapsed, hasReading, headline, isStale, pace, severity, showsError, until } from '../usage.js';
+import { ago, amount, elapsed, hasReading, headline, isStale, pace, readOn, severity, showsError, until } from '../usage.js';
 
 const OPEN = 'agent-bridge.app.usage.open';
 
@@ -42,8 +42,8 @@ export class UsageView {
   render() {
     const now = this.now();
     const entries = this.book.entries();
-    // Shown once any machine offers usage at all.
-    this.section.hidden = this.book.size === 0;
+    // Shown once any machine offers usage at all, or a reading is kept from before.
+    this.section.hidden = this.book.empty;
     this.toggle.setAttribute('aria-expanded', String(this.open));
     this.body.hidden = !this.open;
 
@@ -59,10 +59,13 @@ export class UsageView {
   }
 
   #group(entry, now) {
+    const stale = isStale(entry.at, now) ? ' stale' : '';
+    const by = readOn(entry);
     const head = h('div', { class: 'usage-head' },
       h('span', { class: 'usage-name' }, entry.label),
       h('span', { class: 'usage-account' }, [entry.account, entry.plan].filter(Boolean).join(' \u00b7 ')),
-      h('span', { class: `usage-age${isStale(entry.at, now) ? ' stale' : ''}` }, ago(entry.at, now)));
+      h('span', { class: `usage-age${stale}` }, ago(entry.at, now)),
+      by ? h('span', { class: `usage-by${stale}` }, by) : null);
     return h('div', { class: 'usage-group', dataset: { agent: entry.agent } },
       head,
       hasReading(entry) ? entry.windows.map((w) => this.#window(w, now)) : null,

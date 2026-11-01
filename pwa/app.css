@@ -170,6 +170,9 @@ a { color: var(--primary); }
 .usage-account { flex: 1; min-width: 0; font-size: .85rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .usage-age { flex: none; font-size: .8rem; color: var(--muted); }
 .usage-age.stale { color: var(--warning-text); }
+/* Which machine took the reading (#172): one that may be offline now. */
+.usage-by { flex: 0 1 auto; min-width: 0; max-width: 45%; font-size: .8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.usage-by.stale { color: var(--warning-text); }
 .usage-window { margin-top: 8px; }
 .usage-top, .usage-foot, .usage-pacefoot { display: flex; justify-content: space-between; gap: 8px; }
 .usage-top { font-size: .9rem; }

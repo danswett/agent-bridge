@@ -147,6 +147,35 @@ test('folding the machines panel leaves one line naming the machine, and is reme
   await expect(machines.locator('.machines-summary')).toBeHidden();
 });
 
+test('a reading kept from a machine that has gone shows with its age and the machine that read it, after a reload too', async ({ page }) => {
+  await openDemo(page, '&machines=2&keep=1');
+  const usage = page.locator('#usage');
+  // Laptop is the only machine signed in to a second Claude account, read three hours ago.
+  await page.evaluate(() => {
+    const report = window.agentBridgeDemo.machines['demo-laptop'].usage;
+    const at = new Date(Date.now() - 3 * 3600000).toISOString();
+    window.agentBridgeDemo.machines['demo-laptop'].setUsage({
+      agents: [...report.agents, { agent: 'claude', label: 'Claude Code', accountKey: 'aaaabbbbcccc', plan: 'pro', source: 'api', measuredAt: at, windows: [{ key: 'session', label: 'Session (5h)', percent: 64 }] }],
+    });
+  });
+  const second = usage.locator('.usage-group[data-agent="claude"]').filter({ hasText: '#aaaa' });
+  await expect(second.locator('.usage-by')).toHaveText('read on Laptop');
+
+  await page.evaluate(() => window.agentBridgeDemo.setOnline('demo-laptop', false));
+  await expect(second.locator('.usage-percent')).toHaveText('64%');
+  await expect(second.locator('.usage-age')).toHaveText('3h ago');
+  await expect(second.locator('.usage-age')).toHaveClass(/stale/);
+  await expect(second.locator('.usage-by')).toHaveText('read on Laptop');
+  await expect(second.locator('.usage-by')).toHaveClass(/stale/);
+
+  // A later visit: Laptop is back but no longer offers that account; what was kept still shows.
+  await page.reload();
+  await page.waitForSelector('html[data-demo-ready]');
+  await expect(second.locator('.usage-percent')).toHaveText('64%');
+  await expect(second.locator('.usage-by')).toHaveText('read on Laptop');
+  expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
+});
+
 test('a machine that does not offer usage shows no usage panel', async ({ page }) => {
   await openDemo(page, '&usage=0');
   await expect(page.locator('.session').first()).toBeVisible();

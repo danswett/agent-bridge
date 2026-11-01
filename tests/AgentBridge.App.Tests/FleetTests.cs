@@ -19,6 +19,8 @@ public sealed class FleetTests : IAsyncLifetime
     readonly FakeFleetLink link = new();
     readonly FakeTimeProvider clock = new(Make.T0);
     readonly List<ToastNotice> shown = [];
+    // The usage this app keeps between runs (#172).
+    readonly string cacheFile = Path.Combine(Path.GetTempPath(), "abuc-" + Guid.NewGuid().ToString("N")[..8] + ".json");
     HostConnection local = null!;
     MainViewModel main = null!;
     Fleet fleet = null!;
@@ -39,7 +41,7 @@ public sealed class FleetTests : IAsyncLifetime
         remoteHost.Start();
         link.Endpoints["remote-id"] = remoteHost.Endpoint;
         local = localHost.Connect(ui);
-        main = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel(clock));
+        main = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel(clock, new UsageCache(cacheFile, clock)));
         fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100) }), clock);
         return Task.CompletedTask;
     }
@@ -67,6 +69,7 @@ public sealed class FleetTests : IAsyncLifetime
         await local.DisposeAsync();
         await localHost.DisposeAsync();
         await remoteHost.DisposeAsync();
+        File.Delete(cacheFile);
     }
 
     SessionCardViewModel? Card(string id)
@@ -409,6 +412,44 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.True(watch.Next(S("8", "https://other.example"), true));
         Assert.False(watch.Next(S("8", "https://other.example", SignInState.Pending), true));
         Assert.False(watch.Next(S("8", "https://other.example", SignInState.Failed), true));
+    }
+
+    [Fact]
+    public async Task A_kept_reading_shows_with_its_age_and_the_machine_that_read_it_when_no_machine_offers_it()
+    {
+        // This machine's host is signed in to the account, reads its own Copilot, and the build
+        // server is the only one signed in to Claude.
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        var copilot = new UsageReport([new AgentUsage { Agent = AgentKind.Copilot, Label = "Copilot", Account = "octo", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "plan", Label = "Plan", Percent = 10 }] }]);
+        var claude = new UsageReport([new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = "c1a0de000000", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }] }]);
+        localHost.On(UsageProtocol.Subscribe, _ => copilot);
+        remoteHost.On(UsageProtocol.Subscribe, _ => claude);
+        await BothMachinesAsync();
+        // Said again, in case either was subscribed before the test said what to answer.
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await localHost.SendAsync(UsageProtocol.Update, copilot);
+        await remoteHost.SendAsync(UsageProtocol.Update, claude);
+        await Wait.UntilAsync(() => main.Usage.Rows.Count == 2, "both machines' usage");
+        UsageRowViewModel Claude() => main.Usage.Rows.Single(r => r.Agent == AgentKind.Claude);
+        Assert.Equal("read on Build server", Claude().ReadOn);
+        // This machine's own reading needs no saying where it came from.
+        Assert.Null(main.Usage.Rows.Single(r => r.Agent == AgentKind.Copilot).ReadOn);
+
+        // The build server goes offline, and two hours pass.
+        link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        await Wait.UntilAsync(() => main.AllMachines.Count == 1, "the build server to go");
+        clock.Advance(TimeSpan.FromHours(2));
+        ui.Post(main.Usage.Refresh);
+
+        Assert.Equal(("41%", "read on Build server", "2h ago", true), (Claude().Windows[0].PercentText, Claude().ReadOn, Claude().Age, Claude().Stale));
+
+        // And after the app restarts, before any machine has said anything.
+        var restarted = new UsageViewModel(clock, new UsageCache(cacheFile, clock));
+        restarted.Update(UsageReport.Empty, "host-id", account: null);
+        Assert.Equal([null, "read on Build server"], restarted.Rows.Select(r => r.ReadOn).Order());
+        // A device that has never seen an allowance shows nothing for it; another account sees none.
+        restarted.Update(UsageReport.Empty, "host-id", account: "2");
+        Assert.Empty(restarted.Rows);
     }
 
     [Fact]

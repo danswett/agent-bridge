@@ -103,6 +103,23 @@ test('every other online machine is asked once, one at a time, for its status an
   assert.equal(book.entries()[0].windows[0].percent, 40);
 });
 
+test('a machine that keeps other machines\' readings is asked for them, and its own are marked as read there', async () => {
+  const vm = 'a'.repeat(32);
+  const { connection, book, fleet } = fleetWith({
+    desk: { machine: { name: 'Desk', hostVersion: '0.1.0' }, capabilities: ['usage', 'usage.shared'], usage: { agents: [...usage(40).agents, { agent: 'claude', label: 'Claude Code', accountKey: '3f9a2c71b0de', source: 'api', measuredAt: '2026-10-28T19:00:00.000Z', windows: [{ key: 'weekly_all', label: 'Weekly', percent: 12 }], readBy: { id: vm, name: 'Rehearsal VM' } }] } },
+    old: { machine: { name: 'Old', hostVersion: '0.0.9' }, capabilities: ['usage'], usage: { agents: [] } },
+  });
+  const asked = [];
+  const makeClient = fleet.makeClient;
+  fleet.makeClient = (ch) => ({ ...makeClient(ch), async usage(o) { asked.push([ch.id, o?.shared === true]); return connection.hosts[ch.id].usage; } });
+
+  fleet.probe();
+  await fleet.idle();
+
+  assert.deepEqual(asked, [['desk', true], ['old', false]]);
+  assert.deepEqual(book.entries().map((e) => [e.agent, e.readBy.name]), [['copilot', 'Desk'], ['claude', 'Rehearsal VM']]);
+});
+
 test('a machine that stops offering usage has its last report dropped, and one that cannot be reached keeps it', async () => {
   let now = 0;
   const { connection, book, fleet } = fleetWith({

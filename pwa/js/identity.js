@@ -21,13 +21,20 @@ async function kv(mode, key, value) {
   const db = await open();
   try {
     return await new Promise((resolve, reject) => {
-      const t = db.transaction(STORE, mode);
-      const r = mode === 'readonly' ? t.objectStore(STORE).get(key) : t.objectStore(STORE).put(value, key);
+      const t = db.transaction(STORE, mode === 'delete' ? 'readwrite' : mode);
+      const store = t.objectStore(STORE);
+      const r = mode === 'readonly' ? store.get(key) : mode === 'delete' ? store.delete(key) : store.put(value, key);
       r.onsuccess = () => resolve(r.result);
       r.onerror = () => reject(r.error);
     });
   } finally { db.close(); }
 }
+
+// Other things this device keeps beside its key, in the same store: the account's usage readings
+// (#172), which outlive the machines that read them.
+export const kvGet = (key) => kv('readonly', key);
+export const kvPut = (key, value) => kv('readwrite', key, value);
+export const kvDelete = (key) => kv('delete', key);
 
 export async function loadIdentity() {
   let rec = await kv('readonly', 'device');

@@ -9,18 +9,30 @@ namespace AgentBridge.App.Core;
 public sealed class UsageViewModel : Observable
 {
     readonly TimeProvider time;
+    readonly UsageCache? cache;
     UsageReport report = UsageReport.Empty;
+    string? here;
     string summary = "No usage reported yet";
 
-    public UsageViewModel(TimeProvider? time = null) => this.time = time ?? TimeProvider.System;
+    // cache: the last reading of each allowance kept between runs (#172), shown when no machine
+    // online offers it now.
+    public UsageViewModel(TimeProvider? time = null, UsageCache? cache = null)
+    {
+        this.time = time ?? TimeProvider.System;
+        this.cache = cache;
+    }
 
     public ObservableCollection<UsageRowViewModel> Rows { get; } = [];
     public string Summary { get => summary; private set => Set(ref summary, value); }
     public bool IsEmpty => Rows.Count == 0;
 
-    public void Update(UsageReport next)
+    // next: every machine's readings merged, each marked with the machine that took it. here: this
+    // machine's device id, whose own readings need no "read on". account: the account this
+    // machine's host is signed in to, "" signed out, null not known yet (UsageCache.Merge).
+    public void Update(UsageReport next, string? here = null, string? account = null)
     {
-        report = next;
+        report = cache?.Merge(next, account) ?? next;
+        this.here = here;
         Refresh();
     }
 
@@ -31,7 +43,7 @@ public sealed class UsageViewModel : Observable
         Rows.Clear();
         // One row per allowance even from one machine: a further Copilot account listed that is, or
         // becomes, the signed-in one (usage.copilotAccounts) is one allowance read twice.
-        foreach (var a in UsageMerge.Merge([report]).Agents.OrderByDescending(a => Headline(a) ?? 0)) { Rows.Add(new UsageRowViewModel(a, now)); }
+        foreach (var a in UsageMerge.Merge([report]).Agents.OrderByDescending(a => Headline(a) ?? 0)) { Rows.Add(new UsageRowViewModel(a, now, here)); }
         var figures = Rows.Where(r => r.Headline is not null).Select(r => $"{r.Label} {Math.Round(r.Headline!.Value)}%").ToList();
         Summary = figures.Count > 0 ? string.Join(" · ", figures) : "No usage reported yet";
         Raise(nameof(IsEmpty));
@@ -44,13 +56,16 @@ public sealed class UsageViewModel : Observable
 
 public sealed class UsageRowViewModel
 {
-    public UsageRowViewModel(AgentUsage a, DateTimeOffset now)
+    public UsageRowViewModel(AgentUsage a, DateTimeOffset now, string? here = null)
     {
         Agent = a.Agent;
         Label = a.Label;
         Detail = string.Join(" · ", new[] { a.Account ?? (a.AccountKey is { Length: >= 4 } k ? $"#{k[..4]}" : null), a.Plan }.Where(s => !string.IsNullOrEmpty(s)));
         Age = Words.ReadingAgo(a.MeasuredAt, now);
         Stale = now - a.MeasuredAt > TimeSpan.FromHours(1);
+        // Which machine took it, unless this one did: a reading kept, or passed on by another host,
+        // may be from a machine that is offline now (#172).
+        ReadOn = a.ReadBy is { } by && by.Id != here ? $"read on {by.Name}" : null;
         Headline = UsageViewModel.Headline(a);
         Windows = [.. a.Windows.Select(w => new UsageWindowViewModel(w, now))];
         // A failed read beside a fresh reading is noise; with no reading, or an old one, it is
@@ -62,6 +77,7 @@ public sealed class UsageRowViewModel
     public string Label { get; }
     public string Detail { get; }
     public string Age { get; }
+    public string? ReadOn { get; }
     public bool Stale { get; }
     public double? Headline { get; }
     public IReadOnlyList<UsageWindowViewModel> Windows { get; }

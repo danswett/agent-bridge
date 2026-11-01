@@ -232,6 +232,27 @@ test('a gap subscribes to usage again too, so a lost update is replaced by the c
   await flush();
   assert.equal(heard.at(-1).agents[0].agent, 'claude');
 });
+
+test('usage asked for with the other machines\' readings asks for them again after a gap', async () => {
+  const t = fakeTransport();
+  const client = await subscribed(t, new SessionsStore());
+  const p = client.subscribeUsage({ shared: true });
+  await flush();
+  assert.deepEqual(t.lastRequest('usage.subscribe').data, { shared: true });
+  t.host({ re: t.lastRequest('usage.subscribe').id, ok: true, result: { agents: [] } });
+  await p;
+  t.host({ ev: 'usage.update', seq: 1, data: { agents: [] } });
+  t.host({ ev: 'usage.update', seq: 3, data: { agents: [] } });
+  await flush();
+  assert.equal(t.sent.filter((m) => m.op === 'usage.subscribe').length, 2);
+  assert.deepEqual(t.lastRequest('usage.subscribe').data, { shared: true });
+  const g = client.usage();
+  await flush();
+  // Without it, the host's own report, asked for as before #172.
+  assert.deepEqual(t.lastRequest('usage.get').data, {});
+  t.host({ re: t.lastRequest('usage.get').id, ok: true, result: { agents: [] } });
+  await g;
+});
 test('what holds the host\'s discovery arrives with the snapshot and with each change, and an unreadable one holds nothing', async () => {
   const t = fakeTransport();
   const store = new SessionsStore();

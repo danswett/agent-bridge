@@ -72,7 +72,10 @@ Check `gh pr list -R danswett/agent-bridge` for open PRs. Two coordinators work 
 - **UI coordinator** (bridge session f7ba0bcc0adb4319, DEV-VM1): track B (§5). It merges its own PRs under the same rule.
 - Cross-track needs go on #170.
 
-In flight on 2026-11-01: #187 (S1) and #172 (shared usage), each with a delegate.
+In flight on 2026-11-01: #187 (S1) and #172 (shared usage), each with a delegate. #172 is PR #186,
+in review: each host asks the account's other hosts for their usage readings and serves them
+(`usage.shared`), and the app and PWA keep the last reading of each allowance, so usage read on a
+machine that is now offline still shows. Security-sensitive: a new host-initiated channel, read-only.
 
 - Sub-agents S1 (#173): the host's sub-agent tree from Copilot transcripts and its additive
   protocol (`subagents`, `activity.source` and `own`, `waitingOn`, Question `agent`,
@@ -161,7 +164,8 @@ ui.md §2.2 rule 7 becomes an overlay after rules 1–6 while rule 8 refines rul
   - #56: cancel a question from another device;
   - #78: launched sessions get the agent HA token;
   - #93: migrate carries `usage.*`;
-  - #95: bound the resumable sessions' folder checks.
+  - #95: bound the resumable sessions' folder checks;
+  - #172: usage per account, shared between hosts (in review).
 - **Bugs and follow-ups from live use:**
   - #101: app test timing races;
   - #102 and #150: launch busy wording;
@@ -288,3 +292,4 @@ agent-ha-bridge releases from this work:
 | 11-01 | Monospace (#181): the fallback stack for now (Cascadia Mono, SF Mono, Roboto Mono); Berkeley Mono decided later |
 | 11-01 | Monospace (#181), later the same day: Agent Bridge Mono, a custom OFL build of Iosevka in the repository. Berkeley Mono rejected, because its Commercial license limits embedding to apps without text entry, requires the font to be unextractable and bars public sharing |
 | 11-01 | Track B order: U1→U2 and U3→U4 in parallel, then U5 and U6, then U7, then U8 after S1 |
+| 11-01 | Usage belongs to an account: hosts share readings with each other, any online host serves the freshest per account, and the app and PWA keep the last one (#172) |

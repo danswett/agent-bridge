@@ -541,21 +541,7 @@ public static class UsageMerge
 {
     public static UsageReport Merge(IEnumerable<UsageReport> reports)
     {
-        var slots = new Dictionary<string, (AgentUsage? Reading, AgentUsage? Failure)>(StringComparer.Ordinal);
-        var order = new List<string>();
-        foreach (var a in reports.SelectMany(r => r.Agents))
-        {
-            var key = $"{a.Agent}\0{a.AccountKey ?? (a.Account ?? "").ToLowerInvariant()}";
-            if (!slots.TryGetValue(key, out var slot)) { order.Add(key); }
-            if (a.Windows.Count > 0)
-            {
-                if (slot.Reading is null || slot.Reading.MeasuredAt < a.MeasuredAt) { slot.Reading = a; }
-            }
-            else if (slot.Failure is null || slot.Failure.MeasuredAt < a.MeasuredAt) { slot.Failure = a; }
-            slots[key] = slot;
-        }
-        var entries = order.Select(k => slots[k]).Select(s => s.Reading is not { } r ? s.Failure!
-            : s.Failure is { Error: { Length: > 0 } why } f && f.MeasuredAt > r.MeasuredAt ? r with { Error = why } : r).ToList();
+        var entries = Combine(reports);
         // Two rows of one agent with no account to name either (Claude names none) would look
         // the same: a few characters of the key keep them apart, only when there is something
         // to keep apart.
@@ -566,4 +552,30 @@ public static class UsageMerge
         }
         return new UsageReport(entries);
     }
+
+    // One entry per allowance, as Merge, without the names it adds for showing them.
+    public static List<AgentUsage> Combine(IEnumerable<UsageReport> reports)
+    {
+        var slots = new Dictionary<string, (AgentUsage? Reading, AgentUsage? Failure)>(StringComparer.Ordinal);
+        var order = new List<string>();
+        foreach (var a in reports.SelectMany(r => r.Agents))
+        {
+            var key = UsageShare.Key(a);
+            if (!slots.TryGetValue(key, out var slot)) { order.Add(key); }
+            if (a.Windows.Count > 0)
+            {
+                if (slot.Reading is null || slot.Reading.MeasuredAt < a.MeasuredAt) { slot.Reading = a; }
+            }
+            else if (slot.Failure is null || slot.Failure.MeasuredAt < a.MeasuredAt) { slot.Failure = a; }
+            slots[key] = slot;
+        }
+        return [.. order.Select(k => slots[k]).Select(s => s.Reading is not { } r ? s.Failure!
+            : s.Failure is { Error: { Length: > 0 } why } f && f.MeasuredAt > r.MeasuredAt ? r with { Error = why } : r)];
+    }
+
+    // A machine's own readings, marked as taken by it, so a client can say where each one came from
+    // once they are merged and kept (#172). Readings it passed on from other machines already say.
+    public static UsageReport ReadOn(UsageReport report, MachineInfo? machine) => machine is null || report.Agents.All(a => a.ReadBy is not null)
+        ? report
+        : new UsageReport([.. report.Agents.Select(a => a.ReadBy is null ? a with { ReadBy = new UsageReader(machine.Id, machine.Name) } : a)]);
 }

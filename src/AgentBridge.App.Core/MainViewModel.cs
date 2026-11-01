@@ -354,7 +354,12 @@ public sealed partial class MainViewModel : Observable
         OnHeldChanged();
     }
 
-    void UpdateUsage() => Usage.Update(machines.Count == 1 ? local.Host.Usage : UsageMerge.Merge(machines.Select(m => m.Host.Usage)));
+    // Each machine's readings marked with the machine that took them, merged, and kept between runs
+    // for the account this machine's host is signed in to (#172).
+    void UpdateUsage() => Usage.Update(
+        new UsageReport(UsageMerge.Combine(machines.Select(m => UsageMerge.ReadOn(m.Host.Usage, m.Host.Hello?.Machine)))),
+        LocalMachineId,
+        host.Status is { } status ? status.Account?.AccountId ?? "" : null);
 
     void OnUpsert(Machine m, Session s)
     {

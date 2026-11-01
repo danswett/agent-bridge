@@ -61,6 +61,20 @@ public sealed class ConnectionTests : IAsyncLifetime
         Assert.Contains(HostOps.Subscribe, host.Received.Select(r => r.Op));
         Assert.Contains(UsageProtocol.Subscribe, host.Received.Select(r => r.Op));
         Assert.Contains(Ops.SessionsSubscribe, host.Received.Select(r => r.Op));
+        // A host that keeps no other machines' readings is asked for its own, as before #172.
+        Assert.False(host.Sent(UsageProtocol.Subscribe).Single().GetProperty("shared").GetBoolean());
+    }
+
+    [Fact]
+    public async Task A_host_that_keeps_other_machines_readings_is_asked_for_them_too()
+    {
+        await using var shared = new FakeHost();
+        shared.Capabilities.Add(UsageProtocol.SharedCapability);
+        shared.Start();
+        await using var conn = shared.Connect();
+
+        await Wait.UntilAsync(() => shared.Sent(UsageProtocol.Subscribe).Count == 1, "the usage subscription");
+        Assert.True(shared.Sent(UsageProtocol.Subscribe).Single().GetProperty("shared").GetBoolean());
     }
 
     [Fact]
