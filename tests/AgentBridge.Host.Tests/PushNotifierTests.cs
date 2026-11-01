@@ -319,6 +319,20 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task A_delegates_question_already_pending_when_the_host_starts_ends_no_turn_when_answered()
+    {
+        var asking = S("s1", SessionStatus.Waiting, response: "Started the delegates.", question: Q("q1", "Allow?", QuestionKind.Approval) with { Agent = "agent-1" }, turns: 0) with { WaitingOn = "agent-1" };
+        Start(existing: asking);
+        Subscribe(Phone);
+        await After(TimeSpan.FromSeconds(2));
+
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Started the delegates."));
+        await After(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(["question", "resolved"], Received().Select(r => Kind(r.Notification)));
+    }
+
+    [Fact]
     public async Task A_finished_turn_replaces_the_answered_question_instead_of_adding_a_notice()
     {
         Start();

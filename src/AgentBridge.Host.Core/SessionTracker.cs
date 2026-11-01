@@ -188,16 +188,13 @@ internal sealed class SessionTracker
         var (subagents, more) = _state.Background.Entries(d.ProcessStartedAt, Waiting());
         var source = _state.ResponseBy is null && _state.ReasoningBy is null ? null
             : new ActivitySource { Response = _state.ResponseBy, Reasoning = _state.ReasoningBy };
-        OwnActivity? own = null;
-        if (source is not null)
-        {
-            var (ownResponse, ownCut) = source.Response is null ? (null, false) : Limits.KeepEnd(_state.OwnResponse, Limits.Response);
-            var ownReasoning = source.Reasoning is null ? null : Limits.KeepEnd(_state.OwnReasoning, Limits.Reasoning).Text;
-            if (ownResponse is not null || ownReasoning is not null)
-            {
-                own = new OwnActivity { Response = ownResponse, ResponseTruncated = ownCut ? true : null, Reasoning = ownReasoning, At = _state.OwnAt };
-            }
-        }
+        // The main agent's own text for each field whose top-level text is not it: a
+        // sub-agent's (source names it), or none at all where the host has the main agent's
+        // only from the part of the transcript it skimmed.
+        var (ownResponse, ownCut) = source?.Response is not null || _state.Response is null ? Limits.KeepEnd(_state.OwnResponse, Limits.Response) : (null, false);
+        var ownReasoning = source?.Reasoning is not null || _state.Reasoning is null ? Limits.KeepEnd(_state.OwnReasoning, Limits.Reasoning).Text : null;
+        var own = ownResponse is null && ownReasoning is null ? null
+            : new OwnActivity { Response = ownResponse, ResponseTruncated = ownCut ? true : null, Reasoning = ownReasoning, At = _state.OwnAt };
 
         return new Session
         {

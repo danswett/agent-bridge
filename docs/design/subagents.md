@@ -92,7 +92,8 @@ Rules 3–6 are exactly today's behaviour. Rule 2 is new and needs `Session.wait
   // #20: who wrote the top-level response and reasoning, each on its own; a field left
   // out (or the whole object absent) is the main agent's
   "source": { "response": "agent-3a91", "reasoning": "agent-c204" },
-  // the main agent's own text for each field `source` attributes, sent only with `source`
+  // the main agent's own text for each field whose top-level text is not it: a field
+  // `source` attributes, or one absent where the host only skimmed the main agent's
   "own": { "response": "…", "responseTruncated": true, "reasoning": "…", "at": "…" }
 }
 
@@ -105,7 +106,8 @@ Rules 3–6 are exactly today's behaviour. Rule 2 is new and needs `Session.wait
   last-writer-wins. The only extra is that `source` says whose they are.
 - **New clients:**
   - for each of `response` and `reasoning`, render `own`'s while `source` names a sub-agent
-    for it, and the top-level one otherwise, so the main agent's answer never disappears;
+    for it, otherwise the top-level one, or `own`'s when that is absent, so the main
+    agent's answer never disappears;
   - render the sub-agent's words only from `subagents[]` or `session.get`.
 - **Full detail for one sub-agent:** `session.get { id, agent }` returns its `response`
   (≤ 16 KiB), `reasoning` (≤ 4 KiB) and `history` (latest 50). Lists never carry these.
@@ -134,7 +136,8 @@ Rules 3–6 are exactly today's behaviour. Rule 2 is new and needs `Session.wait
 2. *What counts as running:* only `working` or `waiting` background entries; `idle` ones
    stay listed for later wakes.
 3. *Per-field provenance:* `source.response` and `source.reasoning` are separate, and
-   `own` carries the main agent's text for exactly the fields `source` attributes.
+   `own` carries the main agent's text for the fields `source` attributes, and for one the
+   host has only from its skim of the transcript (the top-level field then absent).
 4. *Budget for `own`:* its field limits are the legacy ones, `own.responseTruncated` is
    its cut signal, and it is trimmed with the legacy field beside it.
 

@@ -347,6 +347,14 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     if (S.Pending.RemoveAll(q => q.Agent == agent) == 0) { return false; }
                     break;
                 }
+            // A sub-agent that failed asks nothing any more either; its failure is written
+            // stamped since CLI 1.0.10x, and by its task call before.
+            case "subagent.failed":
+                {
+                    var agent = Json.Str(e, "agentId") is { Length: > 0 } a ? a : S.Background.AgentOf(Json.Str(data, "toolCallId"));
+                    if (agent is null || S.Pending.RemoveAll(q => q.Agent == agent) == 0) { return false; }
+                    break;
+                }
             case "session.shutdown" when !sub:
                 S.Abandon(at);
                 break;

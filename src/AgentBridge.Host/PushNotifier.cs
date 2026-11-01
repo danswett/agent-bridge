@@ -102,9 +102,9 @@ public sealed class PushNotifier : IAsyncDisposable
         // The question on devices now (notified, not yet resolved).
         public string? Shown;
         public string? FinishedKey;
-        // The main agent's turn as last seen idle: a delegate's question answered while the
-        // main agent was idle all along ends no turn of its.
-        public string? IdleKey;
+        // The main agent's answer as last seen outside a wait on a delegate: answering a
+        // delegate's question while the main agent stayed idle ends no turn of its.
+        public string? MainKey;
         public readonly HashSet<string> Notified = new(StringComparer.Ordinal);
         public readonly Queue<string> NotifiedOrder = new();
     }
@@ -144,7 +144,7 @@ public sealed class PushNotifier : IAsyncDisposable
             foreach (var s in source.Snapshot())
             {
                 if (sessions.ContainsKey(s.Id)) { continue; }
-                var t = sessions[s.Id] = new Tracked { Last = s, IdleKey = s.Status == SessionStatus.Idle ? FinishedKey(s) : null };
+                var t = sessions[s.Id] = new Tracked { Last = s, MainKey = MainKey(s) };
                 if (s.Question is { } q) { t.Due = new Due(NoticeKind.Question, now + this.options.QuestionDelay, q.Id); }
             }
         }
@@ -306,6 +306,9 @@ public sealed class PushNotifier : IAsyncDisposable
         var prev = t.Last;
         t.Last = s;
         t.Removed = false;
+        // The main agent's answer as it stood before any wait on a delegate began.
+        var baseline = t.MainKey;
+        if (s.WaitingOn is null) { t.MainKey = MainKey(s); }
         if (s.Question is { } q)
         {
             // Back before its resolution went out (it flickered while an answer was typed):
@@ -326,28 +329,35 @@ public sealed class PushNotifier : IAsyncDisposable
         }
         // Answered (or gone) before it was notified: nothing to say.
         if (t.Due is { Kind: NoticeKind.Question }) { t.Due = null; }
-        // Waiting on a delegate (status rule 2) says nothing of the main agent's turn: only one
-        // that changed while it waited finished then.
-        var turnRan = prev is { Status: SessionStatus.Working } or { Status: SessionStatus.Waiting, WaitingOn: null } || FinishedKey(s) != t.IdleKey;
-        if (s.Status == SessionStatus.Idle && prev is { Status: SessionStatus.Working or SessionStatus.Waiting } && turnRan
+        // Waiting on a delegate (status rule 2) says nothing of the main agent's turn: a turn
+        // finished then only if the main agent's answer is seen to have changed since before
+        // the wait. With no answer seen before it (a session first seen already waiting on
+        // one), nothing says a turn ran. Sessions present at startup are seeded with theirs.
+        var turnRan = prev is { Status: SessionStatus.Waiting, WaitingOn: not null }
+            ? baseline is { } before && MainKey(s) != before
+            : prev is { Status: SessionStatus.Working or SessionStatus.Waiting };
+        if (s.Status == SessionStatus.Idle && turnRan
             && !string.IsNullOrWhiteSpace(OwnResponse(s)) && FinishedKey(s) != t.FinishedKey)
         {
             t.Due = new Due(NoticeKind.Finished, now + options.FinishedDelay, null);
         }
         // The turn carried on before the notice went: the person is at the machine.
         else if (s.Status != SessionStatus.Idle && t.Due is { Kind: NoticeKind.Finished }) { t.Due = null; }
-        if (s.Status == SessionStatus.Idle) { t.IdleKey = FinishedKey(s); }
         // A question on devices is no longer asked. Not at once: a turn that finishes soon
         // after replaces it with its own notice.
         if (t.Shown is { } shown && t.Due is null) { t.Due = new Due(NoticeKind.Resolved, now + options.QuestionDelay, shown); }
     }
 
     static string FinishedKey(Session s) =>
-        $"{s.Activity.TurnCount}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(OwnResponse(s) ?? "")))[..16]}";
+        $"{s.Activity.TurnCount}:{MainKey(s)}";
+
+    // The main agent's own answer, whatever the status: unlike turnCount, it reads the same
+    // waiting and idle.
+    static string MainKey(Session s) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(OwnResponse(s) ?? "")))[..16];
 
     // "Finished" is the main agent's turn only (subagents.md §7): its own response, never the
     // delegate's that may be the latest text.
-    static string? OwnResponse(Session s) => s.Activity.Source?.Response is null ? s.Activity.Response : s.Activity.Own?.Response;
+    static string? OwnResponse(Session s) => s.Activity.Source?.Response is null ? s.Activity.Response ?? s.Activity.Own?.Response : s.Activity.Own?.Response;
 
     void Signal()
     {

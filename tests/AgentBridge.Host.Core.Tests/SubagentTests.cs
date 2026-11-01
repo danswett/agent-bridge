@@ -425,4 +425,48 @@ public class SubagentTests
         var alone = await s.After(Copilot.PermissionDone("r1", "c9", "approved", 12));
         Assert.Null(alone.Question!.AnswerAtMachine);
     }
+
+    [Fact]
+    public async Task Aborting_the_main_turn_ends_its_task_agents_but_not_one_a_background_agent_started()
+    {
+        await using var s = new Live();
+        await s.After([.. Delegate("t1", "bg", 1),
+            Copilot.ToolStart("t2", "task", new { description = "Nested", prompt = "p" }, 3, "bg"), Copilot.SubagentStarted("t2", "nested", 3, mode: "sync"), Copilot.TurnStart(3, "nested")]);
+
+        var aborted = await s.After(Copilot.User("go", 4), Copilot.TurnStart(4),
+            Copilot.ToolStart("t3", "task", new { description = "Own task", prompt = "p" }, 5), Copilot.SubagentStarted("t3", "own", 5, mode: "sync"), Copilot.TurnStart(5, "own"),
+            Copilot.Event("abort", new { reason = "user initiated" }, 6));
+
+        Assert.Equal((SubagentStatus.Ended, SubagentOutcome.Failed), (Entry(aborted, "own").Status, Entry(aborted, "own").Outcome));
+        Assert.Equal(SubagentStatus.Working, Entry(aborted, "nested").Status);
+        Assert.Equal(SubagentStatus.Working, Entry(aborted, "bg").Status);
+    }
+
+    [Fact]
+    public async Task A_sub_agent_that_fails_while_asking_leaves_nothing_pending_and_reads_failed()
+    {
+        await using var s = new Live();
+        await s.After(Delegate("t1", "a1", 1));
+        var asking = await s.After(Copilot.ToolStart("c9", "powershell", new { command = "gh pr checks" }, 10, "a1"), Copilot.Permission("r1", "c9", Copilot.Prompts["commands"], 10));
+        Assert.Equal("a1", asking.WaitingOn);
+
+        var failed = await s.After(Copilot.Event("subagent.failed", new { toolCallId = "t1", agentName = "general-purpose", error = "AbortError: This operation was aborted" }, 11, "a1"));
+
+        Assert.Null(failed.Question);
+        Assert.Null(failed.WaitingOn);
+        Assert.Equal((SubagentStatus.Ended, SubagentOutcome.Failed), (Entry(failed, "a1").Status, Entry(failed, "a1").Outcome));
+    }
+
+    [Fact]
+    public async Task A_host_starting_after_a_delegate_only_thought_in_its_window_still_has_the_main_agents_answer()
+    {
+        await using var s = new Live(tailBytes: 4096);
+        var filler = Enumerable.Range(0, 8).Select(i => Copilot.Assistant("", 40 + i, reasoning: new string('x', 1000), agentId: "a1")).ToArray();
+
+        var cold = await s.After([.. Delegate("t1", "a1", 1), Copilot.Assistant("The delegate is on it.", 8), Copilot.TurnEnd(8), .. filler]);
+
+        Assert.Null(cold.Activity.Response);
+        Assert.Equal(new ActivitySource { Reasoning = "a1" }, cold.Activity.Source);
+        Assert.Equal("The delegate is on it.", cold.Activity.Own!.Response);
+    }
 }

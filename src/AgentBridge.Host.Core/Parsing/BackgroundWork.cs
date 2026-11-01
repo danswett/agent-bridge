@@ -257,15 +257,34 @@ internal sealed class BackgroundWork
         Finish(agent);
     }
 
-    // The main agent's turn was interrupted: a task agent is part of that turn, so it went
-    // with it. Background agents carry on.
+    // The agent a task call started, if known.
+    public string? AgentOf(string? callId) => callId is not null && _agentByCall.TryGetValue(callId, out var key) ? key : null;
+
+    // The main agent's turn was interrupted: a task agent it started is part of that turn, and
+    // so is one such an agent started, so they went with it. A background agent carries on,
+    // and so does everything under it.
     public void MainAborted(DateTimeOffset? at)
     {
-        foreach (var agent in _agents.Values.Where(a => !a.Background && a.Working).ToList())
+        foreach (var agent in _agents.Values.Where(a => a.Working && InMainTurn(a)).ToList())
         {
             EndRun(agent, at, SubagentOutcome.Failed);
             Finish(agent);
         }
+    }
+
+    // Task agents all the way up to the main agent. A parent no longer known says nothing, so
+    // nothing is ended on its account.
+    bool InMainTurn(Agent agent)
+    {
+        var a = agent;
+        for (var depth = 0; depth < 64; depth++)
+        {
+            if (a.Background) { return false; }
+            if (a.Parent is null) { return true; }
+            if (!_agents.TryGetValue(a.Parent, out var parent)) { return false; }
+            a = parent;
+        }
+        return false;
     }
 
     public void AgentToolStarted(string agentId, string id, string name, string? summary, DateTimeOffset at)

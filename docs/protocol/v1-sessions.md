@@ -586,7 +586,7 @@ agent-ha-bridge notifies a phone through Home Assistant.
 | `kind` | When | Once per |
 |---|---|---|
 | `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it |
-| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Waiting on a sub-agent's question (`waitingOn`) counts only if the main agent's turn count or response changed meanwhile: answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified | Finished turn: the same `turnCount` and response seen ending again is not repeated |
+| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Waiting on a sub-agent's question (`waitingOn`) counts only if the main agent's own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified | Finished turn: the same `turnCount` and response seen ending again is not repeated |
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead | Question |
 
 A question answered before its 2 s are up is never notified. A notice that cannot be sent
@@ -746,7 +746,7 @@ alone.
 | `compactions` | number? | Context compactions so far |
 | `background` | Background? | Work the session started that is still running after its own turn. Absent when there is none |
 | `source` | `{ "response"?: string, "reasoning"?: string }`? | Which sub-agent wrote the top-level `response` and `reasoning`, each on its own, by its `subagents` id: a main-agent reply can sit beside a delegate's reasoning. A field left out is the main agent's own. Absent while both are. Older clients ignore it and keep the last-writer-wins text |
-| `own` | `{ "response"?, "responseTruncated"?, "reasoning"?, "at"? }`? | Sent only with `source`: the main agent's own text for each field `source` names a sub-agent for (16 KiB and 4 KiB, the end kept, as above), and `at`, when the main agent last wrote either. A field `source` names but `own` lacks means the main agent has none. So a newer client shows, for each of `response` and `reasoning`, `own`'s when `source` names an agent for it and the top-level one otherwise, and never shows a delegate's words as the main agent's. Absent when it would be empty |
+| `own` | `{ "response"?, "responseTruncated"?, "reasoning"?, "at"? }`? | The main agent's own text for each field whose top-level text is not it: one `source` names a sub-agent for, or one that is absent while the host has the main agent's from the part of the transcript it only skimmed (a host starting after delegates filled what it parses). 16 KiB and 4 KiB, the end kept, as above; `at` is when the main agent last wrote either. A field `source` names but `own` lacks means the main agent has none. So a newer client shows, for each of `response` and `reasoning`, `own`'s when `source` names an agent for it, otherwise the top-level one, or `own`'s when that is absent; and never shows a delegate's words as the main agent's. Absent when it would be empty |
 
 ### Background
 
@@ -927,8 +927,12 @@ that added `background`).
     `session.model_change` and `assistant.message` (#73: never the session's).
   * A run ends as for background agents above, with outcome `done`. A task agent is
     `ended` when its run ends, or when its `task` call completes (`failed` if the call
-    failed), or when the main agent's turn is aborted (`failed`). `subagent.failed` or the
-    agent's own `abort` ends it `failed`, even when no run of it was seen going; its own
+    failed), or when the main agent's turn is aborted (`failed`) while it was that turn's:
+    a task agent the main agent's `task` started, or one nested only under such agents. One a
+    background agent started belongs to that agent's run, and the main agent's abort leaves
+    it alone. `subagent.failed` or the
+    agent's own `abort` ends it `failed`, even when no run of it was seen going, and clears
+    any question of its still pending; its own
     `session.shutdown` ends it, `failed` only if mid-run. The session's
     `session.shutdown` ends every entry: `failed` if it was mid-run.
   * Its shells are read from its own tool results with the same markers, skimmed ones
