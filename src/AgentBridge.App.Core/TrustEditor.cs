@@ -59,24 +59,22 @@ public sealed class TrustEditor
         {
             var now = (await host.CallAsync<HostStatus>(HostOps.Status)).Settings;
             var saved = change(now) is { } request ? (await host.CallAsync<SettingsResult>(HostOps.Settings, request)).Settings : now;
-            Acknowledge(saved);
+            Volatile.Write(ref acked, Equals(saved, host.Status?.Settings) ? null : saved);
             return saved;
         }
         finally
         {
-            Interlocked.Decrement(ref pending);
+            var last = Interlocked.Decrement(ref pending) == 0;
             slot.Release();
+            // Told once nothing is on its way, failed or not: what was shown while edits were
+            // pending is held back until then (Settings' boxes show what was asked for), so a
+            // change from the Launch page whose status came before its reply was never redrawn.
+            if (last) { Changed?.Invoke(); }
             // A status that came while this was on its way was not checked then; the reply may be
             // older than it (a change at the terminal in between). Failed or not: an earlier
             // acknowledgement may still be held.
             Check();
         }
-    }
-
-    void Acknowledge(HostSettingsView saved)
-    {
-        Volatile.Write(ref acked, Equals(saved, host.Status?.Settings) ? null : saved);
-        Changed?.Invoke();
     }
 
     // A status that disagrees with an acknowledgement, with nothing on its way: either an older
@@ -96,10 +94,14 @@ public sealed class TrustEditor
         try
         {
             var now = (await host.CallAsync<HostStatus>(HostOps.Status)).Settings;
-            Acknowledge(now);
+            Volatile.Write(ref acked, Equals(now, host.Status?.Settings) ? null : now);
+            Changed?.Invoke();
         }
         // Not read: the acknowledgement stands until a status agrees or the next is checked.
         catch (Exception e) when (e is not OutOfMemoryException) { }
         finally { slot.Release(); }
+        // A status that came during the read and agreed with what was held then was let pass,
+        // and the read, older than it, may just have replaced that: it is checked now.
+        Check();
     }
 }

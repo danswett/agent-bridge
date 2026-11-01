@@ -191,7 +191,10 @@ public sealed class SettingsViewModel : Observable
         }
         else
         {
-            TrustDevices = [.. next.Select(r => new TrustDevice(this, r.Id, r.Label, r.Approved))];
+            // A device joining or leaving while changes are on their way: the rows kept show what
+            // was asked for, not a status from before, as above; new ones what the host says.
+            var asked = Volatile.Read(ref pendingEdits) == 0 && !trust.Pending ? null : TrustDevices.ToDictionary(d => d.Id, d => d.Approved);
+            TrustDevices = [.. next.Select(r => new TrustDevice(this, r.Id, r.Label, asked is not null && asked.TryGetValue(r.Id, out var a) ? a : r.Approved))];
             Raise(nameof(TrustDevices));
         }
         Raise(nameof(ShowTrustDevices));
