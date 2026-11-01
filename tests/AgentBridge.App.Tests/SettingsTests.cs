@@ -591,6 +591,20 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_download_from_Settings_that_fails_leaves_what_another_install_recorded_for_its_restart()
+    {
+        await Connected();
+        // The automatic update recorded its install (AutoUpdater.Record) while Settings downloaded.
+        prefs = prefs with { UpdatedFrom = "0.1.0", UpdateNotes = "notes", UpdateRequest = "a-device-press" };
+        updater.DownloadFails = new HttpRequestException("The response ended prematurely.");
+
+        await settings.CheckForUpdatesAsync();
+        await settings.InstallUpdateAsync();
+
+        Assert.Equal(("0.1.0", "notes", "a-device-press"), (prefs.UpdatedFrom, prefs.UpdateNotes, prefs.UpdateRequest));
+    }
+
+    [Fact]
     public async Task An_update_from_Settings_answers_the_install_a_device_pressed_and_the_app_had_not_yet_carried_out()
     {
         await Connected();

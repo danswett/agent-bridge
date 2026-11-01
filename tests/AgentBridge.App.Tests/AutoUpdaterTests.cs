@@ -772,7 +772,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var told = new List<UpdateState>();
         auto.StateChanged += () => told.Add(auto.State);
 
-        AutoUpdater.Failed(() => prefs, p => prefs = p, shared, "0.2.0", "the host did not stop", time);
+        AutoUpdater.Failed(() => prefs, p => prefs = p, shared, "0.2.0", "the host did not stop", time: time);
 
         var last = Assert.Single(told).Last!;
         Assert.Equal((UpdateOutcome.Failed, "0.2.0", "the host did not stop"), (last.Outcome, last.To, last.Reason));

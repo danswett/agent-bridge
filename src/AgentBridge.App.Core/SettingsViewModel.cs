@@ -333,11 +333,12 @@ public sealed class SettingsViewModel : Observable
     {
         if (updateVersion is null) { return; }
         UpdateStatus = $"Downloading {updateVersion}…";
-        // A download that fails is the update failing, for the account's devices too.
+        // A download that fails is the update failing, for the account's devices too, unless the
+        // automatic update is installing meanwhile: its outcome is the one to report.
         try { await updater.DownloadAsync(p => UpdateStatus = $"Downloading {updateVersion}… {p}%"); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            AutoUpdater.Failed(prefs, savePrefs, updater, updateVersion, $"downloading {updateVersion} failed: {e.Message}");
+            if (!manager.UpdateUnderWay) { AutoUpdater.Failed(prefs, savePrefs, updater, updateVersion, $"downloading {updateVersion} failed: {e.Message}", recorded: false); }
             throw;
         }
         // Another check (the automatic one shares this updater) may have found a different release

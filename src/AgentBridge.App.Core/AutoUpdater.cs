@@ -511,16 +511,14 @@ public sealed class AutoUpdater
 
     // Settings' Update and restart failed, the old release still running: kept for the devices as
     // an automatic install that fails is. The press a device made, if Settings took it on, is left
-    // to the app, which still carries it out.
-    public static void Failed(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, string? to, string reason, TimeProvider? time = null)
+    // to the app, which still carries it out. recorded: Settings had recorded the install (Record),
+    // whose markers go with it; a download that failed before then leaves them alone, since they
+    // may be an automatic install's, under way meanwhile.
+    public static void Failed(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, string? to, string reason, bool recorded = true,
+        TimeProvider? time = null)
     {
-        save(prefs() with
-        {
-            UpdatedFrom = null,
-            UpdateNotes = null,
-            UpdateRequest = null,
-            LastUpdate = new UpdateResult { Outcome = UpdateOutcome.Failed, From = updater.InstalledVersion, To = to, Reason = reason, At = (time ?? TimeProvider.System).GetUtcNow() },
-        });
+        var result = new UpdateResult { Outcome = UpdateOutcome.Failed, From = updater.InstalledVersion, To = to, Reason = reason, At = (time ?? TimeProvider.System).GetUtcNow() };
+        save(recorded ? prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, LastUpdate = result } : prefs() with { LastUpdate = result });
         (updater as ObservedUpdater)?.Noted();
     }
 
