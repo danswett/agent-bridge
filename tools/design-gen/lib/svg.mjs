@@ -241,6 +241,13 @@ function checkValues(attrs, file, tag) {
     const list = k === 'stroke-dasharray' && v !== 'none' ? v.split(/[\s,]+/).filter(Boolean) : NUMERIC.has(k) ? [v.trim()] : [];
     if (list.length === 0 && k === 'stroke-dasharray' && v !== 'none') { throw new Error(`${file}: ${k}="${v}" on <${tag}> is not a list of plain numbers`); }
     for (const n of list) { if (!PLAIN.test(n)) { throw new Error(`${file}: ${k}="${v}" on <${tag}> must be a plain number, in the viewBox's units`); } }
+    // SVG clamps an opacity and draws nothing for a shape with no size, or a negative radius or
+    // width; XAML would draw a cap or an unclamped value instead, so neither is in the subset.
+    const x = Number(v);
+    if (/opacity$/.test(k) && !(x >= 0 && x <= 1)) { throw new Error(`${file}: ${k}="${v}" on <${tag}> must be from 0 to 1`); }
+    if ((k === 'r' || (tag === 'rect' && (k === 'width' || k === 'height'))) && !(x > 0)) { throw new Error(`${file}: ${k}="${v}" on <${tag}> must be above 0`); }
+    if ((k === 'rx' || k === 'ry' || k === 'stroke-width') && !(x >= 0)) { throw new Error(`${file}: ${k}="${v}" on <${tag}> may not be negative`); }
+    if (k === 'stroke-dasharray' && (list.some((n) => Number(n) < 0) || list.every((n) => Number(n) === 0))) { throw new Error(`${file}: ${k}="${v}" on <${tag}> may not be negative or all 0`); }
   }
 }
 

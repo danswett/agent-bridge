@@ -111,3 +111,16 @@ test('a translucent part with both fill and stroke, and a dashed stroke with no 
   assert.doesNotThrow(() => readDesignSvg(svgFile('whole', '<circle cx="8" cy="8" r="5" fill="currentColor" stroke="currentColor" opacity=".5"/>'), 'glyph'));
   assert.doesNotThrow(() => readDesignSvg(svgFile('onepaint', '<circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-opacity=".3"/>'), 'glyph'));
 });
+
+test('an opacity outside 0 to 1, a shape with no size and a negative length are refused, as SVG would not draw them as XAML does', () => {
+  const bad = [
+    ['op', '<circle cx="8" cy="8" r="5" fill="currentColor" opacity="1.5"/>', /from 0 to 1/],
+    ['sop', '<circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-opacity="-0.2"/>', /from 0 to 1/],
+    ['r0', '<circle cx="8" cy="8" r="0" fill="none" stroke="currentColor"/>', /above 0/],
+    ['w0', '<rect x="2" y="2" width="0" height="12" fill="none" stroke="currentColor" stroke-linecap="round"/>', /above 0/],
+    ['rxneg', '<rect x="2" y="2" width="12" height="12" rx="-2" fill="currentColor"/>', /may not be negative/],
+    ['swneg', '<path d="M2 8L14 8" stroke="currentColor" stroke-width="-1"/>', /may not be negative/],
+    ['dash0', '<path d="M2 8L14 8" stroke="currentColor" stroke-dasharray="0 0"/>', /negative or all 0/],
+  ];
+  for (const [name, body, re] of bad) { assert.throws(() => readDesignSvg(svgFile(name, body), 'glyph'), re, name); }
+});
