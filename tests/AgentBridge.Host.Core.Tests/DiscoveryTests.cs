@@ -658,18 +658,30 @@ public class DiscoveryTests
             new("copilot", 9456, t.AddMilliseconds(300), Native, Parent: 9992),
             new("node", 9992, t, Loader), // started by hand: no --session-id, no lock of its own (#153)
             new("copilot", 3796, t.AddMinutes(20).AddMilliseconds(300), Native + " --session-id 73d96826", Parent: 1600),
-            new("node", 1600, t.AddMinutes(20), Loader + " --session-id 73d96826"), // a launch's
+            // a launch's, as the launcher's shell wrote it
+            new("node", 1600, t.AddMinutes(20), @"""node""   ""C:\Users\u\AppData\Roaming\npm\\node_modules\@github\copilot\npm-loader.js"" --session-id 73d96826"),
             new("node", 4000, t.AddMinutes(30), Loader), // a loader with no executable: Copilot run in node itself
             new("copilot", 5100, t.AddMinutes(40), Native, Parent: 5000),
             new("node", 5000, t.AddMinutes(41), Loader), // took the id of 5100's loader, which has gone
             new("copilot", 6100, t.AddMinutes(50), Native, Parent: 6000),
             new("node", 6000, t.AddMinutes(50).AddMilliseconds(500), Loader), // the same, half a second later
+            // a session run in node that starts a second, native one: two sessions, not a loader
+            new("copilot", 7100, t.AddMinutes(60).AddSeconds(5), Native, Parent: 7000),
+            new("node", 7000, t.AddMinutes(60), @"node C:\Users\u\AppData\Roaming\npm\node_modules\@github\copilot\index.js"),
         };
 
         var (observation, _) = SystemProcessInspector.Classify(AgentKind.Copilot, "copilot", listing, listed: true, windows: true, _ => false);
 
-        Assert.Equal([9456, 3796, 4000, 5100, 5000, 6100, 6000], observation.Processes.Select(p => p.Id));
+        Assert.Equal([9456, 3796, 4000, 5100, 5000, 6100, 6000, 7100, 7000], observation.Processes.Select(p => p.Id));
         Assert.True(observation.Known);
+
+        var codex = new SystemProcessInspector.ListedProcess[]
+        {
+            new("codex", 2192, t.AddMilliseconds(400), @"C:\Users\u\AppData\Roaming\npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\codex\codex.exe", Parent: 3256),
+            new("node", 3256, t, @"""C:\Program Files\nodejs\node.exe"" C:\Users\u\AppData\Roaming\npm/node_modules/@openai/codex/bin/codex.js"),
+        };
+        Assert.Equal([2192], SystemProcessInspector.Classify(AgentKind.Codex, "codex", codex, listed: true, windows: true, _ => false)
+            .Observation.Processes.Select(p => p.Id));
     }
 
     [Fact]

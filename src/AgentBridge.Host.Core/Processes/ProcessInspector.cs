@@ -147,7 +147,7 @@ public sealed class SystemProcessInspector : IProcessInspector
             // start times must be known, and the loader's no later than its child's, with no
             // slack: a pid the loader left behind and another agent's runtime took even a moment
             // after the child started is that agent's session, and must stay counted.
-            if (candidate is "node" or "bun" && started is { } loaderStarted
+            if (candidate is "node" or "bun" && started is { } loaderStarted && IsLoaderScript(agent, commandLine)
                 && loaders.Any(l => l.Id == id && l.Child is { } child && loaderStarted <= child))
             {
                 continue;
@@ -169,6 +169,26 @@ public sealed class SystemProcessInspector : IProcessInspector
     // calls itself claude.exe even on macOS.
     internal static string[] CandidateNames(string name) =>
         OperatingSystem.IsWindows() ? [name, "node", "bun"] : [name, name + ".exe", "node", "bun"];
+
+    // The scripts npm installs that only start the agent's own executable and wait on it.
+    // Anything else run in node may be a session of its own, even when it starts one more.
+    internal static bool IsLoaderScript(AgentKind agent, string? commandLine)
+    {
+        var loader = agent switch
+        {
+            AgentKind.Copilot => "/@github/copilot/npm-loader.js",
+            AgentKind.Codex => "/@openai/codex/bin/codex.js",
+            _ => null,
+        };
+        if (loader is null || string.IsNullOrEmpty(commandLine)) { return false; }
+        foreach (var token in CommandLine.Split(commandLine))
+        {
+            var file = token.Replace('\\', '/');
+            while (file.Contains("//", StringComparison.Ordinal)) { file = file.Replace("//", "/", StringComparison.Ordinal); }
+            if (file.EndsWith(loader, StringComparison.OrdinalIgnoreCase)) { return true; }
+        }
+        return false;
+    }
 
     internal static bool IsAgentScript(AgentKind agent, string name, string? commandLine)
     {
