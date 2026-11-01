@@ -118,7 +118,7 @@ current. The sources:
 | U6 | #180 | Windows app layout (half of #166) |
 | U7 | #168 | PWA platform layer |
 | U8 | #176 | Delegates in both clients |
-| | #181 | Owner decision: license Berkeley Mono or not. **For now: the fallback stack** (decided 2026-11-01); left open |
+| | #181 | Monospace: **Agent Bridge Mono** (our OFL build of Iosevka, `design/fonts/agent-bridge-mono`), decided 2026-11-01. #177 bundles it in both clients |
 | | #183 | Light-theme `needs` glyph and `text3` fail contrast; fixed in U3 |
 
 **In progress (2026-11-01):** U1 and U3, as delegates. Track B runs in this order:
@@ -273,4 +273,5 @@ agent-ha-bridge releases from this work:
 | 11-01 | UI design proposed (docs/design/ui.md): system text faces with one licensed monospace, status glyphs instead of coloured edges, panes by window width, the PWA following the Windows design. Awaiting sign-off |
 | 11-01 | ui.md signed off by the owner as written ("build the new UI as designed"); #182 merged. A UI coordinator session runs track B |
 | 11-01 | Monospace (#181): the fallback stack for now (Cascadia Mono, SF Mono, Roboto Mono); Berkeley Mono decided later |
+| 11-01 | Monospace (#181), later the same day: Agent Bridge Mono, a custom OFL build of Iosevka in the repository. Berkeley Mono rejected, because its Commercial license limits embedding to apps without text entry, requires the font to be unextractable and bars public sharing |
 | 11-01 | Track B order: U1→U2 and U3→U4 in parallel, then U5 and U6, then U7, then U8 after S1 |
