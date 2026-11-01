@@ -124,3 +124,8 @@ test('an opacity outside 0 to 1, a shape with no size and a negative length are 
   ];
   for (const [name, body, re] of bad) { assert.throws(() => readDesignSvg(svgFile(name, body), 'glyph'), re, name); }
 });
+
+test('a part may clear the dashes it inherits with stroke-dasharray none', () => {
+  const svg = readDesignSvg(svgFile('undash', '<g stroke-dasharray="2 2"><path d="M2 8L14 8" stroke="currentColor" stroke-dasharray="none"/></g>'), 'glyph');
+  assert.equal(parts(svg)[0].style['stroke-dasharray'], 'none');
+});

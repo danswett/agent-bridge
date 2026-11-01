@@ -247,7 +247,7 @@ function checkValues(attrs, file, tag) {
     if (/opacity$/.test(k) && !(x >= 0 && x <= 1)) { throw new Error(`${file}: ${k}="${v}" on <${tag}> must be from 0 to 1`); }
     if ((k === 'r' || (tag === 'rect' && (k === 'width' || k === 'height'))) && !(x > 0)) { throw new Error(`${file}: ${k}="${v}" on <${tag}> must be above 0`); }
     if ((k === 'rx' || k === 'ry' || k === 'stroke-width') && !(x >= 0)) { throw new Error(`${file}: ${k}="${v}" on <${tag}> may not be negative`); }
-    if (k === 'stroke-dasharray' && (list.some((n) => Number(n) < 0) || list.every((n) => Number(n) === 0))) { throw new Error(`${file}: ${k}="${v}" on <${tag}> may not be negative or all 0`); }
+    if (k === 'stroke-dasharray' && list.length && (list.some((n) => Number(n) < 0) || list.every((n) => Number(n) === 0))) { throw new Error(`${file}: ${k}="${v}" on <${tag}> may not be negative or all 0`); }
   }
 }
 
