@@ -9,11 +9,22 @@ const files = {};
 for (const f of fs.readdirSync(projectDir)) if (f.endsWith('.dc.html')) files[f] = fs.readFileSync(path.join(projectDir, f), 'utf8');
 
 const nm = p => path.join(__dirname, 'node_modules', p);
+// @font-face can't redefine generic families, so system-ui, sans-serif and -apple-system
+// would resolve to whatever the rendering machine has installed (a fontconfig alias only
+// worked where Inter was installed system-wide). The renderer rewrites them to this
+// embedded alias instead, in the rendered DOM only; the canvas source keeps its stacks.
+const STAND_IN = 'Agent Bridge Stand-in Sans';
+// Self-contained, because its source is also evaluated inside the page.
+function standIn(css) {
+  const generic = /(^|,)\s*(system-ui|-apple-system|BlinkMacSystemFont|sans-serif)\s*(?=,|$)/gi;
+  return css.replace(/font-family\s*:\s*([^;}]+)/gi, (_, list) =>
+    'font-family: ' + list.trim().replace(generic, "$1 'Agent Bridge Stand-in Sans'").trim());
+}
 const font = (fam, file, extra = '') => `@font-face{font-family:'${fam}';src:url(data:font/woff2;base64,${fs.readFileSync(nm(file)).toString('base64')}) format('woff2');font-weight:100 900;${extra}}`;
 const inter = '@fontsource-variable/inter/files/inter-latin-wght-normal.woff2';
 const fontCss = [
   // Stand-ins: Segoe UI and SF Pro are not licensed for this machine, so Inter takes their place.
-  ...['Segoe UI Variable Text', 'Segoe UI Variable Display', 'Segoe UI', 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Google Sans'].map(f => font(f, inter)),
+  ...['Segoe UI Variable Text', 'Segoe UI Variable Display', 'Segoe UI', 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Google Sans', STAND_IN].map(f => font(f, inter)),
   font('Roboto Flex', '@fontsource-variable/roboto-flex/files/roboto-flex-latin-full-normal.woff2'),
   font('Roboto', '@fontsource-variable/roboto-flex/files/roboto-flex-latin-full-normal.woff2'),
   // The real monospace, from the repository (design/fonts/agent-bridge-mono).
@@ -22,7 +33,8 @@ const fontCss = [
 ].join('\n');
 
 async function renderBoard(page, file, w, h) {
-  return page.evaluate(({ files, file, fontCss }) => {
+  return page.evaluate(({ files, file, fontCss, standInSrc }) => {
+    const standIn = new Function('return (' + standInSrc + ')')();
     class DCLogic { constructor(props) { this.props = props || {}; this.state = {}; } setState() {} forceUpdate() {} }
     const styles = new Set();
     const parse = (src) => {
@@ -90,7 +102,8 @@ async function renderBoard(page, file, w, h) {
         if (/^on[A-Z]/.test(a.name) || /^on[a-z]+$/.test(a.name)) continue;
         const m = a.value.match(whole);
         const v = m ? lookup(scope, m[1]) : interp(a.value, scope);
-        el.setAttribute(a.name, v == null ? '' : String(v));
+        const s = v == null ? '' : String(v);
+        el.setAttribute(a.name, a.name === 'style' ? standIn(s) : s);
       }
       for (const c of [...node.childNodes]) { const r = walk(c, scope); if (r) el.appendChild(r); }
       return el;
@@ -100,12 +113,12 @@ async function renderBoard(page, file, w, h) {
     document.body.innerHTML = '';
     const root = component(file, {});
     const st = document.createElement('style');
-    st.textContent = fontCss + '\n' + [...styles].join('\n') + '\nhtml,body{margin:0}';
+    st.textContent = fontCss + '\n' + standIn([...styles].join('\n')) + '\nhtml,body{margin:0}';
     document.head.appendChild(st);
     const wrap = document.createElement('div'); wrap.id = 'board'; wrap.style.display = 'inline-block';
     wrap.appendChild(root); document.body.appendChild(wrap);
     return true;
-  }, { files, file, fontCss });
+  }, { files, file, fontCss, standInSrc: standIn.toString() });
 }
 
 (async () => {
