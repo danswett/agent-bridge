@@ -855,6 +855,32 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal((UpdateOutcome.Refused, others), (auto.State.Last!.Outcome, auto.State.Last.Reason));
     }
 
+    [Fact]
+    public async Task Automatic_installs_turned_on_hours_after_a_check_found_a_release_still_wait_for_the_busy_sessions()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await AskedAsync(UpdateAskKind.Check);
+        Assert.Equal("0.2.0", auto.Pending);
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+
+        time.Advance(TimeSpan.FromHours(7));
+        prefs = prefs with { AutoUpdate = true };
+        await auto.TickAsync();
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Contains("a session on this machine has a turn running", auto.State.Waiting);
+
+        processes.OnStart = () => host.Start();
+        await GoIdleAsync("s1");
+        await TwoIdleTicksAsync();
+        Assert.True(updater.Applied);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -924,37 +950,71 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(2, updater.Checks);
     }
 
+    // Downloads as Velopack's does: one at a time, a second while one runs failing at once (its
+    // global update lock), not waiting.
     sealed class GatedDownloads : IUpdater
     {
-        public readonly Queue<TaskCompletionSource> Gates = new();
+        public readonly TaskCompletionSource Gate = new();
+        public int Downloads;
+        bool running;
         public string? InstalledVersion => "0.1.0";
         public string? PendingNotes => null;
-        public string? Ready => null;
+        public string? Ready { get; private set; }
         public Task<string?> CheckAsync() => Task.FromResult<string?>("0.2.0");
         public async Task DownloadAsync(Action<int> progress)
         {
-            var gate = new TaskCompletionSource();
-            Gates.Enqueue(gate);
-            progress(40);
-            await gate.Task;
+            if (running) { throw new IOException("could not acquire the update lock: another update is under way"); }
+            running = true;
+            Downloads++;
+            try
+            {
+                progress(40);
+                await Gate.Task;
+                Ready = "0.2.0";
+            }
+            finally { running = false; }
         }
         public void ApplyAndRestart() { }
     }
 
     [Fact]
-    public async Task Overlapping_downloads_from_Settings_and_the_app_keep_reporting_progress_until_the_last_ends()
+    public async Task A_check_pressed_while_Settings_downloads_waits_for_that_download_rather_than_failing()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        var gated = new GatedDownloads();
+        shared = new ObservedUpdater(gated, time);
+        await StartAsync();
+        // Settings' Check, then its Download, still running.
+        await shared.CheckAsync();
+        var settingsDownload = shared.DownloadAsync(_ => { });
+
+        var ask = auto.Ask(UpdateAskKind.Check, Press);
+        gated.Gate.SetResult();
+        await settingsDownload;
+        await ask;
+
+        Assert.Equal(1, gated.Downloads);
+        Assert.Null(auto.State.Last);
+        Assert.Equal(("0.2.0", "0.2.0"), (auto.State.Available, auto.Pending));
+    }
+
+    [Fact]
+    public async Task Overlapping_downloads_from_Settings_and_the_app_both_end_well_with_the_release_downloaded_once()
     {
         var inner = new GatedDownloads();
         var observed = new ObservedUpdater(inner, time);
+        Assert.Equal("0.2.0", await observed.CheckAsync());
         var first = observed.DownloadAsync(_ => { });
         var second = observed.DownloadAsync(_ => { });
-
-        inner.Gates.Dequeue().SetResult();
-        await first;
-
+        Assert.False(second.IsCompleted);
         Assert.Equal((UpdatePhase.Downloading, (int?)40), (observed.Phase, observed.Progress));
-        inner.Gates.Dequeue().SetResult();
+
+        inner.Gate.SetResult();
+        await first;
         await second;
+
+        Assert.Equal(1, inner.Downloads);
+        Assert.Equal("0.2.0", observed.Ready);
         Assert.Equal((UpdatePhase.Idle, (int?)null), (observed.Phase, observed.Progress));
     }
 

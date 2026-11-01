@@ -195,8 +195,11 @@ into one folder with one version. An app update is a host update, so they never 
   stopped for anything but an update is reported `refused` by its next start, never carried out
   then. Settings and the automatic updates
   share one `ObservedUpdater`, so a check or download from Settings is reported as well, and a
-  release whose download failed is still reported as there. A pressed install's six hours run
-  from no earlier than the press. A press within a minute of the last check is answered from it,
+  release whose download failed is still reported as there, and their downloads take turns
+  (Velopack's update lock fails a second rather than waiting): the later one finds the release
+  already downloaded. A pressed install's six hours run from no earlier than the press, and any
+  install's from no earlier than installing was last allowed, so turning the switch on hours
+  after a check found a release still waits for busy sessions. A press within a minute of the last check is answered from it,
   a failed download is not tried again for ten minutes, and the presses taken are remembered
   across restarts (`updateTaken`) so none is carried out twice; the host takes at most three
   presses of each kind from a device in ten minutes ([v1-update.md](protocol/v1-update.md#how-often)). The host

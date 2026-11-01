@@ -24,8 +24,9 @@ reports to the devices, and their presses to its app. It decides who may press.
 
 Being asked stands in for the app's "Install updates automatically" switch, for that release:
 an asked install goes ahead with the switch off, by the same idle rules. Its six hours run from
-no earlier than the press: a release a check found hours before, never installed by itself, still
-waits for the sessions.
+no earlier than the press, and any install's from no earlier than installing was last allowed
+(the switch turned on, another profile gone, the host back): a release a check found hours
+before, never installed by itself, still waits for the sessions.
 
 ## How often
 

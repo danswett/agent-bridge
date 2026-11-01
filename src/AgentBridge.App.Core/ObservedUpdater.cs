@@ -11,6 +11,10 @@ namespace AgentBridge.App.Core;
 public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) : IUpdater
 {
     readonly TimeProvider time = time ?? TimeProvider.System;
+    // One download at a time: Velopack's takes a global update lock and fails, rather than waits,
+    // when another holds it, so Settings' and the automatic one's overlapping made the second fail
+    // (reported to every device as a failed update).
+    readonly SemaphoreSlim downloading = new(1, 1);
     int checks;
     int downloads;
 
@@ -48,10 +52,15 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public async Task DownloadAsync(Action<int> progress)
     {
         Interlocked.Increment(ref downloads);
-        Progress = 0;
+        Progress ??= 0;
         Raise();
+        var held = false;
         try
         {
+            await downloading.WaitAsync();
+            held = true;
+            // The one waited for downloaded the release the last check found: nothing to do.
+            if (inner.Ready is not null) { return; }
             await inner.DownloadAsync(p =>
             {
                 var now = Math.Clamp(p, 0, 100);
@@ -61,6 +70,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         }
         finally
         {
+            if (held) { downloading.Release(); }
             // Settings' and the automatic one's may overlap: the progress goes with the last.
             if (Interlocked.Decrement(ref downloads) == 0) { Progress = null; }
             Raise();

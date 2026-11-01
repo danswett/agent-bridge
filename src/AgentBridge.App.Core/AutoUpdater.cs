@@ -62,6 +62,9 @@ public sealed class AutoUpdater
     DateTimeOffset foundAt;
     // When the install being carried out was pressed: its six hours run from no earlier than that.
     DateTimeOffset installAskedAt;
+    // Since when installing has been allowed without a break (no refusal at a tick), or null while
+    // it is refused: the six hours run from no earlier than that either.
+    DateTimeOffset? allowedSince;
     // The last check's end, and its failure if it failed, which a press soon after is answered with.
     DateTimeOffset? lastCheckAt;
     string? lastCheckFailed;
@@ -267,8 +270,16 @@ public sealed class AutoUpdater
     // device pressed (automatic installs off), no earlier than the press: a release found by a
     // check long before, and never installed by itself, must not go at once whatever the sessions
     // are doing.
-    DateTimeOffset WaitFrom() =>
-        !prefs().AutoUpdate && Asked(UpdateAskKind.Install) is not null && installAskedAt > foundAt ? installAskedAt : foundAt;
+    // Nor earlier than installing was last allowed: a release a check found with automatic installs
+    // off, kept while every tick refused to install it, must not go at once whatever the sessions
+    // are doing when they are turned on hours later (or another profile stops, or the host comes
+    // back).
+    DateTimeOffset WaitFrom()
+    {
+        var from = !prefs().AutoUpdate && Asked(UpdateAskKind.Install) is not null && installAskedAt > foundAt ? installAskedAt : foundAt;
+        var allowed = allowedSince ?? time.GetUtcNow();
+        return allowed > from ? allowed : from;
+    }
 
     string? Asked(UpdateAskKind kind)
     {
@@ -467,6 +478,8 @@ public sealed class AutoUpdater
     {
         if (why != lastWhyNot && why is not null) { log($"auto-update: not installing updates: {why}"); }
         lastWhyNot = why;
+        if (why is null) { allowedSince ??= time.GetUtcNow(); }
+        else { allowedSince = null; }
         return why is not null;
     }
 
