@@ -133,7 +133,9 @@ Agent-ha-bridge's usage card, kept exactly:
   with that host (`readBy`), and keeps the last reading of each allowance for the signed-in
   account between runs: the Windows app in its local state (`<profile>-usage.json`), the PWA in
   IndexedDB. Kept readings merge with live ones by the rules above, live first, and go after 14
-  days; a forgotten machine's go with it, and signing out deletes them. Each row says
+  days (none is shown past that, whether or not anything has been heard since; at most 32 are
+  kept); a forgotten machine's go with it, even where another host still passes them on, and
+  signing out deletes them. Each row says
   `read on <machine>` beside its age, in the stale colour when the reading is stale; the Windows
   app leaves it out for the machine it runs on. A device that has never seen a reading of an
   allowance shows nothing for it.
@@ -155,13 +157,17 @@ owner's logins, and it is untrusted (design §5.1).
 * **Believing.** Only a device the relay lists in the account's presence as a `host`, whose
   channel's handshake proved its key and introduced it as a host, whose `hello` names that same
   device, and which is still in presence as a host when it answers. Readings travel only inside
-  Noise channels between the account's devices.
+  Noise channels between the account's devices. A reading it passes on that was taken by a
+  machine the relay's roster no longer lists (forgotten) is not taken, and an answer that arrives
+  after the host signed in to another account is not taken for the new one.
 * **Keeping.** One reading and one failure per allowance (`agent`, then `accountKey`, else
   `account` ignoring case), as clients merge them: each replaced only by one strictly newer, so
-  a failure never replaces a reading, and a copy passed back changes nothing. A copy keeps the
+  a failure never replaces a reading, and a copy passed back changes nothing. A host serves them
+  as separate entries (the reading, then its failure where that is newer), so a host that already
+  has the reading still learns of a newer failure. A copy keeps the
   original `readBy`, and a host never takes one of its own readings back: its own readings always
   stand. A reading stamped more than 10 minutes ahead of the host's clock is refused, and one
-  older than 14 days goes. At most 32 allowances, the one read longest ago going first. Fields
+  older than 14 days goes (announced to subscribers like any change). At most 32 allowances, the one read longest ago going first. Fields
   are bounded as any reading's; a peer's `error` is passed on as it is, never expanded.
 * **Where.** `usage/peers.json` in the profile's own folder, made private to the user as the
   attachment folder is (a protected DACL on Windows, mode 0700 and files 0600 elsewhere), written

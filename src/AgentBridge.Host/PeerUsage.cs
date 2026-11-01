@@ -109,13 +109,15 @@ public sealed class PeerUsage
     }
 
     // A peer's usage.get, as it answered: its own readings (taken as from), and any it passed on
-    // from other machines (each with its own readBy). Returns how many it took.
-    public int Take(IEnumerable<AgentUsage> agents, UsageReader from)
+    // from other machines (each with its own readBy). forAccount: the account the asking connection
+    // was signed in as; an answer that arrives after the host changed account is not taken. Returns
+    // how many it took.
+    public int Take(IEnumerable<AgentUsage> agents, UsageReader from, string? forAccount = null)
     {
         int took = 0;
         lock (gate)
         {
-            if (account is null) { return 0; }
+            if (account is null || (forAccount is not null && forAccount != account)) { return 0; }
             foreach (var a in agents.Take(UsageProtocol.MaxSharedAgents))
             {
                 if (a is not null && TakeLocked(a, a.ReadBy ?? from)) { took++; }
@@ -127,6 +129,28 @@ public sealed class PeerUsage
         }
         Changed?.Invoke();
         return took;
+    }
+
+    // Readings that have passed 14 days, gone for good and announced, so a subscriber that has
+    // nothing else changing hears they have. Returns how many went.
+    public int Prune()
+    {
+        int dropped = 0;
+        var oldest = time.GetUtcNow() - Kept;
+        lock (gate)
+        {
+            foreach (var (key, slot) in slots.ToList())
+            {
+                if (slot.Reading is { } r && r.MeasuredAt < oldest) { slot.Reading = null; dropped++; }
+                if (slot.Failure is { } f && f.MeasuredAt < oldest) { slot.Failure = null; dropped++; }
+                if (slot.Reading is null && slot.Failure is null) { slots.Remove(key); }
+            }
+            if (dropped == 0) { return 0; }
+            version++;
+            SaveLocked();
+        }
+        Changed?.Invoke();
+        return dropped;
     }
 
     bool TakeLocked(AgentUsage a, UsageReader by)
@@ -180,8 +204,10 @@ public sealed class PeerUsage
         return dropped;
     }
 
-    // One per allowance, as a client would show it: the reading, lent the error of a failure newer
-    // than it, else the failure. None older than 14 days.
+    // Each allowance's reading, and its failure where that is newer, as separate entries: a client
+    // merges them as it merges any two machines' (the failure lends the reading its error), and a
+    // host passed them keeps each with its own time, so a newer failure reaches it even where it
+    // already has the reading. None older than 14 days.
     public IReadOnlyList<AgentUsage> Entries
     {
         get
@@ -194,8 +220,8 @@ public sealed class PeerUsage
                 {
                     var r = slot.Reading is { } x && x.MeasuredAt >= oldest ? x : null;
                     var f = slot.Failure is { } y && y.MeasuredAt >= oldest ? y : null;
-                    if (r is null) { if (f is not null) { list.Add(f); } continue; }
-                    list.Add(f is { Error: { Length: > 0 } why } && f.MeasuredAt > r.MeasuredAt ? r with { Error = why } : r);
+                    if (r is not null) { list.Add(r); }
+                    if (f is not null && (r is null || f.MeasuredAt > r.MeasuredAt)) { list.Add(f); }
                 }
                 return list;
             }

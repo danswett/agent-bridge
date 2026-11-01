@@ -160,6 +160,16 @@ test('a reading a host passed on keeps the machine that took it, and a kept one 
   assert.deepEqual(kept.map((e) => e.accountKey), ['3f9a2c71b0de']);
 });
 
+test('a kept reading is not shown once it is two weeks old, though nothing has been heard since', () => {
+  let now = NOW;
+  const book = new UsageBook({ now: () => now });
+  book.useCache({ entries: [claude({ measuredAt: iso(-13 * 24 * H), readBy: { id: 'vm-id', name: 'Rehearsal VM' } })], save: () => {} });
+  assert.equal(book.entries().length, 1);
+  now += 2 * 24 * H;
+  assert.deepEqual(book.entries(), []);
+  assert.equal(book.empty, true);
+});
+
 test('a forgotten machine takes what it read with it, even where another host passes it on, and signing out keeps nothing', () => {
   const book = new UsageBook({ now: () => NOW });
   let kept = null;

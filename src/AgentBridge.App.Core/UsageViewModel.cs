@@ -56,8 +56,10 @@ public sealed class UsageViewModel : Observable
         var now = time.GetUtcNow();
         Rows.Clear();
         // One row per allowance even from one machine: a further Copilot account listed that is, or
-        // becomes, the signed-in one (usage.copilotAccounts) is one allowance read twice.
-        foreach (var a in UsageMerge.Merge([report]).Agents.OrderByDescending(a => Headline(a) ?? 0)) { Rows.Add(new UsageRowViewModel(a, now, here)); }
+        // becomes, the signed-in one (usage.copilotAccounts) is one allowance read twice. Where
+        // readings are kept, none past their 14 days, whether or not anything has been heard since.
+        var oldest = now - UsageCache.Kept;
+        foreach (var a in UsageMerge.Merge([report]).Agents.Where(a => cache is null || a.MeasuredAt >= oldest).OrderByDescending(a => Headline(a) ?? 0)) { Rows.Add(new UsageRowViewModel(a, now, here)); }
         var figures = Rows.Where(r => r.Headline is not null).Select(r => $"{r.Label} {Math.Round(r.Headline!.Value)}%").ToList();
         Summary = figures.Count > 0 ? string.Join(" · ", figures) : "No usage reported yet";
         Raise(nameof(IsEmpty));

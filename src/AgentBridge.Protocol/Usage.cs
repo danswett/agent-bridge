@@ -143,9 +143,9 @@ public static class UsageShare
     }
 
     // own as the host reports it to anyone (already fitted), then each peer reading a client would
-    // show over the host's own for that allowance, newest first, while they fit the shared limits:
-    // the oldest go first. A peer's copy that is not newer than what this machine read itself is
-    // left out: the host's own reading stands.
+    // show over the host's own for that allowance, readings before failures and newest first, while
+    // they fit the shared limits: failures go first, then the oldest readings. A peer's copy that is
+    // not newer than what this machine read itself is left out: the host's own reading stands.
     public static UsageReport Serve(UsageReport own, IEnumerable<AgentUsage> peers)
     {
         var mine = new Dictionary<string, AgentUsage>(StringComparer.Ordinal);
@@ -155,7 +155,8 @@ public static class UsageShare
             if (!mine.TryGetValue(k, out var b) || Outranks(a, b)) { mine[k] = a; }
         }
         var agents = own.Agents.ToList();
-        foreach (var p in peers.Where(p => p.ReadBy is not null && Outranks(p, mine.GetValueOrDefault(Key(p)))).OrderByDescending(p => p.MeasuredAt))
+        foreach (var p in peers.Where(p => p.ReadBy is not null && Outranks(p, mine.GetValueOrDefault(Key(p))))
+            .OrderByDescending(p => p.Windows.Count > 0).ThenByDescending(p => p.MeasuredAt))
         {
             if (agents.Count >= UsageProtocol.MaxSharedAgents) { break; }
             agents.Add(UsageProtocol.FitAgent(p));

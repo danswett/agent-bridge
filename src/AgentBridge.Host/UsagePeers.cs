@@ -90,6 +90,7 @@ public sealed class UsagePeers : IAsyncDisposable
         await pass.WaitAsync(cancellationToken);
         try
         {
+            store.Prune();
             if (Volatile.Read(ref link) is not { } l) { return 0; }
             ForgetGone(l.Relay);
             var now = time.GetUtcNow();
@@ -127,10 +128,13 @@ public sealed class UsagePeers : IAsyncDisposable
     // roster to say so: without one (an older relay, or one not yet read) nothing is inferred.
     void ForgetGone(RelayClient relay)
     {
-        if (relay.Known is not { } known) { return; }
-        var account = relay.Presence.Select(p => p.Id).Concat(known.Select(k => k.Id)).Append(me).ToHashSet(StringComparer.Ordinal);
+        if (Members(relay) is not { } account) { return; }
         if (store.Forget(account.Contains) is > 0 and var n) { log($"usage: dropped {n} reading(s) taken by machines no longer the account's"); }
     }
+
+    // The account's machines, online or not, as the relay's roster has them; null without one.
+    HashSet<string>? Members(RelayClient relay) => relay.Known is not { } known ? null
+        : relay.Presence.Select(p => p.Id).Concat(known.Select(k => k.Id)).Append(me).ToHashSet(StringComparer.Ordinal);
 
     async Task AskAsync(Link l, PresenceEntry peer, CancellationToken cancellationToken)
     {
@@ -174,7 +178,13 @@ public sealed class UsagePeers : IAsyncDisposable
         // Still a host of the account now: one that left, or connected again as something else,
         // while it was being asked is not believed.
         if (l.Relay.Presence.FirstOrDefault(p => p.Id == peer.Id) is not { Kind: HostKind } now) { return "left while being asked"; }
-        var took = store.Take(report.Agents ?? [], new UsageReader(peer.Id, now.Name));
+        // Nor what it passes on from a machine the account has since forgotten (it may not have
+        // heard yet). Machines that are only offline are still the account's.
+        var agents = (IEnumerable<AgentUsage>)(report.Agents ?? []);
+        if (Members(l.Relay) is { } members) { agents = agents.Where(a => a?.ReadBy is not { } by || members.Contains(by.Id)); }
+        // For the account this connection was signed in as: an answer that arrives after the host
+        // signed in to another one is not taken for it.
+        var took = store.Take(agents, new UsageReader(peer.Id, now.Name), l.Relay.AccountId is { Length: > 0 } a ? a : null);
         if (took > 0) { log($"usage: took {took} reading(s) from {now.Name} ({peer.Id[..8]})"); }
         return Answered;
     }

@@ -48,7 +48,12 @@ public sealed class UsageCache
         // Whatever passes on a forgotten machine's readings (another host that has not heard yet)
         // brings none of them back.
         if (forgotten.Count > 0) { live = new UsageReport([.. live.Agents.Where(a => a.ReadBy is not { } by || !forgotten.Contains(by.Id))]); }
-        if (account is "") { return live; }
+        // Signed out: what was kept is the account's, and goes, file and all.
+        if (account is "")
+        {
+            if (this.account is not null || entries.Count > 0) { Clear(); }
+            return live;
+        }
         var oldest = time.GetUtcNow() - Kept;
         if (account is not null && account != this.account)
         {
@@ -77,6 +82,17 @@ public sealed class UsageCache
     }
 
     public void Present(IEnumerable<string> machineIds) => forgotten.ExceptWith(machineIds);
+
+    void Clear()
+    {
+        account = null;
+        entries = [];
+        forgotten.Clear();
+        saved = "";
+        if (path is null) { return; }
+        try { File.Delete(path); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
 
     void Save()
     {

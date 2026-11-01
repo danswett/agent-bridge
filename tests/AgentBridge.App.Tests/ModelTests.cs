@@ -129,6 +129,37 @@ public sealed class UsageTests
         Assert.Equal([null, "timed out", "not signed in"], vm.Rows.Select(r => r.Error));
         Assert.True(vm.Rows.Single(r => r.Label == "Old").Stale);
     }
+
+    [Fact]
+    public void A_kept_reading_goes_once_it_is_two_weeks_old_and_signing_out_deletes_what_was_kept()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "abuk-" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            var clock = new FakeTimeProvider(Now);
+            var vm = new UsageViewModel(clock, new UsageCache(file, clock));
+            var reading = Agent("Laptop", 30) with { ReadBy = new UsageReader(new string('a', 32), "Laptop") };
+            vm.Update(new UsageReport([reading]), account: "1");
+            Assert.True(File.Exists(file));
+
+            // The laptop is offline, and nothing has been heard since; the view redraws on its timer.
+            vm.Update(UsageReport.Empty, account: "1");
+            clock.Advance(TimeSpan.FromDays(13));
+            vm.Refresh();
+            Assert.Equal("read on Laptop", Assert.Single(vm.Rows).ReadOn);
+            clock.Advance(TimeSpan.FromDays(1));
+            vm.Refresh();
+            Assert.Empty(vm.Rows);
+
+            vm.Update(new UsageReport([reading with { MeasuredAt = clock.GetUtcNow() }]), account: "1");
+            vm.Update(UsageReport.Empty, account: "");
+            Assert.False(File.Exists(file));
+            var restarted = new UsageViewModel(clock, new UsageCache(file, clock));
+            restarted.Update(UsageReport.Empty, account: null);
+            Assert.Empty(restarted.Rows);
+        }
+        finally { File.Delete(file); }
+    }
 }
 
 public sealed class WordsTests

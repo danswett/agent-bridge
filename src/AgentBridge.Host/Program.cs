@@ -446,6 +446,9 @@ async Task<int> ServeAsync()
         },
         SignedIn = (result, relay) =>
         {
+            // Before anything says the new account: other machines' readings kept for the one before
+            // are never served under it, even while the relay reconnects.
+            peerUsage?.Bind(result.AccountId);
             identity.Save(result);
             File.WriteAllText(Path.Combine(identity.Folder, "relay.txt"), relay.ToString());
             signedInRelay = relay;
@@ -579,6 +582,7 @@ async Task<int> ServeAsync()
             catch (OperationCanceledException) { return false; }
             if (identity.ReloadAccount())
             {
+                peerUsage?.Bind(identity.Account!.AccountId);
                 signedInRelay = SavedRelay(identity) ?? signedInRelay;
                 PublishCredential();
                 Log($"signed in as {identity.Account!.Login} by another process");

@@ -238,7 +238,7 @@ export class UsageBook {
   get size() { return this.#reports.size; }
 
   // Whether there is anything to show: a report from a machine, or a reading kept.
-  get empty() { return this.#reports.size === 0 && this.#kept.length === 0; }
+  get empty() { return this.#reports.size === 0 && this.entries().length === 0; }
 
   #live() {
     return [...this.#reports].map(([id, { report, name }]) => ({
@@ -248,7 +248,14 @@ export class UsageBook {
     }));
   }
 
-  entries() { return mergeUsage([...this.#live(), { agents: this.#kept }]); }
+  // Where readings are kept, none past their 14 days, whether or not anything has been heard since:
+  // the view redraws on a timer, and a machine that went offline sends nothing more.
+  entries() {
+    const all = mergeUsage([...this.#live(), { agents: this.#kept }]);
+    if (!this.#cache) { return all; }
+    const oldest = this.now() - KEPT_MS;
+    return all.filter((e) => e.at >= oldest);
+  }
 
   // What is kept for the signed-in account (as the store gave it back), and where to keep it:
   // save(entries) is called with every change to what is kept.

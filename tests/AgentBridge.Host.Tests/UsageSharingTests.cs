@@ -227,10 +227,20 @@ public sealed class UsageSharingTests : IAsyncLifetime
         Assert.Equal(0, store.Take([Claude(30, Now.AddHours(-2))], vm));
         Assert.Equal(0, store.Take([Claude(35, Now.AddHours(-1)) with { ReadBy = laptop }], vm));
 
-        // A failure since is the latest word on why there is nothing fresher, never the figure.
+        // A failure since is the latest word on why there is nothing fresher, never the figure. It is
+        // kept, and passed on, with its own time, beside the reading.
         Assert.Equal(1, store.Take([Failure(AgentKind.Claude, Now, "The Claude usage could not be read: 500")], vm));
-        var shown = Assert.Single(store.Entries);
-        Assert.Equal((35, "The Claude usage could not be read: 500", "Laptop"), (shown.Windows[0].Percent, shown.Error, shown.ReadBy!.Name));
+        Assert.Equal([(35.0, null, "Laptop"), (null, "The Claude usage could not be read: 500", "VM")],
+            store.Entries.Select(e => (e.Windows.FirstOrDefault()?.Percent, e.Error, e.ReadBy!.Name)));
+        // A host that already has the reading still learns of the failure.
+        var other = PeerUsage.Load(null, Id('e'), "1", time);
+        other.Take([Claude(35, Now.AddHours(-1)) with { ReadBy = laptop }], vm);
+        Assert.Equal(1, other.Take(store.Entries, new UsageReader(Id('d'), "Desk")));
+        Assert.Equal(2, other.Entries.Count);
+        // An older failure says nothing about the newer reading, and is not passed on.
+        var settled = PeerUsage.Load(null, Id('e'), "1", time);
+        settled.Take([Claude(35, Now.AddHours(-1)), Failure(AgentKind.Claude, Now.AddHours(-2), "old")], laptop);
+        Assert.Null(Assert.Single(settled.Entries).Error);
     }
 
     [Fact]
@@ -257,9 +267,16 @@ public sealed class UsageSharingTests : IAsyncLifetime
         var vm = new UsageReader(Id('a'), "VM");
         Assert.Equal(0, store.Take([Claude(10, Now.AddHours(1))], vm));
         Assert.Equal(1, store.Take([Claude(10, Now.AddDays(-13))], vm));
+        var heard = 0;
+        store.Changed += () => heard++;
+        var version = store.Version;
 
         time.Advance(TimeSpan.FromDays(2));
         Assert.Empty(store.Entries);
+        // And said, so a subscriber with nothing else changing hears it has gone.
+        Assert.Equal(1, store.Prune());
+        Assert.Equal((1, version + 1), (heard, store.Version));
+        Assert.Equal(0, store.Prune());
     }
 
     [Fact]
@@ -272,6 +289,33 @@ public sealed class UsageSharingTests : IAsyncLifetime
         store.Bind("2");
         Assert.Empty(store.Entries);
         Assert.Empty(PeerUsage.Load(folder, Id('d'), "1", time).Entries);
+        // An answer to a question asked for the account before arrives late.
+        Assert.Equal(0, store.Take([Claude(10, Now)], new UsageReader(Id('a'), "VM"), forAccount: "1"));
+        Assert.Empty(store.Entries);
+    }
+
+    [Fact]
+    public async Task A_reading_taken_by_a_machine_the_account_has_forgotten_is_neither_kept_nor_taken_from_another_host()
+    {
+        var desk = await HostAsync("Desk", [() => Copilot(40, Now)]);
+        var vm = await HostAsync("Rehearsal VM", [() => Copilot(41, Now)]);
+        var old = await relay.ConnectAsync(token, "Old laptop", "host");
+        var oldId = old.Id;
+        // The VM had the old laptop's Claude reading, and the desk does too.
+        vm.Store.Take([Claude(12, Now)], new UsageReader(oldId, "Old laptop"));
+        desk.Store.Take([Claude(12, Now)], new UsageReader(oldId, "Old laptop"));
+        await old.DisposeAsync();
+        var phone = await relay.ConnectAsync(token, "Phone", "pwa");
+        await Wait.UntilAsync(() => phone.Relay.Known?.Any(k => k.Id == oldId) == true, "the old laptop to be listed offline", Patience);
+
+        Assert.Null(await phone.Relay.ForgetAsync(oldId));
+        await Wait.UntilAsync(() => desk.Device.Relay.Known is { } k && k.All(m => m.Id != oldId), "the desk to hear it was forgotten", Patience);
+        await SeeAsync(desk.Device, vm.Device.Id);
+        Assert.Equal(1, await desk.Peers.PassAsync());
+
+        Assert.DoesNotContain(desk.Store.Entries, e => e.Agent == AgentKind.Claude);
+        // The VM itself, not yet asked to look, still has it; the desk did not take it back.
+        Assert.Contains(vm.Store.Entries, e => e.Agent == AgentKind.Claude);
     }
 
     sealed class Collector(Func<AgentUsage?> read) : IUsageCollector
