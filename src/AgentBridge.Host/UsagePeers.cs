@@ -133,8 +133,17 @@ public sealed class UsagePeers : IAsyncDisposable
     }
 
     // The account's machines, online or not, as the relay's roster has them; null without one.
-    HashSet<string>? Members(RelayClient relay) => relay.Roster is not { Known: { } known } roster ? null
-        : roster.Presence.Select(p => p.Id).Concat(known.Select(k => k.Id)).Append(me).ToHashSet(StringComparer.Ordinal);
+    // Where the relay keeps a roster, every machine the account has, online or not, and this one.
+    // RelayClient sets Presence and then Known from each presence message. Known is read first, so
+    // where those stores stay in order (x64), a machine coming online between the two reads is in
+    // one list or the other, never neither, which would read as forgotten. Should it be in neither
+    // anyway, it is online and due to be asked, so its readings are back within the pass.
+    HashSet<string>? Members(RelayClient relay)
+    {
+        if (relay.Known is not { } known) { return null; }
+        Interlocked.MemoryBarrier();
+        return relay.Presence.Select(p => p.Id).Concat(known.Select(k => k.Id)).Append(me).ToHashSet(StringComparer.Ordinal);
+    }
 
     async Task AskAsync(Link l, PresenceEntry peer, CancellationToken cancellationToken)
     {

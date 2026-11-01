@@ -12,10 +12,6 @@ public sealed record PresenceEntry(string Id, string Name, string Kind, DateTime
 // (docs/protocol/roster.md).
 public sealed record KnownMachine(string Id, string Name, string Kind, DateTimeOffset LastSeen);
 
-// The account's devices online, and its machines offline (null where the relay keeps no roster),
-// as one presence message gave them.
-public sealed record RelayRoster(IReadOnlyList<PresenceEntry> Presence, IReadOnlyList<KnownMachine>? Known);
-
 public sealed record PushResult(int Status, string? Error);
 
 public sealed class RelayRefusedException(WebSocketCloseStatus? status, string? reason)
@@ -54,9 +50,6 @@ public sealed class RelayClient : IAsyncDisposable
     // The account's machines that are offline, most recently seen first; null while the relay
     // keeps no roster (an older relay, or one with it off), so nothing can be forgotten either.
     public IReadOnlyList<KnownMachine>? Known { get; private set; }
-    // Both from one presence message, as one value: read as two, a machine coming online in
-    // between would be in neither, and look forgotten.
-    public RelayRoster Roster { get; private set; } = new([], null);
 
     // Called in order, one frame at a time, so frames from one sender are handled in the
     // order they were sent, which Noise transport messages require. Set once.
@@ -377,17 +370,14 @@ public sealed class RelayClient : IAsyncDisposable
 
     void ApplyPresence(JsonElement j)
     {
-        IReadOnlyList<PresenceEntry> presence = [.. j.GetProperty("devices").EnumerateArray().Select(d => new PresenceEntry(
+        Presence = [.. j.GetProperty("devices").EnumerateArray().Select(d => new PresenceEntry(
             d.GetProperty("id").GetString()!, d.GetProperty("name").GetString()!,
             d.GetProperty("kind").GetString()!, d.GetProperty("since").GetDateTimeOffset()))];
-        IReadOnlyList<KnownMachine>? known = j.TryGetProperty("known", out var k) && k.ValueKind == JsonValueKind.Array
-            ? [.. k.EnumerateArray().Select(d => new KnownMachine(
+        Known = j.TryGetProperty("known", out var known) && known.ValueKind == JsonValueKind.Array
+            ? [.. known.EnumerateArray().Select(d => new KnownMachine(
                 d.GetProperty("id").GetString()!, d.GetProperty("name").GetString()!,
                 d.GetProperty("kind").GetString()!, d.GetProperty("lastSeen").GetDateTimeOffset()))]
             : null;
-        Roster = new RelayRoster(presence, known);
-        Presence = presence;
-        Known = known;
         PresenceChanged?.Invoke(Presence);
     }
 
