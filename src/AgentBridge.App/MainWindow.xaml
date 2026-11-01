@@ -113,6 +113,75 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+                            <!-- The account's other machines' updates, each with Check and Install, and Check
+                                 all, which checks this machine too (#51). -->
+                            <StackPanel
+                                Spacing="6"
+                                AutomationProperties.AutomationId="MachineUpdates"
+                                Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachineUpdates), Mode=OneWay}">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource AbSecondaryText}" VerticalAlignment="Center" Text="Updates on your other machines" />
+                                    <Button
+                                        Grid.Column="1"
+                                        AutomationProperties.AutomationId="CheckAllUpdates"
+                                        AutomationProperties.Name="Check every machine for updates, this one included"
+                                        Content="Check all"
+                                        IsEnabled="{x:Bind ViewModel.CanCheckAll, Mode=OneWay}"
+                                        Click="{x:Bind ViewModel.CheckAll}" />
+                                </Grid>
+                                <ItemsControl ItemsSource="{x:Bind ViewModel.MachineUpdates}" IsTabStop="False">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Spacing="6" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="core:MachineUpdateViewModel">
+                                            <Grid ColumnSpacing="8" AutomationProperties.AutomationId="MachineUpdate">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Text="{x:Bind Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Style="{StaticResource AbSecondaryText}" TextWrapping="Wrap" Text="{x:Bind StatusText, Mode=OneWay}" />
+                                                    <TextBlock
+                                                        Style="{StaticResource AbSecondaryText}"
+                                                        TextWrapping="Wrap"
+                                                        Text="{x:Bind LastText, Mode=OneWay}"
+                                                        Visibility="{x:Bind local:Ui.Show(HasLast), Mode=OneWay}" />
+                                                    <TextBlock
+                                                        Style="{StaticResource AbSecondaryText}"
+                                                        TextWrapping="Wrap"
+                                                        Text="{x:Bind Note, Mode=OneWay}"
+                                                        Visibility="{x:Bind local:Ui.Show(HasNote), Mode=OneWay}" />
+                                                </StackPanel>
+                                                <Button
+                                                    Grid.Column="1"
+                                                    VerticalAlignment="Center"
+                                                    AutomationProperties.AutomationId="CheckMachineUpdate"
+                                                    AutomationProperties.Name="{x:Bind CheckName, Mode=OneWay}"
+                                                    Content="Check"
+                                                    IsEnabled="{x:Bind CanCheck, Mode=OneWay}"
+                                                    Click="{x:Bind Check}" />
+                                                <Button
+                                                    Grid.Column="2"
+                                                    VerticalAlignment="Center"
+                                                    AutomationProperties.AutomationId="InstallMachineUpdate"
+                                                    AutomationProperties.Name="{x:Bind InstallName, Mode=OneWay}"
+                                                    Content="Install"
+                                                    IsEnabled="{x:Bind CanInstall, Mode=OneWay}"
+                                                    Click="{x:Bind Install}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
                             <!-- The account's machines that are offline, from the relay's roster, each with a
                                  two-press Forget (#50). -->
                             <StackPanel

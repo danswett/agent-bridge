@@ -22,6 +22,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     SessionSource source = null!;
     SessionService service = null!;
     HostControl control = null!;
+    UpdateService updates = null!;
     LocalServer server = null!;
     string events = "";
     int stops;
@@ -51,9 +52,11 @@ public sealed class LocalApiTests : IAsyncLifetime
         source = new SessionSource(f.Options(), f.Processes, TimeProvider.System);
         await source.RefreshAsync();
         var machine = new MachineInfo("host-id", "Test host", "windows", "0.1.0");
-        service = new SessionService(source, machine, push: new PushNotifier(source, machine, PushStore.Load(null, "acct")));
+        updates = new UpdateService("0.1.0");
+        service = new SessionService(source, machine, push: new PushNotifier(source, machine, PushStore.Load(null, "acct"))) { Updates = updates };
         control = new HostControl(new HostControlOptions
         {
+            Updates = updates,
             Profile = "test",
             Folder = profile,
             Version = "0.1.0",
@@ -475,6 +478,28 @@ public sealed class LocalApiTests : IAsyncLifetime
     }
 
     // Swapped by a test before it connects; asked afresh for every op.
+    [Fact]
+    public async Task Only_the_app_reports_this_machines_updates_and_the_pipe_asks_for_none()
+    {
+        var state = new UpdateState { Current = "0.2.0", Installer = true, Available = "0.3.0", Automatic = true };
+        var app = await ConnectAsync();
+        await app.CallAsync(HostOps.UpdateReport, new UpdateReport(state));
+        Assert.Equal(state, updates.State());
+        // Not even the app asks through its own pipe: it updates this machine from Settings.
+        var asked = await Assert.ThrowsAsync<HostErrorException>(() => app.CallAsync(UpdateProtocol.Install, new { request = Guid.NewGuid().ToString() }));
+        Assert.Equal(UpdateService.ThroughTheRelay, asked.Message);
+        Assert.DoesNotContain(UpdateProtocol.Capability, (await app.HelloAsync()).Capabilities);
+
+        foreach (var kind in new[] { CallerKind.Agent, CallerKind.Other })
+        {
+            callers.Current = new FixedCallerGuard(new Caller(kind, "pid 4242"));
+            var other = await ConnectAsync();
+            var refused = await Assert.ThrowsAsync<HostErrorException>(() => other.CallAsync(HostOps.UpdateReport, new UpdateReport(state with { Available = "9.9.9" })));
+            Assert.StartsWith("refused: this connection is from pid 4242; only the Agent Bridge app", refused.Message);
+        }
+        Assert.Equal(state, updates.State());
+    }
+
     sealed class Callers : ICallerGuard
     {
         public ICallerGuard Current { get; set; } = new FixedCallerGuard(new Caller(CallerKind.App, "the Agent Bridge app"));

@@ -142,6 +142,12 @@ a { color: var(--primary); }
 .machine-forget { grid-column: 3; grid-row: 1 / 3; }
 .machine-forget.armed { color: var(--danger); border-color: currentColor; }
 .machine-error { margin: 4px 12px 0; color: var(--danger); font-size: .85rem; }
+/* A machine's updates (#51): what its app is doing, how the last one ended, Check and Install. */
+.machine-update { margin: 4px 12px 0; font-size: .85rem; color: var(--muted); }
+.machine-update p { margin: 2px 0; }
+.machine-update .machine-error { margin: 2px 0; }
+.machine-update-actions { display: flex; gap: 8px; margin-top: 4px; }
+.machine-check-all { width: 100%; }
 
 /* ---- agent usage: agent-ha-bridge's usage card ---- */
 .usage h2 { margin: 0; }

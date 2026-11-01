@@ -34,6 +34,7 @@ import { SessionsPage } from './ui/sessions-page.js';
 import { UsageBook } from './usage.js';
 import { FleetStatus } from './fleet.js';
 import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
+import { UpdateControl } from './update.js';
 import { UsageView } from './ui/usage-view.js';
 import { DemoBlobStore, DemoConnection, DemoHost, demoMachines, demoTransfers, demoTrust, runScript } from './demo.js';
 import { RelayBlobs } from './blobs.js';
@@ -160,7 +161,11 @@ async function startDemo() {
     transferring: params.get('transfer') !== '0',
     // ?trust=0: a host from before folder-trust questions were answered from devices.
     trusting: params.get('trust') !== '0',
+    // ?updates=1: a host whose app installs updates asked for from here (#51). Never a
+    // read-only one, which offers none.
+    updating: params.get('updates') === '1' && !ahb,
   });
+  host.updateStepMs = Number(params.get('updateStep')) || host.updateStepMs;
   // ?machines=2 or 3: the account's other machines, after this one.
   const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs })];
   // ?attachDelay= slows each file chunk, so its progress can be watched.
@@ -194,6 +199,7 @@ async function startDemo() {
     confirmMs: Number(params.get('forgetMs')) || CONFIRM_MS,
   });
   const fleet = new FleetStatus({ connection, hosts, book, me: null });
+  const demoUpdates = new UpdateControl({ fleet });
   const transfers = new Map();
   for (const m of machines) {
     if (m.capabilities.includes(TRANSFER.capability)) { transfers.set(m.machine.id, await demoTransfers(m, m.machine.id)); }
@@ -211,10 +217,12 @@ async function startDemo() {
     trust: (id) => trusts.get(id) ?? null,
     status: (id) => fleet.status(id),
     forget: demoForget,
+    updates: demoUpdates,
     storage: demoStorage,
     onRendered: () => focusLinked(),
   });
   demoForget.onChange(() => page.drawMachines());
+  demoUpdates.onChange(() => page.drawMachines());
   fleet.onChange(() => page.drawMachines());
   $('machines').hidden = false;
   hosts.restoreTarget(null);
@@ -251,6 +259,11 @@ async function startDemo() {
     // The same, for the next launches: 'started' (the default), 'unconfirmed', 'busy', 'refused',
     // 'failed', an unknown one, or { outcome, reason, drop: true }.
     scriptLaunches: (...outcomes) => host.scriptLaunches(outcomes),
+    // The next update presses' refusals, by reason; none scripted, a press is taken (#51).
+    scriptUpdates: (...reasons) => host.scriptUpdates(reasons),
+    // What the host's app reports now, sent as update.state.
+    setUpdate: (state) => host.setUpdate(state),
+    get updateLog() { return [...host.updateLog]; },
     // The next forgets' refusals, in order ('online', 'rate-limited', ...); none scripted, forgotten.
     scriptForgets: (...outcomes) => forgetOutcomes.push(...outcomes),
     // The offline machine back online: the relay stops listing it.
@@ -335,8 +348,11 @@ function begin(account) {
   const fleet = new FleetStatus({ connection, hosts, book, me: identity.deviceId });
   // Forgetting an offline machine (#50): what this app keeps about it goes with it. Its push
   // subscription is on that machine, which is gone; the notices it left here are closed.
+  // Each machine's updates (#51): Check and Install, from a person's device, which this is.
+  const updates = new UpdateControl({ fleet });
   const dropMachine = (id) => {
     fleet.forget(id);
+    updates.forget(id);
     if (hosts.targetId === id) { hosts.select(ALL); }
     worker().then((r) => closeMachineNotices(r, id)).catch(() => {});
   };
@@ -371,6 +387,7 @@ function begin(account) {
     },
     status: (id) => fleet.status(id),
     forget: forgets,
+    updates,
     onRendered: () => focusLinked(),
   });
   const { answers, replies, stops, launches } = page;
@@ -467,10 +484,14 @@ function begin(account) {
   const offlineNow = () => offlineMachines({ presence: connection.presence, known: connection.known, me: identity.deviceId });
   fleet.onChange(() => page.drawMachines());
   forgets.onChange(() => page.drawMachines());
+  updates.onChange(() => page.drawMachines());
   hosts.restoreTarget(link?.host ?? null);
   fleet.start();
   // "last seen 5m ago" moves on with nothing else to redraw the list: every machine may be offline.
-  setInterval(() => { if (document.visibilityState !== 'hidden' && connection.known?.length) { page.drawMachines(); } }, 30000);
+  // So does "checked 5m ago" under a machine's updates.
+  setInterval(() => {
+    if (document.visibilityState !== 'hidden' && (connection.known?.length || connection.presence.some((d) => fleet.update(d.id)))) { page.drawMachines(); }
+  }, 30000);
 
   connection.on('presence', () => {
     const now = connection.known ? offlineNow() : null;
@@ -498,6 +519,7 @@ function begin(account) {
     hosts.forget();
     fleet.clear();
     forgets.clear();
+    updates.clear();
     lastKnown = null;
     page.clear();
     accountStore.clear();

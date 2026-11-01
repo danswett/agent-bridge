@@ -59,8 +59,9 @@ export class SessionsPage {
   // transfers(hostId): what launching on that machine may bring from the others, or null.
   // trust(hostId): how a folder-trust question on that machine is answered from here, or null.
   // status(id): a machine's status line. forget: a ForgetControl for offline machines, or null.
-  constructor({ $, hosts, connection, me = null, machinesFold, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, status = () => '', forget = null, storage = globalThis.localStorage, onRendered = () => {} }) {
-    Object.assign(this, { $, hosts, connection, me, machinesFold, relayMax, transfers, trust, status, forget, storage, onRendered });
+  // updates: an UpdateControl for the machines that offer updates (#51), or null.
+  constructor({ $, hosts, connection, me = null, machinesFold, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, status = () => '', forget = null, updates = null, storage = globalThis.localStorage, onRendered = () => {} }) {
+    Object.assign(this, { $, hosts, connection, me, machinesFold, relayMax, transfers, trust, status, forget, updates, storage, onRendered });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
     this.answers = new AnswerService({ current, ...timing });
@@ -259,6 +260,7 @@ export class SessionsPage {
       status: (id) => this.status(id),
       known: connection.known ?? null,
       forget: this.forget,
+      updates: this.updates,
       allStatus: hosts.all ? plural(hosts.sessions.size, 'session', 'sessions') : '',
     });
     $('machines-empty').hidden = n !== 0 || !connection.ready;

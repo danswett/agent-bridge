@@ -358,15 +358,21 @@ async Task<int> ServeAsync()
         () => new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, profile, () => stop.Cancel(), Log));
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
         HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers);
+    // What takes answering, replying, ending and launching away while it runs (design G5).
+    // Asked afresh, as the delivery services ask it for what hello offers: a cached answer
+    // could say read-only beside actions offered, or offer none without saying why.
+    string? ServeReadOnly() => ReadOnlyReason() ?? (OperatingSystem.IsWindows() ? haProbe?.Active() : null);
+    // Updates asked for from the account's other devices, which the app beside this host installs
+    // (#51, docs/protocol/v1-update.md). A read-only machine serves none, as #112 withdrew Home
+    // Assistant's Install there.
+    var updates = new UpdateService(HostVersion(), Log) { ReadOnly = ServeReadOnly };
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log), launcher, transfers)
     {
         Drivers = drivers,
-        // What takes answering, replying, ending and launching away while it runs (design G5),
-        // said in hello so a phone shows the machine read-only and why.
-        // Asked afresh, as the delivery services ask it for what hello offers: a cached answer
-        // could say read-only beside actions offered, or offer none without saying why.
-        ReadOnly = () => ReadOnlyReason() ?? (OperatingSystem.IsWindows() ? haProbe?.Active() : null),
+        // Said in hello so a phone shows the machine read-only and why.
+        ReadOnly = ServeReadOnly,
         TrustAnswers = trustAnswers,
+        Updates = updates,
     };
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
@@ -400,6 +406,8 @@ async Task<int> ServeAsync()
     void PublishCredential() => Volatile.Write(ref credential,
         identity.Account is { } a && ServeRelay() is { } r ? new RelayAccount(r.ToString(), a.Token, a.AccountId, a.Login) : null);
     PublishCredential();
+    // agent-ha-bridge's state for the app's status, looked for at most every few seconds.
+    var agentHaCached = haProbe is null ? () => null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64);
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -417,10 +425,13 @@ async Task<int> ServeAsync()
             Log($"folder-trust questions from devices: {(on ? "on" : "off")} (set by the app; applies now)");
         },
         ApplyRemoteFolderTrustDevices = ids => launcher.TrustDevices = ids,
+        Updates = updates,
         Account = () => identity.Account is { } a ? new HostAccount(a.Login, a.AccountId) : null,
         Credential = () => Volatile.Read(ref credential),
         Relay = ServeRelay,
-        AgentHaBridge = haProbe is null ? () => null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64),
+        AgentHaBridge = agentHaCached,
+        ReadOnly = () => ReadOnlyReason() ?? agentHaCached(),
+        ReadOnlyNow = ServeReadOnly,
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -494,6 +505,7 @@ async Task<int> ServeAsync()
             relayBlobs.Attach(relay);
             transfers.Attach(relay, hub);
             trustAnswers.Attach(relay);
+            updates.Attach(relay);
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff = TimeSpan.FromSeconds(1);
@@ -536,6 +548,7 @@ async Task<int> ServeAsync()
             relayBlobs.Attach(null);
             transfers.Attach(null, null);
             trustAnswers.Attach(null);
+            updates.Attach(null);
         }
         reconnects++;
         // A sign-in during the wait goes straight to connecting.

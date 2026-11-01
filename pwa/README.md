@@ -11,11 +11,12 @@ Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/ap
 It shows sessions, their activity and their pending questions, answers those questions
 (`session.answer`), replies to sessions (`session.reply`) with files and images
 (`attachment.*`), ends them (`session.stop`), starts and resumes them (`session.launch`),
-notifies the phone when a session asks or finishes, even with the app closed (Web Push), and
+notifies the phone when a session asks or finishes, even with the app closed (Web Push),
 shows each agent's usage and each machine's status, for one machine or for every machine at
-once, per
+once, and shows each machine's updates with Check, Install and Check all, per
 [docs/protocol/v1-sessions.md](../docs/protocol/v1-sessions.md),
-[v1-launch.md](../docs/protocol/v1-launch.md) and [v1-usage.md](../docs/protocol/v1-usage.md).
+[v1-launch.md](../docs/protocol/v1-launch.md), [v1-usage.md](../docs/protocol/v1-usage.md) and
+[v1-update.md](../docs/protocol/v1-update.md).
 Larger files come next.
 
 | Light | Dark | Answering | A permission request | All machines |
@@ -48,13 +49,14 @@ Larger files come next.
 | `js/launch-service.js` | Starting sessions: `answer-service.js` with `session.launch`, one launch on its way per machine, resent with the same request until it has an outcome |
 | `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
 | `js/usage.js` | Agent usage: the tolerant reader, merging every machine's reports into one row per allowance (a reading beats a failure, then the freshest wins), and the card's words: colours at 75% and 90%, pace, resets, ages |
-| `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`) and usage: each machine shown on its own channel (`usage.subscribe`), every other online machine by a short channel (`hello`, `usage.get`) once a minute while the app is in front |
+| `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`), usage and updates: each machine shown on its own channel (`usage.subscribe`, `update.subscribe`), every other online machine by a short channel (`hello`, `usage.get`, `update.get`) once a minute while the app is in front, every ten seconds while an update there is under way; `call` sends a press to a machine on whichever |
+| `js/update.js` | A machine's updates ([v1-update.md](../docs/protocol/v1-update.md), #51): the tolerant reader, the row's words (what the machine's app is doing, how the last update ended), and `UpdateControl`, Check and Install with a request of their own each, a refusal shown on the row, and Check all |
 | `js/forget.js` | Forgetting an offline machine ([roster.md](../docs/protocol/roster.md)): two presses, the first arming for 5 seconds; an arm goes with a machine that comes back; the relay's refusals in words |
 | `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
 | `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each card's answers, replies, files, End session and the launch panel to the machine it is for; the heading, count, empty state and a line per machine that can't be reached |
 | `js/ui/*` | Session cards, the question and its answer form, the reply box, End session, the Start a session panel (agent-ha-bridge's launch card, without its 255-character prompt), machines list (offline machines after the online ones, with when each was last seen and Forget), the usage panel, fold state, relative times |
-| `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering, replying, ending and launching sessions and usage included; `?machines=2` adds a second machine, Laptop, and `?machines=3` a read-only shadow, DEV-VM1 (shadow), behind a simulated relay (`DemoConnection`) |
+| `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering, replying, ending and launching sessions and usage included; `?machines=2` adds a second machine, Laptop, and `?machines=3` a read-only shadow, DEV-VM1 (shadow), behind a simulated relay (`DemoConnection`); `?updates=1` a machine whose app found a release, and installs it when asked (`?updateStep=<ms>` per step) |
 | `tools/build-site.mjs` | Assembles the site for Pages: `config.js` with the relay, CSP in the page, and `sw.js` stamped with a hash of everything served, so any change reaches an open app as an update (the app then offers Reload) |
 
 ### Connecting a host

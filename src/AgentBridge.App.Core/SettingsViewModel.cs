@@ -333,7 +333,15 @@ public sealed class SettingsViewModel : Observable
     {
         if (updateVersion is null) { return; }
         UpdateStatus = $"Downloading {updateVersion}…";
-        await updater.DownloadAsync(p => UpdateStatus = $"Downloading {updateVersion}… {p}%");
+        // A download that fails is the update failing, for the account's devices too, unless the
+        // automatic update is installing meanwhile: its outcome is the one to report.
+        try { await updater.DownloadAsync(p => UpdateStatus = $"Downloading {updateVersion}… {p}%"); }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            var why = e is DownloadHeldException ? e.Message : $"downloading {updateVersion} failed: {e.Message}";
+            if (!manager.UpdateUnderWay) { AutoUpdater.Failed(prefs, savePrefs, updater, updateVersion, why, recorded: false); }
+            throw;
+        }
         // Another check (the automatic one shares this updater) may have found a different release
         // since: the host is stopped only for the one downloaded.
         if (updater.Ready != updateVersion)
@@ -359,8 +367,8 @@ public sealed class SettingsViewModel : Observable
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
             // Still this version: the host stopped for it is back (HostManager), and the failure is
-            // shown.
-            savePrefs(prefs() with { UpdatedFrom = null, UpdateNotes = null });
+            // shown, and reported to the account's devices.
+            AutoUpdater.Failed(prefs, savePrefs, updater, updateVersion, e.Message);
             updateVersion = null;
             UpdateStatus = "";
             throw;

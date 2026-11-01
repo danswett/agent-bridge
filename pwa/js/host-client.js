@@ -7,6 +7,7 @@
 // it is an in-process fake. Nothing here knows which.
 import { Events, Ops, readAnswerResult, readAttachmentState, readDiscoveryHeld, readHello, readSession, readStopResult } from './protocol.js';
 import { USAGE, readUsage } from './usage.js';
+import { UPDATE, readUpdateState } from './update.js';
 import { LAUNCH, TRUST, readLaunchOptions, readLaunchResult, readTrustResult } from './launch.js';
 
 export class HostError extends Error {
@@ -36,6 +37,7 @@ export class HostClient {
   #snapshot = null;
   #resubscribing = null;
   #usageSubscribed = false;
+  #updateSubscribed = false;
   closed = false;
   synced = false;
 
@@ -179,6 +181,15 @@ export class HostClient {
     return readUsage(await this.request(USAGE.subscribe));
   }
 
+  // update.get: what the machine's updater is doing (docs/protocol/v1-update.md).
+  async updateState() { return readUpdateState(await this.request(UPDATE.get)); }
+
+  // update.subscribe: the state now, then an 'update' event with each change.
+  async subscribeUpdate() {
+    this.#updateSubscribed = true;
+    return readUpdateState(await this.request(UPDATE.subscribe));
+  }
+
   close() {
     if (this.closed) { return; }
     try { this.#transport.close?.(); } finally { this.#closed(new Error('closed')); }
@@ -249,6 +260,9 @@ export class HostClient {
       case USAGE.update:
         this.#emit('usage', readUsage(data));
         break;
+      case UPDATE.event:
+        this.#emit('update', readUpdateState(data));
+        break;
       default:
         // An event this client doesn't know, from a newer host. It still counted for seq.
         break;
@@ -262,6 +276,7 @@ export class HostClient {
     this.#emit('gap', { seq });
     // An update lost in the gap is replaced by the current report.
     if (this.#usageSubscribed) { this.subscribeUsage().then((r) => this.#emit('usage', r), (e) => this.#emit('error', e)); }
+    if (this.#updateSubscribed) { this.subscribeUpdate().then((r) => this.#emit('update', r), (e) => this.#emit('error', e)); }
     this.#resubscribing = this.subscribe()
       .catch((e) => this.#emit('error', e))
       .finally(() => { this.#resubscribing = null; });

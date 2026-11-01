@@ -36,6 +36,15 @@ public sealed class HostControlOptions
     public Action<bool>? ApplyRemoteFolderTrust { get; init; }
     // And launch.remoteFolderTrustDevices, the devices approved to answer them.
     public Action<IReadOnlyList<string>>? ApplyRemoteFolderTrustDevices { get; init; }
+    // Other devices' presses of Check and Install, carried to the app in the status, and the
+    // app's reports of its updater (host.update.report); null where there is nothing to carry.
+    public UpdateService? Updates { get; init; }
+    // Why the host acts on nothing from other devices now, or null (HostStatus.ReadOnly): as
+    // pushed with every status, which may be a few seconds old (agent-ha-bridge is looked for at
+    // most every few seconds), and as host.status asks it, afresh. That is what the app reads
+    // just before it stops the host for an install a device asked for.
+    public Func<string?> ReadOnly { get; init; } = () => null;
+    public Func<string?>? ReadOnlyNow { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -61,6 +70,7 @@ public sealed class HostControl
         this.log = log ?? (_ => { });
         startedAt = options.Time.GetUtcNow();
         running = options.Running;
+        if (options.Updates is { } updates) { updates.AsksChanged += Changed; }
         relay = options.LocalOnly ? new RelayStatus(RelayState.Off, Detail: "this host serves this machine's apps only (--local-only)")
             : options.Account() is null ? new RelayStatus(RelayState.SignedOut, options.Relay()?.ToString())
             : new RelayStatus(RelayState.Connecting, options.Relay()?.ToString());
@@ -86,12 +96,12 @@ public sealed class HostControl
         };
     }
 
-    public HostStatus Status()
+    public HostStatus Status(bool fresh = false)
     {
-        lock (gate) { return StatusLocked(); }
+        lock (gate) { return StatusLocked(fresh); }
     }
 
-    HostStatus StatusLocked()
+    HostStatus StatusLocked(bool fresh = false)
     {
         var running = Volatile.Read(ref this.running);
         var now = Configured();
@@ -112,6 +122,8 @@ public sealed class HostControl
             Settings = now,
             RestartRequired = now != running,
             Log = options.Log,
+            UpdateAsks = options.Updates?.Asks is { Count: > 0 } asks ? asks : null,
+            ReadOnly = fresh && options.ReadOnlyNow is { } afresh ? afresh() : options.ReadOnly(),
         };
     }
 
@@ -140,7 +152,7 @@ public sealed class HostControl
         switch (op)
         {
             case HostOps.Status:
-                return Status();
+                return Status(fresh: true);
             case HostOps.Subscribe:
                 return Subscribe(channel);
             case HostOps.SignIn:
@@ -158,6 +170,8 @@ public sealed class HostControl
             case HostOps.Restart:
                 log("restarting: asked by the app");
                 return new ChannelReply(new { restarting = true }, _ => { options.Restart(); return Task.CompletedTask; });
+            case HostOps.UpdateReport when options.Updates is not null:
+                return options.Updates.Report(channel, Read<UpdateReport>(data) ?? throw new ArgumentException($"{HostOps.UpdateReport} needs the updater's state"));
             default:
                 return null;
         }

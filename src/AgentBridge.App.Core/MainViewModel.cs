@@ -141,6 +141,40 @@ public sealed class MainViewModel : Observable
         Raise(nameof(ShowOfflineMachines));
     }
 
+    // The account's other machines whose updates can be seen and asked for (#51): those whose
+    // host offers update.* (a read-only one offers none), each with Check and Install.
+    public ObservableCollection<MachineUpdateViewModel> MachineUpdates { get; } = [];
+    public bool ShowMachineUpdates => MachineUpdates.Count > 0;
+    public bool CanCheckAll => MachineUpdates.Any(u => u.CanCheck) || CheckLocal is not null;
+    // This machine's own check, for Check all: its updater's, which Settings shows. Set by the app.
+    public Action? CheckLocal { get; set; }
+    public TimeProvider Time { get; init; } = TimeProvider.System;
+
+    // Check all: every machine listed, and this one.
+    public void CheckAll()
+    {
+        CheckLocal?.Invoke();
+        foreach (var u in MachineUpdates.Where(u => u.CanCheck).ToList()) { u.Check(); }
+    }
+
+    void SyncUpdate(Machine m)
+    {
+        var row = MachineUpdates.FirstOrDefault(u => u.Key == m.Key);
+        var shown = !m.IsLocal && machines.Contains(m) && m.Host.State == LinkState.Connected && m.Host.Can(UpdateProtocol.Capability) && m.Host.Update is not null;
+        if (!shown)
+        {
+            if (row is null) { return; }
+            MachineUpdates.Remove(row);
+        }
+        else if (row is null)
+        {
+            MachineUpdates.Add(new MachineUpdateViewModel(m, Time));
+        }
+        else { row.Changed(); }
+        Raise(nameof(ShowMachineUpdates));
+        Raise(nameof(CanCheckAll));
+    }
+
     // What the Sessions page says about the account's other machines, when there is something.
     public string? FleetNote => fleet?.Note;
     public bool HasFleetNote => FleetNote is not null;
@@ -225,6 +259,7 @@ public sealed class MainViewModel : Observable
         unhook.Remove(m, out var undo);
         undo?.Invoke();
         machines.Remove(m);
+        SyncUpdate(m);
         baselined.Remove(m);
         capabilities.Remove(m);
         if (Machines.FirstOrDefault(c => c.Key == key) is { } choice)
@@ -301,6 +336,7 @@ public sealed class MainViewModel : Observable
             foreach (var (c, _) in owner.Where(p => p.Value == m)) { c.CapabilitiesChanged(); }
         }
         if (m.Host.State != LinkState.Connected) { baselined.Remove(m); }
+        SyncUpdate(m);
         MachinesUpdated?.Invoke();
         RefreshLabels();
         Raise(nameof(Connected));
@@ -411,6 +447,10 @@ public sealed class MainViewModel : Observable
         foreach (var m in machines) { m.Toasts?.Tick(); }
         foreach (var o in OfflineMachines) { o.Tick(); }
         if (++ticks % 5 == 0) { foreach (var c in byId.Values) { c.RefreshTimes(); } }
-        if (ticks % 30 == 0) { Usage.Refresh(); }
+        if (ticks % 30 == 0)
+        {
+            Usage.Refresh();
+            foreach (var u in MachineUpdates) { u.Changed(); }
+        }
     }
 }
