@@ -73,6 +73,16 @@ public sealed class SettingsTests : IAsyncLifetime
 
     Task Connected() => Wait.UntilAsync(() => settings.HostRunning && connection.Status is not null, "the connection");
 
+    // The host's status as the test sets it, seen by the app. The app may have read the status before
+    // the test set it (on Linux its socket connects at once), so it is sent as the host would.
+    async Task ConnectedWith(HostStatus status)
+    {
+        host.Status = status;
+        await Connected();
+        await host.SendAsync(HostOps.StatusEvent, status);
+        await Wait.UntilAsync(() => Equals(connection.Status?.Settings, status.Settings), "the host's status");
+    }
+
     // As the host does: answers host.settings with what it saved, which its status says from then
     // on when read; its status event is sent only when a test sends it.
     void Saves(Func<System.Text.Json.JsonElement, HostSettingsView> save) => host.On(HostOps.Settings, d =>
@@ -167,8 +177,7 @@ public sealed class SettingsTests : IAsyncLifetime
         await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
         Saves(d => new HostSettingsView(true, RemoteFolderTrust: true,
             RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]));
-        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
-        await Connected();
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
         await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
 
         // Revoke this app, then approve the phone, before any status event.
@@ -191,8 +200,7 @@ public sealed class SettingsTests : IAsyncLifetime
         await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
         Saves(d => new HostSettingsView(true, RemoteFolderTrust: true,
             RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]));
-        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
-        await Connected();
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
         await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
 
         // Revoked, and the host's reply is in; its status event is not.
@@ -225,8 +233,7 @@ public sealed class SettingsTests : IAsyncLifetime
             host.SendAsync(HostOps.StatusEvent, host.Status).GetAwaiter().GetResult();
             return new SettingsResult(saved, false);
         });
-        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
-        await Connected();
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
         await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
 
         settings.TrustDevices.Single(d => d.Id == b).Approved = true;
@@ -272,8 +279,7 @@ public sealed class SettingsTests : IAsyncLifetime
         await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
         Saves(d => new HostSettingsView(true, RemoteFolderTrust: true,
             RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]));
-        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
-        await Connected();
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
         await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
         // The phone approved; the reply is in and held, its status event never sent.
         settings.TrustDevices.Single(d => d.Id == b).Approved = true;
@@ -313,8 +319,7 @@ public sealed class SettingsTests : IAsyncLifetime
             host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: List(d, "remoteFolderTrustDevices")) };
             return new SettingsResult(host.Status.Settings, false);
         });
-        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a, b]) };
-        await Connected();
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a, b]) });
         await Wait.UntilAsync(() => settings.TrustDevices.Count == 3, "the devices");
 
         settings.TrustDevices.Single(d => d.Id == c).Approved = true;
@@ -340,8 +345,7 @@ public sealed class SettingsTests : IAsyncLifetime
             gate.Wait(TimeSpan.FromSeconds(10));
             return new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]);
         });
-        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
-        await Connected();
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
         await Wait.UntilAsync(() => settings.TrustDevices.Count == 2 && settings.TrustDevices.Single(d => d.Id == a).Approved, "the devices");
 
         try
@@ -373,8 +377,7 @@ public sealed class SettingsTests : IAsyncLifetime
             gate.Wait(TimeSpan.FromSeconds(10));
             return new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]);
         });
-        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: []) };
-        await Connected();
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: []) });
         await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
 
         try
@@ -403,8 +406,7 @@ public sealed class SettingsTests : IAsyncLifetime
             host.SendAsync(HostOps.StatusEvent, host.Status).GetAwaiter().GetResult();
             return new SettingsResult(saved, false);
         });
-        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: []) };
-        await Connected();
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: []) });
         await Wait.UntilAsync(() => settings.TrustDevices.Count == 1, "this app's row");
         Assert.False(settings.TrustDevices.Single().Approved);
 
@@ -425,8 +427,7 @@ public sealed class SettingsTests : IAsyncLifetime
         Saves(d => new HostSettingsView(true, RemoteFolderTrust: true,
             RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]));
         var before = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
-        host.Status = before;
-        await Connected();
+        await ConnectedWith(before);
         await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
         // The phone approved; the reply is in and held, its status event not sent yet.
         settings.TrustDevices.Single(d => d.Id == b).Approved = true;
@@ -460,8 +461,7 @@ public sealed class SettingsTests : IAsyncLifetime
         Saves(d => new HostSettingsView(true,
             RemoteFolderTrust: d.TryGetProperty("remoteFolderTrust", out var t) ? t.GetBoolean() : host.Status.Settings.RemoteFolderTrust,
             RemoteFolderTrustDevices: d.TryGetProperty("remoteFolderTrustDevices", out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : host.Status.Settings.RemoteFolderTrustDevices));
-        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
-        await Connected();
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
         await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
 
         var phone = settings.TrustDevices.Single(d => d.Id == b);
