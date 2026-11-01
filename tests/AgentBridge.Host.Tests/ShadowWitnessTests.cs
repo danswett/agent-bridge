@@ -158,6 +158,25 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Null(Known(Daemon(polled), Host(shells: 1), ShadowKinds.BackgroundShells));
     }
 
+    // Found in review (#162): the host takes no marker longer than it reads one, and an end the
+    // witness dropped for room may be one that rules a restart out.
+    [Fact]
+    public void An_over_long_completion_line_is_no_host_end_and_a_dropped_end_leaves_a_restart_unknown()
+    {
+        Write(Result("<command started in background with shellId: long>"));
+        Write(Result("output\n<shellId: long completed with exit code 0> " + new string('x', 1100)));
+        var polled = Write(Result("<command with shellId: long is still running after 30 seconds>"));
+        Assert.Null(Known(Daemon(polled), Host(shells: 1), ShadowKinds.BackgroundShells));
+
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Result("<shellId: watch completed with exit code 0>"));
+        Write(Result("<command started in background with shellId: watch>"));
+        var blocked = Write(Result("1. a line\n<shellId: watch completed with exit code 0>\n3. another"));
+        Assert.Null(Known(Daemon(blocked, shells: ["long"]), Host(shells: 2), ShadowKinds.BackgroundShells));
+        Write([.. Enumerable.Range(0, 40).Select(_ => Result("1. a line\n<shellId: watch completed with exit code 0>\n3. another"))]);
+        Assert.Null(Known(Daemon(blocked, shells: ["long"]), Host(shells: 2), ShadowKinds.BackgroundShells));
+    }
+
     // Found in review (#162): the same id started again after a shutdown is a run of its own, not
     // the end of the one before it.
     [Fact]
