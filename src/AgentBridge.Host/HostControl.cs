@@ -190,6 +190,14 @@ public sealed class HostControl
 
     SettingsResult SettingsLocked(SettingsRequest request, List<string>? devices)
     {
+        // Made from a list that is no longer the one saved: nothing is changed, and the caller
+        // reads the list again and makes its change from that.
+        if (devices is not null && request.RemoteFolderTrustDevicesWas is { } was && Configured() is var before
+            && !(before.RemoteFolderTrustDevices ?? []).ToHashSet(StringComparer.Ordinal).SetEquals(was.Where(d => d is not null)))
+        {
+            log("settings not changed by the app: the devices approved for folder trust changed meanwhile");
+            return new SettingsResult(before, before != Volatile.Read(ref running), Conflict: true);
+        }
         HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices);
         // Answering folder-trust questions from devices applies at once, so it can be allowed
         // while a question waits; the rest when the host restarts.

@@ -85,7 +85,11 @@ public sealed record HostStatus
 public sealed record SignInRequest(string? Relay = null);
 
 // host.settings: any of these; absent ones are left as they are. Name "" clears it.
-// RemoteFolderTrustDevices replaces the whole list ([] approves none).
-public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name = null, bool? RemoteFolderTrust = null, IReadOnlyList<string>? RemoteFolderTrustDevices = null);
+// RemoteFolderTrustDevices replaces the whole list ([] approves none). RemoteFolderTrustDevicesWas:
+// the list that one was made from; when the host's differs (another app, or a person's terminal,
+// changed it meanwhile), nothing is changed and the result says Conflict, so a device revoked
+// elsewhere is never approved again by a list made before.
+public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name = null, bool? RemoteFolderTrust = null, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
+    IReadOnlyList<string>? RemoteFolderTrustDevicesWas = null);
 
-public sealed record SettingsResult(HostSettingsView Settings, bool RestartRequired);
+public sealed record SettingsResult(HostSettingsView Settings, bool RestartRequired, bool Conflict = false);

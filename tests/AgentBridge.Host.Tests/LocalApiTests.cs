@@ -241,6 +241,32 @@ public sealed class LocalApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_device_list_made_from_one_since_changed_at_the_terminal_changes_nothing_and_says_so()
+    {
+        string phone = new('a', 32), tablet = new('b', 32), laptop = new('c', 32);
+        File.WriteAllText(Path.Combine(profile, "config.json"), $$"""{ "launch": { "remoteFolderTrust": true, "remoteFolderTrustDevices": ["{{phone}}", "{{tablet}}"] } }""");
+        var ch = await ConnectAsync();
+        // The app read [phone, tablet]; the phone is revoked at a person's terminal; the app then
+        // approves the laptop from what it read.
+        File.WriteAllText(Path.Combine(profile, "config.json"), $$"""{ "launch": { "remoteFolderTrust": true, "remoteFolderTrustDevices": ["{{tablet}}"] } }""");
+
+        var stale = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrustDevices = new[] { phone, tablet, laptop }, remoteFolderTrustDevicesWas = new[] { tablet, phone }, remoteFolderTrust = false });
+
+        Assert.True(stale.Conflict);
+        Assert.Equal([tablet], stale.Settings.RemoteFolderTrustDevices!);
+        Assert.Equal([tablet], HostSettings.Load(profile).Settings.Launch.RemoteFolderTrustDevices);
+        Assert.True(HostSettings.Load(profile).Settings.Launch.RemoteFolderTrust);
+        Assert.Empty(approved);
+        Assert.Empty(applied);
+
+        // Made again from the list as it is: saved, in any order it was read in.
+        var made = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrustDevices = new[] { tablet, laptop }, remoteFolderTrustDevicesWas = new[] { tablet } });
+        Assert.False(made.Conflict);
+        Assert.Equal([tablet, laptop], made.Settings.RemoteFolderTrustDevices!);
+        Assert.Equal([tablet, laptop], Assert.Single(approved));
+    }
+
+    [Fact]
     public async Task Two_changes_to_folder_trust_at_once_go_one_after_the_other_so_what_runs_is_what_is_saved()
     {
         var first = await ConnectAsync();
