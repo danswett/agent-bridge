@@ -608,6 +608,15 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    public void A_row_drawn_against_the_options_is_a_changed_layout_left_for_the_machine()
+    {
+        var at = Array.IndexOf(ClaudeAsks, "   Yes, I trust this folder");
+        Assert.NotNull(StartupQuestions.ReadTrust(AgentKind.Claude, ClaudeAsks, "C:\\Users\\me\\agent-tests\\untrusted-4"));
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Claude, [.. ClaudeAsks[..(at + 1)], "   Yes, I accept", .. ClaudeAsks[(at + 1)..]], "C:\\Users\\me\\agent-tests\\untrusted-4"));
+        Assert.Null(StartupQuestions.ReadTrust(AgentKind.Claude, [.. ClaudeAsks[..(at - 1)], "   Yes, I accept", .. ClaudeAsks[(at - 1)..]], "C:\\Users\\me\\agent-tests\\untrusted-4"));
+    }
+
+    [Fact]
     public void A_repository_root_under_Codexs_note_is_never_taken_for_the_folder_launched_in()
     {
         // Launched at the root, while the question on screen is for a folder under it.

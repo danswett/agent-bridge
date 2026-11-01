@@ -126,6 +126,11 @@ public static class StartupQuestions
             options.Add(i);
         }
         if (options.Count != known.All.Length || selected < 0 || trustAt < 0) { return null; }
+        // Every agent draws its options as a block with a blank row on each side: anything else
+        // against it (an unnumbered "Yes, I accept" under Claude's two, say) is a changed layout,
+        // and stays at the machine.
+        if (options[0] > 0 && clean[options[0] - 1].Length > 0) { return null; }
+        if (options[^1] + 1 < clean.Count && clean[options[^1] + 1].Length > 0) { return null; }
 
         // Paragraphs above the options: rows between blank ones.
         var paragraphs = new List<(int First, int Last)>();
