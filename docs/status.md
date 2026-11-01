@@ -51,14 +51,14 @@ The work has been built phone-first. All merged PRs are listed in §7.
 | PWA | Cards, answers, replies, attachments, launch, stop, usage, push, All machines view, Machines fold, folder trust, remote update, Copy button on code blocks |
 | Relay | Production at https://relay.bad-duck.com, image `7c17d4a` (2026-11-01), with a roster store. Staging, then production on approval, via `.github/workflows/relay.yml` |
 | HA connector | Stages 1–7, so a migrated machine stays on the existing HA dashboard: status, answers, replies, stop, launch, phone notifications, update buttons, upkeep and forget. Contract pinned to agent-ha-bridge v1.33.33 |
-| Releases | Every merge to `main` publishes a release-build pre-release of the Windows app (`v0.1.<run>`, Velopack, with deltas). Latest: v0.1.690 or later. Installed apps check every 30 min and install when idle |
+| Releases | Every merge to `main` publishes a release-build pre-release of the Windows app (`v0.1.<run>`, Velopack, with deltas). Latest: v0.1.700 or later. Installed apps check every 30 min and install when idle |
 | Rehearsal (#39) | Done: four runs on a Hyper-V VM and Azure VMs. Verdict: **ready for a supervised migration of one real machine** ([rehearsal-2026-10.md](rehearsal-2026-10.md)) |
 
 ### Machines
 
 | Machine | State |
 |---|---|
-| DSWETT-ULTRA | **Migrated** from agent-ha-bridge on 2026-10-31. Auto-updating, on 0.1.690 as of 2026-11-01. HA connector on since 2026-11-01 08:48 (online in HA). The first real machine; watch it |
+| DSWETT-ULTRA | **Migrated** from agent-ha-bridge on 2026-10-31. HA connector on since 2026-11-01 08:48 (online in HA). Updated to 0.1.700 on 2026-11-01 11:06 by **Install from the PWA**, the first remote install on a real machine (#161). The first real machine; watch it |
 | DSWETT-DEV-VM1 | agent-ha-bridge plus a **read-only shadow host** (profile `shadow`) comparing with the daemon (#40). Gate not yet passed (§3) |
 | DSWETT-HOME | agent-ha-bridge, and the **dashboard publication writer**: migrate refuses there (G7), so it moves last. A view-only app install (`delivery.readOnly`, push off, HA connector off), so it shows in the PWA, is pending with the owner |
 | ARM laptop, Mac, DASDESK | agent-ha-bridge only. The Mac waits for P5 (macOS host) |
@@ -78,13 +78,13 @@ The read-only host has run beside the daemon since 2026-10-29, and the gate is c
 %LOCALAPPDATA%\AgentBridgeShadow\bin\agent-bridge-host.exe shadow summary --gate --profile shadow
 ```
 
-- **2026-11-01:** FAIL, from 43 `background.shells` episodes in one session before 09:57 PST. These are agent-ha-bridge#276, which the daemon gets wrong: a shell restarted under the same id is lost. #162 now labels them as a known difference. The FAIL clears when they leave the 24 h window (about 10:00 PST on 11-02). Before that the verdict was **NOT YET**, on coverage: questions 38 of 100, sessions 8 of 30, status transitions 358 of 500. Claude and Codex have no sessions there yet.
+- **2026-11-01:** FAIL, from 43 `background.shells` episodes in one session before 09:57 PST. These are agent-ha-bridge#276, which the daemon gets wrong: a shell restarted under the same id is lost. #162 now labels them as a known difference (the shadow build is at 350bce6, which has it). The FAIL clears when they leave the 24 h window (about 10:00 PST on 11-02). Before that the verdict was **NOT YET**, on coverage; at 11:00 PST on 11-01 it read questions 40 of 100, sessions 10 of 30, status transitions 408 of 500. Claude and Codex have no sessions there yet.
 - Update the shadow build with `build/shadow-week.ps1 -Update` after relevant merges. Agent sessions can't use `-Install`; the #67 guard refuses it.
 - #163: a skipped sample splits one disagreement into many episodes. Not fixed.
 
 ## 4. Next steps, in order
 
-1. **Watch ULTRA.** Its HA entities (`*_dswett_ultra_*`) and the PWA should agree, and answers, replies and launches from the phone and the HA card should all work. Try **Install** from the PWA once a newer release is out: remote install has never run on a real machine (#161).
+1. **Watch ULTRA.** Its HA entities (`*_dswett_ultra_*`) and the PWA should agree, and answers, replies and launches from the phone and the HA card should all work. Install from the PWA worked on 2026-11-01 (0.1.690 to 0.1.700); Install from the HA card's button is still untried live (#161).
 2. **HOME view-only install**, by the owner (the commands are in §8). Then confirm HOME shows in the PWA, read-only.
 3. **The shadow gate on DEV-VM1:** keep collecting until it passes, then cut DEV-VM1 over with `migrate` and soak it. Claude and Codex coverage is needed.
 4. **The rest, one machine at a time** (design §10 machine order): the ARM laptop, the Dev Box, then the Mac after P5. Each runs on 0.1.649 or later. Repeat rehearsal step E6-07 (worktree reclaim) on the first one.
@@ -105,7 +105,8 @@ proposals arrive as issues:
 | #167 | Design language: status glyphs, icons, colour roles and the app icon, shared by every client |
 | #168 | PWA: a small platform layer (shortcut hints, safe areas, back navigation), not a reskin |
 
-None is started. Agree on the order with the owner before building. Changes to the
+None is started. **Order agreed with the owner (2026-11-01):** #164, #165, #167, #166,
+#168, starting only once the design session signs off. Changes to the
 layout touch both the PWA (`pwa/`) and the app (`src/AgentBridge.App`) and should keep
 them at parity.
 
@@ -242,3 +243,5 @@ agent-ha-bridge releases from this work:
 | 11-01 | Remote update: only a person's device presses it; it obeys the same idle rules; read-only hosts don't offer it |
 | 11-01 | VM01 is left down |
 | 11-01 | Design, status and handoff live in this repository (this page, design.md, AGENTS.md) |
+| 11-01 | A new coordinator session took over (bridge session a6ed320ca83044c5, DEV-VM1) |
+| 11-01 | UI track order: #164, #165, #167, #166, #168, after the design session signs off |
