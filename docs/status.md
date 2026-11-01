@@ -94,21 +94,33 @@ The read-only host has run beside the daemon since 2026-10-29, and the gate is c
 
 ## 5. UI design track
 
-The owner is running a separate design session for the apps' look and layout. Its
-proposals arrive as issues:
+The design session's output is in the repository, **awaiting the owner's sign-off**:
 
-| Issue | Proposal |
-|---|---|
-| #164 | Session list: keep the person's order, not most-recently-updated |
-| #165 | "Needs you": questions and approvals surface above the list without moving it |
-| #166 | Layout: list and detail panes that adapt to the window, with a native shell per platform |
-| #167 | Design language: status glyphs, icons, colour roles and the app icon, shared by every client |
-| #168 | PWA: a small platform layer (shortcut hints, safe areas, back navigation), not a reskin |
+- [design/ui.md](design/ui.md): the spec for every client (status language, colour, type,
+  layout, surfaces, platform shells);
+- [design/subagents.md](design/subagents.md): the sub-agent model and protocol (#84);
+- [design/ui-plan.md](design/ui-plan.md): the slices, their order and how to do one;
+- [/design](../design/README.md): `tokens.json`, the status glyphs and the icons.
 
-None is started. **Order agreed with the owner (2026-11-01):** #164, #165, #167, #166,
-#168, starting only once the design session signs off. Changes to the
-layout touch both the PWA (`pwa/`) and the app (`src/AgentBridge.App`) and should keep
-them at parity.
+| Slice | Issue | What |
+|---|---|---|
+| S1 | #173 | Sub-agents: host model and protocol, Copilot first. May start before sign-off |
+| S2 | #174 | Sub-agents: Claude and Codex sources |
+| S5 | #175 | Sub-agents: HA connector and shadow |
+| U1 | #164 | Session list keeps the person's order |
+| U2 | #165 | "Needs you" lane |
+| U3 | #177 | Design tokens generator; both clients switch to the colour roles |
+| U4 | #178 | Status glyphs and icons replace card edges and glows |
+| U5 | #179 | PWA layout (half of #166) |
+| U6 | #180 | Windows app layout (half of #166) |
+| U7 | #168 | PWA platform layer |
+| U8 | #176 | Delegates in both clients |
+| | #181 | Owner decision: license Berkeley Mono or not (blocks nothing) |
+
+None is started. The client slices run in the order agreed on 2026-11-01 (#164, #165,
+#167, #166, #168), then U8; ui-plan.md §1 shows what can run in parallel. Changes to the
+layout touch both the PWA (`pwa/`) and the app (`src/AgentBridge.App`) and keep them at
+parity.
 
 ## 6. Open issues by theme
 
@@ -245,3 +257,4 @@ agent-ha-bridge releases from this work:
 | 11-01 | Design, status and handoff live in this repository (this page, design.md, AGENTS.md) |
 | 11-01 | A new coordinator session took over (bridge session a6ed320ca83044c5, DEV-VM1) |
 | 11-01 | UI track order: #164, #165, #167, #166, #168, after the design session signs off |
+| 11-01 | UI design proposed (docs/design/ui.md): system text faces with one licensed monospace, status glyphs instead of coloured edges, panes by window width, the PWA following the Windows design. Awaiting sign-off |
