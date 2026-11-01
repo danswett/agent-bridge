@@ -99,7 +99,7 @@ again": an install pressed hours before must not go ahead on sessions never watc
 
 | Field | Type | |
 |---|---|---|
-| `outcome` | `accepted` `refused` | `accepted`: the machine's app has been asked, and how it goes is in the state (`request`, then `last` with this request). `refused`: nothing was asked |
+| `outcome` | `accepted` `refused` | `accepted`: the machine's app has been asked, and how it goes is in the state (`request`, then `last` with this request). A Check that finds a newer release ends instead with `request` gone and `available` and `checkedAt` set (`last` stays how the last update, or a check finding nothing, ended). `refused`: nothing was asked |
 | `reason` | string? | Why it was refused |
 | `state` | `UpdateState`? | The state as the press found it |
 
