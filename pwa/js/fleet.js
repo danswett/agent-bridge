@@ -70,6 +70,10 @@ export class FleetStatus {
     return machineStatus({ ...m, sessions: live ? link.store.size : m.sessions, held: live ? link.store.held?.reason : null });
   }
 
+  // Whether a machine's figures come on a channel of its own: shown, and not found unable to
+  // show sessions (an older host still has a status and may have usage, looked at as any other).
+  #followed(id) { return this.hosts.shows(id) && this.hosts.link(id)?.phase !== 'unsupported'; }
+
   // Settles when every look asked for so far is done.
   idle() { return this.#queue; }
 
@@ -136,7 +140,7 @@ export class FleetStatus {
       this.hosts.refresh?.(link.id)?.catch(() => {});
     }
     for (const d of this.connection.presence) {
-      if (d.kind !== 'host' || d.id === this.me || this.hosts.shows(d.id) || this.#queued.has(d.id)) { continue; }
+      if (d.kind !== 'host' || d.id === this.me || this.#followed(d.id) || this.#queued.has(d.id)) { continue; }
       const seen = this.#machines.get(d.id);
       if (seen && this.now() - seen.at < this.probeEveryMs) { continue; }
       this.#queued.add(d.id);
@@ -145,7 +149,7 @@ export class FleetStatus {
   }
 
   async #probeOne(id) {
-    if (!this.connection.ready || this.hosts.shows(id) || !this.connection.presence.some((d) => d.id === id)) { return; }
+    if (!this.connection.ready || this.#followed(id) || !this.connection.presence.some((d) => d.id === id)) { return; }
     let channel = null;
     let client = null;
     const epoch = this.#epochs.get(id) ?? 0;
@@ -156,7 +160,7 @@ export class FleetStatus {
       // Each answer is dropped if the machine has been shown meanwhile: its own channel then
       // has newer figures, and the book keeps one report per machine. And if it has been
       // forgotten meanwhile: nothing about it is kept.
-      const viewed = () => this.hosts.shows(id);
+      const viewed = () => this.#followed(id);
       const hello = await client.hello();
       if (viewed() || forgotten()) { return; }
       this.#note(id, hello.machine);

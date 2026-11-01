@@ -154,7 +154,8 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
   // update of every machine shown, and a button replaced between a tap's touch and its release
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
   const key = JSON.stringify([current, allStatus, hosts.map((d) => [d.id, d.name, status(d.id)]),
-    offline.map((k) => [k.id, k.name, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget]);
+    // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
+    offline.map((k) => [k.id, k.name, k.lastSeen, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget]);
   if (drawnAs.get(list) === key) { return hosts.length; }
   drawnAs.set(list, key);
   // Every change redraws the list, so the button that had focus is replaced: Forget's first

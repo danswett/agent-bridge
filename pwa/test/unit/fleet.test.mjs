@@ -279,3 +279,13 @@ test('with every machine shown none is probed: each one\'s usage and live count 
   assert.equal(fleet.status('a'), '0 sessions \u00b7 0.1.0');
   assert.equal(fleet.status('b'), '1 session \u00b7 0.2.0');
 });
+
+test('a machine shown that cannot show sessions is still looked at for its status and usage', async () => {
+  const { connection, hosts, book, fleet } = fleetWith({ old: { machine: { hostVersion: '0.0.9' }, capabilities: ['usage'], usage: usage(25) } });
+  hosts.view({ id: 'old', phase: 'unsupported', client: null, machine: null, capabilities: [] });
+  fleet.probe();
+  await fleet.idle();
+  assert.deepEqual(connection.opened, ['old']);
+  assert.equal(fleet.status('old'), '0.0.9');
+  assert.equal(book.entries()[0].windows[0].percent, 25);
+});
