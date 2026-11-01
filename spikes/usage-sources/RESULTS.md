@@ -14,7 +14,7 @@ credentials, refresh and locking. The host never holds or refreshes a token itse
 - **Codex.** The host sends `account/rateLimits/read` with
   `excludeResetCreditDetails: true` to Codex's own app-server. With no Codex running,
   that's a short-lived `codex app-server` over stdio. With the managed daemon running,
-  the request goes through the daemon (`codex app-server proxy`), so Codex never has a
+  the request goes to the daemon over its WebSocket control socket, so Codex never has a
   second credential writer. Codex uses its own `auth.json`/keyring handling and refresh,
   and no thread or turn is started. **Fallback:** the transcript reading the host uses
   today.
@@ -287,7 +287,7 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
 | | Candidate | Verdict |
 |---|---|---|
 | a | The app-server protocol: start `codex app-server` (stdio), send `initialize` then `account/rateLimits/read` | **Recommended** when no Codex process is running |
-| b | The same request through the managed daemon's socket (`codex app-server proxy`) | **Recommended** when the daemon is running, once E9 passes (X-3). Otherwise don't probe |
+| b | The same request through the managed daemon's WebSocket control socket (directly, or through `codex app-server proxy`) | **Recommended** when the daemon is running, once E9 passes (X-3). Otherwise don't probe |
 | c | `/status` in the TUI | Interactive only. `codex exec` would start a turn. Rejected |
 | d | `GET chatgpt.com/backend-api/wham/usage` with the token from `auth.json` | Rejected: it means reading credentials, keyring mode breaks it, the token needs refreshing, and the endpoint is undocumented |
 | — | Transcripts (today) | Fallback |
@@ -314,6 +314,11 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
     so `accountId` alone can't group readings. `account/read` adds the user's `email`
     (`account.rs:22-38`). Together, user and workspace make an identity for an
     `accountKey` (#172).
+  - **The two requests aren't bound to each other.** If the login changes between them,
+    the snapshot can belong to one user and the email to another. The handler does check
+    the snapshot's account and user ids against the active login, but it exposes the
+    result only by leaving `ordinaryUsageAllowed` non-null
+    (`account_processor.rs:1245-1265`). The binding rule is in the recommendation.
 - **The handler** (`app-server/src/request_processors/account_processor.rs:1171-1278`):
   - It requires ChatGPT auth, and otherwise returns "chatgpt authentication required to
     read rate limits".
@@ -389,9 +394,18 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
 - So the probe should take one of three routes, depending on what's running:
   - **No Codex process:** a standalone probe. It's the only reader and writer, apart from
     a session that happens to start during its few seconds (E12).
-  - **The managed daemon is running:** ask through the daemon with
-    `codex app-server proxy`. The daemon's own `AuthManager` answers, so no second writer
-    exists. This depends on E9 showing that a short client doesn't disturb the daemon.
+  - **The managed daemon is running:** ask through the daemon. The daemon's own
+    `AuthManager` answers, so no second writer exists.
+    - **This route needs a different transport.** The control socket accepts WebSocket
+      connections, not stdio's JSON lines
+      (`app-server-transport/src/transport/unix_socket.rs:1-27`), and
+      `codex app-server proxy` only copies bytes between stdio and that socket.
+    - So the host either speaks WebSocket through the proxy's stdio, or connects to the
+      Unix-domain socket itself (.NET's `SocketsHttpHandler.ConnectCallback` with a
+      `UnixDomainSocketEndPoint`). Either way it does the upgrade, sends each message as
+      a text frame, and ends with a WebSocket close.
+    - It depends on E9 showing that this transport works and that a short client doesn't
+      disturb the daemon.
   - **A Codex session without the daemon:** don't probe. The transcripts are fresh while
     it works.
 - The host already ignores app-server processes in discovery
@@ -401,21 +415,29 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
   (`message_processor.rs:407`, `models_refresh_worker.rs:41-58`). That's one more
   non-inference request per probe, and E7 lists them all.
 
-**X-4. Ending the probe safely.**
+**X-4. Ending the probe safely (still open).**
 - On Unix, closing standard input arms a 45 s watchdog that calls
   `process::exit(1)` (`app-server-transport/src/transport/stdio.rs:125-129`,
   `:168-182`). Closing too early could cut a refresh off between the token response and
-  the save.
-- `account/rateLimits/read` gets its credentials through `auth()`, which waits on the
-  in-process refresh lock and adopts any refresh already in flight, such as the start-up
-  model-catalogue refresh (`manager.rs:2499-2513`, `:3148-3195`). By the time its
-  response arrives, no refresh should still be running.
-- **The rule:** close standard input only after both responses have arrived, then let
-  the process exit by itself.
+  the save. Windows has no watchdog (`cfg!(unix)`).
+- `account/rateLimits/read` gets its credentials through `auth()`
+  (`manager.rs:2499-2513`). **When a proactive refresh is due,** `auth()` waits on the
+  in-process refresh lock and adopts a refresh already in flight (`:3148-3195`), so that
+  refresh has finished by the time the response arrives. **When none is due,** it
+  returns the cached credentials straight away. A background refresh can then still be
+  running after both responses arrive: the start-up model-catalogue fetch, or a refresh
+  that a 401 forced.
+- So closing standard input after the responses removes the refresh caused by the
+  probe's own request, but it doesn't guarantee that nothing is refreshing. The host
+  can't see a background refresh from outside.
+- **Interim rule:** close standard input only after both responses arrive, then let the
+  process exit by itself. E13 decides the final mechanism, choosing between:
+  - closing at once;
+  - waiting a grace period after the responses before closing;
+  - using the daemon route (X-3) whenever it's available, since it has no process to end.
 - **The reporting timeout is separate from the process lifetime.** After 60 s with no
   answer, the host stops waiting and reports nothing new, but it leaves the process
-  running. Only after a hard ceiling (10 min) does it treat the process as hung. E13
-  exercises an outstanding refresh.
+  running. Only after a hard ceiling (10 min) does it treat the process as hung.
 
 **X-5. Detecting a Codex sign-out.**
 - `codex login status` only reports stored credentials (`cli/src/login.rs`). A refresh
@@ -434,7 +456,7 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
 | Candidate | Failure | Codex starting or running mid-probe | Sign-out risk and how to avoid it |
 |---|---|---|---|
 | **a. Stdio app-server** | `codex` missing or a different version; protocol drift (the request is versioned v2 and stable); API-key login (an error, so keep transcripts); a slow start (the process is large); the backend down | If it runs beside Codex, it's a second `AuthManager` and a second writer. Codex reads `auth.json` without the lock while the probe may be truncating and rewriting it, so another Codex process can fail to load its auth; and the last writer wins (X-2). That's why it runs only when no Codex process does (X-3) | **Low when run alone.** A session starting during the probe's few seconds is the remaining window (E12). Two rules: (1) close standard input only after the responses arrive, because EOF arms a 45 s exit on Unix (X-4); (2) one probe at a time. Detect a sign-out from the probe's own authentication error, not from `codex login status` (X-5) |
-| **b. Through the daemon** | The daemon may not be running; the socket's framing and lifetime are internal | The daemon's own `AuthManager` answers, so there's no second writer and no race | **Lowest for auth.** But it adds a client to a process that sessions depend on, and its effect on the daemon's idle exit is unknown (E9). Recommended whenever the daemon is running, once E9 passes |
+| **b. Through the daemon** | The daemon may not be running. Its control socket needs a WebSocket client, not JSON lines, and the socket's framing and lifetime are internal | The daemon's own `AuthManager` answers, so there's no second writer and no race | **Lowest for auth,** with no process to shut down. But it adds a client to a process that sessions depend on, and its effect on the daemon's idle exit is unknown (E9). Recommended whenever the daemon is running, once E9 passes |
 | **d. Direct backend call** | Keyring mode has no file; a refresh is needed within about the token's life; undocumented path | n/a | Either it never refreshes (stale, like Claude today) or it refreshes (unsafe) |
 | **Transcripts** | Move only during turns | n/a | None |
 
@@ -470,24 +492,31 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
 ### Recommendation
 
 1. Add a Codex probe. It takes one of the routes in X-3, depending on what's running.
-   With no Codex process it's a standalone `codex app-server` over stdio. With the
-   managed daemon running it's `codex app-server proxy` (after E9). It doesn't run
-   beside a Codex session that has no daemon. Either way:
+   With no Codex process it's a standalone `codex app-server` over stdio (JSON lines).
+   With the managed daemon running it's a WebSocket connection to the daemon's control
+   socket, after E9. It doesn't run beside a Codex session that has no daemon. Either
+   way:
    - `CODEX_HOME` is set to the profile's home, and the working directory is owned by the
      host.
    - Send `initialize` (`clientInfo.name = "agent_bridge"`), then `initialized`, then
-     `account/rateLimits/read` with `{ "excludeResetCreditDetails": true }`, then
-     `account/read` with `{ "refreshToken": false }`.
-   - Close standard input only after both responses have arrived, then let the process
-     exit by itself (X-4).
+     `account/read` with `{ "refreshToken": false }`, then `account/rateLimits/read` with
+     `{ "excludeResetCreditDetails": true }`, then `account/read` again.
+   - Standalone: close standard input only after the responses arrive, then let the
+     process exit by itself, until E13 settles the mechanism (X-4). Daemon: send a
+     WebSocket close.
 2. Map the result:
    - `rateLimitsByLimitId.codex`, or else `rateLimits`, gives the `primary` and
      `secondary` windows.
    - Labels come from `windowDurationMins`, as `CodexUsageCollector.Parse` does now.
    - `resetsAt` comes across as is, and `plan` is `planType`.
    - `accountKey` is the first 12 hex digits of
-     `sha256("codex:" + lower(email) + ":" + accountId)`, taken from the same probe. If
-     either part is missing, the reading has no key and isn't grouped.
+     `sha256("codex:" + lower(email) + ":" + accountId)`. It's set only when the identity
+     is shown to be stable across the read:
+     - both `account/read` answers give the same non-null email;
+     - no `account/updated` notification arrived during the probe;
+     - the snapshot has `accountId`, and its `ordinaryUsageAllowed` is non-null, which
+       means the handler matched the snapshot to the active login.
+     Otherwise the reading has no key and isn't grouped.
    - `source` is `api`.
 3. Keep the transcript reading. The newer of the two readings wins, and a transcript
    reading stays ungrouped, as today.
@@ -499,7 +528,7 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
 ## Disposable-VM experiments
 
 All of these run on a disposable VM (the `rehearsal-w` pattern, with a Linux VM for
-E1, E2 and E5 too). **The owner signs in there.** The rules:
+E1, E2, E5 and E13 too). **The owner signs in there.** The rules:
 - No experiment prints a token.
 - Where a token's change must be seen, record only `sha256(token)[:8]` and the `expiresAt`
   or JWT `exp` claim.
@@ -518,13 +547,13 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 | E4 | Claude kill (negative) | Make `mitmdump` hold the token-endpoint response for 10 s, then kill the probe while it's held. Let Claude Code refresh next | Expected to **fail**, with Claude Code signed out. That confirms the never-kill rule. The owner signs in again |
 | E5 | Claude pace | Probe every 5 min for 2 h, then every minute for 15 min | No rate limit at 5 min. Record where 429s or "rate limited" begin. Plan percentages unaffected |
 | E6 | Claude on the Windows store | `CLAUDE_CODE_FORCE_WINDOWS_CREDMAN=1`, sign in, run E1 | `.credentials.json` isn't updated, the probe still saves `cachedUsageUtilization`, and today's direct reader goes silent (this confirms C-1) |
-| E7 | Codex probe | ChatGPT sign-in. A script runs the four messages in the Codex recommendation over stdio | Exit 0 in under 15 s after standard input closes. Windows match `/status`. No new rollout under `~/.codex/sessions`. No `/responses` traffic. Record every host and path, and whether `last_refresh` moved |
+| E7 | Codex probe | ChatGPT sign-in. A script runs the five messages in the Codex recommendation over stdio | Exit 0 in under 15 s after standard input closes. Windows match `/status`. No new rollout under `~/.codex/sessions`. No `/responses` traffic. Record every host and path, whether `last_refresh` moved, and whether `accountId` and `ordinaryUsageAllowed` are present (they decide whether readings can be grouped) |
 | E8 | Codex concurrency | With the managed daemon and a TUI session running, probe through the daemon every 30 s for 2 h, across at least one access-token expiry (record JWT `exp` to learn the lifetime). Then force the race once: two standalone app-servers refreshing at the same instant | Through the daemon: no `refresh_token_reused` in the Codex logs, TUI turns keep working, and `codex login status` stays signed in. The forced race: record which process loses, and whether its next request recovers through the guarded reload without signing out |
-| E9 | Codex through the daemon (gates route b) | `codex app-server proxy` to the running daemon, same four messages, then disconnect, 50 times | The daemon's process ID is unchanged, its sessions are unaffected, and its idle exit behaves as without the probe |
+| E9 | Codex through the daemon (gates route b) | Connect to the running daemon's control socket with a WebSocket client: through `codex app-server proxy`'s stdio, and directly on the Unix-domain socket. Send the same five messages, then a WebSocket close. Do this 50 times. Also send the plain JSON lines once, to confirm that's refused | Both WebSocket paths answer, and the plain JSON lines don't. The daemon's process ID is unchanged, its sessions are unaffected, and its idle exit behaves as without the probe |
 | E10 | Codex keyring mode | `cli_auth_credentials_store = "keyring"`, then E7 | Same result as E7, with no `auth.json` present |
 | E11 | Invisible to the bridges | Run both probes with an agent-bridge dev host and agent-ha-bridge hooks installed on the VM | No session appears in either, and the host's worktree accounting ignores the probes |
 | E12 | Codex half-written `auth.json` | Make the standalone probe refresh: expire the token, and slow the token response through `mitmdump` so the save lands while another process is reading. Start `codex` or `codex login status` in a loop meanwhile, 50 times | Record any load or parse failure in the reading process. If any occur, the build must not probe while another Codex process could start, beyond what X-3 already rules out |
-| E13 | Codex outstanding refresh at EOF | Hold the token response for 50 s. (a) Close standard input as soon as the request is sent. (b) Close it only after the response, per X-4 | (a) Expected to **fail**: the process exits at 45 s, the rotated token is lost, and Codex signs out. That confirms the rule. (b) No loss. The owner signs in again after (a) |
+| E13 | Codex outstanding refresh at EOF (**on the Linux VM**, since the 45 s watchdog is Unix-only) | Hold the token response for 50 s. (a) Close standard input as soon as the request is sent. (b) Close it only after the responses. (c) Expire the access token so the start-up model-catalogue fetch starts the refresh, let both probe responses complete while that refresh is held, then close. (d) Repeat (b) on the Windows VM | (a) Expected to **fail**: the process exits at 45 s, the rotated token is lost, and Codex signs out. (b) No loss. (c) Record whether the token is lost, which decides between a grace period and the daemon route (X-4). (d) The process exits by itself after EOF. The owner signs in again after each failure |
 | E14 | Codex sign-out signal | Revoke the session from ChatGPT's security settings. Separately, make a refresh token reused (E8's forced race). Probe after each | Record the exact `account/rateLimits/read` error for each. `codex login status` still says logged in, which confirms X-5 |
 
 ---
@@ -564,15 +593,17 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 >
 > **Codex**
 > - [ ] `CodexUsageProbe` chooses its route by what's running (spike X-3):
->       - no Codex process: a standalone `codex app-server` over stdio;
->       - the managed daemon running: `codex app-server proxy` to its socket;
+>       - no Codex process: a standalone `codex app-server` over stdio, using JSON lines;
+>       - the managed daemon running: a WebSocket client to the daemon's control socket,
+>         directly or through `codex app-server proxy`, ending with a WebSocket close;
 >       - a Codex session without the daemon: no probe.
-> - [ ] It sends `initialize`, `initialized`,
+> - [ ] It sends `initialize`, `initialized`, `account/read {refreshToken: false}`,
 >       `account/rateLimits/read {excludeResetCreditDetails: true}` and
->       `account/read {refreshToken: false}`.
-> - [ ] It closes standard input only after both responses arrive (spike X-4). After
->       60 s with no answer it stops waiting and reports nothing, but leaves the process
->       running; the process is treated as hung only after 10 min.
+>       `account/read` again.
+> - [ ] Standalone: it closes standard input only after the responses arrive, using the
+>       shutdown mechanism E13 chose (spike X-4). After 60 s with no answer it stops
+>       waiting and reports nothing, but leaves the process running; the process is
+>       treated as hung only after 10 min.
 > - [ ] An authentication error from the rate-limit read (spike X-5, error text from E14)
 >       gives the failure "Codex needs signing in again on this machine". Probes stop
 >       until the 2-hour back-off ends or a Codex session next runs here. `codex login
@@ -580,8 +611,11 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 > - [ ] Mapping: `rateLimitsByLimitId.codex`, or else `rateLimits`, gives the windows.
 >       Labels come from `windowDurationMins`, plus `resetsAt` and `planType`.
 >       `accountKey` is the first 12 hex digits of
->       `sha256("codex:" + lower(email) + ":" + accountId)`, both taken from the same
->       probe, and is absent when either is missing. `source` is `api`.
+>       `sha256("codex:" + lower(email) + ":" + accountId)`. It's set only when the
+>       identity held steady across the probe (spike Codex recommendation, step 2): the
+>       same non-null email in both `account/read` answers, no `account/updated`, and a
+>       non-null `accountId` and `ordinaryUsageAllowed`. Otherwise it's absent. `source`
+>       is `api`.
 > - [ ] Transcripts stay, and a transcript reading stays ungrouped. The newest reading
 >       wins. An API-key login or a missing `codex` falls back to transcripts without an
 >       error row.
@@ -611,7 +645,11 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 > - [ ] A scripted fake app-server answering `account/rateLimits/read` produces
 >       `primary`/`secondary` windows, labels, resets, plan and `accountKey`.
 > - [ ] Two users in one workspace (same `accountId`, different email) get different
->       `accountKey`s. A response with no `accountId` or no email gets no `accountKey`.
+>       `accountKey`s. A response with no `accountId`, no email or a null
+>       `ordinaryUsageAllowed` gets no `accountKey`.
+> - [ ] A login switch during the probe withholds the `accountKey`: the fake answers
+>       the two `account/read` calls with different emails, or sends `account/updated`
+>       between them.
 > - [ ] The Codex probe sends only `initialize`, `initialized`,
 >       `account/rateLimits/read` (with `excludeResetCreditDetails: true` and no
 >       `supportsLunaReserve`) and `account/read`, and never `thread/*` or `turn/*`.
@@ -619,7 +657,9 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 >       fake app-server that answers after the 60 s reporting timeout still has its
 >       standard input open, and is still running, when it answers.
 > - [ ] The route follows the process state: standalone with no Codex running, the
->       proxy with the daemon running, and nothing beside a session without the daemon.
+>       daemon with the daemon running, and nothing beside a session without the daemon.
+> - [ ] The daemon route speaks WebSocket: against a fake WebSocket control socket it
+>       upgrades, sends text frames and ends with a close frame.
 > - [ ] An authentication error from the rate-limit read stops probing, even while
 >       `codex login status` says logged in.
 > - [ ] A hung fake app-server is given up on after the 10 min ceiling, and the
