@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { loadTokens, surfaceTokens } from './lib/tokens.mjs';
+import { loadTokens, surfaceTokens, monoFont } from './lib/tokens.mjs';
 import { readDesignDir } from './lib/svg.mjs';
 import { tokensCss, spriteSvg } from './lib/emit-pwa.mjs';
 import { designXaml, designKeysCs } from './lib/emit-xaml.mjs';
@@ -39,9 +39,22 @@ function themeColours(root, tokens) {
   return { 'pwa/index.html': index, 'pwa/manifest.webmanifest': manifest };
 }
 
+// Every face the clients are told about must exist, as WOFF2 for the PWA and TTF for the app,
+// with its licence: a face that isn't there would fail quietly in the PWA and leave the app
+// pointing at a file it doesn't have.
+function checkFontFiles(root, tokens) {
+  const font = monoFont(tokens);
+  if (!font) { return; }
+  const dir = path.join(root, font.dir);
+  const wanted = [...font.faces.flatMap((f) => [`woff2/${f.file}.woff2`, `ttf/${f.file}.ttf`]), font.license];
+  const missing = wanted.filter((f) => !existsSync(path.join(dir, f)));
+  if (missing.length) { throw new Error(`type.mono.files (${font.dir}) lacks ${missing.join(', ')}`); }
+}
+
 export function generate(root = repoRoot) {
   const design = path.join(root, 'design');
   const tokens = loadTokens(design);
+  checkFontFiles(root, tokens);
   const glyphs = readDesignDir(path.join(design, 'glyphs'), 'glyph');
   const icons = readDesignDir(path.join(design, 'icons'), 'icon');
   return {

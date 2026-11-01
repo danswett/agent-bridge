@@ -87,9 +87,34 @@ export const allColorTokens = (tokens) => [...roleTokens(tokens), ...surfaceToke
 // no ui-monospace, so it gets Windows' own monospace there instead.
 export function monoFamilies(tokens, client) {
   const family = tokens.type.mono.family;
-  if (client === 'css') { return family.map((f) => (/^[\w-]+$/.test(f) && !/\s/.test(f) && /^(ui-)?monospace$/.test(f) ? f : `"${f}"`)).join(', '); }
-  const named = family.filter((f) => !/^(ui-)?monospace$/.test(f));
+  if (client === 'css') { return family.map((f) => (/^(ui-)?monospace$/.test(f) ? f : `"${f}"`)).join(', '); }
+  // XAML names a bundled font by its file: the first family, if it is ours, comes from the
+  // app's Assets/Fonts (bundled by AgentBridge.App.csproj), then the rest by name.
+  const own = monoFont(tokens);
+  const named = family.filter((f) => !/^(ui-)?monospace$/.test(f))
+    .map((f) => (own && f === own.family ? `ms-appx:///${own.appDir}/${own.faces[0].file}.ttf#${f}` : f));
   return [...named, 'Consolas'].join(', ');
+}
+
+const WEIGHT_NAMES = { 400: 'Regular', 600: 'SemiBold', 700: 'Bold' };
+
+// The bundled monospace (type.mono.files), if there is one: its family, where its files are,
+// and one face per weight and style, named as design/fonts builds them
+// (AgentBridgeMono-SemiBoldItalic). The Regular face comes first.
+export function monoFont(tokens) {
+  const mono = tokens.type.mono;
+  if (!mono.files) { return null; }
+  const family = mono.family[0];
+  const stem = family.replace(/\s+/g, '');
+  const faces = [];
+  for (const style of mono.italic ? ['normal', 'italic'] : ['normal']) {
+    for (const weight of mono.weights ?? [400]) {
+      if (!(weight in WEIGHT_NAMES)) { throw new Error(`type.mono.weights: no file name for weight ${weight}`); }
+      const name = weight === 400 && style === 'italic' ? 'Italic' : `${WEIGHT_NAMES[weight]}${style === 'italic' ? 'Italic' : ''}`;
+      faces.push({ weight, style, file: `${stem}-${name}` });
+    }
+  }
+  return { family, dir: mono.files, faces, appDir: 'Assets/Fonts', license: 'OFL.txt' };
 }
 
 export function radii(tokens) {

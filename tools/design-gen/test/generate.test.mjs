@@ -69,7 +69,7 @@ test('a surface without a high-contrast mapping is refused rather than left to t
 const xaml = parseXml(read(repoRoot, XAML), XAML, { text: true });
 const themes = Object.fromEntries(xaml.children.find((c) => c.tag === 'ResourceDictionary.ThemeDictionaries').children.map((d) => [d.attrs['x:Key'], d.children]));
 const keysCs = read(repoRoot, 'src/AgentBridge.App/Design/DesignKeys.cs');
-const listed = (name) => [...new RegExp(`${name} =\\s*\\[([^\\]]*)\\]`).exec(keysCs)[1].matchAll(/"(\w+)"/g)].map((m) => m[1]);
+const listed = (name) => [...new RegExp(`${name} =\\s*\\[([^\\]]*)\\]`).exec(keysCs)[1].matchAll(/"([\w./-]+)"/g)].map((m) => m[1]);
 
 test('the app\'s Light, Dark and HighContrast dictionaries each define every brush DesignKeys lists', () => {
   assert.deepEqual(Object.keys(themes), ['Light', 'Dark', 'HighContrast']);
@@ -110,4 +110,29 @@ test('the sprite has a symbol for every glyph and icon, and each moving part on 
   const needs = read(repoRoot, 'pwa/design/sprite.svg').match(/<symbol id="glyph-needs"[\s\S]*?<\/symbol>/)[0];
   assert.ok(!/#[0-9A-Fa-f]{6}/.test(needs), 'the ink comes from --ab-glyph-ink, not the file');
   assert.match(needs, /var\(--ab-glyph-ink\)/);
+});
+
+test('the PWA gets an @font-face with font-display swap for every face of the monospace, then the fallback stack', () => {
+  const css = read(repoRoot, 'pwa/design/tokens.css');
+  const faces = [...css.matchAll(/@font-face \{([^}]*)\}/g)].map((m) => m[1]);
+  assert.equal(faces.length, 6, 'regular, semibold and bold, each with an italic');
+  for (const f of faces) {
+    assert.match(f, /font-family: "Agent Bridge Mono";/);
+    assert.match(f, /font-display: swap;/);
+  }
+  assert.ok(faces.some((f) => /SemiBoldItalic\.woff2/.test(f) && /font-weight: 600;/.test(f) && /font-style: italic;/.test(f)));
+  assert.match(css, /--ab-font-mono: "Agent Bridge Mono", "Cascadia Mono", "SF Mono", "Roboto Mono", ui-monospace, monospace;/);
+});
+
+test('the app\'s MonoFontFamily is the bundled TTF, then the fallback stack, and DesignKeys lists the files to bundle', () => {
+  assert.match(read(repoRoot, XAML), /<FontFamily x:Key="MonoFontFamily">ms-appx:\/\/\/Assets\/Fonts\/AgentBridgeMono-Regular\.ttf#Agent Bridge Mono, Cascadia Mono, SF Mono, Roboto Mono, Consolas<\/FontFamily>/);
+  const files = listed('FontFiles');
+  assert.deepEqual(files.filter((f) => f.endsWith('.ttf')).length, 6);
+  assert.ok(files.includes('Assets/Fonts/OFL.txt'));
+});
+
+test('a face the tokens promise but design/fonts lacks is refused', () => {
+  const root = copy('nofont');
+  rmSync(path.join(root, 'design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-BoldItalic.woff2'));
+  assert.throws(() => generate(root), /lacks woff2\/AgentBridgeMono-BoldItalic\.woff2/);
 });

@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const appRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-// design/: the generated tokens.css and sprite.svg (tools/design-gen).
+// design/: the generated tokens.css and sprite.svg (tools/design-gen); copyFonts adds the fonts.
 const FILES = ['index.html', 'app.css', 'design', 'sw.js', 'manifest.webmanifest', 'icon.svg', 'js', 'fixtures'];
 
 export function relayOrigin(relay) {
@@ -43,11 +43,26 @@ export function contentSecurityPolicy(relay, blobOrigins = []) {
   return `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'${connect}; object-src 'none'; base-uri 'none'; form-action 'none'`;
 }
 
+// The monospace's WOFF2s and its licence, from the repository's design/ (design/tokens.json
+// type.mono.files) into design/fonts/, where design/tokens.css's @font-face rules look. Copied
+// at build time rather than kept twice in the repository; the OFL travels with them.
+export function copyFonts(out, repo = path.dirname(appRoot)) {
+  const mono = JSON.parse(readFileSync(path.join(repo, 'design', 'tokens.json'), 'utf8')).type.mono;
+  if (!mono.files) { return []; }
+  const from = path.join(repo, mono.files);
+  const to = path.join(out, 'design', 'fonts');
+  mkdirSync(to, { recursive: true });
+  const files = [...readdirSync(path.join(from, 'woff2')).filter((f) => f.endsWith('.woff2')).map((f) => path.join('woff2', f)), 'OFL.txt'];
+  for (const f of files) { cpSync(path.join(from, f), path.join(to, path.basename(f))); }
+  return files.map((f) => path.basename(f));
+}
+
 export function buildSite({ out, relay = '', blobOrigins = [], root = appRoot }) {
   const origin = relayOrigin(relay);
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
   for (const f of FILES) { cpSync(path.join(root, f), path.join(out, f), { recursive: true }); }
+  copyFonts(out);
   writeFileSync(path.join(out, 'config.js'), `export const RELAY = ${JSON.stringify(origin)};\n`);
   const index = path.join(out, 'index.html');
   const html = readFileSync(index, 'utf8');

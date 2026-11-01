@@ -28,11 +28,11 @@ node tools/design-gen/preview.mjs                # preview.png (needs pwa's npm 
 
 | Client | File | What it holds |
 |---|---|---|
-| PWA | `pwa/design/tokens.css` | `--ab-*` custom properties: roles and surfaces in light, dark (`prefers-color-scheme`) and high contrast (`forced-colors`), the mono stack, radii, spacing |
+| PWA | `pwa/design/tokens.css` | `@font-face` for each face of Agent Bridge Mono (`font-display: swap`), and `--ab-*` custom properties: roles and surfaces in light, dark (`prefers-color-scheme`) and high contrast (`forced-colors`), the mono stack, radii, spacing. `pwa/tools/build-site.mjs` copies the WOFF2s and `OFL.txt` into the site's `design/fonts/` |
 | PWA | `pwa/design/sprite.svg` | A `<symbol>` per glyph (`glyph-<name>`) and icon (`icon-<name>`). A glyph with a moving part also has `glyph-<name>--still` and `glyph-<name>--spin` or `--orbit`, so a client can turn that part alone |
 | PWA | `pwa/index.html`, `pwa/manifest.webmanifest` | Only the `theme-color` and manifest colours, from the shell |
-| Windows | `src/AgentBridge.App/Design/DesignResources.xaml` | `ThemeDictionaries` (Light, Dark, HighContrast) of `Ab*` brushes; `AbFontMono`, radii and spacing; a `ContentControl` style per glyph (`AbGlyph<Name>`) and icon (`AbIcon<Name>`) |
-| Windows | `src/AgentBridge.App/Design/DesignKeys.cs` | Those keys, for the app's self-test |
+| Windows | `src/AgentBridge.App/Design/DesignResources.xaml` | `ThemeDictionaries` (Light, Dark, HighContrast) of `Ab*` brushes; `MonoFontFamily` (the bundled TTF, then the fallback stack), radii and spacing; a `ContentControl` style per glyph (`AbGlyph<Name>`) and icon (`AbIcon<Name>`) |
+| Windows | `src/AgentBridge.App/Design/DesignKeys.cs` | Those keys and the font files the app bundles, for the app's self-test |
 
 Using them:
 - **PWA:** `<svg><use href="design/sprite.svg#glyph-needs"/></svg>`, coloured by its `color`.

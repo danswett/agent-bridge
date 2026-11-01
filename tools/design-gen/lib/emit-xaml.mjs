@@ -4,7 +4,7 @@
 // the app can check at run time that every one of them resolves in every theme.
 
 import { toXamlColor } from './color.mjs';
-import { SYSTEM_COLORS, roleTokens, surfaceTokens, monoFamilies, radii, spaces } from './tokens.mjs';
+import { SYSTEM_COLORS, roleTokens, surfaceTokens, monoFamilies, monoFont, radii, spaces } from './tokens.mjs';
 import { MOVING_CLASSES, formatCommands, fmt } from './svg.mjs';
 
 const pascal = (s) => s.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
@@ -114,13 +114,20 @@ ${theme('Dark', (t) => toXamlColor(t.dark))}
 ${theme('HighContrast', (t) => `{ThemeResource ${SYSTEM_COLORS[t.hc].xaml}}`)}
     </ResourceDictionary.ThemeDictionaries>
 
-    <FontFamily x:Key="AbFontMono">${monoFamilies(tokens, 'xaml')}</FontFamily>
+    <!-- The monospace (docs/design/ui.md §4.1): the bundled font, then the fallback stack. -->
+    <FontFamily x:Key="MonoFontFamily">${monoFamilies(tokens, 'xaml')}</FontFamily>
 ${radii(tokens).map((r) => `    <CornerRadius x:Key="${r.xaml}">${r.value}</CornerRadius>`).join('\n')}
 ${spaces(tokens).map((s) => `    <x:Double x:Key="${s.xaml}">${s.value}</x:Double>`).join('\n')}
 
 ${[...glyphs, ...icons].map(styleXaml).join('\n')}
 </ResourceDictionary>
 `;
+}
+
+// The font files the app bundles, relative to its folder: what the XAML points at, and the OFL.
+export function fontFiles(tokens) {
+  const font = monoFont(tokens);
+  return font ? [...font.faces.map((f) => `${font.appDir}/${f.file}.ttf`), `${font.appDir}/${font.license}`] : [];
 }
 
 export function designKeysCs(tokens, glyphs, icons) {
@@ -150,6 +157,15 @@ ${list(glyphs.map(styleKey))}
     public static readonly string[] Icons =
     [
 ${list(icons.map(styleKey))}
+    ];
+
+    public const string MonoFontFamily = "MonoFontFamily";
+
+    // The bundled monospace and its licence, as the app's folder holds them
+    // (AgentBridge.App.csproj copies them from design/fonts).
+    public static readonly string[] FontFiles =
+    [
+${list(fontFiles(tokens))}
     ];
 }
 `;

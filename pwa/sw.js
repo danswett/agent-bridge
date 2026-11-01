@@ -7,7 +7,10 @@ const PREFIX = 'agent-bridge-app-';
 const VERSION = 'dev';
 const CACHE = `${PREFIX}${VERSION}`;
 const SHELL = [
-  './', './index.html', './app.css', './design/tokens.css', './design/sprite.svg', './config.js', './manifest.webmanifest', './icon.svg',
+  './', './index.html', './app.css', './design/tokens.css', './design/sprite.svg',
+  './design/fonts/AgentBridgeMono-Regular.woff2', './design/fonts/AgentBridgeMono-Italic.woff2', './design/fonts/AgentBridgeMono-SemiBold.woff2',
+  './design/fonts/AgentBridgeMono-SemiBoldItalic.woff2', './design/fonts/AgentBridgeMono-Bold.woff2', './design/fonts/AgentBridgeMono-BoldItalic.woff2',
+  './config.js', './manifest.webmanifest', './icon.svg',
   './js/main.js', './js/bytes.js', './js/noise-p256.js', './js/identity.js', './js/signin.js',
   './js/relay.js', './js/channels.js', './js/connection.js', './js/protocol.js', './js/host-client.js',
   './js/host-session.js', './js/sessions-store.js', './js/session-order.js', './js/markdown.js', './js/demo.js', './js/push.js',

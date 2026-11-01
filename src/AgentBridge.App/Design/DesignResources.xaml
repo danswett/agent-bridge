@@ -99,7 +99,8 @@
             </ResourceDictionary>
     </ResourceDictionary.ThemeDictionaries>
 
-    <FontFamily x:Key="AbFontMono">Agent Bridge Mono, Cascadia Mono, SF Mono, Roboto Mono, Consolas</FontFamily>
+    <!-- The monospace (docs/design/ui.md §4.1): the bundled font, then the fallback stack. -->
+    <FontFamily x:Key="MonoFontFamily">ms-appx:///Assets/Fonts/AgentBridgeMono-Regular.ttf#Agent Bridge Mono, Cascadia Mono, SF Mono, Roboto Mono, Consolas</FontFamily>
     <CornerRadius x:Key="AbRadiusControl">4</CornerRadius>
     <CornerRadius x:Key="AbRadiusCard">8</CornerRadius>
     <CornerRadius x:Key="AbRadiusPill">999</CornerRadius>

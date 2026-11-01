@@ -126,3 +126,21 @@ test('the generated sprite draws the needs glyph in its role colour with its ink
   expect(at.ink).toBe(rgb(role.needs.inkLight));
   expect(at.outside).toBe(rgb(surface.light.card));
 });
+
+test('code is set in Agent Bridge Mono, loaded from the site under the CSP, with the fallback stack behind it', async ({ page }) => {
+  const fonts = [];
+  page.on('response', (r) => { if (r.url().includes('/design/fonts/')) { fonts.push(`${r.status()} ${r.url().split('/').pop()}`); } });
+  await openDemo(page);
+  const code = page.locator('.md code').first();
+  await expect(code).toBeVisible();
+  expect(await code.evaluate((e) => getComputedStyle(e).fontFamily)).toMatch(/^"?Agent Bridge Mono"?, "?Cascadia Mono"?, "?SF Mono"?, "?Roboto Mono"?, ui-monospace, monospace$/);
+  const loaded = await page.evaluate(async () => {
+    const faces = await document.fonts.load('400 13px "Agent Bridge Mono"');
+    await document.fonts.load('italic 600 13px "Agent Bridge Mono"');
+    return { regular: faces.length, status: [...document.fonts].filter((f) => f.family.replace(/"/g, '') === 'Agent Bridge Mono' && f.status === 'loaded').map((f) => `${f.weight} ${f.style}`).sort() };
+  });
+  expect(loaded.regular).toBeGreaterThan(0);
+  expect(loaded.status).toEqual(expect.arrayContaining(['400 normal', '600 italic']));
+  expect(fonts).toEqual(expect.arrayContaining(['200 AgentBridgeMono-Regular.woff2', '200 AgentBridgeMono-SemiBoldItalic.woff2']));
+  expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
+});

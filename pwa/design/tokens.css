@@ -3,6 +3,50 @@
    CI fails when this file is stale against design/.
    Colour roles and surfaces: docs/design/ui.md §3. Secondary text is text2/text3, never a grey. */
 
+/* Agent Bridge Mono: SIL Open Font License 1.1, in fonts/OFL.txt. */
+@font-face {
+  font-family: "Agent Bridge Mono";
+  src: url("fonts/AgentBridgeMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Agent Bridge Mono";
+  src: url("fonts/AgentBridgeMono-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Agent Bridge Mono";
+  src: url("fonts/AgentBridgeMono-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Agent Bridge Mono";
+  src: url("fonts/AgentBridgeMono-Italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Agent Bridge Mono";
+  src: url("fonts/AgentBridgeMono-SemiBoldItalic.woff2") format("woff2");
+  font-weight: 600;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Agent Bridge Mono";
+  src: url("fonts/AgentBridgeMono-BoldItalic.woff2") format("woff2");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
 :root {
   /* Light, and every value that doesn't change with the theme. */
   --ab-bridge: #0B7A6E;

@@ -75,4 +75,19 @@ static class DesignKeys
         "AbIconTools",
         "AbIconUsage",
     ];
+
+    public const string MonoFontFamily = "MonoFontFamily";
+
+    // The bundled monospace and its licence, as the app's folder holds them
+    // (AgentBridge.App.csproj copies them from design/fonts).
+    public static readonly string[] FontFiles =
+    [
+        "Assets/Fonts/AgentBridgeMono-Regular.ttf",
+        "Assets/Fonts/AgentBridgeMono-SemiBold.ttf",
+        "Assets/Fonts/AgentBridgeMono-Bold.ttf",
+        "Assets/Fonts/AgentBridgeMono-Italic.ttf",
+        "Assets/Fonts/AgentBridgeMono-SemiBoldItalic.ttf",
+        "Assets/Fonts/AgentBridgeMono-BoldItalic.ttf",
+        "Assets/Fonts/OFL.txt",
+    ];
 }

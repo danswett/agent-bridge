@@ -5,7 +5,7 @@ name: Pages
 on:
   push:
     branches: [main]
-    paths: ['spikes/**/web/**', 'pwa/**', '.github/workflows/pages.yml']
+    paths: ['spikes/**/web/**', 'pwa/**', 'design/fonts/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 env:
