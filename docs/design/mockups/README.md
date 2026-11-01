@@ -3,8 +3,9 @@
 Every board from the design canvas, rendered on 2026-11-01. **These are reference, not
 spec:** [ui.md](../ui.md) is the spec, and it wins wherever an image disagrees with it.
 
-**Fonts are stand-ins** (Inter for Segoe UI and SF Pro, Cascadia Mono for the
-monospace), so trust the images for layout, colour, size and spacing, not letterforms. To
+**Text fonts are stand-ins:** Inter takes the place of Segoe UI and SF Pro, so trust the
+images for layout, colour, size and spacing, not letterforms. The monospace is the real
+[Agent Bridge Mono](../../../design/fonts/agent-bridge-mono/README.md). To
 regenerate them, see [tools/design-mockups](../../../tools/design-mockups); the source is
 in [design/canvas](../../../design/canvas).
 

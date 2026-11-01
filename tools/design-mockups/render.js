@@ -16,6 +16,8 @@ const fontCss = [
   ...['Segoe UI Variable Text', 'Segoe UI Variable Display', 'Segoe UI', 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Google Sans'].map(f => font(f, inter)),
   font('Roboto Flex', '@fontsource-variable/roboto-flex/files/roboto-flex-latin-full-normal.woff2'),
   font('Roboto', '@fontsource-variable/roboto-flex/files/roboto-flex-latin-full-normal.woff2'),
+  // The real monospace, from the repository (design/fonts/agent-bridge-mono).
+  ...[['Regular', 400, 'normal'], ['SemiBold', 600, 'normal'], ['Bold', 700, 'normal'], ['Italic', 400, 'italic']].map(([n, w, st]) => `@font-face{font-family:'Agent Bridge Mono';src:url(data:font/woff2;base64,${fs.readFileSync(path.join(__dirname, '../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-' + n + '.woff2')).toString('base64')}) format('woff2');font-weight:${w};font-style:${st}}`),
   ...['Cascadia Mono', 'SF Mono', 'Roboto Mono'].map(f => `@font-face{font-family:'${f}';src:url(data:font/woff2;base64,${fs.readFileSync(nm('@fontsource/cascadia-mono/files/cascadia-mono-latin-400-normal.woff2')).toString('base64')}) format('woff2');font-weight:400}@font-face{font-family:'${f}';src:url(data:font/woff2;base64,${fs.readFileSync(nm('@fontsource/cascadia-mono/files/cascadia-mono-latin-600-normal.woff2')).toString('base64')}) format('woff2');font-weight:600}`)
 ].join('\n');
 

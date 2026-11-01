@@ -21,7 +21,7 @@ npm run render                    # Linux or macOS; on Windows run render.js dir
 machines:
 - Inter for Segoe UI and SF Pro;
 - Roboto Flex for Roboto;
-- Cascadia Mono for every monospace, including Berkeley Mono (#181).
+- Cascadia Mono for the fallback monospace faces. Agent Bridge Mono itself is real, loaded from `design/fonts/agent-bridge-mono`.
 
 So the images are right about layout, colour, sizes and spacing, but not about the exact
 letterforms. `fonts.conf` maps `system-ui` and `sans-serif` to Inter for the PWA boards
