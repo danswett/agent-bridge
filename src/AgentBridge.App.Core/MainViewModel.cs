@@ -429,6 +429,8 @@ public sealed partial class MainViewModel : Observable
             foreach (var c in byId.Values) { c.RefreshTimes(); }
             RefreshEnded();
             Order.Flush();
+            // A flush that failed turned the list to Most recent: arrange it so, and tell the picker.
+            if (Order.Sort != toldSort) { Rearrange(); }
         }
         if (ticks % 30 == 0)
         {

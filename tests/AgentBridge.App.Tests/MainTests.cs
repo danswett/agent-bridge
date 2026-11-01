@@ -207,6 +207,40 @@ public sealed class MainTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_seen_mark_that_cannot_be_written_at_the_next_tick_turns_the_list_to_most_recent()
+    {
+        await SnapshotAsync();
+        var folder = Path.Combine(Path.GetTempPath(), "abo-" + Guid.NewGuid().ToString("N")[..8]);
+        var file = Path.Combine(folder, "order.json");
+        try
+        {
+            var cards = new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection };
+            var other = TestUi.Read(() => new MainViewModel(connection, cards, new UsageViewModel(), order: new SessionOrder(file)));
+            var told = 0;
+            other.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MainViewModel.SortIndex)) { told++; } };
+            File.Delete(file);
+            Directory.CreateDirectory(file);
+
+            // An open card's update is only marked seen: nothing is written, nothing fails yet.
+            await host.SendAsync(Events.SessionUpsert, Make.Session("old", response: "Later.", updated: Make.T0.AddMinutes(9)));
+            await Wait.UntilAsync(() => other.Sessions.Single(c => c.Id == "old").Response == "Later.", "the update");
+            Assert.Equal((int)SessionSort.Yours, TestUi.Read(() => other.SortIndex));
+            Assert.Equal(["asking", "old"], TestUi.Read<string[]>(() => [.. other.Sessions.Select(c => c.Id)]));
+
+            for (var i = 0; i < 5; i++) { ui.Post(other.Tick); }
+
+            TestUi.Read(() =>
+            {
+                Assert.Equal((int)SessionSort.Recent, other.SortIndex);
+                Assert.True(told > 0);
+                Assert.Equal(["old", "asking"], other.Sessions.Select(c => c.Id));
+                return true;
+            });
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    [Fact]
     public async Task The_sort_picker_says_most_recent_once_the_order_can_no_longer_be_saved()
     {
         await SnapshotAsync();
