@@ -736,6 +736,9 @@ public sealed partial class LaunchViewModel : Observable
         handled = d.Request;
         if (m == lastMachine) { SeenResult(m, d); }
         var outcome = OutcomeOf(d);
+        // A launch that started an agent now asking about its folder: the question, and the prompt
+        // that went with it. A later busy launch naming it does not replace it.
+        if (outcome == "unconfirmed" && Result(d)?.Trust is { } asking && d.Payload is LaunchRequest went) { askedBy[m.Key] = (asking.Id, went.Prompt); }
         if (outcome == "started")
         {
             // Only the prompt that went: one typed since for the next launch stays.

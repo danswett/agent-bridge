@@ -146,6 +146,36 @@ public sealed class TrustTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_launch_pressed_again_and_busy_on_the_same_question_still_clears_the_prompt_the_first_one_sent()
+    {
+        remoteTrust = [];
+        var launches = 0;
+        remoteHost.On(LaunchProtocol.Launch, _ =>
+        {
+            remoteTrust = [Question()];
+            return Interlocked.Increment(ref launches) == 1
+                ? new LaunchResult(LaunchOutcome.Unconfirmed, "Codex started, and is asking whether to trust there") { Trust = Question() }
+                : new LaunchResult(LaunchOutcome.Busy, "Codex in there is waiting for a person to answer whether to trust that folder") { Trust = Question() };
+        });
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var page = LaunchPage.Open(main, ui);
+        await Wait.UntilAsync(() => page.Machines.Count == 2, "both machines");
+        ui.Post(() => page.SelectedMachine = page.Machines.Single(m => m.Value == "remote-id"));
+        await Wait.UntilAsync(() => page.CanLaunch, "the form");
+        ui.Post(() => page.Prompt = "fix the build");
+        ui.Post(page.Launch);
+        await Wait.UntilAsync(() => page.TrustQuestions.Count == 1 && page.TrustQuestions[0].CanAnswer, "the question");
+        ui.Post(page.Launch);
+        await Wait.UntilAsync(() => page.State == "busy", "busy");
+
+        var card = page.TrustQuestions[0];
+        remoteTrust = [];
+        ui.Post(card.Trust);
+        await Wait.UntilAsync(() => card.State == "started", "started");
+        await Wait.UntilAsync(() => page.Prompt == "", "the prompt cleared");
+    }
+
+    [Fact]
     public async Task Trusting_the_question_a_busy_launch_names_leaves_the_prompt_it_did_not_send()
     {
         remoteTrust = [];
