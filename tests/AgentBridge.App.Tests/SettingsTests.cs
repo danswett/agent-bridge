@@ -342,19 +342,52 @@ public sealed class SettingsTests : IAsyncLifetime
         });
         host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
         await Connected();
-        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2 && settings.TrustDevices.Single(d => d.Id == a).Approved, "the devices");
 
-        settings.TrustDevices.Single(d => d.Id == b).Approved = true;
-        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "the phone's approval sent");
-        // A browser connects while it is on its way: the rows are made again, the phone's still ticked.
-        link.PeopleNow.Add(new FleetHost(c, "Dana's browser"));
-        link.Raise();
-        await Wait.UntilAsync(() => settings.TrustDevices.Count == 3, "the browser's row");
-        Assert.Equal([true, true, false], settings.TrustDevices.Select(d => d.Approved));
-
-        gate.Set();
+        try
+        {
+            settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+            await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "the phone's approval sent");
+            // A browser connects while it is on its way: the rows are made again, the phone's still ticked.
+            link.PeopleNow.Add(new FleetHost(c, "Dana's browser"));
+            link.Raise();
+            await Wait.UntilAsync(() => settings.TrustDevices.Count == 3, "the browser's row");
+            Assert.Equal([true, true, false], settings.TrustDevices.Select(d => d.Approved));
+        }
+        finally { gate.Set(); }
         await Wait.UntilAsync(() => !settings.Busy, "the phone approved");
         Assert.Equal([true, true, false], settings.TrustDevices.Select(d => d.Approved));
+    }
+
+    [Fact]
+    public async Task A_box_not_being_changed_shows_the_hosts_word_while_another_change_is_on_its_way()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        using var gate = new ManualResetEventSlim();
+        Saves(d =>
+        {
+            gate.Wait(TimeSpan.FromSeconds(10));
+            return new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]);
+        });
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: []) };
+        await Connected();
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+
+        try
+        {
+            settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+            await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "the phone's approval sent");
+            // This app approved at the machine's terminal meanwhile: its box says so at once.
+            host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
+            await host.SendAsync(HostOps.StatusEvent, host.Status);
+            await Wait.UntilAsync(() => settings.TrustDevices.Single(d => d.Id == a).Approved, "this app's box ticked");
+            Assert.True(settings.TrustDevices.Single(d => d.Id == b).Approved);
+        }
+        finally { gate.Set(); }
     }
 
     [Fact]

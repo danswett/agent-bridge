@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using AgentBridge.Local;
 
 namespace AgentBridge.App.Core;
@@ -127,9 +128,21 @@ public sealed class SettingsViewModel : Observable
         {
             if (Status is null || RemoteFolderTrust == value) { return; }
             trustWanted = value;
-            _ = TrustSettingsAsync(now => new SettingsRequest(RemoteFolderTrust: value,
+            _ = SwitchAsync(value);
+        }
+    }
+
+    async Task SwitchAsync(bool value)
+    {
+        Interlocked.Increment(ref switching);
+        try
+        {
+            await TrustSettingsAsync(now => new SettingsRequest(RemoteFolderTrust: value,
                 RemoteFolderTrustDevices: value && (now.RemoteFolderTrustDevices ?? []).Count == 0 && fleet?.DeviceId is { } me ? [me] : null));
         }
+        finally { Interlocked.Decrement(ref switching); }
+        // Its boxes were held while it was on its way.
+        DrawDevices();
     }
 
     // Changes to who may answer go one at a time through the editor the Launch page uses too, each
@@ -186,30 +199,46 @@ public sealed class SettingsViewModel : Observable
         // The same rows, kept: a presence update does not recreate the checkboxes on screen.
         if (next.Count == TrustDevices.Count && next.Zip(TrustDevices).All(p => p.First.Id == p.Second.Id && p.First.Label == p.Second.Label))
         {
-            // While changes are on their way, the boxes show what was asked for, not a status from before.
-            if (Volatile.Read(ref pendingEdits) == 0 && !trust.Pending) { foreach (var (row, d) in next.Zip(TrustDevices)) { d.Show(row.Approved); } }
+            // While a change to a box is on its way, it shows what was asked for, not a status from
+            // before; the others show the host's word meanwhile (one drawn before the host's status
+            // came would otherwise stay wrong until every change was in).
+            foreach (var (row, d) in next.Zip(TrustDevices)) { if (!Held(d.Id)) { d.Show(row.Approved); } }
         }
         else
         {
-            // A device joining or leaving while changes are on their way: the rows kept show what
-            // was asked for, not a status from before, as above; new ones what the host says.
-            var asked = Volatile.Read(ref pendingEdits) == 0 && !trust.Pending ? null : TrustDevices.ToDictionary(d => d.Id, d => d.Approved);
-            TrustDevices = [.. next.Select(r => new TrustDevice(this, r.Id, r.Label, asked is not null && asked.TryGetValue(r.Id, out var a) ? a : r.Approved))];
+            // A device joining or leaving while changes are on their way: a box being changed keeps
+            // what was asked for, as above; the rest show what the host says.
+            var asked = TrustDevices.Where(d => Held(d.Id)).ToDictionary(d => d.Id, d => d.Approved);
+            TrustDevices = [.. next.Select(r => new TrustDevice(this, r.Id, r.Label, asked.TryGetValue(r.Id, out var a) ? a : r.Approved))];
             Raise(nameof(TrustDevices));
         }
         Raise(nameof(ShowTrustDevices));
     }
 
+    // Boxes with a change of their own on its way, by device id.
+    readonly ConcurrentDictionary<string, int> asking = new(StringComparer.Ordinal);
+    int switching;
+
+    // Whether a box shows what was asked rather than the host's word: its own change is on its way,
+    // or the switch's (turned on, it approves this app), or a change from the Launch page is.
+    bool Held(string id) => (asking.TryGetValue(id, out var n) && n > 0) || Volatile.Read(ref switching) > 0
+        || (Volatile.Read(ref pendingEdits) == 0 && trust.Pending);
+
     internal async Task ApproveAsync(TrustDevice device, bool on)
     {
         if (Status is not null)
         {
-            await TrustSettingsAsync(now =>
+            asking.AddOrUpdate(device.Id, 1, (_, n) => n + 1);
+            try
             {
-                var devices = now.RemoteFolderTrustDevices ?? [];
-                if (devices.Contains(device.Id) == on) { return null; }
-                return new SettingsRequest(RemoteFolderTrustDevices: on ? [.. devices, device.Id] : [.. devices.Where(d => d != device.Id)]);
-            });
+                await TrustSettingsAsync(now =>
+                {
+                    var devices = now.RemoteFolderTrustDevices ?? [];
+                    if (devices.Contains(device.Id) == on) { return null; }
+                    return new SettingsRequest(RemoteFolderTrustDevices: on ? [.. devices, device.Id] : [.. devices.Where(d => d != device.Id)]);
+                });
+            }
+            finally { asking.AddOrUpdate(device.Id, 0, (_, n) => n - 1); }
         }
         // What the host says now, whatever the checkbox was left showing.
         DrawDevices();
