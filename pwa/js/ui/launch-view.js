@@ -589,21 +589,20 @@ export class LaunchPanel {
       answer.state = 'failed';
       answer.reason = e?.reason ?? e?.message ?? String(e);
     }
+    // The launch from here that started the agent asking this question has now started: its first
+    // message went with it, as with a launch that starts at once, and must not go again with the
+    // next launch. Only that launch, however many busy ones (which send nothing) came after it,
+    // and only its message unchanged: what is written since stays. Whichever machine is picked
+    // now: the form, and its message, are the same for every machine.
+    const launched = this.#asked.get(hostId);
+    if (answer.state === 'done' && answer.result.outcome === 'started' && launched?.question === id) {
+      this.#asked.delete(hostId);
+      if (this.els.prompt.value === launched.prompt) { this.els.prompt.value = ''; this.#drawCount(); }
+    }
     if (this.#target?.hostId !== hostId) { return; }
     this.#drawTrust();
     if (answer.state !== 'done') { return; }
-    if (answer.result.outcome === 'started') {
-      // The launch from here that started the agent asking this question has now started: its
-      // first message went with it, as with a launch that starts at once, and must not go again
-      // with the next launch. Only that launch, however many busy ones (which send nothing)
-      // came after it, and only its message unchanged: what is written since stays.
-      const launched = this.#asked.get(hostId);
-      if (launched?.question === id) {
-        this.#asked.delete(hostId);
-        if (this.els.prompt.value === launched.prompt) { this.els.prompt.value = ''; this.#drawCount(); }
-      }
-      if (answer.result.session) { this.#jumpTo(answer.result.session, hostId); }
-    }
+    if (answer.result.outcome === 'started' && answer.result.session) { this.#jumpTo(answer.result.session, hostId); }
     // The machine's list, and whether it is still busy, have changed.
     this.refresh();
   }

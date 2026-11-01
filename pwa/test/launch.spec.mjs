@@ -311,6 +311,27 @@ test.describe('a folder-trust question', () => {
     await expect(field(page, 'prompt')).toHaveValue('');
   });
 
+  test('a launch trusted just as another machine is picked still clears the message it sent', async ({ page }) => {
+    await openDemo(page, '&machines=2');
+    await panel(page).getByRole('button', { name: 'Start a session on Demo machine' }).click();
+    await expect(field(page, 'agent')).toBeVisible();
+    await script(page, { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: QUESTION });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
+    // The list asked for on that outcome is in before responses are held.
+    await page.waitForTimeout(1000);
+    await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    // The laptop is picked while the answer is on its way.
+    await field(page, 'machine').selectOption('demo-laptop');
+    await expect(panel(page).locator('.launch-title')).toHaveText('Start a session on Laptop');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.host.trustLog.length)).toBe(1);
+    await expect(field(page, 'prompt')).toHaveValue('');
+  });
+
   test('a question this panel\'s launch did not meet, trusted, leaves the first message being written', async ({ page }) => {
     await openDemo(page);
     await ask(page, QUESTION);
