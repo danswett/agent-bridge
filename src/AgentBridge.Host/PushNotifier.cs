@@ -324,7 +324,7 @@ public sealed class PushNotifier : IAsyncDisposable
         // Answered (or gone) before it was notified: nothing to say.
         if (t.Due is { Kind: NoticeKind.Question }) { t.Due = null; }
         if (s.Status == SessionStatus.Idle && prev is { Status: SessionStatus.Working or SessionStatus.Waiting }
-            && !string.IsNullOrWhiteSpace(s.Activity.Response) && FinishedKey(s) != t.FinishedKey)
+            && !string.IsNullOrWhiteSpace(OwnResponse(s)) && FinishedKey(s) != t.FinishedKey)
         {
             t.Due = new Due(NoticeKind.Finished, now + options.FinishedDelay, null);
         }
@@ -336,7 +336,11 @@ public sealed class PushNotifier : IAsyncDisposable
     }
 
     static string FinishedKey(Session s) =>
-        $"{s.Activity.TurnCount}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s.Activity.Response ?? "")))[..16]}";
+        $"{s.Activity.TurnCount}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(OwnResponse(s) ?? "")))[..16]}";
+
+    // "Finished" is the main agent's turn only (subagents.md §7): its own response, never the
+    // delegate's that may be the latest text.
+    static string? OwnResponse(Session s) => s.Activity.Source?.Response is null ? s.Activity.Response : s.Activity.Own?.Response;
 
     void Signal()
     {
@@ -540,11 +544,18 @@ public sealed class PushNotifier : IAsyncDisposable
     {
         var title = PushNotice.Flatten(s.Title);
         if (title.Length == 0) { title = $"{AgentName(s.Agent)} session"; }
+        // A delegate's question says who asks; it keeps the session's tag, so the newer of the
+        // two questions replaces the older on the device.
+        if (kind == NoticeKind.Question && s.Question?.Agent is { } asker)
+        {
+            var name = PushNotice.Flatten(s.Subagents?.FirstOrDefault(a => a.Id == asker)?.Name);
+            title = $"{(name.Length > 0 ? name : "A delegate")} asks · {title}";
+        }
         var body = kind switch
         {
             NoticeKind.Question => $"{machine.Name} · {Waiting(s.Question)}\n" +
                 (PushNotice.Flatten(s.Question?.Message) is { Length: > 0 } m ? m : "This session is waiting for an answer."),
-            NoticeKind.Finished => $"{machine.Name} · finished\n{Preview(s.Activity.Response)}",
+            NoticeKind.Finished => $"{machine.Name} · finished\n{Preview(OwnResponse(s))}",
             _ => $"{machine.Name} · {(ended ? "session ended" : "no longer waiting")}",
         };
         return PushNotice.Fit(new PushMessage

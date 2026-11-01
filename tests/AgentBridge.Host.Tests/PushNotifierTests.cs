@@ -260,6 +260,45 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task A_delegates_question_names_the_delegate_and_shares_the_sessions_tag()
+    {
+        Start();
+        Subscribe(Phone);
+        var delegated = S("s1", SessionStatus.Waiting, question: Q("q1", "Allow **gh pr checks**?", QuestionKind.Approval) with { Agent = "agent-c204" }) with
+        {
+            WaitingOn = "agent-c204",
+            Subagents = [new Subagent { Id = "agent-c204", Kind = SubagentKind.Background, Name = "Read witness shell logic", Status = SubagentStatus.Waiting }],
+        };
+        source.Upsert(delegated);
+        await After(TimeSpan.FromSeconds(2));
+
+        var n = Assert.Single(Received()).Notification;
+        Assert.Equal("Read witness shell logic asks · Fix the login", n.GetProperty("title").GetString());
+        Assert.Equal($"{Machine}:s1", n.GetProperty("tag").GetString());
+        Assert.Equal("question", Kind(n));
+    }
+
+    [Fact]
+    public async Task A_finished_turn_shows_the_main_agents_own_response_not_a_delegates_written_after_it()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        var finished = S("s1", SessionStatus.Idle, response: "HEAD: 1 failing test.");
+        source.Upsert(finished with
+        {
+            Activity = finished.Activity with
+            {
+                Source = new ActivitySource { Response = "agent-3a91" },
+                Own = new OwnActivity { Response = "Started 2 background agents." },
+            },
+        });
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Equal("DEV · finished\nStarted 2 background agents.", Assert.Single(Received()).Notification.GetProperty("body").GetString());
+    }
+
+    [Fact]
     public async Task A_finished_turn_replaces_the_answered_question_instead_of_adding_a_notice()
     {
         Start();

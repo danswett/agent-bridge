@@ -6,8 +6,9 @@ client shows, and the additive protocol that carries it. It supersedes #20.
 - What it looks like: [ui.md](ui.md) §2 and §6.3.
 - The order of work: [ui-plan.md](ui-plan.md).
 
-*Status: proposed 2026-11-01, awaiting the owner's sign-off.* The owner's three open
-questions are in §8.
+*Status: the owner answered §8 on 2026-11-01, all as proposed. S1 (#173) implements §2,
+§4 and §5 for Copilot, settling the four review points recorded on #173 (§5); the wire
+contract is [v1-sessions.md](../protocol/v1-sessions.md).*
 
 **Words.** The UI says *delegate*; specs and code say *sub-agent*. The *main agent* is the
 session's own agent.
@@ -35,15 +36,16 @@ of its own.
 | `name` | Short label: the `task` call's description, else its agent type |
 | `task` | The prompt it was given |
 | `model` | Its own model, never copied to the session |
-| `status` | `working`, `idle` (a background agent waiting to be woken), `waiting` (its own question) or `ended` |
+| `status` | `working`, `idle` (a background agent between runs, which a message can wake), `waiting` (its own question) or `ended` (it can never run again) |
+| `outcome` | With `idle` and `ended`: how its latest run went, `done` or `failed`, for the `done` and `failed` glyphs (ui.md §2.1). Absent when the host never saw it end |
 | `startedAt`, `endedAt` | |
-| `latest` | Its latest reasoning or response |
+| `line` | Its latest reasoning or response |
 | `currentTool`, `history` | As for a session, but its own |
 | `shells` | Background commands it started, counted here and not on the session (agent-ha-bridge#261) |
 
 **What stays the session's own:** `status`, `userMessage`, `model`, `turnCount` and
 `compactions` are the main agent's, as today. The session's `response` and `reasoning`
-become the main agent's own (see §5 for how older clients are kept working).
+stay last-writer-wins for older clients; the main agent's own are kept beside them (see §5).
 
 **Lifetime:**
 - A woken agent (`write_agent`, or a message stamped with its `agentId`) is the same entry
@@ -51,13 +53,14 @@ become the main agent's own (see §5 for how older clients are kept working).
 - An ended entry stays until the session ends. Clients fold ended entries into "N
   finished".
 - **Counts:** `background.agents` is the number of entries with `kind: background` that
-  are not `ended`, at any depth.
+  are running (`working` or `waiting`), at any depth. An `idle` one waits to be woken and
+  is not counted, so an idle session never reads "Delegating" for good.
 
 ## 3. Sources per agent
 
 | Agent | What exists | Model mapping |
 |---|---|---|
-| **Copilot CLI** | Sub-agent events in the session's `events.jsonl`, stamped with a top-level `agentId`. `subagent.started` carries `toolCallId` and `executionMode`. The starter's `task` tool call (same `toolCallId`) carries the description and prompt. `BackgroundWork` already tracks runs by id (v1-sessions.md, Background work) | Full. `name` and `task` come from the `task` call's arguments. `model` comes from the sub-agent's own `session.model_change` or `assistant.message`, which `CopilotParser` currently drops (#73). `parent` comes from the stamping on the `task` call that started it (a call stamped with an `agentId` means nested) |
+| **Copilot CLI** | Sub-agent events in the session's `events.jsonl`, stamped with a top-level `agentId`. `subagent.started` carries `toolCallId`, `executionMode`, `model` and, for a nested one, `parentId` (the starter's `agentId`). The starter's `task` tool call (same `toolCallId`) carries the description and prompt. `BackgroundWork` tracks runs by id (v1-sessions.md, Background work) | Full. `name` and `task` come from the `task` call's arguments. `model` comes from the sub-agent's own `subagent.started`, `subagent.configured`, `session.model_change` or `assistant.message`, never copied to the session (#73). `parent` comes from `parentId`, else the stamping on the `task` call that started it (a call stamped with an `agentId` means nested). Copilot gives sub-agents no `ask_user` (none in 33,966 sub-agent tool calls); their permission prompts are attributed through the tool call they gate. Recorded shapes: `tests/fixtures/copilot/subagents.jsonl` |
 | **Claude Code** | `Task` tool calls in the transcript, plus sidechain entries (`isSidechain: true`), which `ClaudeParser` skips today. Background Bash via `run_in_background` | **To verify against a recorded transcript:** whether sidechain entries carry a stable per-task id, and whether nested `Task` calls are distinguishable. Until then, rule 8: a count from open `Task` calls, no entries |
 | **Codex** | Sub-agent threads as separate rollouts and locks (#62); their `session_meta` names a parent thread | **To verify:** the thread-to-parent link and the status events. Until then, rule 8 |
 
@@ -86,33 +89,52 @@ Rules 3–6 are exactly today's behaviour. Rule 2 is new and needs `Session.wait
 "subagentsMore": 3,               // entries dropped by the cap, if any
 "waitingOn": "agent-c204",        // rule 2 only: the sub-agent whose question is pending
 "activity": {
-  "source": { "agent": "agent-3a91" },          // #20: who wrote top-level response/reasoning; absent = the main agent
-  "own": { "response": "…", "reasoning": "…", "at": "…" }  // the main agent's latest, sent only while `source` is set
+  // #20: who wrote the top-level response and reasoning, each on its own; a field left
+  // out (or the whole object absent) is the main agent's
+  "source": { "response": "agent-3a91", "reasoning": "agent-c204" },
+  // the main agent's own text for each field `source` attributes, sent only with `source`
+  "own": { "response": "…", "responseTruncated": true, "reasoning": "…", "at": "…" }
 }
 
-// Subagent (lists): id, parent, kind, name, task (≤ 512 B, start kept), model,
-// status, startedAt, endedAt?, line (latest reasoning or response, ≤ 300 B, end kept),
-// currentTool?, shells
+// Subagent (lists): id, parent, kind, name (≤ 120 B), task (≤ 512 B, start kept), model,
+// status, outcome?, startedAt, endedAt?, line (latest reasoning or response, ≤ 300 B,
+// end kept), currentTool?, shells
 ```
 
 - **Older clients** keep reading top-level `response` and `reasoning`, which stay
   last-writer-wins. The only extra is that `source` says whose they are.
 - **New clients:**
-  - render `own` while `source` is set, so the main agent's answer never disappears;
+  - for each of `response` and `reasoning`, render `own`'s while `source` names a sub-agent
+    for it, and the top-level one otherwise, so the main agent's answer never disappears;
   - render the sub-agent's words only from `subagents[]` or `session.get`.
 - **Full detail for one sub-agent:** `session.get { id, agent }` returns its `response`
   (≤ 16 KiB), `reasoning` (≤ 4 KiB) and `history` (latest 50). Lists never carry these.
 - **`SessionBudget.Fit`:** after "tool history" (step 1), trim `subagents` in this order:
-  - drop ended entries;
+  - drop finished entries (`idle` and `ended`);
   - drop every `line`;
   - drop every `task`;
   - cap the list at 8 entries and set `subagentsMore`.
-- **Changes that move `updatedAt`:** an entry starting, ending, or changing status. A
-  `line` changing does **not** move it, so busy delegates don't flood upserts. The latest
-  line arrives with the next change, or on `session.get`.
+
+  `own` goes with the legacy field beside it: `own.reasoning` with `reasoning`, and
+  `own.response` to 4 KiB and then away with `response`. Keeping either whole could break
+  the 40 KiB on its own (16 KiB of emoji is 48 KiB of JSON).
+- **Changes that move `updatedAt`:** an entry starting, ending, or changing status or
+  outcome. A `line` changing does **not** move it, so busy delegates don't flood upserts.
+  The latest line arrives with the next change, or on `session.get`.
 - **Questions from sub-agents:** a Question gains an optional `agent` field. The host sets
-  `answerAtMachine` unless it can prove where the keys land. For Copilot that means the
-  pending `ask_user` call is stamped with that `agentId` and no other prompt is pending.
+  `answerAtMachine` unless it can prove where the keys land. For a Copilot `ask_user` that
+  means the pending call is stamped with that `agentId` and no other prompt is pending. A
+  Copilot permission prompt is the CLI's one dialog whoever asked, and keeps the proof it
+  already has (`CopilotPermission`), so it is answered as the main agent's is.
+
+**The review points recorded on #173, as settled in S1:**
+1. *Terminal outcome:* `outcome` (`done` or `failed`) on `idle` and `ended` entries.
+2. *What counts as running:* only `working` or `waiting` background entries; `idle` ones
+   stay listed for later wakes.
+3. *Per-field provenance:* `source.response` and `source.reasoning` are separate, and
+   `own` carries the main agent's text for exactly the fields `source` attributes.
+4. *Budget for `own`:* its field limits are the legacy ones, `own.responseTruncated` is
+   its cut signal, and it is trimmed with the legacy field beside it.
 
 The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the host change.
 
@@ -132,8 +154,9 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
   sub-agent, and both use the same tag, so the newer replaces the older.
 
 **HA connector (single-slot entity attributes, 16 KB limit):**
-- `response` and `reasoning` publish `own` when present, so the HA card never shows a
-  delegate's line as the main agent's.
+- `response` and `reasoning` publish the main agent's own text (`own` for a field `source`
+  attributes to a sub-agent), so the HA card never shows a delegate's line as the main
+  agent's.
 - A new `subagents` attribute carries name, status and line for at most 5 entries.
 - Whether agent-ha-bridge adopts the same rules or records them as known differences is
   decided in the HA slice (ui-plan.md, slice S5).
@@ -141,11 +164,12 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
 **Shadow (#40):** once the host stops last-writer-wins, response mismatches against the
 daemon become intentional differences, and are documented in host-shadow.md.
 
-## 8. Open questions for the owner
+## 8. Questions for the owner (decided)
 
-1. Do finished delegates stay until the session ends, or only until the main agent's next
-   prompt? *Proposed: until the session ends.*
-2. Does a delegate's question push the phone, or only appear in Needs you? *Proposed:
-   push, with the same tag as the session's.*
-3. Is a per-delegate Stop worth a Copilot spike, or do we leave it to the main agent?
-   *Proposed: leave it to the main agent.*
+The owner answered all three on 2026-11-01, as proposed:
+
+1. **Finished delegates stay until the session ends**, not only until the main agent's next
+   prompt.
+2. **A delegate's question pushes the phone**, with the same tag as the session's, so the
+   newer of the two questions replaces the older.
+3. **No per-delegate Stop.** It is left to the main agent ("Ask the main agent to stop it").

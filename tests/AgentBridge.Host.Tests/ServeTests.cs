@@ -113,6 +113,28 @@ public sealed class ServeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Getting_one_sub_agent_returns_its_own_words_and_tools_and_missing_for_one_the_session_does_not_have()
+    {
+        Fixture.Append(events, Copilot.ToolStart("t1", "task", new { description = "Run the suite", prompt = "Run it", mode = "background" }, 4),
+            Copilot.SubagentStarted("t1", "agent-1", 4), Copilot.User("Run it", 4, "agent-1"), Copilot.TurnStart(4, "agent-1"),
+            Copilot.Assistant("", 5, reasoning: "start with the slow ones", tools: ["s1"], agentId: "agent-1"),
+            Copilot.ToolStart("s1", "powershell", new { command = "dotnet test" }, 5, "agent-1"));
+        await source.RefreshAsync();
+        var ch = await OpenAsync();
+
+        var listed = Assert.Single(Result(await ch.RequestAsync(Ops.SessionsList, new { })).GetProperty("sessions")[0].GetProperty("subagents").EnumerateArray());
+        Assert.False(listed.TryGetProperty("history", out _));
+
+        var agent = Result(await ch.RequestAsync(Ops.SessionGet, new { id = Id, agent = "agent-1" }));
+        Assert.Equal("Run the suite", agent.GetProperty("name").GetString());
+        Assert.Equal("start with the slow ones", agent.GetProperty("reasoning").GetString());
+        Assert.Equal("powershell", Assert.Single(agent.GetProperty("history").EnumerateArray()).GetProperty("name").GetString());
+
+        Assert.True(Result(await ch.RequestAsync(Ops.SessionGet, new { id = Id, agent = "agent-2" })).GetProperty("missing").GetBoolean());
+        Assert.True(Result(await ch.RequestAsync(Ops.SessionGet, new { id = Other, agent = "agent-1" })).GetProperty("missing").GetBoolean());
+    }
+
+    [Fact]
     public async Task Getting_without_an_id_and_unknown_ops_are_refused_without_ending_the_channel()
     {
         var ch = await OpenAsync();

@@ -330,9 +330,9 @@ public sealed class StopFlowTests : IAsyncLifetime
     [Fact]
     public async Task A_subagents_question_seen_only_in_the_transcript_also_keeps_exit_from_being_typed()
     {
-        // The session source does not report a subagent's question; the transcript has it.
+        // Written after the session source's last pass, so only the transcript has it. (Since
+        // #173 the source reports a subagent's question too, once it reads it.)
         Fixture.Append(events, Copilot.ToolStart("q9", "ask_user", new { message = "Which?" }, 5, agentId: "a1"));
-        await source.RefreshAsync();
         Assert.Null(source.Get(Id)!.Question);
         var ch = await OpenAsync();
 

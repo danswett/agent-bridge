@@ -1223,8 +1223,9 @@ On DSWETT-DEV-VM1 the host runs read-only: G5 sees agent-ha-bridge there and ref
 
 **Subagent rule (from live testing).** A card's `reasoning` and `response` can come from a
 subagent, and the last writer wins, which is what the HA card does. `status`, `userMessage`
-and `model` are always the session's own. Labelling which subagent wrote a line is
-`danswett/agent-bridge#20`.
+and `model` are always the session's own. Since #173 (#20), `activity.source` names the
+subagent that wrote each, and `activity.own` keeps the main agent's own beside them
+([design/subagents.md](design/subagents.md) §5).
 
 **VM test method.**
 - Use a Hyperloop Hyper-V VM with Node, Git and Copilot CLI installed, and sign Copilot in with a device-flow token.

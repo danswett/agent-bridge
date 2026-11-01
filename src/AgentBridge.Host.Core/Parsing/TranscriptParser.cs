@@ -69,7 +69,7 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
         if (countsAsTurn) { S.Prompts++; }
         // A new message starts a new turn: last turn's reasoning would otherwise sit under
         // this turn's status.
-        S.Reasoning = null;
+        S.ForgetReasoning();
         S.SetStatus(SessionStatus.Working);
         S.Activity(at);
     }

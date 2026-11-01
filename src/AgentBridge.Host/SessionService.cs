@@ -160,6 +160,7 @@ public sealed class SessionService
             case Ops.SessionGet:
                 {
                     var id = String(data, "id") ?? throw new ArgumentException("session.get needs an id");
+                    if (String(data, "agent") is { } agent) { return (object?)await source.GetAgentAsync(id, agent) ?? new { missing = true }; }
                     return (object?)source.Get(id) ?? new { missing = true };
                 }
             case Ops.SessionsSubscribe:

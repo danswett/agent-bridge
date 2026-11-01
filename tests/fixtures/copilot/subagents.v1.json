@@ -1,0 +1,704 @@
+{
+  "20": {
+    "id": "66666666-6666-4666-8666-666666666666",
+    "agent": "copilot",
+    "title": "Fixture session",
+    "cwd": "/work/repo",
+    "repository": "octo/repo",
+    "branch": "main",
+    "model": "claude-opus-5.5",
+    "status": "idle",
+    "statusSince": "2026-10-28T04:00:09.999Z",
+    "startedAt": "2026-10-28T03:00:00.000Z",
+    "updatedAt": "2026-10-28T04:00:12.295Z",
+    "processId": 100,
+    "activity": {
+      "response": "Started 2 background agents: run-suite and witness-logic.",
+      "reasoning": "Wait for the suite.",
+      "history": [
+        {
+          "id": "toolu_01A7rUnSu1teQx9dWm3kLpZe",
+          "name": "task",
+          "summary": "Run full test suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:03.259Z",
+          "endedAt": "2026-10-28T04:00:04.444Z"
+        },
+        {
+          "id": "toolu_01B4w1tnEssLog1cR8vYhTq2",
+          "name": "task",
+          "summary": "Read witness shell logic",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:04.481Z",
+          "endedAt": "2026-10-28T04:00:05.666Z"
+        },
+        {
+          "id": "toolu_01Sa1",
+          "name": "powershell",
+          "summary": "Run the full suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:07.851Z",
+          "endedAt": "2026-10-28T04:00:08.888Z"
+        },
+        {
+          "id": "toolu_01Sb1",
+          "name": "view",
+          "summary": "/work/repo/src/AgentBridge.Host/Shadow/ShadowWitness.cs",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:10.110Z",
+          "endedAt": "2026-10-28T04:00:11.147Z"
+        },
+        {
+          "id": "toolu_01Sa2",
+          "name": "read_powershell",
+          "summary": "suite",
+          "status": "running",
+          "startedAt": "2026-10-28T04:00:12.295Z"
+        }
+      ],
+      "userMessage": "Run the suite and check the witness logic, both in the background.",
+      "turnCount": 1,
+      "compactions": 0,
+      "background": {
+        "agents": 2,
+        "shells": 0
+      }
+    }
+  },
+  "26": {
+    "id": "66666666-6666-4666-8666-666666666666",
+    "agent": "copilot",
+    "title": "Fixture session",
+    "cwd": "/work/repo",
+    "repository": "octo/repo",
+    "branch": "main",
+    "model": "claude-opus-5.5",
+    "status": "idle",
+    "statusSince": "2026-10-28T04:00:09.999Z",
+    "startedAt": "2026-10-28T03:00:00.000Z",
+    "updatedAt": "2026-10-28T04:00:25.702Z",
+    "processId": 100,
+    "activity": {
+      "response": "Started 2 background agents: run-suite and witness-logic.",
+      "reasoning": "Diff the file.",
+      "history": [
+        {
+          "id": "toolu_01A7rUnSu1teQx9dWm3kLpZe",
+          "name": "task",
+          "summary": "Run full test suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:03.259Z",
+          "endedAt": "2026-10-28T04:00:04.444Z"
+        },
+        {
+          "id": "toolu_01B4w1tnEssLog1cR8vYhTq2",
+          "name": "task",
+          "summary": "Read witness shell logic",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:04.481Z",
+          "endedAt": "2026-10-28T04:00:05.666Z"
+        },
+        {
+          "id": "toolu_01Sa1",
+          "name": "powershell",
+          "summary": "Run the full suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:07.851Z",
+          "endedAt": "2026-10-28T04:00:08.888Z"
+        },
+        {
+          "id": "toolu_01Sb1",
+          "name": "view",
+          "summary": "/work/repo/src/AgentBridge.Host/Shadow/ShadowWitness.cs",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:10.110Z",
+          "endedAt": "2026-10-28T04:00:11.147Z"
+        },
+        {
+          "id": "toolu_01Sa2",
+          "name": "read_powershell",
+          "summary": "suite",
+          "status": "running",
+          "startedAt": "2026-10-28T04:00:12.295Z"
+        },
+        {
+          "id": "toolu_01C9rEv1ewW1tn3ssKq5Jm7d",
+          "name": "task",
+          "summary": "Review the witness change",
+          "status": "running",
+          "startedAt": "2026-10-28T04:00:22.406Z"
+        },
+        {
+          "id": "toolu_01Sc1",
+          "name": "powershell",
+          "summary": "Diff the witness",
+          "status": "running",
+          "startedAt": "2026-10-28T04:00:25.702Z"
+        }
+      ],
+      "userMessage": "Run the suite and check the witness logic, both in the background.",
+      "turnCount": 1,
+      "compactions": 0,
+      "background": {
+        "agents": 2,
+        "shells": 0
+      }
+    }
+  },
+  "45": {
+    "id": "66666666-6666-4666-8666-666666666666",
+    "agent": "copilot",
+    "title": "Fixture session",
+    "cwd": "/work/repo",
+    "repository": "octo/repo",
+    "branch": "main",
+    "model": "claude-opus-5.5",
+    "status": "idle",
+    "statusSince": "2026-10-28T04:00:09.999Z",
+    "startedAt": "2026-10-28T03:00:00.000Z",
+    "updatedAt": "2026-10-28T04:00:42.146Z",
+    "processId": 100,
+    "activity": {
+      "response": "HEAD: 1 failing test, RestartAfterResume (timing).",
+      "reasoning": "Diff the file.",
+      "history": [
+        {
+          "id": "toolu_01A7rUnSu1teQx9dWm3kLpZe",
+          "name": "task",
+          "summary": "Run full test suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:03.259Z",
+          "endedAt": "2026-10-28T04:00:04.444Z"
+        },
+        {
+          "id": "toolu_01B4w1tnEssLog1cR8vYhTq2",
+          "name": "task",
+          "summary": "Read witness shell logic",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:04.481Z",
+          "endedAt": "2026-10-28T04:00:05.666Z"
+        },
+        {
+          "id": "toolu_01Sa1",
+          "name": "powershell",
+          "summary": "Run the full suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:07.851Z",
+          "endedAt": "2026-10-28T04:00:08.888Z"
+        },
+        {
+          "id": "toolu_01Sb1",
+          "name": "view",
+          "summary": "/work/repo/src/AgentBridge.Host/Shadow/ShadowWitness.cs",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:10.110Z",
+          "endedAt": "2026-10-28T04:00:11.147Z"
+        },
+        {
+          "id": "toolu_01Sa2",
+          "name": "read_powershell",
+          "summary": "suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:12.295Z",
+          "endedAt": "2026-10-28T04:00:40.998Z"
+        },
+        {
+          "id": "toolu_01C9rEv1ewW1tn3ssKq5Jm7d",
+          "name": "task",
+          "summary": "Review the witness change",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:22.406Z",
+          "endedAt": "2026-10-28T04:00:30.961Z"
+        },
+        {
+          "id": "toolu_01Sc1",
+          "name": "powershell",
+          "summary": "Diff the witness",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:25.702Z",
+          "endedAt": "2026-10-28T04:00:27.739Z"
+        }
+      ],
+      "userMessage": "Run the suite and check the witness logic, both in the background.",
+      "turnCount": 1,
+      "compactions": 0,
+      "background": {
+        "agents": 1,
+        "shells": 0
+      }
+    }
+  },
+  "60": {
+    "id": "66666666-6666-4666-8666-666666666666",
+    "agent": "copilot",
+    "title": "Fixture session",
+    "cwd": "/work/repo",
+    "repository": "octo/repo",
+    "branch": "main",
+    "model": "claude-opus-5.5",
+    "status": "waiting",
+    "statusSince": "2026-10-28T04:00:58.775Z",
+    "startedAt": "2026-10-28T03:00:00.000Z",
+    "updatedAt": "2026-10-28T04:00:58.775Z",
+    "processId": 100,
+    "activity": {
+      "response": "Asked run-suite to bisect; witness-logic is still reading.",
+      "reasoning": "Check CI before saying so.",
+      "history": [
+        {
+          "id": "toolu_01A7rUnSu1teQx9dWm3kLpZe",
+          "name": "task",
+          "summary": "Run full test suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:03.259Z",
+          "endedAt": "2026-10-28T04:00:04.444Z"
+        },
+        {
+          "id": "toolu_01B4w1tnEssLog1cR8vYhTq2",
+          "name": "task",
+          "summary": "Read witness shell logic",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:04.481Z",
+          "endedAt": "2026-10-28T04:00:05.666Z"
+        },
+        {
+          "id": "toolu_01Sa1",
+          "name": "powershell",
+          "summary": "Run the full suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:07.851Z",
+          "endedAt": "2026-10-28T04:00:08.888Z"
+        },
+        {
+          "id": "toolu_01Sb1",
+          "name": "view",
+          "summary": "/work/repo/src/AgentBridge.Host/Shadow/ShadowWitness.cs",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:10.110Z",
+          "endedAt": "2026-10-28T04:00:11.147Z"
+        },
+        {
+          "id": "toolu_01Sa2",
+          "name": "read_powershell",
+          "summary": "suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:12.295Z",
+          "endedAt": "2026-10-28T04:00:40.998Z"
+        },
+        {
+          "id": "toolu_01C9rEv1ewW1tn3ssKq5Jm7d",
+          "name": "task",
+          "summary": "Review the witness change",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:22.406Z",
+          "endedAt": "2026-10-28T04:00:30.961Z"
+        },
+        {
+          "id": "toolu_01Sc1",
+          "name": "powershell",
+          "summary": "Diff the witness",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:25.702Z",
+          "endedAt": "2026-10-28T04:00:27.739Z"
+        },
+        {
+          "id": "toolu_01Ra1",
+          "name": "read_agent",
+          "summary": "3a91c0de-0a4e-4c47-9d2b-5f1e8b7a2c11",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:51.294Z",
+          "endedAt": "2026-10-28T04:00:52.331Z"
+        },
+        {
+          "id": "toolu_01Wa1",
+          "name": "write_agent",
+          "summary": "Bisect RestartAfterResume over the last 10 commits.",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:54.405Z",
+          "endedAt": "2026-10-28T04:00:55.442Z"
+        },
+        {
+          "id": "toolu_01Sa3",
+          "name": "powershell",
+          "summary": "Bisect the failure",
+          "status": "running",
+          "startedAt": "2026-10-28T04:00:56.590Z"
+        },
+        {
+          "id": "toolu_01Sb2",
+          "name": "powershell",
+          "summary": "Watch the checks",
+          "status": "running",
+          "startedAt": "2026-10-28T04:00:58.738Z"
+        }
+      ],
+      "userMessage": "Run the suite and check the witness logic, both in the background.",
+      "turnCount": 0,
+      "compactions": 0,
+      "background": {
+        "agents": 2,
+        "shells": 0
+      }
+    },
+    "question": {
+      "id": "5b0e1f7a-3c2d-4e9f-8a61-0d4c7b2e9f13#2af566cda6fd1a8e",
+      "kind": "approval",
+      "message": "Allow **shell**?\n\nWatch the checks\n\n```\ngh pr checks 182 --watch\n```",
+      "fields": [
+        {
+          "name": "decision",
+          "type": "choice",
+          "options": [
+            {
+              "value": "approve",
+              "label": "Approve once"
+            },
+            {
+              "value": "deny",
+              "label": "Deny"
+            }
+          ],
+          "required": true
+        }
+      ],
+      "askedAt": "2026-10-28T04:00:58.775Z"
+    }
+  },
+  "84": {
+    "id": "66666666-6666-4666-8666-666666666666",
+    "agent": "copilot",
+    "title": "Fixture session",
+    "cwd": "/work/repo",
+    "repository": "octo/repo",
+    "branch": "main",
+    "model": "claude-opus-5.5",
+    "status": "idle",
+    "statusSince": "2026-10-28T04:01:10.812Z",
+    "startedAt": "2026-10-28T03:00:00.000Z",
+    "updatedAt": "2026-10-28T04:01:22.108Z",
+    "processId": 100,
+    "activity": {
+      "response": "First bad commit: abc1234 (Retry the resume twice).",
+      "reasoning": "Check CI before saying so.",
+      "history": [
+        {
+          "id": "toolu_01A7rUnSu1teQx9dWm3kLpZe",
+          "name": "task",
+          "summary": "Run full test suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:03.259Z",
+          "endedAt": "2026-10-28T04:00:04.444Z"
+        },
+        {
+          "id": "toolu_01B4w1tnEssLog1cR8vYhTq2",
+          "name": "task",
+          "summary": "Read witness shell logic",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:04.481Z",
+          "endedAt": "2026-10-28T04:00:05.666Z"
+        },
+        {
+          "id": "toolu_01Sa1",
+          "name": "powershell",
+          "summary": "Run the full suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:07.851Z",
+          "endedAt": "2026-10-28T04:00:08.888Z"
+        },
+        {
+          "id": "toolu_01Sb1",
+          "name": "view",
+          "summary": "/work/repo/src/AgentBridge.Host/Shadow/ShadowWitness.cs",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:10.110Z",
+          "endedAt": "2026-10-28T04:00:11.147Z"
+        },
+        {
+          "id": "toolu_01Sa2",
+          "name": "read_powershell",
+          "summary": "suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:12.295Z",
+          "endedAt": "2026-10-28T04:00:40.998Z"
+        },
+        {
+          "id": "toolu_01C9rEv1ewW1tn3ssKq5Jm7d",
+          "name": "task",
+          "summary": "Review the witness change",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:22.406Z",
+          "endedAt": "2026-10-28T04:00:30.961Z"
+        },
+        {
+          "id": "toolu_01Sc1",
+          "name": "powershell",
+          "summary": "Diff the witness",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:25.702Z",
+          "endedAt": "2026-10-28T04:00:27.739Z"
+        },
+        {
+          "id": "toolu_01Ra1",
+          "name": "read_agent",
+          "summary": "3a91c0de-0a4e-4c47-9d2b-5f1e8b7a2c11",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:51.294Z",
+          "endedAt": "2026-10-28T04:00:52.331Z"
+        },
+        {
+          "id": "toolu_01Wa1",
+          "name": "write_agent",
+          "summary": "Bisect RestartAfterResume over the last 10 commits.",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:54.405Z",
+          "endedAt": "2026-10-28T04:00:55.442Z"
+        },
+        {
+          "id": "toolu_01Sa3",
+          "name": "powershell",
+          "summary": "Bisect the failure",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:56.590Z",
+          "endedAt": "2026-10-28T04:01:20.960Z"
+        },
+        {
+          "id": "toolu_01Sb2",
+          "name": "powershell",
+          "summary": "Watch the checks",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:58.738Z",
+          "endedAt": "2026-10-28T04:01:15.849Z"
+        }
+      ],
+      "userMessage": "Run the suite and check the witness logic, both in the background.",
+      "turnCount": 1,
+      "compactions": 0,
+      "background": {
+        "agents": 1,
+        "shells": 0
+      }
+    }
+  },
+  "90": {
+    "id": "66666666-6666-4666-8666-666666666666",
+    "agent": "copilot",
+    "title": "Fixture session",
+    "cwd": "/work/repo",
+    "repository": "octo/repo",
+    "branch": "main",
+    "model": "claude-opus-5.5",
+    "status": "idle",
+    "statusSince": "2026-10-28T04:01:10.812Z",
+    "startedAt": "2026-10-28T03:00:00.000Z",
+    "updatedAt": "2026-10-28T04:01:25.145Z",
+    "processId": 100,
+    "activity": {
+      "response": "First bad commit: abc1234 (Retry the resume twice).",
+      "reasoning": "Check CI before saying so.",
+      "history": [
+        {
+          "id": "toolu_01A7rUnSu1teQx9dWm3kLpZe",
+          "name": "task",
+          "summary": "Run full test suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:03.259Z",
+          "endedAt": "2026-10-28T04:00:04.444Z"
+        },
+        {
+          "id": "toolu_01B4w1tnEssLog1cR8vYhTq2",
+          "name": "task",
+          "summary": "Read witness shell logic",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:04.481Z",
+          "endedAt": "2026-10-28T04:00:05.666Z"
+        },
+        {
+          "id": "toolu_01Sa1",
+          "name": "powershell",
+          "summary": "Run the full suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:07.851Z",
+          "endedAt": "2026-10-28T04:00:08.888Z"
+        },
+        {
+          "id": "toolu_01Sb1",
+          "name": "view",
+          "summary": "/work/repo/src/AgentBridge.Host/Shadow/ShadowWitness.cs",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:10.110Z",
+          "endedAt": "2026-10-28T04:00:11.147Z"
+        },
+        {
+          "id": "toolu_01Sa2",
+          "name": "read_powershell",
+          "summary": "suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:12.295Z",
+          "endedAt": "2026-10-28T04:00:40.998Z"
+        },
+        {
+          "id": "toolu_01C9rEv1ewW1tn3ssKq5Jm7d",
+          "name": "task",
+          "summary": "Review the witness change",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:22.406Z",
+          "endedAt": "2026-10-28T04:00:30.961Z"
+        },
+        {
+          "id": "toolu_01Sc1",
+          "name": "powershell",
+          "summary": "Diff the witness",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:25.702Z",
+          "endedAt": "2026-10-28T04:00:27.739Z"
+        },
+        {
+          "id": "toolu_01Ra1",
+          "name": "read_agent",
+          "summary": "3a91c0de-0a4e-4c47-9d2b-5f1e8b7a2c11",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:51.294Z",
+          "endedAt": "2026-10-28T04:00:52.331Z"
+        },
+        {
+          "id": "toolu_01Wa1",
+          "name": "write_agent",
+          "summary": "Bisect RestartAfterResume over the last 10 commits.",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:54.405Z",
+          "endedAt": "2026-10-28T04:00:55.442Z"
+        },
+        {
+          "id": "toolu_01Sa3",
+          "name": "powershell",
+          "summary": "Bisect the failure",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:56.590Z",
+          "endedAt": "2026-10-28T04:01:20.960Z"
+        },
+        {
+          "id": "toolu_01Sb2",
+          "name": "powershell",
+          "summary": "Watch the checks",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:58.738Z",
+          "endedAt": "2026-10-28T04:01:15.849Z"
+        }
+      ],
+      "userMessage": "Run the suite and check the witness logic, both in the background.",
+      "turnCount": 1,
+      "compactions": 0
+    }
+  },
+  "101": {
+    "id": "66666666-6666-4666-8666-666666666666",
+    "agent": "copilot",
+    "title": "Fixture session",
+    "cwd": "/work/repo",
+    "repository": "octo/repo",
+    "branch": "main",
+    "model": "claude-opus-5.5",
+    "status": "idle",
+    "statusSince": "2026-10-28T04:01:10.812Z",
+    "startedAt": "2026-10-28T03:00:00.000Z",
+    "updatedAt": "2026-10-28T04:01:25.145Z",
+    "processId": 100,
+    "activity": {
+      "response": "First bad commit: abc1234 (Retry the resume twice).",
+      "reasoning": "Check CI before saying so.",
+      "history": [
+        {
+          "id": "toolu_01A7rUnSu1teQx9dWm3kLpZe",
+          "name": "task",
+          "summary": "Run full test suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:03.259Z",
+          "endedAt": "2026-10-28T04:00:04.444Z"
+        },
+        {
+          "id": "toolu_01B4w1tnEssLog1cR8vYhTq2",
+          "name": "task",
+          "summary": "Read witness shell logic",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:04.481Z",
+          "endedAt": "2026-10-28T04:00:05.666Z"
+        },
+        {
+          "id": "toolu_01Sa1",
+          "name": "powershell",
+          "summary": "Run the full suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:07.851Z",
+          "endedAt": "2026-10-28T04:00:08.888Z"
+        },
+        {
+          "id": "toolu_01Sb1",
+          "name": "view",
+          "summary": "/work/repo/src/AgentBridge.Host/Shadow/ShadowWitness.cs",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:10.110Z",
+          "endedAt": "2026-10-28T04:00:11.147Z"
+        },
+        {
+          "id": "toolu_01Sa2",
+          "name": "read_powershell",
+          "summary": "suite",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:12.295Z",
+          "endedAt": "2026-10-28T04:00:40.998Z"
+        },
+        {
+          "id": "toolu_01C9rEv1ewW1tn3ssKq5Jm7d",
+          "name": "task",
+          "summary": "Review the witness change",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:22.406Z",
+          "endedAt": "2026-10-28T04:00:30.961Z"
+        },
+        {
+          "id": "toolu_01Sc1",
+          "name": "powershell",
+          "summary": "Diff the witness",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:25.702Z",
+          "endedAt": "2026-10-28T04:00:27.739Z"
+        },
+        {
+          "id": "toolu_01Ra1",
+          "name": "read_agent",
+          "summary": "3a91c0de-0a4e-4c47-9d2b-5f1e8b7a2c11",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:51.294Z",
+          "endedAt": "2026-10-28T04:00:52.331Z"
+        },
+        {
+          "id": "toolu_01Wa1",
+          "name": "write_agent",
+          "summary": "Bisect RestartAfterResume over the last 10 commits.",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:54.405Z",
+          "endedAt": "2026-10-28T04:00:55.442Z"
+        },
+        {
+          "id": "toolu_01Sa3",
+          "name": "powershell",
+          "summary": "Bisect the failure",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:56.590Z",
+          "endedAt": "2026-10-28T04:01:20.960Z"
+        },
+        {
+          "id": "toolu_01Sb2",
+          "name": "powershell",
+          "summary": "Watch the checks",
+          "status": "done",
+          "startedAt": "2026-10-28T04:00:58.738Z",
+          "endedAt": "2026-10-28T04:01:15.849Z"
+        }
+      ],
+      "userMessage": "Run the suite and check the witness logic, both in the background.",
+      "turnCount": 1,
+      "compactions": 0
+    }
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "id": "0f3c9a52-7b1e-4d8a-9c2f-5e6d7a8b9c01",
+  "agent": "copilot",
+  "title": "Fix RestartAfterResume",
+  "cwd": "/work/repo",
+  "repository": "octo/repo",
+  "branch": "main",
+  "model": "claude-opus-5.5",
+  "status": "waiting",
+  "statusSince": "2026-11-01T19:58:02.418Z",
+  "startedAt": "2026-11-01T19:40:11.002Z",
+  "updatedAt": "2026-11-01T19:58:02.418Z",
+  "processId": 4120,
+  "activity": {
+    "response": "HEAD: 1 failing test, RestartAfterResume (timing).",
+    "reasoning": "Check CI before saying so.",
+    "userMessage": "Run the suite and check the witness logic, both in the background.",
+    "turnCount": 1,
+    "compactions": 0,
+    "background": { "agents": 2, "shells": 0 },
+    "source": { "response": "agent-3a91", "reasoning": "agent-c204" },
+    "own": {
+      "response": "Started 2 background agents: run-suite and witness-logic.",
+      "reasoning": "Two independent jobs: delegate both.",
+      "at": "2026-11-01T19:41:08.311Z"
+    }
+  },
+  "question": {
+    "id": "5b0e1f7a-3c2d-4e9f-8a61-0d4c7b2e9f13#2af566cda6fd1a8e",
+    "kind": "approval",
+    "message": "Allow **witness-logic** to run `gh pr checks 182 --watch`?",
+    "fields": [
+      {
+        "name": "decision",
+        "type": "choice",
+        "options": [
+          { "value": "approve", "label": "Approve once" },
+          { "value": "deny", "label": "Deny" }
+        ],
+        "required": true
+      }
+    ],
+    "askedAt": "2026-11-01T19:58:02.418Z",
+    "agent": "agent-c204"
+  },
+  "subagents": [
+    {
+      "id": "agent-c204",
+      "kind": "background",
+      "name": "Read witness shell logic",
+      "task": "Read the witness's shell logic and check it follows the latest reply of a turn.",
+      "model": "gpt-5.6-luna",
+      "status": "waiting",
+      "startedAt": "2026-11-01T19:41:04.120Z",
+      "line": "Check CI before saying so.",
+      "currentTool": { "id": "toolu_01Sb2", "name": "powershell", "summary": "Watch the checks", "status": "running", "startedAt": "2026-11-01T19:58:02.301Z" },
+      "shells": 0
+    },
+    {
+      "id": "agent-3a91",
+      "kind": "background",
+      "name": "Run full test suite",
+      "task": "Run the full test suite on HEAD and report any failure with its first error line.",
+      "model": "claude-haiku-5.5",
+      "status": "working",
+      "startedAt": "2026-11-01T19:41:03.877Z",
+      "line": "Bisect over the last 10 commits.",
+      "shells": 1
+    },
+    {
+      "id": "agent-7e55",
+      "parent": "agent-c204",
+      "kind": "task",
+      "name": "Review the witness change",
+      "model": "gpt-5.6-luna",
+      "status": "ended",
+      "outcome": "done",
+      "startedAt": "2026-11-01T19:41:22.406Z",
+      "endedAt": "2026-11-01T19:41:29.887Z",
+      "line": "No regressions: the flag now follows the latest reply.",
+      "shells": 0
+    }
+  ],
+  "subagentsMore": 2,
+  "waitingOn": "agent-c204"
+}

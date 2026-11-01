@@ -74,6 +74,10 @@ Check `gh pr list -R danswett/agent-bridge` for open PRs. Two coordinators work 
 
 In flight on 2026-11-01: #187 (S1) and #172 (shared usage), each with a delegate.
 
+- Sub-agents S1 (#173): the host's sub-agent tree from Copilot transcripts and its additive
+  protocol (`subagents`, `activity.source` and `own`, `waitingOn`, Question `agent`,
+  `session.get { agent }`), in review on branch `feat/subagents-s1`.
+
 ## 3. Shadow gate (DEV-VM1, #40)
 
 The read-only host has run beside the daemon since 2026-10-29, and the gate is coverage-based
@@ -176,7 +180,7 @@ ui.md §2.2 rule 7 becomes an overlay after rules 1–6 while rule 8 refines rul
   - #128: Forget;
   - #134: driver edge on answers.
 - **Design:**
-  - #20 and #84: sub-agents on the card. Write the design doc with the owner before any code;
+  - #20 and #84: sub-agents on the card. The design is [design/subagents.md](design/subagents.md), with §8 answered by the owner on 2026-11-01. The host and protocol for Copilot are S1 (#173); Claude and Codex are #174, HA and shadow #175, the clients #176;
   - #55: device approval with a matching code. Until then a device's kind is self-declared to the relay, which folder trust and remote update both rely on;
   - #164 to #168: UI.
 
