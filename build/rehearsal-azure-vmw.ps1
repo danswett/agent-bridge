@@ -232,7 +232,21 @@ param(
     [switch] $KeepReplacedDisk,
 
     [Parameter(Mandatory, ParameterSetName = 'ListSnapshots')]
-    [switch] $ListSnapshots
+    [switch] $ListSnapshots,
+
+    [Parameter(Mandatory, ParameterSetName = 'Invoke')]
+    [string] $InvokeScript,
+
+    [Parameter(ParameterSetName = 'Invoke')]
+    [switch] $AsDesktopUser,
+
+    [Parameter(ParameterSetName = 'Invoke')]
+    [ValidateRange(1, 85)]
+    [int] $TimeoutMinutes = 30,
+
+    [Parameter(Mandatory, ParameterSetName = 'AutoShutdown')]
+    [ValidateSet('On', 'Off')]
+    [string] $AutoShutdown
 )
 
 Set-StrictMode -Version Latest
@@ -1350,7 +1364,7 @@ if ($Remove) {
     return
 }
 
-if (($Deallocate -or $Start -or $JumpHostSetup -or $Snapshot -or $RestoreSnapshot -or $ListSnapshots) -and -not $groupExists) {
+if (($Deallocate -or $Start -or $JumpHostSetup -or $Snapshot -or $RestoreSnapshot -or $ListSnapshots -or $InvokeScript -or $AutoShutdown) -and -not $groupExists) {
     throw "$ResourceGroup does not exist; provision first"
 }
 
@@ -1372,6 +1386,29 @@ if ($Deallocate) {
     if ($PSCmdlet.ShouldProcess($VmName, 'Deallocate')) {
         Invoke-Az vm deallocate -g $ResourceGroup -n $VmName -o none | Out-Null
         Write-Step "$VmName deallocated: compute is no longer billed; the disk and static IP still are."
+    }
+    return
+}
+
+if ($InvokeScript) {
+    # For other scripts (build/shadow-soak-vm.ps1): the same control-plane path provisioning uses,
+    # so nothing about reaching the VM is duplicated. Only non-secret text may go in.
+    if (-not (Test-VmRunning)) { throw "$VmName is not running; -Start it first" }
+    $text = Get-Content -LiteralPath $InvokeScript -Raw
+    if ($AsDesktopUser) { return Invoke-VmAsDesktopUser -Script $text -TimeoutMinutes $TimeoutMinutes }
+    return Invoke-VmRunCommand -Script $text
+}
+
+if ($AutoShutdown) {
+    # Off for a run that has to last through the night (the shadow soak), On to put it back.
+    if ($PSCmdlet.ShouldProcess($VmName, "auto-shutdown $AutoShutdown")) {
+        if ($AutoShutdown -eq 'On') {
+            Invoke-Az vm auto-shutdown -g $ResourceGroup -n $VmName --time $AutoShutdownUtc -o none | Out-Null
+            Write-Step "auto-shutdown at $AutoShutdownUtc UTC"
+        } else {
+            Invoke-Az vm auto-shutdown -g $ResourceGroup -n $VmName --off -o none | Out-Null
+            Write-Step 'auto-shutdown off: deallocate the VM yourself, or turn it back on with -AutoShutdown On'
+        }
     }
     return
 }

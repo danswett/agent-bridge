@@ -199,11 +199,60 @@ internal static class Program
                     Console.WriteLine(evidence.Report(Evidence.Pacific(), steps));
                     return Outcome.Pass($"evidence in {evidence.Folder}");
                 }
+            case "soak run" or "soak resumable":
+                {
+                    var url = new Uri(p.Option("--url") ?? "http://127.0.0.1:8123");
+                    if (HaCheck.Refusal(url) is { } refused) { return Outcome.Error(refused); }
+                    var token = File.ReadAllText(p.Option("--token-file")!).Trim();
+                    if (token.Length == 0) { return Outcome.Error("the token file is empty"); }
+                    var slug = p.Option("--slug") ?? AgentBridge.HomeAssistant.HaContract.MachineSlug(Environment.MachineName);
+                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+                    var ha = new SoakHa(new AgentBridge.HomeAssistant.HomeAssistantClient(url, token, http));
+                    if (p.Name == "soak resumable") { return await SoakResumableAsync(ha, slug, profileFolder, ct); }
+                    var options = new SoakOptions(slug, p.Option("--workspace") ?? "Rehearsal",
+                        Pairs(p.All("--model"), "--model"), Pairs(p.All("--effort"), "--effort"),
+                        TimeSpan.FromMinutes(p.Int("--every") ?? 22), TimeSpan.FromSeconds(p.Int("--hold") ?? 35),
+                        TimeSpan.FromMinutes(p.Int("--turn-timeout") ?? 6), p.Int("--count") ?? 66,
+                        p.Int("--restart-daemon-at"), p.Int("--restart-shadow-at"), p.Option("--only"));
+                    if (options.Only is { } only && SoakScript.All.All(s => s.Name != only)) { throw new UsageException($"--only takes one of {string.Join(", ", SoakScript.All.Select(s => s.Name).Distinct())}"); }
+                    await new SoakDriver(ha, options, Path.GetFullPath(p.Option("--state")!), homes).RunAsync(ct);
+                    return Outcome.Pass(SoakDriver.Summary(SoakDriver.Load(Path.GetFullPath(p.Option("--state")!))));
+                }
+            case "soak status": return Outcome.Pass(SoakDriver.Summary(SoakDriver.Load(Path.GetFullPath(p.Option("--state")!))));
+            case "soak collect":
+                {
+                    var n = SoakDriver.Collect(homes, p.Args[0], Path.GetFullPath(p.Option("--out")!));
+                    return n > 0 ? Outcome.Pass($"{n} file(s) in {Path.GetFullPath(p.Option("--out")!)}") : Outcome.Error($"no transcript for {p.Args[0]} under {homes.Home}");
+                }
             default: throw new UsageException($"unknown command {p.Name}");
         }
     }
 
     static IReadOnlyDictionary<string, string> Fields(Parsed p) => Pairs(p.All("--field"), "--field");
+
+    // The two resume lists the shadow compares, by label, whitespace collapsed: what
+    // agent-ha-bridge's Resume selector offers (less New session and other machines' sessions,
+    // which the host does not offer yet) and the host's launch.options titles.
+    static async Task<Outcome> SoakResumableAsync(ISoakHa ha, string slug, string profileFolder, CancellationToken ct)
+    {
+        static string Norm(string s) => string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var select = await ha.StateAsync($"select.agent_bridge_{slug}_new_resume", ct);
+        var daemon = select is not null && select.Attributes.TryGetProperty("options", out var o) && o.ValueKind == JsonValueKind.Array
+            ? o.EnumerateArray().Select(x => Norm(x.GetString() ?? "")).Where(l => l != "New session" && !System.Text.RegularExpressions.Regex.IsMatch(l, "^[A-Za-z]+ on [^:]+: ")).ToList()
+            : [];
+        await using var channel = await LocalClient.ConnectAsync(LocalEndpoint.For(profileFolder), TimeSpan.FromSeconds(5), ct);
+        await channel.HelloAsync(ct);
+        var options = await channel.CallAsync<AgentBridge.Protocol.LaunchOptions>(AgentBridge.Protocol.LaunchProtocol.Options, ct: ct);
+        var host = options.Resumable.Select(r => Norm(r.Title)).ToList();
+        var data = new
+        {
+            daemon,
+            host = options.Resumable.Select(r => new { title = Norm(r.Title), r.Id, agent = r.Agent.ToString(), r.Cwd, r.UpdatedAt }),
+            missingOnHost = daemon.Except(host, StringComparer.Ordinal),
+            missingOnDaemon = host.Except(daemon, StringComparer.Ordinal),
+        };
+        return daemon.SequenceEqual(host, StringComparer.Ordinal) ? Outcome.Pass($"both offer the same {host.Count}", data) : Outcome.Fail($"daemon {daemon.Count}, host {host.Count}", data);
+    }
 
     static Dictionary<string, string> Pairs(IReadOnlyList<string> values, string option)
     {
