@@ -33,7 +33,8 @@ public sealed class UpdateService
     public const int RateLimit = 3;
     public static readonly TimeSpan RateWindow = TimeSpan.FromMinutes(10);
     // Devices remembered for the limit and for the log; the oldest is let go past this.
-    const int DevicesKept = 64;
+    internal int DevicesKept { get; init; } = 64;
+    public const string Full = "this machine has too many presses waiting for its app already; try again in a few minutes";
     public const string NoApp = "the Agent Bridge app is not running on this machine, and it is what installs updates";
     public const string ThroughTheRelay = "updates are asked for from another device, through the relay; on this machine, use the app's Settings";
 
@@ -166,7 +167,13 @@ public sealed class UpdateService
             if (!reported.Installer) { return Refused(peer, name, reported.Unavailable ?? "this copy of the app was not installed by its updater, so it cannot update"); }
             // A resend of the same press is the same ask, whether or not the app has taken it.
             added = asks.All(a => a.Request != request) && !taken.ContainsKey(request);
-            if (added && Limited(peer, kind) is { } again)
+            // Full: refused, rather than letting go of a press already answered "accepted".
+            if (added && asks.Count >= MaxAsks)
+            {
+                tooMany = Full;
+                added = false;
+            }
+            else if (added && Limited(peer, kind) is { } again)
             {
                 tooMany = $"too many presses of {(kind == UpdateAskKind.Install ? "Install" : "Check")} from this device just now; try again {again}";
                 added = false;
@@ -175,7 +182,6 @@ public sealed class UpdateService
             {
                 var now = time.GetUtcNow();
                 asks.Add(new UpdateAsk(request, kind, by, now));
-                if (asks.Count > MaxAsks) { asks.RemoveAt(0); }
                 pressed[(peer, kind)].Enqueue(now);
             }
             state = StateLocked();
@@ -199,8 +205,11 @@ public sealed class UpdateService
             say = !refusalLogged.TryGetValue(peer, out var at) || now - at >= TimeSpan.FromMinutes(1);
             if (say)
             {
+                if (!refusalLogged.ContainsKey(peer))
+                {
+                    while (refusalLogged.Count >= DevicesKept) { refusalLogged.Remove(refusalLogged.MinBy(p => p.Value).Key); }
+                }
                 refusalLogged[peer] = now;
-                if (refusalLogged.Count > DevicesKept) { refusalLogged.Remove(refusalLogged.MinBy(p => p.Value).Key); }
             }
         }
         if (say) { log($"{op} refused from {peer[..Math.Min(8, peer.Length)]}: {why}"); }
@@ -213,8 +222,10 @@ public sealed class UpdateService
         var now = time.GetUtcNow();
         if (!pressed.TryGetValue((peer, kind), out var times))
         {
+            // Room made first, so the entry let go is never this one: the one that pressed least
+            // recently (or not at all within the window).
+            while (pressed.Count >= DevicesKept) { pressed.Remove(pressed.MinBy(p => p.Value.Count > 0 ? p.Value.Last() : DateTimeOffset.MinValue).Key); }
             pressed[(peer, kind)] = times = new Queue<DateTimeOffset>();
-            if (pressed.Count > DevicesKept) { pressed.Remove(pressed.MinBy(p => p.Value.Count > 0 ? p.Value.Peek() : DateTimeOffset.MinValue).Key); }
         }
         while (times.Count > 0 && now - times.Peek() >= RateWindow) { times.Dequeue(); }
         if (times.Count < RateLimit) { return null; }

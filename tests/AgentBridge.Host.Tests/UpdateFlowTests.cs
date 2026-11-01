@@ -211,6 +211,50 @@ public sealed class UpdateFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task With_presses_waiting_for_the_app_as_far_as_they_go_a_new_one_is_refused_and_none_accepted_is_dropped()
+    {
+        await ReportAsync(Reported);
+        var phone = await OpenAsync("Phone", "pwa");
+        var browser = await OpenAsync("Browser", "pwa");
+        List<string> accepted = [];
+        async Task PressAsync(SecureChannel ch, string op)
+        {
+            var request = Guid.NewGuid().ToString();
+            Assert.Equal(UpdateAck.Accepted, Read<UpdateCommandResult>(Result(await AskAsync(ch, op, request))).Outcome);
+            accepted.Add(request);
+        }
+        // The app not taking them (hung, say): 8 waiting.
+        for (var i = 0; i < 3; i++) { await PressAsync(phone, UpdateProtocol.Install); await PressAsync(phone, UpdateProtocol.Check); }
+        for (var i = 0; i < 2; i++) { await PressAsync(browser, UpdateProtocol.Install); }
+
+        var refused = Read<UpdateCommandResult>(Result(await AskAsync(browser, UpdateProtocol.Install)));
+
+        Assert.Equal((UpdateAck.Refused, UpdateService.Full), (refused.Outcome, refused.Reason));
+        Assert.Equal(accepted, control.Status().UpdateAsks!.Select(a => a.Request));
+    }
+
+    [Fact]
+    public async Task A_device_new_to_a_full_table_of_devices_is_counted_and_its_press_taken()
+    {
+        // Room for one device: the second makes room by letting go of the first.
+        var small = new UpdateService("0.4.0", time: time) { DevicesKept = 1 };
+        var changed = 0;
+        small.AsksChanged += () => Interlocked.Increment(ref changed);
+        small.Attach(host.Relay);
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.4.0")) { Updates = small }.HandleAsync;
+        small.Report(app, new UpdateReport(Reported));
+        var phone = await OpenAsync("Phone", "pwa");
+        var browser = await OpenAsync("Browser", "pwa");
+        await AskAsync(phone, UpdateProtocol.Install);
+
+        var second = Read<UpdateCommandResult>(Result(await AskAsync(browser, UpdateProtocol.Install)));
+
+        Assert.Equal(UpdateAck.Accepted, second.Outcome);
+        Assert.Equal(2, small.Asks.Count);
+        Assert.Equal(2, Volatile.Read(ref changed));
+    }
+
+    [Fact]
     public async Task A_press_sent_again_after_the_app_took_it_is_the_same_press_not_a_new_one()
     {
         await ReportAsync(Reported);
