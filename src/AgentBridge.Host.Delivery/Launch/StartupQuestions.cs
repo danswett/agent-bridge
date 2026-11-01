@@ -6,7 +6,11 @@ namespace AgentBridge.Host.Delivery.Launch;
 // at the machine answers. This host never types into one: it reads the window, says so, and
 // turns other launches away (busy) while a trust question waits, as agent-ha-bridge does for
 // Claude's. Labels are matched as each agent draws them.
-public enum StartupQuestion { None, Trust, HooksReview }
+// BypassPermissions: Claude's one-time "Bypass Permissions mode" warning, which
+// --dangerously-skip-permissions (Allow all) raises. It is not a folder-trust question, and is
+// never shown or answered as one (#149): a person sent to the machine for a trust question found
+// this riskier one instead.
+public enum StartupQuestion { None, Trust, HooksReview, BypassPermissions }
 
 public static class StartupQuestions
 {
@@ -17,10 +21,11 @@ public static class StartupQuestions
         bool Has(string s) => screen.Contains(s, StringComparison.Ordinal);
         // Copilot CLI's folder trust dialog ("Confirm folder trust", 1.0.105).
         if (Has("Do you trust the files in this folder?") || Has("Confirm folder trust")) { return StartupQuestion.Trust; }
-        // Claude's folder trust question, and the Bypass Permissions warning that
-        // --dangerously-skip-permissions itself raises (agent-ha-bridge's
-        // $script:BridgeClaudeStartupPrompts).
-        if (Has("Yes, I trust this folder") || (Has("Yes, I accept") && Has("No, exit"))) { return StartupQuestion.Trust; }
+        // Claude's folder trust question.
+        if (Has("Yes, I trust this folder")) { return StartupQuestion.Trust; }
+        // The Bypass Permissions warning that --dangerously-skip-permissions itself raises
+        // ("WARNING: Claude Code running in Bypass Permissions mode", No, exit / Yes, I accept).
+        if (Has("Yes, I accept") && Has("No, exit")) { return StartupQuestion.BypassPermissions; }
         // Codex's folder trust question ("Folder access ... Trust this folder? ... 1. Trust and
         // continue / 2. Quit"), drawn before its session exists: seen live on a resume into a
         // folder Codex had not been trusted in, which went unrecognised and so was not busy.

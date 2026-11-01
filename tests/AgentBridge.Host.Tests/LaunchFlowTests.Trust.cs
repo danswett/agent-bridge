@@ -195,6 +195,32 @@ public sealed partial class LaunchFlowTests
     }
 
     [Fact]
+    public async Task Claudes_Bypass_Permissions_warning_is_said_for_what_it_is_and_is_never_offered_as_a_folder_trust_question()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        starter.Registers = false;
+        // As Claude draws it for Allow all (--dangerously-skip-permissions), #149.
+        screens.Rows = [" WARNING: Claude Code running in Bypass Permissions mode", "", " In Bypass Permissions mode, Claude Code will not ask for your approval before running potentially dangerous commands.",
+            "", " ❯ 1. No, exit", "   2. Yes, I accept"];
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var launched = await LaunchTrustAsync(ch, new { agent = "claude", workspace = "App", prompt = "go" });
+        Assert.Equal("unconfirmed", launched.GetProperty("outcome").GetString());
+        Assert.Equal("Claude started in App, and is asking you to confirm Bypass Permissions mode (Allow all). Only a person at the machine can answer that; the session appears here once they do",
+            launched.GetProperty("reason").GetString());
+        Assert.False(launched.TryGetProperty("trust", out _));
+
+        var options = await RequestAsync(ch, LaunchProtocol.Options, new { });
+        Assert.False(options.TryGetProperty("trust", out _));
+        Assert.Equal("Busy: Claude in App is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all), so nothing was launched. Try again in a couple of minutes.",
+            options.GetProperty("busy").GetString());
+        var busy = await LaunchTrustAsync(ch, new { workspace = "API" });
+        Assert.Equal("busy", busy.GetProperty("outcome").GetString());
+        Assert.False(busy.TryGetProperty("trust", out _));
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
     public async Task Quitting_from_a_phone_closes_the_agent_and_the_launch_reads_declined()
     {
         screens.Rows = CopilotAsks();

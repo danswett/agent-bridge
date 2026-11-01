@@ -133,12 +133,14 @@ machine, is `{ from, session, bytes }` with `resume` its new id here. A client t
 `unconfirmed`: something may have started.
 
 **Trust is a person's to answer.** An agent may ask, before its session registers, whether to
-trust the folder (Copilot's "Confirm folder trust", Claude's "Do you trust this folder?" and
-its Bypass Permissions warning, Codex's "Trust this folder?"). A host reads the agent's window
-to see it, says so in `unconfirmed` with the [question](#folder-trust), and never answers it on
-its own. For the next two minutes, while the question shows, other launches on that machine are
-`busy`, so no later press is ever taken as its answer and nothing new starts over it, as
-agent-ha-bridge does. A person answers it at the machine or, where the machine allows it, from
+trust the folder (Copilot's "Confirm folder trust", Claude's "Do you trust this folder?",
+Codex's "Trust this folder?"). A host reads the agent's window to see it, says so in
+`unconfirmed` with the [question](#folder-trust), and never answers it on its own. For the next
+two minutes, while the question shows, other launches on that machine are `busy`, so no later
+press is ever taken as its answer and nothing new starts over it, as agent-ha-bridge does.
+Claude's Bypass Permissions warning (Allow all, "No, exit / Yes, I accept") makes launches
+`busy` in the same way, but is not a folder-trust question: the outcome and the busy reason name
+it, it carries no `trust` question, and only a person at the machine answers it. A person answers it at the machine or, where the machine allows it, from
 their phone, browser or Windows app ([Folder trust](#folder-trust)); the session then registers
 and appears like any other.
 

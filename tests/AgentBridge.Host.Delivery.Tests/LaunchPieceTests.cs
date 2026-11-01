@@ -493,7 +493,7 @@ public sealed class LaunchPieceTests : IDisposable
     {
         Assert.Equal(StartupQuestion.Trust, StartupQuestions.Read(["╭ Confirm folder trust ─╮", "│ C:\\repos\\app │", "Do you trust the files in this folder?", "❯ 1. Yes"]));
         Assert.Equal(StartupQuestion.Trust, StartupQuestions.Read([" Do you trust the files in this folder?", " ❯ 1. Yes, I trust this folder", "   2. No, exit"]));
-        Assert.Equal(StartupQuestion.Trust, StartupQuestions.Read(["Bypass Permissions mode", "❯ 1. No, exit", "  2. Yes, I accept"]));
+        Assert.Equal(StartupQuestion.BypassPermissions, StartupQuestions.Read(["Bypass Permissions mode", "❯ 1. No, exit", "  2. Yes, I accept"]));
         Assert.Equal(StartupQuestion.Trust, StartupQuestions.Read(CodexTrust));
         Assert.Equal(StartupQuestion.HooksReview, StartupQuestions.Read(["Hooks need review"]));
         // Codex's hook review offers "Trust all and continue", which is not its folder question.

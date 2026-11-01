@@ -912,6 +912,16 @@ public sealed partial class LaunchService : ISessionLauncher
                                 : $"{label} started, and is asking whether to trust {p.Where}. Only a person at the machine can answer that; the session appears here once they do")
                             { Session = p.SessionId.Length > 0 ? p.SessionId : null, Launched = p.Launched, Trust = Question(p) });
                         }
+                        else if (question == StartupQuestion.BypassPermissions)
+                        {
+                            // Turns other launches away as a trust question does, but is never one:
+                            // not listed, not answerable, and said for what it is (#149).
+                            p.TrustAt ??= now;
+                            log($"launch {Short(p.Key)}: {label} in {p.Where} is asking to confirm Bypass Permissions mode (Allow all); left for a person at the machine");
+                            p.Decided.TrySetResult(new LaunchResult(LaunchOutcome.Unconfirmed,
+                                $"{label} started in {p.Where}, and is asking you to confirm Bypass Permissions mode (Allow all). Only a person at the machine can answer that; the session appears here once they do")
+                            { Session = p.SessionId.Length > 0 ? p.SessionId : null, Launched = p.Launched });
+                        }
                         else if (question == StartupQuestion.HooksReview)
                         {
                             log($"launch {Short(p.Key)}: {label} in {p.Where} is waiting on a question in its window (hooks need review)");
@@ -1022,8 +1032,12 @@ public sealed partial class LaunchService : ISessionLauncher
         var now = options.Time.GetUtcNow();
         lock (pendingGate)
         {
-            var p = pending.FirstOrDefault(x => x.Question == StartupQuestion.Trust && x.TrustAt is { } at && now - at <= options.TrustBusyFor);
+            // A trust question first: it is the one shown beside the busy (BusyQuestion).
+            bool Asking(Pending x, StartupQuestion q) => x.Question == q && x.TrustAt is { } at && now - at <= options.TrustBusyFor;
+            var p = pending.FirstOrDefault(x => Asking(x, StartupQuestion.Trust)) ?? pending.FirstOrDefault(x => Asking(x, StartupQuestion.BypassPermissions));
             return p is null ? null
+                : p.Question == StartupQuestion.BypassPermissions
+                ? $"Busy: {p.Launcher.Label} in {p.Where} is waiting for a person at the machine to confirm Bypass Permissions mode (Allow all), so nothing was launched. Try again in a couple of minutes."
                 : $"Busy: {p.Launcher.Label} in {p.Where} is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes.";
         }
     }
