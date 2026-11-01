@@ -45,16 +45,17 @@ public sealed class UsageCache
     // that is not known yet (what is kept is shown, and nothing is written). Returns the merge.
     public UsageReport Merge(UsageReport live, string? account)
     {
+        var oldest = time.GetUtcNow() - Kept;
         // Whatever passes on a forgotten machine's readings (another host that has not heard yet)
-        // brings none of them back.
-        if (forgotten.Count > 0) { live = new UsageReport([.. live.Agents.Where(a => a.ReadBy is not { } by || !forgotten.Contains(by.Id))]); }
+        // brings none of them back; and none past their 14 days takes part. Both are left out before
+        // anything is merged: chosen first and dropped after, either would hide one that stands.
+        live = new UsageReport([.. live.Agents.Where(a => a.MeasuredAt >= oldest && (a.ReadBy is not { } by || !forgotten.Contains(by.Id)))]);
         // Signed out: what was kept is the account's, and goes, file and all.
         if (account is "")
         {
             if (this.account is not null || entries.Count > 0) { Clear(); }
             return live;
         }
-        var oldest = time.GetUtcNow() - Kept;
         if (account is not null && account != this.account)
         {
             this.account = account;
@@ -63,11 +64,7 @@ public sealed class UsageCache
         }
         else if (account is null && this.account is null) { return live; }
         // Live first: of two readings taken at the same moment, the one a machine is offering now.
-        // None past their 14 days goes in: chosen first and dropped after, an expired reading would
-        // take a current failure of the same allowance with it.
-        var merged = UsageMerge.Combine([
-                new UsageReport([.. live.Agents.Where(e => e.MeasuredAt >= oldest)]),
-                new UsageReport([.. entries.Where(e => e.MeasuredAt >= oldest)])])
+        var merged = UsageMerge.Combine([live, new UsageReport([.. entries.Where(e => e.MeasuredAt >= oldest)])])
             .OrderByDescending(e => e.MeasuredAt).Take(MaxAllowances).ToList();
         if (account is null) { return new UsageReport(merged); }
         entries = merged;

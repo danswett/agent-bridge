@@ -358,17 +358,35 @@ public sealed partial class MainViewModel : Observable
     // for the account this machine's host is signed in to (#172). Another machine's only while it
     // was listed for that account: this machine's host can say it is signed in to another before
     // the fleet has followed it, and the first account's readings would be kept as the next's.
+    // Every machine's entries go to the cache as they are, not combined here: it leaves out readings
+    // past their 14 days and forgotten machines' first, so neither can win over one that stands.
     void UpdateUsage()
     {
         var account = host.Status is { } status ? status.Account?.AccountId ?? "" : null;
+        // This machine's host passes on other machines' readings for its account; when it names
+        // another, the report it sent before still holds the last account's until it sends the next
+        // (paced, so up to 15 s later). Its own readings stand meanwhile; those it passed on wait.
+        if (account is { Length: > 0 })
+        {
+            if (usageAccount is not null && usageAccount != account) { heldOver = host.Usage; }
+            usageAccount = account;
+        }
+        if (heldOver is not null && !ReferenceEquals(heldOver, host.Usage)) { heldOver = null; }
         Usage.Present(machines.Select(m => m.Host.Hello?.Machine.Id).OfType<string>());
         Usage.Update(
-            new UsageReport(UsageMerge.Combine(machines
+            new UsageReport([.. machines
                 .Where(m => m.IsLocal || account is not { Length: > 0 } || m.ListedFor is null || m.ListedFor == account)
-                .Select(m => UsageMerge.ReadOn(m.Host.Usage, m.Host.Hello?.Machine)))),
+                .SelectMany(m => UsageMerge.ReadOn(
+                    m.IsLocal && heldOver is not null ? new UsageReport([.. m.Host.Usage.Agents.Where(a => a.ReadBy is null)]) : m.Host.Usage,
+                    m.Host.Hello?.Machine).Agents)]),
             LocalMachineId,
             account);
     }
+
+    // The account usage was last kept for, and this machine's host's report from before it named
+    // the one it is on now (UpdateUsage).
+    string? usageAccount;
+    UsageReport? heldOver;
 
     // On the UI thread, from the fleet: a machine forgotten from the account's roster, from this
     // device or another, takes its usage readings with it (#50, #172).

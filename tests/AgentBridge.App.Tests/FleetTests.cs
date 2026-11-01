@@ -464,6 +464,51 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task What_this_machines_host_passed_on_for_the_last_account_is_not_kept_for_the_next_before_it_reports_again()
+    {
+        static AgentUsage Copilot(DateTimeOffset at) => new() { Agent = AgentKind.Copilot, Label = "Copilot", Account = "octo", Source = UsageSource.Api, MeasuredAt = at, Windows = [new UsageWindow { Key = "plan", Label = "Plan", Percent = 10 }] };
+        // This machine's host reads its own Copilot, and passes on a Claude reading taken on account 1's VM.
+        var passedOn = new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = "c1a0de000000", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }], ReadBy = new UsageReader(new string('a', 32), "VM") };
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        localHost.On(UsageProtocol.Subscribe, _ => new UsageReport([Copilot(Make.T0), passedOn]));
+        await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await localHost.SendAsync(UsageProtocol.Update, new UsageReport([Copilot(Make.T0), passedOn]));
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 2 && local.Status?.Account?.AccountId == "1", "both readings, for account 1");
+
+        // Signed in to account 2; the host's next report, without the VM's reading, has not come yet.
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("other", "2") };
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Select(r => r.Agent).ToList()) is [AgentKind.Copilot], "only this machine's own reading");
+        // Then it comes, and what it passes on now is account 2's.
+        var laptop = passedOn with { AccountKey = "c1a0de000002", ReadBy = new UsageReader(new string('b', 32), "Laptop") };
+        await localHost.SendAsync(UsageProtocol.Update, new UsageReport([Copilot(Make.T0.AddMinutes(1)), laptop]));
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 2, "the laptop's reading, passed on for account 2");
+
+        var restarted = new UsageViewModel(clock, new UsageCache(cacheFile, clock));
+        restarted.Update(UsageReport.Empty, "host-id", account: "2");
+        Assert.Equal([null, "read on Laptop"], restarted.Rows.Select(r => r.ReadOn).Order());
+    }
+
+    [Fact]
+    public async Task A_reading_past_two_weeks_on_one_machine_does_not_hide_a_current_failure_on_another()
+    {
+        var key = "c1a0de000000";
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        var expired = new UsageReport([new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = key, Source = UsageSource.Api, MeasuredAt = Make.T0.AddDays(-15), Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }] }]);
+        var failed = new UsageReport([new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = key, Source = UsageSource.None, MeasuredAt = Make.T0, Error = "rate limited" }]);
+        localHost.On(UsageProtocol.Subscribe, _ => expired);
+        remoteHost.On(UsageProtocol.Subscribe, _ => failed);
+        await BothMachinesAsync();
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await localHost.SendAsync(UsageProtocol.Update, expired);
+        await remoteHost.SendAsync(UsageProtocol.Update, failed);
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.SingleOrDefault()?.Error) == "rate limited", "the build server's failure");
+    }
+
+    [Fact]
     public async Task Other_machines_readings_are_not_kept_for_the_account_this_machine_switched_to_while_the_fleet_follows()
     {
         // Two other machines on account 1, each reading its own Claude account.
