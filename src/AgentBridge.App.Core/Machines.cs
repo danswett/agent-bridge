@@ -27,6 +27,9 @@ public sealed class Machine : IAsyncDisposable
     public ToastPlanner? Toasts { get; }
     // What the relay's presence calls it, until its host says hello.
     public string? PresenceName { get; set; }
+    // The account (its id) the fleet listed it for, when known: its usage is that account's only
+    // (#172). Null for this machine, and for a machine from a link that does not say.
+    public string? ListedFor { get; set; }
 
     public string Name => Host.Hello?.Machine.Name ?? PresenceName ?? (IsLocal ? Environment.MachineName : "Another machine");
 
@@ -122,9 +125,6 @@ public sealed class Fleet : IAsyncDisposable
     // learnt from the last one's machines (sessions to bring over) is not this one's.
     public event Action? AccountChanged;
     public int Account => account;
-    // The account the machines listed now are the account's of (IFleetLink.AccountId): kept while
-    // the relay connection is down for now, as they are. Null when not known.
-    public string? MachinesAccount { get; private set; }
 
     // Every host the relay last said is online, this machine's own among them, as one value that
     // changes when they do: the hosts session transfer asks (TransferSourcesAsync).
@@ -211,9 +211,6 @@ public sealed class Fleet : IAsyncDisposable
         var from = link.AccountId;
         var hosts = present.Where(h => h.Id != me).ToDictionary(h => h.Id, StringComparer.Ordinal);
         if (link.Account != now || link.State != state) { return; }
-        // Before any machine is added, so the usage it reports is taken as this account's.
-        if (state == FleetState.Connected) { MachinesAccount = from; }
-        else if (now != account) { MachinesAccount = null; }
         var presence = string.Join(',', present.Select(h => h.Id).Order(StringComparer.Ordinal));
         if (presence != Presence) { Presence = presence; PresenceChanged?.Invoke(); }
         foreach (var (id, h) in hosts)
@@ -221,6 +218,9 @@ public sealed class Fleet : IAsyncDisposable
             if (machines.TryGetValue(id, out var known)) { known.PresenceName = h.Name; continue; }
             var m = create(h);
             m.PresenceName = h.Name;
+            // Each machine, not the fleet, carries its account: the last account's machines are
+            // still listed while the next one's are added, and leave one at a time.
+            m.ListedFor = from;
             machines[id] = m;
             main.Add(m);
             m.Host.Start();
