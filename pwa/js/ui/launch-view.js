@@ -593,10 +593,15 @@ export class LaunchPanel {
     this.#drawTrust();
     if (answer.state !== 'done') { return; }
     if (answer.result.outcome === 'started') {
-      // The launch from here that met this question has now started: its first message has gone,
-      // as a launch that starts at once clears it, and must not go again with the next launch.
+      // The launch from here that started the agent asking this question has now started: its
+      // first message went with it, as with a launch that starts at once, and must not go again
+      // with the next launch. Only that launch (unconfirmed: a busy one named another's question
+      // and sent nothing), and only its message unchanged: what is written since stays.
       const launched = this.service.get(hostId);
-      if (launched?.state === 'done' && launched.detail?.trust?.id === id) { this.els.prompt.value = ''; this.#drawCount(); }
+      if (launched?.state === 'done' && launched.outcome === 'unconfirmed' && launched.detail?.trust?.id === id && this.els.prompt.value === (launched.answer?.prompt ?? '')) {
+        this.els.prompt.value = '';
+        this.#drawCount();
+      }
       if (answer.result.session) { this.#jumpTo(answer.result.session, hostId); }
     }
     // The machine's list, and whether it is still busy, have changed.

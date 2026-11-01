@@ -270,6 +270,30 @@ test.describe('a folder-trust question', () => {
     expect(body).toMatchObject({ v: 1, action: 'launch.trust:trust', principal: { kind: 'user' }, target: { session: QUESTION.id } });
   });
 
+  test('a busy launch that names a question, trusted, leaves its first message, as does one changed after an unconfirmed launch', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.launchOptions = { ...h.launchOptions, trust: [] }; });
+    // Busy: the agent asking was launched earlier; this launch sent nothing.
+    await script(page, { outcome: 'busy', reason: 'a session this machine launched is waiting at its folder trust prompt', trust: QUESTION });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
+    await expect(field(page, 'prompt')).toHaveValue('Add pagination.');
+
+    // Unconfirmed, and the message changed since: the change stays.
+    const next = { ...QUESTION, id: '7f2e1b5a-4d3c-4e0f-9a8b-6c5d4e3f2a1b' };
+    await script(page, { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: next });
+    await launchButton(page).tap();
+    await expect(panel(page).locator(`.trust-question[data-question="${next.id}"]`).getByRole('button', { name: 'Trust' })).toBeVisible();
+    await field(page, 'prompt').fill('Add pagination, then tests.');
+    await panel(page).locator(`.trust-question[data-question="${next.id}"]`).getByRole('button', { name: 'Trust' }).tap();
+    await expect(panel(page).locator(`.trust-question[data-question="${next.id}"] .trust-status`)).toHaveText('Trusted. Codex started.');
+    await expect(field(page, 'prompt')).toHaveValue('Add pagination, then tests.');
+  });
+
   test('a question this panel\'s launch did not meet, trusted, leaves the first message being written', async ({ page }) => {
     await openDemo(page);
     await ask(page, QUESTION);
