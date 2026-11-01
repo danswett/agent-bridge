@@ -144,10 +144,11 @@ public sealed class SystemProcessInspector : IProcessInspector
             }
             if (candidate is "node" or "bun" && !IsAgentScript(agent, name, commandLine)) { continue; }
             // A loader whose own agent executable is listed: that executable stands for it. Both
-            // start times must be known, and the loader's no later than its child's, so a pid
-            // the loader left behind and another runtime took is never mistaken for one.
+            // start times must be known, and the loader's no later than its child's, with no
+            // slack: a pid the loader left behind and another agent's runtime took even a moment
+            // after the child started is that agent's session, and must stay counted.
             if (candidate is "node" or "bun" && started is { } loaderStarted
-                && loaders.Any(l => l.Id == id && l.Child is { } child && loaderStarted <= child + TimeSpan.FromSeconds(1)))
+                && loaders.Any(l => l.Id == id && l.Child is { } child && loaderStarted <= child))
             {
                 continue;
             }

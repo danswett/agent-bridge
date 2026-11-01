@@ -662,11 +662,13 @@ public class DiscoveryTests
             new("node", 4000, t.AddMinutes(30), Loader), // a loader with no executable: Copilot run in node itself
             new("copilot", 5100, t.AddMinutes(40), Native, Parent: 5000),
             new("node", 5000, t.AddMinutes(41), Loader), // took the id of 5100's loader, which has gone
+            new("copilot", 6100, t.AddMinutes(50), Native, Parent: 6000),
+            new("node", 6000, t.AddMinutes(50).AddMilliseconds(500), Loader), // the same, half a second later
         };
 
         var (observation, _) = SystemProcessInspector.Classify(AgentKind.Copilot, "copilot", listing, listed: true, windows: true, _ => false);
 
-        Assert.Equal([9456, 3796, 4000, 5100, 5000], observation.Processes.Select(p => p.Id));
+        Assert.Equal([9456, 3796, 4000, 5100, 5000, 6100, 6000], observation.Processes.Select(p => p.Id));
         Assert.True(observation.Known);
     }
 
