@@ -318,7 +318,7 @@ public class SubagentTests
     };
 
     [Fact]
-    public async Task A_sub_agents_ask_user_makes_the_session_wait_on_it_and_goes_to_the_machine_while_another_prompt_is_pending()
+    public async Task A_sub_agents_ask_user_makes_the_session_wait_on_it_and_is_answered_at_the_machine()
     {
         await using var s = new Live();
         await s.After(Delegate("t1", "a1", 1));
@@ -326,7 +326,9 @@ public class SubagentTests
         var alone = await s.After(Copilot.ToolStart("q1", "ask_user", Ask, 10, "a1"));
         Assert.Equal(SessionStatus.Waiting, alone.Status);
         Assert.Equal(("a1", "a1"), (alone.Question!.Agent, alone.WaitingOn));
-        Assert.Null(alone.Question.AnswerAtMachine);
+        // Delivery types only into the main agent's ask_user, so nothing proves where keys
+        // for a sub-agent's would land, even with no other prompt pending.
+        Assert.True(alone.Question.AnswerAtMachine);
 
         var two = await s.After(Copilot.ToolStart("q2", "ask_user", Ask, 11, "a2"));
         Assert.Equal("q2", two.Question!.Id);

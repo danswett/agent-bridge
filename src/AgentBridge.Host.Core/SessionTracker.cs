@@ -100,9 +100,10 @@ internal sealed class SessionTracker
         // Status precedence (docs/design/subagents.md §4): the session's own question wins over
         // a sub-agent's (rule 1, "question wins"), and a sub-agent's makes it waiting too (rule 2).
         var question = _state.Pending.LastOrDefault(q => q.Agent is null) ?? (_state.Pending.Count > 0 ? _state.Pending[^1] : null);
-        // Keys typed for a sub-agent's question land on it only when it is the one prompt the
-        // CLI shows. A permission prompt carries its own proof (CopilotPermission).
-        if (question is { Agent: not null, Kind: QuestionKind.Form } && _state.Pending.Count > 1) { question = question with { AnswerAtMachine = true }; }
+        // Delivery types only into the main agent's ask_user (AnswerService refuses a stamped
+        // call), so nothing proves where keys for a sub-agent's would land: it is answered at
+        // the machine. A permission prompt carries its own proof (CopilotPermission).
+        if (question is { Agent: not null, Kind: QuestionKind.Form }) { question = question with { AnswerAtMachine = true }; }
         DateTimeOffset? hintAt = null;
 
         if (d.Agent == AgentKind.Claude && reg?.HookStatusAt is { } hookAt && (_state.LastActivityAt is not { } last || hookAt > last))

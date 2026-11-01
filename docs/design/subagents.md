@@ -123,9 +123,11 @@ Rules 3–6 are exactly today's behaviour. Rule 2 is new and needs `Session.wait
   The latest line arrives with the next change, or on `session.get`.
 - **Questions from sub-agents:** a Question gains an optional `agent` field. The host sets
   `answerAtMachine` unless it can prove where the keys land. For a Copilot `ask_user` that
-  means the pending call is stamped with that `agentId` and no other prompt is pending. A
-  Copilot permission prompt is the CLI's one dialog whoever asked, and keeps the proof it
-  already has (`CopilotPermission`), so it is answered as the main agent's is.
+  would need the pending call stamped with that `agentId`, no other prompt pending, and a
+  delivery path that types into a sub-agent's call; the host's refuses stamped calls today,
+  so S1 marks every sub-agent `ask_user` `answerAtMachine` (and Copilot gives sub-agents
+  none, §3). A Copilot permission prompt is the CLI's one dialog whoever asked, and keeps
+  the proof it already has (`CopilotPermission`), so it is answered as the main agent's is.
 
 **The review points recorded on #173, as settled in S1:**
 1. *Terminal outcome:* `outcome` (`done` or `failed`) on `idle` and `ended` entries.

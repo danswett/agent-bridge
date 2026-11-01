@@ -818,7 +818,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `askedAt` | time | |
 | `truncated` | bool? | The host had to cut `message` or drop `fields` to fit the budget. A client shows what it has and says to answer at the machine |
 | `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request of a kind no host drives (or any, on a host without `sessions.approve`), a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once. It still has its fields, so a client can say what it asks, but a client shows no controls for it, gives the session's status as "Waiting at the machine", and a `session.answer` for it is `refused` |
-| `agent` | string? | The sub-agent that asked, by its `subagents` id, when it is not the session's own question (`waitingOn` names it too). A Copilot permission prompt is the CLI's one dialog whoever asked, and is answered the same way. A sub-agent's `ask_user` is `answerAtMachine` unless it is the only prompt pending |
+| `agent` | string? | The sub-agent that asked, by its `subagents` id, when it is not the session's own question (`waitingOn` names it too). A Copilot permission prompt is the CLI's one dialog whoever asked, and is answered the same way. A sub-agent's `ask_user` is always `answerAtMachine`: delivery types only into the main agent's, so nothing proves where the keys would land |
 
 ### Field
 
