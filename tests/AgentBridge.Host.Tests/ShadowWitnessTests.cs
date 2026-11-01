@@ -135,6 +135,19 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Null(Known(Daemon(fresh), Host(shells: 1), ShadowKinds.BackgroundShells));
     }
 
+    // Found in review (#162): the same id started again after a shutdown is a run of its own, not
+    // the end of the one before it.
+    [Fact]
+    public void A_restart_under_the_same_id_after_a_shutdown_and_resume_is_put_down_to_the_daemon()
+    {
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Result("<shellId: watch completed with exit code 0>"));
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Event("session.shutdown", new { }), Event("session.resume", new { }));
+        var again = Write(Result("<command started in background with shellId: watch>"));
+        Assert.Equal("agent-ha-bridge#276", Known(Daemon(again), Host(shells: 1), ShadowKinds.BackgroundShells));
+    }
+
     [Fact]
     public void Missing_agents_are_put_down_to_the_daemon_only_when_they_are_exactly_those_woken_again_after_completing()
     {

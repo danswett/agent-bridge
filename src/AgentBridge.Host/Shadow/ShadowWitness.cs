@@ -106,9 +106,11 @@ public sealed partial class TranscriptEvidence(string path)
         public long DroppedThrough = -1;
         public long Last;
 
-        public void Started(long at, bool subagent, StartKind kind)
+        // since: where the session last shut down; a start after it begins a run of its own, as the
+        // host ends every shell there (found in review, #162).
+        public void Started(long at, bool subagent, StartKind kind, long since)
         {
-            if (Runs.Count > 0 && Runs[^1] is { } run && run.Subagent == subagent && run.Kind == kind && (Ends.Count == 0 || Ends[^1] < run.Last))
+            if (Runs.Count > 0 && Runs[^1] is { } run && run.Subagent == subagent && run.Kind == kind && (Ends.Count == 0 || Ends[^1] < run.Last) && since < run.Last)
             {
                 run.Last = at;
                 return;
@@ -224,6 +226,7 @@ public sealed partial class TranscriptEvidence(string path)
         asks.Clear();
         waiting = 0;
         offset = 0;
+        shutdownAt = -1;
     }
 
     static readonly byte[][] Wanted =
@@ -367,17 +370,17 @@ public sealed partial class TranscriptEvidence(string path)
         {
             var id = started.Groups[1].Value.Trim();
             var proper = StartedWhole().IsMatch(whole);
-            ShellFor(id, at).Started(at, subagent, proper ? StartKind.Proper : StartKind.QuotedOther);
+            ShellFor(id, at).Started(at, subagent, proper ? StartKind.Proper : StartKind.QuotedOther, shutdownAt);
             return;
         }
         if (StillRunning().Match(content) is { Success: true } running)
         {
             var id = running.Groups[1].Value;
             var proper = StillRunningLast().Match(last) is { Success: true } l && l.Groups[1].Value == id;
-            ShellFor(id, at).Started(at, subagent, proper ? StartKind.Proper : StartKind.QuotedStillRunning);
+            ShellFor(id, at).Started(at, subagent, proper ? StartKind.Proper : StartKind.QuotedStillRunning, shutdownAt);
             return;
         }
-        if (Moved().Match(whole) is { Success: true } moved) { ShellFor(moved.Groups[1].Value, at).Started(at, subagent, StartKind.Proper); }
+        if (Moved().Match(whole) is { Success: true } moved) { ShellFor(moved.Groups[1].Value, at).Started(at, subagent, StartKind.Proper, shutdownAt); }
     }
 
     // The daemon lists more (or fewer) background shells than the host. Known when every listed
