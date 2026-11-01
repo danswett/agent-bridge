@@ -107,11 +107,6 @@ public sealed partial class AgentWorktreeUsage : IWorktreeUsage
             var byPid = new Dictionary<int, AgentProcess>();
             foreach (var p in observed.Processes)
             {
-                // Codex's app-server daemon is no session and works in no folder, and it outlives
-                // the session that started it: counted here, every finished worktree was kept for
-                // as long as it ran, which is from a machine's first Codex session on (#154).
-                // Discovery leaves it out the same way.
-                if (kind == AgentKind.Codex && CommandLine.IsCodexAppServer(p.CommandLine)) { continue; }
                 if (p.StartedAt is null) { throw new UsageUnknown($"a live {Name(kind)} process has no readable start time"); }
                 byPid[p.Id] = p;
             }
@@ -226,7 +221,11 @@ public sealed partial class AgentWorktreeUsage : IWorktreeUsage
                 accounted.Add(pid);
             }
         }
-        if (live.Keys.Any(pid => !accounted.Contains(pid)))
+        // Codex's app-server daemon is no session and works in no folder, and it outlives the
+        // session that started it: required to have a registration, it kept every finished worktree
+        // from a machine's first Codex session on (#154). Discovery accounts it the same way. A
+        // registration that does name one still counts its folder above.
+        if (live.Any(p => !accounted.Contains(p.Key) && !(kind == AgentKind.Codex && CommandLine.IsCodexAppServer(p.Value.CommandLine))))
         {
             throw new UsageUnknown($"a live {name} process has no registration");
         }

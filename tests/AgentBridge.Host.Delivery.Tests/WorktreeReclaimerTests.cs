@@ -493,6 +493,13 @@ public sealed class WorktreeReclaimerTests : IDisposable
 
         Assert.True(usage.Known, usage.Detail);
         Assert.Empty(usage.Directories);
+
+        // A registration that names the app-server still counts its folder, as before.
+        var cwd = Directory.CreateDirectory(Path.Combine(root, "app-server-cwd")).FullName;
+        Registration(f.CodexRegistrations, "x1", 7728, cwd);
+        usage = Reader(f).Read();
+        Assert.True(usage.Known, usage.Detail);
+        Assert.True(usage.InUse(cwd));
     }
 
     [Fact]
