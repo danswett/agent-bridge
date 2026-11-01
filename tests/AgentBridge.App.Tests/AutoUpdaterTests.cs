@@ -885,6 +885,38 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_install_asked_for_is_not_carried_out_once_the_machine_has_become_read_only()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await AskedAsync(UpdateAskKind.Install);
+        Assert.Equal(UpdatePhase.Waiting, auto.State.Phase);
+
+        // agent-ha-bridge started there while the install waited for the session.
+        host.Status = host.Status with { ReadOnly = "agent-ha-bridge is running for this user" };
+        await GoIdleAsync("s1");
+        await TwoIdleTicksAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, Press), (last.Outcome, last.Request));
+        Assert.Contains("read-only for other devices now: agent-ha-bridge is running", last.Reason);
+    }
+
+    [Fact]
+    public async Task An_install_asked_for_on_a_read_only_machine_is_refused_before_anything_downloads()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync(FakeHost.StatusOf() with { ReadOnly = "delivery.readOnly is set in config.json" });
+
+        await AskedAsync(UpdateAskKind.Install);
+
+        Assert.Equal((0, 0), (updater.Checks, updater.Downloads));
+        Assert.Equal(UpdateOutcome.Refused, auto.State.Last!.Outcome);
+    }
+
+    [Fact]
     public async Task A_development_copy_refuses_what_it_is_asked()
     {
         updater.InstalledVersion = null;

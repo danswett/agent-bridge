@@ -172,6 +172,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `settings` | `{ remoteApproval, name?, remoteFolderTrust, remoteFolderTrustDevices? }` as `config.json` says now (`launch.remoteFolderTrust`, and the approved device ids, absent when none) |
 | `restartRequired` | `config.json` differs from what the running host read |
 | `log` | Path of the host's log file |
+| `readOnly` | Why the host acts on nothing from other devices now (`delivery.readOnly`, or agent-ha-bridge running, G5); absent when it does. The app carries out no install a device asked for while it is set, and checks it again just before stopping the host |
 | `updateAsks` | Presses of Check and Install from the account's other devices waiting for the app (#51): `[{ request, kind: check \| install, by, at }]`, `by` naming the device (`"pwa 1a2b3c4d"`). Absent when none. At most 8, each dropped once the app reports it taken or after ten minutes. The pipe itself asks for no update: `update.*` is refused here, for the app included, which updates its own machine from Settings |
 
 Unknown fields are ignored, and unknown enum values read as the first value listed, as in

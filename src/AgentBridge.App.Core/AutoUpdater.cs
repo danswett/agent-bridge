@@ -404,6 +404,9 @@ public sealed class AutoUpdater
         {
             return $"the host's status could not be read: {e.Message}";
         }
+        // A press from another device is not carried out on a machine that has become read-only
+        // for other devices since (an automatic update still is: the rule guards other devices).
+        if (asked && fresh.ReadOnly is { } readOnly) { return $"this machine is read-only for other devices now: {readOnly}"; }
         if (await Task.Run(() => othersInPackage(fresh.ProcessId)) is { } others) { return others; }
         return null;
     }

@@ -97,6 +97,9 @@ public sealed record HostStatus
     public string? Log { get; init; }
     // Presses of Check and Install from the account's other devices, for the app to act on.
     public IReadOnlyList<UpdateAsk>? UpdateAsks { get; init; }
+    // Why the host acts on nothing from other devices now (delivery.readOnly, or agent-ha-bridge
+    // running), absent when it does: an install a device asked for before is not carried out.
+    public string? ReadOnly { get; init; }
 }
 
 // host.signIn: start GitHub's device flow through this relay (or the one the profile used).

@@ -76,9 +76,20 @@ public sealed class UpdateService
     // hello's update: through the relay, on a machine that is not read-only.
     public bool Offered(IProtocolChannel channel) => channel is SecureChannel && ReadOnly() is null;
 
+    // The presses waiting for the app. None on a machine that has become read-only since they
+    // were taken: they are let go, not handed to the app.
     public IReadOnlyList<UpdateAsk> Asks
     {
-        get { lock (gate) { Prune(); return [.. asks]; } }
+        get
+        {
+            var readOnly = ReadOnly() is not null;
+            lock (gate)
+            {
+                Prune();
+                if (readOnly) { asks.Clear(); }
+                return [.. asks];
+            }
+        }
     }
 
     public UpdateState State()

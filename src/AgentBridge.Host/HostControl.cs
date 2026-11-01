@@ -39,6 +39,8 @@ public sealed class HostControlOptions
     // Other devices' presses of Check and Install, carried to the app in the status, and the
     // app's reports of its updater (host.update.report); null where there is nothing to carry.
     public UpdateService? Updates { get; init; }
+    // Why the host acts on nothing from other devices now, or null (HostStatus.ReadOnly).
+    public Func<string?> ReadOnly { get; init; } = () => null;
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -117,6 +119,7 @@ public sealed class HostControl
             RestartRequired = now != running,
             Log = options.Log,
             UpdateAsks = options.Updates?.Asks is { Count: > 0 } asks ? asks : null,
+            ReadOnly = options.ReadOnly(),
         };
     }
 

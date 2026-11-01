@@ -406,6 +406,8 @@ async Task<int> ServeAsync()
     void PublishCredential() => Volatile.Write(ref credential,
         identity.Account is { } a && ServeRelay() is { } r ? new RelayAccount(r.ToString(), a.Token, a.AccountId, a.Login) : null);
     PublishCredential();
+    // agent-ha-bridge's state for the app's status, looked for at most every few seconds.
+    var agentHaCached = haProbe is null ? () => null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64);
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -427,7 +429,8 @@ async Task<int> ServeAsync()
         Account = () => identity.Account is { } a ? new HostAccount(a.Login, a.AccountId) : null,
         Credential = () => Volatile.Read(ref credential),
         Relay = ServeRelay,
-        AgentHaBridge = haProbe is null ? () => null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64),
+        AgentHaBridge = agentHaCached,
+        ReadOnly = () => ReadOnlyReason() ?? agentHaCached(),
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();

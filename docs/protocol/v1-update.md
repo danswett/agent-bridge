@@ -18,7 +18,7 @@ reports to the devices, and their presses to its app. It decides who may press.
 |---|---|
 | Through the relay only (a Noise channel); never on the machine's own pipe | The pipe is where agents, the MCP server and the Home Assistant connector are. The app beside the host updates its machine from Settings |
 | Only a device the relay lists as `pwa` or `app` (a person's phone, browser or Windows app) | Another machine's host is where agents act. As for folder-trust answers, the kind is what a device says it is: something holding the account's token could claim `pwa`, and all it could then do is what the app does unasked by default, install the machine's own release once no session is busy |
-| Nothing on a read-only machine (`delivery.readOnly`, or agent-ha-bridge running for this user, G5) | hello offers no `update`, and every `update.*` is refused, reads included, as #112 withdrew Home Assistant's Install there |
+| Nothing on a read-only machine (`delivery.readOnly`, or agent-ha-bridge running for this user, G5) | hello offers no `update`, and every `update.*` is refused, reads included, as #112 withdrew Home Assistant's Install there. A machine that becomes read-only after a press was accepted lets go of presses still waiting, and its app, which reads the host's `readOnly` again just before stopping it, refuses an install it took before |
 | Not while another profile's app or host runs from the same installation | Velopack stops every process in the package, busy or not, and restarts only the profile that installed. The app refuses at once, before anything is downloaded, and again just before it stops the host |
 | Not when the app is not running, or cannot update (a build folder rather than an installed copy) | Nothing would carry it out |
 

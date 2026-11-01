@@ -62,6 +62,7 @@ public sealed class UpdateFlowTests : IAsyncLifetime
             Stop = () => { },
             Restart = () => { },
             Updates = updates,
+            ReadOnly = () => readOnly,
         });
         var service = new SessionService(source, machine) { ReadOnly = () => readOnly, Updates = updates };
 
@@ -252,6 +253,25 @@ public sealed class UpdateFlowTests : IAsyncLifetime
         Assert.Equal(UpdateAck.Accepted, second.Outcome);
         Assert.Equal(2, small.Asks.Count);
         Assert.Equal(2, Volatile.Read(ref changed));
+    }
+
+    [Fact]
+    public async Task Presses_waiting_when_the_machine_becomes_read_only_are_let_go_and_the_app_is_told_it_is()
+    {
+        await ReportAsync(Reported);
+        var ch = await OpenAsync();
+        await AskAsync(ch, UpdateProtocol.Install);
+        Assert.Single(control.Status().UpdateAsks!);
+        Assert.Null(control.Status().ReadOnly);
+
+        readOnly = "agent-ha-bridge is running for this user";
+
+        var status = control.Status();
+        Assert.Null(status.UpdateAsks);
+        Assert.Equal(readOnly, status.ReadOnly);
+        // And not handed over when it stops being read-only.
+        readOnly = null;
+        Assert.Null(control.Status().UpdateAsks);
     }
 
     [Fact]
