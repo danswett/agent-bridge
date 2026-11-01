@@ -302,6 +302,15 @@ export function readDesignSvg(file, kind) {
     if (paintOpacity.length === 2 && paintOpacity[0] !== paintOpacity[1]) {
       throw new Error(`${file}: a part's fill and stroke opacities must match, since XAML has one opacity per path`);
     }
+    // SVG lays a translucent stroke over its translucent fill, darker where they overlap; XAML's
+    // one opacity flattens the path first, so only a part with a single paint may be translucent.
+    if (paintOpacity.length === 2 && paintOpacity[0] !== 1) {
+      throw new Error(`${file}: a part with both fill and stroke cannot have a fill or stroke opacity, since XAML would flatten them`);
+    }
+    // XAML measures dashes in stroke widths, so a dashed stroke needs a width to measure them by.
+    if (paints.includes('stroke') && style['stroke-dasharray'] && style['stroke-dasharray'] !== 'none' && !(Number(style['stroke-width'] ?? 1) > 0)) {
+      throw new Error(`${file}: a dashed stroke needs a stroke-width above 0`);
+    }
     const opacity = Number(node.attrs.opacity ?? 1) * (paintOpacity[0] ?? 1);
     return { tag: node.tag, attrs: node.attrs, style, opacity, classes: all, ownClasses: own, commands: transformCommands(shapeCommands(node, file), myOps) };
   };

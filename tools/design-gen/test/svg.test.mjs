@@ -103,3 +103,11 @@ test('a cap or join XAML has no equal, and a transform with the wrong count of n
   assert.throws(() => readDesignSvg(svgFile('tr3', g('translate(1 2 3)')), 'glyph'), /translate\(\) takes 1 or 2 numbers, not 3/);
   assert.doesNotThrow(() => readDesignSvg(svgFile('fine', g('rotate(45 8 8) translate(1)')), 'glyph'));
 });
+
+test('a translucent part with both fill and stroke, and a dashed stroke with no width, are refused', () => {
+  assert.throws(() => readDesignSvg(svgFile('both', '<circle cx="8" cy="8" r="5" fill="currentColor" stroke="currentColor" fill-opacity=".5" stroke-opacity=".5"/>'), 'glyph'), /XAML would flatten them/);
+  assert.throws(() => readDesignSvg(svgFile('groupop', '<g fill-opacity=".4" stroke-opacity=".4"><circle cx="8" cy="8" r="5" fill="currentColor" stroke="currentColor"/></g>'), 'glyph'), /XAML would flatten them/);
+  assert.throws(() => readDesignSvg(svgFile('zero', '<path d="M2 8L14 8" stroke="currentColor" stroke-width="0" stroke-dasharray="2 2"/>'), 'glyph'), /stroke-width above 0/);
+  assert.doesNotThrow(() => readDesignSvg(svgFile('whole', '<circle cx="8" cy="8" r="5" fill="currentColor" stroke="currentColor" opacity=".5"/>'), 'glyph'));
+  assert.doesNotThrow(() => readDesignSvg(svgFile('onepaint', '<circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-opacity=".3"/>'), 'glyph'));
+});
