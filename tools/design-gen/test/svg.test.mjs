@@ -77,3 +77,17 @@ test('an opacity, transform or class on the root svg is refused, since neither c
     assert.throws(() => readDesignSvg(svgFile('root', '<circle cx="8" cy="8" r="5" fill="currentColor"/>', `viewBox="0 0 16 16" ${attr}`), 'glyph'), /on <svg> is not in the design subset/, attr);
   }
 });
+
+test('a length in percent or a unit is refused, since XAML geometry takes only plain numbers', () => {
+  const bad = [
+    ['pct', '<circle cx="50%" cy="8" r="5" fill="currentColor"/>'],
+    ['px', '<rect x="2" y="2" width="12px" height="12" fill="currentColor"/>'],
+    ['dash', '<path d="M2 8L14 8" stroke="currentColor" stroke-dasharray="2 10%"/>'],
+    ['stroke', '<path d="M2 8L14 8" stroke="currentColor" stroke-width="0.1em"/>'],
+    ['turn', '<g transform="rotate(45deg 8 8)"><circle cx="8" cy="8" r="5" fill="currentColor"/></g>'],
+  ];
+  for (const [name, body] of bad) { assert.throws(() => readDesignSvg(svgFile(name, body), 'glyph'), /plain number/, name); }
+  assert.throws(() => readDesignSvg(svgFile('rootdash', '<path d="M2 8L14 8" stroke="currentColor"/>', 'viewBox="0 0 16 16" stroke-width="5%"'), 'glyph'), /plain number/);
+  assert.throws(() => readDesignSvg(svgFile('vb', '<circle cx="8" cy="8" r="5" fill="currentColor"/>', 'viewBox="0 0 16px 16px"'), 'glyph'), /square viewBox/);
+  assert.doesNotThrow(() => readDesignSvg(svgFile('ok', '<path d="M2 8L14 8" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2,1e0" opacity=".5"/>'), 'glyph'));
+});

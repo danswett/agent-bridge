@@ -45,8 +45,10 @@ Using them:
 
 The SVGs stay inside a small subset the generator converts exactly: `svg`, `g`, `path`,
 `circle`, `rect` and `line`; `rotate()` and `translate()`; path commands M, L, H, V, C, A and
-Z. It refuses anything else, a class not listed below, and a hard-coded colour on a part
-whose class doesn't name the token that replaces it.
+Z; lengths as plain numbers in the viewBox's units (no `%`, `px` or `em`). It refuses
+anything else, an opacity, transform or class on the root `<svg>`, a
+shape that can enclose an area without saying its fill, a class not listed below, and a
+hard-coded colour on a part whose class doesn't name the token that replaces it.
 
 ## Rules for these files
 

@@ -151,7 +151,9 @@ function shapeCommands(node, file) {
 function parseTransform(t, file) {
   const ops = [];
   for (const m of t.matchAll(/(\w+)\s*\(([^)]*)\)/g)) {
-    const a = m[2].split(/[\s,]+/).filter(Boolean).map(Number);
+    const a = m[2].split(/[\s,]+/).filter(Boolean);
+    if (!a.every((v) => PLAIN.test(v))) { throw new Error(`${file}: transform "${t}" must use plain numbers`); }
+    a.forEach((v, i) => { a[i] = Number(v); });
     if (m[1] === 'rotate') { ops.push({ rotate: a[0], cx: a[1] ?? 0, cy: a[2] ?? 0 }); } else if (m[1] === 'translate') { ops.push({ tx: a[0], ty: a[1] ?? 0 }); } else { throw new Error(`${file}: transform ${m[1]}() is not in the design subset`); }
   }
   if (t.replace(/(\w+)\s*\(([^)]*)\)/g, '').trim()) { throw new Error(`${file}: cannot read transform "${t}"`); }
@@ -221,6 +223,19 @@ function lineOnly(node, file) {
 const ALLOWED = new Set([...INHERITED, 'class', 'transform', 'opacity', 'stroke-opacity', 'fill-opacity',
   'd', 'cx', 'cy', 'r', 'x', 'y', 'width', 'height', 'rx', 'ry', 'x1', 'y1', 'x2', 'y2']);
 
+// Lengths are plain user-space numbers: "50%", "2px" or "1em" would be NaN in XAML geometry
+// while the browser drew the sprite, so the two clients would differ.
+const PLAIN = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
+const NUMERIC = new Set(['cx', 'cy', 'r', 'x', 'y', 'width', 'height', 'rx', 'ry', 'x1', 'y1', 'x2', 'y2',
+  'stroke-width', 'opacity', 'stroke-opacity', 'fill-opacity']);
+function checkNumbers(attrs, file, tag) {
+  for (const [k, v] of Object.entries(attrs)) {
+    const list = k === 'stroke-dasharray' && v !== 'none' ? v.split(/[\s,]+/).filter(Boolean) : NUMERIC.has(k) ? [v.trim()] : [];
+    if (list.length === 0 && k === 'stroke-dasharray' && v !== 'none') { throw new Error(`${file}: ${k}="${v}" on <${tag}> is not a list of plain numbers`); }
+    for (const n of list) { if (!PLAIN.test(n)) { throw new Error(`${file}: ${k}="${v}" on <${tag}> must be a plain number, in the viewBox's units`); } }
+  }
+}
+
 function checkColour(value, classes, file, what) {
   if (value === undefined || value === 'none' || value === 'currentColor') { return; }
   if (classes.some((c) => c in TOKEN_CLASSES)) { return; }
@@ -235,20 +250,24 @@ export function readDesignSvg(file, kind) {
   const name = path.basename(file, '.svg');
   const root = parseXml(source, file);
   if (root.tag !== 'svg') { throw new Error(`${file}: the root must be <svg>`); }
-  const vb = (root.attrs.viewBox ?? '').split(/[\s,]+/).map(Number);
-  if (vb.length !== 4 || vb[0] !== 0 || vb[1] !== 0 || vb[2] !== vb[3]) { throw new Error(`${file}: needs a square viewBox from 0 0`); }
+  const vb = (root.attrs.viewBox ?? '').trim().split(/[\s,]+/);
+  if (vb.length !== 4 || !vb.every((v) => PLAIN.test(v)) || Number(vb[0]) !== 0 || Number(vb[1]) !== 0 || vb[2] !== vb[3]) { throw new Error(`${file}: needs a square viewBox from 0 0`); }
+  vb.forEach((v, i) => { vb[i] = Number(v); });
   // The root carries only its size and paint the parts inherit: an opacity, transform or class
   // here would be dropped by both clients rather than drawn.
   for (const k of Object.keys(root.attrs)) {
     if (!ROOT_ATTRS.has(k) && !INHERITED.includes(k)) { throw new Error(`${file}: attribute ${k} on <svg> is not in the design subset`); }
   }
   const rootStyle = {};
+  // Its width and height only size the file; the parts inherit its stroke width and dashes.
+  checkNumbers(Object.fromEntries(Object.entries(root.attrs).filter(([k]) => INHERITED.includes(k))), file, 'svg');
   for (const k of INHERITED) { if (root.attrs[k] !== undefined) { rootStyle[k] = root.attrs[k]; } }
   checkColour(root.attrs.fill, [], file, 'fill');
   checkColour(root.attrs.stroke, [], file, 'stroke');
 
   const walk = (node, inherited, classes, ops) => {
     for (const k of Object.keys(node.attrs)) { if (!ALLOWED.has(k)) { throw new Error(`${file}: attribute ${k} is not in the design subset`); } }
+    checkNumbers(node.attrs, file, node.tag);
     const own = (node.attrs.class ?? '').split(/\s+/).filter(Boolean);
     for (const c of own) { if (!PART_CLASSES.includes(c)) { throw new Error(`${file}: class "${c}" is not one design/README.md defines`); } }
     const all = [...classes, ...own];
