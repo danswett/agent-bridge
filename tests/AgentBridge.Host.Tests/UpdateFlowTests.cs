@@ -152,6 +152,19 @@ public sealed class UpdateFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_subscriber_hears_nothing_more_once_the_machine_becomes_read_only()
+    {
+        var ch = await OpenAsync();
+        Result(await ch.RequestAsync(UpdateProtocol.Subscribe, new { }));
+
+        readOnly = "agent-ha-bridge is running for this user";
+        await ReportAsync(Reported);
+
+        using var quiet = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await ch.Events.ReadAsync(quiet.Token));
+    }
+
+    [Fact]
     public async Task A_phones_press_of_Install_reaches_the_app_in_the_hosts_status_until_the_app_takes_it()
     {
         await ReportAsync(Reported);

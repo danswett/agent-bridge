@@ -366,3 +366,59 @@ test("a machine shown is followed on its own channel, and a press goes on that c
   fleet.clear();
   assert.equal(fleet.update('v'), null);
 });
+
+test('a machine shown that starts offering updates on a refreshed hello is followed from then, on the same channel', async () => {
+  const { hosts, fleet } = fleetWith({});
+  let subscribed = 0;
+  const listeners = [];
+  const client = {
+    synced: true,
+    on: (type, fn) => { if (type === 'update') { listeners.push(fn); } },
+    subscribeUpdate: async () => { subscribed++; return readUpdateState(found); },
+  };
+  // Read-only at first (agent-ha-bridge running there): no updates offered.
+  const link = hosts.view({ id: 'v', client, machine: {}, capabilities: ['sessions.read'] });
+  await flush();
+  assert.equal(fleet.update('v'), null);
+
+  // agent-ha-bridge stopped: the refreshed hello offers them.
+  link.capabilities = ['sessions.read', 'update'];
+  hosts.change();
+  await flush();
+  assert.equal(fleet.update('v').available, '0.5.0');
+
+  // And read-only again, then not: followed again, heard once.
+  link.capabilities = ['sessions.read'];
+  hosts.change();
+  assert.equal(fleet.update('v'), null);
+  link.capabilities = ['sessions.read', 'update'];
+  hosts.change();
+  await flush();
+  assert.equal(subscribed, 2);
+  assert.equal(listeners.length, 1);
+  fleet.clear();
+});
+
+test('a machine a press was accepted on is looked at every few seconds for a while, though its state still says idle', async () => {
+  let now = 0;
+  const { connection, fleet } = fleetWith({ a: { machine: { hostVersion: '0.4.0' }, capabilities: ['update'], update: found } }, { now: () => now });
+  fleet.probe();
+  await fleet.idle();
+  fleet.watch('a', 30000);
+  now = 10000;
+  fleet.probe();
+  await fleet.idle();
+  assert.deepEqual(connection.opened, ['a', 'a']);
+  // The watch ran out, and the state never left idle: back to once a minute.
+  now = 40000;
+  fleet.probe();
+  await fleet.idle();
+  now = 50000;
+  fleet.probe();
+  await fleet.idle();
+  assert.deepEqual(connection.opened, ['a', 'a']);
+  now = 70000;
+  fleet.probe();
+  await fleet.idle();
+  assert.deepEqual(connection.opened, ['a', 'a', 'a']);
+});

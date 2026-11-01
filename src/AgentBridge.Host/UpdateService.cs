@@ -218,7 +218,9 @@ public sealed class UpdateService
                 state = StateLocked();
                 at = version;
             }
-            if (!channel.IsOpen) { return; }
+            // A machine that became read-only since the device subscribed serves it nothing more,
+            // as it answers no update.get; what changed meanwhile is sent if it stops being.
+            if (!channel.IsOpen || ReadOnly() is not null) { return; }
             await channel.SendEventAsync(UpdateProtocol.Event, state);
             lock (gate) { s.Sent = at; }
         }

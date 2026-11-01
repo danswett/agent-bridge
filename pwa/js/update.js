@@ -100,7 +100,7 @@ export class UpdateControl {
   #notes = new Map();
   #listeners = new Set();
 
-  // fleet: a FleetStatus (update(id), call(id, op, data), noteUpdate(id, state)).
+  // fleet: a FleetStatus (update(id), call(id, op, data), noteUpdate(id, state), watch(id)).
   constructor({ fleet, newRequest = () => crypto.randomUUID() }) {
     Object.assign(this, { fleet, newRequest });
   }
@@ -121,9 +121,12 @@ export class UpdateControl {
     this.#notes.delete(id);
     this.#emit();
     try {
+      const before = this.fleet.update(id);
       const result = readUpdateCommandResult(await this.fleet.call(id, kind === 'install' ? UPDATE.install : UPDATE.check, { request: this.newRequest() }));
-      if (result.state) { this.fleet.noteUpdate(id, result.state); }
-      if (result.outcome !== 'accepted') { this.#notes.set(id, line(result.reason ?? 'it refused')); }
+      // The state as the press found it: older than an update.state that came meanwhile, which
+      // it must not replace.
+      if (result.state && this.fleet.update(id) === before) { this.fleet.noteUpdate(id, result.state); }
+      if (result.outcome === 'accepted') { this.fleet.watch?.(id); } else { this.#notes.set(id, line(result.reason ?? 'it refused')); }
     } catch (e) {
       this.#notes.set(id, `It did not take it: ${sentence(e?.message ?? 'the machine could not be reached')}`);
     } finally {

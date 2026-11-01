@@ -651,6 +651,59 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Turning_automatic_updates_off_while_a_release_waits_tells_the_devices_it_now_waits_for_them()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        Assert.Equal(UpdatePhase.Waiting, auto.State.Phase);
+        var told = new List<UpdateState>();
+        auto.StateChanged += () => told.Add(auto.State);
+
+        prefs = prefs with { AutoUpdate = false };
+        await auto.TickAsync();
+
+        var now = Assert.Single(told.TakeLast(1));
+        Assert.Equal((UpdatePhase.Idle, "0.2.0"), (now.Phase, now.Available));
+    }
+
+    [Fact]
+    public async Task A_check_that_finds_nothing_newer_drops_the_release_an_earlier_check_found()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync();
+        await AskedAsync(UpdateAskKind.Check);
+        Assert.Equal("0.2.0", auto.State.Available);
+
+        // The feed changed, or pre-releases were turned off: nothing newer now.
+        updater.Found = null;
+        updater.Ready = null;
+        await AskedAsync(UpdateAskKind.Check, "9b8c7d6e-5f40-4321-8abc-def012345678");
+
+        Assert.Null(auto.State.Available);
+        Assert.Equal(UpdateOutcome.Current, auto.State.Last!.Outcome);
+    }
+
+    [Fact]
+    public async Task A_pipe_that_drops_under_a_host_still_running_is_told_again_when_it_comes_back()
+    {
+        host.On(HostOps.UpdateReport, _ => new { ok = true });
+        updater.Found = null;
+        await StartAsync();
+        using var reporter = new UpdateReporter(connection, auto, log.Add);
+        await Wait.UntilAsync(() => Reports().Count >= 1, "the first report");
+        await reporter.ReportAsync();
+        var sent = Reports().Count;
+
+        // The same run of the host (its status unchanged), a new connection to it: the host forgot
+        // the app when the old one closed.
+        await host.StopAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the pipe gone");
+        host.Start();
+
+        await Wait.UntilAsync(() => Reports().Count > sent, "the host told again");
+    }
+
+    [Fact]
     public async Task A_development_copy_refuses_what_it_is_asked()
     {
         updater.InstalledVersion = null;

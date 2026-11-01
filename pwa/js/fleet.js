@@ -30,6 +30,13 @@ export class FleetStatus {
   #started = false;
   // What each machine's updater is doing, for the machines that offer update.*.
   #updates = new Map();
+  // Each machine shown whose updates are followed, by the client following them; and the clients
+  // listening for update.state, so one that stops and starts offering updates is not heard twice.
+  #updateFollowed = new Map();
+  #updateHeard = new WeakSet();
+  // A press accepted on a machine: looked at every fastMs until then, even before its state says
+  // anything is under way (the answer is the state from before the app took the press).
+  #watchUntil = new Map();
 
   // hosts: a HostSession (host-session.js): links() for the machines shown, link(id), shows(id)
   // and refresh(id).
@@ -70,9 +77,23 @@ export class FleetStatus {
   // followed on its own channel), so its progress and outcome come in time.
   #retime() {
     const fast = this.#started && this.doc?.visibilityState !== 'hidden'
-      && [...this.#updates].some(([id, s]) => underWay(s) && !this.#followed(id) && this.connection.presence.some((d) => d.id === id));
+      && [...new Set([...this.#updates.keys(), ...this.#watchUntil.keys()])].some((id) => this.#busy(id) && !this.#followed(id) && this.connection.presence.some((d) => d.id === id));
     if (fast && !this.#fastTimer) { this.#fastTimer = setInterval(() => this.probe(), this.fastMs); }
     if (!fast && this.#fastTimer) { clearInterval(this.#fastTimer); this.#fastTimer = null; }
+  }
+
+  // An update under way there, or a press just accepted that may start one.
+  #busy(id) {
+    const until = this.#watchUntil.get(id);
+    if (until !== undefined && this.now() >= until) { this.#watchUntil.delete(id); }
+    return underWay(this.#updates.get(id)) || this.#watchUntil.has(id);
+  }
+
+  // A press was accepted on a machine: looked at closely for a while (forMs), so its app's
+  // progress and outcome come in time even before its state changes.
+  watch(id, forMs = 120000) {
+    this.#watchUntil.set(id, this.now() + forMs);
+    this.#retime();
   }
 
   // What a machine's updater is doing, or null when it offers no updates (or none is known yet).
@@ -123,6 +144,8 @@ export class FleetStatus {
     this.#epochs.set(id, (this.#epochs.get(id) ?? 0) + 1);
     this.#machines.delete(id);
     this.#updates.delete(id);
+    this.#updateFollowed.delete(id);
+    this.#watchUntil.delete(id);
     this.book.delete(id);
     this.#retime();
     this.#emit();
@@ -137,6 +160,8 @@ export class FleetStatus {
     this.#viewed.clear();
     this.#viewedAt.clear();
     this.#updates.clear();
+    this.#updateFollowed.clear();
+    this.#watchUntil.clear();
     this.book.clear();
     this.#emit();
   }
@@ -149,8 +174,7 @@ export class FleetStatus {
       if (link.phase !== 'open' || !client) { continue; }
       // What the machine says now, refreshed hellos included (read-only, say).
       this.#note(id, link.machine);
-      // A refreshed hello that no longer offers updates (the machine became read-only).
-      if (!link.capabilities.includes(UPDATE.capability)) { this.#updates.delete(id); }
+      this.#followUpdates(link);
       if (this.#viewed.get(id) === client) { continue; }
       this.#viewed.set(id, client);
       this.#viewedAt.set(id, this.now());
@@ -159,18 +183,35 @@ export class FleetStatus {
         client.on('usage', (r) => { if (mine()) { this.book.set(id, r); } });
         client.subscribeUsage().then((r) => { if (mine()) { this.book.set(id, r); } }, () => {});
       } else { this.book.delete(id); }
-      if (link.capabilities.includes(UPDATE.capability)) {
-        client.on('update', (s) => { if (mine()) { this.#setUpdate(id, s); } });
-        client.subscribeUpdate().then((s) => { if (mine()) { this.#setUpdate(id, s); } }, () => {});
-      }
     }
     // A machine no longer shown is looked at as the others are; its last report stays until then.
     for (const id of [...this.#viewed.keys()]) {
-      if (!shown.has(id)) { this.#viewed.delete(id); this.#viewedAt.delete(id); }
+      if (!shown.has(id)) { this.#viewed.delete(id); this.#viewedAt.delete(id); this.#updateFollowed.delete(id); }
     }
     this.#retime();
     this.#emit();
     this.probe();
+  }
+
+  // A machine shown: its updates followed on its channel whenever its hello offers them, a
+  // refreshed one included (agent-ha-bridge stopped there), and dropped when it stops offering
+  // them (it became read-only). Not on the channel's first hello alone: that left a machine that
+  // became writable with no updates until its channel was opened again.
+  #followUpdates(link) {
+    const { id, client } = link;
+    if (!link.capabilities.includes(UPDATE.capability)) {
+      this.#updateFollowed.delete(id);
+      this.#updates.delete(id);
+      return;
+    }
+    if (this.#updateFollowed.get(id) === client) { return; }
+    this.#updateFollowed.set(id, client);
+    const mine = () => this.#updateFollowed.get(id) === client;
+    if (!this.#updateHeard.has(client)) {
+      this.#updateHeard.add(client);
+      client.on('update', (s) => { if (mine()) { this.#setUpdate(id, s); } });
+    }
+    client.subscribeUpdate().then((s) => { if (mine()) { this.#setUpdate(id, s); } }, () => {});
   }
 
   #note(id, machine) {
@@ -192,11 +233,13 @@ export class FleetStatus {
     for (const d of this.connection.presence) {
       if (d.kind !== 'host' || d.id === this.me || this.#followed(d.id) || this.#queued.has(d.id)) { continue; }
       const seen = this.#machines.get(d.id);
-      const every = underWay(this.#updates.get(d.id)) ? Math.min(this.fastMs, this.probeEveryMs) : this.probeEveryMs;
+      const every = this.#busy(d.id) ? Math.min(this.fastMs, this.probeEveryMs) : this.probeEveryMs;
       if (seen && this.now() - seen.at < every) { continue; }
       this.#queued.add(d.id);
       this.#queue = this.#queue.then(() => this.#probeOne(d.id)).finally(() => this.#queued.delete(d.id));
     }
+    // A watch that has run out stops the looks every few seconds.
+    this.#retime();
   }
 
   async #probeOne(id) {

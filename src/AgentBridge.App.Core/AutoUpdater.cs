@@ -241,8 +241,10 @@ public sealed class AutoUpdater
             }
             var asked = Asked(UpdateAskKind.Install) is not null;
             var why = WhyNot(asked);
-            // Nothing installs, and a check is made only when a device asked for one.
-            if (why is not null && Asked(UpdateAskKind.Check) is null) { Refused(why); idleSince = null; return; }
+            // Nothing installs, and a check is made only when a device asked for one. Said to the
+            // devices too: the switch turned off while a release waited leaves it to install when
+            // asked, no longer waiting by itself.
+            if (why is not null && Asked(UpdateAskKind.Check) is null) { Refused(why); idleSince = null; Changed(); return; }
             var now = time.GetUtcNow();
             Due(now);
             if (checkNow || checkedAt is null || now - checkedAt >= CheckEvery)
@@ -251,7 +253,7 @@ public sealed class AutoUpdater
                 checkedAt = now;
                 await CheckAsync(now);
             }
-            if (Refused(why)) { idleSince = null; return; }
+            if (Refused(why)) { idleSince = null; Changed(); return; }
             if (Pending is null || !Due(time.GetUtcNow())) { Changed(); return; }
             // Settings shares the updater: a check there, or a change of feed, may have replaced
             // the release downloaded here. Then it is found and downloaded again first.
@@ -309,9 +311,11 @@ public sealed class AutoUpdater
         }
         Phase(UpdatePhase.Idle);
         // A check asked for ends here: what it found is in the state (Available). Nothing newer
-        // ends an install asked for too.
+        // ends an install asked for too, and a release found before (on a feed since changed, or
+        // a pre-release since turned off) is no longer one to offer.
         if (found is null)
         {
+            Pending = null;
             Finish(ref checkRequest, UpdateOutcome.Current, null);
             Finish(ref installRequest, UpdateOutcome.Current, null);
         }

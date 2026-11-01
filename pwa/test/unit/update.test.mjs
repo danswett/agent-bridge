@@ -41,10 +41,14 @@ test('the last outcome reads as what happened', () => {
 function fakeFleet(answer) {
   const states = new Map([['a', found], ['b', { ...found, phase: 'installing' }], ['c', found]]);
   const calls = [];
+  const watched = [];
   return {
     calls,
+    watched,
+    states,
     update: (id) => states.get(id) ?? null,
     noteUpdate: (id, s) => states.set(id, s),
+    watch: (id) => watched.push(id),
     async call(id, op, data) { calls.push({ id, op, data }); return answer(id, op); },
   };
 }
@@ -72,6 +76,8 @@ test('an accepted press takes the state the machine answered with, and an unreac
   await control.press('a', 'check');
   assert.equal(fleet.update('a').phase, 'checking');
   assert.equal(control.stateOf('a').note, null);
+  // Looked at closely now, whatever the state says yet.
+  assert.deepEqual(fleet.watched, ['a']);
   await control.press('c', 'check');
   assert.equal(control.stateOf('c').note, 'It did not take it: the machine is offline.');
 });
@@ -81,4 +87,15 @@ test('Check all asks every machine that can check now, and none that is busy ins
   const control = new UpdateControl({ fleet, newRequest: () => 'r' });
   await control.checkAll(['a', 'b', 'c', 'gone']);
   assert.deepEqual(fleet.calls.map((c) => [c.id, c.op]), [['a', 'update.check'], ['c', 'update.check']]);
+});
+
+test("a press's answer does not replace an update.state that came while it was on its way", async () => {
+  const fleet = fakeFleet(() => {
+    // The machine's app took it and reported, before the answer (the state from before) arrived.
+    fleet.states.set('a', { ...found, phase: 'downloading', progress: 30 });
+    return { outcome: 'accepted', state: found };
+  });
+  const control = new UpdateControl({ fleet, newRequest: () => 'r' });
+  await control.press('a', 'install');
+  assert.equal(fleet.update('a').phase, 'downloading');
 });

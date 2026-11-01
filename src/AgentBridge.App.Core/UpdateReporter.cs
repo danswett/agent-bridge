@@ -20,8 +20,10 @@ public sealed class UpdateReporter : IDisposable
     readonly Queue<string> order = new();
     readonly HashSet<string> taken = new(StringComparer.Ordinal);
     readonly SemaphoreSlim sending = new(1, 1);
-    // What the host instance it went to was last sent, so an unchanged state is not sent again
-    // and a restarted host (which knows nothing) is sent it at once.
+    // What the connection it went to was last sent, so an unchanged state is not sent again and a
+    // new connection is sent it at once: the host forgets the app when its connection closes, a
+    // pipe dropped under a host that kept running included, so the host's run alone is not
+    // enough to key it by.
     string? sentTo;
     string? sent;
     string? triedTo;
@@ -59,7 +61,7 @@ public sealed class UpdateReporter : IDisposable
             }
         }
         foreach (var ask in fresh) { _ = updater!.Ask(ask.Kind, ask.Request); }
-        if (fresh.Count > 0 || listed || host.HostInstance != Volatile.Read(ref triedTo)) { Report(); }
+        if (fresh.Count > 0 || listed || Connection() != Volatile.Read(ref triedTo)) { Report(); }
     }
 
     // Sends the state when it, or the host instance, has changed since the last send, or the host
@@ -72,7 +74,7 @@ public sealed class UpdateReporter : IDisposable
         try
         {
             if (host.State != LinkState.Connected || host.Status is not { } status) { return; }
-            var instance = host.HostInstance;
+            var instance = Connection();
             Volatile.Write(ref triedTo, instance);
             List<string> done;
             lock (taken) { done = [.. (status.UpdateAsks ?? []).Select(a => a.Request).Where(taken.Contains)]; }
@@ -91,6 +93,8 @@ public sealed class UpdateReporter : IDisposable
         }
         finally { sending.Release(); }
     }
+
+    string Connection() => $"{host.ConnectionNumber}:{host.HostInstance}";
 
     public void Dispose()
     {
