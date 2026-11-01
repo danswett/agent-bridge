@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Bridge design language</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E1013}
+a{color:#2DD4BF}a:hover{color:#7EEADB}
+</style>
+</helmet>
+<div style="width: 1600px; height: 1500px; box-sizing: border-box; padding: 56px; background: #0E1013; color: #E8EAED; font-family: 'Segoe UI Variable Text', -apple-system, 'SF Pro Text', Roboto, system-ui, sans-serif; font-size: 14px; line-height: 1.45; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: min-content; gap: 24px">
+
+  <!-- Header -->
+  <header style="grid-column: span 12; display: flex; align-items: center; gap: 20px; padding-bottom: 8px">
+    <svg width="56" height="56" viewBox="0 0 48 48" role="img" aria-label="Agent Bridge mark"><circle cx="19" cy="28" r="9.5" fill="none" stroke="#2DD4BF" stroke-width="3.4"></circle><path d="M26.6 22.4C29.8 19.2 32.4 16.4 34.6 14.2" fill="none" stroke="#2DD4BF" stroke-width="3.4" stroke-linecap="round" stroke-dasharray="0.1 5.2"></path><circle cx="36" cy="12.6" r="5" fill="#2DD4BF"></circle></svg>
+    <div style="flex: 1">
+      <h1 style="margin: 0; font-size: 34px; font-weight: 600; letter-spacing: -0.02em">Agent Bridge</h1>
+      <p style="margin: 2px 0 0; color: #9AA0A8; font-size: 15px">A session is a node. Its delegates orbit it. Everything else follows the platform you’re on.</p>
+    </div>
+  </header>
+
+  <!-- Principles -->
+  <section style="grid-column: span 12; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px">
+    <div style="border-top: 2px solid #2DD4BF; padding-top: 12px"><div style="font-weight: 600; margin-bottom: 4px">Ours: what things mean</div><div style="color: #9AA0A8; font-size: 13px">Status glyphs, status colours, the icon set, the mark, and the session → agent → delegate hierarchy are identical everywhere.</div></div>
+    <div style="border-top: 2px solid #3A3F47; padding-top: 12px"><div style="font-weight: 600; margin-bottom: 4px">Theirs: how it’s built</div><div style="color: #9AA0A8; font-size: 13px">Window chrome, navigation pattern, controls, materials, type family, motion and gestures come from Windows, macOS, iOS or Android.</div></div>
+    <div style="border-top: 2px solid #3A3F47; padding-top: 12px"><div style="font-weight: 600; margin-bottom: 4px">Order is yours</div><div style="color: #9AA0A8; font-size: 13px">Rows never move on their own. Only a question floats, into Needs you, and its row stays put.</div></div>
+    <div style="border-top: 2px solid #3A3F47; padding-top: 12px"><div style="font-weight: 600; margin-bottom: 4px">One voice per line</div><div style="color: #9AA0A8; font-size: 13px">The main stream is the main agent only. Every delegate line is on its own row and names who wrote it.</div></div>
+  </section>
+
+  <!-- Status glyphs -->
+  <section style="grid-column: span 7; background: #16181D; border: 1px solid #262A31; border-radius: 16px; padding: 24px">
+    <h2 style="margin: 0 0 4px; font-size: 18px; font-weight: 600">Status glyphs</h2>
+    <p style="margin: 0 0 18px; color: #9AA0A8; font-size: 13px">One shape per state, so they read without colour and in high contrast. Drawn on a 16 grid, scaled to 14 (dense lists), 16, 20 and 24.</p>
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px">
+      <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: #0E1013">
+        <div style="display: flex; gap: 12px; align-items: center"><dc-import name="Glyph" kind="needs" theme="dark" size="24" hint-size="24px,24px"></dc-import><dc-import name="Glyph" kind="needs" theme="dark" size="16" hint-size="16px,16px"></dc-import></div>
+        <div style="font-weight: 600; font-size: 13px">Needs you</div><div style="color: #9AA0A8; font-size: 12px">A question or approval is waiting. Filled: the only solid glyph.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: #0E1013">
+        <div style="display: flex; gap: 12px; align-items: center"><dc-import name="Glyph" kind="working" theme="dark" size="24" hint-size="24px,24px"></dc-import><dc-import name="Glyph" kind="working" theme="dark" size="16" hint-size="16px,16px"></dc-import></div>
+        <div style="font-weight: 600; font-size: 13px">Working</div><div style="color: #9AA0A8; font-size: 12px">The arc turns, once per 1.2 s. Still under reduced motion.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: #0E1013">
+        <div style="display: flex; gap: 12px; align-items: center"><dc-import name="Glyph" kind="delegating" theme="dark" size="24" hint-size="24px,24px"></dc-import><dc-import name="Glyph" kind="delegating" theme="dark" size="16" hint-size="16px,16px"></dc-import></div>
+        <div style="font-weight: 600; font-size: 13px">Delegating</div><div style="color: #9AA0A8; font-size: 12px">Main agent idle, delegates in orbit. Satellites drift slowly.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: #0E1013">
+        <div style="display: flex; gap: 12px; align-items: center"><dc-import name="Glyph" kind="idle" theme="dark" size="24" hint-size="24px,24px"></dc-import><dc-import name="Glyph" kind="idle" theme="dark" size="16" hint-size="16px,16px"></dc-import></div>
+        <div style="font-weight: 600; font-size: 13px">Idle</div><div style="color: #9AA0A8; font-size: 12px">Nothing running. Neutral, never coloured.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: #0E1013">
+        <div style="display: flex; gap: 12px; align-items: center"><dc-import name="Glyph" kind="working" driven="true" theme="dark" size="24" hint-size="24px,24px"></dc-import><dc-import name="Glyph" kind="idle" driven="true" theme="dark" size="16" hint-size="16px,16px"></dc-import></div>
+        <div style="font-weight: 600; font-size: 13px">Driven by an agent</div><div style="color: #9AA0A8; font-size: 12px">Any state, plus the violet diamond; working turns violet.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: #0E1013">
+        <div style="display: flex; gap: 12px; align-items: center"><dc-import name="Glyph" kind="done" theme="dark" size="24" hint-size="24px,24px"></dc-import><dc-import name="Glyph" kind="done" theme="dark" size="16" hint-size="16px,16px"></dc-import></div>
+        <div style="font-weight: 600; font-size: 13px">Finished</div><div style="color: #9AA0A8; font-size: 12px">Delegates only. Neutral: done isn’t news.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: #0E1013">
+        <div style="display: flex; gap: 12px; align-items: center"><dc-import name="Glyph" kind="failed" theme="dark" size="24" hint-size="24px,24px"></dc-import><dc-import name="Glyph" kind="failed" theme="dark" size="16" hint-size="16px,16px"></dc-import></div>
+        <div style="font-weight: 600; font-size: 13px">Failed or stopped</div><div style="color: #9AA0A8; font-size: 12px">Delegate aborted, launch failed, host unreachable.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: #0E1013">
+        <div style="display: flex; gap: 12px; align-items: center"><dc-import name="Glyph" kind="ended" theme="dark" size="24" hint-size="24px,24px"></dc-import><dc-import name="Glyph" kind="ended" theme="dark" size="16" hint-size="16px,16px"></dc-import></div>
+        <div style="font-weight: 600; font-size: 13px">Ended</div><div style="color: #9AA0A8; font-size: 12px">Session gone; kept in the Ended group.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Colour roles -->
+  <section style="grid-column: span 5; background: #16181D; border: 1px solid #262A31; border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 14px">
+    <div>
+      <h2 style="margin: 0 0 4px; font-size: 18px; font-weight: 600">Colour roles</h2>
+      <p style="margin: 0; color: #9AA0A8; font-size: 13px">Five roles, light and dark. Bridge teal is for controls and selection; status colours are never used on controls.</p>
+    </div>
+    <div style="display: grid; grid-template-columns: 1fr 64px 64px; gap: 8px 12px; align-items: center; font-size: 13px">
+      <span style="color: #9AA0A8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em">Role</span><span style="color: #9AA0A8; font-size: 11px; text-align: center">Dark</span><span style="color: #9AA0A8; font-size: 11px; text-align: center">Light</span>
+      <span><b style="font-weight: 600">Bridge</b> <span style="color: #9AA0A8">· primary actions, selection, mark</span></span><span style="height: 32px; border-radius: 8px; background: #2DD4BF"></span><span style="height: 32px; border-radius: 8px; background: #0B7A6E"></span>
+      <span><b style="font-weight: 600">Needs you</b> <span style="color: #9AA0A8">· questions, approvals</span></span><span style="height: 32px; border-radius: 8px; background: #FFB224"></span><span style="height: 32px; border-radius: 8px; background: #E8A10C"></span>
+      <span><b style="font-weight: 600">Active</b> <span style="color: #9AA0A8">· working, delegating</span></span><span style="height: 32px; border-radius: 8px; background: #4C9AFF"></span><span style="height: 32px; border-radius: 8px; background: #0B63E5"></span>
+      <span><b style="font-weight: 600">Agent</b> <span style="color: #9AA0A8">· driven by an agent, only</span></span><span style="height: 32px; border-radius: 8px; background: #A78BFA"></span><span style="height: 32px; border-radius: 8px; background: #6D4AE0"></span>
+      <span><b style="font-weight: 600">Danger</b> <span style="color: #9AA0A8">· failed, end session</span></span><span style="height: 32px; border-radius: 8px; background: #FF6B6B"></span><span style="height: 32px; border-radius: 8px; background: #C9302C"></span>
+    </div>
+    <p style="margin: 0; color: #9AA0A8; font-size: 12px">Surfaces and text come from the platform: Mica and layer fills on Windows, window and sidebar materials on macOS, system grouped backgrounds on iOS, Material tonal surfaces on Android (seeded from Bridge teal; dynamic colour off for status roles). High contrast maps every role to system colours.</p>
+  </section>
+
+  <!-- Icons -->
+  <section style="grid-column: span 7; background: #16181D; border: 1px solid #262A31; border-radius: 16px; padding: 24px">
+    <h2 style="margin: 0 0 4px; font-size: 18px; font-weight: 600">Icons</h2>
+    <p style="margin: 0 0 16px; color: #9AA0A8; font-size: 13px">Our own set, 20 grid, 1.5 stroke, round ends, one weight. Used in place of Segoe Fluent, SF Symbols and Material Symbols so the app reads the same on every device; sizes follow each platform (16 and 20 on desktop, 22–24 on phones).</p>
+    <div style="display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; color: #E8EAED">
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="sessions" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">Sessions</span></div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="delegate" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">Delegates</span></div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="machine" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">Machines</span></div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="launch" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">Launch</span></div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="usage" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">Usage</span></div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="settings" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">Settings</span></div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="search" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">Filter</span></div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="send" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">Send</span></div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="attach" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">Attach</span></div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="stop" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">End</span></div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="pin" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">Pin</span></div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="reasoning" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">Reasoning</span></div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="tools" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">Tools</span></div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: #0E1013"><dc-import name="Icon" icon="inspector" size="24" hint-size="24px,24px"></dc-import><span style="font-size: 11px; color: #9AA0A8">Inspector</span></div>
+    </div>
+  </section>
+
+  <!-- App icon -->
+  <section style="grid-column: span 5; background: #16181D; border: 1px solid #262A31; border-radius: 16px; padding: 24px">
+    <h2 style="margin: 0 0 4px; font-size: 18px; font-weight: 600">App icon</h2>
+    <p style="margin: 0 0 16px; color: #9AA0A8; font-size: 13px">One mark, each platform’s container.</p>
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; text-align: center; font-size: 12px; color: #9AA0A8">
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 8px"><div style="width: 72px; height: 72px; border-radius: 14px; background: #0F1F22; border: 1px solid #23464A; display: grid; place-items: center"><svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true"><circle cx="19" cy="28" r="9.5" fill="none" stroke="#2DD4BF" stroke-width="3.4"></circle><circle cx="36" cy="12.6" r="5" fill="#2DD4BF"></circle></svg></div>Windows</div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 8px"><div style="width: 72px; height: 72px; border-radius: 17px; background: #0F1F22; box-shadow: 0 6px 14px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.08); display: grid; place-items: center"><svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true"><circle cx="19" cy="28" r="9.5" fill="none" stroke="#2DD4BF" stroke-width="3.4"></circle><circle cx="36" cy="12.6" r="5" fill="#2DD4BF"></circle></svg></div>macOS</div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 8px"><div style="width: 72px; height: 72px; border-radius: 17px; background: #0F1F22; display: grid; place-items: center"><svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true"><circle cx="19" cy="28" r="9.5" fill="none" stroke="#2DD4BF" stroke-width="3.4"></circle><circle cx="36" cy="12.6" r="5" fill="#2DD4BF"></circle></svg></div>iOS</div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 8px"><div style="width: 72px; height: 72px; border-radius: 36px; background: #0F1F22; display: grid; place-items: center"><svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><circle cx="19" cy="28" r="9.5" fill="none" stroke="#2DD4BF" stroke-width="3.4"></circle><circle cx="36" cy="12.6" r="5" fill="#2DD4BF"></circle></svg></div>Android</div>
+    </div>
+  </section>
+
+  <!-- Hierarchy -->
+  <section style="grid-column: span 4; background: #16181D; border: 1px solid #262A31; border-radius: 16px; padding: 24px">
+    <h2 style="margin: 0 0 4px; font-size: 18px; font-weight: 600">Hierarchy</h2>
+    <p style="margin: 0 0 16px; color: #9AA0A8; font-size: 13px">Three levels, told apart by size, indent and contrast, never by boxes inside boxes.</p>
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; align-items: center; gap: 10px"><dc-import name="Glyph" kind="delegating" theme="dark" size="20" hint-size="20px,20px"></dc-import><span style="font-size: 18px; font-weight: 600">Session</span><span style="color: #9AA0A8; font-size: 12px">title · status · machine</span></div>
+      <div style="display: flex; align-items: center; gap: 10px; padding-left: 30px"><span style="width: 6px; height: 6px; border-radius: 3px; background: #E8EAED"></span><span style="font-size: 15px">Main agent</span><span style="color: #9AA0A8; font-size: 12px">the stream · full contrast</span></div>
+      <div style="display: flex; align-items: center; gap: 10px; padding-left: 46px; color: #B8BEC6"><dc-import name="Glyph" kind="working" theme="dark" size="14" hint-size="14px,14px"></dc-import><span style="font-size: 13px">Delegate</span><span style="color: #9AA0A8; font-size: 12px">own row · secondary</span></div>
+      <div style="display: flex; align-items: center; gap: 10px; padding-left: 62px; color: #B8BEC6"><dc-import name="Glyph" kind="working" theme="dark" size="14" hint-size="14px,14px"></dc-import><span style="font-size: 13px">Nested delegate</span></div>
+    </div>
+  </section>
+
+  <!-- Type roles -->
+  <section style="grid-column: span 4; background: #16181D; border: 1px solid #262A31; border-radius: 16px; padding: 24px">
+    <h2 style="margin: 0 0 4px; font-size: 18px; font-weight: 600">Typography</h2>
+    <p style="margin: 0 0 14px; color: #9AA0A8; font-size: 13px">System faces for everything people read; one licensed monospace for everything agents type. Sizes are size/line-height.</p>
+    <div style="display: grid; grid-template-columns: 64px repeat(4, minmax(0, 1fr)); gap: 7px 8px; font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums">
+      <span style="color: #9AA0A8"></span><span style="color: #9AA0A8">Windows</span><span style="color: #9AA0A8">macOS</span><span style="color: #9AA0A8">iOS</span><span style="color: #9AA0A8">Android</span>
+      <span style="color: #9AA0A8">Face</span><span>Segoe UI Var</span><span>SF Pro</span><span>SF Pro</span><span>Roboto Flex</span>
+      <span style="color: #9AA0A8">Title</span><span>20/28 Semi</span><span>13/16 Bold</span><span>34/41 Bold</span><span>22/28</span>
+      <span style="color: #9AA0A8">Row</span><span>14/20</span><span>13/16</span><span>17/22</span><span>16/24</span>
+      <span style="color: #9AA0A8">Reading</span><span>15/24</span><span>14/21</span><span>17/22</span><span>16/24</span>
+      <span style="color: #9AA0A8">Meta</span><span>12/16</span><span>11/14</span><span>15/20, 13/18</span><span>14/20, 11/16</span>
+      <span style="color: #9AA0A8">Code</span><span>12/18</span><span>11/16</span><span>13/18</span><span>13/20</span>
+    </div>
+    <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid #262A31; font-family: 'Berkeley Mono', 'Cascadia Mono', 'SF Mono', ui-monospace, monospace; font-size: 13px; line-height: 20px; color: #E8EAED">dotnet test --filter RestartAfterResume  4:02</div>
+    <ul style="margin: 10px 0 0; padding-left: 16px; color: #9AA0A8; font-size: 12px; line-height: 18px">
+      <li>Two weights only: regular and semibold (bold on Apple titles).</li>
+      <li>Tabular figures everywhere a number can change.</li>
+      <li>Secondary text by opacity, never a third grey.</li>
+      <li>Sentence case; reading column capped at about 68 characters.</li>
+    </ul>
+  </section>
+
+  <!-- Layout by width -->
+  <section style="grid-column: span 4; background: #16181D; border: 1px solid #262A31; border-radius: 16px; padding: 24px">
+    <h2 style="margin: 0 0 4px; font-size: 18px; font-weight: 600">Layout by width</h2>
+    <p style="margin: 0 0 14px; color: #9AA0A8; font-size: 13px">Same breakpoints on every platform; the window decides, not the device.</p>
+    <div style="display: flex; flex-direction: column; gap: 12px; font-size: 12px; color: #9AA0A8">
+      <div style="display: flex; align-items: center; gap: 12px"><div style="width: 132px; height: 52px; display: flex; gap: 3px; flex: none"><span style="flex: 2; border-radius: 4px; background: #262A31"></span><span style="flex: 5; border-radius: 4px; background: #3A3F47"></span><span style="flex: 2.4; border-radius: 4px; background: #262A31"></span></div><span><b style="color: #E8EAED; font-weight: 600">1280+</b> list · session · delegate inspector</span></div>
+      <div style="display: flex; align-items: center; gap: 12px"><div style="width: 132px; height: 52px; display: flex; gap: 3px; flex: none"><span style="flex: 2; border-radius: 4px; background: #262A31"></span><span style="flex: 5; border-radius: 4px; background: #3A3F47"></span></div><span><b style="color: #E8EAED; font-weight: 600">760–1279</b> list · session, delegates as a tab</span></div>
+      <div style="display: flex; align-items: center; gap: 12px"><div style="width: 132px; height: 52px; display: flex; gap: 3px; flex: none"><span style="width: 30px; border-radius: 4px; background: #3A3F47"></span></div><span><b style="color: #E8EAED; font-weight: 600">Under 760</b> one column, push navigation, delegate sheet</span></div>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1600,"height":1500}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

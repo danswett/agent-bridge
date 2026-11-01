@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Bridge on Android — session waiting on you</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button,textarea{font:inherit}
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; box-sizing: border-box; background: {{t.surface}}; color: {{t.on}}; font-family: 'Roboto Flex', Roboto, system-ui, sans-serif; font-size: 16px; line-height: 24px; letter-spacing: 0.5px; font-variant-numeric: tabular-nums; display: flex; flex-direction: column; overflow: hidden; border-radius: 28px">
+  <div style="height: 40px"></div>
+  <div style="height: 64px; display: flex; align-items: center; gap: 4px; padding: 0 4px">
+    <a href="Android-List.dc.html" aria-label="Back" style="width: 48px; height: 48px; display: grid; place-items: center; color: {{t.on}}"><dc-import name="Icon" icon="back" size="24" hint-size="24px,24px"></dc-import></a>
+    <div style="flex: 1; min-width: 0; padding-left: 4px">
+      <div style="font-size: 22px; line-height: 28px; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Plan Migration to Windows App</div>
+    </div>
+    <button aria-label="More options" style="width: 48px; height: 48px; border: 0; background: transparent; color: {{t.onv}}; display: grid; place-items: center"><dc-import name="Icon" icon="more" size="24" hint-size="24px,24px"></dc-import></button>
+  </div>
+
+  <section aria-label="Delegates" style="display: flex; gap: 8px; padding: 8px 16px 16px; overflow: hidden">
+    <a href="#" style="flex: none; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 16px 0 8px; border-radius: 8px; border: 1px solid {{t.outlineV}}; color: {{t.on}}; text-decoration: none; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import>Run full test suite</a>
+    <a href="#" style="flex: none; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 16px 0 8px; border-radius: 8px; border: 1px solid {{t.outlineV}}; color: {{t.on}}; text-decoration: none; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import>Check ubuntu CI</a>
+    <a href="#" style="flex: none; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 16px 0 8px; border-radius: 8px; border: 1px solid {{t.outlineV}}; color: {{t.onv}}; text-decoration: none; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px"><dc-import name="Glyph" kind="done" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import>1 done</a>
+  </section>
+
+  <div style="flex: 1; overflow: hidden; padding: 8px 16px; display: flex; flex-direction: column; gap: 24px">
+    <div>
+      <div style="font-size: 12px; line-height: 16px; font-weight: 500; letter-spacing: 0.5px; color: {{t.onv}}; margin-bottom: 4px">Main agent · 4 min</div>
+      <p style="margin: 0">The bisect points at the batch-folding change. The suite is still running on the fix branch.</p>
+    </div>
+
+    <div role="group" aria-label="Question from the main agent" style="border-radius: 16px; background: {{t.warnC}}; padding: 16px 16px 8px; display: flex; flex-direction: column">
+      <div style="display: flex; gap: 8px; align-items: center; font-size: 12px; line-height: 16px; font-weight: 500; letter-spacing: 0.5px; color: {{t.onWarnC}}"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import>Main agent asks</div>
+      <div style="font-size: 16px; line-height: 24px; font-weight: 500; letter-spacing: 0.15px; margin: 8px 0 8px">Ship the fix as 0.1.691 now, or wait for the full suite?</div>
+      <label style="display: flex; align-items: center; gap: 16px; min-height: 48px"><input type="radio" name="q" checked="" style="width: 20px; height: 20px; margin: 0; accent-color: {{t.primary}}"><span>Wait for the full suite</span></label>
+      <label style="display: flex; align-items: center; gap: 16px; min-height: 48px"><input type="radio" name="q" style="width: 20px; height: 20px; margin: 0; accent-color: {{t.primary}}"><span>Ship now</span></label>
+      <div style="display: flex; justify-content: flex-end; padding-top: 8px"><button style="height: 40px; padding: 0 24px; border-radius: 20px; border: 0; background: {{t.primary}}; color: {{t.onPrimary}}; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px">Answer</button></div>
+    </div>
+  </div>
+
+  <div style="flex: none; display: flex; align-items: center; gap: 4px; padding: 12px 8px 28px 4px; background: {{t.sc}}">
+    <button aria-label="Attach files" style="width: 48px; height: 48px; border-radius: 24px; border: 0; background: transparent; color: {{t.onv}}; display: grid; place-items: center"><dc-import name="Icon" icon="attach" size="24" hint-size="24px,24px"></dc-import></button>
+    <label style="flex: 1; min-width: 0"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message the main agent</span><textarea rows="1" placeholder="Message the main agent" style="width: 100%; box-sizing: border-box; height: 48px; resize: none; border-radius: 24px; border: 0; background: {{t.input}}; color: {{t.on}}; padding: 12px 20px; font-size: 16px; line-height: 24px; letter-spacing: 0.5px; outline: none"></textarea></label>
+    <button aria-label="Send" style="margin-left: 4px; width: 48px; height: 48px; border-radius: 24px; border: 0; background: {{t.primary}}; color: {{t.onPrimary}}; display: grid; place-items: center"><dc-import name="Icon" icon="send" size="22" hint-size="22px,22px"></dc-import></button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'dark' ? 'dark' : 'light';
+    const light = {
+      surface: '#F4FBF9', sc: '#E9EFED', on: '#161D1C', onv: '#3F4947', outlineV: '#BEC9C6', input: '#DDE4E2',
+      primary: '#006A60', onPrimary: '#FFFFFF', warnC: '#FFF1D6', onWarnC: '#5C3600'
+    };
+    const dark = {
+      surface: '#0E1513', sc: '#1A211F', on: '#DDE4E1', onv: '#BEC9C6', outlineV: '#3F4947', input: '#2F3634',
+      primary: '#53DBC9', onPrimary: '#003731', warnC: '#33270F', onWarnC: '#FFD8A0'
+    };
+    return { theme, t: theme === 'dark' ? dark : light };
+  }
+}
+</script>
+</body>
+</html>

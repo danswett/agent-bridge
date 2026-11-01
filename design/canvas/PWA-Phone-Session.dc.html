@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Bridge PWA on a phone — session</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button,textarea{font:inherit}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: {{t.shell}}; color: {{t.text}}; font-family: system-ui, 'Segoe UI Variable Text', -apple-system, Roboto, sans-serif; font-size: 15px; line-height: 22px; font-variant-numeric: tabular-nums; display: flex; flex-direction: column; overflow: hidden; border-radius: 40px">
+  <header style="padding: 52px 8px 12px 4px; display: flex; align-items: center; gap: 4px">
+    <a href="PWA-Phone.dc.html" aria-label="Back to sessions" style="width: 44px; height: 44px; display: grid; place-items: center; color: {{t.text}}"><dc-import name="Icon" icon="back" size="20" hint-size="20px,20px"></dc-import></a>
+    <div style="flex: 1; min-width: 0">
+      <div style="font-weight: 600; font-size: 17px; line-height: 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Plan Migration to Windows App</div>
+      <div style="display: flex; align-items: center; gap: 6px; font-size: 13px; line-height: 18px; color: {{t.text2}}"><dc-import name="Glyph" kind="delegating" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import>Delegating · DEV-VM1</div>
+    </div>
+    <button aria-label="More actions" style="width: 44px; height: 44px; border-radius: 6px; border: 0; background: transparent; color: {{t.text}}; display: grid; place-items: center"><dc-import name="Icon" icon="more" size="20" hint-size="20px,20px"></dc-import></button>
+  </header>
+
+  <section aria-label="Delegates" style="display: flex; gap: 8px; padding: 0 20px 12px; overflow: hidden">
+    <a href="#" style="flex: none; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 10px; border-radius: 18px; border: 1px solid {{t.accent}}; background: {{t.accentSoft}}; color: {{t.text}}; text-decoration: none; font-size: 14px"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="14" hint-size="14px,14px"></dc-import>Run full test suite</a>
+    <a href="#" style="flex: none; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 10px; border-radius: 18px; border: 1px solid {{t.stroke2}}; color: {{t.text}}; text-decoration: none; font-size: 14px"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="14" hint-size="14px,14px"></dc-import>Check ubuntu CI</a>
+    <a href="#" style="flex: none; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 10px; border-radius: 18px; border: 1px solid {{t.stroke2}}; color: {{t.text2}}; text-decoration: none; font-size: 14px"><dc-import name="Glyph" kind="done" theme="{{theme}}" size="14" hint-size="14px,14px"></dc-import>1 done</a>
+  </section>
+
+  <div style="flex: 1; overflow: hidden; background: {{t.layer}}; border-top: 1px solid {{t.stroke}}; padding: 20px 20px; display: flex; flex-direction: column; gap: 24px">
+    <div style="border-radius: 8px; background: {{t.card}}; border: 1px solid {{t.stroke}}; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px">
+      <div style="display: flex; align-items: center; gap: 8px"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="font-weight: 600; flex: 1">Run full test suite</span><span style="font-size: 13px; color: {{t.text2}}">12m</span></div>
+      <div style="font-size: 14px; line-height: 20px">HEAD fails one test, RestartAfterResume. A nested agent is bisecting it.</div>
+      <div style="display: flex; gap: 8px; margin-top: 4px">
+        <button style="height: 36px; padding: 0 14px; border-radius: 6px; border: 1px solid {{t.stroke2}}; background: {{t.subtle}}; color: {{t.text}}; font-size: 14px">Open</button>
+        <button style="height: 36px; padding: 0 14px; border-radius: 6px; border: 0; background: transparent; color: {{t.text2}}; font-size: 14px">Ask main agent to stop it</button>
+      </div>
+    </div>
+    <div style="align-self: flex-end; max-width: 80%; padding: 10px 14px; border-radius: 8px; background: {{t.card}}; border: 1px solid {{t.stroke}}">Which install should I run on home?</div>
+    <div>
+      <div style="font-size: 13px; line-height: 18px; color: {{t.text2}}; margin-bottom: 6px"><span style="font-weight: 600; color: {{t.text}}">Main agent</span>&#160;&#160;29m</div>
+      <p style="margin: 0; font-size: 16px; line-height: 24px">Use the 0.1.690 MSI on home. The newer prerelease still has the restart bug from #276, so I’m confirming the fix first.</p>
+    </div>
+  </div>
+
+  <div style="flex: none; padding: 8px 12px 28px; background: {{t.layer}}">
+    <div style="display: flex; align-items: flex-end; gap: 4px; padding: 4px 4px 4px 14px; border-radius: 8px; background: {{t.card}}; border: 1px solid {{t.stroke}}; border-bottom: 2px solid {{t.accent}}">
+      <label style="flex: 1; min-width: 0"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message the main agent</span><textarea rows="1" placeholder="Message the main agent" style="width: 100%; box-sizing: border-box; min-height: 40px; resize: none; border: 0; background: transparent; outline: none; color: {{t.text}}; font-size: 16px; line-height: 20px; padding: 10px 0"></textarea></label>
+      <button aria-label="Attach files" style="width: 40px; height: 40px; border-radius: 6px; border: 0; background: transparent; color: {{t.text2}}; display: grid; place-items: center"><dc-import name="Icon" icon="attach" size="20" hint-size="20px,20px"></dc-import></button>
+      <button aria-label="Send" style="width: 40px; height: 40px; border-radius: 6px; border: 1px solid {{t.accentEdge}}; background: {{t.accent}}; color: {{t.onAccent}}; display: grid; place-items: center"><dc-import name="Icon" icon="send" size="20" hint-size="20px,20px"></dc-import></button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const dark = {
+      shell: '#202326', layer: '#272A2E', card: '#2F3338', stroke: 'rgba(255,255,255,0.07)', stroke2: 'rgba(255,255,255,0.12)', subtle: 'rgba(255,255,255,0.06)',
+      text: '#FFFFFF', text2: 'rgba(255,255,255,0.72)', accent: '#2DD4BF', accentEdge: 'rgba(255,255,255,0.08)', onAccent: '#062621', accentSoft: 'rgba(45,212,191,0.1)'
+    };
+    const light = {
+      shell: '#EEF0F2', layer: '#F9F9F9', card: '#FFFFFF', stroke: 'rgba(0,0,0,0.07)', stroke2: 'rgba(0,0,0,0.12)', subtle: 'rgba(0,0,0,0.03)',
+      text: '#1A1A1A', text2: 'rgba(0,0,0,0.62)', accent: '#0B7A6E', accentEdge: 'rgba(0,0,0,0.1)', onAccent: '#FFFFFF', accentSoft: 'rgba(11,122,110,0.07)'
+    };
+    return { theme, t: theme === 'light' ? light : dark };
+  }
+}
+</script>
+</body>
+</html>

@@ -10,6 +10,7 @@ choice is [docs/design/ui.md](../docs/design/ui.md), and the order of work is
 | `glyphs/*.svg` | The status glyphs, on a 16 grid |
 | `icons/*.svg` | The icon set, on a 20 grid, with a 1.5 stroke and round ends. `mark.svg` is the app mark, on a 48 grid |
 | `preview.png` | The glyphs, icons and colour roles rendered in dark and light. Regenerate it whenever a glyph, icon or role changes |
+| `canvas/` | The design canvas boards' source, rendered to [docs/design/mockups](../docs/design/mockups/README.md) by [tools/design-mockups](../tools/design-mockups/README.md) |
 
 ## Rules for these files
 
