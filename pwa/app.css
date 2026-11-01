@@ -402,6 +402,14 @@ summary {
 .launch-count { margin: 0; }
 .launch-count.warn { color: var(--danger); }
 @media (max-width: 360px) { .launch-form { grid-template-columns: 1fr; } }
+/* A launched agent asking whether to trust its folder: the whole path, never cut short. */
+.launch-trust { display: grid; gap: 10px; margin: 8px 0 12px; }
+.trust-question { border: 1px solid var(--warning); border-radius: 10px; padding: 10px 12px; display: grid; gap: 6px; }
+.trust-question h3 { margin: 0; font-size: 1rem; }
+.trust-line { margin: 0; display: grid; gap: 2px; }
+.trust-path { overflow-wrap: anywhere; word-break: break-all; white-space: pre-wrap; }
+.trust-warning { margin: 0; white-space: pre-line; }
+.trust-at-machine, .trust-status { margin: 0; }
 /* ---- replying ---- */
 .reply-slot:empty { display: none; }
 .reply { margin: 12px 0 4px; padding-top: 10px; border-top: 1px solid var(--border); }

@@ -11,6 +11,7 @@
 import { utf8 } from './bytes.js';
 import { toBase64url } from './blobs.js';
 import { deviceIdOf } from './identity.js';
+import { trustAction } from './launch.js';
 
 export const TRANSFER = Object.freeze({
   capability: 'sessions.transfer',
@@ -36,22 +37,34 @@ export async function macOf(keyBytes, bodyBytes) {
   return new Uint8Array(await subtle().sign('HMAC', k, bodyBytes));
 }
 
-// A signed session.transfer command: { body, by, mac }, each base64url.
-export async function signTransfer({ key, deviceId, machinePublic, session, to, now = Date.now(), request = globalThis.crypto.randomUUID() }) {
+// A signed command for the machine with machinePublic: { body, by, mac }, each base64url. to is
+// the machine that acts on it; omitted, the machine it is signed for.
+export async function signCommand({ key, deviceId, machinePublic, action, session, to, now = Date.now(), request = globalThis.crypto.randomUUID() }) {
   const machine = await deviceIdOf(machinePublic);
   const issuedAt = Math.floor(now / 1000);
   const body = utf8.encode(JSON.stringify({
     v: 1,
-    action: TRANSFER.action,
+    action,
     request,
     principal: { kind: 'user', device: deviceId },
     target: { machine, session },
-    to,
+    to: to ?? machine,
     issuedAt,
     expiresAt: issuedAt + COMMAND_LIFETIME_S,
   }));
   const mac = await macOf(await commandKey(key, machinePublic, deviceId, machine), body);
   return { body: toBase64url(body), by: toBase64url(key.public), mac: toBase64url(mac) };
+}
+
+// A signed session.transfer command.
+export function signTransfer({ session, to, ...rest }) {
+  return signCommand({ ...rest, action: TRANSFER.action, session, to });
+}
+
+// A signed launch.trust.answer command, for one choice on one question, for the machine asking
+// it (docs/protocol/v1-launch.md, "Folder trust").
+export function signTrust({ question, choice, ...rest }) {
+  return signCommand({ ...rest, action: trustAction(choice), session: question });
 }
 
 // The sessions the account's other machines offer for a transfer to target, each with its

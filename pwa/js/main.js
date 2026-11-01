@@ -25,7 +25,8 @@ import { accountStore, startDeviceFlow } from './signin.js';
 import { BridgeConnection } from './connection.js';
 import { ALL, HostSession } from './host-session.js';
 import { HostClient } from './host-client.js';
-import { TRANSFER, collectRemote, signTransfer } from './transfer.js';
+import { TRUST } from './launch.js';
+import { TRANSFER, collectRemote, signTransfer, signTrust } from './transfer.js';
 import { PushRegistrar, closeMachineNotices, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities } from './protocol.js';
 import { MachinesFold, offlineMachines } from './ui/views.js';
@@ -34,7 +35,7 @@ import { UsageBook } from './usage.js';
 import { FleetStatus } from './fleet.js';
 import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UsageView } from './ui/usage-view.js';
-import { DemoBlobStore, DemoConnection, DemoHost, demoMachines, demoTransfers, runScript } from './demo.js';
+import { DemoBlobStore, DemoConnection, DemoHost, demoMachines, demoTransfers, demoTrust, runScript } from './demo.js';
 import { RelayBlobs } from './blobs.js';
 
 const $ = (id) => document.getElementById(id);
@@ -155,6 +156,8 @@ async function startDemo() {
     launching: params.get('launch') !== '0' && params.get('answer') !== '0' && !ahb,
     // ?transfer=0: a host from before sessions came from other machines.
     transferring: params.get('transfer') !== '0',
+    // ?trust=0: a host from before folder-trust questions were answered from devices.
+    trusting: params.get('trust') !== '0',
   });
   // ?machines=2 or 3: the account's other machines, after this one.
   const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs })];
@@ -193,11 +196,17 @@ async function startDemo() {
   for (const m of machines) {
     if (m.capabilities.includes(TRANSFER.capability)) { transfers.set(m.machine.id, await demoTransfers(m, m.machine.id)); }
   }
+  // Folder-trust questions answered from here, each with a command signed for that demo machine.
+  const trusts = new Map();
+  for (const m of machines) {
+    if (m.capabilities.includes(TRUST.capability)) { trusts.set(m.machine.id, await demoTrust(m, () => hosts.route(m.machine.id)?.client ?? null)); }
+  }
   page = new SessionsPage({
     $, hosts, connection, machinesFold,
     blobs: () => blobStore, relayMax: () => blobStore.max,
     retryMs: Number(params.get('retry')) || 3000,
     transfers: (id) => transfers.get(id) ?? null,
+    trust: (id) => trusts.get(id) ?? null,
     status: (id) => fleet.status(id),
     forget: demoForget,
     storage: demoStorage,
@@ -225,6 +234,8 @@ async function startDemo() {
     get client() { return hosts.link(host.machine.id)?.client ?? null; },
     // The launch panel told about the same machine again, as presence updates tell it.
     retarget: () => page.refresh(),
+    // This machine's launch target as the page makes it, for a test to tell the panel about it with a change (read-only).
+    target: () => page.launchTarget(host.machine.id),
     // A new usage report from the host, sent as usage.update.
     usage: (report) => host.setUsage(report),
     // The next answers' outcomes, in order: 'delivered' (the default once these run out),
@@ -250,6 +261,9 @@ async function startDemo() {
     },
     // A machine leaves presence, or comes back.
     setOnline: (id, online) => connection.setOnline(id, online),
+    // A launched agent asking whether to trust its folder, and the next answers' outcomes.
+    askTrust: (question) => host.askTrust(question),
+    scriptTrust: (...outcomes) => host.scriptTrust(outcomes),
     upsert: (s) => host.upsert(s),
     remove: (id) => host.remove(id),
     hold: (held) => host.hold(held),
@@ -337,7 +351,22 @@ function begin(account) {
     transfers: (targetId) => ({
       remotes: () => collectRemote({ connection, targetId, me: identity.deviceId, makeClient: (ch) => new HostClient(ch) }),
       sign: (remote, session) => signTransfer({ key: identity.key, deviceId: identity.deviceId, machinePublic: remote.key, session, to: targetId }),
-    }),
+    }),    // Folder-trust questions answered from here, each with a command this device signs for the
+    // machine on the other end of its channel, whose key the handshake proved, and sent there.
+    trust: (targetId) => {
+      const name = () => hosts.nameOf(targetId) ?? 'that machine';
+      return {
+        sign: (question, choice) => {
+          const key = hosts.route(targetId) ? hosts.link(targetId)?.channel?.hs?.remoteStatic : null;
+          if (!key) { return Promise.reject(new Error(`not connected to ${name()}`)); }
+          return signTrust({ key: identity.key, deviceId: identity.deviceId, machinePublic: new Uint8Array(key), question, choice });
+        },
+        answer: (data) => {
+          const client = hosts.route(targetId)?.client;
+          return client ? client.answerTrust(data) : Promise.reject(new Error(`not connected to ${name()}`));
+        },
+      };
+    },
     status: (id) => fleet.status(id),
     forget: forgets,
     onRendered: () => focusLinked(),
