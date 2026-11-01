@@ -87,6 +87,41 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Null(Known(Daemon(beforeEnd, shells: ["own1", "ended1"]), Host(shells: 1), ShadowKinds.BackgroundShells));
     }
 
+    // Seen on DEV-VM1 (#40): a watcher completed, was started again under the same id 40 s later,
+    // and the daemon, folding both into one batch, listed nothing while it ran (agent-ha-bridge#276).
+    [Fact]
+    public void A_shell_the_daemon_does_not_list_is_put_down_to_a_restart_under_the_same_id_only_when_it_read_both()
+    {
+        Write(Result("<command with shellId: watch is still running after 3 seconds. The command is still running.>"));
+        Write(
+            Event("system.notification", new { kind = new { type = "shell_completed", shellId = "watch", exitCode = 0 } }),
+            Result("<shellId: watch completed with exit code 0>"));
+        var beforeRestart = Write(Result("<shellId: other completed with exit code 0>"));
+        var through = Write(Result("<command started in background with shellId: watch>"));
+
+        Assert.Equal("agent-ha-bridge#276", Known(Daemon(through), Host(shells: 1), ShadowKinds.BackgroundShells));
+        // Not read the restart yet: the daemon is behind.
+        Assert.Null(Known(Daemon(beforeRestart), Host(shells: 1), ShadowKinds.BackgroundShells));
+        // One more on the host than the restart accounts for.
+        Assert.Null(Known(Daemon(through), Host(shells: 2), ShadowKinds.BackgroundShells));
+
+        // A shell started once and never ended, missing on the daemon, is no restart.
+        var fresh = Write(Result("<command started in background with shellId: fresh>"));
+        Assert.Null(Known(Daemon(fresh, shells: ["watch"]), Host(shells: 2), ShadowKinds.BackgroundShells));
+    }
+
+    [Fact]
+    public void A_restart_by_a_subagent_or_one_ended_again_is_not_put_down_to_the_daemon()
+    {
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Result("<shellId: watch completed with exit code 0>"));
+        var bySubagent = Write(Result("<command started in background with shellId: watch>", agentId: "agent-a"));
+        Assert.Null(Known(Daemon(bySubagent), Host(shells: 1), ShadowKinds.BackgroundShells));
+        Write(Result("<command started in background with shellId: watch>"));
+        var endedAgain = Write(Result("<shellId: watch completed with exit code 0>"));
+        Assert.Null(Known(Daemon(endedAgain), Host(shells: 1), ShadowKinds.BackgroundShells));
+    }
+
     [Fact]
     public void Missing_agents_are_put_down_to_the_daemon_only_when_they_are_exactly_those_woken_again_after_completing()
     {

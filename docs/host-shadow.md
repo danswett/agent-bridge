@@ -381,7 +381,8 @@ the comparison reads the transcript and checks every id the difference involves 
 signature below, counting only what the daemon has read (an end, a completion or a wake it
 has not reached yet is the daemon being behind, not its bug). The daemon's list must carry
 every id behind its count. Then the counts have to add up
-exactly: the daemon's, less what the signatures explain, must equal the host's. Anything
+exactly: the daemon's, less what the signatures explain (plus, for #276, the restarts it
+dropped), must equal the host's. Anything
 else, an id with no signature or a count left over, keeps the difference a mismatch. A
 difference that matches is a **known difference**: tallied in the day's `known`, by kind and
 issue, and never a mismatch. The first minutes of the live run on DEV-VM1 showed three of the
@@ -394,6 +395,7 @@ five, and the comparison now classifies each as below.
 | `model` | The last `assistant.message` the daemon has read is a subagent's and names the daemon's model, and the host's is the session's own | agent-ha-bridge#260 |
 | `background.shells`, daemon higher | Every start of each extra id since its last end is in a subagent's tool result | agent-ha-bridge#261 |
 | `background.shells`, daemon higher | Each extra id's only start of the session's own is an "is still running" line that is not its tool result's last line | agent-ha-bridge#262 |
+| `background.shells`, daemon lower | Each shell the host counts and the daemon does not list ended and was then started again under the same id, by the session itself (a start of its own, read as the host reads one), with no end since; the end and the restart both before the daemon's `Offset` | agent-ha-bridge#276 |
 | `question.missingOnHost`, and `status` daemon `waiting` | The daemon's question is the `ask_user` its marker names (by call id, else the one started within 10 s of the marker being armed); that `ask_user` has completed in the transcript, and its start lies more than 4 MiB before the end of the line that completed it. For `status`, the daemon's own status must also be the host's; when it is not, the mismatch stands and names the two statuses | agent-ha-bridge#259 (filed as #263, closed as its duplicate) |
 
 What each bug does:
@@ -405,6 +407,7 @@ What each bug does:
 | `model`, flipping | Sets the session's model from every `assistant.message`, subagents' included, so a session whose agents run another model shows theirs whenever one speaks last. parity.md §1: a subagent's model is not the session's | agent-ha-bridge#260 |
 | `background.shells`, daemon higher, in a session with background agents | Counts a background agent's shells as the session's. Their ends go to the agent and often never reach the session's transcript: in the session that found it, nine shells agents had moved to the background had no process left and no recorded end, and stayed counted. The host leaves an agent's shells to the agent, which is counted while it runs | agent-ha-bridge#261 |
 | `background.shells`, daemon higher, a session reading `shell` while idle | Takes an "is still running" marker anywhere at a line's start in a tool result. A `view` of a file quoting one invented a shell nothing will end. The host takes it only as a result's last line, where Copilot writes it | agent-ha-bridge#262 |
+| `background.shells`, daemon lower, while a restarted shell runs | Folds a batch's shell starts and ends without their order (`Update-DaemonBackgroundShells` adds every start, then removes every end). A shell ended and started again under the same id within one batch loses the new start to the old end, and nothing later adds it back. Found on 2026-11-01 when a `pr-watch` watcher completed at 00:12:35 PDT and was restarted at 00:13:15: the daemon listed nothing from then on while its process ran, 41 mismatches in a morning (one disagreement, split each time the daemon's heartbeat lagged). Replaying the daemon's own functions over those lines gives 0 as one batch and 1 as two | agent-ha-bridge#276 |
 | `question.missingOnHost` and `status` daemon `waiting`, after the question was answered | Learns that a question was answered only from the last 4 MiB of the transcript (`Get-CopilotAskUserState`). When a session writes more than that while its question waits, the `ask_user` start has left the tail by the time it is answered, so the daemon never sees the question complete: the marker stays, and so do the card's question and "waiting for you", until the session asks again. Found when a question asked at 00:58 and answered at 09:32 PT, 7.1 MiB later, was still on the card 20 minutes after. The host read it answered at once | agent-ha-bridge#259 (filed as #263, closed as its duplicate) |
 
 **The first minutes on DEV-VM1**, classified:

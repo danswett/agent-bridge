@@ -382,6 +382,9 @@ public sealed partial class TranscriptEvidence(string path)
     //   #259  an end the daemon has read past and not applied;
     //   #261  only a subagent ever started it (since its last end);
     //   #262  besides a subagent's, only a quoted "still running" line started it;
+    // and, of the shells the host counts that the daemon does not list:
+    //   #276  the session started it again under the same id after it ended, the daemon has read
+    //         both, and folding them as one batch, it took the old end for the new start's;
     // and what is left is exactly the host's count.
     public string? Shells(ShadowSession daemon, ShadowSession host)
     {
@@ -407,7 +410,22 @@ public sealed partial class TranscriptEvidence(string path)
             if (holding.Any(s => !s.Subagent)) { issues.Add(262); }
             explained++;
         }
-        return explained > 0 && daemon.ShellIds.Distinct(StringComparer.Ordinal).Count() - explained == host.Shells ? Name(issues) : null;
+        var listed = daemon.ShellIds.ToHashSet(StringComparer.Ordinal);
+        var restarted = shells.Count(s => !listed.Contains(s.Key) && Restarted(s.Value, through));
+        if (restarted > 0) { issues.Add(276); }
+        return explained + restarted > 0 && listed.Count - explained + restarted == host.Shells ? Name(issues) : null;
+    }
+
+    // Running again since an end of the same id, as the host counts it, and both read by the daemon:
+    // the session's own proper start after the last end, before the daemon's offset, and no end
+    // since. Seen on DEV-VM1 (#40): a pr-watch watcher completed and restarted 40 s later, with the
+    // daemon listing nothing from then on while its process ran (agent-ha-bridge#276).
+    static bool Restarted(Shell shell, long through)
+    {
+        if (shell.Ends.Count == 0 || shell.Ends.Max() is var lastEnd && lastEnd >= through) { return false; }
+        if (shell.DroppedThrough > lastEnd) { return false; }
+        var since = shell.Runs.Where(r => r.Last > lastEnd).ToList();
+        return since.Count > 0 && since.All(r => !r.Subagent && r.Kind == StartKind.Proper && r.First < through);
     }
 
     // The daemon counts fewer (or more) background agents than the host. Known when the host's
