@@ -147,8 +147,9 @@ public sealed class SystemProcessInspector : IProcessInspector
             // start times must be known, and the loader's no later than its child's, with no
             // slack: a pid the loader left behind and another agent's runtime took even a moment
             // after the child started is that agent's session, and must stay counted.
-            if (candidate is "node" or "bun" && started is { } loaderStarted && IsLoaderScript(agent, commandLine)
-                && loaders.Any(l => l.Id == id && l.Child is { } child && loaderStarted <= child))
+            if (candidate is "node" or "bun" && started is { } loaderStarted
+                && loaders.Any(l => l.Id == id && l.Child is { } child && loaderStarted <= child)
+                && IsLoaderScript(agent, commandLine))
             {
                 continue;
             }
@@ -172,7 +173,10 @@ public sealed class SystemProcessInspector : IProcessInspector
 
     // The scripts npm installs that only start the agent's own executable and wait on it.
     // Anything else run in node may be a session of its own, even when it starts one more.
-    internal static bool IsLoaderScript(AgentKind agent, string? commandLine)
+    // Outside Windows npm runs them through a link in its bin folder (`node /usr/local/bin/codex`),
+    // so a script given by path is followed to what it links to; one that cannot be followed is
+    // not taken for a loader, and stays counted.
+    internal static bool IsLoaderScript(AgentKind agent, string? commandLine, Func<string, string?>? resolveLink = null)
     {
         var loader = agent switch
         {
@@ -181,13 +185,26 @@ public sealed class SystemProcessInspector : IProcessInspector
             _ => null,
         };
         if (loader is null || string.IsNullOrEmpty(commandLine)) { return false; }
+        resolveLink ??= LinkTarget;
         foreach (var token in CommandLine.Split(commandLine))
         {
-            var file = token.Replace('\\', '/');
-            while (file.Contains("//", StringComparison.Ordinal)) { file = file.Replace("//", "/", StringComparison.Ordinal); }
-            if (file.EndsWith(loader, StringComparison.OrdinalIgnoreCase)) { return true; }
+            if (IsLoader(token, loader)) { return true; }
+            if (Path.IsPathRooted(token) && resolveLink(token) is { } target && IsLoader(target, loader)) { return true; }
         }
         return false;
+
+        static bool IsLoader(string path, string loader)
+        {
+            var file = path.Replace('\\', '/');
+            while (file.Contains("//", StringComparison.Ordinal)) { file = file.Replace("//", "/", StringComparison.Ordinal); }
+            return file.EndsWith(loader, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    static string? LinkTarget(string path)
+    {
+        try { return File.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
     }
 
     internal static bool IsAgentScript(AgentKind agent, string name, string? commandLine)

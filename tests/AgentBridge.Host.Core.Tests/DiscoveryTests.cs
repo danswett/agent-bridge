@@ -685,6 +685,41 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public void A_loader_run_through_npms_bin_link_is_recognised_by_what_the_link_points_at()
+    {
+        var links = new Dictionary<string, string>
+        {
+            ["/usr/local/bin/codex"] = "/usr/local/lib/node_modules/@openai/codex/bin/codex.js",
+            ["/usr/local/bin/copilot"] = "/usr/local/lib/node_modules/@github/copilot/npm-loader.js",
+            ["/usr/local/bin/other"] = "/usr/local/lib/node_modules/@openai/codex/index.js",
+        };
+        string? Resolve(string path) => links.TryGetValue(path, out var target) ? target : null;
+
+        Assert.True(SystemProcessInspector.IsLoaderScript(AgentKind.Codex, "node /usr/local/bin/codex", Resolve));
+        Assert.True(SystemProcessInspector.IsLoaderScript(AgentKind.Copilot, "node /usr/local/bin/copilot --banner", Resolve));
+        Assert.False(SystemProcessInspector.IsLoaderScript(AgentKind.Codex, "node /usr/local/bin/other", Resolve));
+        // A link that cannot be followed is not taken for a loader: the process stays counted.
+        Assert.False(SystemProcessInspector.IsLoaderScript(AgentKind.Codex, "node /opt/bin/codex", Resolve));
+    }
+
+    [Fact]
+    public void A_real_bin_link_to_the_loader_is_followed()
+    {
+        var root = Directory.CreateTempSubdirectory("loader-link").FullName;
+        try
+        {
+            var script = Path.Combine(root, "node_modules", "@openai", "codex", "bin", "codex.js");
+            Directory.CreateDirectory(Path.GetDirectoryName(script)!);
+            File.WriteAllText(script, "");
+            var link = Path.Combine(root, "codex");
+            try { File.CreateSymbolicLink(link, script); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; } // Windows without the privilege
+            Assert.True(SystemProcessInspector.IsLoaderScript(AgentKind.Codex, $"node \"{link}\""));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
     public void Ownership_is_only_consulted_on_Windows()
     {
         var listing = new SystemProcessInspector.ListedProcess[] { new("node", 11, null, null) };
