@@ -60,14 +60,19 @@ The work has been built phone-first. All merged PRs are listed in §7.
 |---|---|
 | DSWETT-ULTRA | **Migrated** from agent-ha-bridge on 2026-10-31. HA connector on since 2026-11-01 08:48 (online in HA). Updated to 0.1.700 on 2026-11-01 11:06 by **Install from the PWA**, the first remote install on a real machine (#161). The first real machine; watch it |
 | DSWETT-DEV-VM1 | agent-ha-bridge plus a **read-only shadow host** (profile `shadow`) comparing with the daemon (#40). Gate not yet passed (§3) |
-| DSWETT-HOME | agent-ha-bridge, and the **dashboard publication writer**: migrate refuses there (G7), so it moves last. A view-only app install (`delivery.readOnly`, push off, HA connector off), so it shows in the PWA, is pending with the owner |
+| DSWETT-HOME | agent-ha-bridge, and the **dashboard publication writer**: migrate refuses there (G7), so it moves last. Since 2026-11-01 13:39 also a **view-only app install** (0.1.730 or later; `delivery.readOnly`, push off, HA connector off). The PWA lists it online and read-only, and its Claude and Codex usage rows are back. agent-ha-bridge there is unaffected |
 | ARM laptop, Mac, DASDESK | agent-ha-bridge only. The Mac waits for P5 (macOS host) |
 | Hyperloop VM01 (on DEV-VM1) | Down since a reboot on 2026-10-31: its autologon failed and no one knows its generated password. Left down by the owner's decision; not needed |
 | Azure `rehearsal-w`, `rehearsal-m` | Deallocated (resource group `rg-agent-bridge-rehearsal`), with OS-disk snapshots. `build/rehearsal-azure-vmw.ps1 -Start` / `-Deallocate`. Delete the group when no more rehearsals are needed |
 
 ### Running work
 
-Check `gh pr list -R danswett/agent-bridge` for open PRs. On 2026-11-01 there are none.
+Check `gh pr list -R danswett/agent-bridge` for open PRs. Two coordinators work at once (decided 2026-11-01):
+- **Overall coordinator** (bridge session a6ed320ca83044c5, DEV-VM1): the whole project, track A of the UI plan (sub-agents S1 #173, S2 #174, S5 #175), #172 (shared usage), the relay, migration, the shadow gate, machines, and this page outside §5.
+- **UI coordinator** (bridge session f7ba0bcc0adb4319, DEV-VM1): track B (§5). It merges its own PRs under the same rule.
+- Cross-track needs go on #170.
+
+In flight on 2026-11-01: #187 (S1) and #172 (shared usage), each with a delegate.
 
 ## 3. Shadow gate (DEV-VM1, #40)
 
@@ -85,7 +90,7 @@ The read-only host has run beside the daemon since 2026-10-29, and the gate is c
 ## 4. Next steps, in order
 
 1. **Watch ULTRA.** Its HA entities (`*_dswett_ultra_*`) and the PWA should agree, and answers, replies and launches from the phone and the HA card should all work. Install from the PWA worked on 2026-11-01 (0.1.690 to 0.1.700); Install from the HA card's button is still untried live (#161).
-2. **HOME view-only install**, by the owner (the commands are in §8). Then confirm HOME shows in the PWA, read-only.
+2. ~~**HOME view-only install**~~ Done 2026-11-01: the PWA lists HOME online and read-only.
 3. **The shadow gate on DEV-VM1:** keep collecting until it passes, then cut DEV-VM1 over with `migrate` and soak it. Claude and Codex coverage is needed.
 4. **The rest, one machine at a time** (design §10 machine order): the ARM laptop, the Dev Box, then the Mac after P5. Each runs on 0.1.649 or later. Repeat rehearsal step E6-07 (worktree reclaim) on the first one.
 5. **HOME last** (P7): move the publication-writer role, migrate, then retire the HA dashboard as an explicit operator action.
