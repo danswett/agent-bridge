@@ -87,6 +87,21 @@ test('pathological input finishes quickly', () => {
   }
 });
 
+test('a button written in the text stays text, in a paragraph and in a code block', () => {
+  const md = '<button onclick="window.__xss=1">Copy</button>\n\n```\n<button>x</button>\n```';
+  const r = walk(parseMarkdown(md));
+  assert.ok(!r.tags.includes('button'), r.tags.join());
+  assert.ok(r.text.includes('<button onclick="window.__xss=1">Copy</button>'));
+  assert.ok(r.text.includes('<button>x</button>'));
+});
+
+test('a code block keeps its text and indentation, with no newline added', () => {
+  const body = '  indented\n\tpwsh -EncodedCommand AAAA\n';
+  const [pre] = parseMarkdown(`\`\`\`\n${body}\`\`\``);
+  assert.equal(pre.tag, 'pre');
+  assert.equal(textOf(pre), '  indented\n    pwsh -EncodedCommand AAAA');
+});
+
 test('anything that is not a string renders as nothing', () => {
   assert.deepEqual(parseMarkdown(null), []);
   assert.deepEqual(parseMarkdown({ toString: () => '<b>' }), []);

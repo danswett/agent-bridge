@@ -251,7 +251,9 @@ test.describe('on a phone', () => {
     await expect(q).toHaveAttribute('data-answerable', 'true');
     await expect(q.locator('.question-head')).toHaveText('Permission requested');
     await expect(q.locator('.question-message pre')).toHaveText('git push origin main --force-with-lease');
-    await expect(q.getByRole('button')).toHaveText(['Approve once', 'Deny']);
+    // The command can be copied; the only answers are the two decisions.
+    await expect(q.locator('.question-message').getByRole('button', { name: 'Copy code' })).toHaveCount(1);
+    await expect(q.getByRole('button').and(page.locator('button:not(.md-copy)'))).toHaveText(['Approve once', 'Deny']);
     await expect(q.getByRole('button', { name: 'Approve once' })).toHaveClass(/\btone-allow\b/);
     await expect(q.getByRole('button', { name: 'Deny' })).toHaveClass(/\btone-deny\b/);
 
@@ -266,7 +268,8 @@ test.describe('on a phone', () => {
     await expect(q).toHaveAttribute('data-answerable', 'false');
     await expect(q.locator('.question-message')).toContainText('git push origin main --force-with-lease');
     await expect(q.locator('.read-only-why')).toHaveText('Approving permission prompts from the phone is turned off on this machine. Answer at the machine on Demo machine.');
-    await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
+    // Nothing that answers: copying the command is all the card offers.
+    await expect(q.locator(':is(button, input, select, textarea):not(.md-copy)')).toHaveCount(0);
   });
 
   test('every control is at least 44 px tall', async ({ page }) => {

@@ -9,9 +9,10 @@
 // tenth of the size, with no third-party code to keep updated under the page's CSP.
 //
 // Covered: paragraphs (line breaks kept, as a terminal shows them), headings, emphasis,
-// strong, strikethrough, code spans, fenced code, bullet, numbered and task lists (nested),
-// block quotes, rules, GitHub tables, links, autolinks and bare URLs. Images become links,
-// never loads. Not covered: reference links, footnotes, indented code, HTML.
+// strong, strikethrough, code spans, fenced code (wrapped, with a Copy button), bullet,
+// numbered and task lists (nested), block quotes, rules, GitHub tables, links, autolinks and
+// bare URLs. Images become links, never loads. Not covered: reference links, footnotes,
+// indented code, HTML.
 
 const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 const MAX_DEPTH = 12;
@@ -422,7 +423,86 @@ function build(node, doc) {
   if (node.tag === 'ol' && /^\d{1,9}$/.test(a.start ?? '')) { e.setAttribute('start', a.start); }
   if (CLASSES.has(a.class)) { e.className = a.class; }
   for (const child of node.children ?? []) { e.append(build(child, doc)); }
+  // The Copy button is made here and never by the parser: 'button' is not in TAGS, so no
+  // reply text can produce one, and the only handler on it is ours.
+  if (node.tag === 'pre') { return codeBlock(e, textOf(node), doc); }
   return e;
+}
+
+const COPY_RESET_MS = 1500;
+
+// A code block with a Copy button in its top-right corner. On a phone, a long command (a
+// 1000-character pwsh -EncodedCommand, say) is all but impossible to select by hand. What
+// is copied is the block's text as the agent wrote it, not as it is wrapped on screen.
+// The button sits beside the <pre>, not in it, so the block's own text stays the code.
+function codeBlock(pre, text, doc) {
+  const label = doc.createElement('span');
+  label.textContent = 'Copy';
+  const button = doc.createElement('button');
+  button.type = 'button';
+  button.className = 'md-copy';
+  button.setAttribute('aria-label', 'Copy code');
+  button.append(label);
+  // The button's name stays "Copy code"; what happened is announced separately.
+  const status = doc.createElement('span');
+  status.className = 'sr-only';
+  status.setAttribute('role', 'status');
+  let timer = null;
+  button.addEventListener('click', async () => {
+    const ok = await copyText(text, doc);
+    const said = ok ? 'Copied' : 'Copy failed';
+    label.textContent = said;
+    status.textContent = said;
+    button.dataset.copy = ok ? 'done' : 'failed';
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      label.textContent = 'Copy';
+      status.textContent = '';
+      delete button.dataset.copy;
+    }, COPY_RESET_MS);
+  });
+  const wrap = doc.createElement('div');
+  wrap.className = 'md-code';
+  wrap.append(button, pre, status);
+  return wrap;
+}
+
+// Puts text on the clipboard; true if it got there. The Clipboard API first. It is missing
+// in older WebViews, and can reject where it exists (iOS Home Screen apps have refused it),
+// so a hidden textarea and execCommand('copy') follow, as clipboard.js does it.
+export async function copyText(text, doc = document) {
+  const clipboard = doc.defaultView?.navigator?.clipboard;
+  if (typeof clipboard?.writeText === 'function') {
+    try {
+      await clipboard.writeText(text);
+      return true;
+    } catch { /* refused here; the older way may still be allowed */ }
+  }
+  return copyBySelection(text, doc);
+}
+
+function copyBySelection(text, doc) {
+  const area = doc.createElement('textarea');
+  area.className = 'md-copy-buffer';
+  area.value = text;
+  // Read-only, so focusing it never raises the keyboard.
+  area.setAttribute('readonly', '');
+  area.setAttribute('aria-hidden', 'true');
+  area.tabIndex = -1;
+  const before = doc.activeElement;
+  doc.body.append(area);
+  try {
+    area.focus({ preventScroll: true });
+    area.select();
+    // iOS ignores select() on a read-only field; a selection range it honours.
+    area.setSelectionRange(0, text.length);
+    return doc.execCommand('copy') === true;
+  } catch {
+    return false;
+  } finally {
+    area.remove();
+    before?.focus?.({ preventScroll: true });
+  }
 }
 
 export function textOf(node) {
