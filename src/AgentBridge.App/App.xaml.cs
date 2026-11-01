@@ -136,7 +136,8 @@ public partial class App : Application
         }
 
         var localMachine = Build(Machine.LocalKey, connection, new FoldStore(Path.Combine(appData, $"{options.Profile}-folds.json")), () => self?.ReadOnlyWhy);
-        main = self = new MainViewModel(localMachine, new UsageViewModel(), settings);
+        // The list's order, pins and sort, kept beside the folds (#164): every machine's, not only this one's.
+        main = self = new MainViewModel(localMachine, new UsageViewModel(), settings, new SessionOrder(Path.Combine(appData, $"{options.Profile}-order.json")));
         settings.PreferencesChanged += () => { foreach (var c in main.AllCards) { c.CapabilitiesChanged(); } };
         responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (machine, id) => ShowWindow(machine, id));
         main.MachineRemoved += responder.MachineGone;

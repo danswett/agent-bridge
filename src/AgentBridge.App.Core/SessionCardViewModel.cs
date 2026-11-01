@@ -159,6 +159,21 @@ public sealed class SessionCardViewModel : Observable
     // Someone is typing in this card (its reply or answer box has focus): the list holds still.
     public bool Editing { get; set; }
 
+    // Its place in the person's order (#164), set by MainViewModel: "Pinned" or "Sessions" over the
+    // first card of each group once anything is pinned; whether it is pinned; and whether its
+    // session has news since the card was last open (the "new activity" dot).
+    string? groupHeader;
+    bool pinned;
+    bool unread;
+    bool wantsFocus;
+    public string? GroupHeader { get => groupHeader; internal set { if (Set(ref groupHeader, value)) { Raise(nameof(HasGroupHeader)); } } }
+    public bool HasGroupHeader => groupHeader is not null;
+    public bool Pinned { get => pinned; internal set => Set(ref pinned, value); }
+    public bool Unread { get => unread; internal set => Set(ref unread, value); }
+    public RowActions? Row { get; internal set; }
+    // A keyboard move: the card's title takes focus again once it is drawn in its new place.
+    public bool WantsFocus { get => wantsFocus; set => Set(ref wantsFocus, value); }
+
     public void Update(Session next)
     {
         var first = !synced;
