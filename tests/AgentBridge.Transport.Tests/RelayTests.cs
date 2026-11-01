@@ -1,5 +1,7 @@
 using System.Net.WebSockets;
 using System.Text.Json;
+using AgentBridge.Relay;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace AgentBridge.Transport.Tests;
@@ -203,6 +205,27 @@ public class RelayTests
         await leaving.DisposeAsync();
 
         await Wait.UntilAsync(() => watcher.Relay.Presence.All(p => p.Id != leaving.Id), "the device to leave presence");
+    }
+
+    [Fact]
+    public async Task After_many_devices_come_and_go_at_once_every_device_hears_the_account_as_it_now_is()
+    {
+        // Each change is announced with the account as it was then. Announcements once raced each
+        // other to a device, so an older one could land last and stay: a machine forgotten a moment
+        // earlier listed again (#151), or one gone listed as here.
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(1, "octo");
+        var watcher = await relay.ConnectAsync(token, "watcher");
+        var hub = relay.App.Services.GetRequiredService<RelayHub>();
+        for (var round = 0; round < 5; round++)
+        {
+            var came = await Task.WhenAll(Enumerable.Range(0, 16).Select(i => relay.ConnectAsync(token, $"d{i}")));
+            await Wait.UntilAsync(() => came.All(d => watcher.Relay.Presence.Any(p => p.Id == d.Id)), "every device that came in presence");
+
+            await Task.WhenAll(came.Select(d => d.DisposeAsync().AsTask()));
+            await Wait.UntilAsync(() => hub.Online == 1, "the relay to see them go");
+            await Wait.UntilAsync(() => watcher.Relay.Presence.Count == 1, "presence to be the watcher alone");
+        }
     }
 
     [Fact]

@@ -155,8 +155,8 @@ public sealed class LiveHomeAssistantTests : IDisposable
         // The attributes come last, after the selector is Awaiting, as the daemon publishes them.
         await Until(SessionEntities.Decision(node), s => s.State == HaDecision.Awaiting
             && s.Attributes.TryGetProperty("decision_id", out var d) && d.GetString() == "q1");
-        var field = await Until(SessionEntities.Field(node, 1), s => s.State == HaDecision.Choose);
-        Assert.Contains("Cut the release now", field.Attributes.GetProperty("options").EnumerateArray().Select(o => o.GetString()));
+        await Until(SessionEntities.Field(node, 1), s => s.State == HaDecision.Choose && s.Attributes.TryGetProperty("options", out var options)
+            && options.EnumerateArray().Any(o => o.GetString() == "Cut the release now"));
         foreach (var entity in new[] { SessionEntities.Status(node), SessionEntities.Activity(node), SessionEntities.Submit(node), SessionEntities.Reply(node), SessionEntities.ReplyPayload(node), SessionEntities.Stop(node) })
         {
             Assert.NotNull(await ha.GetStateAsync(entity));
@@ -184,8 +184,10 @@ public sealed class LiveHomeAssistantTests : IDisposable
         await Task.Delay(TimeSpan.FromSeconds(2));
 
         await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = SessionEntities.Stop(node) });
-        var asking = await Until(SessionEntities.Activity(node), s => s.State == HaStop.ConfirmNote);
-        Assert.Equal("this session is still working - the confirmation lapses in 30s", asking.Attributes.GetProperty("hint").GetString());
+        // State and attributes are two retained messages, state first, as the daemon sends them:
+        // Home Assistant can show the new state with the old attributes in between (#151).
+        await Until(SessionEntities.Activity(node), s => s.State == HaStop.ConfirmNote
+            && s.Attributes.TryGetProperty("hint", out var hint) && hint.GetString() == "this session is still working - the confirmation lapses in 30s");
 
         await ha.CallServiceAsync("button", "press", new JsonObject { ["entity_id"] = SessionEntities.Stop(node) });
         await Until(() => { lock (stopped) { return stopped.Count == 2; } }, "the second press never reached the host");
@@ -469,7 +471,7 @@ public sealed class LiveHomeAssistantTests : IDisposable
         // Home Assistant took the state (its schema refuses the whole payload for one wrong key):
         // a release is on offer, and the buttons are on the dashboard's ids.
         await Until(entity, s => s.State == "on" && s.Attributes.TryGetProperty("latest_version", out var l) && l.GetString() == "0.2.0"
-            && s.Attributes.GetProperty("installed_version").GetString() == "0.1.0");
+            && s.Attributes.TryGetProperty("installed_version", out var i) && i.GetString() == "0.1.0");
         await Until(Button("check_updates"), _ => true);
         await Until(Button("install_update"), _ => true);
         await Task.Delay(TimeSpan.FromSeconds(1));
@@ -502,7 +504,8 @@ public sealed class LiveHomeAssistantTests : IDisposable
         {
             c.Start();
             await Until(toggle, s => s.State == "off");
-            await Until(HaContract.MachineEntityId("sensor", "sessions", slug), s => s.Attributes.GetProperty("capabilities").GetProperty("detailed").GetBoolean());
+            await Until(HaContract.MachineEntityId("sensor", "sessions", slug), s => s.Attributes.TryGetProperty("capabilities", out var caps)
+                && caps.TryGetProperty("detailed", out var detailed) && detailed.ValueKind == JsonValueKind.True);
         }
         var registry = (await ha.ListEntityRegistryAsync()).Single(e => e.EntityId == toggle);
         Assert.Equal(HaContract.DetailedHelperDisplayName("CI-UPKEEP"), registry.Name);

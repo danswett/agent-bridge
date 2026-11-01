@@ -27,6 +27,8 @@ public class RosterTests
 
     static async Task LeaveAsync(TestRelay relay, Device d, Device watcher)
     {
+        // Seen first, so seeing it gone is its leaving and not a presence from before it came.
+        await watcher.Relay.WaitForPeerAsync(p => p.Id == d.Id, Patience);
         await d.DisposeAsync();
         await Wait.UntilAsync(() => watcher.Relay.Presence.All(p => p.Id != d.Id), "the device left presence");
     }

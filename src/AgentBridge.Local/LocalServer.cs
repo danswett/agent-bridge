@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Net;
 using System.Net.Sockets;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
@@ -27,6 +28,7 @@ public sealed class LocalServer : IAsyncDisposable
     Task loop = Task.CompletedTask;
     Socket? listener;
     int unixPeers;
+    int disposed;
 
     public LocalEndpoint Endpoint => endpoint;
     public int Connections { get { lock (gate) { return channels.Count; } } }
@@ -55,7 +57,7 @@ public sealed class LocalServer : IAsyncDisposable
         }
         else
         {
-            server.listener = server.Bind();
+            server.listener = Bind(endpoint.Address);
             server.loop = Task.Run(server.SocketLoopAsync);
         }
         return server;
@@ -130,9 +132,8 @@ public sealed class LocalServer : IAsyncDisposable
         await next.DisposeAsync();
     }
 
-    Socket Bind()
+    internal static Socket Bind(string path)
     {
-        var path = endpoint.Address;
         if (File.Exists(path))
         {
             // A socket file left by a host that is still listening is in use; one left by a
@@ -146,7 +147,7 @@ public sealed class LocalServer : IAsyncDisposable
             catch (SocketException) { File.Delete(path); }
         }
         var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        socket.Bind(new UnixDomainSocketEndPoint(path));
+        socket.Bind(new UntrackedPath(new UnixDomainSocketEndPoint(path)));
         // The profile folder is the user's alone (0700); the socket is too.
         if (!OperatingSystem.IsWindows()) { File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
         socket.Listen(16);
@@ -202,15 +203,35 @@ public sealed class LocalServer : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        // The name goes first, while this server still listens on it and nobody else can take it
+        // (Bind would find it in use). Deleted after the listener closed, it could be the next
+        // server's: one started meanwhile found the old file dead and replaced it with its own,
+        // which this then deleted, leaving it listening where no client can reach it (#151). So
+        // nothing deletes it later, the runtime included (UntrackedPath). The host's host.lock
+        // keeps two of its own apart; a test's fake host had nothing to.
+        // Once only: a second disposal would delete whatever is there by then.
+        if (Interlocked.Exchange(ref disposed, 1) == 1) { return; }
+        if (!OperatingSystem.IsWindows())
+        {
+            try { File.Delete(endpoint.Address); } catch (IOException) { }
+        }
         stop.Cancel();
         listener?.Dispose();
         try { await loop; } catch (Exception) { }
         LocalChannel[] open;
         lock (gate) { open = [.. channels]; }
         foreach (var c in open) { await c.DisposeAsync(); }
-        if (!OperatingSystem.IsWindows())
-        {
-            try { File.Delete(endpoint.Address); } catch (IOException) { }
-        }
+    }
+
+    // The endpoint a socket file is bound through. Bound through UnixDomainSocketEndPoint itself,
+    // the runtime deletes the path when the socket is disposed, after closing it: by then a server
+    // started meanwhile may have put its own file there (#151). This server deletes its file
+    // itself, while it still listens (DisposeAsync).
+    sealed class UntrackedPath(UnixDomainSocketEndPoint path) : EndPoint
+    {
+        public override AddressFamily AddressFamily => AddressFamily.Unix;
+        public override SocketAddress Serialize() => path.Serialize();
+        public override EndPoint Create(SocketAddress address) => path.Create(address);
+        public override string ToString() => path.ToString();
     }
 }
