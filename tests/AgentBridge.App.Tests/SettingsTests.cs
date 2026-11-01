@@ -73,6 +73,25 @@ public sealed class SettingsTests : IAsyncLifetime
 
     Task Connected() => Wait.UntilAsync(() => settings.HostRunning && connection.Status is not null, "the connection");
 
+    // The host's status as the test sets it, seen by the app. The app may have read the status before
+    // the test set it (on Linux its socket connects at once), so it is sent as the host would.
+    async Task ConnectedWith(HostStatus status)
+    {
+        host.Status = status;
+        await Connected();
+        await host.SendAsync(HostOps.StatusEvent, status);
+        await Wait.UntilAsync(() => Equals(connection.Status?.Settings, status.Settings), "the host's status");
+    }
+
+    // As the host does: answers host.settings with what it saved, which its status says from then
+    // on when read; its status event is sent only when a test sends it.
+    void Saves(Func<System.Text.Json.JsonElement, HostSettingsView> save) => host.On(HostOps.Settings, d =>
+    {
+        var saved = save(d);
+        host.Status = host.Status with { Settings = saved };
+        return new SettingsResult(saved, false);
+    });
+
     [Fact]
     public async Task Signing_in_asks_the_host_through_the_relay_named_and_shows_the_code_it_reports()
     {
@@ -106,6 +125,356 @@ public sealed class SettingsTests : IAsyncLifetime
 
         Assert.False(host.Sent(HostOps.Settings)[0].GetProperty("remoteApproval").GetBoolean());
         await Wait.UntilAsync(() => settings.RestartRequired && !settings.RemoteApproval, "the restart offer");
+    }
+
+    [Fact]
+    public async Task Answering_folder_trust_from_devices_is_turned_on_here_with_this_app_approved_and_each_device_is_approved_here()
+    {
+        const string phone = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", gone = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(phone, "Dana's phone"));
+        link.PeopleNow.Add(new FleetHost(link.DeviceId!, "This app, as the relay lists it"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        Saves(d => new HostSettingsView(true, RemoteFolderTrust: true,
+            RemoteFolderTrustDevices: d.TryGetProperty("remoteFolderTrustDevices", out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : null));
+        await Connected();
+        Assert.False(settings.RemoteFolderTrust);
+        Assert.False(settings.ShowTrustDevices);
+
+        settings.RemoteFolderTrust = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "host.settings");
+        var first = host.Sent(HostOps.Settings)[0];
+        Assert.True(first.GetProperty("remoteFolderTrust").GetBoolean());
+        Assert.Equal([link.DeviceId], first.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()));
+        await Wait.UntilAsync(() => !settings.Busy, "the change made");
+
+        // Another device approved at the machine's terminal since.
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [link.DeviceId!, gone]) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.ShowTrustDevices && settings.TrustDevices.Count == 3, "the devices");
+        Assert.Equal([$"This app ({Environment.MachineName}) · a1a1a1a1", "Dana's phone · b2b2b2b2", "A device not connected now · c3c3c3c3"], settings.TrustDevices.Select(d => d.Label));
+        Assert.Equal([true, false, true], settings.TrustDevices.Select(d => d.Approved));
+
+        var rows = settings.TrustDevices;
+        settings.TrustDevices[1].Approved = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2, "the phone approved");
+        Assert.Equal([link.DeviceId, gone, phone], host.Sent(HostOps.Settings)[1].GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()));
+        Assert.False(host.Sent(HostOps.Settings)[1].TryGetProperty("remoteFolderTrust", out _));
+        // A presence update keeps the rows on screen as they are.
+        link.Raise();
+        await Task.Delay(100);
+        Assert.Same(rows, settings.TrustDevices);
+    }
+
+    [Fact]
+    public async Task Two_quick_device_changes_go_one_after_the_other_so_neither_undoes_the_other()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        Saves(d => new HostSettingsView(true, RemoteFolderTrust: true,
+            RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]));
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+
+        // Revoke this app, then approve the phone, before any status event.
+        settings.TrustDevices.Single(d => d.Id == a).Approved = false;
+        settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2, "both changes");
+        var sent = host.Sent(HostOps.Settings).Select(s => s.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()).ToList()).ToList();
+        Assert.Equal([], sent[0]);
+        Assert.Equal([b], sent[1]);
+    }
+
+    [Fact]
+    public async Task A_change_made_after_the_last_is_in_but_before_its_status_event_keeps_what_the_last_one_did()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        Saves(d => new HostSettingsView(true, RemoteFolderTrust: true,
+            RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]));
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+
+        // Revoked, and the host's reply is in; its status event is not.
+        settings.TrustDevices.Single(d => d.Id == a).Approved = false;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "the revocation made");
+        Assert.Equal([a], connection.Status!.Settings.RemoteFolderTrustDevices!);
+        // Shown as the host acknowledged it, not as the status from before says.
+        Assert.False(settings.TrustDevices.Single(d => d.Id == a).Approved);
+
+        settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2, "the phone approved");
+        Assert.Equal([b], host.Sent(HostOps.Settings)[1].GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()));
+    }
+
+    [Fact]
+    public async Task A_status_that_arrives_while_a_change_is_on_its_way_is_checked_once_the_change_is_in()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        host.On(HostOps.Settings, d =>
+        {
+            var saved = new HostSettingsView(true, RemoteFolderTrust: true,
+                RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]);
+            // Saved, then this app revoked at the machine's terminal before the reply went: that
+            // status arrives first.
+            host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [b]) };
+            host.SendAsync(HostOps.StatusEvent, host.Status).GetAwaiter().GetResult();
+            return new SettingsResult(saved, false);
+        });
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+
+        settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "the phone approved");
+        await Wait.UntilAsync(() => !settings.TrustDevices.Single(d => d.Id == a).Approved && settings.TrustDevices.Single(d => d.Id == b).Approved, "what the host has now");
+    }
+
+    [Fact]
+    public async Task Turned_on_with_none_approved_this_apps_box_is_ticked_once_the_change_is_in_and_a_refused_switch_shows_the_hosts_word()
+    {
+        var link = new FleetTests.FakeFleetLink();
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        Saves(d => new HostSettingsView(true,
+            RemoteFolderTrust: d.TryGetProperty("remoteFolderTrust", out var t) ? t.GetBoolean() : host.Status.Settings.RemoteFolderTrust,
+            RemoteFolderTrustDevices: d.TryGetProperty("remoteFolderTrustDevices", out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : host.Status.Settings.RemoteFolderTrustDevices));
+        await Connected();
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 1, "this app's row");
+
+        // No status event follows: the row shows the host's reply once the change is in.
+        settings.RemoteFolderTrust = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "the change made");
+        await Wait.UntilAsync(() => settings.TrustDevices.Single().Approved, "this app's box ticked");
+
+        // Refused: the switch is told the host's word again after the change it asked for.
+        var told = new List<bool>();
+        settings.PropertyChanged += (_, e) => { if (e.PropertyName is "" or nameof(SettingsViewModel.RemoteFolderTrust)) { lock (told) { told.Add(settings.RemoteFolderTrust); } } };
+        host.On(HostOps.Settings, _ => throw new InvalidOperationException("the config file is locked"));
+        settings.RemoteFolderTrust = false;
+        await Wait.UntilAsync(() => settings.HasError && !settings.Busy, "the refusal");
+        await Wait.UntilAsync(() => { lock (told) { return told.Count > 0 && told[^1]; } }, "the switch told it is still on");
+        Assert.True(settings.RemoteFolderTrust);
+    }
+
+    [Fact]
+    public async Task A_status_that_arrives_during_a_change_that_fails_is_still_checked()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        Saves(d => new HostSettingsView(true, RemoteFolderTrust: true,
+            RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]));
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+        // The phone approved; the reply is in and held, its status event never sent.
+        settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "the phone approved");
+
+        // The next change fails, after the phone was revoked at the terminal and that status came.
+        host.On(HostOps.Settings, _ =>
+        {
+            host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
+            host.SendAsync(HostOps.StatusEvent, host.Status).GetAwaiter().GetResult();
+            throw new InvalidOperationException("the config file is locked");
+        });
+        settings.TrustDevices.Single(d => d.Id == a).Approved = false;
+
+        await Wait.UntilAsync(() => settings.HasError && !settings.Busy, "the refusal");
+        await Wait.UntilAsync(() => !settings.TrustDevices.Single(d => d.Id == b).Approved && settings.TrustDevices.Single(d => d.Id == a).Approved, "what the host has now");
+    }
+
+    [Fact]
+    public async Task A_device_revoked_at_the_terminal_while_another_is_approved_here_stays_revoked()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", c = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        link.PeopleNow.Add(new FleetHost(c, "Dana's browser"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        static string[] List(System.Text.Json.JsonElement d, string name) => d.TryGetProperty(name, out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : [];
+        var calls = 0;
+        // As the host does: a list made from one that is no longer saved changes nothing.
+        host.On(HostOps.Settings, d =>
+        {
+            // The phone is revoked at the machine's terminal just as the first change goes.
+            if (Interlocked.Increment(ref calls) == 1) { host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) }; }
+            var current = host.Status.Settings.RemoteFolderTrustDevices ?? [];
+            if (d.TryGetProperty("remoteFolderTrustDevicesWas", out _) && !List(d, "remoteFolderTrustDevicesWas").ToHashSet().SetEquals(current)) { return new SettingsResult(host.Status.Settings, false, Conflict: true); }
+            host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: List(d, "remoteFolderTrustDevices")) };
+            return new SettingsResult(host.Status.Settings, false);
+        });
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a, b]) });
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 3, "the devices");
+
+        settings.TrustDevices.Single(d => d.Id == c).Approved = true;
+
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2 && !settings.Busy, "the browser approved");
+        Assert.Equal([a, c], List(host.Sent(HostOps.Settings)[1], "remoteFolderTrustDevices"));
+        Assert.Equal([a, c], host.Status.Settings.RemoteFolderTrustDevices!);
+        Assert.False(settings.HasError);
+        await Wait.UntilAsync(() => !settings.TrustDevices.Single(d => d.Id == b).Approved && settings.TrustDevices.Single(d => d.Id == c).Approved, "the phone still revoked");
+    }
+
+    [Fact]
+    public async Task A_device_that_connects_while_a_change_is_on_its_way_leaves_the_boxes_showing_what_was_asked()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", c = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        using var gate = new ManualResetEventSlim();
+        Saves(d =>
+        {
+            gate.Wait(TimeSpan.FromSeconds(10));
+            return new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]);
+        });
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2 && settings.TrustDevices.Single(d => d.Id == a).Approved, "the devices");
+
+        try
+        {
+            settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+            await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "the phone's approval sent");
+            // A browser connects while it is on its way: the rows are made again, the phone's still ticked.
+            link.PeopleNow.Add(new FleetHost(c, "Dana's browser"));
+            link.Raise();
+            await Wait.UntilAsync(() => settings.TrustDevices.Count == 3, "the browser's row");
+            Assert.Equal([true, true, false], settings.TrustDevices.Select(d => d.Approved));
+        }
+        finally { gate.Set(); }
+        await Wait.UntilAsync(() => !settings.Busy, "the phone approved");
+        Assert.Equal([true, true, false], settings.TrustDevices.Select(d => d.Approved));
+    }
+
+    [Fact]
+    public async Task A_box_not_being_changed_shows_the_hosts_word_while_another_change_is_on_its_way()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        using var gate = new ManualResetEventSlim();
+        Saves(d =>
+        {
+            gate.Wait(TimeSpan.FromSeconds(10));
+            return new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]);
+        });
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: []) });
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+
+        try
+        {
+            settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+            await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "the phone's approval sent");
+            // This app approved at the machine's terminal meanwhile: its box says so at once.
+            host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
+            await host.SendAsync(HostOps.StatusEvent, host.Status);
+            await Wait.UntilAsync(() => settings.TrustDevices.Single(d => d.Id == a).Approved, "this app's box ticked");
+            Assert.True(settings.TrustDevices.Single(d => d.Id == b).Approved);
+        }
+        finally { gate.Set(); }
+    }
+
+    [Fact]
+    public async Task This_app_allowed_from_the_Launch_page_is_ticked_here_even_when_its_status_comes_before_the_reply()
+    {
+        var link = new FleetTests.FakeFleetLink();
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        host.On(HostOps.Settings, d =>
+        {
+            var saved = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]);
+            host.Status = host.Status with { Settings = saved };
+            host.SendAsync(HostOps.StatusEvent, host.Status).GetAwaiter().GetResult();
+            return new SettingsResult(saved, false);
+        });
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: []) });
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 1, "this app's row");
+        Assert.False(settings.TrustDevices.Single().Approved);
+
+        // As the Launch page's "Allow answering from this app" does.
+        await TrustEditor.For(connection).EditAsync(now => new SettingsRequest(RemoteFolderTrustDevices: [.. now.RemoteFolderTrustDevices ?? [], link.DeviceId!]));
+
+        await Wait.UntilAsync(() => settings.TrustDevices.Single().Approved, "this app's box ticked");
+    }
+
+    [Fact]
+    public async Task A_status_that_comes_while_the_host_is_read_again_is_checked_after_the_read()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        Saves(d => new HostSettingsView(true, RemoteFolderTrust: true,
+            RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]));
+        var before = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
+        await ConnectedWith(before);
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+        // The phone approved; the reply is in and held, its status event not sent yet.
+        settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "the phone approved");
+        var approved = host.Status;
+
+        // A status from before arrives late, so the host is read again; that read is answered
+        // from before the phone's status event, which comes while it is on its way.
+        var reads = 0;
+        host.On(HostOps.Status, _ =>
+        {
+            if (Interlocked.Increment(ref reads) > 1) { return host.Status; }
+            host.SendAsync(HostOps.StatusEvent, approved).GetAwaiter().GetResult();
+            return before;
+        });
+        await host.SendAsync(HostOps.StatusEvent, before);
+
+        await Wait.UntilAsync(() => Volatile.Read(ref reads) >= 1, "the host read again");
+        // Its answer, older than the status that came meanwhile, has been taken in by now.
+        await Task.Delay(300);
+        await Wait.UntilAsync(() => settings.TrustDevices.Single(d => d.Id == b).Approved, "what the host has now");
+    }
+    [Fact]
+    public async Task A_device_ticked_and_unticked_quickly_ends_unapproved_and_so_does_the_switch()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        Saves(d => new HostSettingsView(true,
+            RemoteFolderTrust: d.TryGetProperty("remoteFolderTrust", out var t) ? t.GetBoolean() : host.Status.Settings.RemoteFolderTrust,
+            RemoteFolderTrustDevices: d.TryGetProperty("remoteFolderTrustDevices", out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : host.Status.Settings.RemoteFolderTrustDevices));
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) });
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+
+        var phone = settings.TrustDevices.Single(d => d.Id == b);
+        phone.Approved = true;
+        phone.Approved = false;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2, "both clicks");
+        Assert.Equal([a], host.Sent(HostOps.Settings)[1].GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()));
+        Assert.False(phone.Approved);
+
+        settings.RemoteFolderTrust = false;
+        settings.RemoteFolderTrust = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 4, "both switches");
+        Assert.True(host.Sent(HostOps.Settings)[3].GetProperty("remoteFolderTrust").GetBoolean());
     }
 
     [Fact]

@@ -3,7 +3,8 @@
     x:Class="AgentBridge.App.SettingsView"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:AgentBridge.App">
+    xmlns:local="using:AgentBridge.App"
+    xmlns:core="using:AgentBridge.App.Core">
     <ScrollViewer AutomationProperties.AutomationId="SettingsPane">
         <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, which pushed
              the column off the right edge (see LaunchView). -->
@@ -107,6 +108,27 @@
                 <TextBlock
                     Style="{StaticResource AbSecondaryText}"
                     Text="Off: Copilot's Approve once and Deny are answered only in the agent's own window. Questions are still answered anywhere. A change applies when the host restarts." />
+                <ToggleSwitch
+                    Header="Answer folder-trust questions from my devices"
+                    AutomationProperties.AutomationId="RemoteFolderTrust"
+                    IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}"
+                    IsOn="{x:Bind ViewModel.RemoteFolderTrust, Mode=TwoWay}" />
+                <TextBlock
+                    Style="{StaticResource AbSecondaryText}"
+                    Text="When an agent launched from a device asks whether to trust its folder, Trust or Quit can be answered from the devices approved below. Trusting a folder lets the agent run what is in it. Off: it is answered only at this machine. Applies at once." />
+                <ItemsControl
+                    AutomationProperties.AutomationId="TrustDevices"
+                    ItemsSource="{x:Bind ViewModel.TrustDevices, Mode=OneWay}"
+                    Visibility="{x:Bind local:Ui.Show(ViewModel.ShowTrustDevices), Mode=OneWay}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="core:TrustDevice">
+                            <CheckBox
+                                AutomationProperties.AutomationId="TrustDevice"
+                                Content="{x:Bind Label}"
+                                IsChecked="{x:Bind Approved, Mode=TwoWay}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
     
                 <!-- The app itself. -->
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="This app" />

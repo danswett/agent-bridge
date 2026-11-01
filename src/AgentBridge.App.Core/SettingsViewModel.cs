@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using AgentBridge.Local;
 
 namespace AgentBridge.App.Core;
@@ -57,6 +58,8 @@ public sealed class SettingsViewModel : Observable
         this.savePrefs = savePrefs;
         AppVersion = appVersion;
         relayUrl = prefs().Relay ?? defaultRelay;
+        trust = TrustEditor.For(host);
+        trust.Changed += Refresh;
         host.Changed += Refresh;
         Refresh();
     }
@@ -110,6 +113,138 @@ public sealed class SettingsViewModel : Observable
         set { if (Status is { } s && s.Settings.RemoteApproval != value) { _ = RunAsync(() => host.CallAsync(HostOps.Settings, new SettingsRequest(RemoteApproval: value))); } }
     }
 
+    // launch.remoteFolderTrust: a person may answer a launched agent's folder-trust question from
+    // their devices, each approved here (launch.remoteFolderTrustDevices). Both apply at once.
+    // Turned on with none approved yet, this app is approved with it: the way most people
+    // will answer, and a setting that lets no device answer would look broken.
+    // While changes are on their way, what was last asked for, so a switch turned on and straight
+    // back off is not taken for no change (the host's status still says off) and lost.
+    bool? trustWanted;
+
+    public bool RemoteFolderTrust
+    {
+        get => trustWanted ?? trust.Settings?.RemoteFolderTrust ?? false;
+        set
+        {
+            if (Status is null || RemoteFolderTrust == value) { return; }
+            trustWanted = value;
+            _ = SwitchAsync(value);
+        }
+    }
+
+    async Task SwitchAsync(bool value)
+    {
+        Interlocked.Increment(ref switching);
+        try
+        {
+            await TrustSettingsAsync(now => new SettingsRequest(RemoteFolderTrust: value,
+                RemoteFolderTrustDevices: value && (now.RemoteFolderTrustDevices ?? []).Count == 0 && fleet?.DeviceId is { } me ? [me] : null));
+        }
+        finally { Interlocked.Decrement(ref switching); }
+        // Its boxes were held while it was on its way.
+        DrawDevices();
+    }
+
+    // Changes to who may answer go one at a time through the editor the Launch page uses too, each
+    // made from the host's list as it is then (TrustEditor).
+    readonly TrustEditor trust;
+    int pendingEdits;
+
+    async Task TrustSettingsAsync(Func<HostSettingsView, SettingsRequest?> change)
+    {
+        Interlocked.Increment(ref pendingEdits);
+        try
+        {
+            await RunAsync(() => trust.EditAsync(change));
+            // Not made: the switch shows what the host has again.
+            if (Error is not null) { trustWanted = null; }
+        }
+        finally
+        {
+            // The last one in: the switch and every device row show what the host has now,
+            // which redraws held back while changes were on their way did not.
+            if (Interlocked.Decrement(ref pendingEdits) == 0) { Refresh(); }
+        }
+    }
+
+    // The devices that may answer: this app, the account's people's devices the relay lists now
+    // (the PWA on a phone or browser, this app on another machine), and any approved that are not
+    // connected now. Each with whether it is approved, which a person changes here.
+    public IReadOnlyList<TrustDevice> TrustDevices { get; private set; } = [];
+    public bool ShowTrustDevices => RemoteFolderTrust && TrustDevices.Count > 0;
+
+    Fleet? fleet;
+
+    // The account's devices come from the relay link, made after this page.
+    internal void AttachFleet(Fleet f)
+    {
+        fleet = f;
+        f.Changed += DrawDevices;
+        DrawDevices();
+    }
+
+    void DrawDevices()
+    {
+        var approved = trust.Settings?.RemoteFolderTrustDevices ?? [];
+        var me = fleet?.DeviceId;
+        var rows = new List<(string Id, string Label)>();
+        if (me is not null) { rows.Add((me, $"This app ({Environment.MachineName})")); }
+        foreach (var p in fleet?.People ?? [])
+        {
+            if (p.Id != me && rows.All(r => r.Id != p.Id)) { rows.Add((p.Id, p.Name is { Length: > 0 } n ? n : "A device")); }
+        }
+        foreach (var id in approved.Where(id => rows.All(r => r.Id != id))) { rows.Add((id, "A device not connected now")); }
+
+        var next = rows.Select(r => (r.Id, Label: $"{r.Label} · {r.Id[..Math.Min(8, r.Id.Length)]}", Approved: approved.Contains(r.Id))).ToList();
+        // The same rows, kept: a presence update does not recreate the checkboxes on screen.
+        if (next.Count == TrustDevices.Count && next.Zip(TrustDevices).All(p => p.First.Id == p.Second.Id && p.First.Label == p.Second.Label))
+        {
+            // While a change to a box is on its way, it shows what was asked for, not a status from
+            // before; the others show the host's word meanwhile (one drawn before the host's status
+            // came would otherwise stay wrong until every change was in).
+            foreach (var (row, d) in next.Zip(TrustDevices)) { if (!Held(d.Id)) { d.Show(row.Approved); } }
+        }
+        else
+        {
+            // A device joining or leaving while changes are on their way: a box being changed keeps
+            // what was asked for, as above; the rest show what the host says.
+            var asked = TrustDevices.Where(d => Held(d.Id)).ToDictionary(d => d.Id, d => d.Approved);
+            TrustDevices = [.. next.Select(r => new TrustDevice(this, r.Id, r.Label, asked.TryGetValue(r.Id, out var a) ? a : r.Approved))];
+            Raise(nameof(TrustDevices));
+        }
+        Raise(nameof(ShowTrustDevices));
+    }
+
+    // Boxes with a change of their own on its way, by device id.
+    readonly ConcurrentDictionary<string, int> asking = new(StringComparer.Ordinal);
+    int switching;
+
+    // Whether a box shows what was asked rather than the host's word: its own change is on its way,
+    // or the switch's (turned on, it approves this app), or a change from the Launch page is.
+    bool Held(string id) => (asking.TryGetValue(id, out var n) && n > 0) || Volatile.Read(ref switching) > 0
+        || (Volatile.Read(ref pendingEdits) == 0 && trust.Pending);
+
+    internal async Task ApproveAsync(TrustDevice device, bool on)
+    {
+        if (Status is not null)
+        {
+            asking.AddOrUpdate(device.Id, 1, (_, n) => n + 1);
+            try
+            {
+                await TrustSettingsAsync(now =>
+                {
+                    var devices = now.RemoteFolderTrustDevices ?? [];
+                    if (devices.Contains(device.Id) == on) { return null; }
+                    return new SettingsRequest(RemoteFolderTrustDevices: on ? [.. devices, device.Id] : [.. devices.Where(d => d != device.Id)]);
+                });
+            }
+            finally { asking.AddOrUpdate(device.Id, 0, (_, n) => n - 1); }
+        }
+        // What the host says now, whatever the checkbox was left showing.
+        DrawDevices();
+        device.Reraise();
+    }
+
     // Each setter acts only on a change: a binding refreshing pushes the same value back.
     public bool StartAtSignIn
     {
@@ -148,6 +283,8 @@ public sealed class SettingsViewModel : Observable
     public void Refresh()
     {
         if (!nameEdited) { machineName = Status?.Settings.Name ?? Status?.Machine.Name ?? ""; }
+        if (Volatile.Read(ref pendingEdits) == 0) { trustWanted = null; }
+        DrawDevices();
         RaiseAll();
     }
 
@@ -250,4 +387,36 @@ public sealed class SettingsViewModel : Observable
     }
 
     static string Host(string? url) => Uri.TryCreate(url, UriKind.Absolute, out var u) ? u.Host : url ?? "the relay";
+}
+
+// One device on the Settings page that may be approved to answer folder-trust questions.
+public sealed class TrustDevice(SettingsViewModel page, string id, string label, bool approved) : Observable
+{
+    bool approved = approved;
+
+    public string Id { get; } = id;
+    public string Label { get; } = label;
+
+    // Shown as asked at once, and every change sent, so ticking and unticking quickly ends as
+    // unticked rather than the second click being taken for no change.
+    public bool Approved
+    {
+        get => approved;
+        set
+        {
+            if (value == approved) { return; }
+            approved = value;
+            Raise();
+            _ = page.ApproveAsync(this, value);
+        }
+    }
+
+    internal void Reraise() => Raise(nameof(Approved));
+
+    internal void Show(bool now)
+    {
+        if (approved == now) { return; }
+        approved = now;
+        Raise(nameof(Approved));
+    }
 }
