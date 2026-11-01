@@ -133,8 +133,14 @@ test('a folded row gets the new activity dot when its session updates, and openi
   // An open row's news is seen as it comes.
   await upsert(page, CLAUDE, { updatedAt: later() });
   await expect(card(page, CLAUDE).locator('.unread-dot')).toHaveCount(0);
-  // It goes once the row is opened.
+  // It goes once the row is opened, by its title or from outside (a notification's link).
   await codex.locator('.fold').click();
+  await expect(codex.locator('.unread-dot')).toHaveCount(0);
+  await codex.locator('.fold').click();
+  await upsert(page, CODEX, { updatedAt: later() });
+  await expect(codex.locator('.unread-dot')).toBeVisible();
+  await page.evaluate((id) => window.agentBridgeDemo.page.showSession(id), CODEX);
+  await expect(codex.locator('.fold')).toHaveAttribute('aria-expanded', 'true');
   await expect(codex.locator('.unread-dot')).toHaveCount(0);
   expect(await order(page)).toEqual(FIRST);
 });
@@ -277,6 +283,19 @@ for (const width of [900, 1440]) {
       const sort = await page.locator('#session-sort').boundingBox();
       expect(sort.x + sort.width).toBeLessThanOrEqual(head.x + head.width + 0.5);
       expect(sort.x).toBeGreaterThan(head.x + head.width / 2);
+    });
+
+    test('group headings and Ended span the whole list, never sharing a row with a card', async ({ page }) => {
+      await openDemo(page);
+      await card(page, CODEX).locator('.fold').click({ button: 'right' });
+      await card(page, CODEX).getByRole('menuitem', { name: 'Pin' }).click();
+      await page.evaluate((id) => window.agentBridgeDemo.remove(id), CLAUDE);
+      await expect(page.locator('.ended-group')).toBeVisible();
+      const list = await page.locator('#session-list').boundingBox();
+      for (const el of [page.locator('.list-group').first(), page.locator('.list-group').last(), page.locator('.ended-group')]) {
+        const box = await el.boundingBox();
+        expect(Math.abs(box.width - list.width)).toBeLessThan(1);
+      }
     });
   });
 }

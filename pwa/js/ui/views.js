@@ -87,6 +87,8 @@ export class SessionListView {
           card = new SessionCard(s, {
             hostId, folds: this.folds, fetchDetail: (id) => this.fetchDetail(hostId, id),
             machineName: m.name, labelled: m.show, answering: () => this.answering(hostId),
+            // Opened, by its title, a notification or a launch, its news is seen.
+            onFold: () => this.schedule(),
           });
           card.element.dataset.key = key;
           card.els.frame.prepend(h('span', { class: 'drag-handle', 'aria-hidden': 'true', title: 'Drag to move' }));
@@ -210,8 +212,6 @@ export class SessionListView {
     c.addEventListener('click', (e) => {
       if (this.#swallowClick && e.target.closest?.('.fold')) { this.#swallowClick = false; e.preventDefault(); e.stopPropagation(); }
     }, true);
-    // A card opened by its title: what it shows now is seen. After the title's own handler.
-    c.addEventListener('click', (e) => { if (e.target.closest?.('.fold')) { this.schedule(); } });
     c.addEventListener('pointerdown', (e) => {
       if (e.target.closest?.('.drag-handle')) { this.#drag(e); return; }
       if (e.pointerType === 'touch' && e.target.closest?.('.fold')) { this.#longPress(e); }
@@ -225,6 +225,8 @@ export class SessionListView {
     this.#cancelPress();
     const press = { id: e.pointerId, x: e.clientX, y: e.clientY };
     press.timer = setTimeout(() => {
+      // Its listeners go with it: #cancelPress() finds no press once this one has fired.
+      press.off();
       this.#press = null;
       this.#swallowClick = true;
       // A click may never come (the finger slid off): don't let one swallow the next tap.

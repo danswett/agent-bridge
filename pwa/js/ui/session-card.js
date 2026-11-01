@@ -54,8 +54,9 @@ export class SessionCard {
   // answering() -> { service, replies, stops, hostId, capabilities } | null: who answers
   // questions, sends replies and ends sessions, and whether the card's machine takes each at
   // all. labelled: whether the card names its machine, as it does with every machine shown.
-  constructor(session, { hostId = null, folds, fetchDetail, machineName, labelled = false, answering = () => null }) {
-    Object.assign(this, { hostId, folds, fetchDetail, machineName, labelled, answering });
+  // onFold(folded): told whenever the card is folded or opened, by its title or from outside.
+  constructor(session, { hostId = null, folds, fetchDetail, machineName, labelled = false, answering = () => null, onFold = () => {} }) {
+    Object.assign(this, { hostId, folds, fetchDetail, machineName, labelled, answering, onFold });
     const n = ++seq;
     this.ids = { title: `s${n}-title`, body: `s${n}-body` };
     this.#build();
@@ -374,6 +375,7 @@ export class SessionCard {
   setFolded(folded) {
     this.folds.setFolded(this.#foldKey, folded);
     this.#applyFolded(folded);
+    this.onFold(folded);
   }
 
   #applyFolded(folded) {

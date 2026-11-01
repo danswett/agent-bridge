@@ -63,6 +63,22 @@ test('a machine\'s snapshot, drawn as it arrives, is placed newest first once th
   assert.deepEqual(shown(o, list, opts).sessions, ['newest', 'mid', 'old']);
 });
 
+test('a row its machine has not finished sending can neither move nor be passed until it has a place', () => {
+  const o = new SessionOrder({ storage: new MemoryStorage() });
+  shown(o, [entry('saved', 1)]);
+  let settled = false;
+  const opts = { settled: (h) => h !== 'h2' || settled };
+  const list = [entry('a', 9, 'h2'), entry('b', 8, 'h2'), entry('saved', 1)];
+  assert.deepEqual(shown(o, list, opts).sessions, ['a', 'b', 'saved']);
+  assert.equal(o.canMove(key('a', 'h2'), 1), false);
+  assert.equal(o.move(key('b', 'h2'), -1), false);
+  assert.equal(o.canMove(key('saved'), -1), false);
+  assert.equal(o.place(key('saved'), key('a', 'h2')), false);
+  settled = true;
+  shown(o, list, opts);
+  assert.ok(o.move(key('b', 'h2'), -1));
+  assert.deepEqual(shown(o, list, opts).sessions, ['b', 'a', 'saved']);
+});
 test('moves persist across a reload of the page', () => {
   const storage = new MemoryStorage();
   const list = [entry('a', 3), entry('b', 2), entry('c', 1)];

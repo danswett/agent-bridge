@@ -61,7 +61,7 @@ export class SessionOrder {
   #ended = [];
   // What the last arrange() showed, by group: moves are among the rows on screen, not among
   // rows remembered for sessions that aren't shown.
-  #shown = { pinned: [], sessions: [] };
+  #shown = { pinned: [], sessions: [], pending: new Set() };
 
   constructor({ storage = globalThis.localStorage, now = () => Date.now() } = {}) {
     this.storage = storage;
@@ -110,7 +110,7 @@ export class SessionOrder {
     const pins = new Set(s.pinned);
     const pinned = entries.filter((e) => pins.has(keyOf(e))).sort(by);
     const sessions = entries.filter((e) => !pins.has(keyOf(e))).sort(by);
-    this.#shown = { pinned: pinned.map(keyOf), sessions: sessions.map(keyOf) };
+    this.#shown = { pinned: pinned.map(keyOf), sessions: sessions.map(keyOf), pending: new Set(pending) };
     const live = new Set(entries.map(keyOf));
     const ended = this.#ended.filter((e) => shows(e.hostId) && !live.has(keyOf(e)));
     return { pinned, sessions, ended };
@@ -141,12 +141,13 @@ export class SessionOrder {
     return this.#shown.pinned.includes(key) ? 'pinned' : this.#shown.sessions.includes(key) ? 'sessions' : null;
   }
 
-  // Whether a row on screen can move by one (delta -1 up, 1 down) within its group.
+  // Whether a row on screen can move by one (delta -1 up, 1 down) within its group. Not past a row,
+  // nor a row itself, its machine hasn't finished sending: it has no place yet to move relative to.
   canMove(key, delta) {
     const g = this.#group(key);
-    if (this.sort !== 'yours' || !g) { return false; }
+    if (this.sort !== 'yours' || !g || this.#shown.pending.has(key)) { return false; }
     const i = this.#shown[g].indexOf(key) + delta;
-    return i >= 0 && i < this.#shown[g].length;
+    return i >= 0 && i < this.#shown[g].length && !this.#shown.pending.has(this.#shown[g][i]);
   }
 
   // Moves a row past its neighbour on screen. Rows remembered for sessions not shown keep
@@ -163,7 +164,8 @@ export class SessionOrder {
   // A drag: the row goes before (or after) the target row, and into the target's group, so a
   // row dragged among the pinned ones is pinned.
   place(key, target, after = false) {
-    if (this.sort !== 'yours' || key === target || !this.#group(key) || !this.#group(target)) { return false; }
+    const { pending } = this.#shown;
+    if (this.sort !== 'yours' || key === target || !this.#group(key) || !this.#group(target) || pending.has(key) || pending.has(target)) { return false; }
     this.#insert(key, target, after);
     return true;
   }
