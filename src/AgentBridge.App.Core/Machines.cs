@@ -70,6 +70,9 @@ public interface IFleetLink : IAsyncDisposable
     // The account's machines that are offline, as the relay's roster remembers them; null while
     // the relay keeps none (an older relay), so none can be forgotten either.
     IReadOnlyList<KnownMachine>? Offline => null;
+    // Hosts and Offline as one reading of the relay: read apart, a machine coming online in between
+    // would be in neither, and look forgotten.
+    (IReadOnlyList<FleetHost> Hosts, IReadOnlyList<KnownMachine>? Offline) Snapshot => (Hosts, Offline);
     // Asks the relay to forget one of them: null when it has, or why not (OfflineMachineViewModel.Explain).
     Task<string?> ForgetAsync(string machineId, CancellationToken ct) => Task.FromResult<string?>("unsupported");
 
@@ -204,10 +207,10 @@ public sealed class Fleet : IAsyncDisposable
         // published its presence would be taken, with the state read after, for every machine gone.
         var now = link.Account;
         var state = link.State;
-        var present = link.Hosts;
-        // Inside the same reading: one taken after the recheck could be a dropped link's null
-        // with the state still read as Connected, and clear the list it should keep.
-        var offline = link.Offline;
+        // The hosts and the offline list as one reading of the relay. Inside the same reading as the
+        // rest: an offline list taken after the recheck could be a dropped link's null with the
+        // state still read as Connected, and clear the list it should keep.
+        var (present, offline) = link.Snapshot;
         var from = link.AccountId;
         var hosts = present.Where(h => h.Id != me).ToDictionary(h => h.Id, StringComparer.Ordinal);
         if (link.Account != now || link.State != state) { return; }
@@ -360,11 +363,15 @@ public sealed class RelayFleetLink : IFleetLink
     public int Account => Volatile.Read(ref accountGeneration);
     public string? AccountId => current?.AccountId;
 
-    public IReadOnlyList<FleetHost> Hosts => current is { } c
-        ? [.. c.Relay.Presence.Where(p => p.Kind == "host" && p.Id != c.Relay.DeviceId).Select(p => new FleetHost(p.Id, p.Name))]
-        : [];
+    public IReadOnlyList<FleetHost> Hosts => current is { } c ? HostsOf(c, c.Relay.Presence) : [];
+
+    static IReadOnlyList<FleetHost> HostsOf(Current c, IReadOnlyList<PresenceEntry> presence) =>
+        [.. presence.Where(p => p.Kind == "host" && p.Id != c.Relay.DeviceId).Select(p => new FleetHost(p.Id, p.Name))];
 
     public IReadOnlyList<KnownMachine>? Offline => current?.Relay.Known;
+
+    public (IReadOnlyList<FleetHost> Hosts, IReadOnlyList<KnownMachine>? Offline) Snapshot =>
+        current is { } c && c.Relay.Roster is var r ? (HostsOf(c, r.Presence), r.Known) : ([], null);
 
     // As a person's device (kind "app"), which the relay requires of a forget.
     public async Task<string?> ForgetAsync(string machineId, CancellationToken ct) =>

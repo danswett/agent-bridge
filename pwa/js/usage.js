@@ -222,6 +222,7 @@ export class UsageBook {
   // host still passes it on, until they come back.
   #forgotten = new Set();
   #members = null;
+  #excluded = new Set();
 
   constructor({ now = () => Date.now() } = {}) { this.now = now; }
 
@@ -234,6 +235,7 @@ export class UsageBook {
     if (!machineId) { return; }
     // A machine reporting is the account's again, whether or not it was forgotten.
     this.#forgotten.delete(machineId);
+    this.#excluded.delete(machineId);
     this.#reports.set(machineId, { report: readUsage(report), name: typeof name === 'string' && name ? name : null });
     this.#keep();
     this.#emit();
@@ -267,10 +269,16 @@ export class UsageBook {
 
   // Whether what a machine read is still the account's: not forgotten while this page is open, and,
   // where the relay keeps a roster, one of its machines (one forgotten while the page was closed is
-  // in neither presence nor the roster).
+  // in neither presence nor the roster). One a roster has left out stays out once there is none,
+  // until a roster lists it again or it reports itself: a host's report from before still carries
+  // what it passed on, and would otherwise bring it back.
   #stands(a) {
     const id = a.readBy?.id;
-    return !id || (!this.#forgotten.has(id) && (!this.#members || this.#members.has(id)));
+    if (!id || this.#forgotten.has(id)) { return !id; }
+    if (!this.#members) { return !this.#excluded.has(id); }
+    if (this.#members.has(id)) { this.#excluded.delete(id); return true; }
+    this.#excluded.add(id);
+    return false;
   }
 
   // The account's machines, online or not, as the relay's roster and presence have them; null
@@ -280,6 +288,9 @@ export class UsageBook {
     const same = next === null ? this.#members === null : this.#members !== null && next.size === this.#members.size && [...next].every((id) => this.#members.has(id));
     if (same) { return; }
     this.#members = next;
+    // Everything held now is checked against it at once, so what it leaves out is remembered even
+    // where nothing is kept or drawn before the roster is gone again.
+    if (next) { this.#current(); }
     this.#keep();
     this.#emit();
   }
@@ -345,6 +356,7 @@ export class UsageBook {
     this.#saved = '[]';
     this.#forgotten.clear();
     this.#members = null;
+    this.#excluded.clear();
     if (had) { this.#emit(); }
   }
 }

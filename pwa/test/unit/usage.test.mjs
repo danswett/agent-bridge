@@ -248,6 +248,19 @@ test('a failure kept beside a reading keeps its own time, and stands once the re
 
 const hasWindows = (e) => e.windows.length > 0;
 
+test('a machine a roster leaves out stays out once there is no roster, until one lists it again', () => {
+  const book = new UsageBook({ now: () => NOW });
+  book.useCache({ entries: [], save: () => {} });
+  // The desk has not heard yet that the old laptop was forgotten, and passes its reading on.
+  book.set('desk-id', { agents: [claude({ readBy: { id: 'gone-id', name: 'Old laptop' } })] }, 'Desk');
+  book.roster(['desk-id']);
+  assert.deepEqual(book.entries(), []);
+  book.roster(null);
+  assert.deepEqual(book.entries(), []);
+  book.roster(['desk-id', 'gone-id']);
+  assert.deepEqual(book.entries().map(readOn), ['read on Old laptop']);
+});
+
 test('a machine whose discovery is held says so on its status line, as agent-ha-bridge did', () => {
   assert.equal(machineStatus({ sessions: 2, hostVersion: '0.1.0', held: 'an unrecognised copilot process (pid 4120)' }),
     '2 sessions \u00b7 0.1.0 \u00b7 discovery held: an unrecognised copilot process (pid 4120)');

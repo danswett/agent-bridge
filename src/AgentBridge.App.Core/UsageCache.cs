@@ -20,6 +20,8 @@ public sealed class UsageCache
     List<AgentUsage> entries = [];
     string saved = "";
     readonly HashSet<string> forgotten = new(StringComparer.Ordinal);
+    // Machines the relay's roster has left out (Merge): not the account's, until it lists them again.
+    readonly HashSet<string> excluded = new(StringComparer.Ordinal);
 
     sealed record Saved(int V, string? Account, List<AgentUsage>? Readings);
 
@@ -49,25 +51,36 @@ public sealed class UsageCache
     public UsageReport Merge(UsageReport live, string? account, IReadOnlySet<string>? members = null)
     {
         var oldest = time.GetUtcNow() - Kept;
-        // Whatever passes on a forgotten machine's readings (another host that has not heard yet)
-        // brings none of them back; and none past their 14 days takes part. Both are left out before
-        // anything is merged: chosen first and dropped after, either would hide one that stands.
-        bool Stands(AgentUsage a) => a.MeasuredAt >= oldest
-            && (a.ReadBy is not { } by || (!forgotten.Contains(by.Id) && (members is null || members.Contains(by.Id))));
-        live = new UsageReport([.. live.Agents.Where(Stands)]);
-        // Signed out: what was kept is the account's, and goes, file and all.
+        // Signed out: what was kept is the account's, and goes, file and all. Another account:
+        // nothing kept, forgotten or left out for the last one is this one's.
         if (account is "")
         {
             if (this.account is not null || entries.Count > 0) { Clear(); }
-            return live;
         }
-        if (account is not null && account != this.account)
+        else if (account is not null && account != this.account)
         {
             this.account = account;
             entries = [];
             forgotten.Clear();
+            excluded.Clear();
         }
-        else if (account is null && this.account is null) { return live; }
+        // What a roster leaves out stays out once there is none (reconnecting, elsewhere), until a
+        // roster lists that machine again or it comes online: a host's report from before still
+        // carries what it passed on, and would otherwise bring it back.
+        if (members is not null)
+        {
+            foreach (var id in live.Agents.Concat(entries).Select(a => a.ReadBy?.Id).OfType<string>())
+            {
+                if (members.Contains(id)) { excluded.Remove(id); } else { excluded.Add(id); }
+            }
+        }
+        // Whatever passes on a forgotten machine's readings (another host that has not heard yet)
+        // brings none of them back; and none past their 14 days takes part. Both are left out before
+        // anything is merged: chosen first and dropped after, either would hide one that stands.
+        bool Stands(AgentUsage a) => a.MeasuredAt >= oldest
+            && (a.ReadBy is not { } by || (!forgotten.Contains(by.Id) && (members is null ? !excluded.Contains(by.Id) : members.Contains(by.Id))));
+        live = new UsageReport([.. live.Agents.Where(Stands)]);
+        if (account is "" || (account is null && this.account is null)) { return live; }
         // Live first: of two readings taken at the same moment, the one a machine is offering now.
         // A reading and a newer failure are kept apart, each with its own time; as many allowances
         // as a host keeps, the one read longest ago going first.
@@ -90,13 +103,19 @@ public sealed class UsageCache
         if (entries.RemoveAll(e => e.ReadBy?.Id == machineId) > 0 && account is not null) { Save(); }
     }
 
-    public void Present(IEnumerable<string> machineIds) => forgotten.ExceptWith(machineIds);
+    public void Present(IEnumerable<string> machineIds)
+    {
+        var online = machineIds.ToList();
+        forgotten.ExceptWith(online);
+        excluded.ExceptWith(online);
+    }
 
     void Clear()
     {
         account = null;
         entries = [];
         forgotten.Clear();
+        excluded.Clear();
         saved = "";
         if (path is null) { return; }
         try { File.Delete(path); }

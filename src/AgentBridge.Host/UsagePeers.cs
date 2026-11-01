@@ -133,8 +133,8 @@ public sealed class UsagePeers : IAsyncDisposable
     }
 
     // The account's machines, online or not, as the relay's roster has them; null without one.
-    HashSet<string>? Members(RelayClient relay) => relay.Known is not { } known ? null
-        : relay.Presence.Select(p => p.Id).Concat(known.Select(k => k.Id)).Append(me).ToHashSet(StringComparer.Ordinal);
+    HashSet<string>? Members(RelayClient relay) => relay.Roster is not { Known: { } known } roster ? null
+        : roster.Presence.Select(p => p.Id).Concat(known.Select(k => k.Id)).Append(me).ToHashSet(StringComparer.Ordinal);
 
     async Task AskAsync(Link l, PresenceEntry peer, CancellationToken cancellationToken)
     {

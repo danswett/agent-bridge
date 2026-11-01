@@ -186,6 +186,23 @@ public sealed class UsageTests
     }
 
     [Fact]
+    public void A_machine_a_roster_leaves_out_stays_out_once_there_is_no_roster_until_one_lists_it_again()
+    {
+        var clock = new FakeTimeProvider(Now);
+        var vm = new UsageViewModel(clock, new UsageCache(null, clock));
+        // Another host has not heard yet that the old laptop was forgotten, and passes its reading on.
+        var passedOn = new UsageReport([Agent("Laptop", 30) with { ReadBy = new UsageReader(new string('a', 32), "Old laptop") }]);
+        var desk = new string('d', 32);
+
+        vm.Update(passedOn, account: "1", members: new HashSet<string> { desk });
+        Assert.Empty(vm.Rows);
+        vm.Update(passedOn, account: "1", members: null);
+        Assert.Empty(vm.Rows);
+        vm.Update(passedOn, account: "1", members: new HashSet<string> { desk, new string('a', 32) });
+        Assert.Equal("read on Old laptop", Assert.Single(vm.Rows).ReadOn);
+    }
+
+    [Fact]
     public void A_reading_past_two_weeks_does_not_hide_a_current_failure_of_the_same_allowance()
     {
         var clock = new FakeTimeProvider(Now);
