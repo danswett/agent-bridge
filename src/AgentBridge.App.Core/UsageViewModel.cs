@@ -11,6 +11,8 @@ public sealed class UsageViewModel : Observable
     readonly TimeProvider time;
     readonly UsageCache? cache;
     UsageReport report = UsageReport.Empty;
+    UsageReport live = UsageReport.Empty;
+    string? account;
     string? here;
     string summary = "No usage reported yet";
 
@@ -31,10 +33,22 @@ public sealed class UsageViewModel : Observable
     // machine's host is signed in to, "" signed out, null not known yet (UsageCache.Merge).
     public void Update(UsageReport next, string? here = null, string? account = null)
     {
+        (live, this.account, this.here) = (next, account, here);
         report = cache?.Merge(next, account) ?? next;
-        this.here = here;
         Refresh();
     }
+
+    // A machine forgotten from the account's roster: what it read is shown and kept no more (#50).
+    public void Forget(string machineId)
+    {
+        if (cache is null) { return; }
+        cache.Forget(machineId);
+        report = cache.Merge(live, account);
+        Refresh();
+    }
+
+    // Machines online now: one forgotten earlier is the account's again.
+    public void Present(IEnumerable<string> machineIds) => cache?.Present(machineIds);
 
     // Also on a timer: ages and "resets in" move on without any update.
     public void Refresh()

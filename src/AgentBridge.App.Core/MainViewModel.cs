@@ -356,10 +356,18 @@ public sealed partial class MainViewModel : Observable
 
     // Each machine's readings marked with the machine that took them, merged, and kept between runs
     // for the account this machine's host is signed in to (#172).
-    void UpdateUsage() => Usage.Update(
-        new UsageReport(UsageMerge.Combine(machines.Select(m => UsageMerge.ReadOn(m.Host.Usage, m.Host.Hello?.Machine)))),
-        LocalMachineId,
-        host.Status is { } status ? status.Account?.AccountId ?? "" : null);
+    void UpdateUsage()
+    {
+        Usage.Present(machines.Select(m => m.Host.Hello?.Machine.Id).OfType<string>());
+        Usage.Update(
+            new UsageReport(UsageMerge.Combine(machines.Select(m => UsageMerge.ReadOn(m.Host.Usage, m.Host.Hello?.Machine)))),
+            LocalMachineId,
+            host.Status is { } status ? status.Account?.AccountId ?? "" : null);
+    }
+
+    // On the UI thread, from the fleet: a machine forgotten from the account's roster, from this
+    // device or another, takes its usage readings with it (#50, #172).
+    internal void Forgotten(string machineId) => Usage.Forget(machineId);
 
     void OnUpsert(Machine m, Session s)
     {

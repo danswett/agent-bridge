@@ -91,6 +91,9 @@ public sealed class Fleet : IAsyncDisposable
     readonly TimeProvider time;
     readonly Dictionary<string, Machine> machines = new(StringComparer.Ordinal);
     bool disposed;
+    // The offline list last read from a relay with a roster, for this account: a machine gone from
+    // the next one without coming online was forgotten.
+    IReadOnlyList<KnownMachine>? lastOffline;
     int account;
 
     public Fleet(IFleetLink link, MainViewModel main, IUiDispatcher ui, Func<FleetHost, Machine> create, TimeProvider? time = null)
@@ -221,7 +224,17 @@ public sealed class Fleet : IAsyncDisposable
         if (switched) { DropLoopback(); AccountChanged?.Invoke(); }
         if (state == FleetState.Connecting && !switched) { return; }
         // This machine's own host is never listed: the banner says when it is not running.
-        main.SetOffline(state == FleetState.Connected ? [.. (offline ?? []).Where(k => k.Id != me && !hosts.ContainsKey(k.Id))] : [], ForgetAsync, time, fresh: switched);
+        var listed = state == FleetState.Connected ? (offline ?? []).Where(k => k.Id != me && !hosts.ContainsKey(k.Id)).ToList() : [];
+        main.SetOffline(listed, ForgetAsync, time, fresh: switched);
+        // A machine that leaves the offline list without coming online was forgotten, from this
+        // device or another (pwa/js/forget.js, vanished): only between two lists from a relay with a
+        // roster, of one account. Its usage readings go with it (#172).
+        if (state == FleetState.Connected && !switched && lastOffline is not null && offline is not null)
+        {
+            foreach (var id in lastOffline.Select(k => k.Id).Except(offline.Select(k => k.Id)).Where(id => !hosts.ContainsKey(id) && id != me)) { main.Forgotten(id); }
+        }
+        if (switched) { lastOffline = null; }
+        if (state == FleetState.Connected) { lastOffline = offline; }
         foreach (var id in machines.Keys.Where(id => !hosts.ContainsKey(id)).ToList())
         {
             machines.Remove(id, out var gone);

@@ -438,6 +438,7 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Null(Row(AgentKind.Copilot).ReadOn);
 
         // The build server goes offline, and two hours pass.
+        link.Known = [new KnownMachine("remote-id", "Build server", "host", Make.T0)];
         link.Set(FleetState.Connected, ("host-id", "Test PC"));
         await Wait.UntilAsync(() => main.AllMachines.Count == 1, "the build server to go");
         clock.Advance(TimeSpan.FromHours(2));
@@ -453,6 +454,13 @@ public sealed class FleetTests : IAsyncLifetime
         // A device that has never seen an allowance shows nothing for it; another account sees none.
         restarted.Update(UsageReport.Empty, "host-id", account: "2");
         Assert.Empty(restarted.Rows);
+
+        // Forgotten, the build server takes its reading with it, here and in what is kept.
+        Assert.Null(await link.ForgetAsync("remote-id", default));
+        await Wait.UntilAsync(() => main.Usage.Rows.Count == 1, "the forgotten machine's reading to go");
+        var afterwards = new UsageViewModel(clock, new UsageCache(cacheFile, clock));
+        afterwards.Update(UsageReport.Empty, "host-id", account: null);
+        Assert.Equal(AgentKind.Copilot, Assert.Single(afterwards.Rows).Agent);
     }
 
     [Fact]

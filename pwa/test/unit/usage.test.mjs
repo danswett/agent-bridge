@@ -160,18 +160,27 @@ test('a reading a host passed on keeps the machine that took it, and a kept one 
   assert.deepEqual(kept.map((e) => e.accountKey), ['3f9a2c71b0de']);
 });
 
-test('a forgotten machine takes what it read with it, and signing out keeps nothing', () => {
+test('a forgotten machine takes what it read with it, even where another host passes it on, and signing out keeps nothing', () => {
   const book = new UsageBook({ now: () => NOW });
   let kept = null;
-  book.useCache({ entries: [claude({ readBy: { id: 'vm-id', name: 'Rehearsal VM' } })], save: (e) => { kept = e; } });
+  const byVm = { readBy: { id: 'vm-id', name: 'Rehearsal VM' } };
+  book.useCache({ entries: [claude(byVm)], save: (e) => { kept = e; } });
   book.set('desk-id', { agents: [reading()] }, 'Desk');
   book.delete('vm-id', { forget: true });
   assert.deepEqual(book.entries().map((e) => e.agent), ['copilot']);
   assert.deepEqual(kept.map((e) => e.agent), ['copilot']);
+  // The desk has not heard yet, and passes the VM's reading on.
+  book.set('desk-id', { agents: [reading(), claude(byVm)] }, 'Desk');
+  assert.deepEqual(book.entries().map((e) => e.agent), ['copilot']);
+  assert.deepEqual(kept.map((e) => e.agent), ['copilot']);
+  // Back, and the account's again.
+  book.set('vm-id', { agents: [claude()] }, 'Rehearsal VM');
+  assert.deepEqual(book.entries().map((e) => e.agent).sort(), ['claude', 'copilot']);
   book.clear();
   assert.equal(book.empty, true);
-  book.set('vm-id', { agents: [claude()] }, 'Rehearsal VM');
-  assert.deepEqual(kept.map((e) => e.agent), ['copilot']);
+  const before = kept;
+  book.set('vm-id', { agents: [claude({ accountKey: 'aaaabbbbcccc' })] }, 'Rehearsal VM');
+  assert.equal(kept, before);
 });
 
 test('a machine whose discovery is held says so on its status line, as agent-ha-bridge did', () => {

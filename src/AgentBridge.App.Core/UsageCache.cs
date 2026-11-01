@@ -19,6 +19,7 @@ public sealed class UsageCache
     string? account;
     List<AgentUsage> entries = [];
     string saved = "";
+    readonly HashSet<string> forgotten = new(StringComparer.Ordinal);
 
     sealed record Saved(int V, string? Account, List<AgentUsage>? Readings);
 
@@ -44,12 +45,16 @@ public sealed class UsageCache
     // that is not known yet (what is kept is shown, and nothing is written). Returns the merge.
     public UsageReport Merge(UsageReport live, string? account)
     {
+        // Whatever passes on a forgotten machine's readings (another host that has not heard yet)
+        // brings none of them back.
+        if (forgotten.Count > 0) { live = new UsageReport([.. live.Agents.Where(a => a.ReadBy is not { } by || !forgotten.Contains(by.Id))]); }
         if (account is "") { return live; }
         var oldest = time.GetUtcNow() - Kept;
         if (account is not null && account != this.account)
         {
             this.account = account;
             entries = [];
+            forgotten.Clear();
         }
         else if (account is null && this.account is null) { return live; }
         // Live first: of two readings taken at the same moment, the one a machine is offering now.
@@ -62,6 +67,16 @@ public sealed class UsageCache
     }
 
     string Serialize() => JsonSerializer.Serialize(new Saved(1, account, entries), ProtocolJson.Options);
+
+    // A machine forgotten from the account's roster (#50): what it read goes, kept or passed on,
+    // until it is back. Present: machines online now, which are the account's again.
+    public void Forget(string machineId)
+    {
+        forgotten.Add(machineId);
+        if (entries.RemoveAll(e => e.ReadBy?.Id == machineId) > 0 && account is not null) { Save(); }
+    }
+
+    public void Present(IEnumerable<string> machineIds) => forgotten.ExceptWith(machineIds);
 
     void Save()
     {

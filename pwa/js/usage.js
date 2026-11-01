@@ -202,6 +202,9 @@ export class UsageBook {
   #kept = [];
   #cache = null;
   #saved = '[]';
+  // Machines forgotten (#50) while this page is open: what they read is dropped even where another
+  // host still passes it on, until they come back.
+  #forgotten = new Set();
 
   constructor({ now = () => Date.now() } = {}) { this.now = now; }
 
@@ -212,6 +215,8 @@ export class UsageBook {
   // name: what the machine is called, for "read on <name>".
   set(machineId, report, name = null) {
     if (!machineId) { return; }
+    // A machine reporting is the account's again, whether or not it was forgotten.
+    this.#forgotten.delete(machineId);
     this.#reports.set(machineId, { report: readUsage(report), name: typeof name === 'string' && name ? name : null });
     this.#keep();
     this.#emit();
@@ -219,12 +224,13 @@ export class UsageBook {
 
   // A machine that has said it reports no usage (hello without the capability: usage.publish
   // off) has nothing to outvote; its last report would otherwise be shown for good. forget: the
-  // machine was forgotten (#50), so what it read is not kept either.
+  // machine was forgotten (#50), so what it read is not kept or shown either, wherever it comes from.
   delete(machineId, { forget = false } = {}) {
     const had = this.#reports.delete(machineId);
-    const kept = this.#kept.length;
-    if (forget) { this.#kept = this.#kept.filter((e) => e.readBy?.id !== machineId); }
-    if (!had && kept === this.#kept.length) { return; }
+    if (forget) {
+      this.#forgotten.add(machineId);
+      this.#kept = this.#kept.filter((e) => e.readBy?.id !== machineId);
+    } else if (!had) { return; }
     this.#keep();
     this.#emit();
   }
@@ -236,7 +242,9 @@ export class UsageBook {
 
   #live() {
     return [...this.#reports].map(([id, { report, name }]) => ({
-      agents: report.agents.map((a) => (a.readBy ? a : { ...a, readBy: { id, name: name ?? id.slice(0, 8) } })),
+      agents: report.agents
+        .map((a) => (a.readBy ? a : { ...a, readBy: { id, name: name ?? id.slice(0, 8) } }))
+        .filter((a) => !this.#forgotten.has(a.readBy.id)),
     }));
   }
 
@@ -276,6 +284,7 @@ export class UsageBook {
     this.#kept = [];
     this.#cache = null;
     this.#saved = '[]';
+    this.#forgotten.clear();
     if (had) { this.#emit(); }
   }
 }
