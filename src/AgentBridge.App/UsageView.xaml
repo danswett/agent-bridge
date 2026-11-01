@@ -47,7 +47,7 @@
                                                 <StackPanel Spacing="3">
                                                     <Grid>
                                                         <TextBlock FontWeight="SemiBold" Text="{x:Bind Label}" />
-                                                        <TextBlock HorizontalAlignment="Right" FontWeight="SemiBold" Text="{x:Bind PercentText}" Foreground="{x:Bind local:UsageView.SeverityBrush(Severity)}" />
+                                                        <TextBlock HorizontalAlignment="Right" FontWeight="SemiBold" Text="{x:Bind PercentText}" Foreground="{x:Bind local:UsageView.SeverityTextBrush(Severity)}" />
                                                     </Grid>
                                                     <ProgressBar
                                                         Maximum="100"
