@@ -446,20 +446,25 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
   - **That recovery has its own 15 s limit.** Discovery runs inside a 15-second timeout
     around an inline future (`workspace_routing.rs:302`, `:552-553`). A refresh still
     running at 15 s is cancelled by Codex itself, whether or not the probe has closed
-    standard input. Because discovery starts at start-up, before EOF, its refresh is
-    finished or cancelled long before the 45 s watchdog could fire. So EOF can't be what
-    cuts it off.
-  - That leaves a separate hazard that isn't the probe's doing. The 15 s cancellation
-    could lose a rotated token on a slow token endpoint, in any app-server start,
-    including the user's own. Each probe is one more start, but discovery only recovers
+    standard input. That's a hazard of any app-server start, including the user's own,
+    on a slow token endpoint. Each probe is one more start, but discovery only recovers
     after a 401, meaning a rejected access token.
-  - E13(c) looks for both kinds of refresh, and tells the two cancellations apart, before
-    a mechanism is chosen.
-- **Interim rule:** close standard input only after both responses arrive, then let the
-  process exit by itself. E13 decides the final mechanism, choosing between:
-  - closing at once;
-  - waiting a grace period after the responses before closing;
-  - using the daemon route (X-3) whenever it's available, since it has no process to end.
+  - **EOF can also cancel it straight away, on every platform.** When the stdio
+    connection closes, the processor loop exits (`app-server/src/lib.rs:1215-1218`)
+    without joining detached start-up work, such as discovery
+    (`account_processor.rs:163-168`, `message_processor.rs:882-888`). Runtime teardown
+    then drops whatever refresh is running. So the 45 s watchdog isn't the only way EOF
+    can cut a refresh off.
+- **Consequence:** closing standard input is safe only if no refresh is running at that
+  moment, and the host can't see that from outside. Any refresh a detached task started
+  can be cut off at EOF.
+- **Interim rule:** wait for all the responses, then a grace period of at least 20 s
+  (longer than discovery's 15 s limit), then close standard input and let the process
+  exit by itself. E13 decides the final mechanism:
+  - keep the grace period, if E13 finds no refresh that can outlive it;
+  - use the daemon route (X-3) whenever it's available, since it has no process to end;
+  - if neither is safe, drop the standalone route: without the daemon, Codex falls back
+    to transcripts.
 - **The reporting timeout is separate from the process lifetime.** After 60 s with no
   answer, the host stops waiting and reports nothing new, but it leaves the process
   running. Only after a hard ceiling (10 min) does it treat the process as hung.
@@ -484,7 +489,7 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
 
 | Candidate | Failure | Codex starting or running mid-probe | Sign-out risk and how to avoid it |
 |---|---|---|---|
-| **a. Stdio app-server** | `codex` missing or a different version; protocol drift (the request is versioned v2 and stable); API-key login (an error, so keep transcripts); a slow start (the process is large); the backend down | If it runs beside Codex, it's a second `AuthManager` and a second writer. Codex reads `auth.json` without the lock while the probe may be truncating and rewriting it, so another Codex process can fail to load its auth; and the last writer wins (X-2). That's why it runs only when no Codex process does (X-3) | **Low when run alone.** A session starting during the probe's few seconds is the remaining window (E12). Two rules: (1) close standard input only after the responses arrive, because EOF arms a 45 s exit on Unix (X-4); (2) one probe at a time. Detect a sign-out from the probe's own authentication error, not from `codex login status` (X-5) |
+| **a. Stdio app-server** | `codex` missing or a different version; protocol drift (the request is versioned v2 and stable); API-key login (an error, so keep transcripts); a slow start (the process is large); the backend down | If it runs beside Codex, it's a second `AuthManager` and a second writer. Codex reads `auth.json` without the lock while the probe may be truncating and rewriting it, so another Codex process can fail to load its auth; and the last writer wins (X-2). That's why it runs only when no Codex process does (X-3) | **Low when run alone.** A session starting during the probe's few seconds is the remaining window (E12). Two rules: (1) after the responses, wait the grace period before closing standard input. EOF tears the runtime down, dropping any refresh a detached task is running, and on Unix it also arms a 45 s exit (X-4). (2) One probe at a time. Detect a sign-out from the probe's own authentication error, not from `codex login status` (X-5) |
 | **b. Through the daemon** | The daemon may not be running. Its control socket needs a WebSocket client, not JSON lines, and the socket's framing and lifetime are internal | The daemon's own `AuthManager` answers, so there's no second writer and no race | **Lowest for auth,** with no process to shut down. But it adds a client to a process that sessions depend on, and its effect on the daemon's idle exit is unknown (E9). Recommended whenever the daemon is running, once E9 passes |
 | **d. Direct backend call** | Keyring mode has no file; a refresh is needed within about the token's life; undocumented path | n/a | Either it never refreshes (stale, like Claude today) or it refreshes (unsafe) |
 | **Transcripts** | Move only during turns | n/a | None |
@@ -530,9 +535,9 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
    - Send `initialize` (`clientInfo.name = "agent_bridge"`), then `initialized`, then
      `account/read` with `{ "refreshToken": false }`, then `account/rateLimits/read` with
      `{ "excludeResetCreditDetails": true }`, then `account/read` again.
-   - Standalone: close standard input only after the responses arrive, then let the
-     process exit by itself, until E13 settles the mechanism (X-4). Daemon: send a
-     WebSocket close.
+   - Standalone: after the responses arrive, wait the grace period (at least 20 s), then
+     close standard input and let the process exit by itself, until E13 settles the
+     mechanism (X-4). Daemon: send a WebSocket close.
 2. Map the result:
    - `rateLimitsByLimitId.codex`, or else `rateLimits`, gives the `primary` and
      `secondary` windows.
@@ -542,9 +547,13 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
      `sha256("codex:" + lower(email) + ":" + accountId)`. It's set only when the identity
      is shown to be stable across the read:
      - both `account/read` answers give the same non-null email;
-     - no `account/updated` notification arrived during the probe;
      - the snapshot has `accountId`, and its `ordinaryUsageAllowed` is non-null, which
-       means the handler matched the snapshot to the active login.
+       means the handler matched the snapshot to the active login when it answered.
+     A login switch at any point changes one of these. A switch before or after the
+     usage read changes the second email, and a switch during it nulls
+     `ordinaryUsageAllowed`. `account/updated` notifications don't count either way:
+     routing discovery sends one to a newly initialized connection even when nothing has
+     changed (`workspace_routing.rs:230-253`).
      Otherwise the reading has no key.
    - `source` is `api`.
 3. Keep the transcript reading. The newer of the two readings wins. A transcript reading
@@ -593,7 +602,7 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 | E10 | Codex keyring mode | `cli_auth_credentials_store = "keyring"`, then E7 | Same result as E7, with no `auth.json` present |
 | E11 | Invisible to the bridges | Run both probes with an agent-bridge dev host and agent-ha-bridge hooks installed on the VM | No session appears in either, and the host's worktree accounting ignores the probes |
 | E12 | Codex half-written `auth.json` | Make the standalone probe refresh: expire the token, and slow the token response through `mitmdump` so the save lands while another process is reading. Start `codex` or `codex login status` in a loop meanwhile, 50 times | Record any load or parse failure in the reading process. If any occur, the build must not probe while another Codex process could start, beyond what X-3 already rules out |
-| E13 | Codex outstanding refresh at EOF (**on the Linux VM**, since the 45 s watchdog is Unix-only) | Hold the token response for 50 s. (a) Close standard input as soon as the request is sent. (b) Close it only after the responses. (c) **Find a background refresh before trying to cut one off.** Two runs. (c1) Proactive: using the token lifetime from E8, start probes 50 times with the access token from 6 min to 4 min before its `exp`, so the 5-minute window opens during the probe. (c2) Routing recovery: with a fresh token and a selected workspace, have `mitmdump` answer `/accounts/check` with one 401, which makes routing discovery refresh outside the window. Hold the token response for 10 s (inside the 15 s discovery limit) and close standard input as soon as the probe's responses arrive. Then repeat with a 20 s hold, which crosses the limit. In both runs, log the time of every token-endpoint request and every probe response, including both `account/read` answers. If a token request is still open after the last probe response in (c1), hold it past the 45 s watchdog in a repeat run and record whether the token is lost. (d) Repeat (b) on the Windows VM | (a) Expected to **fail**: the process exits at 45 s, the rotated token is lost, and Codex signs out. (b) No loss. (c) For each run: either the caller and outcome of a refresh that outlived the responses, or the finding that none does. In particular, whether the second `account/read` waits for routing discovery's refresh. For (c2): the 10 s hold saves the rotated token even though standard input closed early. The 20 s hold is Codex's own 15 s cancellation, not EOF, and the run records whether that loses the token. Together these decide between a grace period, the daemon route and the interim rule as it stands (X-4). (d) The process exits by itself after EOF. The owner signs in again after each failure |
+| E13 | Codex outstanding refresh at EOF (**on the Linux VM**, since the 45 s watchdog is Unix-only) | Hold the token response for 50 s. (a) Close standard input as soon as the request is sent. (b) Close it only after the responses. (c) **Find a background refresh before trying to cut one off.** Two runs. (c1) Proactive: using the token lifetime from E8, start probes 50 times with the access token from 6 min to 4 min before its `exp`, so the 5-minute window opens during the probe. (c2) Routing recovery: with a fresh token and a selected workspace, have `mitmdump` answer `/accounts/check` with one 401, which makes routing discovery refresh outside the window. Hold the token response for 10 s, 20 s and 30 s in separate runs, and in each close standard input (i) as soon as the probe's responses arrive and (ii) after the 20 s grace period. In every run, log the time of every token-endpoint request and every probe response, including both `account/read` answers, plus the process exit time. If a token request is still open after the last probe response in (c1), hold it past the 45 s watchdog in a repeat run and record whether the token is lost. (d) Repeat (b) on the Windows VM | (a) Expected to **fail**: the process exits at 45 s, the rotated token is lost, and Codex signs out. (b) No loss. (c) For each run: either the caller and outcome of a refresh that outlived the responses, or the finding that none does. In particular, whether the second `account/read` waits for routing discovery's refresh. For (c2), record for each run whether the rotated token was saved, and which cancellation happened, if any: runtime teardown at EOF, discovery's 15 s timeout, or the watchdog. Together these decide whether the grace period holds, whether to use the daemon route, or whether to drop the standalone route (X-4). (d) The process exits by itself after EOF. The owner signs in again after each failure |
 | E14 | Codex sign-out signal | Revoke the session from ChatGPT's security settings. Separately, make a refresh token reused (E8's forced race). Probe after each, with and without a selected workspace | Record the exact `account/rateLimits/read` and `account/read` errors for each. `codex login status` still says logged in, which confirms X-5 |
 
 ---
@@ -640,10 +649,10 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 > - [ ] It sends `initialize`, `initialized`, `account/read {refreshToken: false}`,
 >       `account/rateLimits/read {excludeResetCreditDetails: true}` and
 >       `account/read` again.
-> - [ ] Standalone: it closes standard input only after the responses arrive, using the
->       shutdown mechanism E13 chose (spike X-4). After 60 s with no answer it stops
->       waiting and reports nothing, but leaves the process running; the process is
->       treated as hung only after 10 min.
+> - [ ] Standalone: it closes standard input only after the responses and the grace
+>       period, or by whatever shutdown mechanism E13 chose (spike X-4). After 60 s with
+>       no answer it stops waiting and reports nothing, but leaves the process running;
+>       the process is treated as hung only after 10 min.
 > - [ ] An authentication error from the rate-limit read, or a rejected refresh token
 >       from `account/read` (spike X-5, error text from E14), gives the failure "Codex
 >       needs signing in again on this machine". Probes stop until the 2-hour back-off
@@ -654,9 +663,9 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 >       `accountKey` is the first 12 hex digits of
 >       `sha256("codex:" + lower(email) + ":" + accountId)`. It's set only when the
 >       identity held steady across the probe (spike Codex recommendation, step 2): the
->       same non-null email in both `account/read` answers, no `account/updated`, and a
->       non-null `accountId` and `ordinaryUsageAllowed`. Otherwise it's absent. `source`
->       is `api`.
+>       same non-null email in both `account/read` answers, and a non-null `accountId`
+>       and `ordinaryUsageAllowed`. `account/updated` notifications aren't used.
+>       Otherwise it's absent. `source` is `api`.
 > - [ ] Transcripts stay, and a transcript reading has no key. The newest reading
 >       wins. An API-key login or a missing `codex` falls back to transcripts without an
 >       error row.
@@ -694,16 +703,18 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 >       `accountKey`s. A response with no `accountId`, no email or a null
 >       `ordinaryUsageAllowed` gets no `accountKey`.
 > - [ ] A login switch during the probe withholds the `accountKey`: the fake answers
->       the two `account/read` calls with different emails, or sends `account/updated`
->       between them.
+>       the two `account/read` calls with different emails, or answers the usage read
+>       with a null `ordinaryUsageAllowed`.
+> - [ ] An unchanged login keeps its `accountKey` when the fake sends the
+>       initialization `account/updated` during the probe.
 > - [ ] Two keyless Codex readings from different machines merge into two rows, not
 >       one, in both `UsageMerge` and `mergeUsage`. A keyed reading still merges across
 >       machines as before. A host doesn't take a keyless reading from a peer.
 > - [ ] The Codex probe sends only `initialize`, `initialized`,
 >       `account/rateLimits/read` (with `excludeResetCreditDetails: true` and no
 >       `supportsLunaReserve`) and `account/read`, and never `thread/*` or `turn/*`.
-> - [ ] The probe never closes standard input before the rate-limit response arrives. A
->       fake app-server that answers after the 60 s reporting timeout still has its
+> - [ ] The probe never closes standard input before the responses and the grace period.
+>       A fake app-server that answers after the 60 s reporting timeout still has its
 >       standard input open, and is still running, when it answers.
 > - [ ] The route follows the process state: standalone with no Codex running, the
 >       daemon with the daemon running, and nothing beside a session without the daemon.
