@@ -37,6 +37,8 @@ public sealed class TrustEditor
 
     public bool Pending => Volatile.Read(ref pending) > 0;
 
+    const int MaxAttempts = 3;
+
     // What the host said last: its acknowledgement of a change until a status agrees, then the status.
     public HostSettingsView? Settings
     {
@@ -57,10 +59,20 @@ public sealed class TrustEditor
         await slot.WaitAsync();
         try
         {
-            var now = (await host.CallAsync<HostStatus>(HostOps.Status)).Settings;
-            var saved = change(now) is { } request ? (await host.CallAsync<SettingsResult>(HostOps.Settings, request)).Settings : now;
-            Volatile.Write(ref acked, Equals(saved, host.Status?.Settings) ? null : saved);
-            return saved;
+            // Each list sent says which it was made from: one changed meanwhile by another app or a
+            // person's terminal is refused, and the change is made again from the list as it is,
+            // so a device revoked there is never approved again from here.
+            for (var attempt = 1; ; attempt++)
+            {
+                var now = (await host.CallAsync<HostStatus>(HostOps.Status)).Settings;
+                if (change(now) is not { } request) { Volatile.Write(ref acked, Equals(now, host.Status?.Settings) ? null : now); return now; }
+                if (request.RemoteFolderTrustDevices is not null) { request = request with { RemoteFolderTrustDevicesWas = now.RemoteFolderTrustDevices ?? [] }; }
+                var result = await host.CallAsync<SettingsResult>(HostOps.Settings, request);
+                if (result.Conflict && attempt < MaxAttempts) { continue; }
+                if (result.Conflict) { throw new InvalidOperationException("the devices approved for folder trust kept changing at the machine; try again"); }
+                Volatile.Write(ref acked, Equals(result.Settings, host.Status?.Settings) ? null : result.Settings);
+                return result.Settings;
+            }
         }
         finally
         {

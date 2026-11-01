@@ -293,6 +293,40 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_device_revoked_at_the_terminal_while_another_is_approved_here_stays_revoked()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", c = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        link.PeopleNow.Add(new FleetHost(c, "Dana's browser"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        static string[] List(System.Text.Json.JsonElement d, string name) => d.TryGetProperty(name, out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : [];
+        var calls = 0;
+        // As the host does: a list made from one that is no longer saved changes nothing.
+        host.On(HostOps.Settings, d =>
+        {
+            // The phone is revoked at the machine's terminal just as the first change goes.
+            if (Interlocked.Increment(ref calls) == 1) { host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) }; }
+            var current = host.Status.Settings.RemoteFolderTrustDevices ?? [];
+            if (d.TryGetProperty("remoteFolderTrustDevicesWas", out _) && !List(d, "remoteFolderTrustDevicesWas").ToHashSet().SetEquals(current)) { return new SettingsResult(host.Status.Settings, false, Conflict: true); }
+            host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: List(d, "remoteFolderTrustDevices")) };
+            return new SettingsResult(host.Status.Settings, false);
+        });
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a, b]) };
+        await Connected();
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 3, "the devices");
+
+        settings.TrustDevices.Single(d => d.Id == c).Approved = true;
+
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2 && !settings.Busy, "the browser approved");
+        Assert.Equal([a, c], List(host.Sent(HostOps.Settings)[1], "remoteFolderTrustDevices"));
+        Assert.Equal([a, c], host.Status.Settings.RemoteFolderTrustDevices!);
+        Assert.False(settings.HasError);
+        await Wait.UntilAsync(() => !settings.TrustDevices.Single(d => d.Id == b).Approved && settings.TrustDevices.Single(d => d.Id == c).Approved, "the phone still revoked");
+    }
+
+    [Fact]
     public async Task A_device_that_connects_while_a_change_is_on_its_way_leaves_the_boxes_showing_what_was_asked()
     {
         const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", c = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3";
