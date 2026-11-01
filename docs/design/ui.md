@@ -7,8 +7,8 @@ iOS and Android apps.
 - How a session and its sub-agents are modelled and sent: [subagents.md](subagents.md).
 - Machine-readable values (colours, type, spacing, glyphs, icons): [`/design`](../../design/README.md).
 
-*Status: proposed by the design session on 2026-11-01, awaiting the owner's sign-off
-(status.md §5).* The owner's mock-ups live in a private design canvas, "Agent Bridge —
+*Status: proposed by the design session on 2026-11-01 and signed off by the owner the
+same day (status.md §5). Two light-theme tokens are corrected for contrast in #183.* The owner's mock-ups live in a private design canvas, "Agent Bridge —
 Session Workbench". This page is the spec, and it is complete without them: where the two
 disagree, this page wins and the canvas gets fixed.
 
