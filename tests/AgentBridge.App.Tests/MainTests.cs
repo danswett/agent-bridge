@@ -167,6 +167,74 @@ public sealed class MainTests : IAsyncLifetime
     SessionCardViewModel Card(string id) => TestUi.Read(() => main.Sessions.Single(c => c.Id == id));
 
     [Fact]
+    public async Task A_move_the_person_makes_while_typing_in_a_card_still_moves_it()
+    {
+        await SnapshotAsync();
+        var old = Card("old");
+        TestUi.Read(() => Card("asking").Editing = true);
+
+        ui.Post(() => Assert.True(old.Row!.MoveUp()));
+
+        Assert.Equal(["old", "asking"], Order());
+    }
+
+    [Fact]
+    public async Task Headings_follow_the_cards_on_screen_while_an_update_is_held_for_someone_typing()
+    {
+        await SnapshotAsync();
+        await host.SendAsync(Events.SessionUpsert, Make.Session("third", updated: Make.T0.AddMinutes(2)));
+        await Wait.UntilAsync(() => main.Sessions.Any(c => c.Id == "third"), "the new card");
+        ui.Post(() => main.SortIndex = (int)SessionSort.Recent);
+        ui.Post(() => Card("asking").Row!.TogglePin());
+        ui.Post(() => Card("old").Row!.TogglePin());
+        Assert.Equal(["asking", "old", "third"], Order());
+        TestUi.Read(() => Card("third").Editing = true);
+
+        // Most recent would put "old" first among the pinned, but someone is typing.
+        await host.SendAsync(Events.SessionUpsert, Make.Session("old", response: "Later.", updated: Make.T0.AddMinutes(9)));
+        await Wait.UntilAsync(() => Card("old").Response == "Later.", "the update");
+
+        Assert.Equal(["asking", "old", "third"], Order());
+        TestUi.Read(() =>
+        {
+            Assert.Equal("Pinned", Card("asking").GroupHeader);
+            Assert.Null(Card("old").GroupHeader);
+            Assert.Equal("Sessions", Card("third").GroupHeader);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task The_sort_picker_says_most_recent_once_the_order_can_no_longer_be_saved()
+    {
+        await SnapshotAsync();
+        var folder = Path.Combine(Path.GetTempPath(), "abo-" + Guid.NewGuid().ToString("N")[..8]);
+        var file = Path.Combine(folder, "order.json");
+        try
+        {
+            var cards = new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection };
+            var other = TestUi.Read(() => new MainViewModel(connection, cards, new UsageViewModel(), order: new SessionOrder(file)));
+            Assert.Equal((int)SessionSort.Yours, TestUi.Read(() => other.SortIndex));
+            var told = 0;
+            other.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MainViewModel.SortIndex)) { told++; } };
+
+            // The file's place taken by a folder: the next save fails.
+            File.Delete(file);
+            Directory.CreateDirectory(file);
+            await host.SendAsync(Events.SessionUpsert, Make.Session("new", updated: Make.T0.AddMinutes(4)));
+            await Wait.UntilAsync(() => other.Sessions.Any(c => c.Id == "new"), "the new card");
+
+            TestUi.Read(() =>
+            {
+                Assert.Equal((int)SessionSort.Recent, other.SortIndex);
+                Assert.True(told > 0);
+                return true;
+            });
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    [Fact]
     public async Task What_holds_the_hosts_discovery_is_shown_until_it_clears()
     {
         await SnapshotAsync();

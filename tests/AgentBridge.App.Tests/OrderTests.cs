@@ -63,6 +63,25 @@ public sealed class OrderTests : IDisposable
     }
 
     [Fact]
+    public void A_row_its_machine_has_not_finished_sending_can_neither_move_nor_be_passed_until_it_has_a_place()
+    {
+        var o = new SessionOrder(null);
+        o.Arrange([E("saved", 1)]);
+        var settled = false;
+        OrderEntry[] list = [E("a", 9, "m2"), E("b", 8, "m2"), E("saved", 1)];
+        bool Settled(string m) => m != "m2" || settled;
+        Assert.Equal(["a", "b", "saved"], Ids(o.Arrange(list, settled: Settled).Sessions));
+        Assert.False(o.CanMove(K("a", "m2"), 1));
+        Assert.False(o.Move(K("b", "m2"), -1));
+        Assert.False(o.CanMove(K("saved"), -1));
+        Assert.False(o.Place(K("saved"), K("a", "m2"), after: false));
+        settled = true;
+        o.Arrange(list, settled: Settled);
+        Assert.True(o.Move(K("b", "m2"), -1));
+        Assert.Equal(["b", "a", "saved"], Ids(o.Arrange(list, settled: Settled).Sessions));
+    }
+
+    [Fact]
     public void Moves_pins_and_the_sort_survive_a_restart_of_the_app()
     {
         OrderEntry[] list = [E("a", 3), E("b", 2), E("c", 1)];

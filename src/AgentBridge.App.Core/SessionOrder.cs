@@ -54,6 +54,8 @@ public sealed class SessionOrder
     // remembered for sessions that aren't shown.
     List<string> shownPinned = [];
     List<string> shownSessions = [];
+    // Rows shown whose machine hasn't sent its whole list: they have no place yet to move from or to.
+    HashSet<string> pending = new(StringComparer.Ordinal);
 
     sealed class State
     {
@@ -132,10 +134,11 @@ public sealed class SessionOrder
     {
         PlaceNew(entries.Where(e => settled?.Invoke(e.Machine) ?? true).ToList(), entries);
         var placed = state.Pinned.Concat(state.Order).ToHashSet(StringComparer.Ordinal);
-        var pending = entries.Where(e => !placed.Contains(e.Key)).ToList();
-        pending.Sort(Newer);
+        var unplaced = entries.Where(e => !placed.Contains(e.Key)).ToList();
+        unplaced.Sort(Newer);
+        pending = unplaced.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
         var rank = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var k in pending.Select(e => e.Key).Concat(state.Pinned).Concat(state.Order)) { rank.TryAdd(k, rank.Count); }
+        foreach (var k in unplaced.Select(e => e.Key).Concat(state.Pinned).Concat(state.Order)) { rank.TryAdd(k, rank.Count); }
         int Yours(OrderEntry a, OrderEntry b) => rank[a.Key].CompareTo(rank[b.Key]);
         Comparison<OrderEntry> by = Sort switch
         {
@@ -189,12 +192,13 @@ public sealed class SessionOrder
 
     List<string>? GroupOf(string key) => shownPinned.Contains(key, StringComparer.Ordinal) ? shownPinned : shownSessions.Contains(key, StringComparer.Ordinal) ? shownSessions : null;
 
-    // Whether a row on screen can move by one (-1 up, 1 down) within its group.
+    // Whether a row on screen can move by one (-1 up, 1 down) within its group: not a row its machine
+    // hasn't finished sending, nor past one.
     public bool CanMove(string key, int delta)
     {
-        if (Sort != SessionSort.Yours || GroupOf(key) is not { } g) { return false; }
+        if (Sort != SessionSort.Yours || GroupOf(key) is not { } g || pending.Contains(key)) { return false; }
         var i = g.IndexOf(key) + delta;
-        return i >= 0 && i < g.Count;
+        return i >= 0 && i < g.Count && !pending.Contains(g[i]);
     }
 
     // Moves a row past its neighbour on screen. Rows remembered for sessions not shown keep
@@ -211,7 +215,7 @@ public sealed class SessionOrder
     // row dragged among the pinned ones is pinned.
     public bool Place(string key, string target, bool after)
     {
-        if (Sort != SessionSort.Yours || key == target || GroupOf(key) is null || GroupOf(target) is null) { return false; }
+        if (Sort != SessionSort.Yours || key == target || GroupOf(key) is null || GroupOf(target) is null || pending.Contains(key) || pending.Contains(target)) { return false; }
         Insert(key, target, after);
         return true;
     }

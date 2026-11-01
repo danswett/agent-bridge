@@ -152,7 +152,8 @@ public sealed partial class SessionCard : UserControl
 
     // What a move did, said to a screen reader, as the PWA's live region does.
     void Say(string text) =>
-        Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.FromElement(this)?.RaiseNotificationEvent(
+        // Created if need be: FromElement finds only a peer something already asked for.
+        Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(FoldButton)?.RaiseNotificationEvent(
             Microsoft.UI.Xaml.Automation.Peers.AutomationNotificationKind.ActionCompleted,
             Microsoft.UI.Xaml.Automation.Peers.AutomationNotificationProcessing.MostRecent, text, "AgentBridgeRowMoved");
 

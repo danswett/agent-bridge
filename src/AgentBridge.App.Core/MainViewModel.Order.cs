@@ -21,7 +21,7 @@ public sealed partial class MainViewModel
         {
             if (value < 0 || value >= SortChoices.Count) { return; }
             Order.Sort = (SessionSort)value;
-            Rearrange();
+            Rearrange(chosen: true);
             Raise();
         }
     }
@@ -38,21 +38,21 @@ public sealed partial class MainViewModel
     public bool Move(SessionCardViewModel card, int delta)
     {
         if (!Order.Move(KeyOf(card), delta)) { return false; }
-        Rearrange();
+        Rearrange(chosen: true);
         return true;
     }
 
     public void SetPinned(SessionCardViewModel card, bool pinned)
     {
         Order.SetPinned(KeyOf(card), pinned);
-        Rearrange();
+        Rearrange(chosen: true);
     }
 
     // A drag: the card with key `dragged` goes before or after `target`.
     public bool Place(string dragged, SessionCardViewModel target, bool after)
     {
         if (!Order.Place(dragged, KeyOf(target), after)) { return false; }
-        Rearrange();
+        Rearrange(chosen: true);
         return true;
     }
 
@@ -64,20 +64,24 @@ public sealed partial class MainViewModel
         {
             if (e.PropertyName == nameof(SessionCardViewModel.Folded) && !card.Folded && owner.ContainsKey(card))
             {
+                var sort = Order.Sort;
                 Order.MarkSeen(KeyOf(card), card.Session.UpdatedAt);
                 card.Unread = false;
+                if (Order.Sort != sort) { Raise(nameof(SortIndex)); Rearrange(); }
             }
         };
     }
 
     // The cards shown, in order, with the group headers, the dots and the Ended group. Rows move
-    // only when the arrangement says so, and never while someone types in any card: moving one
-    // then would take the words from under their fingers (in Most recent, where upserts move rows).
-    void Rearrange()
+    // only when the arrangement says so, and an update never moves one while someone types in any
+    // card: moving it then would take the words from under their fingers (in Most recent, where
+    // updates move rows). chosen: the person moved, pinned or sorted, which moves rows anyway.
+    void Rearrange(bool chosen = false)
     {
+        var sort = Order.Sort;
         var a = Arranged();
         var want = a.Pinned.Concat(a.Sessions).Select(e => byId[e.Key]).ToList();
-        var hold = Sessions.Any(c => c.Editing);
+        var hold = !chosen && Sessions.Any(c => c.Editing);
         foreach (var gone in Sessions.Except(want).ToList()) { Sessions.Remove(gone); }
         for (var i = 0; i < want.Count; i++)
         {
@@ -86,18 +90,31 @@ public sealed partial class MainViewModel
             if (at < 0) { Sessions.Insert(Math.Min(i, Sessions.Count), c); }
             else if (at != i && !hold) { Sessions.Move(at, i); }
         }
-        for (var i = 0; i < want.Count; i++)
+        var pins = a.Pinned.Select(e => byId[e.Key]).ToHashSet();
+        foreach (var c in want)
         {
-            var c = want[i];
-            c.Pinned = i < a.Pinned.Count;
-            c.GroupHeader = a.Pinned.Count == 0 ? null : i == 0 ? "Pinned" : i == a.Pinned.Count ? "Sessions" : null;
+            c.Pinned = pins.Contains(c);
             var key = KeyOf(c);
             if (!c.Folded) { Order.MarkSeen(key, c.Session.UpdatedAt); }
             c.Unread = Order.Unread(key, c.Session.UpdatedAt);
         }
+        // Headings by the order on screen, which a held update leaves as it was.
+        bool pinnedSeen = false, restSeen = false;
+        foreach (var c in Sessions)
+        {
+            c.GroupHeader = pins.Count == 0 ? null
+                : c.Pinned ? (pinnedSeen ? null : "Pinned")
+                : (restSeen ? null : "Sessions");
+            if (c.Pinned) { pinnedSeen = true; } else { restSeen = true; }
+        }
         SyncEnded(a.Ended);
+        // Saving failed (the file can't be written): the list is Most recent now, and says so.
+        if (Order.Sort != sort)
+        {
+            Raise(nameof(SortIndex));
+            Rearrange(chosen);
+        }
     }
-
     void SyncEnded(IReadOnlyList<EndedSession> ended)
     {
         var now = Time.GetUtcNow();

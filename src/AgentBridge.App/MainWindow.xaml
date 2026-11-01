@@ -73,33 +73,31 @@
                          the column off the right edge (see LaunchView). -->
                     <Grid>
                         <StackPanel MaxWidth="920" Padding="16,12,16,24" Spacing="12">
-                            <StackPanel Orientation="Horizontal" Spacing="12">
-                                <ComboBox
-                                    x:Name="MachinePicker"
-                                    AutomationProperties.AutomationId="MachinePicker"
-                                    AutomationProperties.Name="Show sessions from"
-                                    Header="Machines"
-                                    MinWidth="260"
-                                    ItemsSource="{x:Bind ViewModel.Machines}"
-                                    SelectedItem="{x:Bind ViewModel.SelectedMachine, Mode=OneWay}"
-                                    SelectionChanged="OnMachineChosen"
-                                    Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachines), Mode=OneWay}">
-                                    <ComboBox.ItemTemplate>
-                                        <DataTemplate x:DataType="core:MachineChoice">
-                                            <TextBlock Text="{x:Bind Label, Mode=OneWay}" />
-                                        </DataTemplate>
-                                    </ComboBox.ItemTemplate>
-                                </ComboBox>
-                                <!-- Your order, Most recent or Machine (#164). -->
-                                <ComboBox
-                                    x:Name="SortPicker"
-                                    AutomationProperties.AutomationId="SortPicker"
-                                    AutomationProperties.Name="Sort sessions"
-                                    Header="Sort"
-                                    MinWidth="160"
-                                    ItemsSource="{x:Bind core:MainViewModel.SortChoices}"
-                                    SelectedIndex="{x:Bind ViewModel.SortIndex, Mode=TwoWay}" />
-                            </StackPanel>
+                            <ComboBox
+                                x:Name="MachinePicker"
+                                AutomationProperties.AutomationId="MachinePicker"
+                                AutomationProperties.Name="Show sessions from"
+                                Header="Machines"
+                                MinWidth="260"
+                                ItemsSource="{x:Bind ViewModel.Machines}"
+                                SelectedItem="{x:Bind ViewModel.SelectedMachine, Mode=OneWay}"
+                                SelectionChanged="OnMachineChosen"
+                                Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachines), Mode=OneWay}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="core:MachineChoice">
+                                        <TextBlock Text="{x:Bind Label, Mode=OneWay}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <!-- Your order, Most recent or Machine (#164). -->
+                            <ComboBox
+                                x:Name="SortPicker"
+                                AutomationProperties.AutomationId="SortPicker"
+                                AutomationProperties.Name="Sort sessions"
+                                Header="Sort"
+                                MinWidth="160"
+                                ItemsSource="{x:Bind core:MainViewModel.SortChoices}"
+                                SelectedIndex="{x:Bind ViewModel.SortIndex, Mode=TwoWay}" />
                             <InfoBar
                                 AutomationProperties.AutomationId="FleetNote"
                                 IsClosable="False"
