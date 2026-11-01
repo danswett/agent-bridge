@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Bridge on iOS — session and delegates</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button{font:inherit}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: {{t.bg}}; color: {{t.text}}; font-family: -apple-system, 'SF Pro Text', sans-serif; font-size: 17px; line-height: 22px; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; position: relative; overflow: hidden; border-radius: 44px">
+  <div style="padding: 54px 8px 0; height: 44px; display: flex; align-items: center; gap: 4px; box-sizing: content-box">
+    <a href="iOS-List.dc.html" style="display: flex; align-items: center; gap: 2px; min-height: 44px; padding: 0 8px; color: {{t.tint}}; text-decoration: none"><dc-import name="Icon" icon="back" size="22" hint-size="22px,22px"></dc-import>Sessions</a>
+    <span style="flex: 1"></span>
+    <button aria-label="More" style="width: 44px; height: 44px; border: 0; background: transparent; color: {{t.tint}}; display: grid; place-items: center"><dc-import name="Icon" icon="more" size="22" hint-size="22px,22px"></dc-import></button>
+  </div>
+  <div style="padding: 4px 16px 20px">
+    <h1 style="margin: 0; font-family: -apple-system, 'SF Pro Display', sans-serif; font-size: 28px; line-height: 34px; font-weight: 700; letter-spacing: 0.36px">Plan Migration to Windows App</h1>
+    <div style="display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 15px; line-height: 20px; letter-spacing: -0.24px; color: {{t.text2}}"><dc-import name="Glyph" kind="delegating" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import>Delegating · DEV-VM1</div>
+  </div>
+
+  <div style="padding: 0 16px; display: flex; flex-direction: column; gap: 20px">
+    <div style="align-self: flex-end; max-width: 78%; padding: 8px 14px; border-radius: 18px; background: {{t.bubble}}">Which install should I run on home?</div>
+    <div>
+      <div style="font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: {{t.text2}}; margin-bottom: 4px"><span style="font-weight: 600">Main agent</span>&#160;&#160;29m</div>
+      <p style="margin: 0">Use the 0.1.690 MSI on home. The newer prerelease still has the restart bug from #276, so I’m confirming the fix first.</p>
+    </div>
+  </div>
+
+  <section aria-label="Delegates" style="position: absolute; left: 0; right: 0; bottom: 0; height: 452px; background: {{t.sheet}}; border-radius: 12px 12px 0 0; box-shadow: 0 -1px 0 {{t.sep}}, 0 -12px 40px {{t.shadow}}; display: flex; flex-direction: column">
+    <div style="display: grid; place-items: center; padding: 5px 0 0"><span style="width: 36px; height: 5px; border-radius: 3px; background: {{t.grabber}}"></span></div>
+    <div style="display: flex; align-items: center; padding: 10px 16px 16px 20px">
+      <h2 style="margin: 0; font-size: 20px; line-height: 25px; font-weight: 700; letter-spacing: -0.45px; flex: 1">Delegates</h2>
+      <button style="min-height: 44px; border: 0; background: transparent; color: {{t.tint}}; font-size: 17px; font-weight: 600; letter-spacing: -0.4px">Done</button>
+    </div>
+
+    <div style="margin: 0 16px; border-radius: 10px; background: {{t.sheetCell}}">
+      <a href="#" style="display: flex; gap: 12px; align-items: center; min-height: 60px; padding: 0 16px; text-decoration: none; color: inherit">
+        <dc-import name="Glyph" kind="working" theme="{{theme}}" size="20" hint-size="20px,20px"></dc-import>
+        <div style="flex: 1; min-width: 0"><div>Run full test suite</div><div style="font-size: 15px; line-height: 20px; letter-spacing: -0.24px; color: {{t.text2}}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">HEAD fails RestartAfterResume</div></div>
+        <span style="font-size: 15px; letter-spacing: -0.24px; color: {{t.text2}}">12m</span>
+      </a>
+      <div style="height: 0.5px; background: {{t.sep}}; margin-left: 80px"></div>
+      <a href="#" style="display: flex; gap: 12px; align-items: center; min-height: 52px; padding: 0 16px 0 48px; text-decoration: none; color: inherit">
+        <dc-import name="Glyph" kind="working" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import>
+        <div style="flex: 1; min-width: 0; font-size: 15px; line-height: 20px; letter-spacing: -0.24px">Bisect RestartAfterResume</div>
+        <span style="font-size: 15px; letter-spacing: -0.24px; color: {{t.text2}}">3m</span>
+      </a>
+      <div style="height: 0.5px; background: {{t.sep}}; margin-left: 48px"></div>
+      <a href="#" style="display: flex; gap: 12px; align-items: center; min-height: 60px; padding: 0 16px; text-decoration: none; color: inherit">
+        <dc-import name="Glyph" kind="working" theme="{{theme}}" size="20" hint-size="20px,20px"></dc-import>
+        <div style="flex: 1; min-width: 0"><div>Check ubuntu CI failure</div><div style="font-size: 15px; line-height: 20px; letter-spacing: -0.24px; color: {{t.text2}}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Reading the failed job log</div></div>
+        <span style="font-size: 15px; letter-spacing: -0.24px; color: {{t.text2}}">8m</span>
+      </a>
+    </div>
+
+    <div style="padding: 24px 32px 6px; font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: {{t.text2}}">Finished</div>
+    <div style="margin: 0 16px; border-radius: 10px; background: {{t.sheetCell}}">
+      <a href="#" style="display: flex; gap: 12px; align-items: center; min-height: 44px; padding: 0 16px; text-decoration: none; color: {{t.text2}}">
+        <dc-import name="Glyph" kind="done" theme="{{theme}}" size="20" hint-size="20px,20px"></dc-import>
+        <span style="flex: 1; color: {{t.text}}">Read witness shell logic</span><span style="font-size: 15px; letter-spacing: -0.24px">4m</span>
+      </a>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const dark = {
+      bg: '#000000', bubble: '#2C2C2E', sheet: '#1C1C1E', sheetCell: '#2C2C2E', sep: 'rgba(84,84,88,0.65)', grabber: 'rgba(235,235,245,0.3)',
+      text: '#FFFFFF', text2: 'rgba(235,235,245,0.6)', tint: '#2DD4BF', shadow: 'rgba(0,0,0,0.5)'
+    };
+    const light = {
+      bg: '#FFFFFF', bubble: '#E9E9EB', sheet: '#F2F2F7', sheetCell: '#FFFFFF', sep: 'rgba(60,60,67,0.29)', grabber: 'rgba(60,60,67,0.3)',
+      text: '#000000', text2: 'rgba(60,60,67,0.76)', tint: '#0B7A6E', shadow: 'rgba(0,0,0,0.12)'
+    };
+    return { theme, t: theme === 'light' ? light : dark };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Bridge on iOS — sessions</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button,input{font:inherit}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: {{t.bg}}; color: {{t.text}}; font-family: -apple-system, 'SF Pro Text', sans-serif; font-size: 17px; line-height: 22px; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; display: flex; flex-direction: column; overflow: hidden; border-radius: 44px">
+  <div style="padding: 60px 16px 4px; display: flex; align-items: center; gap: 8px">
+    <h1 style="margin: 0; flex: 1; font-family: -apple-system, 'SF Pro Display', sans-serif; font-size: 34px; line-height: 41px; font-weight: 700; letter-spacing: 0.4px">Sessions</h1>
+    <button aria-label="Filter by machine" style="width: 36px; height: 36px; border-radius: 18px; border: 0; background: {{t.fill}}; color: {{t.tint}}; display: grid; place-items: center"><dc-import name="Icon" icon="machine" size="20" hint-size="20px,20px"></dc-import></button>
+    <button aria-label="New session" style="width: 36px; height: 36px; border-radius: 18px; border: 0; background: {{t.tint}}; color: {{t.onTint}}; display: grid; place-items: center"><dc-import name="Icon" icon="plus" size="20" hint-size="20px,20px"></dc-import></button>
+  </div>
+  <label style="margin: 4px 16px 20px; height: 36px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 10px; background: {{t.fill}}; color: {{t.text2}}">
+    <dc-import name="Icon" icon="search" size="17" hint-size="17px,17px"></dc-import>
+    <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search</span>
+    <input placeholder="Search" style="flex: 1; border: 0; background: transparent; outline: none; color: {{t.text}}; font-size: 17px; letter-spacing: -0.4px">
+  </label>
+
+  <div style="flex: 1; overflow: hidden; padding: 0 16px; display: flex; flex-direction: column">
+    <div style="padding: 0 16px 6px; font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: {{t.amberHead}}; font-weight: 600">Needs you</div>
+    <div style="border-radius: 10px; background: {{t.cell}}; padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 12px; margin-bottom: 32px">
+      <div style="display: flex; gap: 12px; align-items: flex-start">
+        <span style="padding-top: 1px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="20" hint-size="20px,20px"></dc-import></span>
+        <div style="flex: 1; min-width: 0">
+          <div style="display: flex; gap: 8px"><span style="flex: 1; font-weight: 600">Ship 0.1.691 prerelease</span><span style="font-size: 15px; line-height: 20px; color: {{t.text2}}">2m</span></div>
+          <div style="font-size: 15px; line-height: 20px; letter-spacing: -0.24px; color: {{t.text2}}; margin-top: 2px">Approve git push to release/0.1.691</div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px; padding-left: 32px">
+        <button style="flex: 1; height: 36px; border-radius: 18px; border: 0; background: {{t.tint}}; color: {{t.onTint}}; font-weight: 600; font-size: 15px; letter-spacing: -0.24px">Approve</button>
+        <button style="flex: 1; height: 36px; border-radius: 18px; border: 0; background: {{t.fill}}; color: {{t.tint}}; font-weight: 600; font-size: 15px; letter-spacing: -0.24px">Deny</button>
+      </div>
+    </div>
+
+    <div style="padding: 0 16px 6px; font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: {{t.text2}}">Pinned</div>
+    <div style="border-radius: 10px; background: {{t.cell}}; margin-bottom: 32px">
+      <a href="iOS-Session.dc.html" style="display: flex; gap: 12px; align-items: center; min-height: 60px; padding: 0 16px; text-decoration: none; color: inherit">
+        <dc-import name="Glyph" kind="delegating" theme="{{theme}}" size="20" hint-size="20px,20px"></dc-import>
+        <div style="flex: 1; min-width: 0"><div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Plan Migration to Windows App</div><div style="font-size: 15px; line-height: 20px; letter-spacing: -0.24px; color: {{t.text2}}">3 delegates · DEV-VM1</div></div>
+        <span style="color: {{t.chevron}}; display: flex"><dc-import name="Icon" icon="chevron" size="14" hint-size="14px,14px"></dc-import></span>
+      </a>
+    </div>
+
+    <div style="padding: 0 16px 6px; font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: {{t.text2}}">Sessions</div>
+    <div style="border-radius: 10px; background: {{t.cell}}">
+      <a href="#" style="display: flex; gap: 12px; align-items: center; min-height: 60px; padding: 0 16px; text-decoration: none; color: inherit">
+        <dc-import name="Glyph" kind="working" theme="{{theme}}" size="20" hint-size="20px,20px"></dc-import>
+        <div style="flex: 1; min-width: 0"><div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600">Fix trust-wait banner</div><div style="font-size: 15px; line-height: 20px; letter-spacing: -0.24px; color: {{t.text2}}">Editing LaunchView.xaml.cs</div></div>
+        <span style="width: 8px; height: 8px; border-radius: 4px; background: {{t.tint}}" aria-label="New activity"></span>
+      </a>
+      <div style="height: 0.5px; background: {{t.sep}}; margin-left: 48px"></div>
+      <a href="#" style="display: flex; gap: 12px; align-items: center; min-height: 60px; padding: 0 16px; text-decoration: none; color: inherit">
+        <dc-import name="Glyph" kind="delegating" theme="{{theme}}" size="20" hint-size="20px,20px"></dc-import>
+        <div style="flex: 1; min-width: 0"><div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Fluent V8 to V9 migration</div><div style="font-size: 15px; line-height: 20px; letter-spacing: -0.24px; color: {{t.text2}}">1 background command</div></div>
+        <span style="font-size: 15px; color: {{t.text2}}">10h</span>
+      </a>
+      <div style="height: 0.5px; background: {{t.sep}}; margin-left: 48px"></div>
+      <a href="#" style="display: flex; gap: 12px; align-items: center; min-height: 60px; padding: 0 16px; text-decoration: none; color: inherit">
+        <dc-import name="Glyph" kind="idle" driven="true" theme="{{theme}}" size="20" hint-size="20px,20px"></dc-import>
+        <div style="flex: 1; min-width: 0"><div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Nightly issue triage</div><div style="font-size: 15px; line-height: 20px; letter-spacing: -0.24px; color: {{t.violet}}">Driven by an agent</div></div>
+        <span style="font-size: 15px; color: {{t.text2}}">1h</span>
+      </a>
+    </div>
+  </div>
+
+  <nav aria-label="Tabs" style="flex: none; display: flex; justify-content: space-around; padding: 6px 8px 32px; background: {{t.tabBg}}; border-top: 0.5px solid {{t.sep}}; color: {{t.tabOff}}">
+    <a href="#" aria-current="page" style="display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 72px; min-height: 44px; text-decoration: none; color: {{t.tint}}; font-size: 10px; line-height: 12px; letter-spacing: 0.1px; font-weight: 500"><dc-import name="Icon" icon="sessions" size="24" hint-size="24px,24px"></dc-import>Sessions</a>
+    <a href="#" style="display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 72px; min-height: 44px; text-decoration: none; color: inherit; font-size: 10px; line-height: 12px; letter-spacing: 0.1px; font-weight: 500"><dc-import name="Icon" icon="machine" size="24" hint-size="24px,24px"></dc-import>Machines</a>
+    <a href="#" style="display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 72px; min-height: 44px; text-decoration: none; color: inherit; font-size: 10px; line-height: 12px; letter-spacing: 0.1px; font-weight: 500"><dc-import name="Icon" icon="usage" size="24" hint-size="24px,24px"></dc-import>Usage</a>
+    <a href="#" style="display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 72px; min-height: 44px; text-decoration: none; color: inherit; font-size: 10px; line-height: 12px; letter-spacing: 0.1px; font-weight: 500"><dc-import name="Icon" icon="settings" size="24" hint-size="24px,24px"></dc-import>Settings</a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const dark = {
+      bg: '#000000', cell: '#1C1C1E', fill: 'rgba(118,118,128,0.24)', sep: 'rgba(84,84,88,0.65)', text: '#FFFFFF', text2: 'rgba(235,235,245,0.6)',
+      tint: '#2DD4BF', onTint: '#062621', chevron: 'rgba(235,235,245,0.3)', tabBg: 'rgba(18,18,18,0.94)', tabOff: 'rgba(235,235,245,0.6)',
+      amberHead: '#FFB224', violet: '#C4B5FD'
+    };
+    const light = {
+      bg: '#F2F2F7', cell: '#FFFFFF', fill: 'rgba(118,118,128,0.12)', sep: 'rgba(60,60,67,0.29)', text: '#000000', text2: 'rgba(60,60,67,0.76)',
+      tint: '#0B7A6E', onTint: '#FFFFFF', chevron: 'rgba(60,60,67,0.3)', tabBg: 'rgba(249,249,249,0.94)', tabOff: 'rgba(60,60,67,0.76)',
+      amberHead: '#8F5300', violet: '#5B3CC4'
+    };
+    return { theme, t: theme === 'light' ? light : dark };
+  }
+}
+</script>
+</body>
+</html>

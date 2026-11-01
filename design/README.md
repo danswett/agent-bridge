@@ -11,6 +11,7 @@ choice is [docs/design/ui.md](../docs/design/ui.md), and the order of work is
 | `icons/*.svg` | The icon set, on a 20 grid, with a 1.5 stroke and round ends. `mark.svg` is the app mark, on a 48 grid |
 | `fonts/agent-bridge-mono/` | Agent Bridge Mono, the monospace: build plan, build script, TTF and WOFF2. **SIL OFL 1.1, not MIT** (see its README) |
 | `preview.png` | The glyphs, icons and colour roles rendered in dark and light. Regenerate it whenever a glyph, icon or role changes |
+| `canvas/` | The design canvas boards' source, rendered to [docs/design/mockups](../docs/design/mockups/README.md) by [tools/design-mockups](../tools/design-mockups/README.md) |
 
 ## Rules for these files
 

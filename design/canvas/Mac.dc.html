@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Bridge on macOS</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button,textarea,input{font:inherit}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; background: {{t.window}}; color: {{t.text}}; font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', sans-serif; font-size: 13px; line-height: 16px; font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; display: flex; overflow: hidden; border-radius: 12px; border: 1px solid {{t.frame}}; box-shadow: 0 24px 60px rgba(0,0,0,0.28)">
+
+  <!-- Sidebar -->
+  <nav aria-label="Sidebar" style="width: 248px; flex: none; background: {{t.sidebar}}; border-right: 1px solid {{t.stroke}}; display: flex; flex-direction: column; padding: 0 10px">
+    <div aria-hidden="true" style="height: 52px; display: flex; align-items: center; gap: 8px; padding-left: 10px">
+      <span style="width: 12px; height: 12px; border-radius: 6px; background: #FF5F57"></span>
+      <span style="width: 12px; height: 12px; border-radius: 6px; background: #FEBC2E"></span>
+      <span style="width: 12px; height: 12px; border-radius: 6px; background: #28C840"></span>
+    </div>
+
+    <div style="padding: 4px 10px 4px; font-size: 11px; line-height: 14px; font-weight: 700; color: {{t.amberHead}}">Needs You</div>
+    <a href="#" style="display: flex; gap: 8px; align-items: center; height: 28px; padding: 0 8px; border-radius: 6px; text-decoration: none; color: inherit"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Ship 0.1.691 prerelease</span></a>
+
+    <div style="padding: 16px 10px 4px; font-size: 11px; line-height: 14px; font-weight: 700; color: {{t.text3}}">Pinned</div>
+    <a href="#" aria-current="true" style="display: flex; gap: 8px; align-items: center; height: 28px; padding: 0 8px; border-radius: 6px; text-decoration: none; color: #FFFFFF; background: {{t.selRow}}"><span style="display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 8px; background: #FFFFFF"><dc-import name="Glyph" kind="delegating" theme="light" size="14" hint-size="14px,14px"></dc-import></span><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Plan Migration to Windows App</span><span style="font-size: 11px; opacity: 0.85">3</span></a>
+
+    <div style="padding: 16px 10px 4px; font-size: 11px; line-height: 14px; font-weight: 700; color: {{t.text3}}">Sessions</div>
+    <a href="#" style="display: flex; gap: 8px; align-items: center; height: 28px; padding: 0 8px; text-decoration: none; color: inherit"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600">Fix trust-wait banner</span><span style="width: 6px; height: 6px; border-radius: 3px; background: {{t.accent}}" aria-label="New activity"></span></a>
+    <a href="#" style="display: flex; gap: 8px; align-items: center; height: 28px; padding: 0 8px; text-decoration: none; color: inherit"><dc-import name="Glyph" kind="delegating" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Fluent V8 to V9 migration</span></a>
+    <a href="#" style="display: flex; gap: 8px; align-items: center; height: 28px; padding: 0 8px; text-decoration: none; color: inherit"><dc-import name="Glyph" kind="idle" driven="true" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Nightly issue triage</span></a>
+    <a href="#" style="display: flex; gap: 8px; align-items: center; height: 28px; padding: 0 8px; text-decoration: none; color: inherit"><dc-import name="Glyph" kind="idle" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Testing code functionality</span></a>
+
+    <div style="padding: 16px 10px 4px; font-size: 11px; line-height: 14px; font-weight: 700; color: {{t.text3}}">Machines</div>
+    <a href="#" style="display: flex; gap: 8px; align-items: center; height: 28px; padding: 0 8px; text-decoration: none; color: inherit"><span style="color: {{t.accent}}; display: flex"><dc-import name="Icon" icon="machine" size="16" hint-size="16px,16px"></dc-import></span><span style="flex: 1">DSWETT-ULTRA</span><span style="font-size: 11px; color: {{t.text3}}">3</span></a>
+    <a href="#" style="display: flex; gap: 8px; align-items: center; height: 28px; padding: 0 8px; text-decoration: none; color: inherit"><span style="color: {{t.accent}}; display: flex"><dc-import name="Icon" icon="machine" size="16" hint-size="16px,16px"></dc-import></span><span style="flex: 1">DSWETT-DEV-VM1</span><span style="font-size: 11px; color: {{t.text3}}">3</span></a>
+  </nav>
+
+  <div style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+    <!-- Unified toolbar -->
+    <div style="height: 52px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 12px 0 20px; border-bottom: 1px solid {{t.stroke}}; background: {{t.toolbar}}">
+      <div style="flex: 1; min-width: 0">
+        <div style="font-size: 13px; line-height: 16px; font-weight: 700">Plan Migration to Windows App</div>
+        <div style="font-size: 11px; line-height: 14px; color: {{t.text2}}">Delegating to 3 agents · DSWETT-DEV-VM1</div>
+      </div>
+      <label style="width: 200px; height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px; margin-right: 8px; border-radius: 7px; background: {{t.field}}; color: {{t.text3}}; box-sizing: border-box">
+        <dc-import name="Icon" icon="search" size="14" hint-size="14px,14px"></dc-import>
+        <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search</span>
+        <input placeholder="Search" style="flex: 1; min-width: 0; border: 0; background: transparent; outline: none; font-size: 13px; color: {{t.text}}">
+      </label>
+      <button aria-label="Unpin" title="Unpin" style="width: 32px; height: 28px; border-radius: 6px; border: 0; background: transparent; color: {{t.text2}}; display: grid; place-items: center"><dc-import name="Icon" icon="pin" size="16" hint-size="16px,16px"></dc-import></button>
+      <button aria-label="End session" title="End Session" style="width: 32px; height: 28px; border-radius: 6px; border: 0; background: transparent; color: {{t.text2}}; display: grid; place-items: center"><dc-import name="Icon" icon="stop" size="16" hint-size="16px,16px"></dc-import></button>
+      <button aria-label="Hide inspector" title="Inspector" aria-pressed="true" style="width: 32px; height: 28px; border-radius: 6px; border: 0; background: {{t.pressed}}; color: {{t.text}}; display: grid; place-items: center"><dc-import name="Icon" icon="inspector" size="16" hint-size="16px,16px"></dc-import></button>
+    </div>
+
+    <div style="flex: 1; display: flex; min-height: 0">
+      <main style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+        <!-- Delegates as a token row -->
+        <section aria-label="Delegates" style="padding: 12px 24px; display: flex; gap: 6px; align-items: center; border-bottom: 1px solid {{t.stroke}}">
+          <span style="font-size: 11px; line-height: 14px; font-weight: 700; color: {{t.text3}}; margin-right: 6px">Delegates</span>
+          <button style="height: 24px; padding: 0 10px 0 6px; border-radius: 12px; border: 0; background: {{t.accentSoft}}; color: {{t.text}}; display: flex; align-items: center; gap: 6px; font-size: 12px; box-shadow: inset 0 0 0 1px {{t.accent}}"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="14" hint-size="14px,14px"></dc-import>Run full test suite</button>
+          <button style="height: 24px; padding: 0 10px 0 6px; border-radius: 12px; border: 0; background: {{t.chip}}; color: {{t.text}}; display: flex; align-items: center; gap: 6px; font-size: 12px"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="14" hint-size="14px,14px"></dc-import>Check ubuntu CI failure</button>
+          <button style="height: 24px; padding: 0 10px 0 6px; border-radius: 12px; border: 0; background: {{t.chip}}; color: {{t.text2}}; display: flex; align-items: center; gap: 6px; font-size: 12px"><dc-import name="Glyph" kind="done" theme="{{theme}}" size="14" hint-size="14px,14px"></dc-import>1 finished</button>
+        </section>
+
+        <div style="flex: 1; padding: 28px 32px; display: flex; flex-direction: column; gap: 24px; max-width: 680px; font-size: 14px; line-height: 21px">
+          <div style="align-self: flex-end; max-width: 440px; padding: 7px 12px; border-radius: 14px; background: {{t.bubble}}">Which install should I run on home?</div>
+          <div>
+            <div style="font-size: 11px; line-height: 14px; color: {{t.text3}}; margin-bottom: 6px"><span style="font-weight: 600; color: {{t.text2}}">Main agent</span>&#160;&#160;29m</div>
+            <p style="margin: 0">Use the 0.1.690 MSI on home. The newer prerelease still has the restart bug from #276, so I’m confirming the fix against the full suite and the ubuntu CI failure before I recommend it.</p>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; line-height: 16px; color: {{t.text2}}">
+            <div style="display: flex; gap: 8px; align-items: center"><dc-import name="Icon" icon="delegate" size="14" hint-size="14px,14px"></dc-import>Started 3 delegates · 26m</div>
+            <div style="display: flex; gap: 8px; align-items: center"><dc-import name="Glyph" kind="done" theme="{{theme}}" size="14" hint-size="14px,14px"></dc-import><span><a href="#" style="color: {{t.link}}; text-decoration: none">Read witness shell logic</a> reported back · 22m</span></div>
+          </div>
+          <div>
+            <div style="font-size: 11px; line-height: 14px; color: {{t.text3}}; margin-bottom: 6px"><span style="font-weight: 600; color: {{t.text2}}">Main agent</span>&#160;&#160;21m</div>
+            <p style="margin: 0">Setting up a worktree to read the rest of the witness shell.</p>
+          </div>
+        </div>
+
+        <div style="padding: 0 32px 20px">
+          <div style="max-width: 680px; display: flex; align-items: flex-end; gap: 6px; padding: 4px 4px 4px 12px; border-radius: 16px; border: 1px solid {{t.inputStroke}}; background: {{t.input}}">
+            <label style="flex: 1"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message the main agent</span><textarea rows="1" placeholder="Message the main agent" style="width: 100%; box-sizing: border-box; resize: none; border: 0; outline: none; font-size: 13px; line-height: 16px; padding: 6px 0; color: {{t.text}}; background: transparent"></textarea></label>
+            <button aria-label="Attach files" title="Attach" style="width: 28px; height: 28px; border-radius: 14px; border: 0; background: transparent; color: {{t.text2}}; display: grid; place-items: center"><dc-import name="Icon" icon="attach" size="16" hint-size="16px,16px"></dc-import></button>
+            <button aria-label="Send" title="Send (⌘↩)" style="width: 28px; height: 28px; border-radius: 14px; border: 0; background: {{t.accent}}; color: {{t.onAccent}}; display: grid; place-items: center"><dc-import name="Icon" icon="send" size="14" hint-size="14px,14px"></dc-import></button>
+          </div>
+        </div>
+      </main>
+
+      <!-- Inspector -->
+      <aside aria-label="Delegate inspector" style="width: 280px; flex: none; background: {{t.inspector}}; border-left: 1px solid {{t.stroke}}; padding: 20px 16px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+        <div style="display: flex; align-items: center; gap: 8px"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><h3 style="margin: 0; font-size: 13px; line-height: 16px; font-weight: 700">Run full test suite</h3></div>
+        <dl style="margin: 0; display: grid; grid-template-columns: 64px 1fr; gap: 6px 10px; font-size: 12px; line-height: 15px">
+          <dt style="color: {{t.text2}}; text-align: right">Status</dt><dd style="margin: 0">Running · 12 min</dd>
+          <dt style="color: {{t.text2}}; text-align: right">Model</dt><dd style="margin: 0">claude-haiku-5.5</dd>
+          <dt style="color: {{t.text2}}; text-align: right">Kind</dt><dd style="margin: 0">Background</dd>
+          <dt style="color: {{t.text2}}; text-align: right">ID</dt><dd style="margin: 0; font-family: {{mono}}; font-size: 11px">agent-3a91</dd>
+        </dl>
+        <div style="height: 1px; background: {{t.stroke}}"></div>
+        <div><div style="font-size: 11px; line-height: 14px; font-weight: 700; color: {{t.text3}}; margin-bottom: 6px">Task</div><p style="margin: 0; font-size: 12px; line-height: 17px">Run the full suite on HEAD and on the fix branch. Report any test that fails on one and passes on the other.</p></div>
+        <div><div style="font-size: 11px; line-height: 14px; font-weight: 700; color: {{t.text3}}; margin-bottom: 6px">Latest</div><p style="margin: 0; font-size: 12px; line-height: 17px">HEAD fails one test, RestartAfterResume. A nested agent is bisecting it.</p></div>
+        <div>
+          <div style="font-size: 11px; line-height: 14px; font-weight: 700; color: {{t.text3}}; margin-bottom: 8px">Tools</div>
+          <ol style="list-style: none; margin: 0; padding: 0; font-family: {{mono}}; font-size: 11px; line-height: 16px; display: flex; flex-direction: column; gap: 6px">
+            <li style="display: flex; gap: 6px; align-items: center; color: {{t.text2}}"><dc-import name="Glyph" kind="done" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import><span style="flex: 1">dotnet test</span>4:02</li>
+            <li style="display: flex; gap: 6px; align-items: center"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">task Bisect RestartAfter…</span><span style="color: {{t.text2}}">3:10</span></li>
+            <li style="display: flex; gap: 6px; align-items: center"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import><span style="flex: 1">dotnet test --filter</span><span style="color: {{t.text2}}">5:00</span></li>
+          </ol>
+        </div>
+        <button style="margin-top: auto; height: 22px; border-radius: 5px; border: 0; background: {{t.button}}; color: {{t.text}}; font-size: 13px; box-shadow: 0 0 0 0.5px {{t.buttonEdge}}, 0 1px 1px rgba(0,0,0,0.06)">Ask Main Agent to Stop It</button>
+      </aside>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'dark' ? 'dark' : 'light';
+    const light = {
+      window: '#FFFFFF', sidebar: '#EDEDF0', inspector: '#F7F7F8', toolbar: '#FFFFFF', frame: 'rgba(0,0,0,0.2)',
+      text: '#1D1D1F', text2: 'rgba(0,0,0,0.64)', text3: 'rgba(0,0,0,0.58)', stroke: 'rgba(0,0,0,0.08)', field: 'rgba(0,0,0,0.05)',
+      bubble: '#EFEFF1', input: '#FFFFFF', inputStroke: 'rgba(0,0,0,0.14)',
+      accent: '#0B7A6E', onAccent: '#FFFFFF', accentSoft: 'rgba(11,122,110,0.08)', selRow: '#0B7A6E', link: '#0B7A6E',
+      chip: 'rgba(0,0,0,0.05)', pressed: 'rgba(0,0,0,0.07)', button: '#FFFFFF', buttonEdge: 'rgba(0,0,0,0.25)',
+      amberHead: '#9A5B00'
+    };
+    const dark = {
+      window: '#1E1E1E', sidebar: '#29292C', inspector: '#232325', toolbar: '#262628', frame: 'rgba(255,255,255,0.14)',
+      text: '#F5F5F7', text2: 'rgba(255,255,255,0.66)', text3: 'rgba(255,255,255,0.5)', stroke: 'rgba(255,255,255,0.08)', field: 'rgba(255,255,255,0.07)',
+      bubble: '#2E2E30', input: '#2A2A2C', inputStroke: 'rgba(255,255,255,0.12)',
+      accent: '#2DD4BF', onAccent: '#062621', accentSoft: 'rgba(45,212,191,0.12)', selRow: '#11766B', link: '#5EE6D3',
+      chip: 'rgba(255,255,255,0.07)', pressed: 'rgba(255,255,255,0.1)', button: '#3A3A3C', buttonEdge: 'rgba(255,255,255,0.15)',
+      amberHead: '#FFB224'
+    };
+    return { theme, t: theme === 'dark' ? dark : light, mono: "'Berkeley Mono', 'SF Mono', ui-monospace, monospace" };
+  }
+}
+</script>
+</body>
+</html>

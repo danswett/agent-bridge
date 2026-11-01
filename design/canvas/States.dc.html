@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Status rules for sessions and delegates</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E1013}
+a{color:#2DD4BF}a:hover{color:#7EEADB}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1080px; box-sizing: border-box; padding: 48px; font-family: 'Segoe UI Variable Text', -apple-system, Roboto, system-ui, sans-serif; color: #E8EAED; background: #0E1013; display: flex; flex-direction: column; gap: 28px; font-size: 14px; line-height: 1.45">
+  <div>
+    <h1 style="margin: 0 0 6px; font-size: 28px; font-weight: 600">What a session row says, first match wins</h1>
+    <p style="margin: 0; color: #9AA0A8; max-width: 860px">One rule set for every platform and the Home Assistant card. Shape carries the state; colour backs it up; the violet diamond adds “driven by an agent” to any state.</p>
+  </div>
+
+  <ol style="list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; flex: 1">
+    <sc-for list="{{cases}}" as="c" hint-placeholder-count="8">
+      <li style="border: 1px solid #262A31; border-radius: 16px; background: #16181D; padding: 18px; display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <span style="width: 26px; height: 26px; border-radius: 13px; border: 1px solid #3A3F47; display: grid; place-items: center; font-size: 12px; font-weight: 600; color: #9AA0A8; flex: none">{{c.n}}</span>
+          <h2 style="margin: 0; font-size: 15px; font-weight: 600">{{c.when}}</h2>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 10px; background: #0E1013; border: 1px solid #262A31">
+          <dc-import name="Glyph" kind="{{c.kind}}" driven="{{c.driven}}" theme="dark" size="20" hint-size="20px,20px"></dc-import>
+          <div style="min-width: 0; flex: 1">
+            <div style="font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{c.title}}</div>
+            <div style="{{c.subStyle}}">{{c.status}}</div>
+          </div>
+        </div>
+        <p style="margin: 0; font-size: 13px; color: #C9CDD3">{{c.rule}}</p>
+        <p style="margin: 0; font-size: 12px; color: #9AA0A8; margin-top: auto">{{c.note}}</p>
+      </li>
+    </sc-for>
+  </ol>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const sub = 'font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: ';
+    const cases = [
+      { n: 1, kind: 'needs', driven: false, when: 'The session asks you', title: 'Plan Migration to Windows App', status: 'Waiting on you · 2 delegates still running', subStyle: sub + '#FFD27A;',
+        rule: 'Its own question wins over everything its delegates are doing; host and daemon already agree (#84, 2026-10-30 comment).',
+        note: 'Appears in Needs you. Answers go to the session, as today.' },
+      { n: 2, kind: 'needs', driven: false, when: 'A delegate asks you', title: 'Plan Migration to Windows App', status: 'Check ubuntu CI failure asks · answer at the machine', subStyle: sub + '#FFD27A;',
+        rule: 'Same priority, and every line names the delegate. Controls appear only when the host can prove the answer lands on that delegate’s prompt.',
+        note: 'Open: can Copilot background agents call ask_user? Needs a recorded transcript.' },
+      { n: 3, kind: 'working', driven: false, when: 'The main agent is working', title: 'Plan Migration to Windows App', status: 'Working · task: Bisect RestartAfterResume', subStyle: sub + '#9AA0A8;',
+        rule: 'A foreground task agent is part of the main agent’s turn: the row says Working and names it. Its words go on its own row, never in the main stream.',
+        note: 'The model shown is the main agent’s; each delegate row shows its own.' },
+      { n: 4, kind: 'delegating', driven: false, when: 'Main agent idle, delegates running', title: 'Plan Migration to Windows App', status: 'Delegating · 3 agents', subStyle: sub + '#9AA0A8;',
+        rule: 'The orbit glyph. Nested delegates count once, under the agent that started them.',
+        note: 'Finished delegates fold into “N finished” and stay until the session ends.' },
+      { n: 5, kind: 'delegating', driven: false, when: 'Only background commands', title: 'Resume Fluent V8 to V9 Migration', status: '1 background command', subStyle: sub + '#9AA0A8;',
+        rule: 'Same glyph, different words. A delegate’s own shells are its work, counted on its row, not the session’s.',
+        note: 'Matches agent-ha-bridge#261.' },
+      { n: 6, kind: 'idle', driven: false, when: 'Nothing running', title: 'Testing Code Functionality', status: 'Idle · 32m', subStyle: sub + '#9AA0A8;',
+        rule: 'Neutral. New activity puts a dot on the row; it never moves the row.',
+        note: 'Order is yours: drag or pin. Only Needs you floats.' },
+      { n: 7, kind: 'working', driven: true, when: 'An agent is driving', title: 'Nightly issue triage', status: 'Working · driven by an agent', subStyle: sub + '#C4B5FD;',
+        rule: 'Rules 1–6 decide the shape; the diamond is added and active colour turns violet. Violet means only this.',
+        note: 'Same meaning as today’s purple edge (#46), new form.' },
+      { n: 8, kind: 'delegating', driven: false, when: 'The agent can’t list delegates', title: 'Review PR #160 (Claude Code)', status: 'Delegating · details not reported', subStyle: sub + '#9AA0A8;',
+        rule: 'Claude Task sidechains and Codex sub-agent threads show a count where one is known and say plainly when rows can’t be listed.',
+        note: 'Degrades to today’s behaviour, never to a wrong attribution.' }
+    ];
+    return { cases };
+  }
+}
+</script>
+</body>
+</html>

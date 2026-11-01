@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Bridge PWA on a phone — sessions</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button,input{font:inherit}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: {{t.shell}}; color: {{t.text}}; font-family: system-ui, 'Segoe UI Variable Text', -apple-system, Roboto, sans-serif; font-size: 15px; line-height: 20px; font-variant-numeric: tabular-nums; display: flex; flex-direction: column; overflow: hidden; border-radius: 40px">
+  <header style="padding: 56px 8px 0 20px; display: flex; align-items: center; gap: 4px">
+    <h1 style="margin: 0; flex: 1; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 24px; line-height: 32px; font-weight: 600">Sessions</h1>
+    <button aria-label="Search" style="width: 44px; height: 44px; border-radius: 6px; border: 0; background: transparent; color: {{t.text}}; display: grid; place-items: center"><dc-import name="Icon" icon="search" size="20" hint-size="20px,20px"></dc-import></button>
+    <button aria-label="New session" style="width: 44px; height: 44px; border-radius: 6px; border: 0; background: transparent; color: {{t.accentText}}; display: grid; place-items: center"><dc-import name="Icon" icon="plus" size="22" hint-size="22px,22px"></dc-import></button>
+  </header>
+  <div role="tablist" aria-label="Machine" style="display: flex; gap: 24px; padding: 4px 20px 0">
+    <button role="tab" aria-selected="true" style="position: relative; height: 40px; padding: 0; border: 0; background: transparent; color: {{t.text}}; font-weight: 600; font-size: 15px">All<span style="position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px; background: {{t.accent}}"></span></button>
+    <button role="tab" aria-selected="false" style="height: 40px; padding: 0; border: 0; background: transparent; color: {{t.text2}}; font-size: 15px">ULTRA</button>
+    <button role="tab" aria-selected="false" style="height: 40px; padding: 0; border: 0; background: transparent; color: {{t.text2}}; font-size: 15px">DEV-VM1</button>
+  </div>
+
+  <div style="flex: 1; overflow: hidden; background: {{t.layer}}; border-top: 1px solid {{t.stroke}}; padding: 20px 12px 0; display: flex; flex-direction: column">
+    <div style="padding: 0 8px 8px; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.amberHead}}">Needs you</div>
+    <div style="padding: 14px 16px 16px; border-radius: 8px; background: {{t.amberFill}}; display: flex; flex-direction: column; gap: 14px">
+      <div style="display: flex; gap: 12px"><span style="padding-top: 1px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import></span><div style="flex: 1; min-width: 0"><div style="display: flex; gap: 8px"><span style="flex: 1; font-weight: 600">Ship 0.1.691 prerelease</span><span style="font-size: 13px; color: {{t.text2}}">2m</span></div><div style="font-size: 13px; line-height: 18px; color: {{t.amberText}}; margin-top: 2px">Approve git push to release/0.1.691</div></div></div>
+      <div style="display: flex; gap: 8px; padding-left: 30px"><button style="flex: 1; height: 40px; border-radius: 6px; border: 1px solid {{t.accentEdge}}; background: {{t.accent}}; color: {{t.onAccent}}; font-weight: 600; font-size: 15px">Approve once</button><button style="flex: 1; height: 40px; border-radius: 6px; border: 1px solid {{t.stroke2}}; background: {{t.card}}; color: {{t.text}}; font-size: 15px">Deny</button></div>
+    </div>
+
+    <div style="padding: 24px 8px 8px; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text2}}">Pinned</div>
+    <a href="PWA-Phone-Session.dc.html" style="position: relative; display: flex; gap: 12px; align-items: center; min-height: 60px; padding: 0 12px; border-radius: 6px; text-decoration: none; color: inherit; background: {{t.sel}}"><dc-import name="Glyph" kind="delegating" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import><div style="flex: 1; min-width: 0"><div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Plan Migration to Windows App</div><div style="font-size: 13px; line-height: 18px; color: {{t.text2}}">3 delegates · DEV-VM1</div></div></a>
+
+    <div style="padding: 24px 8px 8px; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.text2}}">Sessions</div>
+    <a href="#" style="display: flex; gap: 12px; align-items: center; min-height: 60px; padding: 0 12px; text-decoration: none; color: inherit"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import><div style="flex: 1; min-width: 0"><div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600">Fix trust-wait banner</div><div style="font-size: 13px; line-height: 18px; color: {{t.text2}}">Editing LaunchView.xaml.cs</div></div><span style="width: 6px; height: 6px; border-radius: 3px; background: {{t.accent}}" aria-label="New activity"></span></a>
+    <a href="#" style="display: flex; gap: 12px; align-items: center; min-height: 60px; padding: 0 12px; text-decoration: none; color: inherit"><dc-import name="Glyph" kind="delegating" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import><div style="flex: 1; min-width: 0"><div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Fluent V8 to V9 migration</div><div style="font-size: 13px; line-height: 18px; color: {{t.text2}}">1 background command</div></div><span style="font-size: 13px; color: {{t.text2}}">10h</span></a>
+    <a href="#" style="display: flex; gap: 12px; align-items: center; min-height: 60px; padding: 0 12px; text-decoration: none; color: inherit"><dc-import name="Glyph" kind="idle" driven="true" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import><div style="flex: 1; min-width: 0"><div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Nightly issue triage</div><div style="font-size: 13px; line-height: 18px; color: {{t.violetText}}">Driven by an agent</div></div><span style="font-size: 13px; color: {{t.text2}}">1h</span></a>
+  </div>
+
+  <nav aria-label="App" style="flex: none; display: flex; justify-content: space-around; padding: 8px 8px 28px; background: {{t.layer}}; border-top: 1px solid {{t.stroke}}; color: {{t.text2}}">
+    <a href="#" aria-current="page" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 72px; min-height: 48px; text-decoration: none; color: {{t.text}}; font-size: 11px; line-height: 14px; font-weight: 600"><dc-import name="Icon" icon="sessions" size="22" hint-size="22px,22px"></dc-import>Sessions<span style="position: absolute; top: -9px; width: 20px; height: 3px; border-radius: 2px; background: {{t.accent}}"></span></a>
+    <a href="#" style="display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 72px; min-height: 48px; text-decoration: none; color: inherit; font-size: 11px; line-height: 14px"><dc-import name="Icon" icon="machine" size="22" hint-size="22px,22px"></dc-import>Machines</a>
+    <a href="#" style="display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 72px; min-height: 48px; text-decoration: none; color: inherit; font-size: 11px; line-height: 14px"><dc-import name="Icon" icon="usage" size="22" hint-size="22px,22px"></dc-import>Usage</a>
+    <a href="#" style="display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 72px; min-height: 48px; text-decoration: none; color: inherit; font-size: 11px; line-height: 14px"><dc-import name="Icon" icon="settings" size="22" hint-size="22px,22px"></dc-import>Settings</a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const dark = {
+      shell: '#202326', layer: '#272A2E', card: '#2F3338', stroke: 'rgba(255,255,255,0.07)', stroke2: 'rgba(255,255,255,0.12)', sel: 'rgba(255,255,255,0.06)',
+      text: '#FFFFFF', text2: 'rgba(255,255,255,0.72)', accent: '#2DD4BF', accentText: '#5EE6D3', accentEdge: 'rgba(255,255,255,0.08)', onAccent: '#062621',
+      amberHead: '#FFB224', amberText: '#FFD27A', amberFill: 'rgba(255,178,36,0.1)', violetText: '#C4B5FD'
+    };
+    const light = {
+      shell: '#EEF0F2', layer: '#F9F9F9', card: '#FFFFFF', stroke: 'rgba(0,0,0,0.07)', stroke2: 'rgba(0,0,0,0.12)', sel: 'rgba(0,0,0,0.05)',
+      text: '#1A1A1A', text2: 'rgba(0,0,0,0.62)', accent: '#0B7A6E', accentText: '#0B7A6E', accentEdge: 'rgba(0,0,0,0.1)', onAccent: '#FFFFFF',
+      amberHead: '#8F5300', amberText: '#7A4600', amberFill: '#FFF2D6', violetText: '#5B3CC4'
+    };
+    return { theme, t: theme === 'light' ? light : dark };
+  }
+}
+</script>
+</body>
+</html>
