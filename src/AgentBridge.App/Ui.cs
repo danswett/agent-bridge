@@ -18,19 +18,29 @@ public static class Ui
 
     public static Brush ToneBrush(Tone tone) => tone switch
     {
-        Tone.Ok => Brush("AbOk"),
-        Tone.Warn => Brush("AbWarningText"),
+        Tone.Ok => Brush("AbBridge"),
+        Tone.Warn => Brush("AbNeedsText"),
         Tone.Bad => Brush("AbDanger"),
-        Tone.Progress => Brush("AbPrimary"),
-        _ => Brush("AbMuted"),
+        Tone.Progress => Brush("AbBridge"),
+        _ => Brush("AbText2"),
     };
 
-    // A card's frame by what it shows: the PWA's colours (pwa/app.css .frame.*).
+    // A card's frame by what it shows: the PWA's colours (pwa/app.css .frame.*), in the design
+    // roles: active while working or delegating, needs while waiting, neutral while ending.
     public static Brush StateBrush(string view) => view switch
     {
-        "working" or "delegating" => Brush("AbPrimary"),
-        "waiting" => Brush("AbWarning"),
-        _ => Brush("AbBorder"),
+        "working" or "delegating" => Brush("AbActive"),
+        "waiting" => Brush("AbNeeds"),
+        "ending" => Brush("AbNeutral"),
+        _ => Brush("AbStroke2"),
+    };
+
+    // The status dot beside the words (pwa/app.css .dot): a glyph, so neutral when nothing runs,
+    // where the frame is only a hairline.
+    public static Brush DotBrush(string view) => view switch
+    {
+        "working" or "delegating" or "waiting" => StateBrush(view),
+        _ => Brush("AbNeutral"),
     };
 
     // The edge and glow: purple in place of the state's colour while an agent drives the session

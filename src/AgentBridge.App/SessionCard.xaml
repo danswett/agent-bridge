@@ -46,7 +46,7 @@
             Opacity="0"
             IsHitTestVisible="False"
             Stroke="{x:Bind local:Ui.EdgeBrush(Card.View, Card.Driven), Mode=OneWay}" />
-        <Border Grid.Row="1" Background="{ThemeResource AbSurface}" CornerRadius="14" Padding="16,12,16,12">
+        <Border Grid.Row="1" Background="{ThemeResource AbCard}" CornerRadius="14" Padding="16,12,16,12">
             <StackPanel Spacing="6">
                 <!-- Header: the title folds the card. Its menu (right-click, press and hold, Shift+F10)
                      and Alt+Up/Down move and pin the card (#164). -->
@@ -75,7 +75,7 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <Border Background="{ThemeResource AbCodeBg}" CornerRadius="6" Padding="6,2" VerticalAlignment="Center">
+                        <Border Background="{ThemeResource AbSubtle}" CornerRadius="6" Padding="6,2" VerticalAlignment="Center">
                             <TextBlock Text="{x:Bind Card.AgentName, Mode=OneWay}" FontSize="12" />
                         </Border>
                         <TextBlock
@@ -103,13 +103,13 @@
                 </Button>
                 <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Card.Meta, Mode=OneWay}" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Ellipse Width="9" Height="9" VerticalAlignment="Center" Fill="{x:Bind local:Ui.StateBrush(Card.View), Mode=OneWay}" />
+                    <Ellipse Width="9" Height="9" VerticalAlignment="Center" Fill="{x:Bind local:Ui.DotBrush(Card.View), Mode=OneWay}" />
                     <TextBlock FontWeight="SemiBold" Text="{x:Bind Card.StatusText, Mode=OneWay}" AutomationProperties.AutomationId="Status" />
                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Card.SinceText, Mode=OneWay}" />
                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Card.UpdatedText, Mode=OneWay}" />
                     <TextBlock
                         FontWeight="SemiBold"
-                        Foreground="{ThemeResource AbAgent}"
+                        Foreground="{ThemeResource AbAgentText}"
                         Text="{x:Bind Card.DriverText, Mode=OneWay}"
                         ToolTipService.ToolTip="{x:Bind Card.DriverPrincipal, Mode=OneWay}"
                         Visibility="{x:Bind local:Ui.Show(Card.Driven), Mode=OneWay}"
@@ -175,7 +175,7 @@
                     <StackPanel Spacing="6" Visibility="{x:Bind local:Ui.Some(Card.Reply), Mode=OneWay}">
                         <TextBlock
                             TextWrapping="Wrap"
-                            Foreground="{ThemeResource AbWarningText}"
+                            Foreground="{ThemeResource AbNeedsText}"
                             Text="{x:Bind Card.Reply.HeldText, Mode=OneWay}"
                             Visibility="{x:Bind local:Ui.Some(Card.Reply.HeldText), Mode=OneWay}" />
                         <TextBox
@@ -324,7 +324,7 @@
             CanDrag="True"
             DragStarting="OnGripDragStarting"
             DropCompleted="OnGripDropCompleted"
-            Foreground="{ThemeResource AbMuted}"
+            Foreground="{ThemeResource AbText2}"
             ToolTipService.ToolTip="Drag to move"
             AutomationProperties.AccessibilityView="Raw" />
     </Grid>

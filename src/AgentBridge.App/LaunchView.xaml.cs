@@ -68,7 +68,7 @@ public sealed partial class LaunchView : UserControl
         DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(line)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
 
     public static Brush ProblemBrush() => Ui.ToneBrush(Tone.Bad);
-    public static Brush NoteBrush(bool warns) => warns ? Ui.Brush("AbWarningText") : Ui.Brush("AbMuted");
+    public static Brush NoteBrush(bool warns) => warns ? Ui.Brush("AbNeedsText") : Ui.Brush("AbText2");
     public static bool Has(string? text) => !string.IsNullOrEmpty(text);
 
     // The pickers' choices go to the view model by hand: a two-way x:Bind on SelectedItem cannot

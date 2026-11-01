@@ -7,54 +7,15 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <!-- The design language's colour roles and surfaces (Light, Dark, HighContrast),
+                     mono stack, glyphs and icons, generated from design/ by tools/design-gen
+                     (design/README.md). The PWA gets the same, so a card reads the same on
+                     the desktop. No colour is written here. -->
+                <ResourceDictionary Source="ms-appx:///Design/DesignResources.xaml" />
             </ResourceDictionary.MergedDictionaries>
-            <!-- The PWA's palette (pwa/app.css), so a card reads the same on the desktop. -->
-            <ResourceDictionary.ThemeDictionaries>
-                <ResourceDictionary x:Key="Light">
-                    <SolidColorBrush x:Key="AbPrimary" Color="#0969da" />
-                    <SolidColorBrush x:Key="AbWarning" Color="#bf8700" />
-                    <SolidColorBrush x:Key="AbWarningText" Color="#8a5a00" />
-                    <SolidColorBrush x:Key="AbAgent" Color="#8250df" />
-                    <SolidColorBrush x:Key="AbDanger" Color="#cf222e" />
-                    <SolidColorBrush x:Key="AbOk" Color="#1a7f37" />
-                    <SolidColorBrush x:Key="AbMuted" Color="#59636e" />
-                    <SolidColorBrush x:Key="AbBorder" Color="#d1d9e0" />
-                    <SolidColorBrush x:Key="AbSurface" Color="#ffffff" />
-                    <SolidColorBrush x:Key="AbCodeBg" Color="#eff2f5" />
-                    <!-- TODO(#177): the Bridge colour role, by hand from design/tokens.json (color.role.bridge) until the generator writes it. -->
-                    <SolidColorBrush x:Key="AbBridge" Color="#0B7A6E" />
-                </ResourceDictionary>
-                <ResourceDictionary x:Key="Dark">
-                    <SolidColorBrush x:Key="AbPrimary" Color="#4493f8" />
-                    <SolidColorBrush x:Key="AbWarning" Color="#d29922" />
-                    <SolidColorBrush x:Key="AbWarningText" Color="#e3b341" />
-                    <SolidColorBrush x:Key="AbAgent" Color="#ab7df8" />
-                    <SolidColorBrush x:Key="AbDanger" Color="#f85149" />
-                    <SolidColorBrush x:Key="AbOk" Color="#3fb950" />
-                    <SolidColorBrush x:Key="AbMuted" Color="#9ea7b3" />
-                    <SolidColorBrush x:Key="AbBorder" Color="#3d444d" />
-                    <SolidColorBrush x:Key="AbSurface" Color="#151b23" />
-                    <SolidColorBrush x:Key="AbCodeBg" Color="#0d1117" />
-                    <!-- TODO(#177): design/tokens.json color.role.bridge, dark. -->
-                    <SolidColorBrush x:Key="AbBridge" Color="#2DD4BF" />
-                </ResourceDictionary>
-                <ResourceDictionary x:Key="HighContrast">
-                    <SolidColorBrush x:Key="AbPrimary" Color="{ThemeResource SystemColorHighlightColor}" />
-                    <SolidColorBrush x:Key="AbWarning" Color="{ThemeResource SystemColorHighlightColor}" />
-                    <SolidColorBrush x:Key="AbWarningText" Color="{ThemeResource SystemColorWindowTextColor}" />
-                    <SolidColorBrush x:Key="AbAgent" Color="{ThemeResource SystemColorHighlightColor}" />
-                    <SolidColorBrush x:Key="AbDanger" Color="{ThemeResource SystemColorWindowTextColor}" />
-                    <SolidColorBrush x:Key="AbOk" Color="{ThemeResource SystemColorWindowTextColor}" />
-                    <SolidColorBrush x:Key="AbMuted" Color="{ThemeResource SystemColorGrayTextColor}" />
-                    <SolidColorBrush x:Key="AbBorder" Color="{ThemeResource SystemColorWindowTextColor}" />
-                    <SolidColorBrush x:Key="AbSurface" Color="{ThemeResource SystemColorWindowColor}" />
-                    <SolidColorBrush x:Key="AbCodeBg" Color="{ThemeResource SystemColorWindowColor}" />
-                    <SolidColorBrush x:Key="AbBridge" Color="{ThemeResource SystemColorHighlightColor}" />
-                </ResourceDictionary>
-            </ResourceDictionary.ThemeDictionaries>
 
             <Style x:Key="AbSecondaryText" TargetType="TextBlock">
-                <Setter Property="Foreground" Value="{ThemeResource AbMuted}" />
+                <Setter Property="Foreground" Value="{ThemeResource AbText2}" />
                 <Setter Property="TextWrapping" Value="Wrap" />
                 <Setter Property="IsTextSelectionEnabled" Value="True" />
             </Style>

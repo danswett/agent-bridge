@@ -33,15 +33,15 @@ public sealed class QuestionView : StackPanel
         Padding = new Thickness(12);
         CornerRadius = new CornerRadius(8);
         BorderThickness = new Thickness(1);
-        BorderBrush = Ui.Brush("AbWarning");
+        BorderBrush = Ui.Brush("AbNeeds");
         AutomationId(this, "Question");
 
-        Children.Add(new TextBlock { Text = vm.Heading, FontWeight = FontWeights.SemiBold, Foreground = Ui.Brush("AbWarningText") });
+        Children.Add(new TextBlock { Text = vm.Heading, FontWeight = FontWeights.SemiBold, Foreground = Ui.Brush("AbNeedsHead") });
         Children.Add(new MarkdownView { Markdown = vm.Message });
 
         if (!vm.Answerable)
         {
-            Children.Add(new TextBlock { Text = vm.ReadOnlyNote, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbWarningText") });
+            Children.Add(new TextBlock { Text = vm.ReadOnlyNote, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsText") });
             if (vm.ShowReadOnlyFields)
             {
                 foreach (var f in vm.Fields)

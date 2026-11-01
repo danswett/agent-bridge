@@ -22,7 +22,8 @@
                         <InfoBadge
                             Value="{x:Bind ViewModel.Waiting, Mode=OneWay}"
                             Visibility="{x:Bind local:Ui.Count(ViewModel.Waiting), Mode=OneWay}"
-                            Background="{ThemeResource AbWarning}" />
+                            Background="{ThemeResource AbNeeds}"
+                            Foreground="{ThemeResource AbNeedsInk}" />
                     </NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
                 <NavigationViewItem
