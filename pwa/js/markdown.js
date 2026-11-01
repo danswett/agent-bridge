@@ -47,6 +47,17 @@ const blank = (line) => /^[ \t]*$/.test(line);
 const indentOf = (line) => line.match(/^ */)[0].length;
 const expandTabs = (line) => line.replace(/^\t+/, (t) => '    '.repeat(t.length));
 
+// The raw line with its first n columns of indentation removed, as expandTabs counts them
+// (each leading tab four columns), keeping the tabs after them: a fenced Makefile in a list
+// item must copy with its recipe tabs, not spaces.
+function dropColumns(raw, n) {
+  const tabs = raw.match(/^\t*/)[0].length;
+  if (n > 4 * tabs) { return raw.slice(tabs).slice(n - 4 * tabs); }
+  // A tab only partly inside the columns becomes spaces, as it always did: what is left must
+  // still differ from the expanded line only in its leading tabs.
+  return n % 4 === 0 ? raw.slice(n / 4) : expandTabs(raw).slice(n);
+}
+
 function startsBlock(line, next) {
   // Only a list starting at 1 can interrupt a paragraph, so "in\n2026. we shipped" stays
   // one paragraph (CommonMark's rule).
@@ -67,11 +78,14 @@ function isTableSep(line) { return RE.tableSep.test(line) && line.includes('-') 
 
 export function parseMarkdown(src) {
   const text = typeof src === 'string' ? src : '';
-  const lines = text.replace(/\r\n?/g, '\n').split('\n').map(expandTabs);
-  return parseBlocks(lines, 0);
+  const raw = text.replace(/\r\n?/g, '\n').split('\n');
+  return parseBlocks(raw.map(expandTabs), raw, 0);
 }
 
-function parseBlocks(lines, depth) {
+// lines: what structure is read from, leading tabs expanded. raw: the same lines as written,
+// differing only in those tabs; a fenced block's body is taken from it, so its tabs are shown
+// and copied as the agent wrote them.
+function parseBlocks(lines, raw, depth) {
   const out = [];
   let i = 0;
   while (i < lines.length) {
@@ -92,7 +106,7 @@ function parseBlocks(lines, depth) {
       while (i < lines.length) {
         const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(lines[i]);
         if (close && close[1][0] === marker[0] && close[1].length >= marker.length) { i++; break; }
-        body.push(lines[i]);
+        body.push(raw[i]);
         i++;
       }
       // An unclosed fence runs to the end, as in CommonMark; a cut response often ends so.
@@ -113,17 +127,19 @@ function parseBlocks(lines, depth) {
 
     if (RE.quote.test(line)) {
       const inner = [];
+      const innerRaw = [];
       while (i < lines.length && !blank(lines[i])) {
         const q = RE.quote.exec(lines[i]);
         inner.push(q ? q[1] : lines[i]);
+        innerRaw.push(q ? q[1] : raw[i]);
         i++;
       }
-      out.push(el('blockquote', parseBlocks(inner, depth + 1)));
+      out.push(el('blockquote', parseBlocks(inner, innerRaw, depth + 1)));
       continue;
     }
 
     if (isItem(line)) {
-      i = parseList(lines, i, depth, out);
+      i = parseList(lines, raw, i, depth, out);
       continue;
     }
 
@@ -145,7 +161,7 @@ function inlineLines(lines, depth) {
   return parseInline(lines.map((l) => l.trim()).join('\n'), depth);
 }
 
-function parseList(lines, i, depth, out) {
+function parseList(lines, raw, i, depth, out) {
   const first = RE.item.exec(lines[i]);
   const base = first[1].length;
   const ordered = /\d/.test(first[2]);
@@ -156,6 +172,7 @@ function parseList(lines, i, depth, out) {
     if (!m || m[1].length !== base || !isItem(lines[i]) || /\d/.test(m[2]) !== ordered || (ordered ? m[2].slice(-1) : m[2]) !== delimiter) { break; }
     const contentIndent = base + m[2].length + Math.min(4, m[3].length - m[4].length);
     const body = [m[4]];
+    const bodyRaw = [m[4]];
     i++;
     while (i < lines.length) {
       const line = lines[i];
@@ -163,16 +180,23 @@ function parseList(lines, i, depth, out) {
         // A blank line continues the item only if what follows is indented under it.
         let j = i;
         while (j < lines.length && blank(lines[j])) { j++; }
-        if (j < lines.length && indentOf(lines[j]) > base) { body.push(''); i++; continue; }
+        if (j < lines.length && indentOf(lines[j]) > base) { body.push(''); bodyRaw.push(''); i++; continue; }
         break;
       }
       const ind = indentOf(line);
-      if (ind > base) { body.push(line.slice(Math.min(ind, contentIndent))); i++; continue; }
+      if (ind > base) {
+        const cut = Math.min(ind, contentIndent);
+        body.push(line.slice(cut));
+        bodyRaw.push(dropColumns(raw[i], cut));
+        i++;
+        continue;
+      }
       if (isItem(line) || startsBlock(line, lines[i + 1]) || body[body.length - 1] === '') { break; }
       body.push(line); // a lazy continuation of the item's paragraph
+      bodyRaw.push(raw[i]);
       i++;
     }
-    let blocks = parseBlocks(body, depth + 1);
+    let blocks = parseBlocks(body, bodyRaw, depth + 1);
     // Tight items: the first paragraph's text sits in the <li> itself.
     if (blocks[0]?.tag === 'p') { blocks = [...blocks[0].children, ...blocks.slice(1)]; }
     const task = taskMarker(blocks);

@@ -329,7 +329,7 @@ summary {
 .md pre { background: var(--code-bg); padding: 10px; border-radius: 8px; overflow-x: auto; border: 1px solid var(--border); }
 /* Wrapped, not scrolled: a long command or a base64 blob breaks across lines on a phone
    rather than running off the side. pre-wrap keeps indentation; Copy takes the real text. */
-.md pre code { background: none; padding: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.md pre code { background: none; padding: 0; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
 .md .md-code { position: relative; margin: 8px 0; }
 /* The code starts below the Copy button, so the button never covers its first line. */
 .md .md-code > pre { margin: 0; padding-top: var(--tap); }

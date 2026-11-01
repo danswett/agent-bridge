@@ -95,11 +95,17 @@ test('a button written in the text stays text, in a paragraph and in a code bloc
   assert.ok(r.text.includes('<button>x</button>'));
 });
 
-test('a code block keeps its text and indentation, with no newline added', () => {
+test('a code block keeps its text, tabs and indentation as written, with no newline added', () => {
   const body = '  indented\n\tpwsh -EncodedCommand AAAA\n';
   const [pre] = parseMarkdown(`\`\`\`\n${body}\`\`\``);
   assert.equal(pre.tag, 'pre');
-  assert.equal(textOf(pre), '  indented\n    pwsh -EncodedCommand AAAA');
+  assert.equal(textOf(pre), '  indented\n\tpwsh -EncodedCommand AAAA');
+});
+
+test('a Makefile in a list item keeps its recipe tab', () => {
+  const [list] = parseMarkdown('- the Makefile:\n\n  ```make\n  all:\n  \techo hello\n  ```\n- done');
+  const pre = list.children[0].children.find((n) => n.tag === 'pre');
+  assert.equal(textOf(pre), 'all:\n\techo hello');
 });
 
 test('anything that is not a string renders as nothing', () => {
