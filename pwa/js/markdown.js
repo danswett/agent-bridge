@@ -9,9 +9,10 @@
 // tenth of the size, with no third-party code to keep updated under the page's CSP.
 //
 // Covered: paragraphs (line breaks kept, as a terminal shows them), headings, emphasis,
-// strong, strikethrough, code spans, fenced code, bullet, numbered and task lists (nested),
-// block quotes, rules, GitHub tables, links, autolinks and bare URLs. Images become links,
-// never loads. Not covered: reference links, footnotes, indented code, HTML.
+// strong, strikethrough, code spans, fenced code (wrapped, with a Copy button), bullet,
+// numbered and task lists (nested), block quotes, rules, GitHub tables, links, autolinks and
+// bare URLs. Images become links, never loads. Not covered: reference links, footnotes,
+// indented code, HTML.
 
 const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 const MAX_DEPTH = 12;
@@ -46,6 +47,17 @@ const blank = (line) => /^[ \t]*$/.test(line);
 const indentOf = (line) => line.match(/^ */)[0].length;
 const expandTabs = (line) => line.replace(/^\t+/, (t) => '    '.repeat(t.length));
 
+// The raw line with its first n columns of indentation removed, as expandTabs counts them
+// (each leading tab four columns), keeping the tabs after them: a fenced Makefile in a list
+// item must copy with its recipe tabs, not spaces.
+function dropColumns(raw, n) {
+  const tabs = raw.match(/^\t*/)[0].length;
+  if (n > 4 * tabs) { return raw.slice(tabs).slice(n - 4 * tabs); }
+  // A tab only partly inside the columns becomes spaces, as it always did: what is left must
+  // still differ from the expanded line only in its leading tabs.
+  return n % 4 === 0 ? raw.slice(n / 4) : expandTabs(raw).slice(n);
+}
+
 function startsBlock(line, next) {
   // Only a list starting at 1 can interrupt a paragraph, so "in\n2026. we shipped" stays
   // one paragraph (CommonMark's rule).
@@ -66,11 +78,14 @@ function isTableSep(line) { return RE.tableSep.test(line) && line.includes('-') 
 
 export function parseMarkdown(src) {
   const text = typeof src === 'string' ? src : '';
-  const lines = text.replace(/\r\n?/g, '\n').split('\n').map(expandTabs);
-  return parseBlocks(lines, 0);
+  const raw = text.replace(/\r\n?/g, '\n').split('\n');
+  return parseBlocks(raw.map(expandTabs), raw, 0);
 }
 
-function parseBlocks(lines, depth) {
+// lines: what structure is read from, leading tabs expanded and blank lines in list items
+// emptied. raw: the same lines as written, cut at the same columns; a fenced block's body is
+// taken from it, so its tabs and whitespace are shown and copied as the agent wrote them.
+function parseBlocks(lines, raw, depth) {
   const out = [];
   let i = 0;
   while (i < lines.length) {
@@ -91,7 +106,7 @@ function parseBlocks(lines, depth) {
       while (i < lines.length) {
         const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(lines[i]);
         if (close && close[1][0] === marker[0] && close[1].length >= marker.length) { i++; break; }
-        body.push(lines[i]);
+        body.push(raw[i]);
         i++;
       }
       // An unclosed fence runs to the end, as in CommonMark; a cut response often ends so.
@@ -112,17 +127,19 @@ function parseBlocks(lines, depth) {
 
     if (RE.quote.test(line)) {
       const inner = [];
+      const innerRaw = [];
       while (i < lines.length && !blank(lines[i])) {
         const q = RE.quote.exec(lines[i]);
         inner.push(q ? q[1] : lines[i]);
+        innerRaw.push(q ? q[1] : raw[i]);
         i++;
       }
-      out.push(el('blockquote', parseBlocks(inner, depth + 1)));
+      out.push(el('blockquote', parseBlocks(inner, innerRaw, depth + 1)));
       continue;
     }
 
     if (isItem(line)) {
-      i = parseList(lines, i, depth, out);
+      i = parseList(lines, raw, i, depth, out);
       continue;
     }
 
@@ -144,7 +161,7 @@ function inlineLines(lines, depth) {
   return parseInline(lines.map((l) => l.trim()).join('\n'), depth);
 }
 
-function parseList(lines, i, depth, out) {
+function parseList(lines, raw, i, depth, out) {
   const first = RE.item.exec(lines[i]);
   const base = first[1].length;
   const ordered = /\d/.test(first[2]);
@@ -155,6 +172,7 @@ function parseList(lines, i, depth, out) {
     if (!m || m[1].length !== base || !isItem(lines[i]) || /\d/.test(m[2]) !== ordered || (ordered ? m[2].slice(-1) : m[2]) !== delimiter) { break; }
     const contentIndent = base + m[2].length + Math.min(4, m[3].length - m[4].length);
     const body = [m[4]];
+    const bodyRaw = [m[4]];
     i++;
     while (i < lines.length) {
       const line = lines[i];
@@ -162,16 +180,30 @@ function parseList(lines, i, depth, out) {
         // A blank line continues the item only if what follows is indented under it.
         let j = i;
         while (j < lines.length && blank(lines[j])) { j++; }
-        if (j < lines.length && indentOf(lines[j]) > base) { body.push(''); i++; continue; }
+        if (j < lines.length && indentOf(lines[j]) > base) {
+          body.push('');
+          // A blank line in a fence may still hold spaces or tabs that matter (a heredoc);
+          // only the list's own indentation comes off.
+          bodyRaw.push(dropColumns(raw[i], Math.min(indentOf(expandTabs(raw[i])), contentIndent)));
+          i++;
+          continue;
+        }
         break;
       }
       const ind = indentOf(line);
-      if (ind > base) { body.push(line.slice(Math.min(ind, contentIndent))); i++; continue; }
+      if (ind > base) {
+        const cut = Math.min(ind, contentIndent);
+        body.push(line.slice(cut));
+        bodyRaw.push(dropColumns(raw[i], cut));
+        i++;
+        continue;
+      }
       if (isItem(line) || startsBlock(line, lines[i + 1]) || body[body.length - 1] === '') { break; }
       body.push(line); // a lazy continuation of the item's paragraph
+      bodyRaw.push(raw[i]);
       i++;
     }
-    let blocks = parseBlocks(body, depth + 1);
+    let blocks = parseBlocks(body, bodyRaw, depth + 1);
     // Tight items: the first paragraph's text sits in the <li> itself.
     if (blocks[0]?.tag === 'p') { blocks = [...blocks[0].children, ...blocks.slice(1)]; }
     const task = taskMarker(blocks);
@@ -422,7 +454,86 @@ function build(node, doc) {
   if (node.tag === 'ol' && /^\d{1,9}$/.test(a.start ?? '')) { e.setAttribute('start', a.start); }
   if (CLASSES.has(a.class)) { e.className = a.class; }
   for (const child of node.children ?? []) { e.append(build(child, doc)); }
+  // The Copy button is made here and never by the parser: 'button' is not in TAGS, so no
+  // reply text can produce one, and the only handler on it is ours.
+  if (node.tag === 'pre') { return codeBlock(e, textOf(node), doc); }
   return e;
+}
+
+const COPY_RESET_MS = 1500;
+
+// A code block with a Copy button in its top-right corner. On a phone, a long command (a
+// 1000-character pwsh -EncodedCommand, say) is all but impossible to select by hand. What
+// is copied is the block's text as the agent wrote it, not as it is wrapped on screen.
+// The button sits beside the <pre>, not in it, so the block's own text stays the code.
+function codeBlock(pre, text, doc) {
+  const label = doc.createElement('span');
+  label.textContent = 'Copy';
+  const button = doc.createElement('button');
+  button.type = 'button';
+  button.className = 'md-copy';
+  button.setAttribute('aria-label', 'Copy code');
+  button.append(label);
+  // The button's name stays "Copy code"; what happened is announced separately.
+  const status = doc.createElement('span');
+  status.className = 'sr-only';
+  status.setAttribute('role', 'status');
+  let timer = null;
+  button.addEventListener('click', async () => {
+    const ok = await copyText(text, doc);
+    const said = ok ? 'Copied' : 'Copy failed';
+    label.textContent = said;
+    status.textContent = said;
+    button.dataset.copy = ok ? 'done' : 'failed';
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      label.textContent = 'Copy';
+      status.textContent = '';
+      delete button.dataset.copy;
+    }, COPY_RESET_MS);
+  });
+  const wrap = doc.createElement('div');
+  wrap.className = 'md-code';
+  wrap.append(button, pre, status);
+  return wrap;
+}
+
+// Puts text on the clipboard; true if it got there. The Clipboard API first. It is missing
+// in older WebViews, and can reject where it exists (iOS Home Screen apps have refused it),
+// so a hidden textarea and execCommand('copy') follow, as clipboard.js does it.
+export async function copyText(text, doc = document) {
+  const clipboard = doc.defaultView?.navigator?.clipboard;
+  if (typeof clipboard?.writeText === 'function') {
+    try {
+      await clipboard.writeText(text);
+      return true;
+    } catch { /* refused here; the older way may still be allowed */ }
+  }
+  return copyBySelection(text, doc);
+}
+
+function copyBySelection(text, doc) {
+  const area = doc.createElement('textarea');
+  area.className = 'md-copy-buffer';
+  area.value = text;
+  // Read-only, so focusing it never raises the keyboard.
+  area.setAttribute('readonly', '');
+  area.setAttribute('aria-hidden', 'true');
+  area.tabIndex = -1;
+  const before = doc.activeElement;
+  doc.body.append(area);
+  try {
+    area.focus({ preventScroll: true });
+    area.select();
+    // iOS ignores select() on a read-only field; a selection range it honours.
+    area.setSelectionRange(0, text.length);
+    return doc.execCommand('copy') === true;
+  } catch {
+    return false;
+  } finally {
+    area.remove();
+    before?.focus?.({ preventScroll: true });
+  }
 }
 
 export function textOf(node) {

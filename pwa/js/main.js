@@ -81,7 +81,9 @@ function focusLinked() {
   el.classList.add('linked');
   setTimeout(() => el.classList.remove('linked'), 4000);
   el.scrollIntoView({ block: 'start' });
-  const target = el.querySelector('.question-slot button:not([disabled]), .question-slot input:not([disabled]), .question-slot textarea:not([disabled])') ?? el.querySelector('.fold');
+  // The question's answer controls, not a code block's Copy button in its message: Enter on
+  // a notification's question must answer it, not copy the command it shows.
+  const target = el.querySelector('.question-slot button:not([disabled]):not(.md-copy), .question-slot input:not([disabled]), .question-slot textarea:not([disabled])') ?? el.querySelector('.fold');
   target?.focus({ preventScroll: true });
 }
 

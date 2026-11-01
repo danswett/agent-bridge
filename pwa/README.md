@@ -332,6 +332,13 @@ Images become links and are never loaded. It covers what agents write: paragraph
 breaks kept), headings, emphasis, code, fenced code, nested and task lists, quotes, rules,
 GitHub tables and links. It is linear on hostile input (tested at 16 KiB).
 
+Code blocks wrap rather than scroll sideways (`pre-wrap`, breaking even a long base64
+token), keeping indentation, and each has a Copy button in its top-right corner that copies
+the block's text as written, whatever the wrapping. The button is made by `toDom`, never by
+the parser, so no reply text can produce a `<button>`. It uses the Clipboard API and falls
+back to a hidden text area and `execCommand('copy')` where that API is missing or refuses
+(older WebViews, some iOS Home Screen apps). Inline code has no button.
+
 ## Tests
 
 ```

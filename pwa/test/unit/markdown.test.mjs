@@ -87,6 +87,33 @@ test('pathological input finishes quickly', () => {
   }
 });
 
+test('a button written in the text stays text, in a paragraph and in a code block', () => {
+  const md = '<button onclick="window.__xss=1">Copy</button>\n\n```\n<button>x</button>\n```';
+  const r = walk(parseMarkdown(md));
+  assert.ok(!r.tags.includes('button'), r.tags.join());
+  assert.ok(r.text.includes('<button onclick="window.__xss=1">Copy</button>'));
+  assert.ok(r.text.includes('<button>x</button>'));
+});
+
+test('a code block keeps its text, tabs and indentation as written, with no newline added', () => {
+  const body = '  indented\n\tpwsh -EncodedCommand AAAA\n';
+  const [pre] = parseMarkdown(`\`\`\`\n${body}\`\`\``);
+  assert.equal(pre.tag, 'pre');
+  assert.equal(textOf(pre), '  indented\n\tpwsh -EncodedCommand AAAA');
+});
+
+test('a Makefile in a list item keeps its recipe tab', () => {
+  const [list] = parseMarkdown('- the Makefile:\n\n  ```make\n  all:\n  \techo hello\n  ```\n- done');
+  const pre = list.children[0].children.find((n) => n.tag === 'pre');
+  assert.equal(textOf(pre), 'all:\n\techo hello');
+});
+
+test('whitespace-only lines in a list item\'s code block keep what is past the list\'s indentation', () => {
+  const [list] = parseMarkdown('- a heredoc:\n\n  ```\n  cat <<EOF\n  \t\n      \n  EOF\n  ```');
+  const pre = list.children[0].children.find((n) => n.tag === 'pre');
+  assert.equal(textOf(pre), 'cat <<EOF\n\t\n    \nEOF');
+});
+
 test('anything that is not a string renders as nothing', () => {
   assert.deepEqual(parseMarkdown(null), []);
   assert.deepEqual(parseMarkdown({ toString: () => '<b>' }), []);
