@@ -438,6 +438,7 @@ public sealed partial class TranscriptEvidence(string path)
         if (daemon.ShellIds.Distinct(StringComparer.Ordinal).Count() != daemon.Shells) { return null; }
         var issues = new SortedSet<int>();
         var explained = 0;
+        var explainedIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var id in daemon.ShellIds.Distinct(StringComparer.Ordinal))
         {
             if (!shells.TryGetValue(id, out var shell)) { continue; }
@@ -446,7 +447,7 @@ public sealed partial class TranscriptEvidence(string path)
             if (starts.Count == 0) { continue; }
             // A run the daemon has read only part of may hold a start just short of its offset.
             var latestStart = starts.Max(s => s.Last < through ? s.Last : through - 1);
-            if (ends.Count > 0 && ends.Max() > latestStart) { issues.Add(259); explained++; continue; }
+            if (ends.Count > 0 && ends.Max() > latestStart) { issues.Add(259); explained++; explainedIds.Add(id); continue; }
             var lastEnd = ends.Count > 0 ? ends.Max() : -1;
             if (shell.DroppedThrough > lastEnd) { continue; }
             var holding = starts.Where(s => s.Last > lastEnd).ToList();
@@ -454,10 +455,19 @@ public sealed partial class TranscriptEvidence(string path)
             if (holding.Any(s => s.Subagent)) { issues.Add(261); }
             if (holding.Any(s => !s.Subagent)) { issues.Add(262); }
             explained++;
+            explainedIds.Add(id);
         }
         var listed = daemon.ShellIds.ToHashSet(StringComparer.Ordinal);
         var restarted = shells.Count(s => !listed.Contains(s.Key) && Restarted(s.Value, through, shutdownAt));
-        if (restarted > 0) { issues.Add(276); }
+        if (restarted > 0)
+        {
+            // The host's ids are not known here, only its count, so a restart is put down to #276
+            // only when every shell the daemon lists and no signature explains is one the host runs
+            // too: otherwise a daemon extra and a host extra of other causes could cancel out
+            // (found in review, #162).
+            if (listed.Any(id => !explainedIds.Contains(id) && !(shells.TryGetValue(id, out var s) && HostRuns(s, shutdownAt)))) { return null; }
+            issues.Add(276);
+        }
         return explained + restarted > 0 && listed.Count - explained + restarted == host.Shells ? Name(issues) : null;
     }
 
@@ -469,9 +479,17 @@ public sealed partial class TranscriptEvidence(string path)
     // ignores, and any the daemon took in a later batch would have listed it again. Seen on DEV-VM1
     // (#40): a pr-watch watcher completed and was restarted 40 s later, with the daemon listing
     // nothing from then on while its process ran (agent-ha-bridge#276).
+    // A shell the host counts as running: a start of the session's own that it takes, after the last
+    // end it takes and the last shutdown.
+    static bool HostRuns(Shell shell, long shutdownAt) =>
+        shell.Runs.Any(r => !r.Subagent && r.Kind == StartKind.Proper && r.Last > shell.HostEnd && r.Last > shutdownAt);
+
     static bool Restarted(Shell shell, long through, long shutdownAt)
     {
         if (shell.HostEnd < 0 || shell.HostEnd >= through || shell.DroppedThrough > shell.HostEnd) { return false; }
+        // An end the host takes is one the daemon takes too, at the same place; one no longer held
+        // proves nothing.
+        if (!shell.Ends.Contains(shell.HostEnd)) { return false; }
         // An end dropped for room after the start may have been one the daemon read (found in
         // review, #162): then nothing is known.
         return shell.Runs.Any(r => r.First > shell.HostEnd && r.First > shutdownAt && r.First < through && !r.Subagent && r.Kind == StartKind.Proper

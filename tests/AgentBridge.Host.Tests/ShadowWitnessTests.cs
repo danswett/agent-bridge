@@ -177,6 +177,18 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Null(Known(Daemon(blocked, shells: ["long"]), Host(shells: 2), ShadowKinds.BackgroundShells));
     }
 
+    // Found in review (#162): with only the host's count to go on, a daemon extra and a host extra of
+    // other causes must not cancel out into a restart.
+    [Fact]
+    public void A_restart_is_not_put_down_to_the_daemon_when_it_lists_a_shell_the_host_does_not_run()
+    {
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Result("<shellId: watch completed with exit code 0>"));
+        var through = Write(Result("<command started in background with shellId: watch>"), Result("<command started in background with shellId: other>"));
+        Assert.Equal("agent-ha-bridge#276", Known(Daemon(through, shells: ["other"]), Host(shells: 2), ShadowKinds.BackgroundShells));
+        Assert.Null(Known(Daemon(through, shells: ["mystery"]), Host(shells: 2), ShadowKinds.BackgroundShells));
+    }
+
     // Found in review (#162): the same id started again after a shutdown is a run of its own, not
     // the end of the one before it.
     [Fact]
