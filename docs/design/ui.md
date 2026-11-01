@@ -76,28 +76,39 @@ current behaviour. Rule 7 keeps #46's meaning in a new form.
 
 ## 3. Colour
 
-Five roles, each with a dark value, a light value and a high-contrast mapping, defined in
-[`tokens.json`](../../design/tokens.json) under `color.role`.
+Six roles, each with a dark value, a light value and a high-contrast mapping, defined in
+[`tokens.json`](../../design/tokens.json) under `color.role`, and generated into each client
+by `tools/design-gen` (#177).
 
 | Role | Dark | Light | Used for |
 |---|---|---|---|
 | Bridge | `#2DD4BF` | `#0B7A6E` | Primary actions, selection, focus, the mark, the "new activity" dot |
-| Needs you | `#FFB224` | `#E8A10C` (text `#7A4600`) | Questions and approvals |
+| Needs you | `#FFB224` | `#B87700` (text `#7A4600`) | Questions and approvals |
 | Active | `#4C9AFF` | `#0B63E5` | The `working` and `delegating` glyphs only |
 | Agent | `#A78BFA` | `#6D4AE0` | Driven by an agent, and nothing else |
 | Danger | `#FF6B6B` | `#C9302C` | Failed, stopped, End session |
+| Neutral | `#8B949E` | `#6E7781` | The `idle`, `done` and `ended` glyphs only |
+
+Secondary and tertiary text are the text colour at reduced opacity: `text2` and `text3`,
+white at 0.72 and 0.54 in dark, black at 0.62 and 0.58 in light.
 
 Rules:
 - **Status colours are never used on controls.**
+- **Words are never in Active or Neutral.** They are glyph colours (Active is 4.46:1 on the
+  dark card). Text in a role uses Bridge, Danger, or the role's own text colour (Needs
+  you's and Agent's).
 - **Surfaces and text come from the platform.** Mica and layer fills on Windows, window and
   sidebar materials on macOS, system grouped backgrounds on iOS, and a Material 3 scheme
   seeded from Bridge on Android. Dynamic colour may restyle Android surfaces but never the
   status roles.
 - **Theme:** light, dark and high contrast follow the OS on every client. In high
-  contrast, every role maps to a system colour (`tokens.json` `hc`).
+  contrast, every role and every Windows/PWA surface maps to a system colour (`tokens.json`
+  `hc`, `hcVariants` and `surface.windows.hc`).
 - **Contrast:** status glyphs reach 3:1 against their surface, and text in a role colour
-  reaches 4.5:1. That is why iOS light secondary text is `rgba(60,60,67,0.76)` rather than
-  UIKit's 0.60.
+  reaches 4.5:1 (`tokens.json` `color.contrast`, checked by `tools/design-gen`'s tests). That
+  is why light Needs you is `#B87700` rather than the brighter `#E8A10C` (2.20:1 on the
+  card), light `text3` is 0.58 rather than 0.52 (#183), and iOS light secondary text is
+  `rgba(60,60,67,0.76)` rather than UIKit's 0.60.
 
 This replaces the GitHub-derived palette in `pwa/app.css` and `App.xaml`, which the
 redesign removes.
@@ -120,8 +131,8 @@ redesign removes.
     embedding to apps without text entry, requires the font to be unextractable, and bars
     public sharing (#181).
   - **Stack:** Agent Bridge Mono, then Cascadia Mono, SF Mono, Roboto Mono and
-    `ui-monospace`. The fallbacks cover loading and any character outside the font's
-    subset.
+    `ui-monospace` (Consolas in XAML, which has no generic name). The fallbacks cover
+    loading and any character outside the font's subset.
 
 ### 4.2 Rules
 

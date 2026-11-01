@@ -9,7 +9,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const appRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const FILES = ['index.html', 'app.css', 'sw.js', 'manifest.webmanifest', 'icon.svg', 'js', 'fixtures'];
+// design/: the generated tokens.css and sprite.svg (tools/design-gen).
+const FILES = ['index.html', 'app.css', 'design', 'sw.js', 'manifest.webmanifest', 'icon.svg', 'js', 'fixtures'];
 
 export function relayOrigin(relay) {
   if (!relay) { return ''; }

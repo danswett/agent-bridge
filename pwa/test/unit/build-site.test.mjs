@@ -13,7 +13,7 @@ const sw = (dir) => readFileSync(path.join(dir, 'sw.js'), 'utf8');
 // A copy of the app to change, so the real one is never touched.
 function appCopy(name) {
   const root = out(name);
-  for (const f of ['index.html', 'app.css', 'sw.js', 'manifest.webmanifest', 'icon.svg', 'js', 'fixtures']) {
+  for (const f of ['index.html', 'app.css', 'design', 'sw.js', 'manifest.webmanifest', 'icon.svg', 'js', 'fixtures']) {
     cpSync(path.join(pwa, f), path.join(root, f), { recursive: true });
   }
   return root;
