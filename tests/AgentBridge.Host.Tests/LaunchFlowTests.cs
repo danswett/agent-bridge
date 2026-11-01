@@ -78,7 +78,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null) => new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null) => new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
     {
         CopilotHome = f.CopilotHome,
         ClaudeHome = f.ClaudeHome,
@@ -90,6 +90,9 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         ScreenAfter = TimeSpan.Zero,
         ScreenEvery = TimeSpan.FromMilliseconds(25),
         ReadyWait = readyWait ?? TimeSpan.FromSeconds(5),
+        TrustConfirmWait = trustConfirm ?? TimeSpan.FromSeconds(5),
+        FollowFor = follow ?? TimeSpan.FromMinutes(10),
+        TrustFollowFor = follow ?? TimeSpan.FromMinutes(30),
         ExitGrace = TimeSpan.FromMilliseconds(100),
         // The fixture's folders are under temp, which is a system folder to a real launch.
         IsSystemDirectory = _ => false,
@@ -763,12 +766,34 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
     {
         public volatile IReadOnlyList<string>? Rows = CopilotReady;
         public readonly List<int> Typed = [];
+        public readonly List<KeyPlan> Plans = [];
         public int Reads;
+        // What the agent does with keys that reached it (a folder-trust answer).
+        public Action<KeyPlan>? OnTyped;
+        public InjectionResult? Fails;
+        public Exception? Throws;
+        // Runs while a plan waits for the typing slot: what changes at the machine meanwhile.
+        public Action? BeforeTyping;
+        // What the worker says once the keys went, when not "typed": an Esc that closed the
+        // agent can end its attach first (interrupted).
+        public InjectionResult? Then;
 
+        // As the worker does: nothing is typed unless the rows a send expects are still there.
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
         {
-            lock (Typed) { Typed.Add(processId); }
-            return Task.FromResult(new InjectionResult(InjectionStatus.Typed, "ok"));
+            lock (Typed) { Typed.Add(processId); Plans.Add(plan); }
+            if (Throws is { } broken) { throw broken; }
+            if (Fails is { } failed) { return Task.FromResult(failed); }
+            // As the worker asks once it holds the typing slot.
+            BeforeTyping?.Invoke();
+            if (plan.Proceed?.Invoke() is { } stop) { return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, $"stopped before typing: {stop}")); }
+            var rows = Rows ?? [];
+            foreach (var expect in plan.Sends.SelectMany(s => s.Expect ?? []))
+            {
+                if (expect.Row >= rows.Count || rows[expect.Row].TrimEnd() != expect.Text.TrimEnd()) { return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, "fail screen 0")); }
+            }
+            OnTyped?.Invoke(plan);
+            return Task.FromResult(Then ?? new InjectionResult(InjectionStatus.Typed, "ok"));
         }
 
         // A window that cannot be read: one whose process has gone.
@@ -827,7 +852,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         public Started Start(StartSpec spec)
         {
             int pid;
-            lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } }
+            lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } if (HandsOn) { running.Add(pid + 3000); } }
             if (Registers) { Register(spec, HandsOn ? pid + 3000 : pid); }
             return new Started(pid, DateTimeOffset.UtcNow);
         }

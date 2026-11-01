@@ -130,6 +130,9 @@ public sealed record LaunchResult(LaunchOutcome Outcome, string? Reason = null)
 {
     public string? Session { get; init; }
     public LaunchedWith? Launched { get; init; }
+    // With unconfirmed or busy because a launched agent is asking whether to trust its folder:
+    // that question (launch.trust).
+    public TrustQuestion? Trust { get; init; }
 }
 
 // An outcome a client does not know reads as Unconfirmed: something may have started.
@@ -168,6 +171,8 @@ public sealed record LaunchOptions
     public required LaunchDefaults Defaults { get; init; }
     // Set when a launch now would be busy, saying why.
     public string? Busy { get; init; }
+    // Folder-trust questions launched agents are waiting on (launch.trust). Absent when none.
+    public IReadOnlyList<TrustQuestion>? Trust { get; init; }
 }
 
 // One launcher. Models, efforts and contexts are the values it takes; none of them is the

@@ -79,6 +79,9 @@ public sealed class SessionService
         Drivers!.TakeBack(entry.Session, Time.GetUtcNow(), entry.Generation, answer);
     }
 
+    // launch.trust.answer, through the relay only (FolderTrustAnswers).
+    public FolderTrustAnswers? TrustAnswers { get; init; }
+
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
         UsageService? usage = null, ISessionLauncher? launcher = null, SessionTransfers? transfers = null)
@@ -130,13 +133,21 @@ public sealed class SessionService
             case Ops.PushList:
                 return new PushListResult([]);
             case LaunchProtocol.Options when launcher is not null:
-                return await launcher.OptionsAsync();
+                var options = await launcher.OptionsAsync();
+                return options.Trust is null ? options : options with { Trust = [.. options.Trust.Select(q => ForPeer(channel, q))] };
             case LaunchProtocol.Launch when launcher is not null:
                 return await LaunchAsync(channel, data);
             // Host to host, through the relay only: another machine of the account asking for a
             // session with a command a person's device signed.
             case TransferProtocol.Op when transfers is not null && channel is SecureChannel secure:
                 return await transfers.ServeAsync(secure, data);
+            // A person's device through the relay, with a command it signed. Never this machine's
+            // pipe, which agents and the MCP server reach, nor the Home Assistant connector.
+            case TrustProtocol.Answer when TrustAnswers is not null && channel is SecureChannel secure:
+                return await TrustAnswers.AnswerAsync(secure.PeerId, data);
+            case TrustProtocol.Answer:
+                return new TrustAnswerResult(TrustAnswerOutcome.Refused,
+                    "a folder-trust question is answered by a person, at the machine or from their phone, browser or Windows app through the relay");
             case UsageProtocol.Get or UsageProtocol.Subscribe when usage is not null:
                 return await usage.HandleAsync(channel, op, data);
             case Ops.SessionsList:
@@ -250,6 +261,7 @@ public sealed class SessionService
         if (push is not null && channel is SecureChannel) { offered.Add(Capabilities.Push); }
         if (usage is not null) { offered.Add(UsageProtocol.Capability); }
         if (launcher?.Available == true) { offered.Add(LaunchProtocol.Capability); }
+        if (TrustAnswers?.Available == true && channel is SecureChannel) { offered.Add(TrustProtocol.Capability); }
         // Transfers are signed by a device through the relay, and go through its blob store.
         if (transfers is not null && channel is SecureChannel)
         {
@@ -312,7 +324,31 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
         {
             return new LaunchResult(LaunchOutcome.Refused, "a session from another machine is brought in through the relay, from the phone or browser app");
         }
-        return await launcher!.LaunchAsync(request, channel.PeerId);
+        var result = await launcher!.LaunchAsync(request, channel.PeerId);
+        return result.Trust is null ? result : result with { Trust = ForPeer(channel, result.Trust) };
+    }
+
+    // A folder-trust question as this caller may answer it: the machine says whether it can be
+    // answered at all, and this says whether by this device. Only a device a person approved at
+    // the machine, through the relay; never this machine's pipe, which agents and the MCP server
+    // reach. So a card never offers buttons that would only be refused.
+    TrustQuestion ForPeer(IProtocolChannel channel, TrustQuestion question)
+    {
+        if (!question.Answerable) { return question; }
+        string? why = null;
+        if (TrustAnswers is null || channel is not SecureChannel secure)
+        {
+            why = "Answer at the machine, or from a phone, browser or Windows app through the relay.";
+        }
+        else if (TrustAnswers.NotAPerson(secure.PeerId) is { } who)
+        {
+            why = $"Answer at the machine: {who}.";
+        }
+        else if (launcher!.TrustDevices.Count > 0 && !launcher.TrustDevices.Contains(secure.PeerId))
+        {
+            why = LaunchService.NotApproved(secure.PeerId);
+        }
+        return why is null ? question : question with { Answerable = false, AtMachine = why };
     }
 
     static string? String(JsonElement data, string name) =>

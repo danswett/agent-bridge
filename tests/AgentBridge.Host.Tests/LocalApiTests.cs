@@ -29,6 +29,9 @@ public sealed class LocalApiTests : IAsyncLifetime
     // Who each connection is. The app, unless a test says otherwise.
     readonly Callers callers = new();
     readonly List<string> logged = [];
+    readonly List<bool> applied = [];
+    Action<bool>? onApply;
+    readonly List<IReadOnlyList<string>> approved = [];
     Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> signIn = (_, _, _) => Task.FromException<SignInResult>(new InvalidOperationException("no relay in these tests"));
     (SignInResult Account, Uri Relay)? saved;
     RelayAccount? credential;
@@ -57,6 +60,8 @@ public sealed class LocalApiTests : IAsyncLifetime
             Dev = true,
             Machine = machine,
             Running = new HostSettingsView(RemoteApproval: true),
+            ApplyRemoteFolderTrust = on => { onApply?.Invoke(on); lock (applied) { applied.Add(on); } },
+            ApplyRemoteFolderTrustDevices = ids => { lock (applied) { approved.Add(ids); } },
             Relay = () => new Uri("https://relay.example/"),
             Credential = () => credential,
             SignIn = (relay, show, ct) => signIn(relay, show, ct),
@@ -200,6 +205,87 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal("Desktop", saved["name"]!.GetValue<string>());
         Assert.False(HostSettings.Load(profile).Settings.RemoteApproval);
         Assert.True((await ch.CallAsync<HostStatus>(HostOps.Status)).RestartRequired);
+    }
+
+    [Fact]
+    public async Task Answering_folder_trust_from_a_persons_devices_is_turned_on_from_the_app_beside_the_launch_settings_there()
+    {
+        File.WriteAllText(Path.Combine(profile, "config.json"), """{ "launch": { "workspaces": ["C:\\src"] } }""");
+        var ch = await ConnectAsync();
+        Assert.False((await ch.CallAsync<HostStatus>(HostOps.Status)).Settings.RemoteFolderTrust);
+
+        var result = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrust = true });
+
+        Assert.True(result.Settings.RemoteFolderTrust);
+        // Applied to the running host at once, so it can be allowed while a question waits.
+        Assert.Equal([true], applied);
+        Assert.False(result.RestartRequired);
+        var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(profile, "config.json")))!;
+        Assert.Equal("C:\\src", saved["launch"]!["workspaces"]![0]!.GetValue<string>());
+        Assert.True(HostSettings.Load(profile).Settings.Launch.RemoteFolderTrust);
+
+        // And the devices it may be answered from, approved there too, at once; never a malformed id.
+        var phone = new string('a', 32);
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { remoteFolderTrustDevices = new[] { "phone" } }));
+        Assert.Contains("'phone' is not a device id", refused.Message);
+        Assert.Contains("a device id is missing", (await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { remoteFolderTrustDevices = new[] { phone, null } }))).Message);
+        var many = Enumerable.Range(0, LaunchProtocol.MaxChoices + 1).Select(i => i.ToString("x32")).ToArray();
+        Assert.Contains($"at most {LaunchProtocol.MaxChoices} devices", (await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { remoteFolderTrustDevices = many }))).Message);
+        Assert.Empty(approved);
+        var devices = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrustDevices = new[] { phone, phone } });
+        Assert.Equal([phone], devices.Settings.RemoteFolderTrustDevices!);
+        Assert.Equal([phone], Assert.Single(approved));
+        Assert.False(devices.RestartRequired);
+        Assert.Equal([phone], HostSettings.Load(profile).Settings.Launch.RemoteFolderTrustDevices);
+        Assert.Equal([phone], (await ch.CallAsync<HostStatus>(HostOps.Status)).Settings.RemoteFolderTrustDevices!);
+    }
+
+    [Fact]
+    public async Task A_device_list_made_from_one_since_changed_at_the_terminal_changes_nothing_and_says_so()
+    {
+        string phone = new('a', 32), tablet = new('b', 32), laptop = new('c', 32);
+        File.WriteAllText(Path.Combine(profile, "config.json"), $$"""{ "launch": { "remoteFolderTrust": true, "remoteFolderTrustDevices": ["{{phone}}", "{{tablet}}"] } }""");
+        var ch = await ConnectAsync();
+        // The app read [phone, tablet]; the phone is revoked at a person's terminal; the app then
+        // approves the laptop from what it read.
+        File.WriteAllText(Path.Combine(profile, "config.json"), $$"""{ "launch": { "remoteFolderTrust": true, "remoteFolderTrustDevices": ["{{tablet}}"] } }""");
+
+        var stale = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrustDevices = new[] { phone, tablet, laptop }, remoteFolderTrustDevicesWas = new[] { tablet, phone }, remoteFolderTrust = false });
+
+        Assert.True(stale.Conflict);
+        Assert.Equal([tablet], stale.Settings.RemoteFolderTrustDevices!);
+        Assert.Equal([tablet], HostSettings.Load(profile).Settings.Launch.RemoteFolderTrustDevices);
+        Assert.True(HostSettings.Load(profile).Settings.Launch.RemoteFolderTrust);
+        Assert.Empty(approved);
+        Assert.Empty(applied);
+
+        // Made again from the list as it is: saved, in any order it was read in.
+        var made = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrustDevices = new[] { tablet, laptop }, remoteFolderTrustDevicesWas = new[] { tablet } });
+        Assert.False(made.Conflict);
+        Assert.Equal([tablet, laptop], made.Settings.RemoteFolderTrustDevices!);
+        Assert.Equal([tablet, laptop], Assert.Single(approved));
+    }
+
+    [Fact]
+    public async Task Two_changes_to_folder_trust_at_once_go_one_after_the_other_so_what_runs_is_what_is_saved()
+    {
+        var first = await ConnectAsync();
+        var second = await ConnectAsync();
+        using var inFirst = new ManualResetEventSlim();
+        using var secondDone = new ManualResetEventSlim();
+        // The first change is held just before it applies; the second may finish meanwhile only
+        // if nothing makes it wait.
+        onApply = on => { if (on) { inFirst.Set(); secondDone.Wait(TimeSpan.FromMilliseconds(500)); } };
+
+        var on = first.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrust = true });
+        Assert.True(inFirst.Wait(TimeSpan.FromSeconds(5)));
+        var off = second.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrust = false });
+        _ = off.ContinueWith(_ => secondDone.Set(), TaskScheduler.Default);
+        await Task.WhenAll(on, off);
+
+        var saved = HostSettings.Load(profile).Settings.Launch.RemoteFolderTrust;
+        lock (applied) { Assert.Equal(saved, applied[^1]); }
+        Assert.False((await first.CallAsync<HostStatus>(HostOps.Status)).RestartRequired);
     }
 
     [Fact]
