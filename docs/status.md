@@ -94,7 +94,10 @@ The read-only host has run beside the daemon since 2026-10-29, and the gate is c
 
 ## 5. UI design track
 
-The design session's output is in the repository, **awaiting the owner's sign-off**:
+The design session's output is in the repository (#182). The owner **signed off ui.md on
+2026-11-01**; subagents.md's sign-off and its §8 questions sit with the overall coordinator
+(track A). A UI coordinator session runs track B and merges its PRs; it keeps this section
+current. The sources:
 
 - [design/ui.md](design/ui.md): the spec for every client (status language, colour, type,
   layout, surfaces, platform shells);
@@ -115,12 +118,22 @@ The design session's output is in the repository, **awaiting the owner's sign-of
 | U6 | #180 | Windows app layout (half of #166) |
 | U7 | #168 | PWA platform layer |
 | U8 | #176 | Delegates in both clients |
-| | #181 | Owner decision: license Berkeley Mono or not (blocks nothing) |
+| | #181 | Owner decision: license Berkeley Mono or not. **For now: the fallback stack** (decided 2026-11-01); left open |
+| | #183 | Light-theme `needs` glyph and `text3` fail contrast; fixed in U3 |
 
-None is started. The client slices run in the order agreed on 2026-11-01 (#164, #165,
-#167, #166, #168), then U8; ui-plan.md §1 shows what can run in parallel. Changes to the
-layout touch both the PWA (`pwa/`) and the app (`src/AgentBridge.App`) and keep them at
-parity.
+**In progress (2026-11-01):** U1 and U3, as delegates. Track B runs in this order:
+1. U1 then U2, and U3 then U4, as two chains in parallel;
+2. then U5 and U6, in parallel;
+3. then U7;
+4. U8 once S1 (#173) has merged.
+
+ui-plan.md §1 shows the dependencies. Changes to the layout touch both the PWA (`pwa/`)
+and the app (`src/AgentBridge.App`) and keep them at parity.
+
+**From #182's review:** four subagents.md findings are recorded as S1 requirements on #173
+(a terminal outcome for done/failed, idle delegates not counted as running, per-field
+provenance, a budget for `activity.own`), one shadow finding on #175, and ui.md §2.2 rules
+7 and 8 become overlays in U4 (#178).
 
 ## 6. Open issues by theme
 
@@ -258,3 +271,6 @@ agent-ha-bridge releases from this work:
 | 11-01 | A new coordinator session took over (bridge session a6ed320ca83044c5, DEV-VM1) |
 | 11-01 | UI track order: #164, #165, #167, #166, #168, after the design session signs off |
 | 11-01 | UI design proposed (docs/design/ui.md): system text faces with one licensed monospace, status glyphs instead of coloured edges, panes by window width, the PWA following the Windows design. Awaiting sign-off |
+| 11-01 | ui.md signed off by the owner as written ("build the new UI as designed"); #182 merged. A UI coordinator session runs track B |
+| 11-01 | Monospace (#181): the fallback stack for now (Cascadia Mono, SF Mono, Roboto Mono); Berkeley Mono decided later |
+| 11-01 | Track B order: U1→U2 and U3→U4 in parallel, then U5 and U6, then U7, then U8 after S1 |
