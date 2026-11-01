@@ -236,6 +236,10 @@ public sealed partial class LaunchFlowTests
         Assert.Equal(("declined", "Copilot was not trusted with App, and closed; nothing was launched", null), answer);
         var send = Assert.Single(Assert.Single(screens.Plans).Sends);
         Assert.Equal((KeyPlan.Escape, false), (send.Text, send.Enter));
+        // Asked again on that outcome: no longer busy, and the question is gone.
+        var after = await RequestAsync(ch, LaunchProtocol.Options, new { });
+        Assert.False(after.TryGetProperty("busy", out _));
+        Assert.False(after.TryGetProperty("trust", out _));
     }
 
     [Fact]

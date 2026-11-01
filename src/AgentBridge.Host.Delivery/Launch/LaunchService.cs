@@ -1274,6 +1274,10 @@ public sealed partial class LaunchService : ISessionLauncher
             }
             else if (!AgentAlive(p))
             {
+                // No longer asking from now, not from when following sees it gone after its grace:
+                // a client asks again on this outcome, and found the launch still busy (live, the
+                // app after a Quit from it).
+                p.Question = StartupQuestion.None;
                 return new TrustAnswerResult(TrustAnswerOutcome.Declined, $"{label} was not trusted with {p.Where}, and closed; nothing was launched");
             }
         }
