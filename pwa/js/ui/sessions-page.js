@@ -86,7 +86,10 @@ export class SessionsPage {
     });
     this.view.onRender = (n) => this.#drawCount(n);
     // A new channel to a machine: what waits to be resent to it goes now, and only to it.
-    hosts.onOpen((id) => { for (const s of [this.answers, this.replies, this.stops, this.launches]) { s.ready(id); } });
+    hosts.onOpen((id) => {
+      for (const s of [this.answers, this.replies, this.stops, this.launches]) { s.ready(id); }
+      this.launchPanel.reopened(id);
+    });
     hosts.onChange(() => this.refresh());
   }
 

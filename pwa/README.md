@@ -82,7 +82,9 @@ agent's own warning); with `launch.trust` and where the machine allows it (`answ
 and Quit answer it with `launch.trust.answer` and a command this device signs for that choice.
 Otherwise it says to answer at the machine, and how to allow it there (or approve this device).
 A machine that does not take launches now (read-only, agent-ha-bridge) still shows a waiting
-question, read-only. An answer that may have been typed is never offered again from here, and a
+question, read-only. It is asked for one again when it reconnects, and on updates at most every
+30 seconds. With every machine shown it is offered only when no machine takes launches, and then
+its panel stays while it offers others. An answer that may have been typed is never offered again from here, and a
 resend the machine refuses (its command expired) reads as not confirmed.
 `test/e2e/fixture-host.mjs` is a working example in about 150 lines.
 

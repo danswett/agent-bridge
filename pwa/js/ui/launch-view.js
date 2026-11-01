@@ -216,10 +216,12 @@ export class LaunchPanel {
       // Read-only begun or ended: what the machine says about its questions (answerable, why
       // not) has changed, so it is asked again, superseding any answer still on its way.
       if (!!target.inspectOnly !== was) { this.refresh(); }
-      // A machine shown only for its questions whose list could not be read is asked again on
-      // its next update (a reconnect among them): with nothing loaded the panel is hidden, and
-      // its Reload choices with it, so nothing else would.
-      else if (target.inspectOnly && this.#error && !this.#options && !this.#loading) { this.refresh(); }
+      // A machine shown only for its questions, with none shown, is asked again on its next
+      // update: at once when its list could not be read, else at most every so often. Nothing
+      // else would ask: with no question the panel is hidden, and its Reload with it, and a
+      // question can begin there at any time (a launch at its terminal).
+      else if (target.inspectOnly && !this.#loading && this.#trustQuestions().length === 0
+        && ((this.#error && !this.#options) || Date.now() - this.#askedAt >= LaunchPanel.recheckMs)) { this.refresh(); }
       return;
     }
     this.#unwatch?.();
@@ -239,6 +241,9 @@ export class LaunchPanel {
     this.root.hidden = !target;
     if (!target) { return; }
     this.#unwatch = this.service.watch(target.hostId, (entry) => this.#settled(entry));
+    // One that finished while another machine was picked was not watched then: the list asked
+    // for next supersedes the question it named, as it would have.
+    this.#track(target.hostId, this.service.get(target.hostId));
     this.#title();
     this.setOpen(this.#open);
     // Its questions are looked for even with the panel closed: it shows only if there is one.
@@ -246,9 +251,17 @@ export class LaunchPanel {
     this.#draw();
   }
 
+  // A channel to that machine opened again: one shown only for its questions, with none shown,
+  // is asked for them again.
+  reopened(hostId) {
+    const target = this.#target;
+    if (target?.hostId === hostId && target.inspectOnly && !this.#loading && this.#trustQuestions().length === 0) { this.refresh(); }
+  }
+
   #title() {
     const name = this.#target?.machineName;
-    this.root.querySelector('.launch-title').textContent = this.#target?.inspectOnly ? `Waiting on ${name}` : name ? `Start a session on ${name}` : 'Start a session';
+    const waiting = !this.#target?.inspectOnly || this.#trustQuestions().length > 0;
+    this.root.querySelector('.launch-title').textContent = this.#target?.inspectOnly ? (waiting ? `Waiting on ${name}` : `Nothing waiting on ${name}`) : name ? `Start a session on ${name}` : 'Start a session';
   }
 
   // launch.options again: a workspace approved, an agent installed, a session ended since.
@@ -268,6 +281,7 @@ export class LaunchPanel {
       });
     }
     const asked = ++this.#loads;
+    this.#askedAt = Date.now();
     const loading = this.#loading = target.load().then((o) => {
       if (this.#loading !== loading) { return; }
       this.#options = o;
@@ -316,9 +330,12 @@ export class LaunchPanel {
     const name = this.#target?.machineName || 'this machine';
     if (this.#target?.inspectOnly) {
       const questions = this.#trustQuestions();
-      this.root.hidden = questions.length === 0;
+      // Kept, with nothing waiting, while it offers other machines: one of them may have one.
+      this.root.hidden = questions.length === 0 && e.machineField.hidden;
+      this.#title();
       e.form.hidden = true;
-      e.reload.hidden = true;
+      e.reload.hidden = questions.length > 0;
+      e.reload.disabled = !!this.#loading;
       e.busy.hidden = true;
       e.note.hidden = false;
       e.note.className = 'note launch-note warn';
@@ -477,6 +494,9 @@ export class LaunchPanel {
   // launch.options asked for so far; and by machine, its last launch outcome seen, the count
   // when it came, and whether a list asked for since has superseded it.
   #loads = 0;
+  #askedAt = 0;
+  // How often a machine shown only for its questions, with none shown, is asked again on updates.
+  static recheckMs = 30000;
   #results = new Map();
 
   #answersFor(hostId) {
@@ -583,9 +603,15 @@ export class LaunchPanel {
     this.root.dataset.launch = 'invalid';
   }
 
+  // A launch outcome for that machine, remembered from when it came: only a list asked for after
+  // it says whether the question it named still waits.
+  #track(hostId, entry) {
+    if (entry?.state === 'done' && hostId && this.#results.get(hostId)?.request !== entry.request) { this.#results.set(hostId, { request: entry.request, loads: this.#loads, superseded: false }); }
+  }
+
   #settled(entry) {
     const hostId = entry?.hostId ?? this.#target?.hostId;
-    if (entry?.state === 'done' && hostId && this.#results.get(hostId)?.request !== entry.request) { this.#results.set(hostId, { request: entry.request, loads: this.#loads, superseded: false }); }
+    this.#track(hostId, entry);
     this.#show(entry);
     this.#drawTrust();
     if (entry?.state !== 'done') { return; }

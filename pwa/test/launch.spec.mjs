@@ -412,6 +412,69 @@ test.describe('a folder-trust question', () => {
     await which.selectOption('demo');
     await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
   });
+  test('a launch that finished while another machine was picked is superseded by its machine\'s next list', async ({ page }) => {
+    await openDemo(page, '&machines=2');
+    await panel(page).getByRole('button', { name: 'Start a session on Demo machine' }).click();
+    await expect(field(page, 'agent')).toBeVisible();
+    await script(page, { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: QUESTION });
+    await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.launches.get('demo')?.state ?? null)).not.toBeNull();
+    // The laptop is picked while the launch is on its way, and its outcome comes meanwhile.
+    await field(page, 'machine').selectOption('demo-laptop');
+    await expect(panel(page).locator('.launch-title')).toHaveText('Start a session on Laptop');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.launches.get('demo')?.state)).toBe('done');
+
+    // Answered at the machine since: its list, asked for on coming back to it, says so.
+    await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.launchOptions = { ...h.launchOptions, trust: [] }; });
+    await field(page, 'machine').selectOption('demo');
+    await expect(field(page, 'agent')).toBeVisible();
+    await expect(card(page)).toHaveCount(0);
+  });
+
+  test('a machine shown only for its questions, with none, is asked again when it reconnects', async ({ page }) => {
+    await page.goto('?demo=1&static=1&ahb=1');
+    await page.waitForSelector('html[data-demo-ready]');
+    await expect(panel(page)).toBeHidden();
+    // A question begins there after its list was read; the channel to it drops and comes back.
+    await ask(page, QUESTION);
+    await page.evaluate(() => window.agentBridgeDemo.host.disconnect());
+    await panel(page).getByRole('button', { name: 'Waiting on Demo machine' }).click();
+    await expect(card(page).locator('.trust-folder')).toHaveText(LONG);
+  });
+
+  test('a machine shown only for its questions, with none, is asked again on an update once a while has passed', async ({ page }) => {
+    await page.goto('?demo=1&static=1&ahb=1');
+    await page.waitForSelector('html[data-demo-ready]');
+    await expect(panel(page)).toBeHidden();
+    await ask(page, QUESTION);
+    // Within the while, an update asks nothing.
+    await page.evaluate(() => window.agentBridgeDemo.retarget());
+    await page.waitForTimeout(300);
+    await expect(panel(page)).toBeHidden();
+    await page.evaluate(() => { window.agentBridgeDemo.launchPanel.constructor.recheckMs = 0; window.agentBridgeDemo.retarget(); });
+    await panel(page).getByRole('button', { name: 'Waiting on Demo machine' }).click();
+    await expect(card(page).locator('.trust-folder')).toHaveText(LONG);
+  });
+  test('with every machine shown and none taking launches, the machine picker stays to reach another machine\'s question', async ({ page }) => {
+    await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
+    await page.waitForSelector('html[data-demo-ready]');
+    await page.evaluate(() => {
+      const laptop = window.agentBridgeDemo.machines['demo-laptop'];
+      laptop.machine = { ...laptop.machine, readOnly: 'this is a read-only comparison host (delivery.readOnly in its config); answer at the machine' };
+      laptop.capabilities = laptop.capabilities.filter((c) => c !== 'sessions.launch');
+      laptop.disconnect();
+      window.agentBridgeDemo.machines['demo-shadow'].askTrust({ id: '6e1d0a4f-3c2b-4d9e-8f7a-5b4c3d2e1f0a', agent: 'claude', kind: 'claude', label: 'Claude Code', workspace: 'web', folder: 'C:\\Users\\demo\\untrusted\\web', warning: 'Do you trust the files in this folder?', answerable: false, atMachine: 'Answer at the machine.' });
+    });
+    await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
+    await panel(page).locator('.launch-toggle').click();
+    await field(page, 'machine').selectOption('demo-shadow');
+    await expect(panel(page).locator('.launch-title')).toHaveText('Waiting on DEV-VM1 (shadow)');
+    await expect(card(page).locator('.trust-folder')).toHaveText('C:\\Users\\demo\\untrusted\\web');
+  });
   test('a machine shown for its question whose list could not be read is asked again when it reconnects', async ({ page }) => {
     await openDemo(page);
     await ask(page, QUESTION);
