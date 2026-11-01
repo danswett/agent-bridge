@@ -37,7 +37,8 @@ public sealed class AutoUpdater
     // whose upserts arrive within seconds even if an earlier sessions.synced closed it early.
     public static readonly TimeSpan IdleFor = TimeSpan.FromMinutes(2);
 
-    readonly IUpdater updater;
+    // Shared with Settings, whose checks and downloads it reports too.
+    readonly ObservedUpdater updater;
     readonly HostConnection host;
     readonly HostManager manager;
     readonly Func<AppPreferences> prefs;
@@ -58,17 +59,17 @@ public sealed class AutoUpdater
     string? installRequest;
     string? installVetted;
     volatile bool checkNow;
-    UpdatePhase phase;
-    int? progress;
-    string? downloading;
-    DateTimeOffset? lastChecked;
+    // From stopping the host for an install until it fails (success ends the app).
+    volatile bool installing;
 
     // othersInPackage(this host's pid): another profile's app or host running from this
-    // installation, which an update would stop; null when there is none.
+    // installation, which an update would stop; null when there is none. updater: the app's
+    // ObservedUpdater, which Settings uses too, so what Settings does is reported as well.
     public AutoUpdater(IUpdater updater, HostConnection host, HostManager manager, Func<AppPreferences> prefs, Action<AppPreferences> save, Action<string> log,
         Func<int?, string?> othersInPackage, TimeProvider? time = null)
     {
-        this.updater = updater;
+        this.updater = updater as ObservedUpdater ?? new ObservedUpdater(updater, time);
+        this.updater.Changed += Changed;
         this.host = host;
         this.manager = manager;
         this.prefs = prefs;
@@ -99,19 +100,22 @@ public sealed class AutoUpdater
             var installed = updater.InstalledVersion;
             string? request;
             lock (asks) { request = installRequest ?? checkRequest; }
-            var now = phase;
+            var now = installing ? UpdatePhase.Installing : updater.Phase;
             // A release downloaded that will install by itself, or because a device asked.
             var waiting = now == UpdatePhase.Idle && Pending is not null && installed is not null && (prefs().AutoUpdate || installRequest is not null);
+            // What the last check found, from here or from Settings: still there when its download
+            // failed, and gone when a later one found nothing newer.
+            var available = updater.Found;
             return UpdateProtocol.Fit(new UpdateState
             {
                 Current = installed,
                 Installer = installed is not null,
                 Unavailable = installed is null ? NotInstalled : null,
-                Available = now == UpdatePhase.Downloading ? downloading : Pending,
-                Notes = Pending is not null ? updater.PendingNotes : null,
-                CheckedAt = lastChecked,
+                Available = available,
+                Notes = available is not null ? updater.PendingNotes : null,
+                CheckedAt = updater.CheckedAt,
                 Phase = waiting ? UpdatePhase.Waiting : now,
-                Progress = now == UpdatePhase.Downloading ? progress : null,
+                Progress = now == UpdatePhase.Downloading ? updater.Progress : null,
                 Waiting = waiting ? WaitingFor() : null,
                 Request = request,
                 Automatic = prefs().AutoUpdate,
@@ -146,25 +150,26 @@ public sealed class AutoUpdater
 
     void Changed() => StateChanged?.Invoke();
 
-    // Ends a press: how it went, kept for the devices (and across the restart an update makes).
-    void Finish(ref string? field, UpdateOutcome outcome, string? reason, string? to = null)
+    // Ends a press, the one that was being carried out (a newer one that came meanwhile is left
+    // for the next tick): how it went, kept for the devices, and across the restart an update makes.
+    void Finish(ref string? field, string? request, UpdateOutcome outcome, string? reason, string? to = null)
     {
-        string? request;
-        lock (asks) { request = field; field = null; }
         if (request is null) { return; }
+        lock (asks)
+        {
+            if (field != request) { return; }
+            field = null;
+        }
         log($"update: asked {outcome.ToString().ToLowerInvariant()}{(reason is null ? "" : $": {reason}")}");
+        Remember(outcome, reason, to, request);
+    }
+
+    void Remember(UpdateOutcome outcome, string? reason, string? to, string? request)
+    {
         save(prefs() with
         {
             LastUpdate = new UpdateResult { Outcome = outcome, From = updater.InstalledVersion, To = to, Reason = reason, Request = request, At = time.GetUtcNow() },
         });
-        Changed();
-    }
-
-    void Phase(UpdatePhase now, int? percent = null)
-    {
-        if (phase == now && progress == percent) { return; }
-        phase = now;
-        progress = percent;
         Changed();
     }
 
@@ -229,15 +234,15 @@ public sealed class AutoUpdater
         {
             if (updater.InstalledVersion is null)
             {
-                Finish(ref installRequest, UpdateOutcome.Refused, NotInstalled);
-                Finish(ref checkRequest, UpdateOutcome.Refused, NotInstalled);
+                Finish(ref installRequest, Asked(UpdateAskKind.Install), UpdateOutcome.Refused, NotInstalled);
+                Finish(ref checkRequest, Asked(UpdateAskKind.Check), UpdateOutcome.Refused, NotInstalled);
             }
             // An install asked for is refused now, rather than after the download and the wait,
             // if it could never go ahead: the host gone, or another profile running from here.
             if (Asked(UpdateAskKind.Install) is { } install && installVetted != install)
             {
                 installVetted = install;
-                if (await WhyNotNowAsync(asked: true) is { } refused) { Finish(ref installRequest, UpdateOutcome.Refused, refused); }
+                if (await WhyNotNowAsync(asked: true) is { } refused) { Finish(ref installRequest, install, UpdateOutcome.Refused, refused); }
             }
             var asked = Asked(UpdateAskKind.Install) is not null;
             var why = WhyNot(asked);
@@ -260,10 +265,10 @@ public sealed class AutoUpdater
             if (Stale()) { return; }
             // Asked again now: the host still there (its own status, not the last report) and no
             // other profile's app or host running from the package.
-            asked = Asked(UpdateAskKind.Install) is not null;
-            if (Refused(await WhyNotNowAsync(asked)))
+            var pressed = Asked(UpdateAskKind.Install);
+            if (Refused(await WhyNotNowAsync(pressed is not null)))
             {
-                if (asked) { Finish(ref installRequest, UpdateOutcome.Refused, lastWhyNot); }
+                Finish(ref installRequest, pressed, UpdateOutcome.Refused, lastWhyNot);
                 return;
             }
             // Those took time: the switch turned off, or the host gone, meanwhile, counts too.
@@ -281,25 +286,30 @@ public sealed class AutoUpdater
         {
             log($"auto-update: {e.Message}");
             checkedAt = time.GetUtcNow();
-            Phase(UpdatePhase.Idle);
-            Finish(ref checkRequest, UpdateOutcome.Failed, e.Message);
-            Finish(ref installRequest, UpdateOutcome.Failed, e.Message);
+            installing = false;
+            Changed();
         }
     }
 
     async Task CheckAsync(DateTimeOffset now)
     {
-        Phase(UpdatePhase.Checking);
-        var found = await updater.CheckAsync();
-        lastChecked = time.GetUtcNow();
+        // The presses this check answers; any that come while it runs get a check of their own.
+        var check = Asked(UpdateAskKind.Check);
+        var install = Asked(UpdateAskKind.Install);
+        string? found;
+        try
+        {
+            found = await updater.CheckAsync();
+            if (found is not null && updater.Ready != found) { await updater.DownloadAsync(_ => { }); }
+        }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            Finish(ref checkRequest, check, UpdateOutcome.Failed, e.Message);
+            Finish(ref installRequest, install, UpdateOutcome.Failed, e.Message);
+            throw;
+        }
         if (found is not null)
         {
-            if (updater.Ready != found)
-            {
-                downloading = found;
-                Phase(UpdatePhase.Downloading, 0);
-                await updater.DownloadAsync(p => Phase(UpdatePhase.Downloading, Math.Clamp(p, 0, 100)));
-            }
             if (found != Pending)
             {
                 // The wait runs from the first release found, so newer ones arriving every
@@ -309,21 +319,20 @@ public sealed class AutoUpdater
                 log($"auto-update: {found} downloaded; installing when no session is busy, or at {(foundAt + WaitAtMost).ToLocalTime():g}");
             }
         }
-        Phase(UpdatePhase.Idle);
         // A check asked for ends here: what it found is in the state (Available). Nothing newer
         // ends an install asked for too, and a release found before (on a feed since changed, or
         // a pre-release since turned off) is no longer one to offer.
         if (found is null)
         {
             Pending = null;
-            Finish(ref checkRequest, UpdateOutcome.Current, null);
-            Finish(ref installRequest, UpdateOutcome.Current, null);
+            Finish(ref checkRequest, check, UpdateOutcome.Current, null);
+            Finish(ref installRequest, install, UpdateOutcome.Current, null);
         }
         else
         {
-            lock (asks) { checkRequest = null; }
-            Changed();
+            lock (asks) { if (checkRequest == check) { checkRequest = null; } }
         }
+        Changed();
     }
 
     async Task<string?> WhyNotNowAsync(bool asked = false)
@@ -360,15 +369,17 @@ public sealed class AutoUpdater
         var to = Pending!;
         var request = Asked(UpdateAskKind.Install);
         log($"auto-update: installing {to}, as {because}");
-        Phase(UpdatePhase.Installing);
+        installing = true;
+        Changed();
         // The host comes back from a failed install, or from the app quitting mid-way (HostManager).
         try { await manager.StopAndApplyAsync(() => Record(prefs, save, updater, request), updater.ApplyAndRestart); }
         // Settings' Update and restart got there first: that one is installing, and recorded it.
         catch (UpdateUnderWayException e)
         {
             log($"auto-update: not installing {to}: {e.Message}");
-            Phase(UpdatePhase.Idle);
-            Finish(ref installRequest, UpdateOutcome.Refused, "an update is already being installed from this machine's Settings", to);
+            installing = false;
+            Finish(ref installRequest, request, UpdateOutcome.Refused, "an update is already being installed from this machine's Settings", to);
+            Changed();
         }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
@@ -378,8 +389,11 @@ public sealed class AutoUpdater
             Pending = null;
             checkedAt = time.GetUtcNow();
             log($"auto-update: installing {to} failed: {e.Message}");
-            Phase(UpdatePhase.Idle);
-            Finish(ref installRequest, UpdateOutcome.Failed, e.Message, to);
+            installing = false;
+            // Kept for the devices whether a device asked for it or the app installed it unasked:
+            // the old release still runs, and no later start would say so.
+            if (request is null) { Remember(UpdateOutcome.Failed, e.Message, to, null); }
+            else { Finish(ref installRequest, request, UpdateOutcome.Failed, e.Message, to); }
         }
     }
 

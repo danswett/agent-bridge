@@ -422,3 +422,24 @@ test('a machine a press was accepted on is looked at every few seconds for a whi
   await fleet.idle();
   assert.deepEqual(connection.opened, ['a', 'a', 'a']);
 });
+
+test('a look that finds no updates, ending after its machine is shown, leaves what its own channel says', async () => {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const { connection, hosts, fleet } = fleetWith({ a: { machine: {}, capabilities: ['usage'], usage: usage(40) } });
+  const makeClient = fakeClient(connection);
+  let asked = false;
+  fleet.makeClient = (ch) => ({ ...makeClient(ch), async usage() { asked = true; await held; return usage(40); } });
+  fleet.probe();
+  while (!asked) { await flush(); }
+  // Chosen while the look waits on its usage; agent-ha-bridge stopped there meanwhile.
+  const client = { synced: true, on() {}, subscribeUsage: async () => usage(10), subscribeUpdate: async () => readUpdateState(found) };
+  hosts.view({ id: 'a', client, machine: {}, capabilities: ['usage', 'update'] });
+  await flush();
+  assert.equal(fleet.update('a').available, '0.5.0');
+
+  release();
+  await fleet.idle();
+  assert.equal(fleet.update('a').available, '0.5.0');
+  fleet.clear();
+});

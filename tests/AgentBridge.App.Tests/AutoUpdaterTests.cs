@@ -25,6 +25,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     string? others;
     int? othersAskedFor;
     Func<string?>? othersProbe;
+    // The app's updater as Settings shares it, when a test plays Settings too.
+    ObservedUpdater? shared;
 
     sealed class Updater : IUpdater
     {
@@ -35,10 +37,25 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public string? Found = "0.2.0";
         public string? Ready { get; set; }
         public Exception? ApplyFails;
+        public Exception? DownloadFails;
+        // Held until released, as a check that takes its time.
+        public TaskCompletionSource? CheckGate;
         public string? InstalledVersion { get; set; } = "0.1.0";
         public string? PendingNotes => Found is null ? null : $"What {Found} changes";
-        public Task<string?> CheckAsync() { Checks++; return Task.FromResult(Found); }
-        public Task DownloadAsync(Action<int> progress) { Downloads++; progress(100); Ready = Found; return Task.CompletedTask; }
+        public async Task<string?> CheckAsync()
+        {
+            Checks++;
+            if (CheckGate is { } gate) { await gate.Task; }
+            return Found;
+        }
+        public Task DownloadAsync(Action<int> progress)
+        {
+            Downloads++;
+            if (DownloadFails is { } e) { throw e; }
+            progress(100);
+            Ready = Found;
+            return Task.CompletedTask;
+        }
         public void ApplyAndRestart() { OnApply?.Invoke(); if (ApplyFails is { } e) { throw e; } Applied = true; }
     }
 
@@ -77,7 +94,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(50),
             Elevated = () => false,
         };
-        auto = new AutoUpdater(updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time);
+        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Status is not null && connection.Sessions.All.Count == sessions.Length && connection.Sessions.Complete, "the connection");
     }
 
@@ -339,6 +356,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.False(manager.UpdateUnderWay);
         Assert.Null(auto.Pending);
         Assert.Null(prefs.UpdatedFrom);
+        // Said to the devices, though none asked for it: the old release still runs.
+        Assert.Equal((UpdateOutcome.Failed, "Update.exe is missing", (string?)null), (prefs.LastUpdate!.Outcome, prefs.LastUpdate.Reason, prefs.LastUpdate.Request));
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Complete, "the host back");
         var checks = updater.Checks;
         time.Advance(TimeSpan.FromMinutes(1));
@@ -701,6 +720,57 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         host.Start();
 
         await Wait.UntilAsync(() => Reports().Count > sent, "the host told again");
+    }
+
+    [Fact]
+    public async Task What_Settings_checks_and_downloads_is_what_the_devices_are_told()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        shared = new ObservedUpdater(updater, time);
+        await StartAsync();
+        var told = new List<UpdateState>();
+        auto.StateChanged += () => told.Add(auto.State);
+
+        // Settings' Check, then its Download, through the updater they share.
+        Assert.Equal("0.2.0", await shared.CheckAsync());
+        await shared.DownloadAsync(_ => { });
+
+        Assert.Contains(told, s => s.Phase == UpdatePhase.Checking);
+        Assert.Contains(told, s => s.Phase == UpdatePhase.Downloading);
+        Assert.Equal(("0.2.0", UpdatePhase.Idle), (auto.State.Available, auto.State.Phase));
+    }
+
+    [Fact]
+    public async Task A_release_whose_download_failed_is_still_reported_as_there()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        updater.DownloadFails = new IOException("the connection was reset");
+        await StartAsync();
+
+        await AskedAsync(UpdateAskKind.Check);
+
+        Assert.Equal("0.2.0", auto.State.Available);
+        Assert.Equal((UpdateOutcome.Failed, "the connection was reset"), (auto.State.Last!.Outcome, auto.State.Last.Reason));
+    }
+
+    [Fact]
+    public async Task A_check_pressed_while_another_runs_gets_a_check_of_its_own()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        updater.Found = null;
+        await StartAsync();
+        updater.CheckGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        const string Second = "9b8c7d6e-5f40-4321-8abc-def012345678";
+
+        var first = auto.Ask(UpdateAskKind.Check, Press);
+        await Wait.UntilAsync(() => updater.Checks == 1, "the first check under way");
+        await auto.Ask(UpdateAskKind.Check, Second);
+        updater.CheckGate.SetResult();
+        await first;
+
+        Assert.Equal(2, updater.Checks);
+        Assert.Equal((UpdateOutcome.Current, Second), (auto.State.Last!.Outcome, auto.State.Last.Request));
+        Assert.Null(auto.State.Request);
     }
 
     [Fact]

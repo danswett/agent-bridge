@@ -186,7 +186,10 @@ into one folder with one version. An app update is a host update, so they never 
   minutes, or six hours), with "Install updates automatically" off too: being asked stands in
   for the switch, for that release. How it ended is kept in the profile's settings
   (`lastUpdate`, with the press it answers in `updateRequest` across the restart), so the new
-  version reports `updated`, or `failed` if it did not take, and the devices see it. The host
+  version reports `updated`, or `failed` if it did not take, and the devices see it; an
+  automatic install that fails is reported `failed` too. Settings and the automatic updates
+  share one `ObservedUpdater`, so a check or download from Settings is reported as well, and a
+  release whose download failed is still reported as there. The host
   takes these presses only through the relay, only from a device listed as a person's (`pwa` or
   `app`, never a machine), and none on a read-only machine (`delivery.readOnly`, or
   agent-ha-bridge running, G5): those rules are #112's for Home Assistant's Install button.

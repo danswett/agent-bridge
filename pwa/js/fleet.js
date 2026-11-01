@@ -268,7 +268,7 @@ export class FleetStatus {
       if (hello.capabilities.includes(UPDATE.capability)) {
         const state = await client.updateState();
         if (!viewed() && !forgotten()) { this.#updates.set(id, state); }
-      } else { this.#updates.delete(id); }
+      } else if (!viewed() && !forgotten()) { this.#updates.delete(id); }
       this.#retime();
     } catch {
       if (forgotten()) { return; }

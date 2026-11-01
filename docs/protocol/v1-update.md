@@ -49,7 +49,7 @@ read-only. The pipe never offers it.
 | `current` | string? | The release installed. With no app reporting, the host's own version |
 | `installer` | bool | Whether an updater is there to act: the Windows app, running and installed |
 | `unavailable` | string? | Why nothing can be asked now (`"the Agent Bridge app is not running on this machine, and it is what installs updates"`, `"this copy of the app was not installed by its updater, so it cannot update"`) |
-| `available` | string? | A newer release, once a check has found one; the one downloading while `phase` is `downloading` |
+| `available` | string? | The newer release the last check found, from a device's press, the app's own schedule or its Settings; still there if its download failed, gone once a check finds nothing newer |
 | `notes` | string? | Its release notes |
 | `checkedAt` | time? | When the app last checked |
 | `phase` | `idle` `checking` `downloading` `waiting` `installing` | `waiting`: a release is downloaded and will install (automatic updates are on, or a device asked) once the host is idle |
