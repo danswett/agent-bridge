@@ -102,6 +102,9 @@ public sealed class PushNotifier : IAsyncDisposable
         // The question on devices now (notified, not yet resolved).
         public string? Shown;
         public string? FinishedKey;
+        // The main agent's turn as last seen idle: a delegate's question answered while the
+        // main agent was idle all along ends no turn of its.
+        public string? IdleKey;
         public readonly HashSet<string> Notified = new(StringComparer.Ordinal);
         public readonly Queue<string> NotifiedOrder = new();
     }
@@ -141,7 +144,7 @@ public sealed class PushNotifier : IAsyncDisposable
             foreach (var s in source.Snapshot())
             {
                 if (sessions.ContainsKey(s.Id)) { continue; }
-                var t = sessions[s.Id] = new Tracked { Last = s };
+                var t = sessions[s.Id] = new Tracked { Last = s, IdleKey = s.Status == SessionStatus.Idle ? FinishedKey(s) : null };
                 if (s.Question is { } q) { t.Due = new Due(NoticeKind.Question, now + this.options.QuestionDelay, q.Id); }
             }
         }
@@ -323,13 +326,17 @@ public sealed class PushNotifier : IAsyncDisposable
         }
         // Answered (or gone) before it was notified: nothing to say.
         if (t.Due is { Kind: NoticeKind.Question }) { t.Due = null; }
-        if (s.Status == SessionStatus.Idle && prev is { Status: SessionStatus.Working or SessionStatus.Waiting }
+        // Waiting on a delegate (status rule 2) says nothing of the main agent's turn: only one
+        // that changed while it waited finished then.
+        var turnRan = prev is { Status: SessionStatus.Working } or { Status: SessionStatus.Waiting, WaitingOn: null } || FinishedKey(s) != t.IdleKey;
+        if (s.Status == SessionStatus.Idle && prev is { Status: SessionStatus.Working or SessionStatus.Waiting } && turnRan
             && !string.IsNullOrWhiteSpace(OwnResponse(s)) && FinishedKey(s) != t.FinishedKey)
         {
             t.Due = new Due(NoticeKind.Finished, now + options.FinishedDelay, null);
         }
         // The turn carried on before the notice went: the person is at the machine.
         else if (s.Status != SessionStatus.Idle && t.Due is { Kind: NoticeKind.Finished }) { t.Due = null; }
+        if (s.Status == SessionStatus.Idle) { t.IdleKey = FinishedKey(s); }
         // A question on devices is no longer asked. Not at once: a turn that finishes soon
         // after replaces it with its own notice.
         if (t.Shown is { } shown && t.Due is null) { t.Due = new Due(NoticeKind.Resolved, now + options.QuestionDelay, shown); }

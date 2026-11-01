@@ -166,13 +166,19 @@ internal sealed class BackgroundWork
     {
         if (!_agents.TryGetValue(agentId, out var agent)) { return; }
         AgentModel(agentId, model);
-        if (Text.NonBlank(reasoning) is { } r) { agent.Reasoning = Limits.KeepEnd(r, Limits.Reasoning).Text; agent.Line = r; }
+        if (Text.NonBlank(reasoning) is { } r) { agent.Reasoning = Limits.KeepEnd(r, Limits.Reasoning).Text; agent.Line = LineOf(r); }
         if (Text.NonBlank(content) is { } c)
         {
             (agent.Response, agent.ResponseTruncated) = Limits.KeepEnd(c, Limits.Response);
-            agent.Line = c;
+            agent.Line = LineOf(c);
         }
     }
+
+    // Cut once as it arrives, not on every build: an entry is rebuilt each pass for as long as
+    // the session lives, and a reply can be 16 KiB. Some slack before collapsing whitespace
+    // keeps a run of it from leaving the line short.
+    static string? LineOf(string text) =>
+        Limits.KeepEnd(Collapse(Limits.KeepEnd(text, 4 * Limits.SubagentLine).Text), Limits.SubagentLine).Text;
 
     // The turn's latest reply decides whether it goes on to run tools, as for the session
     // itself (#104): a reply asking for tools, then their results, then a final reply with
@@ -193,10 +199,13 @@ internal sealed class BackgroundWork
     }
 
     // The agent's own abort or shutdown: its run is over, and nothing else of the session's.
-    public void AgentEnded(string agentId, DateTimeOffset? at)
+    // An abort failed it even if no run of it was seen going (its start only skimmed, or
+    // between runs); a shutdown failed only a run it cut short.
+    public void AgentEnded(string agentId, DateTimeOffset? at, bool aborted = true)
     {
         if (!_agents.TryGetValue(agentId, out var agent)) { return; }
         EndRun(agent, at, SubagentOutcome.Failed);
+        if (aborted && agent.Outcome != SubagentOutcome.Failed) { agent.Outcome = SubagentOutcome.Failed; agent.EndedAt = at ?? agent.EndedAt; Version++; }
         Finish(agent);
     }
 
@@ -206,7 +215,7 @@ internal sealed class BackgroundWork
         var key = agentId ?? (callId is not null && _agentByCall.TryGetValue(callId, out var k) ? k : null);
         if (key is null || !_agents.TryGetValue(key, out var agent)) { return; }
         EndRun(agent, at, SubagentOutcome.Failed);
-        if (agent.Outcome != SubagentOutcome.Failed) { agent.Outcome = SubagentOutcome.Failed; Version++; }
+        if (agent.Outcome != SubagentOutcome.Failed) { agent.Outcome = SubagentOutcome.Failed; agent.EndedAt = at ?? agent.EndedAt; Version++; }
         Finish(agent);
     }
 
@@ -335,9 +344,10 @@ internal sealed class BackgroundWork
 
     public void ForgetShells()
     {
-        if (_shells.Count == 0) { return; }
+        var any = _shells.Count > 0;
         _shells.Clear();
-        Version++;
+        foreach (var a in _agents.Values.Where(a => a.Shells.Count > 0)) { a.Shells.Clear(); any = true; }
+        if (any) { Version++; }
     }
 
     // The session's CLI shut down: everything it was running went with it. An agent cut off
@@ -413,7 +423,7 @@ internal sealed class BackgroundWork
             Outcome = running || stale ? null : a.Outcome,
             StartedAt = a.StartedAt,
             EndedAt = running || stale ? null : a.EndedAt,
-            Line = Limits.KeepEnd(Collapse(a.Line), Limits.SubagentLine).Text,
+            Line = a.Line,
             CurrentTool = running ? a.Tools.Current() : null,
             Shells = running ? a.Shells.Values.Count(s => Live(s, processStartedAt)) : 0,
         };

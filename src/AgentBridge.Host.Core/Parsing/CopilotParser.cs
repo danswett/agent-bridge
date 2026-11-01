@@ -46,8 +46,16 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
 
     bool _turnAskedForTools;
     readonly Dictionary<string, string> _permissionQuestion = new(StringComparer.Ordinal);
+    static readonly byte[] AssistantMessage = Marker("\"assistant.message\"");
+    static readonly byte[] Stamped = Marker("\"agentId\"");
 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;
+
+    // The main agent's replies too, for activity.own: a session whose delegates filled the
+    // parsed window had no reply of the main agent's in it. A delegate's carries an agentId,
+    // and is not wanted; a main reply quoting that word is merely missed.
+    protected override bool SkimWants(ReadOnlySpan<byte> line) =>
+        base.SkimWants(line) || (line.IndexOf(AssistantMessage) >= 0 && line.IndexOf(Stamped) < 0);
 
     public override void Reset()
     {
@@ -69,7 +77,15 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     S.FirstUserMessage ??= text;
                     S.UserMessage = text;
                     S.Prompts++;
+                    S.OwnReasoning = null;
                 }
+                break;
+            // Only the main agent's own text, never the legacy fields: those are the window's
+            // to say, as they always were.
+            case "assistant.message" when !IsSubagent(e):
+                S.OwnReasoning = Text.NonBlank(Json.Str(data, "reasoningText")) ?? S.OwnReasoning;
+                S.OwnResponse = Text.NonBlank(Json.Str(data, "content")) ?? S.OwnResponse;
+                if (Text.NonBlank(Json.Str(data, "reasoningText")) is not null || Text.NonBlank(Json.Str(data, "content")) is not null) { S.OwnAt = Json.Time(e, "timestamp"); }
                 break;
             case "session.compaction_complete" when Json.Bool(data, "success") == true:
                 S.Compactions++;
@@ -105,6 +121,14 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     if (started is not null) { S.Background.ShellStarted(started, Json.Time(e, "timestamp")); }
                     break;
                 }
+            // A delegate's own shells likewise, counted on its entry.
+            case "tool.execution_complete":
+                {
+                    var content = Json.Obj(data, "result") is { } result ? Json.Str(result, "content") : null;
+                    var (started, ended) = ShellMarkers.Read(content);
+                    if (started is not null || ended is not null) { S.Background.AgentShell(Json.Str(e, "agentId")!, started, ended, Json.Time(e, "timestamp")); }
+                    break;
+                }
             case "system.notification" when Json.Obj(data, "kind") is { } kind && Json.Str(kind, "type") == "shell_completed":
                 S.Background.ShellEnded(Json.Str(kind, "shellId"));
                 break;
@@ -116,13 +140,17 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
 
     // A shell the skim saw start may have ended in the bytes the tail never read (a transcript
     // past the skim budget); counted, it would read as running for as long as its CLI lives.
-    // One started again or still running in the window is counted from there. The model may
-    // have changed there too, so it is left for the window (or the session's registration)
-    // to say rather than kept stale.
+    // One started again or still running in the window is counted from there; a delegate's
+    // likewise. The model may have changed there too, so it is left for the window (or the
+    // session's registration) to say rather than kept stale, and so is the main agent's own
+    // text.
     public override void Skipped()
     {
         S.Background.ForgetShells();
         S.Model = null;
+        S.OwnResponse = null;
+        S.OwnReasoning = null;
+        S.OwnAt = null;
     }
 
     protected override bool Apply(JsonElement e, DateTimeOffset? at)
@@ -172,7 +200,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             // two months of real transcripts, but a woken agent writes no second
             // subagent.completed, so missing one would leave it working for good.
             case "abort" or "session.shutdown" when agentId is not null:
-                work.AgentEnded(agentId, at);
+                work.AgentEnded(agentId, at, aborted: Json.Str(e, "type") == "abort");
                 break;
             case "user.message" when agentId is not null:
                 work.AgentActive(agentId, at);

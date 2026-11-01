@@ -282,11 +282,11 @@ public class SubagentTests
         readonly string _events;
         public readonly AgentBridge.Host.Core.SessionSource Source;
 
-        public Live()
+        public Live(long tailBytes = 4 * 1024 * 1024)
         {
             _events = F.CopilotSession(Id, 100);
             F.Processes.Run(AgentKind.Copilot, 100);
-            Source = F.Source();
+            Source = F.Source(tailBytes);
         }
 
         public async Task<Session> After(params string[] lines)
@@ -382,5 +382,47 @@ public class SubagentTests
         var aborted = await s.After(Copilot.ToolStart("t2", "task", new { description = "Second", prompt = "p" }, 6), Copilot.SubagentStarted("t2", "s2", 6, mode: "sync"),
             Copilot.TurnStart(6, "s2"), Copilot.Event("abort", new { reason = "user initiated" }, 7));
         Assert.Equal((SubagentStatus.Ended, SubagentOutcome.Failed), (Entry(aborted, "s2").Status, Entry(aborted, "s2").Outcome));
+    }
+
+    // A host starting while delegates have filled the part of the transcript it parses.
+    [Fact]
+    public async Task A_host_that_starts_after_delegates_filled_its_window_still_has_the_main_agents_reply_and_their_shells()
+    {
+        await using var s = new Live(tailBytes: 4096);
+        var filler = Enumerable.Range(0, 8).Select(i => Copilot.Assistant("", 40 + i, reasoning: new string('x', 1000), tools: ["f" + i], agentId: "a1")).ToArray();
+
+        var cold = await s.After([
+            .. Delegate("t1", "a1", 1), .. Delegate("t2", "a2", 3),
+            Copilot.Assistant("Both delegates are running.", 8, reasoning: "wait for them"), Copilot.TurnEnd(8),
+            Copilot.ToolResult("c1", "<command started in background with shellId: build>", 9, agentId: "a1"),
+            .. filler,
+            Copilot.Assistant("Build is green.", 60, agentId: "a1"),
+            Copilot.Event("abort", new { reason = "user initiated" }, 61, agentId: "a2"),
+        ]);
+
+        Assert.Equal("Build is green.", cold.Activity.Response);
+        Assert.Equal("a1", cold.Activity.Source!.Response);
+        Assert.Equal("Both delegates are running.", cold.Activity.Own!.Response);
+        Assert.Equal(1, Entry(cold, "a1").Shells);
+        // Known only from the skim, then seen aborting: it failed, though no run was seen going.
+        Assert.Equal((SubagentStatus.Ended, SubagentOutcome.Failed), (Entry(cold, "a2").Status, Entry(cold, "a2").Outcome));
+    }
+
+    [Fact]
+    public async Task The_sessions_own_form_is_answered_at_the_machine_while_a_delegates_permission_prompt_is_also_pending()
+    {
+        await using var s = new Live();
+        await s.After(Delegate("t1", "a1", 1));
+
+        var both = await s.After(Copilot.User("ask me", 10), Copilot.ToolStart("own", "ask_user", Ask, 10),
+            Copilot.ToolStart("c9", "powershell", new { command = "gh pr checks" }, 11, "a1"), Copilot.Permission("r1", "c9", Copilot.Prompts["commands"], 11));
+
+        Assert.Equal(("own", (string?)null), (both.Question!.Id, both.Question.Agent));
+        // The CLI may be showing the delegate's dialog: keys for the form could approve it.
+        Assert.True(both.Question.AnswerAtMachine);
+        Assert.Equal(SubagentStatus.Waiting, Entry(both, "a1").Status);
+
+        var alone = await s.After(Copilot.PermissionDone("r1", "c9", "approved", 12));
+        Assert.Null(alone.Question!.AnswerAtMachine);
     }
 }

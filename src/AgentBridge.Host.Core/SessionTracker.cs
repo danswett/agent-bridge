@@ -102,8 +102,15 @@ internal sealed class SessionTracker
         var question = _state.Pending.LastOrDefault(q => q.Agent is null) ?? (_state.Pending.Count > 0 ? _state.Pending[^1] : null);
         // Delivery types only into the main agent's ask_user (AnswerService refuses a stamped
         // call), so nothing proves where keys for a sub-agent's would land: it is answered at
-        // the machine. A permission prompt carries its own proof (CopilotPermission).
-        if (question is { Agent: not null, Kind: QuestionKind.Form }) { question = question with { AnswerAtMachine = true }; }
+        // the machine. Nor for a Copilot form while a permission prompt or a sub-agent's
+        // question is also pending: the CLI shows one of them, and a sub-agent's permission
+        // dialog can be the one on screen while the session's own question is the one listed.
+        // A permission prompt carries its own proof (CopilotPermission).
+        if (question is { Kind: QuestionKind.Form } && (question.Agent is not null
+            || (d.Agent == AgentKind.Copilot && _state.Pending.Any(q => q != question && (q.Kind == QuestionKind.Approval || q.Agent is not null)))))
+        {
+            question = question with { AnswerAtMachine = true };
+        }
         DateTimeOffset? hintAt = null;
 
         if (d.Agent == AgentKind.Claude && reg?.HookStatusAt is { } hookAt && (_state.LastActivityAt is not { } last || hookAt > last))

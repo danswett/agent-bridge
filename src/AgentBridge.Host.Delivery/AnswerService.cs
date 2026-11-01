@@ -194,6 +194,15 @@ public sealed class AnswerService : ISessionAnswerer
             if (call.Arguments is not { } arguments) { return Stale("the session's transcript no longer shows that question"); }
             if (call.Answer is not null || call.SessionEnded) { return Stale("the question has already been answered"); }
             if (!call.IsMainAgent) { return Refused("the question was asked by a subagent; answer at the machine"); }
+            // Keys go to whichever prompt the CLI shows, and a permission dialog (a sub-agent's,
+            // say) can be shown over this question, which is the one listed (#173). Read just
+            // before typing, since the host's view may be a pass behind.
+            var prompts = CopilotPermissionTranscript.Before(transcript, "");
+            if (!prompts.Readable) { return Refused("the session's transcript could not be read, so nothing is typed; answer at the machine"); }
+            if (prompts.PendingPermissions > 0)
+            {
+                return Refused("Copilot has more than one prompt waiting, and the screen shows only one of them; answer at the machine");
+            }
 
             var (form, unreadable) = CopilotForm.Read(arguments);
             if (form is null) { return Refused(unreadable!); }

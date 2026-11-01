@@ -299,6 +299,26 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task Answering_a_delegates_question_while_the_main_agent_was_idle_all_along_is_no_finished_turn()
+    {
+        Start(existing: S("s1", SessionStatus.Idle, response: "Started the delegates."));
+        Subscribe(Phone);
+        var asking = S("s1", SessionStatus.Waiting, response: "Started the delegates.", question: Q("q1", "Allow?", QuestionKind.Approval) with { Agent = "agent-1" }, turns: 0) with { WaitingOn = "agent-1" };
+        source.Upsert(asking);
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Started the delegates."));
+        await After(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(["question", "resolved"], Received().Select(r => Kind(r.Notification)));
+
+        // The main agent finishing a turn while a delegate's question waited is still news.
+        source.Upsert(asking with { Activity = asking.Activity with { Response = "Both are done.", TurnCount = 1 } });
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Both are done.", turns: 2));
+        await After(TimeSpan.FromSeconds(5));
+        Assert.Equal("DEV · finished\nBoth are done.", Received()[^1].Notification.GetProperty("body").GetString());
+    }
+
+    [Fact]
     public async Task A_finished_turn_replaces_the_answered_question_instead_of_adding_a_notice()
     {
         Start();

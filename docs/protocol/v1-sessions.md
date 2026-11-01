@@ -586,7 +586,7 @@ agent-ha-bridge notifies a phone through Home Assistant.
 | `kind` | When | Once per |
 |---|---|---|
 | `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it |
-| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified | Finished turn: the same `turnCount` and response seen ending again is not repeated |
+| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Waiting on a sub-agent's question (`waitingOn`) counts only if the main agent's turn count or response changed meanwhile: answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified | Finished turn: the same `turnCount` and response seen ending again is not repeated |
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead | Question |
 
 A question answered before its 2 s are up is never notified. A notice that cannot be sent
@@ -818,7 +818,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `askedAt` | time | |
 | `truncated` | bool? | The host had to cut `message` or drop `fields` to fit the budget. A client shows what it has and says to answer at the machine |
 | `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request of a kind no host drives (or any, on a host without `sessions.approve`), a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once. It still has its fields, so a client can say what it asks, but a client shows no controls for it, gives the session's status as "Waiting at the machine", and a `session.answer` for it is `refused` |
-| `agent` | string? | The sub-agent that asked, by its `subagents` id, when it is not the session's own question (`waitingOn` names it too). A Copilot permission prompt is the CLI's one dialog whoever asked, and is answered the same way. A sub-agent's `ask_user` is always `answerAtMachine`: delivery types only into the main agent's, so nothing proves where the keys would land |
+| `agent` | string? | The sub-agent that asked, by its `subagents` id, when it is not the session's own question (`waitingOn` names it too). A Copilot permission prompt is the CLI's one dialog whoever asked, and is answered the same way. A sub-agent's `ask_user` is always `answerAtMachine`: delivery types only into the main agent's, so nothing proves where the keys would land. And while a permission prompt or a sub-agent's question waits beside it, the session's own Copilot `ask_user` is `answerAtMachine` too, since the CLI may be showing the other one; a host also checks the transcript for a pending permission prompt just before typing an answer |
 
 ### Field
 
@@ -927,12 +927,15 @@ that added `background`).
     `session.model_change` and `assistant.message` (#73: never the session's).
   * A run ends as for background agents above, with outcome `done`. A task agent is
     `ended` when its run ends, or when its `task` call completes (`failed` if the call
-    failed), or when the main agent's turn is aborted (`failed`). `subagent.failed`, or the
-    agent's own `abort` or `session.shutdown`, ends it `failed`. The session's
+    failed), or when the main agent's turn is aborted (`failed`). `subagent.failed` or the
+    agent's own `abort` ends it `failed`, even when no run of it was seen going; its own
+    `session.shutdown` ends it, `failed` only if mid-run. The session's
     `session.shutdown` ends every entry: `failed` if it was mid-run.
-  * Its shells are read from its own tool results with the same markers, and count on its
-    entry while it runs; their ends come back only in its own results (never a
-    `shell_completed` notification to the session).
+  * Its shells are read from its own tool results with the same markers, skimmed ones
+    included, and count on its entry while it runs; their ends come back only in its own
+    results (never a `shell_completed` notification to the session).
+  * The main agent's own text (`own`) is read from the skimmed part of the transcript too, so
+    a host starting after delegates filled the parsed window still has it.
   * **Questions:** a sub-agent's `permission.requested` is written unstamped, naming the tool
     call it gates; that call's `agentId` says whose it is. A `tool.execution_start` of
     `ask_user` stamped with an `agentId` would be that agent's question, but Copilot gives
