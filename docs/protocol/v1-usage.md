@@ -135,8 +135,10 @@ Agent-ha-bridge's usage card, kept exactly:
   with that host (`readBy`), and keeps the last reading of each allowance for the signed-in
   account between runs: the Windows app in its local state (`<profile>-usage.json`), the PWA in
   IndexedDB. Kept readings merge with live ones by the rules above, live first, and go after 14
-  days (none is shown past that, whether or not anything has been heard since; at most 32 are
-  kept); a forgotten machine's go with it, even where another host still passes them on, and
+  days (none is shown past that, whether or not anything has been heard since, and none that old
+  takes part in the merge, so it never hides a current failure; at most 32 are kept). Only another
+  machine the client lists for the signed-in account adds to what is kept; a forgotten machine's
+  go with it, even where another host still passes them on, and
   signing out deletes them. Each row says
   `read on <machine>` beside its age, in the stale colour when the reading is stale; the Windows
   app leaves it out for the machine it runs on. A device that has never seen a reading of an

@@ -63,7 +63,11 @@ public sealed class UsageCache
         }
         else if (account is null && this.account is null) { return live; }
         // Live first: of two readings taken at the same moment, the one a machine is offering now.
-        var merged = UsageMerge.Combine([live, new UsageReport(entries)]).Where(e => e.MeasuredAt >= oldest)
+        // None past their 14 days goes in: chosen first and dropped after, an expired reading would
+        // take a current failure of the same allowance with it.
+        var merged = UsageMerge.Combine([
+                new UsageReport([.. live.Agents.Where(e => e.MeasuredAt >= oldest)]),
+                new UsageReport([.. entries.Where(e => e.MeasuredAt >= oldest)])])
             .OrderByDescending(e => e.MeasuredAt).Take(MaxAllowances).ToList();
         if (account is null) { return new UsageReport(merged); }
         entries = merged;

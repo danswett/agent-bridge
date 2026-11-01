@@ -160,6 +160,19 @@ public sealed class UsageTests
         }
         finally { File.Delete(file); }
     }
+
+    [Fact]
+    public void A_reading_past_two_weeks_does_not_hide_a_current_failure_of_the_same_allowance()
+    {
+        var clock = new FakeTimeProvider(Now);
+        var vm = new UsageViewModel(clock, new UsageCache(null, clock));
+        var expired = Agent("Laptop", 30, Now.AddDays(-15)) with { ReadBy = new UsageReader(new string('a', 32), "Laptop") };
+        var failed = Agent("Laptop", -1, Now.AddMinutes(-1), "rate limited") with { ReadBy = new UsageReader(new string('b', 32), "Desk") };
+
+        vm.Update(new UsageReport([expired, failed]), account: "1");
+
+        Assert.Equal("rate limited", Assert.Single(vm.Rows).Error);
+    }
 }
 
 public sealed class WordsTests

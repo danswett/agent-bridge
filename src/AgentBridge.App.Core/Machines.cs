@@ -50,6 +50,9 @@ public interface IFleetLink : IAsyncDisposable
     // Changes when the account (or relay) the machines come from does: whatever was shown for
     // the one before goes, even while the new one is still connecting.
     int Account => 0;
+    // The account (its id) the hosts listed now come from, while connected; null when not known (a
+    // stand-in), which ties them to no account.
+    string? AccountId => null;
     // Raised on any thread when the state or the hosts change.
     event Action? Changed;
     void Start();
@@ -119,6 +122,9 @@ public sealed class Fleet : IAsyncDisposable
     // learnt from the last one's machines (sessions to bring over) is not this one's.
     public event Action? AccountChanged;
     public int Account => account;
+    // The account the machines listed now are the account's of (IFleetLink.AccountId): kept while
+    // the relay connection is down for now, as they are. Null when not known.
+    public string? MachinesAccount { get; private set; }
 
     // Every host the relay last said is online, this machine's own among them, as one value that
     // changes when they do: the hosts session transfer asks (TransferSourcesAsync).
@@ -202,8 +208,12 @@ public sealed class Fleet : IAsyncDisposable
         // Inside the same reading: one taken after the recheck could be a dropped link's null
         // with the state still read as Connected, and clear the list it should keep.
         var offline = link.Offline;
+        var from = link.AccountId;
         var hosts = present.Where(h => h.Id != me).ToDictionary(h => h.Id, StringComparer.Ordinal);
         if (link.Account != now || link.State != state) { return; }
+        // Before any machine is added, so the usage it reports is taken as this account's.
+        if (state == FleetState.Connected) { MachinesAccount = from; }
+        else if (now != account) { MachinesAccount = null; }
         var presence = string.Join(',', present.Select(h => h.Id).Order(StringComparer.Ordinal));
         if (presence != Presence) { Presence = presence; PresenceChanged?.Invoke(); }
         foreach (var (id, h) in hosts)
@@ -301,7 +311,7 @@ public sealed class RelayFleetLink : IFleetLink
     volatile Current? current;
     volatile StateNow state = new(FleetState.SignedOut, null);
 
-    sealed record Current(RelayClient Relay, ChannelHub Hub);
+    sealed record Current(RelayClient Relay, ChannelHub Hub, string AccountId);
     sealed record StateNow(FleetState State, string? Detail);
 
     // claim: whether this copy of the app may hold the relay link, which one copy per person may
@@ -332,6 +342,7 @@ public sealed class RelayFleetLink : IFleetLink
     int accountGeneration;
     RelayAccount? tried;
     public int Account => Volatile.Read(ref accountGeneration);
+    public string? AccountId => current?.AccountId;
 
     public IReadOnlyList<FleetHost> Hosts => current is { } c
         ? [.. c.Relay.Presence.Where(p => p.Kind == "host" && p.Id != c.Relay.DeviceId).Select(p => new FleetHost(p.Id, p.Name))]
@@ -402,7 +413,7 @@ public sealed class RelayFleetLink : IFleetLink
                 await using var relay = await RelayClient.ConnectAsync(relayUri, a.Token, key, name, "app", ct);
                 var hub = new ChannelHub(relay, key, name, "app") { JsonOptions = ProtocolJson.Options };
                 relay.PresenceChanged += _ => Changed?.Invoke();
-                current = new Current(relay, hub);
+                current = new Current(relay, hub, a.AccountId);
                 Set(FleetState.Connected, $"as {relay.Login}");
                 log($"connected to the relay as {relay.Login} ({Wire.DeviceId(key.Public)[..8]})");
                 backoff = TimeSpan.FromSeconds(1);

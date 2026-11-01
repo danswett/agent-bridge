@@ -193,6 +193,26 @@ test('a forgotten machine takes what it read with it, even where another host pa
   assert.equal(kept, before);
 });
 
+test('a reading past two weeks does not hide a current failure of the same allowance, shown or kept', () => {
+  const book = new UsageBook({ now: () => NOW });
+  let kept = null;
+  book.useCache({ entries: [], save: (e) => { kept = e; } });
+  // A host still passes on a reading taken a fortnight and a day ago; another has just failed to read.
+  book.set('laptop-id', { agents: [claude({ measuredAt: iso(-15 * 24 * H), readBy: { id: 'vm-id', name: 'Rehearsal VM' } })] }, 'Laptop');
+  book.set('desk-id', { agents: [claude({ windows: [], source: 'none', measuredAt: iso(-60000), error: 'rate limited' })] }, 'Desk');
+  assert.deepEqual(book.entries().map((e) => e.error), ['rate limited']);
+  assert.deepEqual(kept.map((e) => e.error), ['rate limited']);
+});
+
+test('a machine forgotten while what was kept is being read is not brought back by it, and the store hears it went', () => {
+  const book = new UsageBook({ now: () => NOW });
+  let kept = null;
+  book.delete('vm-id', { forget: true });
+  book.useCache({ entries: [claude({ readBy: { id: 'vm-id', name: 'Rehearsal VM' } })], save: (e) => { kept = e; } });
+  assert.deepEqual(book.entries(), []);
+  assert.deepEqual(kept, []);
+});
+
 test('a machine whose discovery is held says so on its status line, as agent-ha-bridge did', () => {
   assert.equal(machineStatus({ sessions: 2, hostVersion: '0.1.0', held: 'an unrecognised copilot process (pid 4120)' }),
     '2 sessions \u00b7 0.1.0 \u00b7 discovery held: an unrecognised copilot process (pid 4120)');

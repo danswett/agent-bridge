@@ -355,14 +355,20 @@ public sealed partial class MainViewModel : Observable
     }
 
     // Each machine's readings marked with the machine that took them, merged, and kept between runs
-    // for the account this machine's host is signed in to (#172).
+    // for the account this machine's host is signed in to (#172). Another machine's only while the
+    // fleet lists it for that account: this machine's host can say it is signed in to another
+    // before the fleet has followed it, and the first account's readings would be kept as the next's.
     void UpdateUsage()
     {
+        var account = host.Status is { } status ? status.Account?.AccountId ?? "" : null;
+        var theirs = fleet?.MachinesAccount;
         Usage.Present(machines.Select(m => m.Host.Hello?.Machine.Id).OfType<string>());
         Usage.Update(
-            new UsageReport(UsageMerge.Combine(machines.Select(m => UsageMerge.ReadOn(m.Host.Usage, m.Host.Hello?.Machine)))),
+            new UsageReport(UsageMerge.Combine(machines
+                .Where(m => m.IsLocal || account is not { Length: > 0 } || theirs is null || theirs == account)
+                .Select(m => UsageMerge.ReadOn(m.Host.Usage, m.Host.Hello?.Machine)))),
             LocalMachineId,
-            host.Status is { } status ? status.Account?.AccountId ?? "" : null);
+            account);
     }
 
     // On the UI thread, from the fleet: a machine forgotten from the account's roster, from this

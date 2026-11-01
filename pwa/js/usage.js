@@ -248,21 +248,28 @@ export class UsageBook {
     }));
   }
 
+  // None past its 14 days goes into a merge: chosen first and dropped after, an expired reading
+  // would take a current failure of the same allowance with it.
+  #fresh(agents) {
+    const oldest = this.now() - KEPT_MS;
+    return agents.filter((a) => (Date.parse(a.measuredAt ?? '') || 0) >= oldest);
+  }
+
   // Where readings are kept, none past their 14 days, whether or not anything has been heard since:
   // the view redraws on a timer, and a machine that went offline sends nothing more.
   entries() {
-    const all = mergeUsage([...this.#live(), { agents: this.#kept }]);
-    if (!this.#cache) { return all; }
-    const oldest = this.now() - KEPT_MS;
-    return all.filter((e) => e.at >= oldest);
+    if (!this.#cache) { return mergeUsage([...this.#live(), { agents: this.#kept }]); }
+    return mergeUsage([...this.#live().map((r) => ({ agents: this.#fresh(r.agents) })), { agents: this.#fresh(this.#kept) }]);
   }
 
   // What is kept for the signed-in account (as the store gave it back), and where to keep it:
   // save(entries) is called with every change to what is kept.
   useCache({ entries = [], save = () => {} } = {}) {
-    const oldest = this.now() - KEPT_MS;
-    this.#kept = readUsage({ agents: Array.isArray(entries) ? entries.slice(0, KEPT_MAX) : [] }).agents.filter((a) => (Date.parse(a.measuredAt ?? '') || 0) >= oldest);
-    this.#saved = JSON.stringify(this.#kept);
+    const loaded = readUsage({ agents: Array.isArray(entries) ? entries.slice(0, KEPT_MAX) : [] }).agents;
+    // A machine forgotten while the store was being read takes what it read with it here too, and
+    // the store hears of that: what was saved is what was loaded, not what is kept.
+    this.#kept = this.#fresh(loaded).filter((a) => !this.#forgotten.has(a.readBy?.id));
+    this.#saved = JSON.stringify(loaded);
     this.#cache = { save };
     this.#keep();
     this.#emit();
@@ -270,9 +277,7 @@ export class UsageBook {
 
   #keep() {
     if (!this.#cache) { return; }
-    const oldest = this.now() - KEPT_MS;
-    this.#kept = combineUsage([...this.#live(), { agents: this.#kept }])
-      .filter((e) => e.at >= oldest)
+    this.#kept = combineUsage([...this.#live().map((r) => ({ agents: this.#fresh(r.agents) })), { agents: this.#fresh(this.#kept) }])
       // As many allowances as a host keeps (PeerUsage), the one read longest ago going first.
       .sort((x, y) => y.at - x.at)
       .slice(0, KEPT_MAX)

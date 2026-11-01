@@ -464,6 +464,31 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Another_machines_reading_is_not_kept_for_the_account_this_machine_switched_to_before_the_fleet_follows()
+    {
+        link.AccountId = "1";
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        var claude = new UsageReport([new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = "c1a0de000000", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }] }]);
+        localHost.On(UsageProtocol.Subscribe, _ => UsageReport.Empty);
+        remoteHost.On(UsageProtocol.Subscribe, _ => claude);
+        await BothMachinesAsync();
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await remoteHost.SendAsync(UsageProtocol.Update, claude);
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 1 && local.Status?.Account?.AccountId == "1", "the build server's reading, for account 1");
+
+        // This machine's host signs in to account 2; the fleet still lists account 1's machines.
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("other", "2") };
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await Wait.UntilAsync(() => local.Status?.Account?.AccountId == "2", "this machine's new account");
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 0, "account 1's reading to go from view");
+
+        var restarted = new UsageViewModel(clock, new UsageCache(cacheFile, clock));
+        restarted.Update(UsageReport.Empty, "host-id", account: "2");
+        Assert.Empty(restarted.Rows);
+    }
+
+    [Fact]
     public async Task Usage_is_merged_across_machines()
     {
         var older = new AgentUsage { Agent = AgentKind.Copilot, Label = "Copilot", Account = "octocat", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "premium", Label = "Premium", Percent = 10 }] };
@@ -706,6 +731,7 @@ public sealed class FleetTests : IAsyncLifetime
         public event Action? Changed;
 
         public int Account { get; private set; }
+        public string? AccountId { get; set; }
 
         // Runs once, right after the next read of the hosts: for a change between two reads.
         public Action? AfterHostsRead { get; set; }
