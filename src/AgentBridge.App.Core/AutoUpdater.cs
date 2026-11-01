@@ -36,6 +36,13 @@ public sealed class AutoUpdater
     // it counts: long past the moment a snapshot is replaced (sessions.subscribe again after a gap),
     // whose upserts arrive within seconds even if an earlier sessions.synced closed it early.
     public static readonly TimeSpan IdleFor = TimeSpan.FromMinutes(2);
+    // A press within this of the last check is answered from it, not by asking the feed again,
+    // so a device pressing Check over and over costs the feed nothing.
+    public static readonly TimeSpan CheckAgainAfter = TimeSpan.FromMinutes(1);
+    // How long after a failed download it is not downloaded again, whoever asks.
+    public static readonly TimeSpan DownloadAgainAfter = TimeSpan.FromMinutes(10);
+    // How many presses are remembered as taken, across restarts.
+    public const int TakenKept = 32;
 
     // Shared with Settings, whose checks and downloads it reports too.
     readonly ObservedUpdater updater;
@@ -48,6 +55,14 @@ public sealed class AutoUpdater
     readonly TimeProvider time;
     DateTimeOffset? checkedAt;
     DateTimeOffset foundAt;
+    // When the install being carried out was pressed: its six hours run from no earlier than that.
+    DateTimeOffset installAskedAt;
+    // The last check's end, and its failure if it failed, which a press soon after is answered with.
+    DateTimeOffset? lastCheckAt;
+    string? lastCheckFailed;
+    string? lastFailure;
+    // When the last download failed, of which release.
+    (string Release, DateTimeOffset At)? downloadFailed;
     DateTimeOffset? idleSince;
     string? lastWhyNot;
     int busy;
@@ -126,7 +141,7 @@ public sealed class AutoUpdater
 
     string WaitingFor()
     {
-        var until = $"; it installs anyway at {(foundAt + WaitAtMost).ToLocalTime():g}";
+        var until = $"; it installs anyway at {(WaitFrom() + WaitAtMost).ToLocalTime():g}";
         if (lastWhyNot is { } why) { return why; }
         return Idle ? $"no session has been busy for {IdleFor.TotalMinutes:0} minutes yet{until}"
             : $"a session on this machine has a turn running or a question waiting{until}";
@@ -137,9 +152,13 @@ public sealed class AutoUpdater
     // The tick it starts, which is already done if one was running (that one runs again for it).
     public Task Ask(UpdateAskKind kind, string request)
     {
+        // Taken before, by this app or the one before a restart: carried out once.
+        var taken = prefs().UpdateTaken ?? [];
+        if (taken.Contains(request)) { return Task.CompletedTask; }
+        save(prefs() with { UpdateTaken = [.. taken.Append(request).TakeLast(TakenKept)] });
         lock (asks)
         {
-            if (kind == UpdateAskKind.Install) { installRequest = request; installVetted = null; }
+            if (kind == UpdateAskKind.Install) { installRequest = request; installVetted = null; installAskedAt = time.GetUtcNow(); }
             else { checkRequest = request; }
         }
         log($"update: {(kind == UpdateAskKind.Install ? "install" : "check")} asked for");
@@ -200,8 +219,15 @@ public sealed class AutoUpdater
         if (!Idle) { idleSince = null; }
         else { idleSince ??= now; }
         if (!host.Sessions.Complete) { return false; }
-        return (idleSince is { } since && now - since >= IdleFor) || now - foundAt >= WaitAtMost;
+        return (idleSince is { } since && now - since >= IdleFor) || now - WaitFrom() >= WaitAtMost;
     }
+
+    // Where the six hours run from: the release first found, for an automatic install. For one a
+    // device pressed (automatic installs off), no earlier than the press: a release found by a
+    // check long before, and never installed by itself, must not go at once whatever the sessions
+    // are doing.
+    DateTimeOffset WaitFrom() =>
+        !prefs().AutoUpdate && Asked(UpdateAskKind.Install) is not null && installAskedAt > foundAt ? installAskedAt : foundAt;
 
     string? Asked(UpdateAskKind kind)
     {
@@ -287,7 +313,9 @@ public sealed class AutoUpdater
         // A check that cannot reach the network, a download cut off: tried again at the next check.
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            log($"auto-update: {e.Message}");
+            // Said once, not at every press answered with the same failure.
+            if (e.Message != lastFailure) { log($"auto-update: {e.Message}"); }
+            lastFailure = e.Message;
             checkedAt = time.GetUtcNow();
             installing = false;
             Changed();
@@ -302,8 +330,37 @@ public sealed class AutoUpdater
         string? found;
         try
         {
-            found = await updater.CheckAsync();
-            if (found is not null && updater.Ready != found) { await updater.DownloadAsync(_ => { }); }
+            // A check a moment ago answers: its release, or its failure.
+            if (lastCheckAt is { } at && now - at < CheckAgainAfter)
+            {
+                if (lastCheckFailed is { } failed) { throw new InvalidOperationException(failed); }
+                found = updater.Found;
+            }
+            else
+            {
+                try { found = await updater.CheckAsync(); }
+                catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+                {
+                    (lastCheckAt, lastCheckFailed) = (now, e.Message);
+                    throw;
+                }
+                // As of when it was asked: a press after that, a minute on, asks again.
+                (lastCheckAt, lastCheckFailed) = (now, null);
+            }
+            if (found is not null && updater.Ready != found)
+            {
+                if (downloadFailed is { } d && d.Release == found && now - d.At < DownloadAgainAfter)
+                {
+                    throw new InvalidOperationException($"downloading {found} failed {Words.Ago(d.At, now)}; it is tried again after {(d.At + DownloadAgainAfter).ToLocalTime():t}");
+                }
+                try { await updater.DownloadAsync(_ => { }); }
+                catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+                {
+                    downloadFailed = (found, time.GetUtcNow());
+                    throw;
+                }
+                downloadFailed = null;
+            }
         }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
@@ -319,7 +376,7 @@ public sealed class AutoUpdater
                 // half hour cannot put an update off for good.
                 if (Pending is null) { foundAt = now; }
                 Pending = found;
-                log($"auto-update: {found} downloaded; installing when no session is busy, or at {(foundAt + WaitAtMost).ToLocalTime():g}");
+                log($"auto-update: {found} downloaded; installing when no session is busy, or at {(WaitFrom() + WaitAtMost).ToLocalTime():g}");
             }
         }
         // A check asked for ends here: what it found is in the state (Available). Nothing newer

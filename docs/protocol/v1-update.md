@@ -23,7 +23,18 @@ reports to the devices, and their presses to its app. It decides who may press.
 | Not when the app is not running, or cannot update (a build folder rather than an installed copy) | Nothing would carry it out |
 
 Being asked stands in for the app's "Install updates automatically" switch, for that release:
-an asked install goes ahead with the switch off, by the same idle rules.
+an asked install goes ahead with the switch off, by the same idle rules. Its six hours run from
+no earlier than the press: a release a check found hours before, never installed by itself, still
+waits for the sessions.
+
+## How often
+
+| Limit | |
+|---|---|
+| Presses per device | Each device may have 3 presses of each kind taken in 10 minutes. The rest are refused (`"too many presses of Install from this device just now; try again in 7 minutes"`), and the host logs a refusal from a device at most once a minute |
+| The same press | A request sent again is the same press, before and for ten minutes after the app took it, and the app remembers the last 32 it took across restarts: none is carried out twice |
+| The feed | A press within a minute of the app's last check is answered from that check (its release, or its failure) without asking the feed again |
+| Downloads | A release whose download failed is not downloaded again for ten minutes, whoever presses; the press is answered `failed`, saying when it is tried again |
 
 ## Capability
 

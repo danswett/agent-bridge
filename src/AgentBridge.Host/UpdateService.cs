@@ -27,6 +27,13 @@ public sealed class UpdateService
     static readonly HashSet<string> PersonKinds = new(["pwa", "app"], StringComparer.Ordinal);
     public static readonly TimeSpan AskKept = TimeSpan.FromMinutes(10);
     public const int MaxAsks = 8;
+    // Each device may have this many presses of each kind taken in RateWindow; the rest are
+    // refused, saying when to try again. Every new press makes the app ask the feed (or answer
+    // from a check a minute old) and an Install look at the machine's processes again.
+    public const int RateLimit = 3;
+    public static readonly TimeSpan RateWindow = TimeSpan.FromMinutes(10);
+    // Devices remembered for the limit and for the log; the oldest is let go past this.
+    const int DevicesKept = 64;
     public const string NoApp = "the Agent Bridge app is not running on this machine, and it is what installs updates";
     public const string ThroughTheRelay = "updates are asked for from another device, through the relay; on this machine, use the app's Settings";
 
@@ -34,6 +41,13 @@ public sealed class UpdateService
     readonly TimeProvider time;
     readonly object gate = new();
     readonly List<UpdateAsk> asks = [];
+    // Presses taken, by request, for AskKept: one sent again after the app took it is the same
+    // press, not a new one.
+    readonly Dictionary<string, DateTimeOffset> taken = new(StringComparer.Ordinal);
+    // Each device's presses taken in RateWindow, by kind, and when each device's refusal was last
+    // logged.
+    readonly Dictionary<(string Peer, UpdateAskKind Kind), Queue<DateTimeOffset>> pressed = [];
+    readonly Dictionary<string, DateTimeOffset> refusalLogged = new(StringComparer.Ordinal);
     readonly Dictionary<IProtocolChannel, Subscriber> subscribers = [];
     Func<IReadOnlyList<PresenceEntry>>? presence;
     IProtocolChannel? app;
@@ -81,7 +95,7 @@ public sealed class UpdateService
     // host.update.report, from the app on this machine's pipe (LocalApi lets nothing else send it).
     public object Report(IProtocolChannel channel, UpdateReport report)
     {
-        var taken = false;
+        var took = false;
         lock (gate)
         {
             if (app != channel)
@@ -90,10 +104,15 @@ public sealed class UpdateService
                 _ = channel.Closed.ContinueWith(_ => Gone(channel), TaskScheduler.Default);
             }
             reported = UpdateProtocol.Fit(report.State);
-            foreach (var request in report.Taken ?? []) { taken |= asks.RemoveAll(a => a.Request == request) > 0; }
+            foreach (var request in report.Taken ?? [])
+            {
+                if (asks.RemoveAll(a => a.Request == request) == 0) { continue; }
+                took = true;
+                this.taken[request] = time.GetUtcNow();
+            }
             version++;
         }
-        if (taken) { AsksChanged?.Invoke(); }
+        if (took) { AsksChanged?.Invoke(); }
         Push();
         return new { ok = true };
     }
@@ -139,20 +158,29 @@ public sealed class UpdateService
         var by = $"{who.Kind} {peer[..8]}";
         bool added;
         UpdateState state;
+        string? tooMany = null;
         lock (gate)
         {
             Prune();
             if (app is null || reported is null) { return Refused(peer, name, NoApp); }
             if (!reported.Installer) { return Refused(peer, name, reported.Unavailable ?? "this copy of the app was not installed by its updater, so it cannot update"); }
-            // A resend of the same press is the same ask.
-            added = asks.All(a => a.Request != request);
-            if (added)
+            // A resend of the same press is the same ask, whether or not the app has taken it.
+            added = asks.All(a => a.Request != request) && !taken.ContainsKey(request);
+            if (added && Limited(peer, kind) is { } again)
             {
-                asks.Add(new UpdateAsk(request, kind, by, time.GetUtcNow()));
+                tooMany = $"too many presses of {(kind == UpdateAskKind.Install ? "Install" : "Check")} from this device just now; try again {again}";
+                added = false;
+            }
+            else if (added)
+            {
+                var now = time.GetUtcNow();
+                asks.Add(new UpdateAsk(request, kind, by, now));
                 if (asks.Count > MaxAsks) { asks.RemoveAt(0); }
+                pressed[(peer, kind)].Enqueue(now);
             }
             state = StateLocked();
         }
+        if (tooMany is not null) { return Refused(peer, name, tooMany); }
         if (added)
         {
             log($"update {(kind == UpdateAskKind.Install ? "install" : "check")} asked for by {by}");
@@ -163,15 +191,44 @@ public sealed class UpdateService
 
     UpdateCommandResult Refused(string peer, string op, string why)
     {
-        log($"{op} refused from {peer[..Math.Min(8, peer.Length)]}: {why}");
+        // At most one line a minute for each device: a device pressing over and over fills no log.
+        bool say;
+        lock (gate)
+        {
+            var now = time.GetUtcNow();
+            say = !refusalLogged.TryGetValue(peer, out var at) || now - at >= TimeSpan.FromMinutes(1);
+            if (say)
+            {
+                refusalLogged[peer] = now;
+                if (refusalLogged.Count > DevicesKept) { refusalLogged.Remove(refusalLogged.MinBy(p => p.Value).Key); }
+            }
+        }
+        if (say) { log($"{op} refused from {peer[..Math.Min(8, peer.Length)]}: {why}"); }
         return new UpdateCommandResult(UpdateAck.Refused, why) { State = State() };
     }
 
-    // Under the gate: an ask the app has not taken in AskKept (it was not running, or hung) goes.
+    // Under the gate: when this device may press this kind again, in words, or null if it may now.
+    string? Limited(string peer, UpdateAskKind kind)
+    {
+        var now = time.GetUtcNow();
+        if (!pressed.TryGetValue((peer, kind), out var times))
+        {
+            pressed[(peer, kind)] = times = new Queue<DateTimeOffset>();
+            if (pressed.Count > DevicesKept) { pressed.Remove(pressed.MinBy(p => p.Value.Count > 0 ? p.Value.Peek() : DateTimeOffset.MinValue).Key); }
+        }
+        while (times.Count > 0 && now - times.Peek() >= RateWindow) { times.Dequeue(); }
+        if (times.Count < RateLimit) { return null; }
+        var minutes = Math.Max(1, (int)Math.Ceiling((times.Peek() + RateWindow - now).TotalMinutes));
+        return $"in {minutes} minute{(minutes == 1 ? "" : "s")}";
+    }
+
+    // Under the gate: an ask the app has not taken in AskKept (it was not running, or hung) goes,
+    // and so does the memory of one it took.
     void Prune()
     {
         var now = time.GetUtcNow();
         asks.RemoveAll(a => now - a.At > AskKept);
+        foreach (var (request, at) in taken.Where(t => now - t.Value > AskKept).ToList()) { taken.Remove(request); }
     }
 
     // As usage.subscribe: the state now, then update.state whenever it changes, nothing ahead of

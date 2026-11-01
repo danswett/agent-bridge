@@ -97,6 +97,9 @@ public sealed record AppPreferences
     // last update asked for or installed ended, for the host to tell the account's devices.
     public string? UpdateRequest { get; init; }
     public UpdateResult? LastUpdate { get; init; }
+    // The presses from other devices this app has taken on, the latest last: one the host still
+    // lists after the app restarts (its report that it took them lost) is not carried out twice.
+    public IReadOnlyList<string>? UpdateTaken { get; init; }
     public string? Relay { get; init; }
     // The installed app's first run turned on starting at sign-in (the host's logon task and
     // the app's Run entry); after that they are the person's to turn off and stay off.

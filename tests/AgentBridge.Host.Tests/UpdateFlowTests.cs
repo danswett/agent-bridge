@@ -188,6 +188,45 @@ public sealed class UpdateFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_device_pressing_over_and_over_is_refused_after_a_few_and_may_press_again_later()
+    {
+        await ReportAsync(Reported);
+        var ch = await OpenAsync();
+        for (var i = 0; i < UpdateService.RateLimit; i++)
+        {
+            Assert.Equal(UpdateAck.Accepted, Read<UpdateCommandResult>(Result(await AskAsync(ch, UpdateProtocol.Install))).Outcome);
+        }
+
+        var refused = Read<UpdateCommandResult>(Result(await AskAsync(ch, UpdateProtocol.Install)));
+        Assert.Equal((UpdateAck.Refused, "too many presses of Install from this device just now; try again in 10 minutes"), (refused.Outcome, refused.Reason));
+        // Each kind has its own count.
+        Assert.Equal(UpdateAck.Accepted, Read<UpdateCommandResult>(Result(await AskAsync(ch, UpdateProtocol.Check))).Outcome);
+        Assert.Equal(UpdateService.RateLimit + 1, control.Status().UpdateAsks!.Count);
+        // Pressing on is refused without a log line each time.
+        for (var i = 0; i < 5; i++) { await AskAsync(ch, UpdateProtocol.Install); }
+        lock (log) { Assert.Single(log, l => l.Contains("refused")); }
+
+        time.Advance(UpdateService.RateWindow);
+        Assert.Equal(UpdateAck.Accepted, Read<UpdateCommandResult>(Result(await AskAsync(ch, UpdateProtocol.Install))).Outcome);
+    }
+
+    [Fact]
+    public async Task A_press_sent_again_after_the_app_took_it_is_the_same_press_not_a_new_one()
+    {
+        await ReportAsync(Reported);
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+        await AskAsync(ch, UpdateProtocol.Install, request);
+        await ReportAsync(Reported, request);
+        var changes = Volatile.Read(ref asksChanged);
+
+        Assert.Equal(UpdateAck.Accepted, Read<UpdateCommandResult>(Result(await AskAsync(ch, UpdateProtocol.Install, request))).Outcome);
+
+        Assert.Null(control.Status().UpdateAsks);
+        Assert.Equal(changes, Volatile.Read(ref asksChanged));
+    }
+
+    [Fact]
     public async Task The_Windows_app_on_another_machine_may_ask_too_but_a_machine_may_not()
     {
         await ReportAsync(Reported);

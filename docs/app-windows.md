@@ -189,7 +189,11 @@ into one folder with one version. An app update is a host update, so they never 
   version reports `updated`, or `failed` if it did not take, and the devices see it; an
   automatic install that fails is reported `failed` too. Settings and the automatic updates
   share one `ObservedUpdater`, so a check or download from Settings is reported as well, and a
-  release whose download failed is still reported as there. The host
+  release whose download failed is still reported as there. A pressed install's six hours run
+  from no earlier than the press. A press within a minute of the last check is answered from it,
+  a failed download is not tried again for ten minutes, and the presses taken are remembered
+  across restarts (`updateTaken`) so none is carried out twice; the host takes at most three
+  presses of each kind from a device in ten minutes ([v1-update.md](protocol/v1-update.md#how-often)). The host
   takes these presses only through the relay, only from a device listed as a person's (`pwa` or
   `app`, never a machine), and none on a read-only machine (`delivery.readOnly`, or
   agent-ha-bridge running, G5): those rules are #112's for Home Assistant's Install button.

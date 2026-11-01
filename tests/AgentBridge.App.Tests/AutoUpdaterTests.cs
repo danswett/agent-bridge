@@ -696,6 +696,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         // The feed changed, or pre-releases were turned off: nothing newer now.
         updater.Found = null;
         updater.Ready = null;
+        time.Advance(AutoUpdater.CheckAgainAfter);
         await AskedAsync(UpdateAskKind.Check, "9b8c7d6e-5f40-4321-8abc-def012345678");
 
         Assert.Null(auto.State.Available);
@@ -764,6 +765,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         var first = auto.Ask(UpdateAskKind.Check, Press);
         await Wait.UntilAsync(() => updater.Checks == 1, "the first check under way");
+        // A minute on, so the first check does not answer for it.
+        time.Advance(AutoUpdater.CheckAgainAfter);
         await auto.Ask(UpdateAskKind.Check, Second);
         updater.CheckGate.SetResult();
         await first;
@@ -793,6 +796,92 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Equal((0, 0), (updater.Checks, updater.Downloads));
         Assert.Equal((UpdateOutcome.Refused, others), (auto.State.Last!.Outcome, auto.State.Last.Reason));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_install_pressed_hours_after_the_release_was_found_still_waits_for_the_busy_sessions(bool automaticWhenFound)
+    {
+        prefs = prefs with { AutoUpdate = automaticWhenFound };
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        // Found by a check pressed from a device, or by the automatic updates, which were then
+        // turned off: either way never installed by itself.
+        if (automaticWhenFound) { await auto.TickAsync(); } else { await AskedAsync(UpdateAskKind.Check); }
+        Assert.Equal("0.2.0", auto.Pending);
+        prefs = prefs with { AutoUpdate = false };
+
+        time.Advance(AutoUpdater.WaitAtMost + TimeSpan.FromHours(1));
+        await AskedAsync(UpdateAskKind.Install, "9b8c7d6e-5f40-4321-8abc-def012345678");
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal(UpdatePhase.Waiting, auto.State.Phase);
+        Assert.Contains("a session on this machine has a turn running", auto.State.Waiting);
+
+        // Six hours from the press, it goes as an automatic one would.
+        processes.OnStart = () => host.Start();
+        time.Advance(AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+        Assert.True(updater.Applied);
+    }
+
+    [Fact]
+    public async Task Presses_within_a_minute_of_a_check_are_answered_from_it_without_asking_the_feed_again()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        updater.Found = null;
+        await StartAsync();
+
+        await AskedAsync(UpdateAskKind.Check);
+        await AskedAsync(UpdateAskKind.Check, "9b8c7d6e-5f40-4321-8abc-def012345678");
+        await AskedAsync(UpdateAskKind.Install, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
+        Assert.Equal(1, updater.Checks);
+        Assert.Equal((UpdateOutcome.Current, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"), (auto.State.Last!.Outcome, auto.State.Last.Request));
+
+        time.Advance(AutoUpdater.CheckAgainAfter);
+        await AskedAsync(UpdateAskKind.Check, "1b2c3d4e-5f60-4b7c-8d9e-0f1a2b3c4d5e");
+        Assert.Equal(2, updater.Checks);
+    }
+
+    [Fact]
+    public async Task A_download_that_failed_is_not_tried_again_for_a_while_however_often_a_device_presses()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        updater.DownloadFails = new IOException("the connection was reset");
+        await StartAsync();
+        await AskedAsync(UpdateAskKind.Install);
+        Assert.Equal(1, updater.Downloads);
+
+        time.Advance(TimeSpan.FromMinutes(2));
+        await AskedAsync(UpdateAskKind.Install, "9b8c7d6e-5f40-4321-8abc-def012345678");
+        Assert.Equal(1, updater.Downloads);
+        Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
+        Assert.Contains("tried again after", auto.State.Last.Reason);
+
+        updater.DownloadFails = null;
+        time.Advance(AutoUpdater.DownloadAgainAfter);
+        await AskedAsync(UpdateAskKind.Check, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
+        Assert.Equal(2, updater.Downloads);
+    }
+
+    [Fact]
+    public async Task A_press_taken_before_the_app_restarted_is_not_carried_out_again()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        updater.Found = null;
+        await StartAsync();
+        await AskedAsync(UpdateAskKind.Check);
+        Assert.Equal(1, updater.Checks);
+
+        // The app restarted while the host still listed the press (the report it was taken lost).
+        var restarted = new AutoUpdater(updater, connection, manager, () => prefs, p => prefs = p, log.Add, _ => null, time);
+        time.Advance(AutoUpdater.CheckAgainAfter);
+        await restarted.Ask(UpdateAskKind.Check, Press);
+
+        Assert.Equal(1, updater.Checks);
     }
 
     [Fact]
