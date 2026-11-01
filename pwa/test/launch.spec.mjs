@@ -294,6 +294,23 @@ test.describe('a folder-trust question', () => {
     await expect(field(page, 'prompt')).toHaveValue('Add pagination, then tests.');
   });
 
+  test('a launch pressed again and busy on the question the first one met still clears the message the first one sent', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page,
+      { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: QUESTION },
+      { outcome: 'busy', reason: 'a session this machine launched is waiting at its folder trust prompt', trust: QUESTION });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
+    await launchButton(page).tap();
+    await expect(panel(page)).toHaveAttribute('data-launch', 'busy');
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
+    await expect(field(page, 'prompt')).toHaveValue('');
+  });
+
   test('a question this panel\'s launch did not meet, trusted, leaves the first message being written', async ({ page }) => {
     await openDemo(page);
     await ask(page, QUESTION);

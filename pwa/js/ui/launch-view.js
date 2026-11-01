@@ -595,12 +595,12 @@ export class LaunchPanel {
     if (answer.result.outcome === 'started') {
       // The launch from here that started the agent asking this question has now started: its
       // first message went with it, as with a launch that starts at once, and must not go again
-      // with the next launch. Only that launch (unconfirmed: a busy one named another's question
-      // and sent nothing), and only its message unchanged: what is written since stays.
-      const launched = this.service.get(hostId);
-      if (launched?.state === 'done' && launched.outcome === 'unconfirmed' && launched.detail?.trust?.id === id && this.els.prompt.value === (launched.answer?.prompt ?? '')) {
-        this.els.prompt.value = '';
-        this.#drawCount();
+      // with the next launch. Only that launch, however many busy ones (which send nothing)
+      // came after it, and only its message unchanged: what is written since stays.
+      const launched = this.#asked.get(hostId);
+      if (launched?.question === id) {
+        this.#asked.delete(hostId);
+        if (this.els.prompt.value === launched.prompt) { this.els.prompt.value = ''; this.#drawCount(); }
       }
       if (answer.result.session) { this.#jumpTo(answer.result.session, hostId); }
     }
@@ -618,7 +618,14 @@ export class LaunchPanel {
   // it says whether the question it named still waits.
   #track(hostId, entry) {
     if (entry?.state === 'done' && hostId && this.#results.get(hostId)?.request !== entry.request) { this.#results.set(hostId, { request: entry.request, loads: this.#loads, superseded: false }); }
+    // A launch that started an agent now asking about its folder, by machine: the question, and
+    // the first message that went with it. A later busy launch naming it does not replace it.
+    if (entry?.state === 'done' && hostId && entry.outcome === 'unconfirmed' && entry.detail?.trust?.id) {
+      this.#asked.set(hostId, { question: entry.detail.trust.id, prompt: entry.answer?.prompt ?? '' });
+    }
   }
+
+  #asked = new Map();
 
   #settled(entry) {
     const hostId = entry?.hostId ?? this.#target?.hostId;
