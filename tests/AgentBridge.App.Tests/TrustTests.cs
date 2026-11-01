@@ -112,6 +112,40 @@ public sealed class TrustTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_launch_that_starts_on_Trust_clears_its_prompt_and_a_question_it_did_not_meet_leaves_it()
+    {
+        remoteTrust = [];
+        remoteHost.On(LaunchProtocol.Launch, _ =>
+        {
+            remoteTrust = [Question()];
+            return new LaunchResult(LaunchOutcome.Unconfirmed, "Codex started, and is asking whether to trust there") { Trust = Question() };
+        });
+        link.Set(FleetState.Connected, ("remote-id", "Build server"), ("host-id", "Test PC"));
+        var page = LaunchPage.Open(main, ui);
+        await Wait.UntilAsync(() => page.Machines.Count == 2, "both machines");
+        ui.Post(() => page.SelectedMachine = page.Machines.Single(m => m.Value == "remote-id"));
+        await Wait.UntilAsync(() => page.CanLaunch, "the form");
+        ui.Post(() => page.Prompt = "fix the build");
+        ui.Post(page.Launch);
+        await Wait.UntilAsync(() => page.TrustQuestions.Count == 1 && page.TrustQuestions[0].CanAnswer, "the question");
+
+        remoteTrust = [];
+        ui.Post(page.TrustQuestions[0].Trust);
+        await Wait.UntilAsync(() => page.TrustQuestions.Count == 0 || page.TrustQuestions[0].State == "started", "started");
+        await Wait.UntilAsync(() => page.Prompt == "", "the prompt cleared");
+
+        // A question asked at the machine, answered here: what is being written stays.
+        remoteTrust = [Question() with { Id = "q-2" }];
+        answer = _ => new TrustAnswerResult(TrustAnswerOutcome.Started) { Session = "there-2" };
+        ui.Post(() => page.Prompt = "add tests");
+        await page.RefreshAsync();
+        await Wait.UntilAsync(() => page.TrustQuestions.Any(q => q.Id == "q-2" && q.CanAnswer), "the other question");
+        ui.Post(page.TrustQuestions.Single(q => q.Id == "q-2").Trust);
+        await Wait.UntilAsync(() => page.TrustQuestions.Single(q => q.Id == "q-2").State == "started", "it started");
+        Assert.Equal("add tests", page.Prompt);
+    }
+
+    [Fact]
     public async Task Quit_says_the_agent_was_not_trusted_and_closed()
     {
         answer = _ => new TrustAnswerResult(TrustAnswerOutcome.Declined, "Codex was not trusted with there, and closed; nothing was launched");

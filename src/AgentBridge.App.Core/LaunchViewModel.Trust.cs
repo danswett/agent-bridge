@@ -297,7 +297,15 @@ public sealed partial class LaunchViewModel
         if (d.State != DeliveryState.Done) { return; }
         var answer = trustAnswers.Values.FirstOrDefault(a => a.Request == d.Request);
         if (answer is null || !trustHandled.Add(d.Request)) { return; }
-        if (TrustOutcome(d) == "started" && TrustResult(d)?.Session is { } id) { main.Open(answer.Machine, id, untilItArrives: true); }
+        if (TrustOutcome(d) == "started")
+        {
+            // The launch from here that met this question has now started: its prompt went with it,
+            // as for a launch that starts at once, and must not go again with the next launch. Only
+            // that prompt: one typed since stays.
+            if (lastMachine?.Key == answer.Machine && last is { State: DeliveryState.Done, Payload: LaunchRequest sent } && Result(last)?.Trust?.Id == answer.Question.Id
+                && (string.IsNullOrWhiteSpace(prompt) ? null : prompt) == sent.Prompt) { Prompt = ""; }
+            if (TrustResult(d)?.Session is { } id) { main.Open(answer.Machine, id, untilItArrives: true); }
+        }
         // Its busy and its questions have changed.
         if (machine?.Key == answer.Machine && shown) { _ = RefreshAsync(); }
     }
