@@ -592,7 +592,13 @@ export class LaunchPanel {
     if (this.#target?.hostId !== hostId) { return; }
     this.#drawTrust();
     if (answer.state !== 'done') { return; }
-    if (answer.result.outcome === 'started' && answer.result.session) { this.#jumpTo(answer.result.session, hostId); }
+    if (answer.result.outcome === 'started') {
+      // The launch from here that met this question has now started: its first message has gone,
+      // as a launch that starts at once clears it, and must not go again with the next launch.
+      const launched = this.service.get(hostId);
+      if (launched?.state === 'done' && launched.detail?.trust?.id === id) { this.els.prompt.value = ''; this.#drawCount(); }
+      if (answer.result.session) { this.#jumpTo(answer.result.session, hostId); }
+    }
     // The machine's list, and whether it is still busy, have changed.
     this.refresh();
   }

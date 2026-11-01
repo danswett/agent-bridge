@@ -261,11 +261,23 @@ test.describe('a folder-trust question', () => {
     await card(page).getByRole('button', { name: 'Trust' }).tap();
     await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
     await expect(card(page).getByRole('button', { name: 'Trust' })).toHaveCount(0);
+    // Its first message went with it, so it is not sent again with the next launch.
+    await expect(field(page, 'prompt')).toHaveValue('');
     const [sent] = await trustLog(page);
     expect(sent.question).toBe(QUESTION.id);
     expect(sent.choice).toBe('trust');
     const body = JSON.parse(Buffer.from(sent.command.body, 'base64url').toString('utf8'));
     expect(body).toMatchObject({ v: 1, action: 'launch.trust:trust', principal: { kind: 'user' }, target: { session: QUESTION.id } });
+  });
+
+  test('a question this panel\'s launch did not meet, trusted, leaves the first message being written', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, QUESTION);
+    await openPanel(page);
+    await field(page, 'prompt').fill('Add pagination.');
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
+    await expect(field(page, 'prompt')).toHaveValue('Add pagination.');
   });
 
   test('Quit says the agent was not trusted and closed', async ({ page }) => {
