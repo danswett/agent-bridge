@@ -258,6 +258,21 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    public void A_closed_listener_leaves_whatever_is_at_its_path_by_then_alone()
+    {
+        // The runtime deletes a UnixDomainSocketEndPoint's path when its socket is disposed, after
+        // closing it, when the path may already be the next server's (#151).
+        if (OperatingSystem.IsWindows()) { return; }
+        var listener = LocalServer.Bind(Endpoint.Address);
+        File.Delete(Endpoint.Address);
+        File.WriteAllText(Endpoint.Address, "the next server's");
+
+        listener.Dispose();
+
+        Assert.True(File.Exists(Endpoint.Address));
+    }
+
+    [Fact]
     public async Task Closing_the_server_ends_its_connections_and_fails_what_is_outstanding()
     {
         var release = new TaskCompletionSource();
