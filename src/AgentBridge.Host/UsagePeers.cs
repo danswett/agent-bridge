@@ -54,8 +54,9 @@ public sealed class UsagePeers : IAsyncDisposable
         var old = Interlocked.Exchange(ref link, next);
         if (old is not null) { old.Relay.PresenceChanged -= OnPresence; }
         if (next is null) { return; }
-        // A host signed in to another account keeps none of the first one's readings.
-        if (next.Relay.AccountId is { Length: > 0 } account) { store.Bind(account); }
+        // The store is not bound here: the account is, as the host signs in (Program.cs, before the
+        // new account is published), and a connection made before that sign-in, attached after it,
+        // would bind it back to the account before. Its answers are refused instead (Take's forAccount).
         next.Relay.PresenceChanged += OnPresence;
         Wake();
     }

@@ -312,6 +312,22 @@ public sealed class UsageSharingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_connection_from_before_a_sign_in_attached_after_it_takes_nothing_for_the_account_before()
+    {
+        var desk = await HostAsync("Desk", [() => Copilot(40, Now)]);
+        var vm = await HostAsync("Rehearsal VM", [() => Claude(41.3, Now.AddMinutes(-4))]);
+        await SeeAsync(desk.Device, vm.Device.Id);
+
+        // The desk signs in to another account while its connection to this one is being made, and
+        // that connection is attached after.
+        desk.Store.Bind("another-account");
+        desk.Peers.Attach(desk.Device.Relay, desk.Device.Hub);
+        Assert.Equal(1, await desk.Peers.PassAsync());
+
+        Assert.Empty(desk.Store.Entries);
+    }
+
+    [Fact]
     public void Readings_kept_for_one_account_are_never_served_to_another()
     {
         var store = PeerUsage.Load(folder, Id('d'), "1", time);

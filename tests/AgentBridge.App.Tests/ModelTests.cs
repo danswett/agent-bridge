@@ -203,6 +203,27 @@ public sealed class UsageTests
     }
 
     [Fact]
+    public void Every_allowance_reported_is_shown_though_only_thirty_two_are_kept()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "abuc-" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            var clock = new FakeTimeProvider(Now);
+            var vm = new UsageViewModel(clock, new UsageCache(file, clock));
+            var reader = new UsageReader(new string('a', 32), "Laptop");
+            vm.Update(new UsageReport([.. Enumerable.Range(0, 33).Select(i => Agent($"Account{i}", 10, Now.AddMinutes(-i)) with { ReadBy = reader })]), account: "1");
+            Assert.Equal(33, vm.Rows.Count);
+
+            var restarted = new UsageViewModel(clock, new UsageCache(file, clock));
+            restarted.Update(UsageReport.Empty, account: "1");
+            Assert.Equal(32, restarted.Rows.Count);
+            // The one read longest ago is the one not kept.
+            Assert.DoesNotContain(restarted.Rows, r => r.Detail.StartsWith("account32", StringComparison.Ordinal));
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
     public void A_reading_past_two_weeks_does_not_hide_a_current_failure_of_the_same_allowance()
     {
         var clock = new FakeTimeProvider(Now);

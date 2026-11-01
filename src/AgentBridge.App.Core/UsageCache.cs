@@ -83,12 +83,11 @@ public sealed class UsageCache
         if (account is "" || (account is null && this.account is null)) { return live; }
         // Live first: of two readings taken at the same moment, the one a machine is offering now.
         // A reading and a newer failure are kept apart, each with its own time; as many allowances
-        // as a host keeps, the one read longest ago going first.
-        var merged = UsageMerge.Latest([live, new UsageReport([.. entries.Where(Stands)])])
-            .GroupBy(UsageShare.Key).OrderByDescending(g => g.Max(e => e.MeasuredAt)).Take(MaxAllowances)
-            .SelectMany(g => g).ToList();
+        // as a host keeps, the one read longest ago going first. The cap is on what is kept only:
+        // everything that stands is shown.
+        var merged = UsageMerge.Latest([live, new UsageReport([.. entries.Where(Stands)])]);
         if (account is null) { return new UsageReport(merged); }
-        entries = merged;
+        entries = [.. merged.GroupBy(UsageShare.Key).OrderByDescending(g => g.Max(e => e.MeasuredAt)).Take(MaxAllowances).SelectMany(g => g)];
         Save();
         return new UsageReport(merged);
     }
