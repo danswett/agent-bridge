@@ -66,12 +66,14 @@ export class SessionsPage {
     this.replies = new ReplyService({ current, ...timing, blobs });
     this.stops = new StopService({ current, ...timing });
     this.launches = new LaunchService({ current, ...timing });
-    // A launch is remembered by the machine it went to: the next one starts there.
-    this.launches.onAny((e) => { if (e.state === 'sending') { this.#rememberLaunch(e.hostId); } });
     this.launchPanel = new LaunchPanel($('launch'), {
       service: this.launches,
       jump: (id, hostId) => this.showSession(id, hostId),
       pick: (hostId) => { this.#rememberLaunch(hostId); this.#drawLaunch(); },
+      // A launch is remembered by the machine it was pressed for: the next one starts there.
+      // At the press, not when it is sent: one resent after its machine comes back must not
+      // take the picker from a machine picked since.
+      launched: (hostId) => this.#rememberLaunch(hostId),
     });
     this.view = new SessionListView($('session-list'), hosts.sessions, {
       fetchDetail: (hostId, id) => {

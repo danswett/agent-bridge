@@ -220,3 +220,31 @@ test('a machine remembered from a demo with more machines says it is offline, an
   await row(page, 'demo').click();
   await expect(page.locator('.session')).toHaveCount(4);
 });
+
+test('a launch resent when its machine comes back does not take the picker from a machine picked since', async ({ page }) => {
+  await openDemo(page, { machines: 2 });
+  const panel = page.locator('#launch');
+  await panel.locator('.launch-toggle').click();
+  const which = panel.locator('select[name="machine"]');
+  await which.selectOption(LAPTOP);
+  await expect(panel.locator('[name="agent"]')).toBeVisible();
+  // The laptop drops away just as Launch is pressed: the launch waits for it.
+  await page.evaluate(() => {
+    const laptop = window.agentBridgeDemo.machines['demo-laptop'];
+    laptop.failOpen = 'the handshake timed out';
+    laptop.disconnect();
+  });
+  await expect(page.locator(`#host-state [data-host-id="${LAPTOP}"]`)).toBeVisible();
+  await panel.getByRole('button', { name: 'Launch' }).click();
+  await expect(panel).toHaveAttribute('data-launch', 'waiting');
+  await which.selectOption('demo');
+  await expect(panel.locator('.launch-title')).toHaveText('Start a session on Demo machine');
+
+  await page.evaluate(() => { window.agentBridgeDemo.machines['demo-laptop'].failOpen = null; });
+  await row(page, 'all').click();
+  await expect.poll(() => machine(page, LAPTOP, 'launchLog').then((l) => l.length)).toBe(1);
+  // Drawn again, as any later change in the machines would.
+  await page.evaluate(() => window.agentBridgeDemo.retarget());
+  await expect(which).toHaveValue('demo');
+  await expect(panel.locator('.launch-title')).toHaveText('Start a session on Demo machine');
+});

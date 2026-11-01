@@ -80,8 +80,9 @@ export class LaunchPanel {
 
   // root: the #launch section. service: a LaunchService. jump(sessionId, hostId): shows a
   // session's card, true once it is on screen. pick(hostId): another machine was picked.
-  constructor(root, { service, jump = () => false, pick = () => {} }) {
-    Object.assign(this, { root, service, jump, pick });
+  // launched(hostId): Launch was pressed for that machine.
+  constructor(root, { service, jump = () => false, pick = () => {}, launched = () => {} }) {
+    Object.assign(this, { root, service, jump, pick, launched });
     this.#build();
   }
 
@@ -361,6 +362,7 @@ export class LaunchPanel {
       if (this.#selection !== selection) { return; }
     }
     this.#jumped = null;
+    this.launched(target.hostId);
     this.service.submit({ hostId: target.hostId, launch });
   }
 
