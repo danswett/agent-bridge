@@ -139,7 +139,7 @@ test('a kept reading outlives the machine that read it, saying which machine tha
   book.useCache({ entries: [], save: (e) => { kept = e; } });
   book.set('vm-id', { agents: [claude()] }, 'Rehearsal VM');
   book.set('desk-id', { agents: [reading()] }, 'Desk');
-  assert.deepEqual(kept.map((e) => [e.agent, e.readBy.name]), [['claude', 'Rehearsal VM'], ['copilot', 'Desk']]);
+  assert.deepEqual(kept.map((e) => [e.agent, e.readBy.name]).sort(), [['claude', 'Rehearsal VM'], ['copilot', 'Desk']]);
 
   // Another visit: no machine has said anything yet, and the VM never will.
   const later = new UsageBook({ now: () => NOW + 2 * H });

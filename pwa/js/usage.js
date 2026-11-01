@@ -8,6 +8,7 @@ export const USAGE = Object.freeze({ capability: 'usage', shared: 'usage.shared'
 // How long a reading is kept, by a host for the account's other machines and by this app for the
 // account (#172): a fortnight-old figure is history, not usage.
 export const KEPT_MS = 14 * 86400000;
+export const KEPT_MAX = 32;
 
 const AGENTS = ['copilot', 'claude', 'codex'];
 const SOURCES = ['api', 'cache', 'transcript', 'none'];
@@ -245,7 +246,7 @@ export class UsageBook {
   // save(entries) is called with every change to what is kept.
   useCache({ entries = [], save = () => {} } = {}) {
     const oldest = this.now() - KEPT_MS;
-    this.#kept = readUsage({ agents: Array.isArray(entries) ? entries : [] }).agents.filter((a) => (Date.parse(a.measuredAt ?? '') || 0) >= oldest);
+    this.#kept = readUsage({ agents: Array.isArray(entries) ? entries.slice(0, KEPT_MAX) : [] }).agents.filter((a) => (Date.parse(a.measuredAt ?? '') || 0) >= oldest);
     this.#saved = JSON.stringify(this.#kept);
     this.#cache = { save };
     this.#keep();
@@ -257,6 +258,9 @@ export class UsageBook {
     const oldest = this.now() - KEPT_MS;
     this.#kept = combineUsage([...this.#live(), { agents: this.#kept }])
       .filter((e) => e.at >= oldest)
+      // As many allowances as a host keeps (PeerUsage), the one read longest ago going first.
+      .sort((x, y) => y.at - x.at)
+      .slice(0, KEPT_MAX)
       .map(({ key, at, ...a }) => a);
     const text = JSON.stringify(this.#kept);
     // Every report from every machine passes through here; most change nothing kept.

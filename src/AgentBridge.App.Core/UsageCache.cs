@@ -11,6 +11,8 @@ namespace AgentBridge.App.Core;
 public sealed class UsageCache
 {
     public static readonly TimeSpan Kept = TimeSpan.FromDays(14);
+    // Allowances kept at most, as a host keeps them (PeerUsage); past this the one read longest ago goes.
+    public const int MaxAllowances = 32;
 
     readonly string? path;
     readonly TimeProvider time;
@@ -29,7 +31,7 @@ public sealed class UsageCache
             if (path is not null && File.Exists(path) && JsonSerializer.Deserialize<Saved>(File.ReadAllText(path), ProtocolJson.Options) is { Account: { Length: > 0 } a } s)
             {
                 account = a;
-                entries = [.. (s.Readings ?? []).Where(e => e is not null)];
+                entries = [.. (s.Readings ?? []).Where(e => e is not null).Take(MaxAllowances)];
                 saved = Serialize();
             }
         }
@@ -51,7 +53,8 @@ public sealed class UsageCache
         }
         else if (account is null && this.account is null) { return live; }
         // Live first: of two readings taken at the same moment, the one a machine is offering now.
-        var merged = UsageMerge.Combine([live, new UsageReport(entries)]).Where(e => e.MeasuredAt >= oldest).ToList();
+        var merged = UsageMerge.Combine([live, new UsageReport(entries)]).Where(e => e.MeasuredAt >= oldest)
+            .OrderByDescending(e => e.MeasuredAt).Take(MaxAllowances).ToList();
         if (account is null) { return new UsageReport(merged); }
         entries = merged;
         Save();

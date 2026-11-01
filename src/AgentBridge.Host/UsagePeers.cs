@@ -192,7 +192,7 @@ public sealed class UsagePeers : IAsyncDisposable
         if (!response.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
         {
             var error = response.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
-            throw new HostErrorException(Limits.KeepStart(error, 200) ?? "refused");
+            throw new HostErrorException(Limits.KeepStart(error is null ? null : new string([.. error.Where(c => !char.IsControl(c))]), 200) ?? "refused");
         }
         return response.GetProperty("result").Deserialize<T>(ProtocolJson.Options) ?? throw new JsonException("no result");
     }

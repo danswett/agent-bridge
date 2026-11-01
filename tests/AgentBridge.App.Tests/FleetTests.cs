@@ -429,11 +429,13 @@ public sealed class FleetTests : IAsyncLifetime
         await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
         await localHost.SendAsync(UsageProtocol.Update, copilot);
         await remoteHost.SendAsync(UsageProtocol.Update, claude);
-        await Wait.UntilAsync(() => main.Usage.Rows.Count == 2, "both machines' usage");
-        UsageRowViewModel Claude() => main.Usage.Rows.Single(r => r.Agent == AgentKind.Claude);
-        Assert.Equal("read on Build server", Claude().ReadOn);
+        await Wait.UntilAsync(() => main.Usage.Rows.Count == 2 && local.Status?.Account is not null, "both machines' usage, and this machine's account");
+        // Read as the UI thread would: the rows are redrawn on it whenever anything changes.
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        UsageRowViewModel Row(AgentKind agent) => OnUi(() => main.Usage.Rows.Single(r => r.Agent == agent));
+        await Wait.UntilAsync(() => Row(AgentKind.Claude).ReadOn == "read on Build server", "the build server's reading, marked as its");
         // This machine's own reading needs no saying where it came from.
-        Assert.Null(main.Usage.Rows.Single(r => r.Agent == AgentKind.Copilot).ReadOn);
+        Assert.Null(Row(AgentKind.Copilot).ReadOn);
 
         // The build server goes offline, and two hours pass.
         link.Set(FleetState.Connected, ("host-id", "Test PC"));
@@ -441,7 +443,8 @@ public sealed class FleetTests : IAsyncLifetime
         clock.Advance(TimeSpan.FromHours(2));
         ui.Post(main.Usage.Refresh);
 
-        Assert.Equal(("41%", "read on Build server", "2h ago", true), (Claude().Windows[0].PercentText, Claude().ReadOn, Claude().Age, Claude().Stale));
+        var kept = Row(AgentKind.Claude);
+        Assert.Equal(("41%", "read on Build server", "2h ago", true), (kept.Windows[0].PercentText, kept.ReadOn, kept.Age, kept.Stale));
 
         // And after the app restarts, before any machine has said anything.
         var restarted = new UsageViewModel(clock, new UsageCache(cacheFile, clock));
