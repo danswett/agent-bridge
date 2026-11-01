@@ -577,5 +577,6 @@ public class SubagentTests
             Copilot.Permission("r1", "c9", Copilot.Prompts["commands"], 60)]);
 
         Assert.Equal(("a1", "a1"), (cold.Question!.Agent, cold.WaitingOn));
+        Assert.Equal(1, cold.Activity.Background!.Agents);
     }
 }

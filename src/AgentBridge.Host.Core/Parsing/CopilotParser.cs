@@ -455,6 +455,8 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         var id = prompt.QuestionId;
         _permissionQuestion[prompt.RequestId] = id;
         var agent = stamped ?? (prompt.ToolCallId is { } call ? S.Tools.Find(call)?.Agent ?? S.Background.CallAgent(call) : null);
+        // An agent asking is working, though a cold read may have seen nothing else of its run.
+        if (agent is not null) { S.Background.AgentActive(agent, at); }
         S.Ask(QuestionMapper.Approval(id, prompt.Message, at, atMachine: !remoteApproval || prompt.AtMachine is not null) with { Agent = agent });
     }
 
