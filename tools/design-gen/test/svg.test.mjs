@@ -91,3 +91,15 @@ test('a length in percent or a unit is refused, since XAML geometry takes only p
   assert.throws(() => readDesignSvg(svgFile('vb', '<circle cx="8" cy="8" r="5" fill="currentColor"/>', 'viewBox="0 0 16px 16px"'), 'glyph'), /square viewBox/);
   assert.doesNotThrow(() => readDesignSvg(svgFile('ok', '<path d="M2 8L14 8" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2,1e0" opacity=".5"/>'), 'glyph'));
 });
+
+test('a cap or join XAML has no equal, and a transform with the wrong count of numbers, are refused', () => {
+  const line = (extra) => `<path d="M2 8L14 8" stroke="currentColor" ${extra}/>`;
+  assert.throws(() => readDesignSvg(svgFile('miterclip', line('stroke-linejoin="miter-clip"')), 'glyph'), /not one of miter, round, bevel/);
+  assert.throws(() => readDesignSvg(svgFile('inherit', line('stroke-linecap="inherit"')), 'glyph'), /not one of butt, round, square/);
+  assert.throws(() => readDesignSvg(svgFile('rootjoin', line(''), 'viewBox="0 0 16 16" stroke-linejoin="arcs"'), 'glyph'), /not one of/);
+  const g = (t) => `<g transform="${t}">${line('')}</g>`;
+  assert.throws(() => readDesignSvg(svgFile('rot0', g('rotate()')), 'glyph'), /rotate\(\) takes 1 or 3 numbers, not 0/);
+  assert.throws(() => readDesignSvg(svgFile('rot2', g('rotate(45 8)')), 'glyph'), /takes 1 or 3 numbers, not 2/);
+  assert.throws(() => readDesignSvg(svgFile('tr3', g('translate(1 2 3)')), 'glyph'), /translate\(\) takes 1 or 2 numbers, not 3/);
+  assert.doesNotThrow(() => readDesignSvg(svgFile('fine', g('rotate(45 8 8) translate(1)')), 'glyph'));
+});

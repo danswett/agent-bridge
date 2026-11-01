@@ -108,7 +108,9 @@ Rules:
   `hc`, `hcVariants` and `surface.windows.hc`).
 - **Contrast:** status glyphs reach 3:1 against their surface, and text in a role colour
   reaches 4.5:1, on every surface and on every role's fill over it (`tokens.json`
-  `color.contrast`, checked by `tools/design-gen`'s tests). That is why light Needs you is `#B87700` rather than the brighter `#E8A10C` (2.20:1 on the
+  `color.contrast`, checked by `tools/design-gen`'s tests). Words on a tint (`subtle`,
+  `selected`) are text, text2 or Bridge, and a tint never sits on a role fill: code in a
+  question takes the card colour. That is why light Needs you is `#B87700` rather than the brighter `#E8A10C` (2.20:1 on the
   card), light `text3` is 0.58 rather than 0.52 (#183), and iOS light secondary text is
   `rgba(60,60,67,0.76)` rather than UIKit's 0.60.
 

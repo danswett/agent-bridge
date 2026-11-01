@@ -20,11 +20,22 @@ export function contrastPairs(tokens) {
     // A role's fill is a surface of its own (the question card), over each of the others.
     const fills = roles.filter((r) => r.variant === 'fill')
       .flatMap((f) => bgs.map((b) => ({ name: `${f.role}.fill on ${b.name}`, colour: over(f[theme], b.colour) })));
+    // A tint (inline code, a read-only field, a machine row, a badge) over the surfaces it sits
+    // on, measured only with the words color.contrast.tints lets on it.
+    const tintRules = rules.tints ?? {};
+    const tints = Object.keys(tintRules).filter((k) => k !== 'over' && !k.startsWith('$')).flatMap((name) => {
+      const t = surfaces.find((x) => x.name === name);
+      if (!t) { throw new Error(`color.contrast.tints names ${name}, which surface.windows lacks`); }
+      return bgs.filter((b) => tintRules.over.includes(b.name))
+        .map((b) => ({ name: `${name} on ${b.name}`, colour: over(t[theme], b.colour), allows: tintRules[name] }));
+    });
     const add = (fg, fgName, bg, bgName, kind) => out.push({
       theme, fg: fgName, bg: bgName, kind, min: rules[kind], ratio: contrast(fg, bg),
     });
     const everywhere = (fg, fgName, kind) => {
-      for (const b of [...bgs, ...(notOnFills.has(fgName) ? [] : fills)]) { add(fg, fgName, b.colour, b.name, kind); }
+      for (const b of [...bgs, ...(notOnFills.has(fgName) ? [] : fills), ...tints.filter((t) => t.allows.includes(fgName))]) {
+        add(fg, fgName, b.colour, b.name, kind);
+      }
     };
     for (const role of new Set(roles.map((r) => r.role))) {
       const own = roles.filter((r) => r.role === role);

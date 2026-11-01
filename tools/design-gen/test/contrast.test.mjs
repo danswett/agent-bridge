@@ -48,3 +48,12 @@ test('the check finds danger set as words on the dark needs fill, which is why w
   const found = failures(contrastPairs(asRole));
   assert.ok(found.some((p) => p.theme === 'dark' && p.fg === 'danger' && p.bg === 'needs.fill on card' && p.kind === 'text' && p.ratio < 3.8), found.map(describe).join('; '));
 });
+test('words on a tint are measured on it over each surface it sits on, and only the words it allows', () => {
+  const onTint = pairs.filter((p) => p.bg.startsWith('subtle on ') || p.bg.startsWith('selected on '));
+  assert.ok(onTint.some((p) => p.theme === 'light' && p.fg === 'bridge' && p.bg === 'subtle on card' && p.kind === 'text'));
+  assert.ok(!onTint.some((p) => p.fg === 'surface.text3' || p.bg.includes('fill')), 'text3 and role fills are not on a tint');
+  // text3 is 4.48:1 on subtle over the dark card, which is why a tint does not allow it.
+  const wider = structuredClone(tokens);
+  wider.color.contrast.tints.subtle.push('surface.text3');
+  assert.ok(failures(contrastPairs(wider)).some((p) => p.theme === 'dark' && p.fg === 'surface.text3' && p.bg === 'subtle on card'));
+});

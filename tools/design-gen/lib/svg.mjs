@@ -154,7 +154,12 @@ function parseTransform(t, file) {
     const a = m[2].split(/[\s,]+/).filter(Boolean);
     if (!a.every((v) => PLAIN.test(v))) { throw new Error(`${file}: transform "${t}" must use plain numbers`); }
     a.forEach((v, i) => { a[i] = Number(v); });
-    if (m[1] === 'rotate') { ops.push({ rotate: a[0], cx: a[1] ?? 0, cy: a[2] ?? 0 }); } else if (m[1] === 'translate') { ops.push({ tx: a[0], ty: a[1] ?? 0 }); } else { throw new Error(`${file}: transform ${m[1]}() is not in the design subset`); }
+    // rotate(a) or rotate(a cx cy), translate(x) or translate(x y): any other count would be NaN
+    // in the geometry, or an argument silently dropped.
+    const counts = { rotate: [1, 3], translate: [1, 2] }[m[1]];
+    if (!counts) { throw new Error(`${file}: transform ${m[1]}() is not in the design subset`); }
+    if (!counts.includes(a.length)) { throw new Error(`${file}: ${m[1]}() takes ${counts.join(' or ')} numbers, not ${a.length}`); }
+    if (m[1] === 'rotate') { ops.push({ rotate: a[0], cx: a[1] ?? 0, cy: a[2] ?? 0 }); } else { ops.push({ tx: a[0], ty: a[1] ?? 0 }); }
   }
   if (t.replace(/(\w+)\s*\(([^)]*)\)/g, '').trim()) { throw new Error(`${file}: cannot read transform "${t}"`); }
   return ops;
@@ -228,8 +233,11 @@ const ALLOWED = new Set([...INHERITED, 'class', 'transform', 'opacity', 'stroke-
 const PLAIN = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
 const NUMERIC = new Set(['cx', 'cy', 'r', 'x', 'y', 'width', 'height', 'rx', 'ry', 'x1', 'y1', 'x2', 'y2',
   'stroke-width', 'opacity', 'stroke-opacity', 'fill-opacity']);
-function checkNumbers(attrs, file, tag) {
+function checkValues(attrs, file, tag) {
   for (const [k, v] of Object.entries(attrs)) {
+    // The values both clients draw the same: XAML has no miter-clip or arcs join, for one.
+    const keyword = { 'stroke-linecap': ['butt', 'round', 'square'], 'stroke-linejoin': ['miter', 'round', 'bevel'] }[k];
+    if (keyword && !keyword.includes(v)) { throw new Error(`${file}: ${k}="${v}" on <${tag}> is not one of ${keyword.join(', ')}`); }
     const list = k === 'stroke-dasharray' && v !== 'none' ? v.split(/[\s,]+/).filter(Boolean) : NUMERIC.has(k) ? [v.trim()] : [];
     if (list.length === 0 && k === 'stroke-dasharray' && v !== 'none') { throw new Error(`${file}: ${k}="${v}" on <${tag}> is not a list of plain numbers`); }
     for (const n of list) { if (!PLAIN.test(n)) { throw new Error(`${file}: ${k}="${v}" on <${tag}> must be a plain number, in the viewBox's units`); } }
@@ -260,14 +268,14 @@ export function readDesignSvg(file, kind) {
   }
   const rootStyle = {};
   // Its width and height only size the file; the parts inherit its stroke width and dashes.
-  checkNumbers(Object.fromEntries(Object.entries(root.attrs).filter(([k]) => INHERITED.includes(k))), file, 'svg');
+  checkValues(Object.fromEntries(Object.entries(root.attrs).filter(([k]) => INHERITED.includes(k))), file, 'svg');
   for (const k of INHERITED) { if (root.attrs[k] !== undefined) { rootStyle[k] = root.attrs[k]; } }
   checkColour(root.attrs.fill, [], file, 'fill');
   checkColour(root.attrs.stroke, [], file, 'stroke');
 
   const walk = (node, inherited, classes, ops) => {
     for (const k of Object.keys(node.attrs)) { if (!ALLOWED.has(k)) { throw new Error(`${file}: attribute ${k} is not in the design subset`); } }
-    checkNumbers(node.attrs, file, node.tag);
+    checkValues(node.attrs, file, node.tag);
     const own = (node.attrs.class ?? '').split(/\s+/).filter(Boolean);
     for (const c of own) { if (!PART_CLASSES.includes(c)) { throw new Error(`${file}: class "${c}" is not one design/README.md defines`); } }
     const all = [...classes, ...own];

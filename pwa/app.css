@@ -362,6 +362,9 @@ summary {
 .md ul, .md ol { padding-left: 1.4em; }
 .md h4, .md h5, .md h6 { margin: 12px 0 4px; font-size: 1rem; }
 .md code { font: .86em var(--ab-font-mono); background: var(--ab-subtle); padding: 1px 4px; border-radius: 4px; }
+/* Never a tint on a role fill: a linked `code` in a question would be bridge at 4.41:1 on subtle
+   over the light needs fill (design/tokens.json color.contrast.tints). */
+.question .md pre, .question .md :not(pre) > code { background: var(--ab-card); }
 .md pre { background: var(--ab-subtle); padding: 10px; border-radius: 8px; overflow-x: auto; border: 1px solid var(--ab-stroke2); }
 /* Wrapped, not scrolled: a long command or a base64 blob breaks across lines on a phone
    rather than running off the side. pre-wrap keeps indentation; Copy takes the real text. */

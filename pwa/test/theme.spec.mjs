@@ -55,6 +55,17 @@ for (const scheme of ['light', 'dark']) {
       return getComputedStyle(p).color;
     });
     expect(error).toBe(rgb(role.danger[`text${scheme === 'light' ? 'Light' : 'Dark'}`]));
+    // Nor is code in it on a tint: a linked `code` would be bridge on subtle over the needs fill.
+    const code = await copilot.locator('.question').first().evaluate((q) => {
+      const md = document.createElement('div');
+      md.className = 'md';
+      const a = md.appendChild(document.createElement('a'));
+      a.href = '#x';
+      a.appendChild(document.createElement('code')).textContent = 'npm test';
+      q.append(md);
+      return getComputedStyle(a.firstChild).backgroundColor;
+    });
+    expect(code).toBe(rgb(surface[scheme].card));
     expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
   });
 }
