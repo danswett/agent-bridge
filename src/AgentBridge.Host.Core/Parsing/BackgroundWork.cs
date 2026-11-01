@@ -123,18 +123,25 @@ internal sealed class BackgroundWork
     {
         var key = agentId ?? callId;
         if (key is null) { return null; }
-        if (callId is not null) { _agentByCall[callId] = key; }
+        if (callId is not null)
+        {
+            // One agent id started under ever new call ids would otherwise grow this for good.
+            if (!_agentByCall.ContainsKey(callId) && _agentByCall.Count >= 2 * Keep) { _agentByCall.Remove(_agentByCall.Keys.First()); }
+            _agentByCall[callId] = key;
+        }
         if (!_agents.TryGetValue(key, out var agent)) { agent = Add(key); }
         var call = callId is not null && _calls.Remove(callId, out var c) ? c : null;
         var name = Text.Title(call?.Description ?? info?.DisplayName ?? info?.AgentType);
+        var model = Limits.KeepStart(Text.NonBlank(info?.Model), Limits.SubagentName);
         var changed = agent.Background != background || (name is not null && agent.Name != name)
-            || (info?.Model is { } m && agent.Model != m);
+            || (model is not null && agent.Model != model);
         agent.CallId = callId ?? agent.CallId;
         agent.Background = background;
-        agent.Parent = info?.Parent ?? call?.Parent ?? agent.Parent;
+        agent.Parent = Limits.KeepStart(info?.Parent ?? call?.Parent, Limits.SubagentName) ?? agent.Parent;
         agent.Name = name ?? agent.Name;
-        agent.Task = call?.Prompt ?? agent.Task;
-        agent.Model = Text.NonBlank(info?.Model) ?? agent.Model;
+        // Kept cut: an entry lives as long as its session, and a transcript line can be huge.
+        agent.Task = Limits.KeepStart(call?.Prompt, Limits.SubagentTask) ?? agent.Task;
+        agent.Model = model ?? agent.Model;
         if (changed) { Version++; }
         return agent;
     }
@@ -150,12 +157,12 @@ internal sealed class BackgroundWork
     // for an agent whose task call was outside the window.
     public void AgentPrompt(string agentId, string? text)
     {
-        if (_agents.TryGetValue(agentId, out var agent) && agent.Task is null && Text.NonBlank(text) is { } t) { agent.Task = t; }
+        if (_agents.TryGetValue(agentId, out var agent) && agent.Task is null && Text.NonBlank(text) is { } t) { agent.Task = Limits.KeepStart(t, Limits.SubagentTask); }
     }
 
     public void AgentModel(string agentId, string? model)
     {
-        if (!_agents.TryGetValue(agentId, out var agent) || Text.NonBlank(model) is not { } m || agent.Model == m) { return; }
+        if (!_agents.TryGetValue(agentId, out var agent) || Limits.KeepStart(Text.NonBlank(model), Limits.SubagentName) is not { } m || agent.Model == m) { return; }
         agent.Model = m;
         Version++;
     }
