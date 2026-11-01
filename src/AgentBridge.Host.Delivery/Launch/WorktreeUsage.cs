@@ -221,7 +221,11 @@ public sealed partial class AgentWorktreeUsage : IWorktreeUsage
                 accounted.Add(pid);
             }
         }
-        if (live.Keys.Any(pid => !accounted.Contains(pid)))
+        // Codex's app-server daemon is no session and works in no folder, and it outlives the
+        // session that started it: required to have a registration, it kept every finished worktree
+        // from a machine's first Codex session on (#154). Discovery accounts it the same way. A
+        // registration that does name one still counts its folder above.
+        if (live.Any(p => !accounted.Contains(p.Key) && !(kind == AgentKind.Codex && CommandLine.IsCodexAppServer(p.Value.CommandLine))))
         {
             throw new UsageUnknown($"a live {name} process has no registration");
         }

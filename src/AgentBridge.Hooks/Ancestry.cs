@@ -38,6 +38,19 @@ public static partial class Ancestry
         return [];
     }
 
+    // The process that started pid, where the OS will say (Windows and Linux); null when it
+    // has gone, cannot be asked, or on macOS.
+    public static int? ParentOf(int pid)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows()) { return WindowsParent(pid); }
+            if (OperatingSystem.IsLinux()) { return LinuxParent(pid); }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ExternalException or DllNotFoundException or EntryPointNotFoundException) { }
+        return null;
+    }
+
     // Follows parent links from pid, for at most max processes. Stops at a process it cannot
     // look up, at the root, and at a loop.
     public static int[] Walk(int pid, int max, Func<int, int?> parentOf)

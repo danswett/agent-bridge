@@ -391,6 +391,7 @@ public sealed class HookRunnerTests : IDisposable
         Assert.DoesNotContain(Environment.ProcessId, chain);
         using var parent = System.Diagnostics.Process.GetProcessById(chain[0]);
         Assert.False(parent.HasExited);
+        Assert.Equal(chain[0], Ancestry.ParentOf(Environment.ProcessId));
     }
     [Fact]
     public void Two_hooks_that_open_the_log_at_the_same_end_both_keep_their_record()

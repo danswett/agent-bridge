@@ -81,7 +81,10 @@ public sealed class SystemProcessInspector : IProcessInspector
                     DateTimeOffset? started = null;
                     try { started = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero); }
                     catch (Exception e) when (e is InvalidOperationException or Win32Exception or NotSupportedException) { }
-                    listing.Add(new(candidate, id, started, CommandLineOf((id, started?.UtcTicks ?? 0))));
+                    // Only the agent's own executable is asked for its parent: that is the
+                    // loader to recognise in Classify.
+                    var parent = candidate is "node" or "bun" ? null : AgentBridge.Hooks.Ancestry.ParentOf(id);
+                    listing.Add(new(candidate, id, started, CommandLineOf((id, started?.UtcTicks ?? 0)), parent));
                 }
             }
         }
@@ -102,7 +105,7 @@ public sealed class SystemProcessInspector : IProcessInspector
         return observation;
     }
 
-    internal sealed record ListedProcess(string Candidate, int Id, DateTimeOffset? StartedAt, string? CommandLine);
+    internal sealed record ListedProcess(string Candidate, int Id, DateTimeOffset? StartedAt, string? CommandLine, int? Parent = null);
 
     // What a listing of candidate processes says about this agent, apart from reading the
     // machine, so the filtering is testable. Kept are the processes whose cached command
@@ -114,9 +117,17 @@ public sealed class SystemProcessInspector : IProcessInspector
         var unidentified = new List<AgentProcess>();
         var kept = new List<ListedProcess>();
         var known = listed;
-        foreach (var process in listing)
+        var all = listing.ToList();
+        // An npm install runs the agent as a node loader (npm-loader.js, codex.js) that starts
+        // the agent's own executable and waits on it. The executable is the session's process:
+        // it holds Copilot's lock and is what the hooks record. Counted as well, the loader was a
+        // process with no session: discovery held for two minutes after every launch and every
+        // restart, and worktree reclaim never ran while a session started by hand was open (#153).
+        var loaders = all.Where(p => p.Candidate is not ("node" or "bun") && p.Parent is > 0)
+            .Select(p => (Id: p.Parent!.Value, Child: p.StartedAt)).ToList();
+        foreach (var process in all)
         {
-            var (candidate, id, started, commandLine) = process;
+            var (candidate, id, started, commandLine, _) = process;
             // Another user's agent is none of this user's sessions, and nothing of it can
             // be read: taken for one, it held discovery for as long as it ran (#143).
             if (commandLine is null && windows && anotherUsers(id)) { continue; }
@@ -132,6 +143,16 @@ public sealed class SystemProcessInspector : IProcessInspector
                 continue;
             }
             if (candidate is "node" or "bun" && !IsAgentScript(agent, name, commandLine)) { continue; }
+            // A loader whose own agent executable is listed: that executable stands for it. Both
+            // start times must be known, and the loader's no later than its child's, with no
+            // slack: a pid the loader left behind and another agent's runtime took even a moment
+            // after the child started is that agent's session, and must stay counted.
+            if (candidate is "node" or "bun" && started is { } loaderStarted
+                && loaders.Any(l => l.Id == id && l.Child is { } child && loaderStarted <= child)
+                && IsLoaderScript(agent, commandLine))
+            {
+                continue;
+            }
             found.Add(new AgentProcess(id, started, commandLine));
         }
         return (new(found, known) { Listed = listed, Unidentified = unidentified }, kept);
@@ -149,6 +170,43 @@ public sealed class SystemProcessInspector : IProcessInspector
     // calls itself claude.exe even on macOS.
     internal static string[] CandidateNames(string name) =>
         OperatingSystem.IsWindows() ? [name, "node", "bun"] : [name, name + ".exe", "node", "bun"];
+
+    // The scripts npm installs that only start the agent's own executable and wait on it.
+    // Anything else run in node may be a session of its own, even when it starts one more.
+    // Outside Windows npm runs them through a link in its bin folder (`node /usr/local/bin/codex`),
+    // so a script given by path is followed to what it links to; one that cannot be followed is
+    // not taken for a loader, and stays counted.
+    internal static bool IsLoaderScript(AgentKind agent, string? commandLine, Func<string, string?>? resolveLink = null)
+    {
+        var loader = agent switch
+        {
+            AgentKind.Copilot => "/@github/copilot/npm-loader.js",
+            AgentKind.Codex => "/@openai/codex/bin/codex.js",
+            _ => null,
+        };
+        if (loader is null || string.IsNullOrEmpty(commandLine)) { return false; }
+        resolveLink ??= LinkTarget;
+        // Only the script node runs: the first argument after the runtime that is not one of its
+        // options. A loader's path anywhere later (in a prompt, say) is not what the process runs.
+        // An option that takes a separate value makes that value look like the script, which then
+        // matches nothing, so the process stays counted.
+        var arguments = CommandLine.Split(commandLine);
+        if (arguments.Skip(1).FirstOrDefault(a => !a.StartsWith('-')) is not { } script) { return false; }
+        return IsLoader(script, loader) || (Path.IsPathRooted(script) && resolveLink(script) is { } target && IsLoader(target, loader));
+
+        static bool IsLoader(string path, string loader)
+        {
+            var file = path.Replace('\\', '/');
+            while (file.Contains("//", StringComparison.Ordinal)) { file = file.Replace("//", "/", StringComparison.Ordinal); }
+            return file.EndsWith(loader, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    static string? LinkTarget(string path)
+    {
+        try { return File.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
+    }
 
     internal static bool IsAgentScript(AgentKind agent, string name, string? commandLine)
     {
