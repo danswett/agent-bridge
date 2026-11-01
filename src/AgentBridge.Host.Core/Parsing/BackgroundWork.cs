@@ -100,7 +100,9 @@ internal sealed class BackgroundWork
         if (callId is null) { return; }
         var args = arguments is { ValueKind: JsonValueKind.Object } a ? a : default;
         if (_calls.Count >= KeepCalls) { _calls.Remove(_calls.Keys.First()); }
-        _calls[callId] = new TaskCall(Text.NonBlank(Json.Str(args, "description")), Text.NonBlank(Json.Str(args, "prompt")), starter);
+        // Cut as it is kept: the skim takes these too, and a prompt can be huge.
+        _calls[callId] = new TaskCall(Limits.KeepStart(Text.NonBlank(Json.Str(args, "description")), 4 * Limits.SubagentName),
+            Limits.KeepStart(Text.NonBlank(Json.Str(args, "prompt")), Limits.SubagentTask), Limits.KeepStart(starter, Limits.SubagentName));
     }
 
     // A start seen only in the skimmed part of the transcript: the agent is worth knowing
@@ -242,7 +244,7 @@ internal sealed class BackgroundWork
     {
         if (callId is null || !_agentByCall.TryGetValue(callId, out var key) || !_agents.TryGetValue(key, out var agent) || agent.Completed) { return; }
         agent.Completed = true;
-        EndRun(agent, at, SubagentOutcome.Done);
+        Outcome(agent, at, SubagentOutcome.Done);
     }
 
     // The task call that started a task (sync) agent has returned: the agent is done, and
@@ -252,9 +254,21 @@ internal sealed class BackgroundWork
     {
         if (callId is null || !_agentByCall.TryGetValue(callId, out var key) || !_agents.TryGetValue(key, out var agent) || agent.Background) { return; }
         var outcome = succeeded ? SubagentOutcome.Done : SubagentOutcome.Failed;
-        EndRun(agent, at, outcome);
+        Outcome(agent, at, outcome);
         if (!succeeded && agent.Outcome != outcome) { agent.Outcome = outcome; Version++; }
         Finish(agent);
+    }
+
+    // How a run ended. One the window never saw start (its start only skimmed on a cold
+    // read) still ended, and when: without this it was listed with no outcome or end time,
+    // and sorted among the finished by when it began.
+    void Outcome(Agent agent, DateTimeOffset? at, SubagentOutcome outcome)
+    {
+        if (agent.Working) { EndRun(agent, at, outcome); return; }
+        if (agent.Outcome is not null) { return; }
+        agent.Outcome = outcome;
+        agent.EndedAt ??= at;
+        Version++;
     }
 
     // The agent a task call started, if known.
@@ -376,6 +390,15 @@ internal sealed class BackgroundWork
         if (any) { Version++; }
     }
 
+    // A delegate's model may have changed in bytes never read: the window says it, or nothing
+    // does, as for the session's own.
+    public void ForgetModels()
+    {
+        var any = false;
+        foreach (var a in _agents.Values.Where(a => a.Model is not null)) { a.Model = null; any = true; }
+        if (any) { Version++; }
+    }
+
     // The session's CLI shut down: everything it was running went with it. An agent cut off
     // mid-run failed; one between runs had finished its work.
     public void EndAll(DateTimeOffset? at = null)
@@ -429,9 +452,12 @@ internal sealed class BackgroundWork
 
     Subagent ToRecord(Agent a, DateTimeOffset? processStartedAt, IReadOnlySet<string> waiting)
     {
-        // A run its CLI did not outlive: nothing will say how it ended.
-        var stale = a.Working && !Live(a.Since, processStartedAt);
-        var status = stale ? SubagentStatus.Ended
+        // Its CLI is gone: a run it did not outlive, of which nothing will say how it ended,
+        // or a background agent between runs that no message can wake any more. That one
+        // finished its work, and keeps how and when.
+        var gone = !Live(a.Since, processStartedAt);
+        var stale = a.Working && gone;
+        var status = stale || (gone && a.Background) ? SubagentStatus.Ended
             : waiting.Contains(a.Id) ? SubagentStatus.Waiting
             : a.Working ? SubagentStatus.Working
             : a.Ended || !a.Background ? SubagentStatus.Ended

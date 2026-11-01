@@ -37,6 +37,10 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         Marker("\"session.model_change\""),
         Marker("\"session.shutdown\""),
         Marker("\"subagent.started\""),
+        // What a delegate was given, by whom, and its model since: a cold read whose window
+        // its start falls before still lists it with its task, nesting and current model.
+        Marker("\"task\""),
+        Marker("\"subagent.configured\""),
         // A shell's start, end or stop is in a tool result's text, and its completion in a
         // notification; agent-ha-bridge reads both from wherever they are.
         Marker("shellId: "),
@@ -103,6 +107,21 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "session.model_change" when !IsSubagent(e):
                 S.Model = Json.Str(data, "newModel") ?? S.Model;
                 break;
+            // A delegate's own, likewise: never the session's (#73).
+            case "session.model_change":
+                S.Background.AgentModel(Json.Str(e, "agentId")!, Json.Str(data, "newModel"));
+                break;
+            case "subagent.configured" when IsSubagent(e):
+                S.Background.AgentModel(Json.Str(e, "agentId")!, Json.Str(data, "model"));
+                break;
+            // The label and prompt of the agent it starts next, and who started it; not work.
+            case "tool.execution_start" when Json.Str(data, "toolName") == "task":
+                S.Background.TaskCalled(Json.Str(data, "toolCallId"), Json.Str(e, "agentId") is { Length: > 0 } starter ? starter : null, Json.Get(data, "arguments"));
+                break;
+            // A delegate's first message is the prompt it was started with.
+            case "user.message":
+                S.Background.AgentPrompt(Json.Str(e, "agentId")!, Json.Str(data, "content"));
+                break;
             case "subagent.started":
                 // What the agent is, not whether it is still working: its events in the parsed
                 // window say that, and one with none there is listed as finished.
@@ -142,11 +161,12 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     // past the skim budget); counted, it would read as running for as long as its CLI lives.
     // One started again or still running in the window is counted from there; a delegate's
     // likewise. The model may have changed there too, so it is left for the window (or the
-    // session's registration) to say rather than kept stale, and so is the main agent's own
-    // text.
+    // session's registration) to say rather than kept stale, a delegate's likewise, and so is
+    // the main agent's own text.
     public override void Skipped()
     {
         S.Background.ForgetShells();
+        S.Background.ForgetModels();
         S.Model = null;
         S.OwnResponse = null;
         S.OwnReasoning = null;

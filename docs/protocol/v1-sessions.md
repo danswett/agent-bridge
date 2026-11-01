@@ -925,7 +925,15 @@ that added `background`).
     `user.message` stamped with the agent's id, which is that prompt.
   * `model` is `subagent.started`'s, then its own `subagent.configured`,
     `session.model_change` and `assistant.message` (#73: never the session's).
-  * A run ends as for background agents above, with outcome `done`. A task agent is
+  * The starting `task` call, the first stamped `user.message`, `subagent.started` and the
+    model events are read from the skimmed part of the transcript too, so an agent started
+    before the parsed window keeps its name, task, parent and model. A model is dropped
+    when the host could not read everything before the window, as the session's is.
+  * An agent of a CLI process that has since been replaced is `ended`: mid-run with no
+    `outcome` or `endedAt`, since nothing will say how it went; between runs keeping both.
+  * A run ends as for background agents above, with outcome `done`. A run whose start
+    the host only skimmed still gets the `outcome` and `endedAt` of the event in the window
+    that ends it (a `task` call completing, `subagent.completed`). A task agent is
     `ended` when its run ends, or when its `task` call completes (`failed` if the call
     failed), or when the main agent's turn is aborted (`failed`) while it was that turn's:
     a task agent the main agent's `task` started, or one nested only under such agents. One a

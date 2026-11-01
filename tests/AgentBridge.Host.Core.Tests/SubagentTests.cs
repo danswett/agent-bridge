@@ -469,4 +469,55 @@ public class SubagentTests
         Assert.Equal(new ActivitySource { Reasoning = "a1" }, cold.Activity.Source);
         Assert.Equal("The delegate is on it.", cold.Activity.Own!.Response);
     }
+
+    [Fact]
+    public async Task A_host_starting_after_a_nested_task_agent_began_still_has_its_task_its_parent_and_how_it_ended()
+    {
+        await using var s = new Live(tailBytes: 4096);
+        var filler = Enumerable.Range(0, 8).Select(i => Copilot.Assistant("", 40 + i, reasoning: new string('x', 1000), agentId: "elsewhere")).ToArray();
+
+        var cold = await s.After([
+            .. Delegate("t1", "bg", 1),
+            Copilot.ToolStart("t2", "task", new { description = "Nested job", prompt = "Check the build" }, 3, "bg"),
+            Copilot.SubagentStarted("t2", "nested", 3, mode: "sync"), Copilot.User("Check the build", 3, "nested"),
+            .. filler,
+            Copilot.ToolDone("t2", 60, agentId: "bg"),
+        ]);
+
+        var nested = Entry(cold, "nested");
+        Assert.Equal(("Nested job", "Check the build", "bg"), (nested.Name, nested.Task, nested.Parent));
+        Assert.Equal((SubagentStatus.Ended, SubagentOutcome.Done, Fixture.T0.AddSeconds(60)), (nested.Status, nested.Outcome, nested.EndedAt));
+    }
+
+    [Fact]
+    public async Task A_host_starting_after_a_delegate_changed_model_shows_the_model_it_changed_to()
+    {
+        await using var s = new Live(tailBytes: 4096);
+        var filler = Enumerable.Range(0, 8).Select(i => Copilot.Assistant("", 40 + i, reasoning: new string('x', 1000), agentId: "elsewhere")).ToArray();
+
+        var cold = await s.After([
+            .. Delegate("t1", "a1", 1),
+            Copilot.Event("subagent.configured", new { model = "newer-model" }, 5, "a1"),
+            .. filler,
+            Copilot.ToolStart("c1", "view", new { path = "README.md" }, 60, "a1"),
+        ]);
+
+        Assert.Equal("newer-model", Entry(cold, "a1").Model);
+    }
+
+    [Fact]
+    public async Task A_background_agent_between_runs_ends_with_its_outcome_when_the_session_resumes_in_a_new_cli()
+    {
+        await using var s = new Live();
+        var idle = await s.After([.. Delegate("t1", "a1", 1), Copilot.Assistant("All done.", 5, agentId: "a1"), Copilot.TurnEnd(5, "a1")]);
+        Assert.Equal(SubagentStatus.Idle, Entry(idle, "a1").Status);
+
+        s.F.Processes.Exit(AgentKind.Copilot, 100);
+        s.F.Processes.Run(AgentKind.Copilot, 200, startedAt: Fixture.T0.AddSeconds(30));
+        s.F.CopilotSession(Id, 200, lockWrite: Fixture.T0.AddSeconds(31));
+        var resumed = await s.After(Copilot.Event("session.resume", new { resumeTime = Copilot.At(31) }, 31));
+        Assert.Equal(200, resumed.ProcessId);
+
+        Assert.Equal((SubagentStatus.Ended, SubagentOutcome.Done, Fixture.T0.AddSeconds(5)), (Entry(resumed, "a1").Status, Entry(resumed, "a1").Outcome, Entry(resumed, "a1").EndedAt));
+    }
 }
