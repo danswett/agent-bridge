@@ -111,15 +111,28 @@ public sealed class ShadowWitnessTests : IDisposable
     }
 
     [Fact]
-    public void A_restart_by_a_subagent_or_one_ended_again_is_not_put_down_to_the_daemon()
+    public void A_restart_by_a_subagent_one_ended_again_or_one_before_a_shutdown_is_not_put_down_to_the_daemon()
     {
         Write(Result("<command started in background with shellId: watch>"));
         Write(Result("<shellId: watch completed with exit code 0>"));
         var bySubagent = Write(Result("<command started in background with shellId: watch>", agentId: "agent-a"));
         Assert.Null(Known(Daemon(bySubagent), Host(shells: 1), ShadowKinds.BackgroundShells));
+        Write(Result("<shellId: watch completed with exit code 0>", agentId: "agent-a"));
+
+        // Found in review (#162): the session's own restart counts whatever is quoted about the id
+        // after it, and stops counting at the end that follows it, not at an earlier run's.
         Write(Result("<command started in background with shellId: watch>"));
+        var quoted = Write(Result("1. a line of the file\n<command with shellId: watch is still running after 30 seconds>\n3. and more of it"));
+        Assert.Equal("agent-ha-bridge#276", Known(Daemon(quoted), Host(shells: 1), ShadowKinds.BackgroundShells));
         var endedAgain = Write(Result("<shellId: watch completed with exit code 0>"));
         Assert.Null(Known(Daemon(endedAgain), Host(shells: 1), ShadowKinds.BackgroundShells));
+
+        // Found in review (#162): a restart before the session shut down is over; a fresh shell
+        // after it that the daemon does not list is a mismatch, not this restart.
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Event("session.shutdown", new { }));
+        var fresh = Write(Event("session.resume", new { }), Result("<command started in background with shellId: fresh>"));
+        Assert.Null(Known(Daemon(fresh), Host(shells: 1), ShadowKinds.BackgroundShells));
     }
 
     [Fact]

@@ -134,6 +134,8 @@ public sealed partial class TranscriptEvidence(string path)
     }
 
     readonly Dictionary<string, Shell> shells = new(StringComparer.Ordinal);
+    // Where the session itself last shut down: the host ends every shell there (BackgroundWork.EndAll).
+    long shutdownAt = -1;
     readonly Dictionary<string, Agent> agents = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> agentByCall = new(StringComparer.Ordinal);
     // Each tool call's first subagent.completed, where the daemon stops counting its agent.
@@ -303,6 +305,7 @@ public sealed partial class TranscriptEvidence(string path)
                 break;
             case "session.shutdown" when agentId is null:
                 foreach (var a in agents.Values) { a.Working = false; a.AskedForTools = false; a.IdleOwed = 0; }
+                shutdownAt = at;
                 break;
             case "abort" or "session.shutdown" when agentId is not null && agents.TryGetValue(agentId, out var ended):
                 EndRun(ended);
@@ -411,21 +414,23 @@ public sealed partial class TranscriptEvidence(string path)
             explained++;
         }
         var listed = daemon.ShellIds.ToHashSet(StringComparer.Ordinal);
-        var restarted = shells.Count(s => !listed.Contains(s.Key) && Restarted(s.Value, through));
+        var restarted = shells.Count(s => !listed.Contains(s.Key) && Restarted(s.Value, through, shutdownAt));
         if (restarted > 0) { issues.Add(276); }
         return explained + restarted > 0 && listed.Count - explained + restarted == host.Shells ? Name(issues) : null;
     }
 
     // Running again since an end of the same id, as the host counts it, and both read by the daemon:
-    // the session's own proper start after the last end, before the daemon's offset, and no end
-    // since. Seen on DEV-VM1 (#40): a pr-watch watcher completed and restarted 40 s later, with the
-    // daemon listing nothing from then on while its process ran (agent-ha-bridge#276).
-    static bool Restarted(Shell shell, long through)
+    // a proper start of the session's own after the last end and before the daemon's offset, no end
+    // since, and no shutdown since either (which ends every shell on the host). Other markers for
+    // the id since then (a quoted line, a subagent's) the host ignores, and any the daemon took
+    // would have listed it again. Seen on DEV-VM1 (#40): a pr-watch watcher completed and was
+    // restarted 40 s later, with the daemon listing nothing from then on while its process ran
+    // (agent-ha-bridge#276).
+    static bool Restarted(Shell shell, long through, long shutdownAt)
     {
         if (shell.Ends.Count == 0 || shell.Ends.Max() is var lastEnd && lastEnd >= through) { return false; }
         if (shell.DroppedThrough > lastEnd) { return false; }
-        var since = shell.Runs.Where(r => r.Last > lastEnd).ToList();
-        return since.Count > 0 && since.All(r => !r.Subagent && r.Kind == StartKind.Proper && r.First < through);
+        return shell.Runs.Any(r => r.First > lastEnd && r.First > shutdownAt && r.First < through && !r.Subagent && r.Kind == StartKind.Proper);
     }
 
     // The daemon counts fewer (or more) background agents than the host. Known when the host's
