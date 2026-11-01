@@ -39,6 +39,7 @@ import { checkAnswer } from './answers.js';
 import { checkReply, typedForm } from './replies.js';
 import { readQuestion } from './protocol.js';
 import { USAGE } from './usage.js';
+import { UPDATE } from './update.js';
 import { LAUNCH, TRUST, checkLaunch, flattenPrompt, trustAction } from './launch.js';
 import { TRANSFER, signTransfer, signTrust } from './transfer.js';
 import { P256KeyPair } from './noise-p256.js';
@@ -163,6 +164,12 @@ export class DemoHost {
   #trustScript = [];
   // This machine's static key, which a folder-trust answer is signed for.
   key = null;
+  // update.* (#51): what its app reports, every press as received, the next refusals, and how
+  // long each step of an update takes here.
+  update = null;
+  updateLog = [];
+  #updateScript = [];
+  updateStepMs = 400;
 
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
   // replying: false, one that can't reply; attaching: false, one that takes no files; large:
@@ -172,12 +179,16 @@ export class DemoHost {
   // a busy session waits for its second. usage: false plays a host from before usage.get;
   // launching: false, one that can't launch sessions; transferring: false, one that takes no
   // sessions from other machines. readOnly: why it takes nothing from the phone, as hello says.
-  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching } = {}) {
+  // updating: true plays a host whose app installs updates asked for from the phone (#51).
+  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false } = {}) {
     this.machine = { id: machineId, name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true, ...(readOnly ? { readOnly } : {}) };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : []), ...(updating ? [UPDATE.capability] : [])];
+    if (updating) {
+      this.update = { current: '0.1.0', installer: true, available: '0.2.0', notes: 'Updates from your phone', checkedAt: now(), phase: 'idle', automatic: false };
+    }
     this.sessions = new Map();
     for (const s of fixture.sessions ?? []) { this.sessions.set(s.id, s); }
     this.revision = fixture.revision ?? 1;
@@ -246,6 +257,17 @@ export class DemoHost {
       case TRUST.answer:
         if (!this.capabilities.includes(TRUST.capability)) { break; }
         return this.#answerTrust(data, reply);
+      case UPDATE.get:
+        if (!this.capabilities.includes(UPDATE.capability)) { break; }
+        return reply(clone(this.update));
+      case UPDATE.subscribe:
+        if (!this.capabilities.includes(UPDATE.capability)) { break; }
+        t.updateSubscribed = true;
+        return reply(clone(this.update));
+      case UPDATE.check:
+      case UPDATE.install:
+        if (!this.capabilities.includes(UPDATE.capability)) { break; }
+        return reply(this.#updateAsk(op, data));
       default:
         return t.deliver({ re: id, ok: false, error: `unknown op ${op}` });
     }
@@ -604,6 +626,39 @@ export class DemoHost {
   }
 
   #event(t, ev, data) { t.deliver({ ev, seq: ++this.seq, data }); }
+
+  // The next presses' refusals, in order (their reasons); none scripted, a press is taken.
+  scriptUpdates(reasons) { this.#updateScript.push(...reasons); }
+
+  // What the app reports, sent to every channel following it as update.state.
+  setUpdate(state) {
+    this.update = state;
+    for (const t of this.transports) { if (t.updateSubscribed) { this.#event(t, UPDATE.event, clone(state)); } }
+  }
+
+  // As the machine's app would: a check finds what it finds; an install downloads, installs
+  // and comes back on the new release, each step updateStepMs apart.
+  #updateAsk(op, data) {
+    this.updateLog.push({ op, request: data?.request ?? null });
+    const refused = this.#updateScript.shift();
+    if (refused) { return { outcome: 'refused', reason: refused, state: clone(this.update) }; }
+    const request = data?.request ?? null;
+    const step = (fn, after) => setTimeout(fn, after * this.updateStepMs);
+    if (op === UPDATE.check) {
+      this.setUpdate({ ...this.update, phase: 'checking', request });
+      step(() => this.setUpdate({ ...this.update, phase: 'idle', request: null, checkedAt: now() }), 1);
+      return { outcome: 'accepted', state: clone(this.update) };
+    }
+    const from = this.update.current;
+    const to = this.update.available;
+    this.setUpdate({ ...this.update, phase: 'downloading', progress: 50, request });
+    step(() => this.setUpdate({ ...this.update, phase: 'installing', progress: null }), 1);
+    step(() => this.setUpdate({
+      ...this.update, current: to, available: null, notes: null, phase: 'idle', request: null, checkedAt: now(),
+      last: { outcome: 'updated', from, to, request, at: now() },
+    }), 2);
+    return { outcome: 'accepted', state: clone(this.update) };
+  }
 
   // A new usage report, sent to every channel subscribed to usage as a host would.
   setUsage(report) {

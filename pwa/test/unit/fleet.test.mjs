@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { FleetStatus } from '../../js/fleet.js';
 import { UsageBook } from '../../js/usage.js';
 import { SessionsStore } from '../../js/sessions-store.js';
+import { readUpdateState } from '../../js/update.js';
 
 const flush = async () => { for (let i = 0; i < 10; i++) { await new Promise((r) => setImmediate(r)); } };
 const usage = (percent) => ({ agents: [{ agent: 'copilot', label: 'GitHub Copilot', account: 'octo', source: 'api', measuredAt: '2026-10-28T20:00:00.000Z', windows: [{ key: 'plan', label: 'Plan', percent }] }] });
@@ -43,6 +44,12 @@ function fakeClient(connection) {
     channel,
     async hello() { const h = connection.hosts[channel.id]; if (h.fail) { throw new Error('no answer'); } return { machine: h.machine, capabilities: h.capabilities }; },
     async usage() { return connection.hosts[channel.id].usage; },
+    async updateState() { return readUpdateState(connection.hosts[channel.id].update); },
+    async request(op, data) {
+      const h = connection.hosts[channel.id];
+      (h.requests ??= []).push({ op, data });
+      return h.answer?.(op, data) ?? {};
+    },
     close() { channel.close(); },
   });
 }
@@ -288,4 +295,74 @@ test('a machine shown that cannot show sessions is still looked at for its statu
   assert.deepEqual(connection.opened, ['old']);
   assert.equal(fleet.status('old'), '0.0.9');
   assert.equal(book.entries()[0].windows[0].percent, 25);
+});
+
+// Updates (#51): read with the look at each machine, followed on a machine shown, and looked at
+// every few seconds instead of every minute while one is under way.
+const found = { current: '0.4.0', installer: true, available: '0.5.0', phase: 'idle' };
+
+test("each machine's update state is read with its look, and dropped when it stops offering updates", async () => {
+  let now = 0;
+  const { connection, fleet } = fleetWith({ a: { machine: { hostVersion: '0.4.0' }, capabilities: ['update'], update: found } }, { now: () => now });
+  fleet.probe();
+  await fleet.idle();
+  assert.equal(fleet.update('a').available, '0.5.0');
+
+  // agent-ha-bridge started there: read-only, it offers none.
+  connection.hosts.a.capabilities = ['sessions.read'];
+  now = 60000;
+  fleet.probe();
+  await fleet.idle();
+  assert.equal(fleet.update('a'), null);
+});
+
+test('a machine whose update is under way is looked at every few seconds, and every minute once it is done', async () => {
+  let now = 0;
+  const { connection, fleet } = fleetWith({ a: { machine: { hostVersion: '0.4.0' }, capabilities: ['update'], update: { ...found, phase: 'downloading', progress: 10 } } }, { now: () => now });
+  fleet.probe();
+  await fleet.idle();
+  now = 10000;
+  fleet.probe();
+  await fleet.idle();
+  assert.deepEqual(connection.opened, ['a', 'a']);
+
+  connection.hosts.a.update = { ...found, phase: 'idle', available: null, current: '0.5.0', last: { outcome: 'updated', from: '0.4.0', to: '0.5.0', at: '2026-11-02T18:00:00.000Z' } };
+  now = 20000;
+  fleet.probe();
+  await fleet.idle();
+  now = 30000;
+  fleet.probe();
+  await fleet.idle();
+  assert.deepEqual(connection.opened, ['a', 'a', 'a']);
+  assert.equal(fleet.update('a').last.outcome, 'updated');
+});
+
+test("a machine shown is followed on its own channel, and a press goes on that channel; another machine's on a short one", async () => {
+  const { connection, hosts, fleet } = fleetWith({ b: { machine: {}, capabilities: ['update'], update: found, answer: () => ({ outcome: 'accepted' }) } });
+  let onUpdate = null;
+  const sent = [];
+  const client = {
+    synced: true,
+    on: (type, fn) => { if (type === 'update') { onUpdate = fn; } },
+    subscribeUpdate: async () => readUpdateState(found),
+    request: async (op, data) => { sent.push({ op, data }); return { outcome: 'accepted' }; },
+  };
+  hosts.view({ id: 'v', client, machine: {}, capabilities: ['sessions.read', 'update'] });
+  await flush();
+  await fleet.idle();
+  // Only the machine not shown was looked at.
+  assert.deepEqual(connection.opened, ['b']);
+  assert.equal(fleet.update('v').available, '0.5.0');
+  onUpdate(readUpdateState({ ...found, phase: 'installing' }));
+  assert.equal(fleet.update('v').phase, 'installing');
+
+  await fleet.call('v', 'update.install', { request: 'r1' });
+  assert.deepEqual(sent, [{ op: 'update.install', data: { request: 'r1' } }]);
+  assert.deepEqual(connection.opened, ['b']);
+
+  await fleet.call('b', 'update.check', { request: 'r2' });
+  assert.deepEqual(connection.hosts.b.requests, [{ op: 'update.check', data: { request: 'r2' } }]);
+  assert.deepEqual(connection.opened, ['b', 'b']);
+  fleet.clear();
+  assert.equal(fleet.update('v'), null);
 });

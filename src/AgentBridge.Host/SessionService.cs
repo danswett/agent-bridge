@@ -82,6 +82,9 @@ public sealed class SessionService
     // launch.trust.answer, through the relay only (FolderTrustAnswers).
     public FolderTrustAnswers? TrustAnswers { get; init; }
 
+    // update.*, through the relay only, and never on a read-only machine (UpdateService).
+    public UpdateService? Updates { get; init; }
+
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
         UsageService? usage = null, ISessionLauncher? launcher = null, SessionTransfers? transfers = null)
@@ -150,6 +153,8 @@ public sealed class SessionService
                     "a folder-trust question is answered by a person, at the machine or from their phone, browser or Windows app through the relay");
             case UsageProtocol.Get or UsageProtocol.Subscribe when usage is not null:
                 return await usage.HandleAsync(channel, op, data);
+            case UpdateProtocol.Get or UpdateProtocol.Subscribe or UpdateProtocol.Check or UpdateProtocol.Install when Updates is not null:
+                return await Updates.HandleAsync(channel, op, data);
             case Ops.SessionsList:
                 return source.List(String(data, "cursor"));
             case Ops.SessionGet:
@@ -262,6 +267,7 @@ public sealed class SessionService
         if (usage is not null) { offered.Add(UsageProtocol.Capability); }
         if (launcher?.Available == true) { offered.Add(LaunchProtocol.Capability); }
         if (TrustAnswers?.Available == true && channel is SecureChannel) { offered.Add(TrustProtocol.Capability); }
+        if (Updates?.Offered(channel) == true) { offered.Add(UpdateProtocol.Capability); }
         // Transfers are signed by a device through the relay, and go through its blob store.
         if (transfers is not null && channel is SecureChannel)
         {

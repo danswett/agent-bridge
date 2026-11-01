@@ -27,6 +27,7 @@ public sealed class HostConnection : IAsyncDisposable
     Current? current;
     long statusEvents;
     long usageEvents;
+    long updateEvents;
     long connections;
 
     sealed record Current(IClientChannel Channel, string? Instance);
@@ -67,6 +68,9 @@ public sealed class HostConnection : IAsyncDisposable
     public IReadOnlyList<string> Capabilities => Hello?.Capabilities ?? [];
     public HostStatus? Status { get; private set; }
     public UsageReport Usage { get; private set; } = UsageReport.Empty;
+    // Another machine's updates (update.subscribe, #51), through the relay: null where the host
+    // offers none (this machine's own pipe, a read-only host, an older host).
+    public UpdateState? Update { get; private set; }
     public SessionStore Sessions { get; } = new();
 
     // Raised on the UI thread: the link, hello, status or usage changed.
@@ -143,6 +147,13 @@ public sealed class HostConnection : IAsyncDisposable
                 }
                 // A host that reports no usage now (usage.publish off) has no figure to keep showing.
                 else { ui.Post(() => Usage = UsageReport.Empty); }
+                var heardUpdate = Interlocked.Read(ref updateEvents);
+                if (Subscribes && hello.Capabilities.Contains(UpdateProtocol.Capability))
+                {
+                    var update = await ch.CallAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
+                    ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; } });
+                }
+                else { ui.Post(() => Update = null); }
                 if (Subscribes) { await SubscribeSessionsAsync(ch, ct); }
                 ui.Post(() => SetState(LinkState.Connected, null));
                 Volatile.Read(ref connected).TrySetResult();
@@ -221,6 +232,12 @@ public sealed class HostConnection : IAsyncDisposable
             var usage = await ch.CallAsync<UsageReport>(UsageProtocol.Get, ct: ct);
             ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; Changed?.Invoke(); } });
         }
+        if (hello.Capabilities.Contains(UpdateProtocol.Capability))
+        {
+            var heardUpdate = Interlocked.Read(ref updateEvents);
+            var update = await ch.CallAsync<UpdateState>(UpdateProtocol.Get, ct: ct);
+            ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; Changed?.Invoke(); } });
+        }
         await SubscribeSessionsAsync(ch, ct);
     }
     // What the host offers now, and its status (whose agent-ha-bridge note the host works out
@@ -229,10 +246,19 @@ public sealed class HostConnection : IAsyncDisposable
     {
         var hello = await ch.HelloAsync(ct);
         HostStatus? status = hello.Capabilities.Contains(HostOps.Capability) ? await ch.CallAsync<HostStatus>(HostOps.Status, ct: ct) : null;
+        // Updates offered again (agent-ha-bridge stopped there): followed from now. Subscribing
+        // again where they already are changes nothing at the host.
+        UpdateState? update = null;
+        var heardUpdate = Interlocked.Read(ref updateEvents);
+        if (Subscribes && hello.Capabilities.Contains(UpdateProtocol.Capability) && Hello?.Capabilities.Contains(UpdateProtocol.Capability) != true)
+        {
+            update = await ch.CallAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
+        }
         ui.Post(() =>
         {
             var changed = false;
             if (Hello is not null && !Hello.Capabilities.SequenceEqual(hello.Capabilities)) { Hello = hello; changed = true; }
+            if (update is not null && Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; changed = true; }
             if (status is not null && Status is { } now && (now.AgentHaBridge != status.AgentHaBridge || now.RestartRequired != status.RestartRequired))
             {
                 Status = status;
@@ -282,6 +308,10 @@ public sealed class HostConnection : IAsyncDisposable
             case UsageProtocol.Update when ev.Data.Deserialize<UsageReport>(ProtocolJson.Options) is { } u:
                 Interlocked.Increment(ref usageEvents);
                 ui.Post(() => { Usage = u; Changed?.Invoke(); });
+                break;
+            case UpdateProtocol.Event when ev.Data.Deserialize<UpdateState>(ProtocolJson.Options) is { } up:
+                Interlocked.Increment(ref updateEvents);
+                ui.Post(() => { Update = up; Changed?.Invoke(); });
                 break;
             case HostOps.StatusEvent when ev.Data.Deserialize<HostStatus>(ProtocolJson.Options) is { } h:
                 Interlocked.Increment(ref statusEvents);

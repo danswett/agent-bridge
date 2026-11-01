@@ -36,6 +36,9 @@ public sealed class HostControlOptions
     public Action<bool>? ApplyRemoteFolderTrust { get; init; }
     // And launch.remoteFolderTrustDevices, the devices approved to answer them.
     public Action<IReadOnlyList<string>>? ApplyRemoteFolderTrustDevices { get; init; }
+    // Other devices' presses of Check and Install, carried to the app in the status, and the
+    // app's reports of its updater (host.update.report); null where there is nothing to carry.
+    public UpdateService? Updates { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -61,6 +64,7 @@ public sealed class HostControl
         this.log = log ?? (_ => { });
         startedAt = options.Time.GetUtcNow();
         running = options.Running;
+        if (options.Updates is { } updates) { updates.AsksChanged += Changed; }
         relay = options.LocalOnly ? new RelayStatus(RelayState.Off, Detail: "this host serves this machine's apps only (--local-only)")
             : options.Account() is null ? new RelayStatus(RelayState.SignedOut, options.Relay()?.ToString())
             : new RelayStatus(RelayState.Connecting, options.Relay()?.ToString());
@@ -112,6 +116,7 @@ public sealed class HostControl
             Settings = now,
             RestartRequired = now != running,
             Log = options.Log,
+            UpdateAsks = options.Updates?.Asks is { Count: > 0 } asks ? asks : null,
         };
     }
 
@@ -158,6 +163,8 @@ public sealed class HostControl
             case HostOps.Restart:
                 log("restarting: asked by the app");
                 return new ChannelReply(new { restarting = true }, _ => { options.Restart(); return Task.CompletedTask; });
+            case HostOps.UpdateReport when options.Updates is not null:
+                return options.Updates.Report(channel, Read<UpdateReport>(data) ?? throw new ArgumentException($"{HostOps.UpdateReport} needs the updater's state"));
             default:
                 return null;
         }

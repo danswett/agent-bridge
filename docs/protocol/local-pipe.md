@@ -155,6 +155,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `host.restart` | none | `{ "restarting": true }`, then the host starts a replacement and exits |
 | `host.stop` | none | `{ "stopping": true }`, then the host exits |
 | `host.relay.account` | none | `{ "relay", "token", "accountId", "login" }`: the account this host signed in to, and the relay that issued it, so the app can reach the account's other machines through the relay as a device of its own (kind `app`, with its own key) without a second sign-in. `token` is a bearer credential for that relay only. Fails with `this host is not signed in to the relay` before a sign-in, and on a `--local-only` host |
+| `host.update.report` | `{ "state": UpdateState, "taken"?: [request] }`: what the app's updater is doing, and the presses in `updateAsks` it has taken on ([v1-update.md](v1-update.md)) | `{ "ok": true }`. The host serves the state to the account's other devices (`update.*`) until the app's connection closes, then says the app is not running, and drops the presses taken from `updateAsks`. Refused to anything but the app: `only the Agent Bridge app beside this host reports its updates, and takes other devices' presses of Install` |
 
 `HostStatus`:
 
@@ -171,6 +172,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `settings` | `{ remoteApproval, name?, remoteFolderTrust, remoteFolderTrustDevices? }` as `config.json` says now (`launch.remoteFolderTrust`, and the approved device ids, absent when none) |
 | `restartRequired` | `config.json` differs from what the running host read |
 | `log` | Path of the host's log file |
+| `updateAsks` | Presses of Check and Install from the account's other devices waiting for the app (#51): `[{ request, kind: check \| install, by, at }]`, `by` naming the device (`"pwa 1a2b3c4d"`). Absent when none. At most 8, each dropped once the app reports it taken or after ten minutes. The pipe itself asks for no update: `update.*` is refused here, for the app included, which updates its own machine from Settings |
 
 Unknown fields are ignored, and unknown enum values read as the first value listed, as in
 the rest of the protocol.

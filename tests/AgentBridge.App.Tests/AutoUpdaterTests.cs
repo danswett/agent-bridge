@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -487,5 +488,179 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Empty(toasts.Shown);
         Assert.Null(prefs.UpdatedFrom);
+    }
+
+    // Asked from another device (#51): the press stands in for the switch, for that release, and
+    // waits for the same idle as an automatic update.
+    const string Press = "3f2a1b4c-5d6e-4f70-8192-a3b4c5d6e7f8";
+
+    async Task AskedAsync(UpdateAskKind kind, string request = Press)
+    {
+        await auto.Ask(kind, request);
+    }
+
+    [Fact]
+    public async Task Install_asked_for_from_another_device_installs_once_idle_even_with_automatic_updates_off_and_says_so_after_the_restart()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        var states = new List<UpdateState>();
+        auto.StateChanged += () => states.Add(auto.State);
+
+        await AskedAsync(UpdateAskKind.Install);
+        // Found and downloaded at once, then waiting for the turn to end, as an automatic one does.
+        Assert.Equal(1, updater.Checks);
+        Assert.Contains(states, s => s.Phase == UpdatePhase.Checking);
+        Assert.Contains(states, s => s.Phase == UpdatePhase.Downloading && s.Available == "0.2.0");
+        var waiting = auto.State;
+        Assert.Equal((UpdatePhase.Waiting, "0.2.0", Press), (waiting.Phase, waiting.Available, waiting.Request));
+        Assert.Contains("a session on this machine has a turn running", waiting.Waiting);
+        Assert.False(updater.Applied);
+
+        await GoIdleAsync("s1");
+        await TwoIdleTicksAsync();
+
+        Assert.True(updater.Applied);
+        Assert.Contains(states, s => s.Phase == UpdatePhase.Installing);
+        Assert.Equal(("0.1.0", Press), (prefs.UpdatedFrom, prefs.UpdateRequest));
+
+        // The new version's first start: the outcome, with the press it answers, for the devices.
+        updater.InstalledVersion = "0.2.0";
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time);
+        var last = prefs.LastUpdate!;
+        Assert.Equal((UpdateOutcome.Updated, "0.1.0", "0.2.0", Press, time.GetUtcNow()), (last.Outcome, last.From, last.To, last.Request, last.At));
+        Assert.Null(prefs.UpdateRequest);
+    }
+
+    [Fact]
+    public async Task Install_asked_for_while_another_profile_runs_from_the_installation_is_refused_at_once_and_nothing_is_downloaded()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync();
+        others = "another profile's host (pid 77) runs from this installation";
+
+        await AskedAsync(UpdateAskKind.Install);
+
+        Assert.Equal((0, 0), (updater.Checks, updater.Downloads));
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, others, Press), (last.Outcome, last.Reason, last.Request));
+        Assert.Null(auto.State.Request);
+        await TwoIdleTicksAsync();
+        Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    public async Task Install_asked_for_with_nothing_newer_says_it_is_current_and_stops_nothing()
+    {
+        updater.Found = null;
+        await StartAsync();
+
+        await AskedAsync(UpdateAskKind.Install);
+        await TwoIdleTicksAsync();
+
+        Assert.Equal((UpdateOutcome.Current, Press), (auto.State.Last!.Outcome, auto.State.Last.Request));
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    public async Task Check_asked_for_finds_the_release_without_installing_it_when_automatic_updates_are_off()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync();
+
+        await AskedAsync(UpdateAskKind.Check);
+        await TwoIdleTicksAsync();
+
+        var state = auto.State;
+        Assert.Equal(1, updater.Checks);
+        Assert.Equal(("0.2.0", "What 0.2.0 changes", UpdatePhase.Idle, time.GetUtcNow() - AutoUpdater.IdleFor), (state.Available, state.Notes, state.Phase, state.CheckedAt));
+        Assert.False(state.Automatic);
+        Assert.Null(state.Request);
+        Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    public async Task Install_asked_for_that_fails_says_so_and_the_host_comes_back()
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        updater.ApplyFails = new InvalidOperationException("the package is damaged");
+
+        await AskedAsync(UpdateAskKind.Install);
+        await TwoIdleTicksAsync();
+
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Failed, "the package is damaged", "0.2.0", Press), (last.Outcome, last.Reason, last.To, last.Request));
+        Assert.Null(prefs.UpdateRequest);
+        Assert.Single(processes.Started);
+    }
+
+    List<UpdateReport> Reports() => [.. host.Sent(HostOps.UpdateReport).Select(r => r.Deserialize<UpdateReport>(ProtocolJson.Options)!)];
+
+    [Fact]
+    public async Task The_hosts_asks_reach_the_updater_once_each_and_the_host_hears_what_it_did_and_which_it_took()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        host.On(HostOps.UpdateReport, _ => new { ok = true });
+        await StartAsync(FakeHost.StatusOf() with { UpdateAsks = [new UpdateAsk(Press, UpdateAskKind.Check, "pwa 1a2b3c4d", Make.T0)] });
+
+        using var reporter = new UpdateReporter(connection, auto, log.Add);
+
+        await Wait.UntilAsync(() => Reports().Any(r => r.Taken?.Contains(Press) == true) && Reports().Any(r => r.State.Available == "0.2.0"), "the check reported");
+        Assert.Equal(1, updater.Checks);
+        // The host's status again with the ask still in it (the report not yet applied there): it
+        // is not asked for twice.
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Task.Delay(300);
+        Assert.Equal(1, updater.Checks);
+        Assert.Single(log, l => l == "update: check asked for");
+    }
+
+    [Fact]
+    public async Task A_restarted_host_is_told_at_once_and_an_unchanged_state_is_not_sent_again()
+    {
+        host.On(HostOps.UpdateReport, _ => new { ok = true });
+        updater.Found = null;
+        await StartAsync();
+        using var reporter = new UpdateReporter(connection, auto, log.Add);
+        await Wait.UntilAsync(() => Reports().Count >= 1, "the first report");
+        await reporter.ReportAsync();
+        var sent = Reports().Count;
+
+        await host.StopAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the host gone");
+        host.Status = host.Status with { StartedAt = host.Status.StartedAt.AddMinutes(1) };
+        host.Start();
+
+        await Wait.UntilAsync(() => Reports().Count > sent, "the restarted host told");
+        Assert.Equal("0.1.0", Reports()[^1].State.Current);
+    }
+
+    [Fact]
+    public async Task A_copy_the_updater_cannot_update_says_so_and_takes_no_asks()
+    {
+        host.On(HostOps.UpdateReport, _ => new { ok = true });
+        await StartAsync(FakeHost.StatusOf() with { UpdateAsks = [new UpdateAsk(Press, UpdateAskKind.Install, "pwa 1a2b3c4d", Make.T0)] });
+
+        using var reporter = new UpdateReporter(connection, null, log.Add);
+
+        await Wait.UntilAsync(() => Reports().Count >= 1, "the report");
+        var report = Reports()[0];
+        Assert.Equal((false, AutoUpdater.NotInstalled), (report.State.Installer, report.State.Unavailable));
+        Assert.Null(report.Taken);
+    }
+
+    [Fact]
+    public async Task A_development_copy_refuses_what_it_is_asked()
+    {
+        updater.InstalledVersion = null;
+        await StartAsync();
+
+        await AskedAsync(UpdateAskKind.Install);
+
+        Assert.Equal(UpdateOutcome.Refused, auto.State.Last!.Outcome);
+        Assert.Equal(AutoUpdater.NotInstalled, auto.State.Unavailable);
+        Assert.False(auto.State.Installer);
+        Assert.Equal(0, updater.Checks);
     }
 }

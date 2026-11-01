@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
@@ -92,12 +93,22 @@ public sealed record AppPreferences
     // announces it: the version updated from, and the new one's release notes.
     public string? UpdatedFrom { get; init; }
     public string? UpdateNotes { get; init; }
+    // The press from another device that update answers, if one asked for it (#51), and how the
+    // last update asked for or installed ended, for the host to tell the account's devices.
+    public string? UpdateRequest { get; init; }
+    public UpdateResult? LastUpdate { get; init; }
     public string? Relay { get; init; }
     // The installed app's first run turned on starting at sign-in (the host's logon task and
     // the app's Run entry); after that they are the person's to turn off and stay off.
     public bool SetUp { get; init; }
 
-    static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+    static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        // LastUpdate's outcome as the protocol's string, read back tolerantly.
+        Converters = { new TolerantEnumConverterFactory() },
+    };
 
     public static AppPreferences Load(string path)
     {

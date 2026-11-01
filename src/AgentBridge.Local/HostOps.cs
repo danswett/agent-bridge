@@ -22,7 +22,23 @@ public static class HostOps
     // other machines through the relay as a device of its own without a second sign-in. For
     // the app alone, like every management op: never an agent session's to read.
     public const string RelayAccount = "host.relay.account";
+    // The app tells its host what its updater is doing, for the host to serve to the account's
+    // other devices (update.*, docs/protocol/v1-update.md), and which of the host's asks
+    // (HostStatus.UpdateAsks) it has taken on. For the app alone, like every management op.
+    public const string UpdateReport = "host.update.report";
 }
+
+// A device's press of Check or Install, waiting for this machine's app: carried in the host's
+// status, which the app follows, until the app says it has taken it (UpdateReport.Taken). By:
+// the device, as the host's log names it ("pwa 1a2b3c4d").
+public sealed record UpdateAsk(string Request, UpdateAskKind Kind, string By, DateTimeOffset At);
+
+// An unknown kind reads as Check, which changes nothing on the machine.
+[UnknownAs(Check)]
+public enum UpdateAskKind { Check, Install }
+
+// host.update.report: the app's updater now, and the asks it has taken on.
+public sealed record UpdateReport(UpdateState State, IReadOnlyList<string>? Taken = null);
 
 // host.relay.account: the relay that issued the account, and the account. Token is a bearer
 // credential for that relay, as private as the device key.
@@ -79,6 +95,8 @@ public sealed record HostStatus
     public bool RestartRequired { get; init; }
     // The host's log file, for an app to show the end of.
     public string? Log { get; init; }
+    // Presses of Check and Install from the account's other devices, for the app to act on.
+    public IReadOnlyList<UpdateAsk>? UpdateAsks { get; init; }
 }
 
 // host.signIn: start GitHub's device flow through this relay (or the one the profile used).

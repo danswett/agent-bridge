@@ -20,6 +20,7 @@ public partial class App : Application
     DispatcherTimer? timer;
     DispatcherTimer? updateTimer;
     AutoUpdater? autoUpdater;
+    UpdateReporter? updateReporter;
     HostConnection? connection;
     DemoHost? demo;
     DemoHost? remoteDemo;
@@ -191,6 +192,10 @@ public partial class App : Application
             updateTimer.Start();
             _ = autoUpdater.TickAsync();
         }
+        // What this machine's updater is doing, for the account's other devices to see, and their
+        // presses of Check and Install (#51). A copy the updater cannot update says so.
+        if (!options.Demo) { updateReporter = new UpdateReporter(connection, autoUpdater, AppLog.Write); }
+        if (autoUpdater is { } auto) { main.CheckLocal = () => _ = auto.Ask(UpdateAskKind.Check, Guid.NewGuid().ToString()); }
     }
 
     // The app starts the host when it is not running: at first run, after an update, or after

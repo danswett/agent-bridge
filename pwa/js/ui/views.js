@@ -4,6 +4,7 @@ import { ALL } from '../host-session.js';
 import { SessionCard } from './session-card.js';
 import { FoldStore } from './fold-store.js';
 import { ago } from './time.js';
+import { updateLine, lastLine, canCheck, canInstall } from '../update.js';
 
 // Keeps one card per session, from every machine shown, in the order given (most recently
 // updated first), updating cards in place so an open disclosure, scroll position or focus
@@ -146,14 +147,46 @@ export function offlineMachines({ presence, known, me }) {
 // What each list was last drawn from.
 const drawnAs = new WeakMap();
 
-export function renderMachines(list, { presence, me, current, onSelect, status = () => '', known = null, forget = null, now = Date.now(), allStatus = '' }) {
+// The update block under a machine that offers updates (#51): what its app is doing, how the
+// last update ended, Check and Install, and a refused press's reason.
+function updateRow(updates, id, name, now) {
+  const s = updates?.state(id);
+  if (!s) { return { key: null, el: null }; }
+  const { busy, note } = updates.stateOf(id);
+  const said = updateLine(s, now);
+  const last = lastLine(s, now);
+  const check = canCheck(s) && !busy;
+  const install = canInstall(s) && !busy;
+  const key = [said, last, note, busy, check, install];
+  // Not disabled when it cannot be pressed: a disabled button loses focus, and the next draw
+  // could not give it back. A press then does nothing (UpdateControl, and the host's own rules).
+  const button = (cls, label, aria, can, kind) => h('button', {
+    type: 'button', class: `button secondary ${cls}`, 'aria-label': aria,
+    'aria-disabled': can ? null : 'true',
+    onclick: () => { if (can) { updates.press(id, kind); } },
+  }, label);
+  return {
+    key,
+    el: h('div', { class: 'machine-update' },
+      h('p', { class: 'machine-update-line' }, said),
+      last ? h('p', { class: 'machine-update-last' }, last) : null,
+      note ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
+      s.installer ? h('div', { class: 'machine-update-actions' },
+        button('machine-update-check', busy ? 'Asking…' : 'Check', `Check ${name} for updates`, check, 'check'),
+        s.available ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, 'install') : null) : null),
+  };
+}
+
+export function renderMachines(list, { presence, me, current, onSelect, status = () => '', known = null, forget = null, updates = null, now = Date.now(), allStatus = '' }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   const all = current === ALL;
   const offline = offlineMachines({ presence, known, me });
+  const rows = new Map(hosts.map((d) => [d.id, updateRow(updates, d.id, d.name, now)]));
+  const updating = hosts.filter((d) => rows.get(d.id).el);
   // Drawn again only when something in it changes. It is asked to redraw on every session
   // update of every machine shown, and a button replaced between a tap's touch and its release
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
-  const key = JSON.stringify([current, allStatus, hosts.map((d) => [d.id, d.name, status(d.id)]),
+  const key = JSON.stringify([current, allStatus, hosts.map((d) => [d.id, d.name, status(d.id), rows.get(d.id).key]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
     offline.map((k) => [k.id, k.name, k.lastSeen, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget]);
   if (drawnAs.get(list) === key) { return hosts.length; }
@@ -161,7 +194,7 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
   // Every change redraws the list, so the button that had focus is replaced: Forget's first
   // press redraws it armed, and a keyboard's second press must land on the new one.
   const active = list.ownerDocument?.activeElement;
-  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button'].find((c) => active.classList.contains(c)) } : null;
+  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-check-all'].find((c) => active.classList.contains(c)) } : null;
   const everyMachine = hosts.length > 1 ? [h('li', { class: 'machine all-machines', dataset: { deviceId: ALL, deviceName: 'All machines' } },
     h('button', {
       type: 'button', class: `machine-button${all ? ' selected' : ''}`,
@@ -186,7 +219,8 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
       h('span', { class: 'machine-sub' },
         h('span', { class: 'machine-id' }, d.id.slice(0, 8)),
         said ? h('span', { class: 'machine-status' }, ` \u00b7 ${said}`) : null),
-      h('span', { class: 'machine-state' }, selected ? 'Viewing' : 'Online')));
+      h('span', { class: 'machine-state' }, selected ? 'Viewing' : 'Online')),
+      rows.get(d.id).el);
   }), ...offline.map((k) => {
     const name = typeof k.name === 'string' && k.name ? k.name : 'unnamed';
     const seen = ago(k.lastSeen, now);
@@ -207,7 +241,11 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
           onclick: () => forget.press(k.id, k.lastSeen),
         }, s.busy ? 'Forgetting\u2026' : s.armed ? 'Press again to forget' : 'Forget') : h('span', { class: 'machine-state' }, 'Offline')),
       s.error ? h('p', { class: 'machine-error', role: 'alert' }, s.error) : null);
-  }));
+  }), ...(updating.length ? [h('li', { class: 'machine machine-updates', dataset: { deviceId: 'check-all' } },
+    h('button', {
+      type: 'button', class: 'button secondary machine-check-all',
+      onclick: () => updates.checkAll(updating.map((d) => d.id)),
+    }, updating.length > 1 ? 'Check all machines for updates' : 'Check for updates'))] : []));
   if (had?.id && had.cls) {
     const again = [...list.children].find((li) => li.dataset.deviceId === had.id)?.querySelector(`.${had.cls}`);
     again?.focus();

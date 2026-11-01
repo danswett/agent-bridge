@@ -91,6 +91,7 @@ Request `data`: `{}`. Result:
 | `sessions.launch` | `launch.options`, `session.launch`: starting or resuming a session in a workspace approved at the machine ([v1-launch.md](v1-launch.md)) |
 | `sessions.transfer` | `session.launch` takes a `transfer`: a session that ended on another of the account's machines, brought here and resumed as a copy ([v1-transfer.md](v1-transfer.md)). Through a relay with a blob store only |
 | `sessions.transfer.serve` | `session.transfer`, host to host: this machine hands its ended sessions to the account's other machines on a command a person's device signed ([v1-transfer.md](v1-transfer.md)). Through a relay with a blob store only |
+| `update` | `update.get`, `update.subscribe`, `update.check`, `update.install`: the machine's updates, seen and asked for from a person's other devices, installed by its Windows app ([v1-update.md](v1-update.md)). Through the relay only, and never by a read-only machine |
 
 ### `sessions.list`
 

@@ -32,7 +32,9 @@ public static class LocalApi
             if (!Reads.Contains(op) && callers.Classify(channel, fresh: true) is { Kind: not CallerKind.App } caller
                 && !(caller.Kind == CallerKind.HostCli && op == HostOps.Restart))
             {
-                throw Refuse(op, caller, caller.Kind == CallerKind.Agent
+                throw Refuse(op, caller, op == HostOps.UpdateReport
+                    ? "only the Agent Bridge app beside this host reports its updates, and takes other devices' presses of Install"
+                    : caller.Kind == CallerKind.Agent
                     ? "stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the Agent Bridge app"
                     : "only the Agent Bridge app beside this host may stop, restart, sign in, change settings or read the relay account", log);
             }
