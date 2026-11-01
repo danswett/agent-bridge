@@ -77,11 +77,17 @@ public sealed class UpdateService
     public bool Offered(IProtocolChannel channel) => channel is SecureChannel && ReadOnly() is null;
 
     // The presses waiting for the app. None on a machine that has become read-only since they
-    // were taken: they are let go, not handed to the app.
+    // were taken: they are let go, not handed to the app. ReadOnly is uncached (it scans for
+    // agent-ha-bridge) and every status reads Asks, so it is asked only when a press is waiting.
     public IReadOnlyList<UpdateAsk> Asks
     {
         get
         {
+            lock (gate)
+            {
+                Prune();
+                if (asks.Count == 0) { return []; }
+            }
             var readOnly = ReadOnly() is not null;
             lock (gate)
             {

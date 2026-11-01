@@ -279,6 +279,16 @@ public sealed class UpdateFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public void With_no_press_waiting_the_presses_are_listed_without_scanning_for_agent_ha_bridge()
+    {
+        var scans = 0;
+        var idle = new UpdateService("0.4.0", time: time) { ReadOnly = () => { scans++; return null; } };
+
+        Assert.Empty(idle.Asks);
+        Assert.Equal(0, scans);
+    }
+
+    [Fact]
     public async Task Host_status_asked_for_says_afresh_whether_the_machine_is_read_only()
     {
         // agent-ha-bridge has just started: the status pushed to subscribers has not caught up.
