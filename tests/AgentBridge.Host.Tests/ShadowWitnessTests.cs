@@ -135,6 +135,29 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Null(Known(Daemon(fresh), Host(shells: 1), ShadowKinds.BackgroundShells));
     }
 
+    // Found in review (#162): only the ends the host takes make a restart, and a quoted start line
+    // before a genuine last-line poll of the same id is a start the host takes.
+    [Fact]
+    public void A_restart_is_judged_by_the_ends_and_starts_the_host_takes()
+    {
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Result("<shellId: watch completed with exit code 0>"));
+        var mixed = Write(Result("a quoted line:\n<command started in background with shellId: watch>\noutput\n<command with shellId: watch is still running after 30 seconds>"));
+        Assert.Equal("agent-ha-bridge#276", Known(Daemon(mixed), Host(shells: 1), ShadowKinds.BackgroundShells));
+        // A completion quoted after the daemon's offset is not one it has read.
+        Write(Result("1. a line\n<shellId: watch completed with exit code 0>\n3. another"));
+        Assert.Equal("agent-ha-bridge#276", Known(Daemon(mixed), Host(shells: 1), ShadowKinds.BackgroundShells));
+    }
+
+    [Fact]
+    public void A_quoted_completion_between_two_polls_is_no_restart()
+    {
+        Write(Result("<command started in background with shellId: watch>"));
+        Write(Result("1. a line\n<shellId: watch completed with exit code 0>\n3. another"));
+        var polled = Write(Result("<command with shellId: watch is still running after 30 seconds>"));
+        Assert.Null(Known(Daemon(polled), Host(shells: 1), ShadowKinds.BackgroundShells));
+    }
+
     // Found in review (#162): the same id started again after a shutdown is a run of its own, not
     // the end of the one before it.
     [Fact]

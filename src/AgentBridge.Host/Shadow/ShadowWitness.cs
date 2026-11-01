@@ -121,6 +121,11 @@ public sealed partial class TranscriptEvidence(string path)
 
         // Only the latest ends matter: an end counts against the starts before it.
         public void Ended(long at) { Ends.Add(at); if (Ends.Count > Recent) { Ends.RemoveAt(0); } }
+
+        // The ends agent-bridge's host takes (ShellMarkers.Read, the session's own results only,
+        // and shell_completed): the daemon's Ends also hold quoted lines and subagents' results.
+        // Only the latest matters.
+        public long HostEnd = -1;
     }
     // A background agent's runs, the way agent-bridge's host follows them (BackgroundWork).
     sealed class Agent
@@ -303,6 +308,7 @@ public sealed partial class TranscriptEvidence(string path)
                         break;
                     case "shell_completed" when Str(kind, "shellId") is { } id:
                         ShellFor(id, at).Ended(at);
+                        ShellFor(id, at).HostEnd = at;
                         break;
                 }
                 break;
@@ -363,13 +369,28 @@ public sealed partial class TranscriptEvidence(string path)
         if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Object) { return; }
         if (Str(result, "content") is not { } content) { return; }
         var whole = content.Trim();
-        foreach (Match m in Completed().Matches(content)) { ShellFor(m.Groups[1].Value, at).Ended(at); }
-        if (Stopped().Match(whole) is { Success: true } stop) { ShellFor(stop.Groups[1].Value, at).Ended(at); return; }
         var last = whole[(whole.LastIndexOf('\n') + 1)..].TrimEnd('\r');
+        // The start the host takes from this result, if any (ShellMarkers.Read): a whole start or
+        // move, else a last line still running.
+        var hostStart = subagent ? null
+            : StartedWhole().Match(whole) is { Success: true } sw ? sw.Groups[1].Value.Trim()
+            : Moved().Match(whole) is { Success: true } mw ? mw.Groups[1].Value
+            : StillRunningLast().Match(last) is { Success: true } lw ? lw.Groups[1].Value
+            : null;
+        if (!subagent && hostStart is null && Completed().Match(last) is { Success: true } hostEnd) { ShellFor(hostEnd.Groups[1].Value, at).HostEnd = at; }
+        foreach (Match m in Completed().Matches(content)) { ShellFor(m.Groups[1].Value, at).Ended(at); }
+        if (Stopped().Match(whole) is { Success: true } stop)
+        {
+            ShellFor(stop.Groups[1].Value, at).Ended(at);
+            if (!subagent) { ShellFor(stop.Groups[1].Value, at).HostEnd = at; }
+            return;
+        }
         if (Started().Match(content) is { Success: true } started)
         {
             var id = started.Groups[1].Value.Trim();
-            var proper = StartedWhole().IsMatch(whole);
+            // Proper when the host takes a start of the same id from it: a quoted start line
+            // before a genuine last-line poll of that id is one (found in review, #162).
+            var proper = StartedWhole().IsMatch(whole) || hostStart == id;
             ShellFor(id, at).Started(at, subagent, proper ? StartKind.Proper : StartKind.QuotedOther, shutdownAt);
             return;
         }
@@ -423,17 +444,18 @@ public sealed partial class TranscriptEvidence(string path)
     }
 
     // Running again since an end of the same id, as the host counts it, and both read by the daemon:
-    // a proper start of the session's own after the last end and before the daemon's offset, no end
-    // since, and no shutdown since either (which ends every shell on the host). Other markers for
-    // the id since then (a quoted line, a subagent's) the host ignores, and any the daemon took
-    // would have listed it again. Seen on DEV-VM1 (#40): a pr-watch watcher completed and was
-    // restarted 40 s later, with the daemon listing nothing from then on while its process ran
-    // (agent-ha-bridge#276).
+    // an end the host takes, then a start of the session's own that both take, before the daemon's
+    // offset; since that start, no end the host takes (so it still runs) and none the daemon has
+    // read (an end after the start drops it for another reason), and no shutdown, which ends every
+    // shell on the host. Other starts for the id since (a quoted line, a subagent's) the host
+    // ignores, and any the daemon took in a later batch would have listed it again. Seen on DEV-VM1
+    // (#40): a pr-watch watcher completed and was restarted 40 s later, with the daemon listing
+    // nothing from then on while its process ran (agent-ha-bridge#276).
     static bool Restarted(Shell shell, long through, long shutdownAt)
     {
-        if (shell.Ends.Count == 0 || shell.Ends.Max() is var lastEnd && lastEnd >= through) { return false; }
-        if (shell.DroppedThrough > lastEnd) { return false; }
-        return shell.Runs.Any(r => r.First > lastEnd && r.First > shutdownAt && r.First < through && !r.Subagent && r.Kind == StartKind.Proper);
+        if (shell.HostEnd < 0 || shell.HostEnd >= through || shell.DroppedThrough > shell.HostEnd) { return false; }
+        return shell.Runs.Any(r => r.First > shell.HostEnd && r.First > shutdownAt && r.First < through && !r.Subagent && r.Kind == StartKind.Proper
+            && !shell.Ends.Any(e => e > r.First && e < through));
     }
 
     // The daemon counts fewer (or more) background agents than the host. Known when the host's
