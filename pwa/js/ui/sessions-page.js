@@ -16,7 +16,7 @@ import { AnswerService } from '../answer-service.js';
 import { ReplyService } from '../reply-service.js';
 import { StopService } from '../stop-service.js';
 import { LaunchService } from '../launch-service.js';
-import { LAUNCH } from '../launch.js';
+import { LAUNCH, TRUST } from '../launch.js';
 import { TRANSFER } from '../transfer.js';
 import { Capabilities } from '../protocol.js';
 import { AttachmentLimits } from '../attachments.js';
@@ -57,9 +57,10 @@ export class SessionsPage {
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
   // transfers(hostId): what launching on that machine may bring from the others, or null.
+  // trust(hostId): how a folder-trust question on that machine is answered from here, or null.
   // status(id): a machine's status line. forget: a ForgetControl for offline machines, or null.
-  constructor({ $, hosts, connection, me = null, machinesFold, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, status = () => '', forget = null, storage = globalThis.localStorage, onRendered = () => {} }) {
-    Object.assign(this, { $, hosts, connection, me, machinesFold, relayMax, transfers, status, forget, storage, onRendered });
+  constructor({ $, hosts, connection, me = null, machinesFold, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, status = () => '', forget = null, storage = globalThis.localStorage, onRendered = () => {} }) {
+    Object.assign(this, { $, hosts, connection, me, machinesFold, relayMax, transfers, trust, status, forget, storage, onRendered });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
     this.answers = new AnswerService({ current, ...timing });
@@ -197,27 +198,52 @@ export class SessionsPage {
 
   // The launch panel: for the machine chosen, or with every machine shown, for the one picked
   // in it. While a machine reconnects its panel stays, with any launch still waiting to be
-  // resent; one that comes back without sessions.launch takes it away.
+  // resent; one that comes back without sessions.launch takes it away. A machine that takes no
+  // launches now (read-only, or agent-ha-bridge runs there) still gets a panel, to show a
+  // folder-trust question waiting on it read-only, while it reconnects too; but with every
+  // machine shown, only when none of them launches, so the picker offers only machines that do.
   #drawLaunch() {
     const { hosts, launchPanel: panel } = this;
     if (hosts.selection === null) { panel.setMachines(null); panel.setTarget(null); return; }
-    const can = hosts.links().filter((l) => l.capabilities.includes(LAUNCH.capability) && (l.phase === 'open' || l.id === panel.hostId));
+    const links = hosts.links();
+    const launches = links.filter((l) => this.#launches(l));
+    const inspect = hosts.all && launches.length ? [] : links.filter((l) => !this.#launches(l) && this.#inspectOnly(l));
+    const can = [...launches, ...inspect];
     const has = (id) => !!id && can.some((l) => l.id === id);
     const pick = hosts.all ? [this.#launchHost, this.#read(LAUNCH_HOST), panel.hostId].find(has) ?? can[0]?.id ?? null : can[0]?.id ?? null;
     panel.setMachines(hosts.all ? can.map((l) => ({ hostId: l.id, name: hosts.nameOf(l.id) ?? l.id.slice(0, 8) })) : null, pick);
-    panel.setTarget(pick ? this.#launchTarget(pick) : null);
+    panel.setTarget(pick ? this.launchTarget(pick) : null);
   }
 
-  #launchTarget(id) {
-    const { hosts } = this;
+  #launches(l) {
+    const panel = this.launchPanel;
+    return l.capabilities.includes(LAUNCH.capability) && (l.phase === 'open' || (l.id === panel.hostId && !panel.inspectOnly));
+  }
+
+  #inspectOnly(l) {
+    const panel = this.launchPanel;
+    return l.phase === 'open' ? !!l.machine?.readOnly : l.id === panel.hostId && panel.inspectOnly;
+  }
+
+  // What the launch panel is told about a machine: a new object each time, for the same machine,
+  // as a presence update hands in.
+  launchTarget(id) {
+    const { hosts, launchPanel: panel } = this;
     const link = hosts.link(id);
-    return {
+    const base = {
       hostId: id,
       machineName: hosts.nameOf(id) ?? 'your machine',
       load: () => (hosts.link(id)?.client ? hosts.link(id).client.launchOptions() : Promise.reject(new Error('not connected'))),
+    };
+    if (link && !this.#launches(link) && this.#inspectOnly(link)) {
+      return { ...base, transfers: null, trust: null, inspectOnly: true, readOnly: link.phase === 'open' ? link.machine?.readOnly ?? null : panel.readOnly };
+    }
+    return {
+      ...base,
       // The account's other machines' sessions, each signed for when picked: only where this one
       // takes them, and only what they hand on.
       transfers: link?.capabilities.includes(TRANSFER.capability) ? this.transfers(id) : null,
+      trust: link?.capabilities.includes(TRUST.capability) ? this.trust(id) : null,
     };
   }
 

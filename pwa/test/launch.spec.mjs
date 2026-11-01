@@ -222,3 +222,261 @@ test.describe('bringing a session from another machine', () => {
     await expect(field(page, 'resume').locator('option')).toHaveText(['New session', 'Fix the flaky relay test · agent-bridge']);
   });
 });
+
+// A launched agent asking whether to trust its folder (launch.trust): shown in full, and answered
+// from here with a command this device signs, only where the machine allows it.
+test.describe('a folder-trust question', () => {
+  test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
+
+  const LONG = 'C:\\Users\\demo\\repos\\a-rather-long-folder-name-that-will-not-fit-on-one-phone-line\\and-a-subfolder\\web';
+  const QUESTION = {
+    id: '5d0c9f3e-2b1a-4c8d-9e7f-6a5b4c3d2e1f', agent: 'codex', kind: 'codex', label: 'Codex', workspace: 'agent-bridge', folder: LONG,
+    root: 'c:\\users\\demo\\repos\\a-rather-long-folder-name-that-will-not-fit-on-one-phone-line',
+    rootNote: 'Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:',
+    warning: 'Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a model request. Continue only if you trust these files. Your trust decision will be saved.',
+    answerable: true,
+  };
+  const card = (page) => panel(page).locator('.trust-question');
+  const trustLog = (page) => page.evaluate(() => window.agentBridgeDemo.host.trustLog);
+  const ask = (page, q) => page.evaluate((x) => window.agentBridgeDemo.askTrust(x), q);
+
+  test('a launch that meets one shows the agent, the whole folder, its repository root and its own words, and Trust starts the session', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: QUESTION });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+
+    await expect(card(page)).toHaveCount(1);
+    await expect(card(page).locator('h3')).toHaveText('Codex on Demo machine is asking whether to trust a folder');
+    await expect(card(page).locator('.trust-folder')).toHaveText(LONG);
+    await expect(card(page).locator('.trust-root')).toHaveText(QUESTION.root);
+    await expect(card(page).locator('.trust-root-note')).toHaveText(QUESTION.rootNote);
+    await expect(card(page).locator('.trust-warning')).toHaveText(QUESTION.warning);
+    // The whole path is on screen, wrapped, never cut short.
+    const fits = await card(page).locator('.trust-folder').evaluate((e) => e.scrollWidth <= e.clientWidth + 1);
+    expect(fits).toBe(true);
+
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toHaveCount(0);
+    const [sent] = await trustLog(page);
+    expect(sent.question).toBe(QUESTION.id);
+    expect(sent.choice).toBe('trust');
+    const body = JSON.parse(Buffer.from(sent.command.body, 'base64url').toString('utf8'));
+    expect(body).toMatchObject({ v: 1, action: 'launch.trust:trust', principal: { kind: 'user' }, target: { session: QUESTION.id } });
+  });
+
+  test('Quit says the agent was not trusted and closed', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, { ...QUESTION, warning: null, root: null, rootNote: null });
+    await openPanel(page);
+    await expect(card(page).locator('.trust-root')).toHaveCount(0);
+    await card(page).getByRole('button', { name: 'Quit' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText('Not trusted. Codex was not trusted with agent-bridge, and closed; nothing was launched.');
+    expect((await trustLog(page))[0].choice).toBe('quit');
+  });
+
+  test('where the machine does not allow it, it is shown to answer at the machine, with how to allow it', async ({ page }) => {
+    await openDemo(page);
+    const atMachine = 'Answer at the machine. To answer from your devices, turn on "Answer folder-trust questions from my devices" in the Agent Bridge app\'s Settings on that machine, or run agent-bridge-host config set launch.remoteFolderTrust true there and restart the host.';
+    await ask(page, { ...QUESTION, answerable: false, atMachine });
+    await openPanel(page);
+    await expect(card(page).locator('.trust-folder')).toHaveText(LONG);
+    await expect(card(page).locator('.trust-at-machine')).toHaveText(atMachine);
+    await expect(card(page).getByRole('button')).toHaveCount(0);
+  });
+
+  test('a machine from before launch.trust shows it read-only', async ({ page }) => {
+    await openDemo(page, '&trust=0');
+    await ask(page, QUESTION);
+    await openPanel(page);
+    await expect(card(page).locator('.trust-at-machine')).toHaveText('Answer at the machine: this app cannot answer it on Demo machine.');
+    await expect(card(page).getByRole('button')).toHaveCount(0);
+  });
+
+  test('an answer whose effect the machine could not see says to answer at the machine, and is not sent again', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, QUESTION);
+    await page.evaluate(() => window.agentBridgeDemo.scriptTrust('unconfirmed'));
+    await openPanel(page);
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText('Not confirmed: answer at the machine. The question is still in Codex\'s window.');
+    await expect(card(page).getByRole('button')).toHaveCount(0);
+    expect(await trustLog(page)).toHaveLength(1);
+    // Shown again after another machine, or none, was picked: still not offered.
+    await page.evaluate(() => window.agentBridgeDemo.launchPanel.setTarget(null));
+    await page.evaluate(() => window.agentBridgeDemo.retarget());
+    await expect(card(page).locator('.trust-status')).toHaveText('Not confirmed: answer at the machine. The question is still in Codex\'s window.');
+    await expect(card(page).getByRole('button')).toHaveCount(0);
+  });
+
+  test('an answer whose response was lost offers only that same command again, which gets the first outcome', async ({ page }) => {
+    await openDemo(page, '&timeout=1000');
+    await ask(page, QUESTION);
+    await page.evaluate(() => window.agentBridgeDemo.scriptTrust({ outcome: 'started', drop: true }));
+    await openPanel(page);
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).getByRole('button', { name: 'Try again' })).toBeVisible({ timeout: 10000 });
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toHaveCount(0);
+    await expect(card(page).getByRole('button', { name: 'Quit' })).toHaveCount(0);
+    await card(page).getByRole('button', { name: 'Try again' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
+    const sent = await trustLog(page);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+  });
+
+  test('a lost answer keeps its Try again while the machine is asked for its choices again', async ({ page }) => {
+    await openDemo(page, '&timeout=1000');
+    await ask(page, QUESTION);
+    await page.evaluate(() => window.agentBridgeDemo.scriptTrust({ outcome: 'started', drop: true }));
+    await openPanel(page);
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).getByRole('button', { name: 'Try again' })).toBeVisible({ timeout: 10000 });
+    // Another machine picked and this one again, whose choices are slow to come.
+    await page.evaluate(() => {
+      const d = window.agentBridgeDemo;
+      d.launchPanel.setTarget(null);
+      d.client.launchOptions = () => new Promise(() => {});
+      d.retarget();
+    });
+    await expect(panel(page).locator('.launch-note')).toHaveText('Getting the choices from Demo machine…');
+    await expect(card(page).getByRole('button', { name: 'Try again' })).toBeVisible();
+  });
+
+  test('a resend refused because its command expired is not confirmed, and Trust is not offered again', async ({ page }) => {
+    await openDemo(page, '&timeout=1000');
+    await ask(page, QUESTION);
+    await page.evaluate(() => window.agentBridgeDemo.scriptTrust({ outcome: 'started', drop: true, expire: true }));
+    await openPanel(page);
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await card(page).getByRole('button', { name: 'Try again' }).tap({ timeout: 10000 });
+    await expect(card(page).locator('.trust-status')).toHaveText('Not confirmed: answer at the machine. The first answer may have reached it, and the resend was refused (the command has expired).');
+    await expect(card(page).getByRole('button')).toHaveCount(0);
+  });
+
+  test('a refused answer to a question that has since gone is not offered again', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, QUESTION);
+    await page.evaluate(() => window.agentBridgeDemo.scriptTrust({ outcome: 'refused', reason: 'that question is no longer waiting: it was answered, or the agent closed' }));
+    await openPanel(page);
+    // Answered at the machine meanwhile: the machine no longer lists it.
+    await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.launchOptions = { ...h.launchOptions, trust: [] }; });
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText(/^Not answered/);
+    await expect(card(page).locator('.trust-at-machine')).toHaveText('Demo machine no longer lists this question as waiting.');
+    await expect(card(page).getByRole('button')).toHaveCount(0);
+  });
+
+  test('a question a launch met is offered only until the list after it says it no longer waits', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await page.evaluate(() => window.agentBridgeDemo.scriptTrust({ outcome: 'refused', reason: 'that question is no longer waiting: it was answered, or the agent closed' }));
+    await script(page, { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: QUESTION });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
+    // The list asked for on that outcome is in.
+    await page.waitForTimeout(1000);
+
+    // Answered at the machine meanwhile: the machine's next list leaves it out, and the
+    // outcome alone never offers it again.
+    await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.launchOptions = { ...h.launchOptions, trust: [] }; });
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText(/^Not answered/);
+    await expect(card(page).getByRole('button')).toHaveCount(0);
+  });
+
+  test('a question a launch met is superseded only by its own machine\'s list, never another\'s', async ({ page }) => {
+    await openDemo(page, '&machines=2');
+    await panel(page).getByRole('button', { name: 'Start a session on Demo machine' }).click();
+    await expect(field(page, 'agent')).toBeVisible();
+    // This machine's list can no longer be read: nothing from it says the question has gone.
+    await page.evaluate(() => { window.agentBridgeDemo.client.launchOptions = () => Promise.reject(new Error('the channel closed')); });
+    await script(page, { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: QUESTION });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
+
+    // The laptop's list comes in: it says nothing of this machine's question.
+    const which = field(page, 'machine');
+    await which.selectOption('demo-laptop');
+    await expect(panel(page).locator('.launch-title')).toHaveText('Start a session on Laptop');
+    await expect(field(page, 'agent')).toBeVisible();
+    await expect(card(page)).toHaveCount(0);
+
+    await which.selectOption('demo');
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
+  });
+  test('a machine shown for its question whose list could not be read is asked again when it reconnects', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, QUESTION);
+    const reason = 'this is a read-only comparison host (delivery.readOnly in its config); answer at the machine';
+    await page.evaluate((why) => {
+      const d = window.agentBridgeDemo;
+      d.launchPanel.setTarget(null);
+      d.launchPanel.setTarget({ ...d.target(), transfers: null, trust: null, inspectOnly: true, readOnly: why, load: () => Promise.reject(new Error('the channel closed')) });
+    }, reason);
+    await expect(panel(page)).toBeHidden();
+
+    // The same machine again, as a reconnect hands it in: its question is asked for once more.
+    await page.evaluate((why) => { const d = window.agentBridgeDemo; d.launchPanel.setTarget({ ...d.target(), transfers: null, trust: null, inspectOnly: true, readOnly: why }); }, reason);
+    await expect(card(page).locator('.trust-folder')).toHaveText(LONG);
+  });
+
+  test('a Trust button with focus keeps it when the machine is redrawn', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, QUESTION);
+    await openPanel(page);
+    await card(page).getByRole('button', { name: 'Trust' }).focus();
+    await page.evaluate(() => window.agentBridgeDemo.retarget());
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeFocused();
+  });
+
+  test('a machine that stops being read-only is asked again, and Trust is offered at once', async ({ page }) => {
+    await openDemo(page);
+    const reason = 'agent-ha-bridge is running for this user (AgentBridgeDaemon)';
+    await ask(page, { ...QUESTION, answerable: false, atMachine: `Answer at the machine: ${reason}.` });
+    await page.evaluate((why) => { const d = window.agentBridgeDemo; d.launchPanel.setTarget({ ...d.target(), transfers: null, trust: null, inspectOnly: true, readOnly: why }); }, reason);
+    await panel(page).getByRole('button', { name: 'Waiting on Demo machine' }).click();
+    await expect(card(page).locator('.trust-at-machine')).toHaveText(`Answer at the machine: ${reason}.`);
+
+    // agent-ha-bridge stopped: the machine answers again, and says the question can be answered.
+    await ask(page, QUESTION);
+    await page.evaluate(() => window.agentBridgeDemo.retarget());
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
+  });
+
+  test('a busy launch that names a question asks again, which may offer Trust now', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, { ...QUESTION, answerable: false, atMachine: 'Answer at the machine. No device is approved yet.' });
+    await openPanel(page);
+    await expect(card(page).locator('.trust-at-machine')).toBeVisible();
+    // Approved at the machine since: the busy launch's question, and the machine's list, say so.
+    await script(page, { outcome: 'busy', reason: 'a session this machine launched is waiting at its folder trust prompt', trust: QUESTION });
+    await field(page, 'prompt').fill('Go.');
+    await launchButton(page).tap();
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
+  });
+
+  test('a machine where agent-ha-bridge runs shows a waiting question read-only, and nothing to launch', async ({ page }) => {
+    await page.addInitScript(() => { window.__cspViolations = []; });
+    await page.goto('?demo=1&static=1&ahb=1');
+    await page.waitForSelector('html[data-demo-ready]');
+    await expect(panel(page)).toBeHidden();
+    const atMachine = 'Answer at the machine: agent-ha-bridge is running for this user (AgentBridgeDaemon).';
+    await ask(page, { ...QUESTION, answerable: false, atMachine });
+    await page.evaluate(() => window.agentBridgeDemo.retarget());
+    await page.evaluate(() => window.agentBridgeDemo.launchPanel.refresh());
+    await panel(page).getByRole('button', { name: 'Waiting on Demo machine' }).click();
+    await expect(card(page).locator('.trust-folder')).toHaveText(LONG);
+    await expect(card(page).locator('.trust-at-machine')).toHaveText(atMachine);
+    await expect(card(page).getByRole('button')).toHaveCount(0);
+    await expect(panel(page).locator('.launch-note')).toHaveText(/^Sessions can't be started on Demo machine now: agent-ha-bridge is running/);
+    await expect(launchButton(page)).toBeHidden();
+  });
+});

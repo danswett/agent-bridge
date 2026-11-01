@@ -4,7 +4,7 @@ import { P256KeyPair } from '../../js/noise-p256.js';
 import { deviceIdOf } from '../../js/identity.js';
 import { fromBase64url, toBase64url } from '../../js/blobs.js';
 import { fromUtf8, utf8 } from '../../js/bytes.js';
-import { TRANSFER, collectRemote, commandKey, macOf, signTransfer } from '../../js/transfer.js';
+import { TRANSFER, collectRemote, commandKey, macOf, signTransfer, signTrust } from '../../js/transfer.js';
 import { checkLaunch, readLaunchResult } from '../../js/launch.js';
 import { HostClient } from '../../js/host-client.js';
 import { LaunchService } from '../../js/launch-service.js';
@@ -38,6 +38,27 @@ test('a command is signed exactly as the host checks it', async () => {
     target: { machine: await deviceIdOf(machine.public), session: '0f3c4d5e-6a7b-4c8d-9e0f-a1b2c3d4e5f6' },
     to: '00112233445566778899aabbccddeeff', issuedAt: 1793300000, expiresAt: 1793300300,
   });
+});
+
+test('a folder-trust answer is signed for one choice on one question, for the machine asking it', async () => {
+  const [me, machine] = await Promise.all([phone(), source()]);
+  const [deviceId, machineId] = await Promise.all([deviceIdOf(me.public), deviceIdOf(machine.public)]);
+  const signed = await signTrust({
+    key: me, deviceId, machinePublic: machine.public,
+    question: '5d0c9f3e-2b1a-4c8d-9e7f-6a5b4c3d2e1f', choice: 'trust',
+    now: 1793300000 * 1000, request: '7d0f3a2e-1c4b-4d5e-8f60-112233445566',
+  });
+  const bytes = fromBase64url(signed.body);
+  assert.deepEqual(JSON.parse(fromUtf8.decode(bytes)), {
+    v: 1, action: 'launch.trust:trust', request: '7d0f3a2e-1c4b-4d5e-8f60-112233445566',
+    principal: { kind: 'user', device: deviceId },
+    target: { machine: machineId, session: '5d0c9f3e-2b1a-4c8d-9e7f-6a5b4c3d2e1f' },
+    to: machineId, issuedAt: 1793300000, expiresAt: 1793300300,
+  });
+  // The machine makes the same MAC from its side (tests/AgentBridge.Host.Tests/SignedCommandTests.cs
+  // verifies this very command).
+  assert.equal(signed.mac, toBase64url(await macOf(await commandKey(machine, me.public, deviceId, machineId), bytes)));
+  assert.equal(signed.mac, 'OO_ZAWL1C15dpDTn1IcnT-RZXcsEtdN-9poKPLlx5bA');
 });
 
 test('only the machine a command is for can make its key, from its side of the exchange', async () => {
