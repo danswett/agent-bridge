@@ -648,6 +648,29 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public void An_npm_loader_is_left_out_when_its_agent_executable_is_listed()
+    {
+        var t = DateTimeOffset.Parse("2026-11-01T00:54:42Z", System.Globalization.CultureInfo.InvariantCulture);
+        const string Loader = @"""C:\Program Files\nodejs\node.exe"" C:\Users\u\AppData\Roaming\npm/node_modules/@github/copilot/npm-loader.js";
+        const string Native = @"C:\Users\u\AppData\Roaming\npm\node_modules\@github\copilot\node_modules\@github\copilot-win32-x64\copilot.exe";
+        var listing = new SystemProcessInspector.ListedProcess[]
+        {
+            new("copilot", 9456, t.AddMilliseconds(300), Native, Parent: 9992),
+            new("node", 9992, t, Loader), // started by hand: no --session-id, no lock of its own (#153)
+            new("copilot", 3796, t.AddMinutes(20).AddMilliseconds(300), Native + " --session-id 73d96826", Parent: 1600),
+            new("node", 1600, t.AddMinutes(20), Loader + " --session-id 73d96826"), // a launch's
+            new("node", 4000, t.AddMinutes(30), Loader), // a loader with no executable: Copilot run in node itself
+            new("copilot", 5100, t.AddMinutes(40), Native, Parent: 5000),
+            new("node", 5000, t.AddMinutes(41), Loader), // took the id of 5100's loader, which has gone
+        };
+
+        var (observation, _) = SystemProcessInspector.Classify(AgentKind.Copilot, "copilot", listing, listed: true, windows: true, _ => false);
+
+        Assert.Equal([9456, 3796, 4000, 5100, 5000], observation.Processes.Select(p => p.Id));
+        Assert.True(observation.Known);
+    }
+
+    [Fact]
     public void Ownership_is_only_consulted_on_Windows()
     {
         var listing = new SystemProcessInspector.ListedProcess[] { new("node", 11, null, null) };

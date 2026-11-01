@@ -81,7 +81,10 @@ public sealed class SystemProcessInspector : IProcessInspector
                     DateTimeOffset? started = null;
                     try { started = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero); }
                     catch (Exception e) when (e is InvalidOperationException or Win32Exception or NotSupportedException) { }
-                    listing.Add(new(candidate, id, started, CommandLineOf((id, started?.UtcTicks ?? 0))));
+                    // Only the agent's own executable is asked for its parent: that is the
+                    // loader to recognise in Classify.
+                    var parent = candidate is "node" or "bun" ? null : AgentBridge.Hooks.Ancestry.ParentOf(id);
+                    listing.Add(new(candidate, id, started, CommandLineOf((id, started?.UtcTicks ?? 0)), parent));
                 }
             }
         }
@@ -102,7 +105,7 @@ public sealed class SystemProcessInspector : IProcessInspector
         return observation;
     }
 
-    internal sealed record ListedProcess(string Candidate, int Id, DateTimeOffset? StartedAt, string? CommandLine);
+    internal sealed record ListedProcess(string Candidate, int Id, DateTimeOffset? StartedAt, string? CommandLine, int? Parent = null);
 
     // What a listing of candidate processes says about this agent, apart from reading the
     // machine, so the filtering is testable. Kept are the processes whose cached command
@@ -114,9 +117,17 @@ public sealed class SystemProcessInspector : IProcessInspector
         var unidentified = new List<AgentProcess>();
         var kept = new List<ListedProcess>();
         var known = listed;
-        foreach (var process in listing)
+        var all = listing.ToList();
+        // An npm install runs the agent as a node loader (npm-loader.js, codex.js) that starts
+        // the agent's own executable and waits on it. The executable is the session's process:
+        // it holds Copilot's lock and is what the hooks record. Counted as well, the loader was a
+        // process with no session: discovery held for two minutes after every launch and every
+        // restart, and worktree reclaim never ran while a session started by hand was open (#153).
+        var loaders = all.Where(p => p.Candidate is not ("node" or "bun") && p.Parent is > 0)
+            .Select(p => (Id: p.Parent!.Value, Child: p.StartedAt)).ToList();
+        foreach (var process in all)
         {
-            var (candidate, id, started, commandLine) = process;
+            var (candidate, id, started, commandLine, _) = process;
             // Another user's agent is none of this user's sessions, and nothing of it can
             // be read: taken for one, it held discovery for as long as it ran (#143).
             if (commandLine is null && windows && anotherUsers(id)) { continue; }
@@ -132,6 +143,14 @@ public sealed class SystemProcessInspector : IProcessInspector
                 continue;
             }
             if (candidate is "node" or "bun" && !IsAgentScript(agent, name, commandLine)) { continue; }
+            // A loader whose own agent executable is listed: that executable stands for it. Both
+            // start times must be known, and the loader's no later than its child's, so a pid
+            // the loader left behind and another runtime took is never mistaken for one.
+            if (candidate is "node" or "bun" && started is { } loaderStarted
+                && loaders.Any(l => l.Id == id && l.Child is { } child && loaderStarted <= child + TimeSpan.FromSeconds(1)))
+            {
+                continue;
+            }
             found.Add(new AgentProcess(id, started, commandLine));
         }
         return (new(found, known) { Listed = listed, Unidentified = unidentified }, kept);

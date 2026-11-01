@@ -480,6 +480,22 @@ public sealed class WorktreeReclaimerTests : IDisposable
     }
 
     [Fact]
+    public void Codexs_app_server_daemon_does_not_keep_finished_worktrees()
+    {
+        using var f = new Fixture();
+        // What Codex 0.166 leaves running after its session has exited (#154).
+        f.Processes.Run(AgentKind.Codex, 7728,
+            @"""\\?\C:\Users\u\.codex\packages\app-server-daemon\releases\0.166.0-x86_64-pc-windows-msvc\bin\codex.exe"" app-server --listen unix:// --managed-daemon");
+        f.Processes.Run(AgentKind.Codex, 9676,
+            @"""\\?\C:\Users\u\.codex\packages\app-server-daemon\releases\0.166.0-x86_64-pc-windows-msvc\bin\codex.exe"" app-server daemon pid-update-loop");
+
+        var usage = Reader(f).Read();
+
+        Assert.True(usage.Known, usage.Detail);
+        Assert.Empty(usage.Directories);
+    }
+
+    [Fact]
     public void Anything_the_usage_snapshot_cannot_account_for_makes_it_unknown()
     {
         using (var f = new Fixture())
