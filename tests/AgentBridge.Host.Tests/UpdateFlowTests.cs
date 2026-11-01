@@ -22,6 +22,9 @@ public sealed class UpdateFlowTests : IAsyncLifetime
     readonly List<string> log = [];
     readonly AppChannel app = new();
     string? readOnly;
+    // Whether the status pushed to the app is a few seconds behind (agent-ha-bridge is looked for
+    // at most every few seconds); host.status asks afresh.
+    bool cacheBehind;
     int asksChanged;
     TestRelay relay = null!;
     SessionSource source = null!;
@@ -62,7 +65,8 @@ public sealed class UpdateFlowTests : IAsyncLifetime
             Stop = () => { },
             Restart = () => { },
             Updates = updates,
-            ReadOnly = () => readOnly,
+            ReadOnly = () => cacheBehind ? null : readOnly,
+            ReadOnlyNow = () => readOnly,
         });
         var service = new SessionService(source, machine) { ReadOnly = () => readOnly, Updates = updates };
 
@@ -272,6 +276,19 @@ public sealed class UpdateFlowTests : IAsyncLifetime
         // And not handed over when it stops being read-only.
         readOnly = null;
         Assert.Null(control.Status().UpdateAsks);
+    }
+
+    [Fact]
+    public async Task Host_status_asked_for_says_afresh_whether_the_machine_is_read_only()
+    {
+        // agent-ha-bridge has just started: the status pushed to subscribers has not caught up.
+        cacheBehind = true;
+        readOnly = "agent-ha-bridge is running for this user";
+
+        var asked = (HostStatus)(await control.HandleAsync(app, HostOps.Status, default))!;
+
+        Assert.Equal(readOnly, asked.ReadOnly);
+        Assert.Null(control.Status().ReadOnly);
     }
 
     [Fact]

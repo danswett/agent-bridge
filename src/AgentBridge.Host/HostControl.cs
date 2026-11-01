@@ -39,8 +39,12 @@ public sealed class HostControlOptions
     // Other devices' presses of Check and Install, carried to the app in the status, and the
     // app's reports of its updater (host.update.report); null where there is nothing to carry.
     public UpdateService? Updates { get; init; }
-    // Why the host acts on nothing from other devices now, or null (HostStatus.ReadOnly).
+    // Why the host acts on nothing from other devices now, or null (HostStatus.ReadOnly): as
+    // pushed with every status, which may be a few seconds old (agent-ha-bridge is looked for at
+    // most every few seconds), and as host.status asks it, afresh. That is what the app reads
+    // just before it stops the host for an install a device asked for.
     public Func<string?> ReadOnly { get; init; } = () => null;
+    public Func<string?>? ReadOnlyNow { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -92,12 +96,12 @@ public sealed class HostControl
         };
     }
 
-    public HostStatus Status()
+    public HostStatus Status(bool fresh = false)
     {
-        lock (gate) { return StatusLocked(); }
+        lock (gate) { return StatusLocked(fresh); }
     }
 
-    HostStatus StatusLocked()
+    HostStatus StatusLocked(bool fresh = false)
     {
         var running = Volatile.Read(ref this.running);
         var now = Configured();
@@ -119,7 +123,7 @@ public sealed class HostControl
             RestartRequired = now != running,
             Log = options.Log,
             UpdateAsks = options.Updates?.Asks is { Count: > 0 } asks ? asks : null,
-            ReadOnly = options.ReadOnly(),
+            ReadOnly = fresh && options.ReadOnlyNow is { } afresh ? afresh() : options.ReadOnly(),
         };
     }
 
@@ -148,7 +152,7 @@ public sealed class HostControl
         switch (op)
         {
             case HostOps.Status:
-                return Status();
+                return Status(fresh: true);
             case HostOps.Subscribe:
                 return Subscribe(channel);
             case HostOps.SignIn:

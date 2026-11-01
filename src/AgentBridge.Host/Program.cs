@@ -431,6 +431,7 @@ async Task<int> ServeAsync()
         Relay = ServeRelay,
         AgentHaBridge = agentHaCached,
         ReadOnly = () => ReadOnlyReason() ?? agentHaCached(),
+        ReadOnlyNow = ServeReadOnly,
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
