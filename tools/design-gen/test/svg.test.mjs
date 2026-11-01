@@ -129,3 +129,7 @@ test('a part may clear the dashes it inherits with stroke-dasharray none', () =>
   const svg = readDesignSvg(svgFile('undash', '<g stroke-dasharray="2 2"><path d="M2 8L14 8" stroke="currentColor" stroke-dasharray="none"/></g>'), 'glyph');
   assert.equal(parts(svg)[0].style['stroke-dasharray'], 'none');
 });
+
+test('an arc with a negative radius takes its absolute value and one with a zero radius is a line, as SVG draws them', () => {
+  assert.equal(formatCommands(parsePathData('M2 8A-3 -3 0 0 1 8 8a0 4 0 0 1 4 0')), 'M2,8 A3,3 0 0 1 8,8 L12,8');
+});

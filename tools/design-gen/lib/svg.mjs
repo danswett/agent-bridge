@@ -80,11 +80,13 @@ export function parsePathData(d, file = 'path') {
     // Z takes no numbers, so one after it is an error, not a Z repeated without end.
     if (C === 'Z') { out.push({ c: 'Z', p: [] }); x = sx; y = sy; cmd = null; skip(); continue; }
     if (C === 'A') {
-      const [rx, ry, rot] = [number(), number(), number()];
+      // SVG takes an arc's radii as absolute values and draws one with a zero radius as a
+      // straight line; XAML would refuse a negative Size, so normalise both here.
+      const [rx, ry, rot] = [number(), number(), number()].map((v, k) => (k < 2 ? Math.abs(v) : v));
       const [large, sweep] = [flag(), flag()];
       let [ex, ey] = [number(), number()];
       if (rel) { ex += x; ey += y; }
-      out.push({ c: 'A', p: [rx, ry, rot, large, sweep, ex, ey] });
+      out.push(rx === 0 || ry === 0 ? { c: 'L', p: [ex, ey] } : { c: 'A', p: [rx, ry, rot, large, sweep, ex, ey] });
       [x, y] = [ex, ey];
     } else if (C === 'H' || C === 'V') {
       const v = number();
