@@ -236,6 +236,63 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Turned_on_with_none_approved_this_apps_box_is_ticked_once_the_change_is_in_and_a_refused_switch_shows_the_hosts_word()
+    {
+        var link = new FleetTests.FakeFleetLink();
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        Saves(d => new HostSettingsView(true,
+            RemoteFolderTrust: d.TryGetProperty("remoteFolderTrust", out var t) ? t.GetBoolean() : host.Status.Settings.RemoteFolderTrust,
+            RemoteFolderTrustDevices: d.TryGetProperty("remoteFolderTrustDevices", out var l) ? [.. l.EnumerateArray().Select(e => e.GetString()!)] : host.Status.Settings.RemoteFolderTrustDevices));
+        await Connected();
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 1, "this app's row");
+
+        // No status event follows: the row shows the host's reply once the change is in.
+        settings.RemoteFolderTrust = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "the change made");
+        await Wait.UntilAsync(() => settings.TrustDevices.Single().Approved, "this app's box ticked");
+
+        // Refused: the switch is told the host's word again after the change it asked for.
+        var told = new List<bool>();
+        settings.PropertyChanged += (_, e) => { if (e.PropertyName is "" or nameof(SettingsViewModel.RemoteFolderTrust)) { lock (told) { told.Add(settings.RemoteFolderTrust); } } };
+        host.On(HostOps.Settings, _ => throw new InvalidOperationException("the config file is locked"));
+        settings.RemoteFolderTrust = false;
+        await Wait.UntilAsync(() => settings.HasError && !settings.Busy, "the refusal");
+        await Wait.UntilAsync(() => { lock (told) { return told.Count > 0 && told[^1]; } }, "the switch told it is still on");
+        Assert.True(settings.RemoteFolderTrust);
+    }
+
+    [Fact]
+    public async Task A_status_that_arrives_during_a_change_that_fails_is_still_checked()
+    {
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        var link = new FleetTests.FakeFleetLink();
+        link.PeopleNow.Add(new FleetHost(b, "Dana's phone"));
+        var main = new MainViewModel(connection, new CardContext { Deliveries = new Deliveries(connection, ui), Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), settings);
+        await using var fleet = new Fleet(link, main, ui, h => throw new InvalidOperationException("no machines"));
+        Saves(d => new HostSettingsView(true, RemoteFolderTrust: true,
+            RemoteFolderTrustDevices: [.. d.GetProperty("remoteFolderTrustDevices").EnumerateArray().Select(e => e.GetString()!)]));
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
+        await Connected();
+        await Wait.UntilAsync(() => settings.TrustDevices.Count == 2, "the devices");
+        // The phone approved; the reply is in and held, its status event never sent.
+        settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "the phone approved");
+
+        // The next change fails, after the phone was revoked at the terminal and that status came.
+        host.On(HostOps.Settings, _ =>
+        {
+            host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };
+            host.SendAsync(HostOps.StatusEvent, host.Status).GetAwaiter().GetResult();
+            throw new InvalidOperationException("the config file is locked");
+        });
+        settings.TrustDevices.Single(d => d.Id == a).Approved = false;
+
+        await Wait.UntilAsync(() => settings.HasError && !settings.Busy, "the refusal");
+        await Wait.UntilAsync(() => !settings.TrustDevices.Single(d => d.Id == b).Approved && settings.TrustDevices.Single(d => d.Id == a).Approved, "what the host has now");
+    }
+
+    [Fact]
     public async Task A_device_ticked_and_unticked_quickly_ends_unapproved_and_so_does_the_switch()
     {
         const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", b = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";

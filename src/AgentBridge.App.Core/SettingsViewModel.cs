@@ -148,7 +148,9 @@ public sealed class SettingsViewModel : Observable
         }
         finally
         {
-            if (Interlocked.Decrement(ref pendingEdits) == 0) { trustWanted = null; }
+            // The last one in: the switch and every device row show what the host has now,
+            // which redraws held back while changes were on their way did not.
+            if (Interlocked.Decrement(ref pendingEdits) == 0) { Refresh(); }
         }
     }
 

@@ -305,25 +305,41 @@ public sealed partial class LaunchViewModel
     // The relay or this machine's loopback came up after this machine's questions were listed
     // through the pipe alone: list them through the relay now, so one this app may answer offers
     // Trust and Quit without a reload. One at a time.
+    // A change that came while one was running asks again once it is done: the first may have
+    // looked before the loopback's hello was in, and found nothing to list.
     bool relisting;
+    bool relistAgain;
 
     void RelistLocalTrust()
     {
-        if (!shown || relisting || machine is not { IsLocal: true } m || localTrust is not null || options?.Trust is not { Count: > 0 } piped) { return; }
+        if (!shown || machine is not { IsLocal: true } m || localTrust is not null || options?.Trust is not { Count: > 0 }) { return; }
         if (main.Fleet?.State != FleetState.Connected) { return; }
+        if (relisting) { relistAgain = true; return; }
         relisting = true;
-        var load = loads;
-        _ = Task.Run(async () =>
+        relistAgain = false;
+        _ = RelistAsync(m, loads);
+    }
+
+    // Started from the UI thread and continued there, so what it reads of the connection follows
+    // the updates already queued for it (its hello, which says whether it answers), rather than
+    // racing them from the thread pool.
+    async Task RelistAsync(Machine m, int load)
+    {
+        IReadOnlyList<TrustQuestion>? got = null;
+        try { got = await LocalTrustAsync(options); }
+        finally
         {
-            var got = await LocalTrustAsync(options);
             ui.Post(() =>
             {
                 relisting = false;
-                if (load != loads || m != machine || got is null) { return; }
-                localTrust = got;
-                DrawTrust();
+                if (load == loads && m == machine && got is not null)
+                {
+                    localTrust = got;
+                    DrawTrust();
+                }
+                if (relistAgain) { relistAgain = false; RelistLocalTrust(); }
             });
-        });
+        }
     }
 
     // This machine's questions through the relay, where the pipe listed any: only then, since
