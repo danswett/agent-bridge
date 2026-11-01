@@ -40,7 +40,7 @@ public sealed class AutoUpdater
     // so a device pressing Check over and over costs the feed nothing.
     public static readonly TimeSpan CheckAgainAfter = TimeSpan.FromMinutes(1);
     // How long after a failed download it is not downloaded again, whoever asks.
-    public static readonly TimeSpan DownloadAgainAfter = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan DownloadAgainAfter = ObservedUpdater.DownloadAgainAfter;
     // How many presses are remembered as taken, across restarts.
     public const int TakenKept = 32;
     // How a press the app took and had not carried out when it last stopped (quit, signed out, the
@@ -69,8 +69,6 @@ public sealed class AutoUpdater
     DateTimeOffset? lastCheckAt;
     string? lastCheckFailed;
     string? lastFailure;
-    // When the last download failed, of which release.
-    (string Release, DateTimeOffset At)? downloadFailed;
     DateTimeOffset? idleSince;
     string? lastWhyNot;
     int busy;
@@ -400,20 +398,8 @@ public sealed class AutoUpdater
                 // As of when it was asked: a press after that, a minute on, asks again.
                 (lastCheckAt, lastCheckFailed) = (now, null);
             }
-            if (found is not null && updater.Ready != found)
-            {
-                if (downloadFailed is { } d && d.Release == found && now - d.At < DownloadAgainAfter)
-                {
-                    throw new InvalidOperationException($"downloading {found} failed {Words.Ago(d.At, now)}; it is tried again after {(d.At + DownloadAgainAfter).ToLocalTime():t}");
-                }
-                try { await updater.DownloadAsync(_ => { }); }
-                catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
-                {
-                    downloadFailed = (found, time.GetUtcNow());
-                    throw;
-                }
-                downloadFailed = null;
-            }
+            // Not again for a while after it failed, from here or Settings (ObservedUpdater).
+            if (found is not null && updater.Ready != found) { await updater.DownloadAsync(_ => { }); }
         }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {

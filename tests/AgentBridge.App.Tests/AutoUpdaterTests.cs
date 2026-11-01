@@ -999,6 +999,44 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_download_that_failed_in_Settings_is_not_tried_again_for_a_while_by_a_devices_press()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        shared = new ObservedUpdater(updater, time);
+        await StartAsync();
+        updater.DownloadFails = new IOException("the connection was reset");
+        await shared.CheckAsync();
+        await Assert.ThrowsAsync<IOException>(() => shared.DownloadAsync(_ => { }));
+        updater.DownloadFails = null;
+
+        time.Advance(TimeSpan.FromMinutes(2));
+        await AskedAsync(UpdateAskKind.Check);
+
+        Assert.Equal(1, updater.Downloads);
+        Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
+        Assert.Contains("tried again after", auto.State.Last.Reason);
+        time.Advance(AutoUpdater.DownloadAgainAfter);
+        await AskedAsync(UpdateAskKind.Check, "9b8c7d6e-5f40-4321-8abc-def012345678");
+        Assert.Equal(2, updater.Downloads);
+    }
+
+    [Fact]
+    public async Task A_download_waiting_on_one_that_fails_does_not_try_again_at_once()
+    {
+        var inner = new GatedDownloads();
+        var observed = new ObservedUpdater(inner, time);
+        await observed.CheckAsync();
+        var first = observed.DownloadAsync(_ => { });
+        var second = observed.DownloadAsync(_ => { });
+
+        inner.Gate.SetException(new IOException("the connection was reset"));
+
+        await Assert.ThrowsAsync<IOException>(() => first);
+        await Assert.ThrowsAsync<DownloadHeldException>(() => second);
+        Assert.Equal(1, inner.Downloads);
+    }
+
+    [Fact]
     public async Task Overlapping_downloads_from_Settings_and_the_app_both_end_well_with_the_release_downloaded_once()
     {
         var inner = new GatedDownloads();

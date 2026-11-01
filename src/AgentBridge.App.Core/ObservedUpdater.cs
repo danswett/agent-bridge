@@ -15,8 +15,13 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     // when another holds it, so Settings' and the automatic one's overlapping made the second fail
     // (reported to every device as a failed update).
     readonly SemaphoreSlim downloading = new(1, 1);
+    // Which release's download last failed, and when: not tried again for DownloadAgainAfter,
+    // whoever asks (Settings, the automatic updates, a device's press, or one waiting above).
+    (string? Release, DateTimeOffset At)? failed;
     int checks;
     int downloads;
+
+    public static readonly TimeSpan DownloadAgainAfter = TimeSpan.FromMinutes(10);
 
     // Raised whenever anything below changes, on the thread that changed it.
     public event Action? Changed;
@@ -61,12 +66,27 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
             held = true;
             // The one waited for downloaded the release the last check found: nothing to do.
             if (inner.Ready is not null) { return; }
-            await inner.DownloadAsync(p =>
+            var release = Found;
+            var now = time.GetUtcNow();
+            if (failed is { } f && f.Release == release && now - f.At < DownloadAgainAfter)
             {
-                var now = Math.Clamp(p, 0, 100);
-                if (Progress != now) { Progress = now; Raise(); }
-                progress(p);
-            });
+                throw new DownloadHeldException($"downloading {release} failed {Words.Ago(f.At, now)}; it is tried again after {(f.At + DownloadAgainAfter).ToLocalTime():t}");
+            }
+            try
+            {
+                await inner.DownloadAsync(p =>
+                {
+                    var at = Math.Clamp(p, 0, 100);
+                    if (Progress != at) { Progress = at; Raise(); }
+                    progress(p);
+                });
+            }
+            catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+            {
+                failed = (release, time.GetUtcNow());
+                throw;
+            }
+            failed = null;
         }
         finally
         {
@@ -84,3 +104,6 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
 
     void Raise() => Changed?.Invoke();
 }
+
+// A download not tried, its release's having failed a moment ago (ObservedUpdater.DownloadAgainAfter).
+public sealed class DownloadHeldException(string message) : InvalidOperationException(message);

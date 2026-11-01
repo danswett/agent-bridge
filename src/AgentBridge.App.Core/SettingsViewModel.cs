@@ -338,7 +338,8 @@ public sealed class SettingsViewModel : Observable
         try { await updater.DownloadAsync(p => UpdateStatus = $"Downloading {updateVersion}… {p}%"); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            if (!manager.UpdateUnderWay) { AutoUpdater.Failed(prefs, savePrefs, updater, updateVersion, $"downloading {updateVersion} failed: {e.Message}", recorded: false); }
+            var why = e is DownloadHeldException ? e.Message : $"downloading {updateVersion} failed: {e.Message}";
+            if (!manager.UpdateUnderWay) { AutoUpdater.Failed(prefs, savePrefs, updater, updateVersion, why, recorded: false); }
             throw;
         }
         // Another check (the automatic one shares this updater) may have found a different release

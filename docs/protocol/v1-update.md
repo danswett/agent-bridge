@@ -36,7 +36,7 @@ before, never installed by itself, still waits for the sessions.
 | Presses waiting | At most 8 wait for the machine's app at once; a new one is then refused (`"this machine has too many presses waiting for its app already; try again in a few minutes"`), never one already accepted dropped |
 | The same press | A request sent again is the same press, before and for ten minutes after the app took it, and the app remembers the last 32 it took across restarts: none is carried out twice |
 | The feed | A press within a minute of the app's last check is answered from that check (its release, or its failure) without asking the feed again |
-| Downloads | A release whose download failed is not downloaded again for ten minutes, whoever presses; the press is answered `failed`, saying when it is tried again |
+| Downloads | A release whose download failed is not downloaded again for ten minutes, whoever asks (the machine's own Settings and automatic updates included); the press is answered `failed`, saying when it is tried again |
 
 ## Capability
 
