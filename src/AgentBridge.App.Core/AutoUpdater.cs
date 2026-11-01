@@ -104,16 +104,15 @@ public sealed class AutoUpdater
     }
 
     // The presses the app before this start had taken and not finished (UpdateInstallAsked,
-    // UpdateCheckAsked). One an update answered was reported by Announce, with its request; any
-    // other is ended as Restarted, not carried out now: an install pressed hours ago must not go
-    // ahead on a machine whose sessions were never watched for it.
+    // UpdateCheckAsked). One an update answered was reported by Announce, with its request; the
+    // other is ended as Restarted (the install first, there being one last outcome), not carried
+    // out now: an install pressed hours ago must not go ahead on sessions never watched for it.
     void Resume()
     {
         var p = prefs();
         if (p.UpdateInstallAsked is null && p.UpdateCheckAsked is null) { return; }
-        var left = p.UpdateInstallAsked ?? p.UpdateCheckAsked;
         save(p with { UpdateInstallAsked = null, UpdateCheckAsked = null });
-        if (left != p.LastUpdate?.Request)
+        if (new[] { p.UpdateInstallAsked, p.UpdateCheckAsked }.FirstOrDefault(r => r is not null && r != p.LastUpdate?.Request) is { } left)
         {
             log("update: a press taken before the app restarted was not carried out");
             Remember(UpdateOutcome.Refused, Restarted, null, left);

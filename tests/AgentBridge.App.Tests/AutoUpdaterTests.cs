@@ -746,6 +746,39 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_update_from_Settings_that_fails_is_what_the_devices_are_told_at_once()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        shared = new ObservedUpdater(updater, time);
+        await StartAsync();
+        var told = new List<UpdateState>();
+        auto.StateChanged += () => told.Add(auto.State);
+
+        AutoUpdater.Failed(() => prefs, p => prefs = p, shared, "0.2.0", "the host did not stop", time);
+
+        var last = Assert.Single(told).Last!;
+        Assert.Equal((UpdateOutcome.Failed, "0.2.0", "the host did not stop"), (last.Outcome, last.To, last.Reason));
+    }
+
+    [Fact]
+    public async Task A_check_pressed_beside_an_install_an_update_answered_is_reported_unfinished_after_the_restart()
+    {
+        await StartAsync();
+        prefs = prefs with
+        {
+            UpdateInstallAsked = Press,
+            UpdateCheckAsked = "5d0c1e2f-3a4b-4c5d-8e6f-7a8b9c0d1e2f",
+            LastUpdate = new UpdateResult { Outcome = UpdateOutcome.Updated, Request = Press, At = time.GetUtcNow() },
+        };
+
+        var restarted = new AutoUpdater(updater, connection, manager, () => prefs, p => prefs = p, log.Add, _ => null, time);
+
+        var last = restarted.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, AutoUpdater.Restarted, "5d0c1e2f-3a4b-4c5d-8e6f-7a8b9c0d1e2f"), (last.Outcome, last.Reason, last.Request));
+        Assert.Null(prefs.UpdateCheckAsked);
+    }
+
+    [Fact]
     public async Task A_release_whose_download_failed_is_still_reported_as_there()
     {
         prefs = prefs with { AutoUpdate = false };
