@@ -46,6 +46,8 @@ public sealed class AutoUpdater
     // How a press the app took and had not carried out when it last stopped (quit, signed out, the
     // machine restarted) ends: the next start says so, rather than leaving it to vanish.
     public const string Restarted = "the app on this machine restarted before carrying it out; press it again";
+    // How a press the app came to only after the host had let it go ends (UpdateProtocol.Lapses).
+    public const string Lapsed = "this machine's app did not take it within 10 minutes of the press; press it again";
 
     // Shared with Settings, whose checks and downloads it reports too.
     readonly ObservedUpdater updater;
@@ -179,12 +181,20 @@ public sealed class AutoUpdater
     // A press from another device (UpdateReporter): Check, or Install now. A newer press of the
     // same kind takes over from an older one, whose device then sees another request under way.
     // The tick it starts, which is already done if one was running (that one runs again for it).
-    public Task Ask(UpdateAskKind kind, string request)
+    // at: when the device pressed it, as the host says; one older than UpdateProtocol.Lapses has
+    // lapsed at the host, and is refused rather than carried out late.
+    public Task Ask(UpdateAskKind kind, string request, DateTimeOffset? at = null)
     {
         // Taken before, by this app or the one before a restart: carried out once.
         var taken = prefs().UpdateTaken ?? [];
         if (taken.Contains(request)) { return Task.CompletedTask; }
         save(prefs() with { UpdateTaken = [.. taken.Append(request).TakeLast(TakenKept)] });
+        if (at is { } pressed && time.GetUtcNow() - pressed > UpdateProtocol.Lapses)
+        {
+            log("update: a press that had lapsed was not carried out");
+            Remember(UpdateOutcome.Refused, Lapsed, null, request);
+            return Task.CompletedTask;
+        }
         lock (asks)
         {
             if (kind == UpdateAskKind.Install) { installRequest = request; installVetted = null; installAskedAt = time.GetUtcNow(); }

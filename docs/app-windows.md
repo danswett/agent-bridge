@@ -187,8 +187,10 @@ into one folder with one version. An app update is a host update, so they never 
   for the switch, for that release. How it ended is kept in the profile's settings
   (`lastUpdate`, with the press it answers in `updateRequest` across the restart), so the new
   version reports `updated`, or `failed` if it did not take, and the devices see it; an
-  automatic install that fails is reported `failed` too, as is one from Settings, whose Update
-  and restart also answers a device's Install not yet carried out. The presses being carried
+  automatic install that fails is reported `failed` too, as is one from Settings (its download
+  included), whose Update and restart also answers a device's Install not yet carried out. A
+  press the app comes to more than ten minutes after it was made has lapsed at the host and is
+  refused, not carried out late. The presses being carried
   out are kept too (`updateInstallAsked`, `updateCheckAsked`): one left unfinished when the app
   stopped for anything but an update is reported `refused` by its next start, never carried out
   then. Settings and the automatic updates

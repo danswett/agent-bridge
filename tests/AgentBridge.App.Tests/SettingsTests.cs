@@ -24,11 +24,18 @@ public sealed class SettingsTests : IAsyncLifetime
         public Action? OnApply;
         public Exception? CheckFails;
         public Exception? ApplyFails;
+        public Exception? DownloadFails;
         public bool Applied;
         public string? Ready { get; private set; }
         public string? InstalledVersion => "0.1.0";
         public Task<string?> CheckAsync() => CheckFails is { } e ? Task.FromException<string?>(e) : Task.FromResult<string?>("0.2.0");
-        public Task DownloadAsync(Action<int> progress) { progress(100); Ready = "0.2.0"; return Task.CompletedTask; }
+        public Task DownloadAsync(Action<int> progress)
+        {
+            if (DownloadFails is { } e) { return Task.FromException(e); }
+            progress(100);
+            Ready = "0.2.0";
+            return Task.CompletedTask;
+        }
         public void ApplyAndRestart() { OnApply?.Invoke(); if (ApplyFails is { } e) { throw e; } Applied = true; }
     }
 
@@ -566,6 +573,21 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.StartsWith("no downloaded update to install", last.Reason);
         Assert.Null(prefs.UpdateRequest);
         Assert.Equal("a-device-press", prefs.UpdateInstallAsked);
+    }
+
+    [Fact]
+    public async Task An_update_from_Settings_whose_download_fails_is_reported_to_the_devices()
+    {
+        await Connected();
+        updater.DownloadFails = new HttpRequestException("The response ended prematurely.");
+
+        await settings.CheckForUpdatesAsync();
+        await settings.InstallUpdateAsync();
+
+        var last = prefs.LastUpdate!;
+        Assert.Equal((UpdateOutcome.Failed, "0.2.0", "downloading 0.2.0 failed: The response ended prematurely."), (last.Outcome, last.To, last.Reason));
+        Assert.Equal("The response ended prematurely.", settings.Error);
+        Assert.Empty(host.Sent(HostOps.Stop));
     }
 
     [Fact]

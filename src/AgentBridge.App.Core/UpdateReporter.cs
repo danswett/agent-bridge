@@ -60,7 +60,7 @@ public sealed class UpdateReporter : IDisposable
                 fresh.Add(ask);
             }
         }
-        foreach (var ask in fresh) { _ = updater!.Ask(ask.Kind, ask.Request); }
+        foreach (var ask in fresh) { _ = updater!.Ask(ask.Kind, ask.Request, ask.At); }
         if (fresh.Count > 0 || listed || Connection() != Volatile.Read(ref triedTo)) { Report(); }
     }
 

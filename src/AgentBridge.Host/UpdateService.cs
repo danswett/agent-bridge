@@ -25,7 +25,7 @@ public sealed class UpdateService
 {
     // The relay's kinds for a person's device.
     static readonly HashSet<string> PersonKinds = new(["pwa", "app"], StringComparer.Ordinal);
-    public static readonly TimeSpan AskKept = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan AskKept = UpdateProtocol.Lapses;
     public const int MaxAsks = 8;
     // Each device may have this many presses of each kind taken in RateWindow; the rest are
     // refused, saying when to try again. Every new press makes the app ask the feed (or answer

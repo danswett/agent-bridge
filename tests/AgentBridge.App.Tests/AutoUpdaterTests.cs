@@ -640,6 +640,24 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_press_the_app_comes_to_after_it_lapsed_at_the_host_is_refused_not_carried_out_late()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        host.On(HostOps.UpdateReport, _ => new { ok = true });
+        var pressed = Make.T0 - UpdateProtocol.Lapses - TimeSpan.FromSeconds(1);
+        await StartAsync(FakeHost.StatusOf() with { UpdateAsks = [new UpdateAsk(Press, UpdateAskKind.Install, "pwa 1a2b3c4d", pressed)] });
+
+        using var reporter = new UpdateReporter(connection, auto, log.Add);
+
+        await Wait.UntilAsync(() => Reports().Any(r => r.Taken?.Contains(Press) == true && r.State.Last?.Request == Press), "the lapse reported");
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, AutoUpdater.Lapsed), (last.Outcome, last.Reason));
+        Assert.Equal(0, updater.Checks);
+        Assert.Null(auto.State.Request);
+        Assert.False(updater.Applied);
+    }
+
+    [Fact]
     public async Task A_restarted_host_is_told_at_once_and_an_unchanged_state_is_not_sent_again()
     {
         host.On(HostOps.UpdateReport, _ => new { ok = true });

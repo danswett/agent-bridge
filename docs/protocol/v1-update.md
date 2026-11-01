@@ -90,7 +90,7 @@ first start on the new release reports `updated` (or `failed`, "the update did n
 that `request`. A device following the machine sees its channel close as the host stops, and
 the outcome when it reconnects. An update from the machine's own Settings answers an Install a
 device pressed and the app had not yet carried out, and one that fails there is reported
-`failed` like an automatic one. A press the app took and had not finished when it stopped for
+`failed` like an automatic one, its download failing included. A press the app took and had not finished when it stopped for
 anything else (quit, sign-out, the machine restarting) is not carried out by its next start,
 which reports it `refused`, "the app on this machine restarted before carrying it out; press it
 again": an install pressed hours before must not go ahead on sessions never watched for it.
@@ -107,7 +107,8 @@ The host refuses a device that is not connected to the relay now, one that is no
 and a press with no app to carry it out. The app's refusals (another profile running, the host
 gone, a build folder) come back as `last` with `outcome: "refused"`, since the host has already
 answered `accepted` by then. A press the app has not taken within ten minutes lapses at the
-host.
+host, and an app that comes to it later (from a status it was slow to read) refuses it, with
+`last` saying so, rather than carrying it out late.
 
 ## Between the host and its app
 

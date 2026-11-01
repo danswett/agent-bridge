@@ -22,6 +22,9 @@ public static class UpdateProtocol
     public const int Reason = 512;
     public const int Notes = 4096;
     public const int RequestId = 64;
+    // A press the machine's app has not taken this long after it was made lapses: the host lets
+    // go of it, and an app that comes to it later (from a status it was slow to read) refuses it.
+    public static readonly TimeSpan Lapses = TimeSpan.FromMinutes(10);
 
     // A request id is the device's UUID for one press, as session.answer's.
     public static bool IsRequest(string? request) => request is { Length: > 0 and <= RequestId } && Guid.TryParse(request, out _);
