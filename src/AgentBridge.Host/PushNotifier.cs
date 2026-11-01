@@ -102,6 +102,10 @@ public sealed class PushNotifier : IAsyncDisposable
         // The question on devices now (notified, not yet resolved).
         public string? Shown;
         public string? FinishedKey;
+        // The main agent's answer as last seen outside a wait on a delegate: answering a
+        // delegate's question while the main agent stayed idle ends no turn of its.
+        public string? MainKey;
+        public bool MainRunning;
         public readonly HashSet<string> Notified = new(StringComparer.Ordinal);
         public readonly Queue<string> NotifiedOrder = new();
     }
@@ -141,7 +145,7 @@ public sealed class PushNotifier : IAsyncDisposable
             foreach (var s in source.Snapshot())
             {
                 if (sessions.ContainsKey(s.Id)) { continue; }
-                var t = sessions[s.Id] = new Tracked { Last = s };
+                var t = sessions[s.Id] = new Tracked { Last = s, MainKey = MainKey(s), MainRunning = s.WaitingOn is null && s.Status is SessionStatus.Working or SessionStatus.Waiting };
                 if (s.Question is { } q) { t.Due = new Due(NoticeKind.Question, now + this.options.QuestionDelay, q.Id); }
             }
         }
@@ -303,6 +307,15 @@ public sealed class PushNotifier : IAsyncDisposable
         var prev = t.Last;
         t.Last = s;
         t.Removed = false;
+        // The main agent's answer as it stood before any wait on a delegate began, and whether
+        // its turn was running then.
+        var baseline = t.MainKey;
+        var wasRunning = t.MainRunning;
+        if (s.WaitingOn is null)
+        {
+            t.MainKey = MainKey(s);
+            t.MainRunning = s.Status is SessionStatus.Working or SessionStatus.Waiting;
+        }
         if (s.Question is { } q)
         {
             // Back before its resolution went out (it flickered while an answer was typed):
@@ -323,8 +336,16 @@ public sealed class PushNotifier : IAsyncDisposable
         }
         // Answered (or gone) before it was notified: nothing to say.
         if (t.Due is { Kind: NoticeKind.Question }) { t.Due = null; }
-        if (s.Status == SessionStatus.Idle && prev is { Status: SessionStatus.Working or SessionStatus.Waiting }
-            && !string.IsNullOrWhiteSpace(s.Activity.Response) && FinishedKey(s) != t.FinishedKey)
+        // Waiting on a delegate (status rule 2) hides the main agent's turn: a turn finished
+        // then if it was running when the wait began (it may have ended, its answer already
+        // given, while the delegate asked), or if its answer is seen to have changed since.
+        // With neither (a session first seen already waiting on one), nothing says a turn
+        // ran. Sessions present at startup are seeded with theirs.
+        var turnRan = prev is { Status: SessionStatus.Waiting, WaitingOn: not null }
+            ? wasRunning || (baseline is { } before && MainKey(s) != before)
+            : prev is { Status: SessionStatus.Working or SessionStatus.Waiting };
+        if (s.Status == SessionStatus.Idle && turnRan
+            && !string.IsNullOrWhiteSpace(OwnResponse(s)) && FinishedKey(s) != t.FinishedKey)
         {
             t.Due = new Due(NoticeKind.Finished, now + options.FinishedDelay, null);
         }
@@ -336,7 +357,15 @@ public sealed class PushNotifier : IAsyncDisposable
     }
 
     static string FinishedKey(Session s) =>
-        $"{s.Activity.TurnCount}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s.Activity.Response ?? "")))[..16]}";
+        $"{s.Activity.TurnCount}:{MainKey(s)}";
+
+    // The main agent's own answer, whatever the status: unlike turnCount, it reads the same
+    // waiting and idle.
+    static string MainKey(Session s) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(OwnResponse(s) ?? "")))[..16];
+
+    // "Finished" is the main agent's turn only (subagents.md §7): its own response, never the
+    // delegate's that may be the latest text.
+    static string? OwnResponse(Session s) => s.Activity.Source?.Response is null ? s.Activity.Response ?? s.Activity.Own?.Response : s.Activity.Own?.Response;
 
     void Signal()
     {
@@ -540,11 +569,18 @@ public sealed class PushNotifier : IAsyncDisposable
     {
         var title = PushNotice.Flatten(s.Title);
         if (title.Length == 0) { title = $"{AgentName(s.Agent)} session"; }
+        // A delegate's question says who asks; it keeps the session's tag, so the newer of the
+        // two questions replaces the older on the device.
+        if (kind == NoticeKind.Question && s.Question?.Agent is { } asker)
+        {
+            var name = PushNotice.Flatten(s.Subagents?.FirstOrDefault(a => a.Id == asker)?.Name);
+            title = $"{(name.Length > 0 ? name : "A delegate")} asks · {title}";
+        }
         var body = kind switch
         {
             NoticeKind.Question => $"{machine.Name} · {Waiting(s.Question)}\n" +
                 (PushNotice.Flatten(s.Question?.Message) is { Length: > 0 } m ? m : "This session is waiting for an answer."),
-            NoticeKind.Finished => $"{machine.Name} · finished\n{Preview(s.Activity.Response)}",
+            NoticeKind.Finished => $"{machine.Name} · finished\n{Preview(OwnResponse(s))}",
             _ => $"{machine.Name} · {(ended ? "session ended" : "no longer waiting")}",
         };
         return PushNotice.Fit(new PushMessage

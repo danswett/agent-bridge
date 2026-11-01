@@ -267,8 +267,8 @@ public sealed class StopService : ISessionStopper
         }
     }
 
-    // A Copilot subagent's question is only in the transcript. One that cannot be read cannot
-    // say nothing is asking.
+    // A Copilot question, a subagent's included, written since the session source last read
+    // the transcript. One that cannot be read cannot say nothing is asking.
     bool CopilotAsking(Session session)
     {
         if (session.Agent != AgentKind.Copilot || !Guid.TryParseExact(session.Id, "D", out _)) { return false; }

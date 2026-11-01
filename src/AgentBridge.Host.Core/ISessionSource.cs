@@ -25,6 +25,11 @@ public interface ISessionSource : IAsyncDisposable
     // session.get: the full session with its tool history, or null once it has gone.
     Session? Get(string id);
 
+    // session.get { id, agent }: one of the session's sub-agents with its own response,
+    // reasoning and tool history, within the session budget. Null when the session has gone
+    // or has no sub-agent by that id, or from a source that lists none.
+    Task<Subagent?> GetAgentAsync(string id, string agent, CancellationToken cancellationToken = default) => Task.FromResult<Subagent?>(null);
+
     // Where a live session's files are, for a host that types into it and then reads what
     // the agent recorded: its transcript and, for Claude and Codex, agent-ha-bridge's hook
     // registration. Null once it has gone, or from a source that does not know.

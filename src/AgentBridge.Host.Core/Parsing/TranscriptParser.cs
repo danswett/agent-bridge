@@ -21,9 +21,18 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
     // and Count checks the parsed type anyway.
     public void Skim(ReadOnlyMemory<byte> line)
     {
-        if (!SkimMarkers.Any(m => line.Span.IndexOf(m) >= 0)) { return; }
+        if (!SkimWants(line.Span)) { return; }
         using var doc = TryParse(line);
         if (doc is { RootElement.ValueKind: JsonValueKind.Object } d) { Count(d.RootElement); }
+    }
+
+    protected virtual bool SkimWants(ReadOnlySpan<byte> line)
+    {
+        foreach (var m in SkimMarkers)
+        {
+            if (line.IndexOf(m) >= 0) { return true; }
+        }
+        return false;
     }
 
     public void Parse(ReadOnlyMemory<byte> line)
@@ -69,7 +78,7 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
         if (countsAsTurn) { S.Prompts++; }
         // A new message starts a new turn: last turn's reasoning would otherwise sit under
         // this turn's status.
-        S.Reasoning = null;
+        S.ForgetReasoning();
         S.SetStatus(SessionStatus.Working);
         S.Activity(at);
     }

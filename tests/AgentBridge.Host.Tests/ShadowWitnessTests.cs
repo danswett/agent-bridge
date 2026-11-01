@@ -263,6 +263,29 @@ public sealed class ShadowWitnessTests : IDisposable
 
         Assert.Equal("agent-ha-bridge#258", Known(Daemon(woken), Host(agents: 1), ShadowKinds.BackgroundAgents));
     }
+
+    // #84: as the host now reads it, a woken agent's turn whose latest reply asks for nothing
+    // more ends its run, even after a reply in the same turn asked for tools. The witness must
+    // agree, or it would put an agent the host no longer counts down to the daemon.
+    [Fact]
+    public void A_woken_agents_turn_ends_its_run_when_its_latest_reply_asks_for_nothing_after_one_that_asked_for_tools()
+    {
+        Write(
+            Event("subagent.started", new { toolCallId = "c1", executionMode = "background" }, agentId: "a1"),
+            Event("assistant.turn_end", new { }, agentId: "a1"),
+            Event("subagent.completed", new { toolCallId = "c1" }),
+            Event("user.message", new { content = "carry on" }, agentId: "a1"),
+            Event("assistant.turn_start", new { }, agentId: "a1"));
+        var asked = Write(Event("assistant.message", new { content = "", toolRequests = new[] { new { name = "view" } } }, agentId: "a1"),
+            Event("assistant.turn_end", new { }, agentId: "a1"));
+        Assert.Equal("agent-ha-bridge#258", Known(Daemon(asked), Host(agents: 1), ShadowKinds.BackgroundAgents));
+
+        var replied = Write(Event("assistant.turn_start", new { }, agentId: "a1"),
+            Event("assistant.message", new { content = "", toolRequests = new[] { new { name = "view" } } }, agentId: "a1"),
+            Event("assistant.message", new { content = "Done." }, agentId: "a1"),
+            Event("assistant.turn_end", new { }, agentId: "a1"));
+        Assert.Null(Known(Daemon(replied), Host(agents: 1), ShadowKinds.BackgroundAgents));
+    }
     [Fact]
     public void A_daemon_model_is_put_down_to_a_subagent_only_when_a_subagent_named_it_last()
     {

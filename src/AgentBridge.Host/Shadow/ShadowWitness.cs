@@ -344,7 +344,8 @@ public sealed partial class TranscriptEvidence(string path)
                     if (agentId is not null && agents.TryGetValue(agentId, out var talking))
                     {
                         Wake(talking, at);
-                        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("toolRequests", out var r) && r.ValueKind == JsonValueKind.Array && r.GetArrayLength() > 0) { talking.AskedForTools = true; }
+                        // The turn's latest reply decides, as in BackgroundWork (#84).
+                        talking.AskedForTools = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("toolRequests", out var r) && r.ValueKind == JsonValueKind.Array && r.GetArrayLength() > 0;
                     }
                     if (Str(data, "model") is { } model)
                     {

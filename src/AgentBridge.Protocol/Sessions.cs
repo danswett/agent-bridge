@@ -90,6 +90,13 @@ public static class Limits
     public const int AnswerRequest = 16 * 1024;
     // The text of a session.reply.
     public const int ReplyText = 16 * 1024;
+    // A sub-agent's entry (docs/design/subagents.md §5): its label, the start of the prompt
+    // it was given, and the end of what it last said or thought.
+    public const int SubagentName = 120;
+    public const int SubagentTask = 512;
+    public const int SubagentLine = 300;
+    // Entries a host lists, running ones first; SessionBudget.Fit may cap them further.
+    public const int Subagents = 20;
 
     // Keeps the end of the text, as clients show the most recent part. Never splits a
     // character (UTF-8 sequence or surrogate pair).
@@ -131,39 +138,119 @@ public static class Limits
 public static class SessionBudget
 {
     public const int MaxSessionBytes = 40 * 1024;
+    // Sub-agent entries left once everything else about them has been trimmed.
+    public const int SubagentsCap = 8;
 
-    // Trims in the order that loses least for a reader: oldest tool history, reasoning,
-    // the user's message, the response (to 4 KiB, end kept), the question's message (to
-    // 2 KiB), and only then the question's fields, marking the question truncated so a
-    // client says to answer elsewhere.
+    // Additive first: everything an older client ignores goes before anything it shows, so a
+    // session carrying sub-agent fields (subagents.md) never shows an older reader less than
+    // the same session would without them. The sub-agents (finished entries, every line,
+    // every task, all but SubagentsCap), the main agent's own reasoning, its own response (to
+    // 4 KiB, then gone, still marked truncated), the entries' tools, and the entries, each
+    // counted in subagentsMore. Then, as before them: oldest tool history, reasoning, the
+    // user's message, the response (to 4 KiB, end kept), the question's message (to 2 KiB),
+    // and only then the question's fields, marking the question truncated so a client says
+    // to answer elsewhere.
     public static Session Fit(Session s, int maxBytes = MaxSessionBytes)
     {
         bool Fits(Session x) => ProtocolJson.ByteCount(x) <= maxBytes;
         if (Fits(s)) { return s; }
 
+        s = Subagents(s, a => a.Where(e => !e.Finished));
+        if (!Fits(s)) { s = Subagents(s, a => a.Select(e => e with { Line = null })); }
+        if (!Fits(s)) { s = Subagents(s, a => a.Select(e => e with { Task = null })); }
+        if (!Fits(s)) { s = Subagents(s, a => a.Take(SubagentsCap)); }
+        if (!Fits(s)) { s = WithOwn(s, o => o with { Reasoning = null }); }
+        if (!Fits(s))
+        {
+            s = WithOwn(s, o =>
+            {
+                var (own, cut) = Limits.KeepEnd(o.Response, 4 * 1024);
+                return o with { Response = own, ResponseTruncated = cut || o.ResponseTruncated == true ? true : null };
+            });
+        }
+        if (!Fits(s)) { s = WithOwn(s, o => o with { Response = null, ResponseTruncated = o.Response is null ? o.ResponseTruncated : true }); }
+        if (!Fits(s)) { s = Subagents(s, a => a.Select(e => e with { CurrentTool = null })); }
+        if (!Fits(s)) { s = Subagents(s, _ => []); }
+        if (Fits(s)) { return s; }
+
+        // What is left of them is a few ids and flags. The older fields are trimmed exactly as
+        // they would be without them, then, should those few bytes still overflow, further.
+        s = Older(s, x => Fits(WithoutSubagentFields(x)));
+        return Older(s, Fits);
+    }
+
+    static Session Older(Session s, Func<Session, bool> fits)
+    {
         var history = s.Activity.History?.ToList();
-        while (history is { Count: > 0 } && !Fits(s))
+        while (history is { Count: > 0 } && !fits(s))
         {
             history.RemoveAt(0);
             s = s with { Activity = s.Activity with { History = history.Count == 0 ? null : [.. history] } };
         }
-        if (!Fits(s)) { s = s with { Activity = s.Activity with { Reasoning = null } }; }
-        if (!Fits(s)) { s = s with { Activity = s.Activity with { UserMessage = null } }; }
-        if (!Fits(s))
+        if (!fits(s)) { s = s with { Activity = s.Activity with { Reasoning = null } }; }
+        if (!fits(s)) { s = s with { Activity = s.Activity with { UserMessage = null } }; }
+        if (!fits(s))
         {
             var (r, cut) = Limits.KeepEnd(s.Activity.Response, 4 * 1024);
             s = s with { Activity = s.Activity with { Response = r, ResponseTruncated = cut || s.Activity.ResponseTruncated == true ? true : null } };
         }
-        if (!Fits(s) && s.Question is { } q1)
+        if (!fits(s) && s.Question is { } q1)
         {
             s = s with { Question = q1 with { Message = Limits.KeepStart(q1.Message, 2 * 1024)!, Truncated = true } };
         }
-        if (!Fits(s) && s.Question is { } q2)
+        if (!fits(s) && s.Question is { } q2)
         {
             s = s with { Question = q2 with { Fields = [], Truncated = true } };
         }
-        if (!Fits(s)) { s = s with { Activity = s.Activity with { Response = null, ResponseTruncated = true, CurrentTool = null } }; }
+        if (!fits(s))
+        {
+            s = s with { Activity = s.Activity with { Response = null, ResponseTruncated = true, CurrentTool = null } };
+        }
         return s;
+    }
+
+    // The session as a client that predates sub-agents reads it.
+    internal static Session WithoutSubagentFields(Session s) => s with
+    {
+        Subagents = null,
+        SubagentsMore = null,
+        WaitingOn = null,
+        Activity = s.Activity with { Source = null, Own = null },
+        Question = s.Question is { } q ? q with { Agent = null } : null,
+    };
+
+    // Trims the list, counting whatever it drops in subagentsMore.
+    static Session Subagents(Session s, Func<IEnumerable<Subagent>, IEnumerable<Subagent>> trim)
+    {
+        if (s.Subagents is not { Count: > 0 } list) { return s; }
+        var kept = trim(list).ToList();
+        var more = (s.SubagentsMore ?? 0) + list.Count - kept.Count;
+        return s with { Subagents = kept.Count == 0 ? null : kept, SubagentsMore = more > 0 ? more : null };
+    }
+
+    static Session WithOwn(Session s, Func<OwnActivity, OwnActivity> change) =>
+        s.Activity.Own is { } own ? s with { Activity = s.Activity with { Own = change(own) } } : s;
+
+    // session.get { id, agent }: one sub-agent in full, within the same budget. Its oldest
+    // tools go first, then its reasoning, its response to 4 KiB, then everything but the entry.
+    public static Subagent Fit(Subagent a, int maxBytes = MaxSessionBytes)
+    {
+        bool Fits(Subagent x) => ProtocolJson.ByteCount(x) <= maxBytes;
+        if (Fits(a)) { return a; }
+        var history = a.History?.ToList();
+        while (history is { Count: > 0 } && !Fits(a))
+        {
+            history.RemoveAt(0);
+            a = a with { History = history.Count == 0 ? null : [.. history] };
+        }
+        if (!Fits(a)) { a = a with { Reasoning = null }; }
+        if (!Fits(a))
+        {
+            var (r, cut) = Limits.KeepEnd(a.Response, 4 * 1024);
+            a = a with { Response = r, ResponseTruncated = cut || a.ResponseTruncated == true ? true : null };
+        }
+        if (!Fits(a)) { a = a with { Response = null, ResponseTruncated = a.Response is null ? a.ResponseTruncated : true, Line = null, Task = null }; }
+        return a;
     }
 }
 
@@ -227,6 +314,15 @@ public sealed record Session
     // With Driver Agent, which agent, when the host knows (within Limits.DriverPrincipal):
     // "homeassistant:<user id>" for a press by one of homeAssistant.agentUserIds.
     public string? DriverPrincipal { get; init; }
+    // The sub-agents this session started, at any depth (docs/design/subagents.md): running
+    // ones first, then the most recently finished. Absent when there are none. Older clients
+    // ignore it and keep reading activity.background's counts.
+    public IReadOnlyList<Subagent>? Subagents { get; init; }
+    // Entries left out of Subagents: by the host's list limit or by SessionBudget.Fit.
+    public int? SubagentsMore { get; init; }
+    // Status precedence rule 2: the sub-agent whose question is pending (Question.Agent),
+    // when the session itself has none.
+    public string? WaitingOn { get; init; }
 
     // The list and event form: everything but the tool history.
     public Session WithoutHistory() => Activity.History is null ? this : this with { Activity = Activity with { History = null } };
@@ -245,6 +341,72 @@ public sealed record Activity
     // Work the session started that outlives its own turn, still running. Absent when there
     // is none; status says nothing about it, so an idle session with this is not finished.
     public Background? Background { get; init; }
+    // Which sub-agent wrote the top-level response and reasoning, each on its own: they stay
+    // last-writer-wins for older clients, and a main agent's reply can sit beside a
+    // delegate's reasoning. Absent while both are the main agent's own.
+    public ActivitySource? Source { get; init; }
+    // The main agent's own text for each field Source attributes to a sub-agent, so a newer
+    // client never loses the main agent's answer. Sent only with Source.
+    public OwnActivity? Own { get; init; }
+}
+
+// The sub-agent ids that wrote the top-level text; a field left out is the main agent's.
+public sealed record ActivitySource
+{
+    public string? Response { get; init; }
+    public string? Reasoning { get; init; }
+}
+
+// The main agent's latest response and reasoning, for the fields Source names a sub-agent
+// for. A field absent here, with Source naming one for it, means the main agent has none.
+public sealed record OwnActivity
+{
+    public string? Response { get; init; }
+    public bool? ResponseTruncated { get; init; }
+    public string? Reasoning { get; init; }
+    // When the main agent last wrote either.
+    public DateTimeOffset? At { get; init; }
+}
+
+[UnknownAs(Task)]
+public enum SubagentKind { Background, Task }
+
+// Idle: a background sub-agent between runs, which a message can wake. Ended: it can no
+// longer run (its own abort, a failure, the session's CLI exiting, or a task agent done).
+[UnknownAs(Idle)]
+public enum SubagentStatus { Working, Idle, Waiting, Ended }
+
+// How a finished run went, for the done and failed glyphs. A host that did not see the run
+// end (its start was all it read) leaves it out.
+[UnknownAs(Done)]
+public enum SubagentOutcome { Done, Failed }
+
+// One sub-agent (docs/design/subagents.md §2). Lists carry the entry; session.get { id,
+// agent } adds its own response, reasoning and tool history.
+public sealed record Subagent
+{
+    public required string Id { get; init; }
+    public string? Parent { get; init; }
+    public required SubagentKind Kind { get; init; }
+    public string? Name { get; init; }
+    public string? Task { get; init; }
+    public string? Model { get; init; }
+    public required SubagentStatus Status { get; init; }
+    public SubagentOutcome? Outcome { get; init; }
+    public DateTimeOffset? StartedAt { get; init; }
+    public DateTimeOffset? EndedAt { get; init; }
+    public string? Line { get; init; }
+    public ToolCall? CurrentTool { get; init; }
+    public int Shells { get; init; }
+    // session.get { id, agent } only.
+    public string? Response { get; init; }
+    public bool? ResponseTruncated { get; init; }
+    public string? Reasoning { get; init; }
+    public IReadOnlyList<ToolCall>? History { get; init; }
+
+    // Not running: idle between runs, or ended. The first entries the budget lets go.
+    [JsonIgnore]
+    public bool Finished => Status is SubagentStatus.Idle or SubagentStatus.Ended;
 }
 
 // Counts, never ids: a client shows that the session is waiting and on what kind of work.
@@ -285,6 +447,9 @@ public sealed record Question
     // the host does not drive, or on a host with remote approval off): a client shows it with
     // no controls and says it is waiting at the machine.
     public bool? AnswerAtMachine { get; init; }
+    // The sub-agent that asked, when it is not the session's own question (status
+    // precedence rule 2). Absent for the main agent's.
+    public string? Agent { get; init; }
 }
 
 public sealed record Field

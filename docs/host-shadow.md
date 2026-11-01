@@ -462,6 +462,10 @@ The same runs, and review, found six host bugs, all fixed:
   come and showed the session working until its next prompt. Seen as `status` daemon `shell`,
   host `working` on 2026-10-30 from 17:05 PT, cut short by the next bug. The daemon was right:
   a turn's latest reply now decides.
+* **The same for a background agent** (`SubagentTests`, #84). A sub-agent's turn of that shape
+  kept the agent counted in `background.agents` past its `turn_end`, until its own
+  `agent_idle` arrived, which can be an hour and a half late. Its latest reply now decides too
+  (#173), and the witness (`ShadowWitness`) follows the host's rule.
 * **A relay socket that aborted itself crashed the host** (`RelayTests`). The keep-alive
   aborts a socket whose pong never comes, and the receive then throws
   `OperationCanceledException`, which the relay client let through. Four minutes after a

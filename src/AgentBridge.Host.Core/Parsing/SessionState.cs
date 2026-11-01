@@ -10,8 +10,18 @@ internal sealed class SessionState
     // A title the agent generated itself (Claude's ai-title), better than the first message.
     public string? AgentTitle;
     public string? UserMessage;
+    // The latest text, from whichever agent wrote it last, as older clients have it.
     public string? Response;
     public string? Reasoning;
+    // The sub-agent that wrote Response or Reasoning, null for the main agent's own.
+    public string? ResponseBy;
+    public string? ReasoningBy;
+    // The main agent's own latest text, and when it wrote it: activity.own.
+    public string? OwnResponse;
+    // OwnResponse was cut as the skim took it: kept bounded, since only the skim holds it.
+    public bool OwnResponseCut;
+    public string? OwnReasoning;
+    public DateTimeOffset? OwnAt;
     public string? Model;
     public string? Cwd;
     public string? Branch;
@@ -42,6 +52,7 @@ internal sealed class SessionState
     {
         FirstUserMessage = null;
         AgentTitle = null; UserMessage = null; Response = null; Reasoning = null; Model = null;
+        ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnResponseCut = false; OwnReasoning = null; OwnAt = null;
         Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null;
         Prompts = 0; Compactions = 0; Seen = false;
         Status = SessionStatus.Idle; StatusSince = null; EffectiveSince = null;
@@ -75,6 +86,29 @@ internal sealed class SessionState
 
     public bool Answer(string? id) => id is not null && Pending.RemoveAll(q => q.Id == id) > 0;
 
+    // What the main agent wrote: the latest text, and its own.
+    public void MainSaid(string? content, string? reasoning, DateTimeOffset? at)
+    {
+        if (reasoning is not null) { Reasoning = OwnReasoning = reasoning; ReasoningBy = null; OwnAt = at ?? OwnAt; }
+        if (content is not null) { Response = OwnResponse = content; OwnResponseCut = false; ResponseBy = null; OwnAt = at ?? OwnAt; }
+    }
+
+    // What a sub-agent wrote: the latest text still, as on agent-ha-bridge's card, now
+    // attributed, so a newer client can show the main agent's own beside it.
+    public void SubagentSaid(string agentId, string? content, string? reasoning)
+    {
+        if (reasoning is not null) { Reasoning = reasoning; ReasoningBy = agentId; }
+        if (content is not null) { Response = content; ResponseBy = agentId; }
+    }
+
+    // A new prompt starts a new turn: last turn's reasoning would otherwise sit under its status.
+    public void ForgetReasoning()
+    {
+        Reasoning = null;
+        ReasoningBy = null;
+        OwnReasoning = null;
+    }
+
     // The turn ended without finishing (the user interrupted, or the agent shut down):
     // nothing is running any more and nothing is still being asked.
     public void Abandon(DateTimeOffset? at)
@@ -101,13 +135,16 @@ internal sealed class ToolHistory
         public ToolStatus Status;
         public DateTimeOffset StartedAt;
         public DateTimeOffset? EndedAt;
+        // The sub-agent that made the call, null for the main agent's: a permission prompt
+        // names only the call it gates.
+        public string? Agent;
     }
 
     public int Count => _entries.Count;
 
     public void Clear() { _entries.Clear(); _byId.Clear(); }
 
-    public void Start(string id, string name, string? summary, DateTimeOffset at)
+    public void Start(string id, string name, string? summary, DateTimeOffset at, string? agent = null)
     {
         if (_byId.TryGetValue(id, out var known))
         {
@@ -116,7 +153,7 @@ internal sealed class ToolHistory
             known.Summary ??= summary;
             return;
         }
-        var entry = new Entry { Id = id, Name = name, Summary = summary, Status = ToolStatus.Running, StartedAt = at };
+        var entry = new Entry { Id = id, Name = name, Summary = summary, Status = ToolStatus.Running, StartedAt = at, Agent = agent };
         _entries.Add(entry);
         _byId[id] = entry;
         while (_entries.Count > Keep)

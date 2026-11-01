@@ -125,6 +125,19 @@ public sealed class SessionSource : ISessionSource
         lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.GetForm : null; }
     }
 
+    // Read between passes, as a pass is what changes a tracker's state.
+    public async Task<Subagent?> GetAgentAsync(string id, string agent, CancellationToken cancellationToken = default)
+    {
+        await _pass.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            Entry? entry;
+            lock (_gate) { entry = _entries.GetValueOrDefault(id); }
+            return entry?.Tracker.Agent(agent);
+        }
+        finally { _pass.Release(); }
+    }
+
     public SessionProcess? ProcessOf(string id)
     {
         lock (_gate)

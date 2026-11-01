@@ -210,6 +210,23 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Empty(injector.Plans);
     }
 
+    // #173: the session's own question is the one listed while a delegate's permission prompt
+    // also waits, and the CLI may be showing that dialog: keys typed for the form could approve
+    // it. The transcript is read just before typing, as the host's view may be a pass behind.
+    [Fact]
+    public async Task An_answer_while_a_delegates_permission_prompt_also_waits_is_refused_and_types_nothing()
+    {
+        var ch = await OpenAsync();
+        Fixture.Append(events, Copilot.ToolStart("c9", "powershell", new { command = "gh pr checks" }, second++, "helper"),
+            Copilot.Permission("r1", "c9", Copilot.Prompts["commands"], second++));
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("more than one prompt", reason);
+        Assert.Empty(injector.Plans);
+    }
+
     [Fact]
     public async Task A_second_answer_to_a_session_while_one_is_being_typed_is_busy()
     {

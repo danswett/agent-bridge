@@ -218,4 +218,178 @@ public class ContractTests
         Assert.Empty(s.Question.Fields);
         Assert.Equal("short", s.Activity.Response);
     }
+
+    [Fact]
+    public void The_documented_session_with_sub_agents_reads_into_the_records_and_writes_back_unchanged()
+    {
+        var json = Example("session-subagents.json");
+        var s = JsonSerializer.Deserialize<Session>(json, ProtocolJson.Options)!;
+        var back = JsonSerializer.Serialize(s, ProtocolJson.Options);
+
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(json), JsonNode.Parse(back)), back);
+        Assert.Equal("agent-c204", s.WaitingOn);
+        Assert.Equal("agent-c204", s.Question!.Agent);
+        Assert.Equal([SubagentStatus.Waiting, SubagentStatus.Working, SubagentStatus.Ended], s.Subagents!.Select(a => a.Status));
+        Assert.Equal((SubagentKind.Task, "agent-c204", SubagentOutcome.Done), (s.Subagents![2].Kind, s.Subagents[2].Parent, s.Subagents[2].Outcome));
+        Assert.Equal(new ActivitySource { Response = "agent-3a91", Reasoning = "agent-c204" }, s.Activity.Source);
+        Assert.StartsWith("Started 2", s.Activity.Own!.Response);
+    }
+
+    [Fact]
+    public void Sub_agent_values_from_a_newer_host_read_as_the_documented_fallbacks()
+    {
+        var a = JsonSerializer.Deserialize<Subagent>("""{"id":"x","kind":"fork","status":"paused","outcome":"cancelled","shells":0}""", ProtocolJson.Options)!;
+
+        Assert.Equal((SubagentKind.Task, SubagentStatus.Idle, SubagentOutcome.Done), (a.Kind, a.Status, a.Outcome));
+    }
+
+    static Subagent Delegate(int i, SubagentStatus status, string text) => new()
+    {
+        Id = $"agent-{i:D2}",
+        Kind = SubagentKind.Background,
+        Name = $"Delegate {i}",
+        Task = Limits.KeepStart(text, Limits.SubagentTask),
+        Model = "claude-haiku-5.5",
+        Status = status,
+        Outcome = status is SubagentStatus.Ended or SubagentStatus.Idle ? SubagentOutcome.Done : null,
+        StartedAt = DateTimeOffset.UnixEpoch,
+        Line = Limits.KeepEnd(text, Limits.SubagentLine).Text,
+        CurrentTool = status == SubagentStatus.Working ? new ToolCall { Id = $"t{i}", Name = "powershell", Summary = "dotnet test", Status = ToolStatus.Running, StartedAt = DateTimeOffset.UnixEpoch } : null,
+        Shells = 1,
+    };
+
+    [Fact]
+    public void A_session_with_twenty_sub_agents_stays_within_its_budget_and_counts_the_ones_it_left_out()
+    {
+        // Every text at its limit, in emoji, which escapes to three times its size.
+        var emoji = string.Concat(Enumerable.Repeat("😀", 4096));
+        var s = Big("delegating", emoji) with
+        {
+            Subagents = [.. Enumerable.Range(0, 20).Select(i => Delegate(i, i < 12 ? SubagentStatus.Working : SubagentStatus.Ended, emoji))],
+            Activity = Big("x", emoji).Activity with
+            {
+                Reasoning = Limits.KeepEnd(emoji, Limits.Reasoning).Text,
+                Source = new ActivitySource { Response = "agent-00", Reasoning = "agent-01" },
+                Own = new OwnActivity { Response = Limits.KeepEnd(emoji, Limits.Response).Text, Reasoning = Limits.KeepEnd(emoji, Limits.Reasoning).Text },
+            },
+        };
+        Assert.True(ProtocolJson.ByteCount(s) > 3 * SessionBudget.MaxSessionBytes);
+
+        var fit = SessionBudget.Fit(s);
+
+        Assert.True(ProtocolJson.ByteCount(fit) <= SessionBudget.MaxSessionBytes, $"{ProtocolJson.ByteCount(fit)} bytes");
+        // The session's own fields alone overflow it, so every sub-agent field went first.
+        Assert.Null(fit.Subagents);
+        Assert.Equal(20, fit.SubagentsMore);
+        Assert.Equal(((string?)null, (string?)null, true), (fit.Activity.Own!.Response, fit.Activity.Own.Reasoning, fit.Activity.Own.ResponseTruncated));
+        Assert.True(fit.Activity.ResponseTruncated);
+    }
+
+    [Fact]
+    public void Running_delegates_beyond_the_cap_are_counted_and_the_rest_keep_their_tools_while_the_session_fits()
+    {
+        var text = new string('t', 2000);
+        var s = Big("delegating", "short") with
+        {
+            Subagents = [.. Enumerable.Range(0, 20).Select(i => Delegate(i, SubagentStatus.Working, text))],
+        };
+        var capped = s with { Subagents = [.. s.Subagents!.Take(SessionBudget.SubagentsCap).Select(a => a with { Line = null, Task = null })], SubagentsMore = 12 };
+
+        var fit = SessionBudget.Fit(s, ProtocolJson.ByteCount(capped) + 16);
+
+        Assert.Equal(SessionBudget.SubagentsCap, fit.Subagents!.Count);
+        Assert.Equal(12, fit.SubagentsMore);
+        Assert.All(fit.Subagents, a => Assert.Equal(((string?)null, (string?)null, true), (a.Line, a.Task, a.CurrentTool is not null)));
+    }
+
+    // What an older client, or the HA connector, reads must not lose anything to fields it
+    // ignores: each case is trimmed exactly as the same session without sub-agent fields.
+    [Fact]
+    public void Sub_agent_fields_are_trimmed_away_before_anything_an_older_client_reads()
+    {
+        var history = Enumerable.Range(0, 50).Select(i => new ToolCall { Id = $"t{i}", Name = "powershell", Summary = new string('s', 190), Status = ToolStatus.Done, StartedAt = DateTimeOffset.UnixEpoch }).ToList();
+        Session Case(string response, string reasoning, IReadOnlyList<ToolCall>? tools) => Big("additive", response, tools) with
+        {
+            Title = "A session near the budget",
+            Activity = Big("x", response, tools).Activity with
+            {
+                Reasoning = reasoning,
+                UserMessage = new string('u', 2000),
+                Source = new ActivitySource { Response = "agent-01", Reasoning = "agent-01" },
+                Own = new OwnActivity { Response = new string('m', 12 * 1024), Reasoning = new string('n', 3 * 1024), At = DateTimeOffset.UnixEpoch },
+            },
+            Subagents = [.. Enumerable.Range(0, 8).Select(i => Delegate(i, SubagentStatus.Working, new string('d', 512)))],
+            WaitingOn = "agent-01",
+        };
+        // The delegate's report as the latest text: before sub-agent fields, this was sent whole.
+        Session[] cases =
+        [
+            Case(new string('r', Limits.Response), new string('q', Limits.Reasoning), null),
+            Case(new string('r', Limits.Response), new string('q', Limits.Reasoning), history),
+            Case(string.Concat(Enumerable.Repeat("😀", 4096)), new string('q', Limits.Reasoning), history),
+        ];
+
+        foreach (var s in cases)
+        {
+            Assert.True(ProtocolJson.ByteCount(s) > SessionBudget.MaxSessionBytes);
+            var fit = SessionBudget.Fit(s);
+            var older = SessionBudget.Fit(Older(s));
+
+            Assert.True(ProtocolJson.ByteCount(fit) <= SessionBudget.MaxSessionBytes);
+            Assert.Equal(JsonSerializer.Serialize(older, ProtocolJson.Options), JsonSerializer.Serialize(Older(fit), ProtocolJson.Options));
+        }
+        Assert.Equal(cases[0].Activity.Response, SessionBudget.Fit(cases[0]).Activity.Response);
+    }
+
+    static Session Older(Session s) => s with
+    {
+        Subagents = null,
+        SubagentsMore = null,
+        WaitingOn = null,
+        Activity = s.Activity with { Source = null, Own = null },
+        Question = s.Question is { } q ? q with { Agent = null } : null,
+    };
+
+    [Fact]
+    public void Finished_delegates_then_lines_then_tasks_go_before_any_of_the_sessions_own_text()
+    {
+        var s = Big("order", "the main agent's answer") with
+        {
+            Activity = Big("x", "the main agent's answer").Activity with { Reasoning = "thinking" },
+            Subagents = [.. Enumerable.Range(0, 10).Select(i => Delegate(i, i < 5 ? SubagentStatus.Working : SubagentStatus.Idle, new string('t', 2000)))],
+        };
+        int Size(Session x) => ProtocolJson.ByteCount(x);
+        var withoutFinished = s with { Subagents = [.. s.Subagents!.Take(5)] };
+        var withoutLines = withoutFinished with { Subagents = [.. withoutFinished.Subagents!.Select(a => a with { Line = null })] };
+
+        var finished = SessionBudget.Fit(s, Size(withoutFinished) + 64);
+        Assert.Equal(5, finished.Subagents!.Count);
+        Assert.Equal(5, finished.SubagentsMore);
+        Assert.NotNull(finished.Subagents[0].Line);
+
+        var lines = SessionBudget.Fit(s, Size(withoutLines) + 64);
+        Assert.All(lines.Subagents!, a => Assert.Equal(((string?)null, true), (a.Line, a.Task is not null)));
+        Assert.Equal("thinking", lines.Activity.Reasoning);
+        Assert.Equal("the main agent's answer", lines.Activity.Response);
+    }
+
+    [Fact]
+    public void One_sub_agent_in_full_fits_the_budget_losing_its_oldest_tools_first()
+    {
+        var history = Enumerable.Range(0, 50).Select(i => new ToolCall { Id = $"t{i}", Name = "powershell", Summary = new string('s', 190), Status = ToolStatus.Done, StartedAt = DateTimeOffset.UnixEpoch }).ToList();
+        var a = Delegate(1, SubagentStatus.Idle, "done") with
+        {
+            Response = new string('r', Limits.Response),
+            Reasoning = Limits.KeepEnd(string.Concat(Enumerable.Repeat("😀", 1024)), Limits.Reasoning).Text,
+            History = history,
+        };
+        Assert.True(ProtocolJson.ByteCount(a) > SessionBudget.MaxSessionBytes);
+
+        var fit = SessionBudget.Fit(a);
+
+        Assert.True(ProtocolJson.ByteCount(fit) <= SessionBudget.MaxSessionBytes);
+        Assert.Equal("t49", fit.History!.Last().Id);
+        Assert.True(fit.History.Count < 50);
+        Assert.Equal((a.Response, a.Reasoning), (fit.Response, fit.Reasoning));
+    }
 }

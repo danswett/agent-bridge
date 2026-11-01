@@ -111,6 +111,15 @@ consistent list uses `sessions.subscribe`.
 Request `data`: `{ "id": "<session id>" }`. Result: the full `Session`, or
 `{ "missing": true }` once the session has ended and been dropped.
 
+With `"agent": "<sub-agent id>"` as well, the result is that one entry of the session's
+`subagents` in full: the [Subagent](#subagent) with its own `response` (at most 16 KiB, the end
+kept, `responseTruncated` set when cut), `reasoning` (at most 4 KiB) and `history` (its latest
+50 tool calls, oldest first), within the session budget (oldest tools go first, then
+`reasoning`, then `response` to its last 4 KiB). `{ "missing": true }` when the session has
+gone or has no sub-agent by that id. Lists never carry these fields. A host before
+sub-agents ignores `agent` and returns the session, so a client asks only of a host whose
+sessions carry `subagents`.
+
 ### `sessions.subscribe`
 
 Request `data`: `{}`. Result: `{ "revision": 118, "count": 3 }`. Then the host sends:
@@ -577,7 +586,7 @@ agent-ha-bridge notifies a phone through Home Assistant.
 | `kind` | When | Once per |
 |---|---|---|
 | `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it |
-| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty `response`, and is still idle 3 s later. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news | Finished turn: the same `turnCount` and `response` seen ending again is not repeated |
+| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified | Finished turn: the same `turnCount` and response seen ending again is not repeated |
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead | Question |
 
 A question answered before its 2 s are up is never notified. A notice that cannot be sent
@@ -627,8 +636,8 @@ service worker shows from the same fields everywhere else:
 
 | Field | Notes |
 |---|---|
-| `title` | The session's `title`, or "Copilot session" (by agent) without one. At most 120 bytes |
-| `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the `response` (as agent-ha-bridge's preview), "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
+| `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "*name* asks · *title*", with the sub-agent's `name` from `subagents`; it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. At most 120 bytes |
+| `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
 | `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. A client opens that machine and session, and the question ready to answer |
 | `silent` | `true` for `resolved`, which replaces a question without alerting again |
 | `data.kind` | `question`, `finished` or `resolved`. A client reads a kind it doesn't know as `question` |
@@ -677,6 +686,16 @@ open a channel and read `sessions.list`, so `push` gives it nothing more.
 | `question` | Question? | The question the agent is waiting on, if any |
 | `driver` | `"person"` \| `"agent"`? | Who drives the current turn ([Driver](#driver)). Absent means `person`, and a host sends it only as `agent`. A client that does not know a value reads it as `person` |
 | `driverPrincipal` | string? | With `driver` `agent`, which agent, when the host knows: at most 128 bytes, plain text, shown as secondary detail only. Absent otherwise |
+| `subagents` | [Subagent](#subagent)[]? | The sub-agents the session started, at any depth ([design/subagents.md](../design/subagents.md)): running ones (`working`, `waiting`) first, newest start first, then the most recently finished. At most 20, and fewer if the [session budget](#session-budget) trims them. Absent when there are none. Finished ones stay until the session ends. Only Copilot sends them so far |
+| `subagentsMore` | number? | Entries left out of `subagents`, by the host's limit or the budget. Absent when none are |
+| `waitingOn` | string? | Status precedence rule 2: the id of the sub-agent whose question is `question`, while the session has none of its own. Absent otherwise |
+
+**Status precedence** with sub-agents (first match wins): the session's own question
+(`waiting`); a sub-agent's question (`waiting`, with `waitingOn`); the main agent's turn
+running (`working`); the main agent idle with background agents or commands still running
+(`idle` with `background`, shown as delegating); otherwise `idle`. Only the second is new,
+and it was already `waiting` for a sub-agent's permission prompt before hosts said whose it
+was.
 
 ### Driver
 
@@ -717,15 +736,17 @@ alone.
 
 | Field | Type | Notes |
 |---|---|---|
-| `response` | string? (Markdown) | The latest assistant text, at most 16 KiB. When it's longer, the **end** is kept and `responseTruncated` is true. It may be a subagent's, including a background agent's while the session itself is idle, as on agent-ha-bridge's card; `status`, `userMessage` and `model` are always the session's own |
+| `response` | string? (Markdown) | The latest assistant text, at most 16 KiB. When it's longer, the **end** is kept and `responseTruncated` is true. It may be a subagent's, including a background agent's while the session itself is idle, as on agent-ha-bridge's card; `source.response` then names it. `status`, `userMessage` and `model` are always the session's own |
 | `responseTruncated` | bool? | |
-| `reasoning` | string? | The latest reasoning text, at most 4 KiB (the end is kept). Like `response`, it may be a subagent's |
+| `reasoning` | string? | The latest reasoning text, at most 4 KiB (the end is kept). Like `response`, it may be a subagent's; `source.reasoning` then names it |
 | `currentTool` | ToolCall? | The tool running now, while `working` |
 | `history` | ToolCall[]? | Only in `session.get`: the latest 50 tool calls, oldest first |
 | `userMessage` | string? | The latest user message, at most 2 KiB |
 | `turnCount` | number? | User prompts whose turn has finished: the prompts sent, less one while a turn is still in progress (`working` or `waiting`). Not the agent's own model rounds: Copilot writes `assistant.turn_end` after every round of tool calls, and those are not counted |
 | `compactions` | number? | Context compactions so far |
 | `background` | Background? | Work the session started that is still running after its own turn. Absent when there is none |
+| `source` | `{ "response"?: string, "reasoning"?: string }`? | Which sub-agent wrote the top-level `response` and `reasoning`, each on its own, by its `subagents` id: a main-agent reply can sit beside a delegate's reasoning. A field left out is the main agent's own. Absent while both are. Older clients ignore it and keep the last-writer-wins text |
+| `own` | `{ "response"?, "responseTruncated"?, "reasoning"?, "at"? }`? | The main agent's own text for each field whose top-level text is not it: one `source` names a sub-agent for, or one that is absent while the host has the main agent's from the part of the transcript it only skimmed (a host starting after delegates filled what it parses). 16 KiB and 4 KiB, the end kept, as above; `at` is when the main agent last wrote either. A field `source` names but `own` lacks means the main agent has none, unless `own.responseTruncated` is set, which means the [session budget](#session-budget) dropped its response. So a newer client shows, for each of `response` and `reasoning`, `own`'s when `source` names an agent for it, otherwise the top-level one, or `own`'s when that is absent; and never shows a delegate's words as the main agent's. Absent when it would be empty |
 
 ### Background
 
@@ -734,7 +755,7 @@ both are sent.
 
 | Field | Type | Notes |
 |---|---|---|
-| `agents` | number | Background agents still working: Copilot `task` agents started in background mode, including one woken again by a later message |
+| `agents` | number | Background agents still working: Copilot `task` agents started in background mode, including one woken again by a later message, at any depth. One between runs (a `subagents` entry `idle`) is not counted |
 | `shells` | number | Background shell commands still running: started async, or started sync and left running in the background |
 
 **`status` is unchanged by it.** A session whose own turn has ended is `idle`, truthfully;
@@ -744,6 +765,31 @@ background agents" when `agents` is above zero, otherwise "Waiting for backgroun
 commands". An older client ignores the field and shows `idle`, as before. A change in
 either count is something a client shows, so it moves `updatedAt` and sends an upsert.
 Counts are never trimmed by the session budget.
+
+### Subagent
+
+One agent the session started, from `subagents` ([design/subagents.md](../design/subagents.md)
+§2). The UI calls it a *delegate*.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | The agent's own id (Copilot's `agentId`) |
+| `parent` | string? | The `id` of the sub-agent that started it; absent when the main agent did. A client lists it under its parent |
+| `kind` | `"background"` \| `"task"` | `background` runs past its starter's turn and can be woken by a message; `task` is part of its starter's turn. Unknown reads as `task` |
+| `name` | string? | Its label: the starter's description of the job, else its agent type. At most 120 bytes |
+| `task` | string? | The prompt it was given, at most 512 bytes, the **start** kept |
+| `model` | string? | Its own model, never the session's |
+| `status` | `"working"` \| `"idle"` \| `"waiting"` \| `"ended"` | `waiting`: a question of its own is pending. `idle`: a background agent between runs, which a message can wake. `ended`: it can never run again (a task agent done, its own abort or failure, or the session's CLI exiting). Unknown reads as `idle` |
+| `outcome` | `"done"` \| `"failed"`? | With `idle` and `ended` only: how its latest run went, for the `done` and `failed` glyphs (ui.md §2.1). Absent when the host never saw it end (only its start was read, or its CLI was replaced). Unknown reads as `done` |
+| `startedAt` | time? | When it first started |
+| `endedAt` | time? | With `idle` and `ended`: when its latest run ended |
+| `line` | string? | Its latest response or reasoning, whitespace collapsed, at most 300 bytes, the **end** kept. A `line` changing alone does not move the session's `updatedAt` or send an upsert; the latest arrives with the next change, or from `session.get` |
+| `currentTool` | ToolCall? | Its running tool, while `working` or `waiting` |
+| `shells` | number | Background commands it started that are still running, while it runs. They count here and never in the session's `background.shells` (agent-ha-bridge#261) |
+| `response`, `responseTruncated`, `reasoning`, `history` | | `session.get { id, agent }` only |
+
+An entry starting, ending, or changing `status` or `outcome` moves the session's `updatedAt`.
+A woken agent is the same entry working again, never a new one.
 
 ### ToolCall
 
@@ -772,6 +818,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `askedAt` | time | |
 | `truncated` | bool? | The host had to cut `message` or drop `fields` to fit the budget. A client shows what it has and says to answer at the machine |
 | `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request of a kind no host drives (or any, on a host without `sessions.approve`), a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once. It still has its fields, so a client can say what it asks, but a client shows no controls for it, gives the session's status as "Waiting at the machine", and a `session.answer` for it is `refused` |
+| `agent` | string? | The sub-agent that asked, by its `subagents` id, when it is not the session's own question (`waitingOn` names it too). A Copilot permission prompt is the CLI's one dialog whoever asked, and is answered the same way. A sub-agent's `ask_user` is always `answerAtMachine`: delivery types only into the main agent's, so nothing proves where the keys would land. And while a permission prompt or a sub-agent's question waits beside it, the session's own Copilot `ask_user` is `answerAtMachine` too, since the CLI may be showing the other one; a host also checks the transcript for a pending permission prompt just before typing an answer |
 
 ### Field
 
@@ -795,15 +842,33 @@ to show; if it's absent, show `value`.
 
 After applying the field limits, a host checks the size of each `Session` it sends. If
 it is over 40 KiB, the host trims in this order until it fits, which loses the least for
-a reader (`SessionBudget.Fit` in C#):
+a reader (`SessionBudget.Fit` in C#). Everything a client that predates sub-agents ignores
+goes first, so such a client, and the HA connector, never sees less of a session because
+of fields it doesn't read:
 
-1. Tool history, oldest first.
-2. `reasoning`.
-3. `userMessage`.
-4. `response`, to its last 4 KiB (`responseTruncated` set).
-5. The question's `message`, to its first 2 KiB (`truncated` set).
-6. The question's `fields` (`truncated` set).
-7. `response` and `currentTool`.
+1. `subagents`: finished entries (`idle` and `ended`), then every `line`, then every
+   `task`, then all but the first 8; each entry dropped is counted in `subagentsMore`.
+2. `own.reasoning`.
+3. `own.response`, to its last 4 KiB (`own.responseTruncated` set), then the whole of it,
+   keeping `own.responseTruncated`.
+4. Every entry's `currentTool`.
+5. The remaining entries, counted in `subagentsMore`.
+
+Then the session's older fields, trimmed exactly as for the same session without any of
+the above, and further only if the few ids and flags left (`source`, `waitingOn`,
+`subagentsMore`, a question's `agent`) still overflow:
+
+6. Tool history, oldest first.
+7. `reasoning`.
+8. `userMessage`.
+9. `response`, to its last 4 KiB (`responseTruncated` set).
+10. The question's `message`, to its first 2 KiB (`truncated` set).
+11. The question's `fields` (`truncated` set).
+12. `response` and `currentTool`.
+
+`own` cannot simply stay whole: 16 KiB of emoji is 48 KiB of JSON on its own. A field
+`source` names with `own.responseTruncated` set but no `own.response` was the main agent's,
+dropped for the budget.
 
 A list page holds as many sessions as fit in 48 KiB, and always at least one, since every
 session is at most 40 KiB.
@@ -816,7 +881,7 @@ session is at most 40 KiB.
 | Claude Code | The bridge's registration files, else Claude Code's own `~/.claude/sessions/<pid>.json` (an interactive CLI, its pid running, written no earlier than that process started); and `~/.claude/projects/<slug>/<id>.jsonl` | Transcript `assistant` entries (`text`, `thinking`, `tool_use`) and `user` entries | A `tool_use` named `AskUserQuestion`, pending until a `tool_result` with its id. Claude Code 2.1.312 writes that `tool_use` only once the question is answered, so without agent-ha-bridge's `PreToolUse` hook a waiting question is not seen. A permission prompt, which only agent-ha-bridge's hook reports (its status `waiting`, newer than the transcript, over a running tool), is an `approval` with that tool's id, `answerAtMachine` |
 | Codex | The bridge's registration files, else (Windows) `~/.codex/thread-writer-locks/<id>.lock`, as the Restart Manager reports who holds it open. The lock must be held by exactly one running `codex.exe`, and that one must be an interactive terminal: its command line read, with no subcommand (a prompt at most), `resume` or `fork`, and no `app-server` or `mcp-server` argument. That is a Codex run with `--no-daemon`, not `exec`, `review`, `migrate-rollouts` and the like. A lock shared with the daemon or with an unreadable Codex names nobody. Each decision is checked again after 30 s. A terminal holding several locks is the session of the one whose rollout `session_meta` is its own top-level thread (`id` and `session_id` equal, `thread_source` "user") with an event since it started, else of none. A lone lock whose rollout names another thread (a sub-agent's) is not a session either. A registration agent-ha-bridge marked ended keeps its thread from being found this way; and `~/.codex/sessions/…/rollout-*.jsonl` | Rollout `event_msg` payloads | An approval agent-ha-bridge's hook recorded in `<id>.approval.json` beside the registration: an `approval` whose `id` is the marker's `DecisionId` (its generation), `answerAtMachine` once the marker records agent-ha-bridge's own attempt (`DeliveryAttempted`). An `exec_approval_request` or `apply_patch_approval_request` in the rollout with no marker is an `approval` keyed by its `call_id`, `answerAtMachine` |
 
-Only Copilot reports `background` so far. Claude Code can run Bash with
+Only Copilot reports `background` and `subagents` so far. Claude Code can run Bash with
 `run_in_background`, and Codex may have equivalents, but no transcript of either doing
 so has been examined yet, so neither sends it.
 
@@ -833,8 +898,10 @@ that added `background`).
 * **Agents are tracked by id, never counted.** One starts with `subagent.started` whose
   `executionMode` is `background`; its own events carry its `agentId` at the top level.
   It is working until its own turn bookkeeping says it has stopped: an
-  `assistant.turn_end` stamped with its `agentId` whose turn asked for no tools. A later
-  `user.message` stamped with its `agentId` (a message sent to it) makes it work again.
+  `assistant.turn_end` stamped with its `agentId` whose turn's **latest** reply asked for
+  no tools (a reply asking for tools, their results, then a final reply with nothing to run
+  is a turn that ends the run, #84). A later `user.message` stamped with its `agentId` (a
+  message sent to it) makes it work again.
   Its own `abort` or `session.shutdown` (stamped with its `agentId`) ends its run and
   nothing else. `subagent.completed` (by `toolCallId`) and a `system.notification` of kind
   `agent_idle` (by `kind.agentId`) also end a run, but neither is enough alone:
@@ -857,3 +924,47 @@ that added `background`).
 * **Nothing outlives its CLI process.** `session.shutdown` ends everything, and work
   that began before the session's current process started is dropped: a CLI that was
   replaced can never report back what it started.
+* **Sub-agent entries** (`subagents`) come from the same events, for every agent, `task`
+  (sync) ones included. Checked against the CLI 1.0.105 transcripts on one machine; the
+  recorded shapes are in `tests/fixtures/copilot/subagents.jsonl`.
+  * `subagent.started` is stamped with the new agent's `agentId` and carries `toolCallId`,
+    `executionMode`, `agentDisplayName`, `agentType`, `model`, and `parentId`: the
+    `agentId` of the sub-agent that started it, absent for the main agent's. A `task`
+    tool call stamped with an `agentId` says the same.
+  * `name` is the starting `task` call's `description` argument, else
+    `agentDisplayName`, else the agent type. `task` is its `prompt` argument, else the first
+    `user.message` stamped with the agent's id, which is that prompt.
+  * `model` is `subagent.started`'s, then its own `subagent.configured`,
+    `session.model_change` and `assistant.message` (#73: never the session's).
+  * The starting `task` call, the first stamped `user.message`, `subagent.started` and the
+    model events are read from the skimmed part of the transcript too, so an agent started
+    before the parsed window keeps its name, task, parent and model. A model is dropped
+    when the host could not read everything before the window, as the session's is. The
+    latest 64 sub-agent tool calls are read there too, so a permission prompt in the window
+    for one whose call is not is still that agent's.
+  * An agent of a CLI process that has since been replaced is `ended`: mid-run with no
+    `outcome` or `endedAt`, since nothing will say how it went; between runs keeping both.
+  * A run ends as for background agents above, with outcome `done`. A run whose start
+    the host only skimmed still gets the `outcome` and `endedAt` of the event in the window
+    that ends it (a `task` call completing, `subagent.completed`, a late `agent_idle`). A task agent is
+    `ended` when its run ends, or when its `task` call completes (`failed` if the call
+    failed), or when the main agent's turn is aborted (`failed`) while it was that turn's:
+    a task agent the main agent's `task` started, or one nested only under such agents. One a
+    background agent started belongs to that agent's run, and the main agent's abort leaves
+    it alone. `subagent.failed` or the
+    agent's own `abort` ends it `failed`, even when no run of it was seen going, and clears
+    any question of its still pending; the task agents it was itself waiting on (down to a
+    background one) end `failed` with it, as does a failed `task` call's, with their
+    questions. Its own
+    `session.shutdown` ends it, `failed` only if mid-run. The session's
+    `session.shutdown` ends every entry: `failed` if it was mid-run.
+  * Its shells are read from its own tool results with the same markers, skimmed ones
+    included, and count on its entry while it runs; their ends come back only in its own
+    results (never a `shell_completed` notification to the session).
+  * The main agent's own text (`own`) is read from the skimmed part of the transcript too, so
+    a host starting after delegates filled the parsed window still has it.
+  * **Questions:** a sub-agent's `permission.requested` is written unstamped, naming the tool
+    call it gates; that call's `agentId` says whose it is. A `tool.execution_start` of
+    `ask_user` stamped with an `agentId` would be that agent's question, but Copilot gives
+    its sub-agents no `ask_user`: none of 33,966 sub-agent tool calls in two months of
+    transcripts on that machine was one.
