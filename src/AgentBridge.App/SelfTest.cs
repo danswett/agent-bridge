@@ -176,7 +176,16 @@ static class SelfTest
                 : [.. Design.DesignKeys.Brushes];
             check(missing.Count == 0, $"defines every design brush in {theme}{(missing.Count > 0 ? $": missing {string.Join(", ", missing)}" : "")}");
         }
-        check(Application.Current.Resources.TryGetValue("AbFontMono", out var mono) && mono is FontFamily, "has the design's monospace stack");
+        check(Application.Current.Resources.TryGetValue("MonoFontFamily", out var mono) && mono is FontFamily, "has the design's monospace stack");
+        List<string> missingFonts = [.. Design.DesignKeys.FontFiles.Where(f => !File.Exists(Path.Combine(AppContext.BaseDirectory, f)))];
+        check(missingFonts.Count == 0, $"bundles Agent Bridge Mono and its licence{(missingFonts.Count > 0 ? $": missing {string.Join(", ", missingFonts)}" : "")}");
+
+        // The bundled font itself, with no fallback after it: in a monospace ten i are as wide as
+        // ten M. Were the file not found, the name would fall through to Segoe UI, where they aren't.
+        var bundled = (mono as FontFamily)?.Source.Split(',')[0].Trim() ?? "";
+        TextBlock Sample(string text) => new() { Text = text, FontFamily = new FontFamily(bundled), FontSize = 20, HorizontalAlignment = HorizontalAlignment.Left };
+        var narrow = Sample("iiiiiiiiii");
+        var wide = Sample("MMMMMMMMMM");
 
         // Drawn for a moment, unseen, so each template is applied and its path markup read.
         var host = new StackPanel { Opacity = 0, IsHitTestVisible = false };
@@ -184,6 +193,8 @@ static class SelfTest
             .Select(k => (Key: k, Control: new ContentControl { Style = Application.Current.Resources.TryGetValue(k, out var s) ? s as Style : null }))
             .ToList();
         foreach (var (_, c) in controls) { host.Children.Add(c); }
+        host.Children.Add(narrow);
+        host.Children.Add(wide);
         var root = (Panel)window.RootElement;
         root.Children.Add(host);
         try
@@ -191,6 +202,8 @@ static class SelfTest
             host.UpdateLayout();
             var undrawn = controls.Where(x => x.Control.Style is null || Find<Microsoft.UI.Xaml.Shapes.Path>(x.Control).Count == 0).Select(x => x.Key).ToList();
             check(undrawn.Count == 0, $"draws every design glyph and icon{(undrawn.Count > 0 ? $": not {string.Join(", ", undrawn)}" : "")}");
+            var (n, w) = (narrow.ActualWidth, wide.ActualWidth);
+            check(n > 0 && Math.Abs(n - w) < 1, $"sets code in the bundled Agent Bridge Mono ({bundled}: ten i {n:0.#} px, ten M {w:0.#} px)");
         }
         finally { root.Children.Remove(host); }
     }

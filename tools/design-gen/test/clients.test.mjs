@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { repoRoot } from '../generate.mjs';
 
@@ -60,20 +60,39 @@ test('the Windows app sets no colour of its own: App.xaml and every view take th
   assert.match(read(`${appDir}/App.xaml`), /<ResourceDictionary Source="ms-appx:\/\/\/Design\/DesignResources\.xaml" \/>/);
 });
 
-test('every Ab resource the Windows app asks for is defined, in all three themes for a brush', () => {
+test('every design resource the Windows app asks for is defined, in all three themes for a brush', () => {
   // A missing key is no build error: the installed app fails at startup or the moment a view
   // asks for it, with nothing but 0xC000027B.
   const generated = read(`${appDir}/Design/DesignResources.xaml`);
   const themes = [...generated.matchAll(/<ResourceDictionary x:Key="(\w+)">([\s\S]*?)<\/ResourceDictionary>/g)];
   assert.deepEqual(themes.map((t) => t[1]), ['Light', 'Dark', 'HighContrast']);
   const inEvery = (key) => themes.every((t) => t[2].includes(`x:Key="${key}"`));
-  const defined = new Set([...`${generated}\n${read(`${appDir}/App.xaml`)}`.matchAll(/x:Key="(Ab\w+)"/g)].map((m) => m[1]));
+  const defined = new Set([...`${generated}\n${read(`${appDir}/App.xaml`)}`.matchAll(/x:Key="((?:Ab|Mono)\w+)"/g)].map((m) => m[1]));
   const asked = new Set();
   for (const f of appFiles()) {
     const text = read(`${appDir}/${f}`);
-    for (const m of text.matchAll(/\{(?:Theme|Static)Resource (Ab\w+)\}|Brush\("(Ab\w+)"\)|Resources\["(Ab\w+)"\]/g)) { asked.add(m[1] ?? m[2] ?? m[3]); }
+    for (const m of text.matchAll(/\{(?:Theme|Static)Resource ((?:Ab|Mono)\w+)\}|Brush\("(Ab\w+)"\)|Resources\["((?:Ab|Mono)\w+)"\]/g)) { asked.add(m[1] ?? m[2] ?? m[3]); }
   }
-  assert.ok(asked.has('AbCard') && asked.has('AbFontMono'), 'it does use the generated resources');
+  assert.ok(asked.has('AbCard') && asked.has('MonoFontFamily'), 'it does use the generated resources');
   assert.deepEqual([...asked].filter((k) => !defined.has(k)), []);
   for (const m of read(`${appDir}/Ui.cs`).matchAll(/Brush\("(Ab\w+)"\)/g)) { assert.ok(inEvery(m[1]), `${m[1]} is in every theme`); }
+});
+
+test('the Windows app bundles every font file its MonoFontFamily names, with the OFL beside them', () => {
+  // The app names Agent Bridge Mono by file (ms-appx:///Assets/Fonts/...): one the project
+  // doesn't copy would quietly fall back to another font on every installed machine.
+  const csproj = read(`${appDir}/AgentBridge.App.csproj`);
+  const keys = read(`${appDir}/Design/DesignKeys.cs`);
+  const files = [.../FontFiles =\s*\[([^\]]*)\]/.exec(keys)[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(files.length >= 7);
+  const tokens = JSON.parse(read('design/tokens.json'));
+  const fonts = tokens.type.mono.files.replace(/\//g, '\\\\');
+  for (const f of files) {
+    const name = f.split('/').pop();
+    const source = name.endsWith('.ttf') ? `ttf/${name}` : name;
+    assert.ok(existsSync(path.join(repoRoot, tokens.type.mono.files, source)), `${source} is in design/fonts`);
+  }
+  assert.match(csproj, new RegExp(`<Content Include="\\.\\.\\\\\\.\\.\\\\${fonts}\\\\ttf\\\\\\*\\.ttf" Link="Assets\\\\Fonts\\\\%\\(Filename\\)%\\(Extension\\)" CopyToOutputDirectory="PreserveNewest" />`));
+  assert.match(csproj, new RegExp(`<Content Include="\\.\\.\\\\\\.\\.\\\\${fonts}\\\\OFL\\.txt" Link="Assets\\\\Fonts\\\\OFL\\.txt" CopyToOutputDirectory="PreserveNewest" />`));
+  assert.match(read(`${appDir}/Design/DesignResources.xaml`), /ms-appx:\/\/\/Assets\/Fonts\/AgentBridgeMono-Regular\.ttf#/);
 });

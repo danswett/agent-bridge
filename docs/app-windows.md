@@ -421,11 +421,14 @@ reaches the real host or its profile.
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
 * CI (`app` job) runs `build/pack-app.ps1`: publishes the app, host, launcher, injector and hook
-  into one folder, checks for the app's `.pri` and the executables, and packs it with `vpk`,
-  with a delta from the latest release. It then starts the published
+  into one folder, checks for the app's `.pri`, the executables and the bundled Agent Bridge
+  Mono TTFs with their `OFL.txt` (`Assets\Fonts`; SIL Open Font License, not MIT), and packs it
+  with `vpk`, with a delta from the latest release. It then starts the published
   app with `--self-test`, which runs the demo, finds the cards by automation id, answers a
-  question on each machine by invoking its button's automation peer, narrows the list with
-  the machine picker, launches a session from the Launch page and waits for its card,
+  question on each machine by invoking its button's automation peer, checks the generated
+  design resources in every theme, draws every glyph and icon, sets code in the bundled
+  font, narrows the list with the machine picker, launches a session from the Launch page
+  and waits for its card,
   checks Codex on the other machine is not launched without a prompt, and saves a picture
   of each page. Last, it dry-runs publishing the package (`build/publish-prerelease.ps1
   -DryRun`) and uploads `Setup.exe` and the packages as an artifact, which the `publish` job

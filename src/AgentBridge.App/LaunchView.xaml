@@ -26,13 +26,13 @@
                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="Folder" />
                     <TextBlock
                         AutomationProperties.AutomationId="TrustFolder"
-                        FontFamily="{StaticResource AbFontMono}" TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                        FontFamily="{StaticResource MonoFontFamily}" TextWrapping="Wrap" IsTextSelectionEnabled="True"
                         Text="{x:Bind Folder, Mode=OneWay}" />
                     <StackPanel Spacing="4" Visibility="{x:Bind local:Ui.Show(ShowRoot), Mode=OneWay}">
                         <TextBlock Style="{StaticResource AbSecondaryText}" TextWrapping="Wrap" Text="{x:Bind RootNote, Mode=OneWay}" />
                         <TextBlock
                             AutomationProperties.AutomationId="TrustRoot"
-                            FontFamily="{StaticResource AbFontMono}" TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                            FontFamily="{StaticResource MonoFontFamily}" TextWrapping="Wrap" IsTextSelectionEnabled="True"
                             Text="{x:Bind Root, Mode=OneWay}" />
                     </StackPanel>
                     <TextBlock

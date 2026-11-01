@@ -14,7 +14,7 @@ namespace AgentBridge.App;
 public sealed class MarkdownView : StackPanel
 {
     // The design's monospace stack (design/tokens.json type.mono), from the app's resources.
-    static FontFamily Mono => (FontFamily)Application.Current.Resources["AbFontMono"];
+    static FontFamily Mono => (FontFamily)Application.Current.Resources["MonoFontFamily"];
     string? markdown;
 
     public MarkdownView() => Spacing = 8;
