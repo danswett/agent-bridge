@@ -229,7 +229,7 @@
                             Visibility="{x:Bind local:Ui.Show(Card.Reply.LineBreakHint), Mode=OneWay}" />
                         <TextBlock
                             TextWrapping="Wrap"
-                            Foreground="{ThemeResource AbDanger}"
+                            Foreground="{ThemeResource AbDangerText}"
                             Text="{x:Bind Card.Reply.Error, Mode=OneWay}"
                             Visibility="{x:Bind local:Ui.Show(Card.Reply.HasError), Mode=OneWay}" />
                         <TextBlock
@@ -281,7 +281,7 @@
                                 Content="End session"
                                 AutomationProperties.AutomationId="EndSession"
                                 AutomationProperties.Name="{x:Bind Card.End.ButtonName, Mode=OneWay}"
-                                Foreground="{ThemeResource AbDanger}"
+                                Foreground="{ThemeResource AbDangerText}"
                                 IsEnabled="{x:Bind Card.End.CanPress, Mode=OneWay}"
                                 Click="OnEnd" />
                             <Button

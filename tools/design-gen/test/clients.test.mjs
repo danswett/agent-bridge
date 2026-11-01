@@ -96,3 +96,16 @@ test('the Windows app bundles every font file its MonoFontFamily names, with the
   assert.match(csproj, new RegExp(`<Content Include="\\.\\.\\\\\\.\\.\\\\${fonts}\\\\OFL\\.txt" Link="Assets\\\\Fonts\\\\OFL\\.txt" CopyToOutputDirectory="PreserveNewest" />`));
   assert.match(read(`${appDir}/Design/DesignResources.xaml`), /ms-appx:\/\/\/Assets\/Fonts\/AgentBridgeMono-Regular\.ttf#/);
 });
+
+test('neither client sets words in the danger role itself, only in its text colour', () => {
+  // Dark danger is 3.72:1 on the needs fill, where a question's errors and Deny sit (#188).
+  const css = withoutComments(read('pwa/app.css'));
+  assert.deepEqual([...css.matchAll(/(?<![-\w])color:\s*var\(--ab-danger\)/g)].map((m) => m[0]), []);
+  const found = [];
+  for (const f of appFiles()) {
+    const text = read(`${appDir}/${f}`);
+    for (const m of text.matchAll(/Foreground="\{ThemeResource AbDanger\}"|Foreground = Ui\.Brush\("AbDanger"\)|Tone\.Bad => Brush\("AbDanger"\)/g)) { found.push(`${f}: ${m[0]}`); }
+  }
+  assert.deepEqual(found, []);
+  assert.match(read(`${appDir}/UsageView.xaml.cs`), /SeverityTextBrush[\s\S]*?"crit" => Ui\.Brush\("AbDangerText"\)/);
+});

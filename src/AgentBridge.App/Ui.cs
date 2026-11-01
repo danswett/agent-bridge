@@ -20,7 +20,7 @@ public static class Ui
     {
         Tone.Ok => Brush("AbBridge"),
         Tone.Warn => Brush("AbNeedsText"),
-        Tone.Bad => Brush("AbDanger"),
+        Tone.Bad => Brush("AbDangerText"),
         Tone.Progress => Brush("AbBridge"),
         _ => Brush("AbText2"),
     };

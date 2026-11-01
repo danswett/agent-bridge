@@ -89,7 +89,7 @@
                 </Border>
                 <TextBlock
                     TextWrapping="Wrap"
-                    Foreground="{ThemeResource AbDanger}"
+                    Foreground="{ThemeResource AbDangerText}"
                     Text="{x:Bind ViewModel.SignInError, Mode=OneWay}"
                     Visibility="{x:Bind local:Ui.Some(ViewModel.SignInError), Mode=OneWay}" />
                 <StackPanel Orientation="Horizontal" Spacing="8">

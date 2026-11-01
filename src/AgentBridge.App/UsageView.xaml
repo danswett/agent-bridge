@@ -35,7 +35,7 @@
                                         <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Age}" />
                                         <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind ReadOn}" Visibility="{x:Bind local:Ui.Some(ReadOn)}" />
                                     </StackPanel>
-                                    <TextBlock TextWrapping="Wrap" Foreground="{ThemeResource AbDanger}" Text="{x:Bind Error}" Visibility="{x:Bind local:Ui.Some(Error)}" />
+                                    <TextBlock TextWrapping="Wrap" Foreground="{ThemeResource AbDangerText}" Text="{x:Bind Error}" Visibility="{x:Bind local:Ui.Some(Error)}" />
                                     <ItemsControl ItemsSource="{x:Bind Windows}" IsTabStop="False">
                                         <ItemsControl.ItemsPanel>
                                             <ItemsPanelTemplate>

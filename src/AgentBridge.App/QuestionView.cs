@@ -57,7 +57,7 @@ public sealed class QuestionView : StackPanel
 
         if (vm.Answerable)
         {
-            error.Foreground = Ui.Brush("AbDanger");
+            error.Foreground = Ui.Brush("AbDangerText");
             resend.Click += (_, _) => vm.Resend();
             AutomationId(resend, "Resend");
             var footer = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
@@ -121,7 +121,7 @@ public sealed class QuestionView : StackPanel
             var b = new Button { HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };
             b.Content = new TextBlock { Text = o.Label, TextWrapping = TextWrapping.Wrap };
             if (o.Recommended || (vm.Approval && o.Tone == "allow")) { b.Style = (Style)Application.Current.Resources["AccentButtonStyle"]; }
-            if (vm.Approval && o.Tone == "deny") { b.Foreground = Ui.Brush("AbDanger"); }
+            if (vm.Approval && o.Tone == "deny") { b.Foreground = Ui.Brush("AbDangerText"); }
             AutomationProperties(b, o.Label, $"Option:{o.Value}");
             b.Click += (_, _) => vm.Choose(o);
             refreshers.Add(() =>
