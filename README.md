@@ -5,11 +5,13 @@ CLI, Claude Code, Codex) across your machines and your phone. It is the successo
 [agent-ha-bridge](https://github.com/danswett/agent-ha-bridge), without the need for
 Home Assistant.
 
-> **Status: P0 spikes.** Nothing here is installable yet. agent-ha-bridge remains the
-> supported product, and nothing in this repository changes or replaces it until a
-> machine is explicitly migrated. How far each of agent-ha-bridge's features has come,
-> with the evidence, and what must be true before a machine migrates:
-> [docs/parity.md](docs/parity.md).
+> **Status: in use on a first migrated machine (2026-11-01).** The host, Windows app, phone
+> PWA and relay are built to parity with agent-ha-bridge, and machines are moving over
+> one at a time, with rollback. agent-ha-bridge stays the supported product on every
+> machine not yet migrated. **Where things stand, what's next and how to pick the work
+> up: [docs/status.md](docs/status.md).** The plan and architecture are in
+> [docs/design.md](docs/design.md), how to work here is in [AGENTS.md](AGENTS.md), and
+> feature-by-feature parity with evidence is in [docs/parity.md](docs/parity.md).
 
 ## Planned shape
 
