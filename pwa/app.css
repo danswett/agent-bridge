@@ -57,7 +57,7 @@ a { color: var(--ab-bridge); }
 }
 .pill.ok { color: var(--ab-bridge); border-color: currentColor; }
 .pill.warn { color: var(--ab-needs-text); border-color: currentColor; }
-.pill.bad { color: var(--ab-danger); border-color: currentColor; }
+.pill.bad { color: var(--ab-danger-text); border-color: currentColor; }
 
 /* ---- shared ---- */
 .panel, .banner {
@@ -116,8 +116,8 @@ a { color: var(--ab-bridge); }
 .machine-row .machine-name { color: var(--ab-text); }
 .machine-row .machine-state { color: var(--ab-text2); }
 .machine-forget { grid-column: 3; grid-row: 1 / 3; }
-.machine-forget.armed { color: var(--ab-danger); border-color: currentColor; }
-.machine-error { margin: 4px 12px 0; color: var(--ab-danger); font-size: .85rem; }
+.machine-forget.armed { color: var(--ab-danger-text); border-color: currentColor; }
+.machine-error { margin: 4px 12px 0; color: var(--ab-danger-text); font-size: .85rem; }
 /* A machine's updates (#51): what its app is doing, how the last one ended, Check and Install. */
 .machine-update { margin: 4px 12px 0; font-size: .85rem; color: var(--ab-text2); }
 .machine-update p { margin: 2px 0; }
@@ -135,7 +135,7 @@ a { color: var(--ab-bridge); }
 .usage-toggle[aria-expanded="true"] .usage-chevron { transform: rotate(45deg); }
 .usage-summary { margin: 0; color: var(--ab-text2); font-size: .9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .usage-figure.warn { color: var(--ab-needs-text); }
-.usage-figure.crit { color: var(--ab-danger); }
+.usage-figure.crit { color: var(--ab-danger-text); }
 .usage-group { padding: 10px 0 4px; border-top: 1px solid var(--ab-stroke2); margin-top: 8px; }
 .usage-head { display: flex; align-items: baseline; gap: 8px; }
 .usage-name { font-weight: 600; }
@@ -159,7 +159,7 @@ a { color: var(--ab-bridge); }
 /* The halo keeps the mark legible on both sides of the fill: without one it read as a gap
    in the bar rather than as a marker, which is how agent-ha-bridge's was first reported. */
 .usage-pace { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ab-text); box-shadow: 0 0 0 1.5px var(--ab-card); }
-.usage-error { margin: 4px 0 0; font-size: .8rem; color: var(--ab-danger); }
+.usage-error { margin: 4px 0 0; font-size: .8rem; color: var(--ab-danger-text); }
 @media (prefers-reduced-motion: reduce) {
   .usage-fill, .usage-chevron { transition: none; }
 }
@@ -352,7 +352,7 @@ summary {
 .tool .tool-summary { color: var(--ab-text2); overflow-wrap: anywhere; }
 .tool .tool-time { color: var(--ab-text2); font-size: .78rem; white-space: nowrap; }
 .tool.done .tool-mark { color: var(--ab-text2); }
-.tool.failed .tool-mark { color: var(--ab-danger); }
+.tool.failed .tool-mark { color: var(--ab-danger-text); }
 .tool.running .tool-mark { color: var(--ab-active); }
 
 /* ---- Markdown ---- */
@@ -376,7 +376,7 @@ summary {
 }
 .md-copy > span { padding: 3px 8px; border: 1px solid var(--ab-stroke2); border-radius: 6px; background: var(--ab-card); }
 .md-copy[data-copy="done"] { color: var(--ab-bridge); }
-.md-copy[data-copy="failed"] { color: var(--ab-danger); }
+.md-copy[data-copy="failed"] { color: var(--ab-danger-text); }
 .md-copy:focus-visible { outline: 2px solid var(--ab-bridge); outline-offset: -2px; border-radius: 8px; }
 /* The fallback copy's scratch field: in the DOM for a moment, never seen. */
 .md-copy-buffer { position: fixed; top: 0; left: -9999px; width: 1px; height: 1px; padding: 0; border: 0; font-size: 16px; }
@@ -452,7 +452,7 @@ summary {
 .launch-field[hidden] { display: none; }
 .launch-label { font-weight: 600; font-size: .92rem; }
 .launch-count { margin: 0; }
-.launch-count.warn { color: var(--ab-danger); }
+.launch-count.warn { color: var(--ab-danger-text); }
 @media (max-width: 360px) { .launch-form { grid-template-columns: 1fr; } }
 /* A launched agent asking whether to trust its folder: the whole path, never cut short. */
 .launch-trust { display: grid; gap: 10px; margin: 8px 0 12px; }
@@ -469,7 +469,7 @@ summary {
 .reply .note { margin: 4px 0; }
 .bytes { display: block; color: var(--ab-text2); font-size: .8rem; text-align: right; min-height: 0; }
 .bytes:empty { display: none; }
-.bytes.over { color: var(--ab-danger); font-weight: 600; }
+.bytes.over { color: var(--ab-danger-text); font-weight: 600; }
 /* Files going with a reply: a chip each, a thumbnail for an image. */
 .attachments { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 0; padding: 0; }
 .attachment {
@@ -486,7 +486,7 @@ summary {
 }
 .attachment .remove:disabled { opacity: .4; cursor: default; }
 .button.attach { gap: 6px; }
-.field.invalid > .field-set > legend .field-title, .field.invalid .field-head .field-title { color: var(--ab-danger); }
+.field.invalid > .field-set > legend .field-title, .field.invalid .field-head .field-title { color: var(--ab-danger-text); }
 
 .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
 .toggle, .choice {
@@ -508,7 +508,7 @@ summary {
 /* An approval's fixed choices: big, and coloured by what they do. */
 .choices.approval .choice { min-height: 56px; font-weight: 600; justify-content: center; text-align: center; }
 .choices.approval .choice.tone-allow { border-color: var(--ab-bridge); color: var(--ab-bridge); }
-.choices.approval .choice.tone-deny { border-color: var(--ab-danger); color: var(--ab-danger); }
+.choices.approval .choice.tone-deny { border-color: var(--ab-danger); color: var(--ab-danger-text); }
 .choices.approval .choice[aria-pressed="true"].tone-allow { background: var(--ab-bridge); color: var(--ab-bridge-on); }
 .choices.approval .choice[aria-pressed="true"].tone-deny { background: var(--ab-danger); color: var(--ab-shell); }
 .toggle:disabled, .choice:disabled, .answer input:disabled, .text-input:disabled, .number-input:disabled { cursor: default; opacity: .6; }
@@ -517,7 +517,7 @@ summary {
 .answer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .answer-actions .button { min-width: 8em; }
 .answer-actions:not(:has(.button:not([hidden]))) { display: none; }
-.answer-error { color: var(--ab-danger); font-weight: 600; font-size: .92rem; margin: 8px 0 0; }
+.answer-error { color: var(--ab-danger-text); font-weight: 600; font-size: .92rem; margin: 8px 0 0; }
 .answer-status, .answer-receipt { margin: 8px 0 0; font-size: .92rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .answer-status:empty { display: none; }
 .answer-status.progress::before, .answer-receipt.progress::before {
@@ -527,7 +527,7 @@ summary {
 .answer-status.progress, .answer-receipt.progress { color: var(--ab-bridge); }
 .answer-status.ok, .answer-receipt.ok { color: var(--ab-bridge); }
 .answer-status.warn, .answer-receipt.warn { color: var(--ab-needs-text); }
-.answer-status.bad, .answer-receipt.bad { color: var(--ab-danger); }
+.answer-status.bad, .answer-receipt.bad { color: var(--ab-danger-text); }
 .answer-receipt { padding: 8px 0; }
 .question-changed { margin: 8px 0; padding: 4px 12px 10px; border: 1px dashed var(--ab-needs); border-radius: 10px; }
 .question-changed .button { margin-top: 8px; }
@@ -546,7 +546,7 @@ summary {
 }
 .end-button .icon { width: 18px; height: 18px; }
 .end-button:disabled { opacity: .55; cursor: default; }
-.end-session[data-stop="confirm"] .end-button { color: var(--ab-danger); font-weight: 600; }
+.end-session[data-stop="confirm"] .end-button { color: var(--ab-danger-text); font-weight: 600; }
 .end-session .stop-status { margin: 0 0 6px; }
 .end-session .resend { margin-bottom: 6px; }
 /* Being ended: still, grey and dotted, neither working nor finished. */

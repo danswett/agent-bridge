@@ -86,17 +86,19 @@ by `tools/design-gen` (#177).
 | Needs you | `#FFB224` | `#B87700` (text `#7A4600`) | Questions and approvals |
 | Active | `#4C9AFF` | `#0B63E5` | The `working` and `delegating` glyphs only |
 | Agent | `#A78BFA` | `#6D4AE0` | Driven by an agent, and nothing else |
-| Danger | `#FF6B6B` | `#C9302C` | Failed, stopped, End session |
+| Danger | `#FF6B6B` (text `#FF9494`) | `#C9302C` | Failed, stopped, End session |
 | Neutral | `#8B949E` | `#6E7781` | The `idle`, `done` and `ended` glyphs only |
 
 Secondary and tertiary text are the text colour at reduced opacity: `text2` and `text3`,
-white at 0.72 and 0.54 in dark, black at 0.62 and 0.58 in light.
+white at 0.72 and 0.54 in dark, black at 0.62 and 0.58 in light. `text3` is not used on
+a role fill (4.30:1 on the dark Needs you fill).
 
 Rules:
 - **Status colours are never used on controls.**
 - **Words are never in Active or Neutral.** They are glyph colours (Active is 4.46:1 on the
-  dark card). Text in a role uses Bridge, Danger, or the role's own text colour (Needs
-  you's and Agent's).
+  dark card). Text in a role uses Bridge or the role's own text colour (Needs you's,
+  Agent's and Danger's): dark Danger is 3.72:1 on the Needs you fill, so its words are
+  `#FF9494`.
 - **Surfaces and text come from the platform.** Mica and layer fills on Windows, window and
   sidebar materials on macOS, system grouped backgrounds on iOS, and a Material 3 scheme
   seeded from Bridge on Android. Dynamic colour may restyle Android surfaces but never the
@@ -105,8 +107,8 @@ Rules:
   contrast, every role and every Windows/PWA surface maps to a system colour (`tokens.json`
   `hc`, `hcVariants` and `surface.windows.hc`).
 - **Contrast:** status glyphs reach 3:1 against their surface, and text in a role colour
-  reaches 4.5:1 (`tokens.json` `color.contrast`, checked by `tools/design-gen`'s tests). That
-  is why light Needs you is `#B87700` rather than the brighter `#E8A10C` (2.20:1 on the
+  reaches 4.5:1, on every surface and on every role's fill over it (`tokens.json`
+  `color.contrast`, checked by `tools/design-gen`'s tests). That is why light Needs you is `#B87700` rather than the brighter `#E8A10C` (2.20:1 on the
   card), light `text3` is 0.58 rather than 0.52 (#183), and iOS light secondary text is
   `rgba(60,60,67,0.76)` rather than UIKit's 0.60.
 

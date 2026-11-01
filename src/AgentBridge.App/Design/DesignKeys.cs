@@ -25,6 +25,7 @@ static class DesignKeys
         "AbAgentText",
         "AbAgentTrack",
         "AbDanger",
+        "AbDangerText",
         "AbNeutral",
         "AbShell",
         "AbLayer",

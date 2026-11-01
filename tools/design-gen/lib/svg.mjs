@@ -206,6 +206,18 @@ export function formatCommands(cmds) {
 // --- a design SVG as data ---
 
 const INHERITED = ['fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-dasharray'];
+const ROOT_ATTRS = new Set(['xmlns', 'width', 'height', 'viewBox']);
+
+// A line, or a path whose every subpath is one straight segment: nothing SVG would fill.
+function lineOnly(node, file) {
+  if (node.tag === 'line') { return true; }
+  if (node.tag !== 'path') { return false; }
+  let segments = 0;
+  for (const { c } of parsePathData(node.attrs.d ?? '', file)) {
+    if (c === 'M') { segments = 0; } else if (c === 'L' && ++segments === 1) { continue; } else { return false; }
+  }
+  return true;
+}
 const ALLOWED = new Set([...INHERITED, 'class', 'transform', 'opacity', 'stroke-opacity', 'fill-opacity',
   'd', 'cx', 'cy', 'r', 'x', 'y', 'width', 'height', 'rx', 'ry', 'x1', 'y1', 'x2', 'y2']);
 
@@ -225,6 +237,11 @@ export function readDesignSvg(file, kind) {
   if (root.tag !== 'svg') { throw new Error(`${file}: the root must be <svg>`); }
   const vb = (root.attrs.viewBox ?? '').split(/[\s,]+/).map(Number);
   if (vb.length !== 4 || vb[0] !== 0 || vb[1] !== 0 || vb[2] !== vb[3]) { throw new Error(`${file}: needs a square viewBox from 0 0`); }
+  // The root carries only its size and paint the parts inherit: an opacity, transform or class
+  // here would be dropped by both clients rather than drawn.
+  for (const k of Object.keys(root.attrs)) {
+    if (!ROOT_ATTRS.has(k) && !INHERITED.includes(k)) { throw new Error(`${file}: attribute ${k} on <svg> is not in the design subset`); }
+  }
   const rootStyle = {};
   for (const k of INHERITED) { if (root.attrs[k] !== undefined) { rootStyle[k] = root.attrs[k]; } }
   checkColour(root.attrs.fill, [], file, 'fill');
@@ -246,9 +263,10 @@ export function readDesignSvg(file, kind) {
     }
     if (!SHAPES.has(node.tag)) { throw new Error(`${file}: <${node.tag}> is not in the design subset`); }
     if (node.children.length) { throw new Error(`${file}: <${node.tag}> may not have children`); }
-    // SVG fills a shape black unless told otherwise; only an open line may leave fill unsaid.
-    if (style.fill === undefined && (node.tag === 'circle' || node.tag === 'rect' || /z/i.test(node.attrs.d ?? ''))) {
-      throw new Error(`${file}: a closed <${node.tag}> needs a fill (currentColor or none)`);
+    // SVG fills a shape black unless told otherwise, closed or not: three points enclose an area
+    // without a Z. Only straight single-segment lines may leave fill unsaid.
+    if (style.fill === undefined && !lineOnly(node, file)) {
+      throw new Error(`${file}: a <${node.tag}> that can enclose an area needs a fill (currentColor or none)`);
     }
     for (const k of ['opacity', 'stroke-opacity', 'fill-opacity']) { delete style[k]; }
     // XAML has one opacity per Path. Paint opacities inherit from groups; opacity does not.

@@ -27,6 +27,7 @@
                 <SolidColorBrush x:Key="AbAgentText" Color="#5B3CC4" />
                 <SolidColorBrush x:Key="AbAgentTrack" Color="#E3DBFB" />
                 <SolidColorBrush x:Key="AbDanger" Color="#C9302C" />
+                <SolidColorBrush x:Key="AbDangerText" Color="#C9302C" />
                 <SolidColorBrush x:Key="AbNeutral" Color="#6E7781" />
                 <SolidColorBrush x:Key="AbShell" Color="#EEF0F2" />
                 <SolidColorBrush x:Key="AbLayer" Color="#F9F9F9" />
@@ -55,6 +56,7 @@
                 <SolidColorBrush x:Key="AbAgentText" Color="#C4B5FD" />
                 <SolidColorBrush x:Key="AbAgentTrack" Color="#33285A" />
                 <SolidColorBrush x:Key="AbDanger" Color="#FF6B6B" />
+                <SolidColorBrush x:Key="AbDangerText" Color="#FF9494" />
                 <SolidColorBrush x:Key="AbNeutral" Color="#8B949E" />
                 <SolidColorBrush x:Key="AbShell" Color="#202326" />
                 <SolidColorBrush x:Key="AbLayer" Color="#272A2E" />
@@ -83,6 +85,7 @@
                 <SolidColorBrush x:Key="AbAgentText" Color="{ThemeResource SystemColorHighlightColor}" />
                 <SolidColorBrush x:Key="AbAgentTrack" Color="{ThemeResource SystemColorGrayTextColor}" />
                 <SolidColorBrush x:Key="AbDanger" Color="{ThemeResource SystemColorWindowTextColor}" />
+                <SolidColorBrush x:Key="AbDangerText" Color="{ThemeResource SystemColorWindowTextColor}" />
                 <SolidColorBrush x:Key="AbNeutral" Color="{ThemeResource SystemColorGrayTextColor}" />
                 <SolidColorBrush x:Key="AbShell" Color="{ThemeResource SystemColorWindowColor}" />
                 <SolidColorBrush x:Key="AbLayer" Color="{ThemeResource SystemColorWindowColor}" />

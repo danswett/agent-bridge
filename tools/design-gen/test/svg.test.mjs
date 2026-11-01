@@ -67,3 +67,13 @@ test('a token class on a group draws the group\'s paint from the token in the sp
   assert.match(sprite, /<g class="ink" stroke="var\(--ab-glyph-ink\)">/);
   assert.ok(!sprite.includes('#14100A'));
 });
+test('a path that encloses an area without a Z still needs a fill, as SVG would fill it black', () => {
+  assert.throws(() => readDesignSvg(svgFile('triangle', '<path d="M2 2L14 2L8 14" stroke="currentColor"/>'), 'glyph'), /needs a fill/);
+  assert.doesNotThrow(() => readDesignSvg(svgFile('cross', '<path d="M2 2L6 6M6 2L2 6" stroke="currentColor"/>'), 'glyph'));
+});
+
+test('an opacity, transform or class on the root svg is refused, since neither client would keep it', () => {
+  for (const attr of ['opacity="0"', 'transform="rotate(45)"', 'class="spin"', 'stroke-opacity="0.5"']) {
+    assert.throws(() => readDesignSvg(svgFile('root', '<circle cx="8" cy="8" r="5" fill="currentColor"/>', `viewBox="0 0 16 16" ${attr}`), 'glyph'), /on <svg> is not in the design subset/, attr);
+  }
+});

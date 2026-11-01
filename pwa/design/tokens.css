@@ -62,6 +62,7 @@
   --ab-agent-text: #5B3CC4;
   --ab-agent-track: #E3DBFB;
   --ab-danger: #C9302C;
+  --ab-danger-text: #C9302C;
   --ab-neutral: #6E7781;
   --ab-shell: #EEF0F2;
   --ab-layer: #F9F9F9;
@@ -113,6 +114,7 @@
     --ab-agent-text: #C4B5FD;
     --ab-agent-track: #33285A;
     --ab-danger: #FF6B6B;
+    --ab-danger-text: #FF9494;
     --ab-neutral: #8B949E;
     --ab-shell: #202326;
     --ab-layer: #272A2E;
@@ -145,6 +147,7 @@
     --ab-agent-text: Highlight;
     --ab-agent-track: GrayText;
     --ab-danger: CanvasText;
+    --ab-danger-text: CanvasText;
     --ab-neutral: GrayText;
     --ab-shell: Canvas;
     --ab-layer: Canvas;

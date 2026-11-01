@@ -6,6 +6,7 @@ import { roleTokens, surfaceTokens } from './tokens.mjs';
 
 export function contrastPairs(tokens) {
   const rules = tokens.color.contrast;
+  const notOnFills = new Set(rules.notOnFills ?? []);
   const roles = roleTokens(tokens);
   const surfaces = surfaceTokens(tokens);
   const out = [];
@@ -16,28 +17,25 @@ export function contrastPairs(tokens) {
       if (parseColor(s[theme]).a !== 1) { throw new Error(`surface ${name} must be opaque to be measured against`); }
       return { name, colour: s[theme] };
     });
+    // A role's fill is a surface of its own (the question card), over each of the others.
+    const fills = roles.filter((r) => r.variant === 'fill')
+      .flatMap((f) => bgs.map((b) => ({ name: `${f.role}.fill on ${b.name}`, colour: over(f[theme], b.colour) })));
     const add = (fg, fgName, bg, bgName, kind) => out.push({
       theme, fg: fgName, bg: bgName, kind, min: rules[kind], ratio: contrast(fg, bg),
     });
+    const everywhere = (fg, fgName, kind) => {
+      for (const b of [...bgs, ...(notOnFills.has(fgName) ? [] : fills)]) { add(fg, fgName, b.colour, b.name, kind); }
+    };
     for (const role of new Set(roles.map((r) => r.role))) {
       const own = roles.filter((r) => r.role === role);
       const base = own.find((r) => r.variant === '');
-      // A role's fill is a surface of its own for the role and its text: the question card.
-      const fills = own.filter((r) => r.variant === 'fill').flatMap((f) => bgs.map((b) => ({ name: `${role}.fill on ${b.name}`, colour: over(f[theme], b.colour) })));
-      const under = [...bgs, ...fills];
-      for (const b of under) {
-        add(base[theme], role, b.colour, b.name, 'graphic');
-        if (rules.roleText.includes(role)) { add(base[theme], role, b.colour, b.name, 'text'); }
-      }
-      for (const v of own.filter((r) => /^(text|head)/.test(r.variant))) {
-        for (const b of under) { add(v[theme], `${role}.${v.variant}`, b.colour, b.name, 'text'); }
-      }
+      everywhere(base[theme], role, 'graphic');
+      if (rules.roleText.includes(role)) { everywhere(base[theme], role, 'text'); }
+      for (const v of own.filter((r) => /^(text|head)/.test(r.variant))) { everywhere(v[theme], `${role}.${v.variant}`, 'text'); }
       for (const v of own.filter((r) => r.variant.startsWith('on'))) { add(v[theme], `${role}.${v.variant}`, base[theme], role, 'text'); }
       for (const v of own.filter((r) => r.variant.startsWith('ink'))) { add(v[theme], `${role}.${v.variant}`, base[theme], role, 'graphic'); }
     }
-    for (const t of surfaces.filter((s) => /^text\d*$/.test(s.name))) {
-      for (const b of bgs) { add(t[theme], `surface.${t.name}`, b.colour, b.name, 'text'); }
-    }
+    for (const t of surfaces.filter((s) => /^text\d*$/.test(s.name))) { everywhere(t[theme], `surface.${t.name}`, 'text'); }
   }
   return out;
 }

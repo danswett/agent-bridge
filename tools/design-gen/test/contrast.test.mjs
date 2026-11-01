@@ -15,10 +15,13 @@ test('every colour role reaches 3:1 as a graphic on every surface, in dark and l
 });
 
 test('every text token reaches 4.5:1 on every surface, in dark and light', () => {
-  for (const fg of ['surface.text', 'surface.text2', 'surface.text3', 'needs.text', 'needs.head', 'agent.text', 'bridge', 'danger']) {
+  for (const fg of ['surface.text', 'surface.text2', 'surface.text3', 'needs.text', 'needs.head', 'agent.text', 'danger.text', 'bridge']) {
     assert.ok(covered(fg, 'text'), `${fg} is measured as text on every surface`);
   }
-  assert.ok(pairs.some((p) => p.fg === 'needs.text' && p.bg.startsWith('needs.fill')), 'needs text is measured on the needs fill');
+  // The question card: every kind of words that can sit in it, on it.
+  for (const fg of ['needs.text', 'danger.text', 'agent.text', 'bridge', 'surface.text2']) {
+    assert.ok(pairs.some((p) => p.theme === 'dark' && p.fg === fg && p.bg === 'needs.fill on card' && p.kind === 'text'), ` is measured on the needs fill`);
+  }
   assert.ok(pairs.some((p) => p.fg === 'bridge.on' && p.bg === 'bridge'), 'text on a bridge button is measured');
   assert.deepEqual(failures(pairs.filter((p) => p.kind === 'text')).map(describe), []);
 });
@@ -38,3 +41,10 @@ test('the check finds the two light tokens #183 reported', () => {
   assert.ok(found.every((p) => p.theme === 'light' && (p.fg === 'needs' || p.fg === 'surface.text3')), `only those two: ${found.map(describe).join('; ')}`);
 });
 
+
+test('the check finds danger set as words on the dark needs fill, which is why words in danger use danger.text', () => {
+  const asRole = structuredClone(tokens);
+  asRole.color.contrast.roleText.push('danger');
+  const found = failures(contrastPairs(asRole));
+  assert.ok(found.some((p) => p.theme === 'dark' && p.fg === 'danger' && p.bg === 'needs.fill on card' && p.kind === 'text' && p.ratio < 3.8), found.map(describe).join('; '));
+});

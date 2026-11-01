@@ -46,6 +46,15 @@ for (const scheme of ['light', 'dark']) {
     expect(await claude.locator('.status-text').evaluate((e) => getComputedStyle(e).color)).toBe(rgb(surface[scheme].text));
     // Controls are bridge, never a status colour.
     expect(await page.locator('#demo-banner .button').evaluate((e) => getComputedStyle(e).color)).toBe(rgb(v(role.bridge)));
+    // Words in danger inside the question card are danger's text colour, which reads on its fill.
+    const error = await copilot.locator('.question').first().evaluate((q) => {
+      const p = document.createElement('p');
+      p.className = 'answer-error';
+      p.textContent = 'Not sent';
+      q.append(p);
+      return getComputedStyle(p).color;
+    });
+    expect(error).toBe(rgb(role.danger[`text${scheme === 'light' ? 'Light' : 'Dark'}`]));
     expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
   });
 }
