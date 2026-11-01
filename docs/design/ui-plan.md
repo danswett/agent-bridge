@@ -13,7 +13,7 @@ project's priorities (§4 step 6 and §5).
 | Gate | Who | Blocks |
 |---|---|---|
 | The owner signs off ui.md and subagents.md, and answers subagents.md §8 | Owner | Every slice in track B. S1 may start before it (see below) |
-| #181: license Berkeley Mono, or not | Owner | Nothing. Every slice uses the fallback stack until it's decided |
+| #181: the monospace | Owner | Decided 2026-11-01: Agent Bridge Mono, in `design/fonts`. #177 bundles it |
 
 **S1 may start before sign-off.** Its model and protocol are additive and change nothing a
 current client shows. Its fixtures also feed the shadow gate (#40). If sign-off changes

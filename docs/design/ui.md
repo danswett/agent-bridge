@@ -110,12 +110,16 @@ redesign removes.
   foreign, so none is used.
 - **Code: one monospace everywhere,** for commands, paths, agent IDs, tool calls and code
   blocks. That's where agent apps usually look generic, and it's on screen constantly.
-  - Proposed: **Berkeley Mono** (US Graphics). Its Developer license excludes commercial
-    use, so shipping it in the apps and the PWA needs a Commercial license (the "Indie"
-    tier fits). Confirm with the foundry that embedding in distributed apps and a web app
-    is covered before buying (tracked in #181).
-  - Until it's licensed, the font stack falls back to Cascadia Mono, SF Mono, Roboto Mono,
-    then `ui-monospace`. Ship nothing that requires Berkeley Mono to look right.
+  - **Agent Bridge Mono,** our own build of Iosevka with a Berkeley Mono-like
+    character (IoskeleyMono configuration, a tailed `l`, a 560 width), in
+    [`/design/fonts/agent-bridge-mono`](../../design/fonts/agent-bridge-mono/README.md).
+    It is under the SIL OFL, so it ships inside every client and lives in this public
+    repository. Berkeley Mono was considered and rejected: its Commercial license limits
+    embedding to apps without text entry, requires the font to be unextractable, and bars
+    public sharing (#181).
+  - **Stack:** Agent Bridge Mono, then Cascadia Mono, SF Mono, Roboto Mono and
+    `ui-monospace`. The fallbacks cover loading and any character outside the font's
+    subset.
 
 ### 4.2 Rules
 
