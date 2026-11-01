@@ -343,21 +343,23 @@ test.describe('notifications', () => {
 
   test('a notification\'s link opens its machine and session with the question ready, and so does a tap while the app is open', async ({ page }) => {
     const t = new Date().toISOString();
-    const question = (id) => ({ id: `q-${id}`, kind: 'form', message: 'Which one?', askedAt: t, fields: [{ name: 'answer', type: 'choice', options: [{ value: 'a' }, { value: 'b' }] }] });
+    // A command in the message gets a Copy button; focus still goes to the answers.
+    const question = (id) => ({ id: `q-${id}`, kind: 'form', message: 'Which one?\n\n```\ngit push\n```', askedAt: t, fields: [{ name: 'answer', type: 'choice', options: [{ value: 'a' }, { value: 'b' }] }] });
     for (const id of ['linked-1', 'linked-2']) {
       await host.upsert({ id, agent: 'copilot', title: id, status: 'waiting', statusSince: t, updatedAt: t, activity: {}, question: question(id) });
     }
     await signIn(page);
     await page.goto(`${appUrl}?host=${host.deviceId}&session=linked-1&question=q-linked-1`);
     await expect(card(page, 'linked-1')).toHaveClass(/linked/, { timeout: 30000 });
-    await expect(card(page, 'linked-1').locator('.question-slot button').first()).toBeFocused();
+    await expect(card(page, 'linked-1').locator('.question-message .md-copy')).toHaveCount(1);
+    await expect(card(page, 'linked-1').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
     expect(new URL(page.url()).search).toBe('');
 
     // What the worker tells an open app when one of its notifications is tapped.
     await page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
       `${appUrl}?host=${host.deviceId}&session=linked-2&question=q-linked-2`);
     await expect(card(page, 'linked-2')).toHaveClass(/linked/);
-    await expect(card(page, 'linked-2').locator('.question-slot button').first()).toBeFocused();
+    await expect(card(page, 'linked-2').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
   });
 });
 
