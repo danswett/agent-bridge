@@ -287,6 +287,13 @@ public sealed class TrustTests : IAsyncLifetime
         Assert.Equal("Sessions can't be started on Build server now: agent-ha-bridge is running for this user.", page.Note);
         Assert.Equal("Answer at the machine: agent-ha-bridge is running for this user.", card.AtMachine);
         Assert.False(card.CanAnswer);
+
+        // Answered at the machine since: Check again lists it again, and it is gone.
+        Assert.True(page.ShowReload);
+        Assert.Equal("Check again", page.ReloadText);
+        remoteTrust = [];
+        await page.RefreshAsync();
+        await Wait.UntilAsync(() => page.TrustQuestions.Count == 0, "the question to go");
     }
 
     [Fact]

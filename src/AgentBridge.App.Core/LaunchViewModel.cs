@@ -248,7 +248,10 @@ public sealed partial class LaunchViewModel : Observable
     public bool ShowModel { get; private set; }
     public bool ShowEffort { get; private set; }
     public bool ShowContext { get; private set; }
-    public bool ShowReload => !InspectOnly && (options is not null || error is not null);
+    // Kept for a machine shown only for its questions too: nothing else lists them again there, so
+    // one answered at the machine, or a listing that failed, would stay until the page was left.
+    public bool ShowReload => options is not null || error is not null;
+    public string ReloadText => InspectOnly ? "Check again" : "Reload choices";
     public bool CanReload => !loading;
 
     public string Note { get; private set; } = "";
@@ -591,7 +594,7 @@ public sealed partial class LaunchViewModel : Observable
         foreach (var p in new[] { nameof(Resumes), nameof(Resume), nameof(Agents), nameof(Agent), nameof(Workspaces), nameof(Workspace), nameof(Profiles), nameof(Profile),
             nameof(Models), nameof(Model), nameof(Efforts), nameof(Effort), nameof(Contexts), nameof(Context), nameof(Permissions),
             nameof(ShowForm), nameof(ShowResume), nameof(ShowWorkspace), nameof(ShowProfile), nameof(ShowModel), nameof(ShowEffort), nameof(ShowContext),
-            nameof(ShowReload), nameof(CanReload), nameof(Note), nameof(NoteWarns), nameof(Busy), nameof(PromptPlaceholder), nameof(Title) })
+            nameof(ShowReload), nameof(ReloadText), nameof(CanReload), nameof(Note), nameof(NoteWarns), nameof(Busy), nameof(PromptPlaceholder), nameof(Title) })
         {
             Raise(p);
         }

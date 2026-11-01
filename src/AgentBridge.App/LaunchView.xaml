@@ -190,7 +190,7 @@
                         Visibility="{x:Bind local:Ui.Show(ViewModel.ShowOpen), Mode=OneWay}" Click="OnOpen" />
                 </StackPanel>
                 <Button
-                    Content="Reload choices" AutomationProperties.AutomationId="LaunchReload"
+                    Content="{x:Bind ViewModel.ReloadText, Mode=OneWay}" AutomationProperties.AutomationId="LaunchReload"
                     IsEnabled="{x:Bind ViewModel.CanReload, Mode=OneWay}"
                     Visibility="{x:Bind local:Ui.Show(ViewModel.ShowReload), Mode=OneWay}" Click="OnReload" />
             </StackPanel>
