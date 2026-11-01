@@ -74,8 +74,10 @@ failure under its login, saying why.
 
 With `shared`: the host's own entries as above, first, then other machines' readings, each with
 `readBy`, at most 16 entries and 48 KiB in all. A peer reading is left out where the host's own
-reading of that allowance is as good (a reading over a failure, then the later one), and the
-oldest peer readings go first when the limits are reached.
+reading of that allowance is as good (a reading over a failure, then the later one). A peer
+failure is left out unless it is newer than every entry the host has for that allowance, so a
+client still learns of a newer failure beside an older reading. Failures go first, then the
+oldest peer readings, when the limits are reached.
 
 ### AgentUsage
 

@@ -143,19 +143,27 @@ public static class UsageShare
     }
 
     // own as the host reports it to anyone (already fitted), then each peer reading a client would
-    // show over the host's own for that allowance, readings before failures and newest first, while
-    // they fit the shared limits: failures go first, then the oldest readings. A peer's copy that is
-    // not newer than what this machine read itself is left out: the host's own reading stands.
+    // show over the host's own for that allowance, and each peer failure newer than anything the
+    // host has for it, readings before failures and newest first, while they fit the shared limits:
+    // failures go first, then the oldest readings. A peer's reading that is not newer than what
+    // this machine read itself is left out: the host's own reading stands. A failure is judged by
+    // its time alone, since it only lends its error to whichever reading a client shows; ranked as
+    // a reading would be, it was dropped wherever the host had a reading of its own however old.
     public static UsageReport Serve(UsageReport own, IEnumerable<AgentUsage> peers)
     {
         var mine = new Dictionary<string, AgentUsage>(StringComparer.Ordinal);
+        var latest = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         foreach (var a in own.Agents)
         {
             var k = Key(a);
             if (!mine.TryGetValue(k, out var b) || Outranks(a, b)) { mine[k] = a; }
+            if (!latest.TryGetValue(k, out var t) || a.MeasuredAt > t) { latest[k] = a.MeasuredAt; }
         }
+        bool Passes(AgentUsage p) => p.Windows.Count > 0
+            ? Outranks(p, mine.GetValueOrDefault(Key(p)))
+            : !latest.TryGetValue(Key(p), out var t) || p.MeasuredAt > t;
         var agents = own.Agents.ToList();
-        foreach (var p in peers.Where(p => p.ReadBy is not null && Outranks(p, mine.GetValueOrDefault(Key(p))))
+        foreach (var p in peers.Where(p => p.ReadBy is not null && Passes(p))
             .OrderByDescending(p => p.Windows.Count > 0).ThenByDescending(p => p.MeasuredAt))
         {
             if (agents.Count >= UsageProtocol.MaxSharedAgents) { break; }

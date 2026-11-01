@@ -261,6 +261,38 @@ public sealed class UsageSharingTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_peers_failure_newer_than_the_hosts_own_reading_is_passed_on_beside_it_and_an_older_one_is_not()
+    {
+        var store = PeerUsage.Load(null, Id('d'), "1", time);
+        var vm = new UsageReader(Id('a'), "VM");
+        store.Take([Copilot(45, Now.AddMinutes(-30)), Failure(AgentKind.Copilot, Now, "rate limited")], vm);
+        var own = new UsageReport([Copilot(40, Now.AddHours(-1))]);
+
+        Assert.Equal([(40.0, null), (45.0, null), (null, "rate limited")],
+            UsageShare.Serve(own, store.Entries).Agents.Select(a => (a.Windows.FirstOrDefault()?.Percent, a.Error)));
+        // Only the host's own reading of it, and a failure older than that: the failure says nothing new.
+        var only = PeerUsage.Load(null, Id('d'), "1", time);
+        only.Take([Failure(AgentKind.Copilot, Now.AddHours(-2), "old")], vm);
+        Assert.Equal(own.Agents, UsageShare.Serve(own, only.Entries).Agents);
+    }
+
+    [Fact]
+    public void A_malformed_entry_from_a_peer_is_refused_without_letting_the_store_grow_past_its_cap()
+    {
+        var store = PeerUsage.Load(null, Id('d'), "1", time);
+        var vm = new UsageReader(Id('a'), "VM");
+        var key = 0;
+        for (var round = 0; round < 4; round++)
+        {
+            var answer = Enumerable.Range(0, 14).Select(_ => Claude(10, Now, key: $"k{key++}")).ToList();
+            answer.Add(Claude(10, Now) with { Windows = null! });
+            answer.Add(Claude(10, Now) with { Windows = [null!] });
+            Assert.Equal(14, store.Take(answer, vm));
+        }
+        Assert.Equal(32, store.Entries.Count);
+    }
+
+    [Fact]
     public void Readings_older_than_two_weeks_go_and_one_stamped_in_the_future_is_refused()
     {
         var store = PeerUsage.Load(null, Id('d'), "1", time);

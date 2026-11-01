@@ -88,6 +88,7 @@ public sealed class PeerUsage
         lock (store.gate)
         {
             foreach (var a in saved.Readings ?? []) { if (a?.ReadBy is { } by) { store.TakeLocked(a, by); } }
+            store.Cap();
         }
         return store;
     }
@@ -118,14 +119,24 @@ public sealed class PeerUsage
         lock (gate)
         {
             if (account is null || (forAccount is not null && forAccount != account)) { return 0; }
-            foreach (var a in agents.Take(UsageProtocol.MaxSharedAgents))
+            try
             {
-                if (a is not null && TakeLocked(a, a.ReadBy ?? from)) { took++; }
+                foreach (var a in agents.Take(UsageProtocol.MaxSharedAgents))
+                {
+                    if (a is not null && TakeLocked(a, a.ReadBy ?? from)) { took++; }
+                }
+            }
+            finally
+            {
+                // Whatever went in is capped and announced even if a later entry threw.
+                if (took > 0)
+                {
+                    Cap();
+                    version++;
+                    SaveLocked();
+                }
             }
             if (took == 0) { return 0; }
-            Cap();
-            version++;
-            SaveLocked();
         }
         Changed?.Invoke();
         return took;
@@ -155,6 +166,10 @@ public sealed class PeerUsage
 
     bool TakeLocked(AgentUsage a, UsageReader by)
     {
+        // The JSON options do not enforce non-nullable members, so a peer can send "windows": null,
+        // a null window or one with no key; any of those threw out of FitAgent part-way through a
+        // Take, after earlier entries went in but before the store was capped.
+        if (a.Windows is null || a.Label is null || a.Windows.Any(w => w is null || w.Key is null || w.Label is null)) { return false; }
         // Fitted as any reading is: a peer's error is passed on as it is, bounded, never expanded.
         // Its place among the further accounts was that machine's; here it is just its account.
         var fit = UsageProtocol.FitAgent(a with { ReadBy = by, Slot = null });
