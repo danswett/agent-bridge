@@ -700,6 +700,11 @@ public class DiscoveryTests
         Assert.False(SystemProcessInspector.IsLoaderScript(AgentKind.Codex, "node /usr/local/bin/other", Resolve));
         // A link that cannot be followed is not taken for a loader: the process stays counted.
         Assert.False(SystemProcessInspector.IsLoaderScript(AgentKind.Codex, "node /opt/bin/codex", Resolve));
+        // Only the script node runs counts, not a loader's path later on its command line.
+        Assert.False(SystemProcessInspector.IsLoaderScript(AgentKind.Copilot,
+            @"node C:\npm\node_modules\@github\copilot\index.js -p ""see C:\npm\node_modules\@github\copilot\npm-loader.js""", Resolve));
+        Assert.True(SystemProcessInspector.IsLoaderScript(AgentKind.Copilot,
+            @"node --no-warnings C:\npm\node_modules\@github\copilot\npm-loader.js --session-id x", Resolve));
     }
 
     [Fact]

@@ -186,12 +186,13 @@ public sealed class SystemProcessInspector : IProcessInspector
         };
         if (loader is null || string.IsNullOrEmpty(commandLine)) { return false; }
         resolveLink ??= LinkTarget;
-        foreach (var token in CommandLine.Split(commandLine))
-        {
-            if (IsLoader(token, loader)) { return true; }
-            if (Path.IsPathRooted(token) && resolveLink(token) is { } target && IsLoader(target, loader)) { return true; }
-        }
-        return false;
+        // Only the script node runs: the first argument after the runtime that is not one of its
+        // options. A loader's path anywhere later (in a prompt, say) is not what the process runs.
+        // An option that takes a separate value makes that value look like the script, which then
+        // matches nothing, so the process stays counted.
+        var arguments = CommandLine.Split(commandLine);
+        if (arguments.Skip(1).FirstOrDefault(a => !a.StartsWith('-')) is not { } script) { return false; }
+        return IsLoader(script, loader) || (Path.IsPathRooted(script) && resolveLink(script) is { } target && IsLoader(target, loader));
 
         static bool IsLoader(string path, string loader)
         {
