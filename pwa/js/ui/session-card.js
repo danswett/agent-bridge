@@ -212,6 +212,24 @@ export class SessionCard {
     if (this.#s) { this.update(this.#s); }
   }
 
+  // Activity since the card was last open (session-order.js): the "new activity" dot at the
+  // title's trailing edge (ui.md §6.1), named for a screen reader.
+  setUnread(unread) {
+    const e = this.els;
+    if (unread && !e.unread) {
+      e.unread = h('span', { class: 'unread-dot' }, h('span', { class: 'sr-only' }, 'New activity'));
+      e.fold.insertBefore(e.unread, e.titleText.nextSibling);
+    } else if (!unread && e.unread) {
+      e.unread.remove();
+      e.unread = null;
+    }
+    this.element.classList.toggle('unread', unread);
+  }
+
+  setPinned(pinned) {
+    if (pinned) { this.element.dataset.pinned = 'true'; } else { delete this.element.dataset.pinned; }
+  }
+
   // The card is going: its session ended or another machine is shown.
   dispose() {
     this.#panel?.destroy();

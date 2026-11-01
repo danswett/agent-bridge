@@ -3,26 +3,53 @@ import { h, icon } from './dom.js';
 import { ALL } from '../host-session.js';
 import { SessionCard } from './session-card.js';
 import { FoldStore } from './fold-store.js';
+import { RowMenu } from './row-menu.js';
+import { SessionOrder } from '../session-order.js';
 import { ago } from './time.js';
 import { updateLine, lastLine, canCheck, canInstall } from '../update.js';
 
-// Keeps one card per session, from every machine shown, in the order given (most recently
-// updated first), updating cards in place so an open disclosure, scroll position or focus
-// survives an upsert. A card is its machine's and session's: two machines may each have a
-// session of the same id, and each card acts only on its own machine.
+const LONG_PRESS_MS = 500;
+// A finger that moves further than this is scrolling, not pressing.
+const LONG_PRESS_SLOP = 10;
+
+// Keeps one card per session, from every machine shown, in the person's order (session-order.js):
+// Pinned, then the rest, then an Ended group (ui.md §6.1). Cards are updated in place so an open
+// disclosure, scroll position or focus survives an upsert, and an upsert never moves one. A card
+// is its machine's and session's: two machines may each have a session of the same id, and each
+// card acts only on its own machine.
+//
+// Rows move only when the person moves them: Alt+Up/Down on a card's title, a drag by the handle
+// that shows on hover, or the row menu (a long press on a phone, a right-click, Shift+F10).
 export class SessionListView {
   #cards = new Map();
   #scheduled = false;
+  #menu = new RowMenu();
+  #heads = {};
+  #ended = null;
+  #press = null;
+  #swallowClick = false;
 
   // sessions: { list() -> [{ hostId, session }], onChange } (HostSession.sessions).
   // fetchDetail(hostId, id) -> Promise<Session|null>; machine(hostId) -> { name, show }: what to
   // call the machine, and whether its cards say so (with every machine shown).
   // answering(hostId) -> { service, replies, stops, hostId, capabilities, readOnly } | null.
-  constructor(container, sessions, { fetchDetail, machine = () => ({ name: '', show: false }), folds = new FoldStore(), answering = () => null } = {}) {
-    Object.assign(this, { container, sessions, fetchDetail, machine, folds, answering });
-    sessions.onChange(() => this.schedule());
+  // order: the person's order (SessionOrder). shows(hostId): whether a machine is shown.
+  // settled(hostId): whether a machine has sent its whole list yet.
+  constructor(container, sessions, { fetchDetail, machine = () => ({ name: '', show: false }), folds = new FoldStore(), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true } = {}) {
+    Object.assign(this, { container, sessions, fetchDetail, machine, folds, answering, order, shows, settled });
+    sessions.onChange((change) => {
+      this.order.observe(change);
+      if (change?.type === 'synced' && change.hostId) {
+        this.order.synced(change.hostId, new Set(sessions.list().filter((e) => e.hostId === change.hostId).map((e) => e.session.id)));
+      }
+      this.schedule();
+    });
     // Relative times move on without any event from the host.
     this.ticker = setInterval(() => { for (const c of this.#cards.values()) { c.refreshTimes(); } }, 15000);
+    // What a move did, said to a screen reader.
+    this.said = h('p', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
+    container.after(this.said);
+    this.#listen();
   }
 
   static key(hostId, id) { return `${hostId}\n${id}`; }
@@ -34,33 +61,59 @@ export class SessionListView {
     queueMicrotask(() => { this.#scheduled = false; this.render(); });
   }
 
+  setSort(sort) {
+    this.order.setSort(sort);
+    this.render();
+  }
+
   render() {
     const entries = this.sessions.list();
+    const { pinned, sessions, ended } = this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, shows: this.shows, settled: this.settled });
+    this.container.dataset.sort = this.order.sort;
+    this.onSorted?.();
     const live = new Set();
     // Moving a card takes focus out of it, and a card being answered moves when its
-    // session updates: the text box being typed in keeps focus and the caret.
+    // session updates in Most recent: the text box being typed in keeps focus and the caret.
     const focused = this.container.contains(document.activeElement) ? document.activeElement : null;
     const caret = focused && typeof focused.selectionStart === 'number' ? [focused.selectionStart, focused.selectionEnd] : null;
-    let prev = null;
-    for (const { hostId, session: s } of entries) {
-      const key = SessionListView.key(hostId, s.id);
-      live.add(key);
-      let card = this.#cards.get(key);
-      if (!card) {
-        const m = this.machine(hostId);
-        card = new SessionCard(s, {
-          hostId, folds: this.folds, fetchDetail: (id) => this.fetchDetail(hostId, id),
-          machineName: m.name, labelled: m.show, answering: () => this.answering(hostId),
-        });
-        this.#cards.set(key, card);
-      } else if (card.session !== s) {
-        card.update(s);
+    const want = [];
+    const cards = (list, isPinned) => {
+      for (const { hostId, session: s } of list) {
+        const key = SessionListView.key(hostId, s.id);
+        live.add(key);
+        let card = this.#cards.get(key);
+        if (!card) {
+          const m = this.machine(hostId);
+          card = new SessionCard(s, {
+            hostId, folds: this.folds, fetchDetail: (id) => this.fetchDetail(hostId, id),
+            machineName: m.name, labelled: m.show, answering: () => this.answering(hostId),
+          });
+          card.element.dataset.key = key;
+          card.els.frame.prepend(h('span', { class: 'drag-handle', 'aria-hidden': 'true', title: 'Drag to move' }));
+          this.#cards.set(key, card);
+        } else if (card.session !== s) {
+          card.update(s);
+        }
+        card.setPinned(isPinned);
+        // Open on screen, its news is seen as it comes; folded, it gets the dot.
+        if (!card.folded) { this.order.markSeen(key, s.updatedAt); }
+        card.setUnread(this.order.unread(key, s.updatedAt));
+        want.push(card.element);
       }
-      // Move only what is out of place, so a card being read is not torn out and put back.
-      const want = prev ? prev.nextSibling : this.container.firstChild;
-      if (want !== card.element) { this.container.insertBefore(card.element, want); }
-      prev = card.element;
+    };
+    if (pinned.length) { want.push(this.#head('pinned', 'Pinned')); }
+    cards(pinned, true);
+    if (pinned.length && sessions.length) { want.push(this.#head('sessions', 'Sessions')); }
+    cards(sessions, false);
+    if (ended.length) { want.push(this.#endedGroup(ended)); }
+    // Move only what is out of place, so a card being read is not torn out and put back.
+    let prev = null;
+    for (const el of want) {
+      const at = prev ? prev.nextSibling : this.container.firstChild;
+      if (at !== el) { this.container.insertBefore(el, at); }
+      prev = el;
     }
+    while (prev ? prev.nextSibling : this.container.firstChild) { (prev ? prev.nextSibling : this.container.firstChild).remove(); }
     for (const [key, card] of this.#cards) {
       if (!live.has(key)) { card.dispose(); card.element.remove(); this.#cards.delete(key); }
     }
@@ -69,6 +122,183 @@ export class SessionListView {
       if (caret) { try { focused.setSelectionRange(...caret); } catch { /* not a text control */ } }
     }
     this.onRender?.(entries.length);
+  }
+
+  #head(id, text) {
+    this.#heads[id] ??= h('h3', { class: 'list-group', dataset: { group: id } }, text);
+    return this.#heads[id];
+  }
+
+  // Ended · N, folded unless opened: the sessions the host removed while this page was open.
+  #endedGroup(ended) {
+    if (!this.#ended) {
+      this.#ended = { summary: h('summary'), list: h('ul', { class: 'ended-list' }) };
+      this.#ended.el = h('details', { class: 'ended-group' }, this.#ended.summary, this.#ended.list);
+    }
+    const { el, summary, list } = this.#ended;
+    summary.textContent = `Ended \u00b7 ${ended.length}`;
+    const now = Date.now();
+    list.replaceChildren(...ended.map((e) => {
+      const m = this.machine(e.hostId);
+      const when = ago(e.endedAt, now);
+      return h('li', { class: 'ended', dataset: { id: e.session.id, hostId: e.hostId } },
+        h('span', { class: 'ended-title' }, e.session.title || 'Untitled session'),
+        h('span', { class: 'ended-meta' }, [m.show ? m.name : null, when ? `ended ${when}` : null].filter(Boolean).join(' \u00b7 ')));
+    }));
+    return el;
+  }
+
+  #cardOf(el) {
+    const node = el?.closest?.('.session');
+    return node ? this.#cards.get(node.dataset.key) ?? null : null;
+  }
+
+  #keyOf(card) { return SessionListView.key(card.hostId, card.id); }
+
+  // Moves a row and keeps the move in view and in focus.
+  #move(card, delta) {
+    if (!this.order.move(this.#keyOf(card), delta)) { return false; }
+    this.render();
+    card.els.fold.focus({ preventScroll: true });
+    card.element.scrollIntoView({ block: 'nearest' });
+    this.#say(delta < 0 ? 'Moved up' : 'Moved down');
+    return true;
+  }
+
+  #pin(card, pinned) {
+    this.order.setPinned(this.#keyOf(card), pinned);
+    this.render();
+    card.els.fold.focus({ preventScroll: true });
+    this.#say(pinned ? 'Pinned' : 'Unpinned');
+  }
+
+  #say(text) { this.said.textContent = text; }
+
+  openMenu(card) {
+    const key = this.#keyOf(card);
+    const pinned = this.order.isPinned(key);
+    this.#menu.show(card.element, [
+      { label: 'Move up', disabled: !this.order.canMove(key, -1), run: () => this.#move(card, -1) },
+      { label: 'Move down', disabled: !this.order.canMove(key, 1), run: () => this.#move(card, 1) },
+      { label: pinned ? 'Unpin' : 'Pin', run: () => this.#pin(card, !pinned) },
+    ], { back: card.els.fold, label: `${card.session.title || 'Session'}: actions` });
+  }
+
+  #listen() {
+    const c = this.container;
+    c.addEventListener('keydown', (e) => {
+      const card = e.target.closest?.('.fold') ? this.#cardOf(e.target) : null;
+      if (!card) { return; }
+      // The context-menu key, or Shift+F10: Safari has neither as a contextmenu event.
+      if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey)) {
+        e.preventDefault();
+        this.openMenu(card);
+        return;
+      }
+      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) { return; }
+      e.preventDefault();
+      this.#move(card, e.key === 'ArrowUp' ? -1 : 1);
+    });
+    c.addEventListener('contextmenu', (e) => {
+      const card = e.target.closest?.('.fold') ? this.#cardOf(e.target) : null;
+      if (!card) { return; }
+      e.preventDefault();
+      this.#cancelPress();
+      this.openMenu(card);
+    });
+    // The tap that ends a long press doesn't fold the card.
+    c.addEventListener('click', (e) => {
+      if (this.#swallowClick && e.target.closest?.('.fold')) { this.#swallowClick = false; e.preventDefault(); e.stopPropagation(); }
+    }, true);
+    // A card opened by its title: what it shows now is seen. After the title's own handler.
+    c.addEventListener('click', (e) => { if (e.target.closest?.('.fold')) { this.schedule(); } });
+    c.addEventListener('pointerdown', (e) => {
+      if (e.target.closest?.('.drag-handle')) { this.#drag(e); return; }
+      if (e.pointerType === 'touch' && e.target.closest?.('.fold')) { this.#longPress(e); }
+    });
+  }
+
+  // A long press on a card's title opens its menu; the tap it ends with doesn't fold the card.
+  #longPress(e) {
+    const card = this.#cardOf(e.target);
+    if (!card) { return; }
+    this.#cancelPress();
+    const press = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    press.timer = setTimeout(() => {
+      this.#press = null;
+      this.#swallowClick = true;
+      // A click may never come (the finger slid off): don't let one swallow the next tap.
+      setTimeout(() => { this.#swallowClick = false; }, 800);
+      if (!this.#menu.open) { this.openMenu(card); }
+    }, LONG_PRESS_MS);
+    const moved = (ev) => {
+      if (ev.pointerId === press.id && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > LONG_PRESS_SLOP) { this.#cancelPress(); }
+    };
+    const up = (ev) => { if (ev.pointerId === press.id) { this.#cancelPress(); } };
+    document.addEventListener('pointermove', moved);
+    document.addEventListener('pointerup', up);
+    document.addEventListener('pointercancel', up);
+    press.off = () => {
+      document.removeEventListener('pointermove', moved);
+      document.removeEventListener('pointerup', up);
+      document.removeEventListener('pointercancel', up);
+    };
+    this.#press = press;
+  }
+
+  #cancelPress() {
+    if (!this.#press) { return; }
+    clearTimeout(this.#press.timer);
+    this.#press.off();
+    this.#press = null;
+  }
+
+  // A drag by the handle, with a mouse or pen, in Your order: a line shows where the row will
+  // go, and Escape puts it back.
+  #drag(e) {
+    const card = this.#cardOf(e.target);
+    if (!card || e.button !== 0 || e.pointerType === 'touch' || this.order.sort !== 'yours') { return; }
+    e.preventDefault();
+    const el = card.element;
+    el.classList.add('dragging');
+    let drop = null;
+    const mark = (next) => {
+      if (drop?.el === next?.el && drop?.after === next?.after) { return; }
+      drop?.el.classList.remove('drop-before', 'drop-after');
+      drop = next;
+      drop?.el.classList.add(drop.after ? 'drop-after' : 'drop-before');
+    };
+    const move = (ev) => {
+      if (ev.pointerId !== e.pointerId) { return; }
+      // Rows are a grid of columns on a wide screen: the row under the pointer, in both directions.
+      const over = [...this.container.querySelectorAll(':scope > .session')].find((s) => {
+        const r = s.getBoundingClientRect();
+        return ev.clientX >= r.left - 7 && ev.clientX <= r.right + 7 && ev.clientY >= r.top - 7 && ev.clientY <= r.bottom + 7;
+      });
+      if (!over || over === el) { mark(null); return; }
+      const r = over.getBoundingClientRect();
+      mark({ el: over, after: ev.clientY > r.top + r.height / 2 });
+    };
+    const finish = (commit) => {
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      document.removeEventListener('pointercancel', cancel);
+      document.removeEventListener('keydown', esc, true);
+      el.classList.remove('dragging');
+      const target = drop;
+      mark(null);
+      if (commit && target && this.order.place(this.#keyOf(card), target.el.dataset.key, target.after)) {
+        this.render();
+        this.#say('Moved');
+      }
+    };
+    const up = (ev) => { if (ev.pointerId === e.pointerId) { finish(true); } };
+    const cancel = (ev) => { if (ev.pointerId === e.pointerId) { finish(false); } };
+    const esc = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); finish(false); } };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+    document.addEventListener('pointercancel', cancel);
+    document.addEventListener('keydown', esc, true);
   }
 
   // Whether a machine takes answers may have changed: every question of its cards (of every

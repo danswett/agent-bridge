@@ -197,6 +197,29 @@ Sections, top to bottom:
 3. **Sessions,** in your order (#164).
 4. **Ended · N,** collapsed.
 
+**Order (#164).** Rules the clients share; the PWA and the Windows app keep the order in
+their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
+- **Per device.** Kept on the device (the PWA's `localStorage`, a file beside the Windows
+  app's folds). Never sent to a host: it isn't protocol.
+- **New sessions** go to the top of Sessions once, then stay put. A machine's first list is
+  placed together, newest first, once the machine has sent all of it.
+- **Moving** is the person's only: Alt+↑/↓ on a row; a drag by the handle that shows on hover
+  (mouse or pen); or the row menu, opened by a long press on touch, a right-click, or
+  Shift+F10 / the menu key. Its items are Move up, Move down and Pin (or Unpin). Moves stay
+  within the row's group; a row dragged into the other group is pinned or unpinned.
+- **Pins:** a pinned row goes to the foot of Pinned, and an unpinned one to the top of
+  Sessions.
+- **Sort menu:** "Your order" (the default), "Most recent" and "Machine" (by machine name,
+  then your order). It sorts within Pinned and within Sessions. Rows move only in Your order.
+  Where the order can't be kept (storage blocked or full), the list is Most recent and Your
+  order can't be picked.
+- **Ended** holds the sessions a host removed while the client was running: the most
+  recently ended first, at most 20, until the client restarts. A machine that goes offline
+  or out of view ends nothing.
+- **Unread:** a row whose session updated since the row was last open (an unfolded card in
+  today's layout; the selected row once #179 and #180 land). A session seen for the first
+  time starts read.
+
 **Row anatomy (two lines):**
 - **Leading:** the status glyph, aligned to line 1.
 - **Line 1:** the title. Semibold means unread activity, and the 6 px Bridge dot appears at
@@ -324,8 +347,8 @@ Sections, top to bottom:
 - **Glyphs** carry their state as an accessible name. A row reads as "Plan Migration to
   Windows App, delegating to 3 agents, DEV-VM1".
 - **Reduced motion** stops all glyph animation. Nothing relies on motion alone.
-- **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), and Ctrl/⌘+K
-  focuses search.
+- **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
+  menu key opens a row's menu, and Ctrl/⌘+K focuses search.
 
 ## 10. Mock-up index
 

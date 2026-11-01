@@ -24,7 +24,8 @@ export class SessionsStore {
   get(id) { return this.#sessions.get(id) ?? null; }
   has(id) { return this.#sessions.has(id); }
 
-  // Most recently updated first. Times are in one fixed format, so they compare as strings.
+  // Most recently updated first: the Most recent sort. What the list shows by default is the
+  // person's order (session-order.js). Times are in one fixed format, so they compare as strings.
   list() {
     return [...this.#sessions.values()].sort((a, b) =>
       a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
@@ -39,19 +40,24 @@ export class SessionsStore {
     return s;
   }
 
+  // The change carries the session as it last was: the list keeps it in its Ended group
+  // (session-order.js).
   remove(id) {
-    if (typeof id !== 'string' || !this.#sessions.delete(id)) { return false; }
-    this.#emit({ type: 'remove', id });
+    const session = typeof id === 'string' ? this.#sessions.get(id) : undefined;
+    if (!session) { return false; }
+    this.#sessions.delete(id);
+    this.#emit({ type: 'remove', id, session });
     return true;
   }
 
-  // Drops every session not in `ids`: what a completed snapshot means.
+  // Drops every session not in `ids`: what a completed snapshot means. Those dropped have
+  // ended, and go with the change as `removed`.
   retain(ids) {
-    let changed = false;
-    for (const id of [...this.#sessions.keys()]) {
-      if (!ids.has(id)) { this.#sessions.delete(id); changed = true; }
+    const removed = [];
+    for (const [id, s] of [...this.#sessions]) {
+      if (!ids.has(id)) { this.#sessions.delete(id); removed.push(s); }
     }
-    this.#emit({ type: 'synced', changed });
+    this.#emit({ type: 'synced', changed: removed.length > 0, removed });
   }
 
   // Announced only when it changes.

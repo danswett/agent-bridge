@@ -5,8 +5,8 @@
 // channel and no other (../answer-service.js, current(hostId)).
 //
 // With every machine shown (ALL, ../host-session.js), as the Windows app's "All machines":
-//   * every online machine's sessions, most recently updated first, each card naming its
-//     machine;
+//   * every online machine's sessions in one list, in the person's order (../session-order.js),
+//     each card naming its machine;
 //   * a machine that can't be reached says so in a line of its own, and the others go on;
 //   * the launch panel asks which machine to launch on, starting from the one last used.
 import { h } from './dom.js';
@@ -21,6 +21,7 @@ import { TRANSFER } from '../transfer.js';
 import { Capabilities } from '../protocol.js';
 import { AttachmentLimits } from '../attachments.js';
 import { maxPlain } from '../blobs.js';
+import { SessionOrder, SORTS, SORT_LABELS } from '../session-order.js';
 
 // The machine last launched on, or picked to launch on, with every machine shown.
 export const LAUNCH_HOST = 'agent-bridge.app.launchHost';
@@ -77,6 +78,7 @@ export class SessionsPage {
       // take the picker from a machine picked since.
       launched: (hostId) => this.#rememberLaunch(hostId),
     });
+    this.order = new SessionOrder({ storage });
     this.view = new SessionListView($('session-list'), hosts.sessions, {
       fetchDetail: (hostId, id) => {
         const client = hosts.link(hostId)?.client;
@@ -84,8 +86,12 @@ export class SessionsPage {
       },
       machine: (hostId) => ({ name: hosts.nameOf(hostId) ?? 'another machine', show: this.#several() }),
       answering: (hostId) => this.answering(hostId),
+      order: this.order,
+      shows: (hostId) => hosts.shows(hostId),
+      settled: (hostId) => hosts.link(hostId)?.client?.synced !== false,
     });
     this.view.onRender = (n) => this.#drawCount(n);
+    this.#sortMenu($('session-sort'));
     // A new channel to a machine: what waits to be resent to it goes now, and only to it.
     hosts.onOpen((id) => {
       for (const s of [this.answers, this.replies, this.stops, this.launches]) { s.ready(id); }
@@ -128,8 +134,23 @@ export class SessionsPage {
     this.replies.clear();
     this.stops.clear();
     this.launches.clear();
+    this.order.clearEnded();
     this.launchPanel.setMachines(null);
     this.launchPanel.setTarget(null);
+  }
+
+  // Your order, Most recent or Machine. Where the order can't be kept on this device, the list
+  // is Most recent and Your order can't be picked.
+  #sortMenu(select) {
+    if (!select) { return; }
+    select.replaceChildren(...SORTS.map((s) => h('option', { value: s, disabled: s === 'yours' && !this.order.usable ? true : null }, SORT_LABELS[s])));
+    const show = () => {
+      select.value = this.order.sort;
+      select.options[0].disabled = !this.order.usable;
+    };
+    select.addEventListener('change', () => { this.view.setSort(select.value); show(); });
+    this.view.onSorted = show;
+    show();
   }
 
   // A line in place of the sessions, for something that stopped the page altogether.
