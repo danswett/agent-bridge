@@ -132,8 +132,8 @@ and the app (`src/AgentBridge.App`) and keep them at parity.
 
 **From #182's review:** four subagents.md findings are recorded as S1 requirements on #173
 (a terminal outcome for done/failed, idle delegates not counted as running, per-field
-provenance, a budget for `activity.own`), one shadow finding on #175, and ui.md §2.2 rules
-7 and 8 become overlays in U4 (#178).
+provenance, a budget for `activity.own`), one shadow finding on #175, and in U4 (#178)
+ui.md §2.2 rule 7 becomes an overlay after rules 1–6 while rule 8 refines rule 4 only.
 
 ## 6. Open issues by theme
 
