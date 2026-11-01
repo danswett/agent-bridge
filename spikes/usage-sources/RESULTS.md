@@ -430,14 +430,20 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
 - So closing standard input after the responses removes the refresh caused by the
   probe's own request, but it doesn't guarantee that nothing is refreshing. The host
   can't see a background refresh from outside.
-- **What could still be refreshing.** In 0.166 the model-catalogue fetch gets its
-  credentials through `auth()`, so it refreshes only proactively, and a 401 there doesn't
-  start a refresh (`model-provider/src/models_endpoint.rs:119-160`). So in a probe
-  process the refreshes left are proactive ones, started by start-up work calling
-  `auth()`. If a refresh is already due when the usage request arrives, the request waits
-  for it. The gap is the boundary: the token enters its 5-minute window after the usage
-  read's `auth()` but before the process exits, and some other start-up caller refreshes
-  then. E13(c) searches for that case before choosing a mechanism.
+- **What could still be refreshing.** There are two kinds of refresh in a probe process.
+  - **Proactive.** The model-catalogue fetch gets its credentials through `auth()`, so it
+    refreshes only proactively, and a 401 there doesn't start a refresh
+    (`model-provider/src/models_endpoint.rs:119-160`). If a refresh is already due when
+    the usage request arrives, the request waits for it. The gap is the boundary: the
+    token enters its 5-minute window after the usage read's `auth()` but before the
+    process exits.
+  - **Recovery after a 401.** At start-up the app-server also spawns workspace-routing
+    discovery (`account_processor.rs:162-167`). When `/accounts/check` returns 401, that
+    discovery runs `unauthorized_recovery()`, which refreshes **outside** the 5-minute
+    window (`account_processor/workspace_routing.rs:401-445`). The usage read doesn't
+    wait for it. `account/read` may wait, since it reports routing results, but whether
+    that covers the refresh is unknown.
+  - E13(c) looks for both kinds before a mechanism is chosen.
 - **Interim rule:** close standard input only after both responses arrive, then let the
   process exit by itself. E13 decides the final mechanism, choosing between:
   - closing at once;
@@ -450,12 +456,16 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
 **X-5. Detecting a Codex sign-out.**
 - `codex login status` only reports stored credentials (`cli/src/login.rs`). A refresh
   token that has been revoked or reused still prints "Logged in using ChatGPT", because
-  permanent refresh failures live only in the failing process's memory. `account/read`
-  doesn't check either: it discards its own refresh outcome
-  (`account_processor.rs:1082-1104`).
-- The verified signal is the probe's own `account/rateLimits/read` failing with an
-  authentication error after a failed refresh. E14 records the exact error for a revoked
-  token and for a reused one.
+  permanent refresh failures live only in the failing process's memory.
+- `account/read` discards the outcome of the refresh it's asked for with `refreshToken`
+  (`account_processor.rs:1082-1104`). But when a workspace is selected, its
+  routing-discovery path can fail with `RefreshTokenRejected`
+  (`account_processor/workspace_routing.rs:418-432`). So it reports a permanent refresh
+  failure in that case, and in no other.
+- The verified signals are the probe's own `account/rateLimits/read` failing with an
+  authentication error after a failed refresh, and, with a workspace selected,
+  `account/read` failing with a rejected refresh token. E14 records the exact errors for
+  a revoked token and for a reused one, with and without a selected workspace.
 - After that error, stop probing. Start again after the 2-hour back-off or when a Codex
   session next runs here, whichever comes first.
 
@@ -572,8 +582,8 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 | E10 | Codex keyring mode | `cli_auth_credentials_store = "keyring"`, then E7 | Same result as E7, with no `auth.json` present |
 | E11 | Invisible to the bridges | Run both probes with an agent-bridge dev host and agent-ha-bridge hooks installed on the VM | No session appears in either, and the host's worktree accounting ignores the probes |
 | E12 | Codex half-written `auth.json` | Make the standalone probe refresh: expire the token, and slow the token response through `mitmdump` so the save lands while another process is reading. Start `codex` or `codex login status` in a loop meanwhile, 50 times | Record any load or parse failure in the reading process. If any occur, the build must not probe while another Codex process could start, beyond what X-3 already rules out |
-| E13 | Codex outstanding refresh at EOF (**on the Linux VM**, since the 45 s watchdog is Unix-only) | Hold the token response for 50 s. (a) Close standard input as soon as the request is sent. (b) Close it only after the responses. (c) **Find a background refresh before trying to cut one off.** Using the token lifetime from E8, start probes 50 times with the access token from 6 min to 4 min before its `exp`, so the 5-minute window opens during the probe. Log, with times, every token-endpoint request and every probe response. If a token request starts after the last probe response, identify its caller, hold that response past the 45 s watchdog in a repeat run, and record whether the token is lost. If none ever does, record that every refresh in a probe was one the usage read waited for. (d) Repeat (b) on the Windows VM | (a) Expected to **fail**: the process exits at 45 s, the rotated token is lost, and Codex signs out. (b) No loss. (c) Either the caller and outcome of a refresh that outlived the responses, or the finding that none does. That decides between a grace period, the daemon route and the interim rule as it stands (X-4). (d) The process exits by itself after EOF. The owner signs in again after each failure |
-| E14 | Codex sign-out signal | Revoke the session from ChatGPT's security settings. Separately, make a refresh token reused (E8's forced race). Probe after each | Record the exact `account/rateLimits/read` error for each. `codex login status` still says logged in, which confirms X-5 |
+| E13 | Codex outstanding refresh at EOF (**on the Linux VM**, since the 45 s watchdog is Unix-only) | Hold the token response for 50 s. (a) Close standard input as soon as the request is sent. (b) Close it only after the responses. (c) **Find a background refresh before trying to cut one off.** Two runs. (c1) Proactive: using the token lifetime from E8, start probes 50 times with the access token from 6 min to 4 min before its `exp`, so the 5-minute window opens during the probe. (c2) Routing recovery: with a fresh token and a selected workspace, have `mitmdump` answer `/accounts/check` with one 401, which makes routing discovery refresh outside the window. In both runs, log the time of every token-endpoint request and every probe response, including both `account/read` answers. If a token request is still open after the last probe response, hold it past the 45 s watchdog in a repeat run and record whether the token is lost. (d) Repeat (b) on the Windows VM | (a) Expected to **fail**: the process exits at 45 s, the rotated token is lost, and Codex signs out. (b) No loss. (c) For each run: either the caller and outcome of a refresh that outlived the responses, or the finding that none does. In particular, whether the second `account/read` waits for routing discovery's refresh. That decides between a grace period, the daemon route and the interim rule as it stands (X-4). (d) The process exits by itself after EOF. The owner signs in again after each failure |
+| E14 | Codex sign-out signal | Revoke the session from ChatGPT's security settings. Separately, make a refresh token reused (E8's forced race). Probe after each, with and without a selected workspace | Record the exact `account/rateLimits/read` and `account/read` errors for each. `codex login status` still says logged in, which confirms X-5 |
 
 ---
 
@@ -623,10 +633,11 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
 >       shutdown mechanism E13 chose (spike X-4). After 60 s with no answer it stops
 >       waiting and reports nothing, but leaves the process running; the process is
 >       treated as hung only after 10 min.
-> - [ ] An authentication error from the rate-limit read (spike X-5, error text from E14)
->       gives the failure "Codex needs signing in again on this machine". Probes stop
->       until the 2-hour back-off ends or a Codex session next runs here. `codex login
->       status` isn't used for this.
+> - [ ] An authentication error from the rate-limit read, or a rejected refresh token
+>       from `account/read` (spike X-5, error text from E14), gives the failure "Codex
+>       needs signing in again on this machine". Probes stop until the 2-hour back-off
+>       ends or a Codex session next runs here. `codex login status` isn't used for
+>       this.
 > - [ ] Mapping: `rateLimitsByLimitId.codex`, or else `rateLimits`, gives the windows.
 >       Labels come from `windowDurationMins`, plus `resetsAt` and `planType`.
 >       `accountKey` is the first 12 hex digits of
