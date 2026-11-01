@@ -33,10 +33,13 @@ public static class HostSide
 
     // What background.agents counts, entry by entry: background sub-agents working or waiting, at
     // any depth (subagents.md §2). Running ones are listed first, so the list holds them all unless
-    // nothing finished follows them and some were left out.
+    // nothing finished follows them and some were left out. A host that lists none while it counts
+    // some (one from before sub-agents, or an agent that reports counts only, rule 8) is compared
+    // by its count alone.
     static IReadOnlyList<string>? RunningSubagents(Session s)
     {
         var list = s.Subagents ?? [];
+        if (list.Count == 0 && s.Activity.Background is { Agents: > 0 }) { return null; }
         if (s.SubagentsMore is > 0 && !list.Any(a => a.Finished)) { return null; }
         return [.. list.Where(a => a.Kind == SubagentKind.Background && !a.Finished).Select(a => a.Id)];
     }

@@ -152,10 +152,18 @@ public static class HaPayloads
     // An addition to agent-ha-bridge's attributes, only on a session that has sub-agents: what
     // its delegates are doing, so the main agent's text can stay its own. subagents_more counts
     // the entries left out, here or by the host. The card draws neither yet.
+    //
+    // Budgeted against everything else the attributes carry, never at its cost: a 6000-character
+    // reply in both response and history plus five delegates at their limits came to over 17 KiB
+    // (found in review), and Home Assistant keeps no more than 16 KiB of a state's attributes. So
+    // the lines go first, then entries from the end, each counted in subagents_more. A session
+    // whose card text alone fills the budget publishes an empty list and the count, which still
+    // says it has delegates.
     internal static void AddSubagents(JsonObject detail, Session full)
     {
-        if (full.Subagents is not { Count: > 0 } list) { return; }
-        var shown = new JsonArray();
+        var list = full.Subagents ?? [];
+        if (list.Count == 0 && full.SubagentsMore is not > 0) { return; }
+        var entries = new List<JsonObject>();
         foreach (var a in list.Take(SubagentsShown))
         {
             var entry = new JsonObject
@@ -164,12 +172,32 @@ public static class HaPayloads
                 ["status"] = a.Status.ToString().ToLowerInvariant(),
             };
             if (Limits.KeepEnd(Flatten(a.Line), Limits.SubagentLine).Text is { Length: > 0 } line) { entry["line"] = NeutraliseTemplates(line); }
-            shown.Add(entry);
+            entries.Add(entry);
         }
-        detail["subagents"] = shown;
-        var more = list.Count - shown.Count + (full.SubagentsMore ?? 0);
-        if (more > 0) { detail["subagents_more"] = more; }
+        void Put()
+        {
+            detail["subagents"] = new JsonArray([.. entries.Select(e => (JsonNode)e.DeepClone())]);
+            var more = list.Count - entries.Count + (full.SubagentsMore ?? 0);
+            if (more > 0) { detail["subagents_more"] = more; } else { detail.Remove("subagents_more"); }
+        }
+        bool Fits() => System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(detail)) <= ActivityAttributesBudget;
+        Put();
+        if (!Fits())
+        {
+            foreach (var e in entries) { e.Remove("line"); }
+            Put();
+        }
+        while (!Fits() && entries.Count > 0)
+        {
+            entries.RemoveAt(entries.Count - 1);
+            Put();
+        }
     }
+
+    // What the activity attributes may come to with the delegates in them: Home Assistant's 16 KiB,
+    // less room for what is laid over them later (End session's hint) and the attributes Home
+    // Assistant adds itself (friendly_name, icon).
+    public const int ActivityAttributesBudget = 15 * 1024;
 
     static string Flatten(string? text) => string.IsNullOrWhiteSpace(text) ? "" : string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 

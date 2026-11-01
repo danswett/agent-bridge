@@ -405,7 +405,8 @@ five, and the comparison now classifies each as below.
 `background.agents` (`subagents`: background entries `working` or `waiting`, at any depth,
 the same ones the daemon counts from `subagent.started`). When that list holds them all
 (nothing left out, or a finished entry after the running ones), the agents are matched one
-by one as well as counted. Each of the daemon's tool calls is mapped to its agent through
+by one as well as counted. A host that counts agents but lists none (one from before
+sub-agents, or an agent that reports counts only) is compared by its count alone. Each of the daemon's tool calls is mapped to its agent through
 the transcript's `subagent.started`. Each agent the host counts and the daemon does not must
 be one woken again after its first completion (#258), and each the daemon counts and the
 host does not must be one whose `subagent.completed` the daemon has read past (#259). A call

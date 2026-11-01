@@ -285,6 +285,42 @@ public class ContractTests
         Assert.True(System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(detail)) < 16 * 1024);
     }
 
+    // Found in review: a 6000-character reply is in both response and history, and five delegates at
+    // their limits on top of it came to over 17 KiB. They make way for the card's text, never the
+    // other way round, and are still counted when none fit.
+    [Fact]
+    public void Delegates_make_way_for_the_cards_own_text_within_home_assistants_limit_and_are_still_counted()
+    {
+        var templates = string.Concat(Enumerable.Repeat("{{", 2000));
+        var delegates = Enumerable.Range(0, 6).Select(i => new Subagent
+        {
+            Id = $"agent-{i}", Kind = SubagentKind.Background, Status = SubagentStatus.Working, Name = templates, Line = templates,
+        }).ToList();
+        int Bytes(JsonObject o) => System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(o));
+        JsonObject Detail(string reply, IReadOnlyList<Subagent>? list, int? more = null) => HaPayloads.ActivityAttributes(
+            FakeSessions.Copilot(SessionId, response: reply) with { Subagents = list, SubagentsMore = more },
+            Contract.Text("session.sessionName"), Machine, verbose: false, DateTimeOffset.Now);
+
+        var reply = new string('r', 6000);
+        var detail = Detail(reply, delegates);
+        Assert.True(Bytes(detail) <= HaPayloads.ActivityAttributesBudget, $"{Bytes(detail)} bytes");
+        Assert.Equal(reply, detail["response"]!.GetValue<string>());
+        var listed = detail["subagents"]!.AsArray();
+        Assert.NotEmpty(listed);
+        Assert.Equal(6 - listed.Count, detail["subagents_more"]!.GetValue<int>());
+
+        // A reply that fills the budget on its own: none listed, all counted.
+        var full = Detail(string.Concat(Enumerable.Repeat("\U0001F680", 3000)), delegates, more: 2);
+        Assert.Empty(full["subagents"]!.AsArray());
+        Assert.Equal(8, full["subagents_more"]!.GetValue<int>());
+
+        // The host's budget dropped every entry: still a session with delegates.
+        var dropped = Detail("Done.", null, more: 3);
+        Assert.Empty(dropped["subagents"]!.AsArray());
+        Assert.Equal(3, dropped["subagents_more"]!.GetValue<int>());
+        Assert.False(Detail("Done.", null).ContainsKey("subagents"));
+    }
+
     // The readings the usage contract was recorded from.
     internal static readonly AgentUsage[] UsageReadings =
     {

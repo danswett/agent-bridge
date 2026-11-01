@@ -208,9 +208,13 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
   `status` is `working`, `waiting`, `idle` or `ended`, and `line` is absent until the
   delegate has said something. `subagents_more` counts the entries left out, here or by the
   host, when there are any. Names keep their first 120 bytes and lines their last 300,
-  whitespace collapsed and template markup broken as in names, so the attribute stays a few
-  KiB with any number of delegates, far inside Home Assistant's 16 KiB for a state's
-  attributes. The card draws neither yet.
+  whitespace collapsed and template markup broken as in names, so five entries come to a few
+  KiB with any number of delegates. They are also budgeted against the rest of the
+  attributes, never at the card text's cost: past 15 KiB in all (Home Assistant keeps 16 KiB
+  of a state's attributes, less room for End session's hint and its own), the lines go, then
+  entries from the end, each counted in `subagents_more`. A session whose card text fills
+  that alone, or whose every entry the host's own budget dropped, publishes `subagents: []`
+  with the count. The card draws neither yet.
 
 ### What is withdrawn
 

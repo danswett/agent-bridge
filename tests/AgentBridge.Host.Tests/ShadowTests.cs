@@ -377,17 +377,20 @@ public sealed class ShadowTests : IDisposable
     public void The_hosts_counted_agents_are_read_from_its_list_only_when_the_list_holds_them_all()
     {
         Subagent A(string id, SubagentStatus status, SubagentKind kind = SubagentKind.Background) => new() { Id = id, Kind = kind, Status = status };
-        IReadOnlyList<string>? Running(IReadOnlyList<Subagent>? list, int? more = null) => HostSide.From(new Session
+        IReadOnlyList<string>? Running(IReadOnlyList<Subagent>? list, int? more = null, int counted = 0) => HostSide.From(new Session
         {
             Id = Id, Agent = AgentKind.Copilot, Status = SessionStatus.Idle, StatusSince = Fixture.T0, UpdatedAt = Fixture.T0,
-            Activity = new Activity(), Subagents = list, SubagentsMore = more,
+            Activity = new Activity { Background = counted > 0 ? Background.Of(counted, 0) : null }, Subagents = list, SubagentsMore = more,
         }).RunningSubagents;
 
         Assert.Equal([], Running(null));
-        Assert.Equal(["a1", "a3"], Running([A("a1", SubagentStatus.Working), A("a2", SubagentStatus.Working, SubagentKind.Task), A("a3", SubagentStatus.Waiting), A("a4", SubagentStatus.Idle)], more: 4));
+        Assert.Equal(["a1", "a3"], Running([A("a1", SubagentStatus.Working), A("a2", SubagentStatus.Working, SubagentKind.Task), A("a3", SubagentStatus.Waiting), A("a4", SubagentStatus.Idle)], more: 4, counted: 2));
         // Capped with nothing finished after the running ones: some may have been left out.
-        Assert.Null(Running([A("a1", SubagentStatus.Working)], more: 2));
-        Assert.Null(Running(null, more: 3));
+        Assert.Null(Running([A("a1", SubagentStatus.Working)], more: 2, counted: 3));
+        Assert.Null(Running(null, more: 3, counted: 1));
+        // A count with no list (a host from before sub-agents, or an agent that reports counts
+        // only) is compared by its count alone (found in review).
+        Assert.Null(Running(null, counted: 2));
     }
 
     // The live shadow's first minutes (#40): a session's subagents' shells counted by the daemon as
