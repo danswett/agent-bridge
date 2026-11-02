@@ -19,6 +19,10 @@ Some boards are shared components or thin wrappers:
   its `theme` prop flipped;
 - `PWA-Desktop.dc.html` imports `Windows.dc.html` with `chrome="web"`.
 
+`Proposal-<issue>-*.dc.html` boards are drafts for a proposal in
+[docs/design/proposals](../../docs/design/proposals), not part of the signed-off design. They
+render beside the proposal, not into `docs/design/mockups`, and go once the owner has decided.
+
 Colours and glyph paths inside these files are copies of
 [`design/tokens.json`](../tokens.json) and [`design/glyphs`](../glyphs). If they drift,
 `design/` is right.

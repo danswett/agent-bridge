@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #253: attention on Windows and the desktop PWA</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button,textarea,input{font:inherit}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/253-attention.md). variant "before" draws a
+     session waiting on an ask_user question as ui.md specifies it today, with each place the
+     question repeats numbered; "after" draws the recommended option. filter "on" shows the list
+     narrowed by Needs you · N. -->
+<div style="width: 1440px; height: 900px; box-sizing: border-box; background: {{t.shell}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 20px; font-variant-numeric: tabular-nums; display: flex; flex-direction: column; overflow: hidden; border: 1px solid {{t.frame}}; border-radius: {{frameRadius}}">
+
+  <sc-if value="{{isNative}}" hint-placeholder-val="{{true}}">
+  <div style="height: 48px; flex: none; display: flex; align-items: center; padding-left: 16px; gap: 12px">
+    <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true"><circle cx="19" cy="28" r="9.5" fill="none" stroke="{{t.accent}}" stroke-width="4.5"></circle><circle cx="36" cy="12.6" r="6" fill="{{t.accent}}"></circle></svg>
+    <span style="font-size: 12px; line-height: 16px">Agent Bridge</span>
+    <span style="flex: 1"></span>
+    <label style="width: 400px; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 4px; background: {{t.field}}; border: 1px solid {{t.stroke}}; border-bottom-color: {{t.fieldEdge}}; color: {{t.text2}}; box-sizing: border-box">
+      <input placeholder="Search" aria-label="Search" style="flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: {{t.text}}; font-size: 14px">
+      <dc-import name="Icon" icon="search" size="16" hint-size="16px,16px"></dc-import>
+    </label>
+    <span style="flex: 1"></span>
+    <div aria-hidden="true" style="display: flex; height: 48px; width: 138px">
+      <span style="width: 46px; display: grid; place-items: center"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" stroke-width="1"></path></svg></span>
+      <span style="width: 46px; display: grid; place-items: center"><svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1"></rect></svg></span>
+      <span style="width: 46px; display: grid; place-items: center"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1"></path></svg></span>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{isWeb}}" hint-placeholder-val="{{false}}">
+  <header style="height: 56px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 16px 0 20px">
+    <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true"><circle cx="19" cy="28" r="9.5" fill="none" stroke="{{t.accent}}" stroke-width="4.5"></circle><circle cx="36" cy="12.6" r="6" fill="{{t.accent}}"></circle></svg>
+    <span style="font-size: 14px; font-weight: 600">Agent Bridge</span>
+    <span style="flex: 1"></span>
+    <label style="width: 400px; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 4px; background: {{t.field}}; border: 1px solid {{t.stroke}}; border-bottom-color: {{t.fieldEdge}}; color: {{t.text2}}; box-sizing: border-box">
+      <input placeholder="Search" aria-label="Search" style="flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: {{t.text}}; font-size: 14px">
+      <span style="font-size: 12px; line-height: 16px; color: {{t.text3}}; border: 1px solid {{t.stroke2}}; border-radius: 4px; padding: 0 6px">/</span>
+    </label>
+    <span style="flex: 1"></span>
+    <span style="display: inline-flex; align-items: center; gap: 8px; font-size: 12px; line-height: 16px; color: {{t.text2}}"><span style="width: 6px; height: 6px; border-radius: 3px; background: {{t.ok}}"></span>2 machines</span>
+    <button aria-label="Account: danswett" style="margin-left: 8px; width: 32px; height: 32px; border-radius: 16px; border: 1px solid {{t.stroke2}}; background: {{t.card}}; color: {{t.text}}; font-size: 12px; font-weight: 600">D</button>
+  </header>
+  </sc-if>
+
+  <div style="flex: 1; display: flex; min-height: 0">
+    <nav aria-label="App" style="width: 48px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px 0 8px; color: {{t.text2}}">
+      <a href="#" aria-current="page" aria-label="Sessions, 3 need you" style="position: relative; width: 40px; height: 36px; border-radius: 4px; display: grid; place-items: center; color: {{t.text}}; background: {{t.sel}}"><span style="position: absolute; left: 0; top: 10px; width: 3px; height: 16px; border-radius: 2px; background: {{t.accent}}"></span><dc-import name="Icon" icon="sessions" size="16" hint-size="16px,16px"></dc-import><span style="position: absolute; top: 3px; right: 4px; min-width: 14px; height: 14px; border-radius: 7px; background: {{t.amber}}; color: {{t.amberInk}}; font-size: 10px; line-height: 14px; font-weight: 600; text-align: center">3</span></a>
+      <a href="#" aria-label="Machines" style="width: 40px; height: 36px; display: grid; place-items: center; color: inherit"><dc-import name="Icon" icon="machine" size="16" hint-size="16px,16px"></dc-import></a>
+      <a href="#" aria-label="Launch" style="width: 40px; height: 36px; display: grid; place-items: center; color: inherit"><dc-import name="Icon" icon="launch" size="16" hint-size="16px,16px"></dc-import></a>
+      <a href="#" aria-label="Usage" style="width: 40px; height: 36px; display: grid; place-items: center; color: inherit"><dc-import name="Icon" icon="usage" size="16" hint-size="16px,16px"></dc-import></a>
+      <span style="flex: 1"></span>
+      <a href="#" aria-label="Settings" style="width: 40px; height: 36px; display: grid; place-items: center; color: inherit"><dc-import name="Icon" icon="settings" size="16" hint-size="16px,16px"></dc-import></a>
+    </nav>
+
+    <div style="flex: 1; min-width: 0; display: flex; background: {{t.layer}}; border-top-left-radius: 8px; border-top: 1px solid {{t.stroke}}; border-left: 1px solid {{t.stroke}}">
+
+      <!-- Session list -->
+      <section aria-label="Sessions" style="width: 320px; flex: none; display: flex; flex-direction: column; border-right: 1px solid {{t.stroke}}; overflow: hidden">
+        <div style="display: flex; align-items: center; padding: 20px 16px 12px 20px">
+          <h1 style="margin: 0; font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif; font-size: 20px; line-height: 28px; font-weight: 600; flex: 1">Sessions</h1>
+          <button style="height: 32px; padding: 0 12px 0 10px; border-radius: 4px; border: 1px solid {{t.accentEdge}}; background: {{t.accent}}; color: {{t.onAccent}}; display: flex; align-items: center; gap: 6px; font-size: 14px"><dc-import name="Icon" icon="plus" size="16" hint-size="16px,16px"></dc-import>New</button>
+        </div>
+        <div role="tablist" aria-label="Machine" style="display: flex; gap: 20px; padding: 0 20px; border-bottom: 1px solid {{t.stroke}}">
+          <button role="tab" aria-selected="true" style="position: relative; height: 36px; padding: 0; border: 0; background: transparent; color: {{t.text}}; font-weight: 600; font-size: 14px">All<span style="position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: {{t.accent}}"></span></button>
+          <button role="tab" aria-selected="false" style="height: 36px; padding: 0; border: 0; background: transparent; color: {{t.text2}}; font-size: 14px">ULTRA</button>
+          <button role="tab" aria-selected="false" style="height: 36px; padding: 0; border: 0; background: transparent; color: {{t.text2}}; font-size: 14px">DEV-VM1</button>
+        </div>
+
+        <!-- Before: the Needs you lane, a second entry for each waiting session (ui.md §6.1 item 1). -->
+        <sc-if value="{{isBefore}}" hint-placeholder-val="{{true}}">
+        <div style="padding: 12px 12px 0">
+          <div style="border: 1px solid {{t.amber}}; background: {{t.amberFill}}; border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px">
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.amberHead}}">Needs you · 3<span style="flex: 1"></span><span style="width: 18px; height: 18px; border-radius: 9px; background: {{t.mark}}; color: #FFFFFF; font-size: 11px; line-height: 18px; font-weight: 700; text-align: center">1</span></div>
+            <div style="display: flex; gap: 8px">
+              <span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span>
+              <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+                <span style="font-weight: 600">Ship 0.1.691 prerelease</span>
+                <span>Allow Copilot to run this command?</span>
+                <code style="display: block; margin-top: 4px; padding: 6px 8px; border-radius: 4px; background: {{t.card}}; font-family: {{mono}}; font-size: 12px; line-height: 18px">git push origin release/0.1.691</code>
+                <span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">ULTRA · Copilot · 2m</span>
+                <span style="display: flex; gap: 8px; margin-top: 4px"><button style="height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.accentEdge}}; background: {{t.accent}}; color: {{t.onAccent}}; font-size: 14px">Approve once</button><button style="height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.stroke2}}; background: {{t.card}}; color: {{t.text}}; font-size: 14px">Deny</button></span>
+              </div>
+            </div>
+            <div style="display: flex; gap: 8px">
+              <span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span>
+              <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+                <span style="font-weight: 600">Release notes for 0.1.691</span>
+                <span>Which channel should the 0.1.691 notes go to?</span>
+                <span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">DEV-VM1 · Copilot · 4m</span>
+              </div>
+            </div>
+            <div style="display: flex; gap: 8px">
+              <span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span>
+              <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+                <span style="font-weight: 600">Fluent V8 to V9 migration</span>
+                <span>Can I drop the v8 theme shim from Theme.tsx?</span>
+                <span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">DEV-VM1 · Copilot · Delegate Check ubuntu CI asks · 9m</span>
+                <span style="font-weight: 600; color: {{t.amberText}}">Answer at the machine</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- After: one toggle that narrows the list to the rows waiting on you. Its count is every machine's. -->
+        <sc-if value="{{isAfter}}" hint-placeholder-val="{{false}}">
+        <div style="padding: 12px 12px 0">
+          <button aria-pressed="{{filterAria}}" aria-label="Needs you, 3 on every machine" title="Show only the sessions waiting on you" style="position: relative; width: 100%; height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-radius: 4px; border: 1px solid {{toggleEdge}}; background: {{toggleFill}}; color: {{t.text}}; font-size: 14px; text-align: left">
+            <sc-if value="{{filterOn}}" hint-placeholder-val="{{false}}"><span style="position: absolute; left: 0; top: 10px; width: 3px; height: 16px; border-radius: 2px; background: {{t.accent}}"></span></sc-if>
+            <dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import>
+            <span style="flex: 1; font-weight: {{toggleWeight}}">Needs you&#160;· 3</span>
+            <sc-if value="{{filterOn}}" hint-placeholder-val="{{false}}"><span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Showing 3 of 7</span></sc-if>
+          </button>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{showPinned}}" hint-placeholder-val="{{true}}">
+        <div style="padding: 16px 20px 8px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}">Pinned</div>
+        <ul style="list-style: none; margin: 0; padding: 0 12px; display: flex; flex-direction: column; gap: 2px">
+          <li><a href="#" style="display: flex; gap: 12px; padding: 10px 12px; border-radius: 4px; text-decoration: none; color: inherit"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="delegating" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span><div style="min-width: 0; flex: 1"><div style="display: flex; gap: 8px; align-items: baseline"><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Plan Migration to Windows App</span><span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">now</span></div><div style="font-size: 12px; line-height: 16px; color: {{t.text2}}; margin-top: 2px">3 delegates · DEV-VM1</div></div></a></li>
+        </ul>
+        </sc-if>
+
+        <div style="padding: 16px 20px 8px; display: flex; font-size: 12px; line-height: 16px; color: {{t.text2}}"><span style="font-weight: 600; flex: 1">Sessions</span></div>
+        <ul style="list-style: none; margin: 0; padding: 0 12px; display: flex; flex-direction: column; gap: 2px">
+          <sc-for list="{{rows}}" as="row">
+          <li><a href="#" style="position: relative; display: flex; gap: 12px; padding: 10px 12px; border-radius: 4px; text-decoration: none; color: inherit; background: {{row.fill}}">
+            <sc-if value="{{row.selected}}" hint-placeholder-val="{{false}}"><span style="position: absolute; left: 0; top: 18px; width: 3px; height: 16px; border-radius: 2px; background: {{t.accent}}"></span></sc-if>
+            <span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="{{row.glyph}}" driven="{{row.driven}}" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span>
+            <div style="min-width: 0; flex: 1">
+              <div style="display: flex; gap: 8px; align-items: center"><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: {{row.weight}}">{{row.title}}</span><sc-if value="{{row.unread}}" hint-placeholder-val="{{false}}"><span style="width: 6px; height: 6px; border-radius: 3px; background: {{t.accent}}" aria-label="New activity"></span></sc-if><span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">{{row.age}}</span><sc-if value="{{row.mark}}" hint-placeholder-val="{{false}}"><span style="width: 18px; height: 18px; border-radius: 9px; background: {{t.mark}}; color: #FFFFFF; font-size: 11px; line-height: 18px; font-weight: 700; text-align: center">2</span></sc-if></div>
+              <div style="font-size: 12px; line-height: 16px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap"><span style="color: {{row.statusColor}}">{{row.status}}</span><span style="color: {{t.text2}}">&#160;· {{row.machine}}</span></div>
+            </div>
+          </a></li>
+          </sc-for>
+        </ul>
+        <div style="margin-top: auto; padding: 12px 20px; border-top: 1px solid {{t.stroke}}; display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 16px; color: {{t.text2}}; background: {{t.layer}}"><span style="flex: 1">Copilot usage</span><span>3.1%</span></div>
+      </section>
+
+      <!-- Session -->
+      <main style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+        <header style="padding: 20px 24px 16px 32px; display: flex; align-items: flex-start; gap: 12px; border-bottom: 1px solid {{t.stroke}}">
+          <div style="flex: 1; min-width: 0">
+            <h2 style="margin: 0; font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif; font-size: 20px; line-height: 28px; font-weight: 600">Release notes for 0.1.691</h2>
+            <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; line-height: 16px; color: {{t.text2}}"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="14" hint-size="14px,14px"></dc-import><span style="color: {{t.amberText}}">Waiting on you</span><span>·</span><span>DEV-VM1</span><span>·</span><span>agent-bridge</span></div>
+          </div>
+          <div style="display: flex; gap: 4px">
+            <button aria-label="Pin" title="Pin" style="width: 32px; height: 32px; border-radius: 4px; border: 0; background: transparent; color: {{t.text}}; display: grid; place-items: center"><dc-import name="Icon" icon="pin" size="16" hint-size="16px,16px"></dc-import></button>
+            <button aria-label="Session details" title="Details" style="width: 32px; height: 32px; border-radius: 4px; border: 0; background: transparent; color: {{t.text}}; display: grid; place-items: center"><dc-import name="Icon" icon="more" size="16" hint-size="16px,16px"></dc-import></button>
+            <button aria-label="Hide inspector" title="Inspector" aria-pressed="true" style="width: 32px; height: 32px; border-radius: 4px; border: 0; background: {{t.sel}}; color: {{t.text}}; display: grid; place-items: center"><dc-import name="Icon" icon="inspector" size="16" hint-size="16px,16px"></dc-import></button>
+          </div>
+        </header>
+
+        <div style="flex: 1; padding: 24px 24px 24px 32px; display: flex; flex-direction: column; gap: 24px; max-width: 712px; font-size: 15px; line-height: 24px">
+          <div style="align-self: flex-end; max-width: 480px; padding: 10px 14px; border-radius: 8px; background: {{t.card}}; border: 1px solid {{t.stroke}}">Draft the release notes for 0.1.691 and post them.</div>
+          <div>
+            <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}; margin-bottom: 8px"><span style="font-weight: 600; color: {{t.text}}">Main agent</span>&#160;&#160;5m</div>
+            <p style="margin: 0">The notes are drafted in <code style="font-family: {{mono}}; font-size: 0.9em">docs/release-notes.md</code>: the restart fix from #276, the trust-wait banner and the delegate strip. Before I post them I need to know where they go.</p>
+            <sc-if value="{{isBefore}}" hint-placeholder-val="{{true}}">
+            <div style="display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: 12px; line-height: 16px; color: {{t.text2}}"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import><span style="font-family: {{mono}}; color: {{t.text}}">ask_user</span><span style="flex: 1">Which channel should the 0.1.691 notes go to?</span><span style="width: 18px; height: 18px; border-radius: 9px; background: {{t.mark}}; color: #FFFFFF; font-size: 11px; line-height: 18px; font-weight: 700; text-align: center">3</span></div>
+            </sc-if>
+          </div>
+
+          <!-- The question: its one full presentation (ui.md §6.4). -->
+          <section aria-label="Main agent asks" style="border-radius: 8px; background: {{t.amberFill}}; border: 1px solid {{t.amberEdge}}; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px">
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 16px"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="font-weight: 600; color: {{t.amberHead}}">Main agent asks</span><span style="color: {{t.text2}}">4m</span><span style="flex: 1"></span><sc-if value="{{isBefore}}" hint-placeholder-val="{{true}}"><span style="width: 18px; height: 18px; border-radius: 9px; background: {{t.markKeep}}; color: #FFFFFF; font-size: 11px; line-height: 18px; font-weight: 700; text-align: center">4</span></sc-if></div>
+            <p style="margin: 0">Which channel should the 0.1.691 notes go to?</p>
+            <div role="radiogroup" style="display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 20px">
+              <label style="display: flex; gap: 10px; align-items: center"><span style="width: 18px; height: 18px; border-radius: 9px; border: 5px solid {{t.accent}}; box-sizing: border-box; background: {{t.onAccent}}"></span>Pre-release only (Recommended)</label>
+              <label style="display: flex; gap: 10px; align-items: center"><span style="width: 18px; height: 18px; border-radius: 9px; border: 1px solid {{t.fieldEdge}}; box-sizing: border-box; background: {{t.card}}"></span>Pre-release and stable</label>
+              <label style="display: flex; gap: 10px; align-items: center"><span style="width: 18px; height: 18px; border-radius: 9px; border: 1px solid {{t.fieldEdge}}; box-sizing: border-box; background: {{t.card}}"></span>Hold until #276 is fixed</label>
+              <label style="display: flex; gap: 10px; align-items: center"><span style="width: 18px; height: 18px; border-radius: 9px; border: 1px solid {{t.fieldEdge}}; box-sizing: border-box; background: {{t.card}}"></span>Other…</label>
+            </div>
+            <div><button style="height: 32px; padding: 0 16px; border-radius: 4px; border: 1px solid {{t.accentEdge}}; background: {{t.accent}}; color: {{t.onAccent}}; font-size: 14px">Answer</button></div>
+          </section>
+        </div>
+
+        <div style="padding: 0 24px 24px 32px">
+          <div style="max-width: 680px; border-radius: 8px; background: {{t.card}}; border: 1px solid {{t.stroke}}; border-bottom: 2px solid {{t.accent}}; padding: 8px 8px 8px 16px; display: flex; align-items: flex-end; gap: 8px">
+            <label style="flex: 1"><textarea rows="2" aria-label="Message the main agent" placeholder="Message the main agent" style="width: 100%; box-sizing: border-box; resize: none; background: transparent; border: 0; outline: none; color: {{t.text}}; font-size: 14px; line-height: 20px; padding: 6px 0"></textarea></label>
+            <button aria-label="Attach files" title="Attach" style="width: 32px; height: 32px; border-radius: 4px; border: 0; background: transparent; color: {{t.text2}}; display: grid; place-items: center"><dc-import name="Icon" icon="attach" size="16" hint-size="16px,16px"></dc-import></button>
+            <button aria-label="Send" title="Send (Ctrl+Enter)" style="width: 32px; height: 32px; border-radius: 4px; border: 1px solid {{t.accentEdge}}; background: {{t.accent}}; color: {{t.onAccent}}; display: grid; place-items: center"><dc-import name="Icon" icon="send" size="16" hint-size="16px,16px"></dc-import></button>
+          </div>
+        </div>
+      </main>
+
+      <!-- Inspector: the session's Details and Tools (ui.md §6.2) -->
+      <aside aria-label="Inspector" style="width: 336px; flex: none; border-left: 1px solid {{t.stroke}}; padding: 24px; display: flex; flex-direction: column; gap: 24px; box-sizing: border-box">
+        <div>
+          <h3 style="margin: 0 0 8px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}">Details</h3>
+          <dl style="margin: 0; display: grid; grid-template-columns: 96px 1fr; gap: 4px 12px; font-size: 12px; line-height: 16px">
+            <dt style="color: {{t.text2}}">Agent</dt><dd style="margin: 0">Copilot</dd>
+            <dt style="color: {{t.text2}}">Machine</dt><dd style="margin: 0">DEV-VM1</dd>
+            <dt style="color: {{t.text2}}">Repository</dt><dd style="margin: 0">agent-bridge</dd>
+            <dt style="color: {{t.text2}}">Branch</dt><dd style="margin: 0; font-family: {{mono}}">main</dd>
+            <dt style="color: {{t.text2}}">Model</dt><dd style="margin: 0">claude-sonnet-5</dd>
+            <dt style="color: {{t.text2}}">In this state</dt><dd style="margin: 0">4m</dd>
+          </dl>
+        </div>
+        <div>
+          <h3 style="margin: 0 0 8px; display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}"><span style="flex: 1">Tools</span><sc-if value="{{isBefore}}" hint-placeholder-val="{{true}}"><span style="width: 18px; height: 18px; border-radius: 9px; background: {{t.mark}}; color: #FFFFFF; font-size: 11px; line-height: 18px; font-weight: 700; text-align: center">5</span></sc-if></h3>
+          <ol style="list-style: none; margin: 0; padding: 0; font-size: 12px; line-height: 16px; display: flex; flex-direction: column; gap: 6px">
+            <sc-if value="{{isBefore}}" hint-placeholder-val="{{true}}">
+            <li style="display: flex; gap: 8px; align-items: flex-start"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import></span><span style="flex: 1; min-width: 0"><span style="font-family: {{mono}}">ask_user</span> <span style="color: {{t.text2}}">Which channel should the 0.1.691 notes go to? Pre-release only (Recommended) · Pre-release and stable · Hold until #276 is fixed</span></span><span style="color: {{t.text2}}">4m</span></li>
+            </sc-if>
+            <sc-if value="{{isAfter}}" hint-placeholder-val="{{false}}">
+            <li style="display: flex; gap: 8px; align-items: flex-start"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import></span><span style="flex: 1; min-width: 0"><span style="font-family: {{mono}}">ask_user</span>&#160;· <a href="#" style="color: {{t.link}}; text-decoration: none">Waiting on you</a></span><span style="color: {{t.text2}}">4m</span></li>
+            </sc-if>
+            <li style="display: flex; gap: 8px; align-items: flex-start"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="done" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import></span><span style="flex: 1; min-width: 0"><span style="font-family: {{mono}}">edit</span> <span style="font-family: {{mono}}; color: {{t.text2}}">docs/release-notes.md</span></span><span style="color: {{t.text2}}">5m</span></li>
+            <li style="display: flex; gap: 8px; align-items: flex-start"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="done" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import></span><span style="flex: 1; min-width: 0"><span style="font-family: {{mono}}">powershell</span> <span style="font-family: {{mono}}; color: {{t.text2}}">git log v0.1.690..HEAD --oneline</span></span><span style="color: {{t.text2}}">7m</span></li>
+            <li style="display: flex; gap: 8px; align-items: flex-start"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="done" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import></span><span style="flex: 1; min-width: 0"><span style="font-family: {{mono}}">view</span> <span style="font-family: {{mono}}; color: {{t.text2}}">CHANGELOG.md</span></span><span style="color: {{t.text2}}">8m</span></li>
+          </ol>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"chrome":{"editor":"enum","options":["windows","web"],"default":"windows"},"variant":{"editor":"enum","options":["before","after"],"default":"after"},"filter":{"editor":"enum","options":["off","on"],"default":"off"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const web = this.props.chrome === 'web';
+    const before = this.props.variant === 'before';
+    const filterOn = !before && this.props.filter === 'on';
+    // Colours are copies of design/tokens.json (color.role, Windows surfaces), as in Windows.dc.html.
+    const dark = {
+      shell: '#202326', layer: '#272A2E', card: '#2F3338', frame: '#3A3A3A',
+      stroke: 'rgba(255,255,255,0.07)', stroke2: 'rgba(255,255,255,0.12)', subtle: 'rgba(255,255,255,0.05)', sel: 'rgba(255,255,255,0.07)',
+      field: 'rgba(255,255,255,0.06)', fieldEdge: 'rgba(255,255,255,0.3)',
+      text: '#FFFFFF', text2: 'rgba(255,255,255,0.72)', text3: 'rgba(255,255,255,0.54)',
+      accent: '#2DD4BF', accentEdge: 'rgba(255,255,255,0.08)', onAccent: '#062621', accentSoft: 'rgba(45,212,191,0.1)', link: '#5EE6D3', ok: '#4ADE80',
+      amber: '#FFB224', amberInk: '#14100A', amberHead: '#FFB224', amberText: '#FFD27A', amberFill: 'rgba(255,178,36,0.1)', amberEdge: 'rgba(255,178,36,0.35)',
+      violetText: '#C4B5FD',
+      // Annotation only, never UI: a duplicate (mark) and the one presentation kept (markKeep).
+      mark: '#E5398A', markKeep: '#2E8B57'
+    };
+    const light = {
+      shell: '#EEF0F2', layer: '#F9F9F9', card: '#FFFFFF', frame: '#C8C8C8',
+      stroke: 'rgba(0,0,0,0.07)', stroke2: 'rgba(0,0,0,0.12)', subtle: 'rgba(0,0,0,0.03)', sel: 'rgba(0,0,0,0.05)',
+      field: '#FFFFFF', fieldEdge: 'rgba(0,0,0,0.45)',
+      text: '#1A1A1A', text2: 'rgba(0,0,0,0.62)', text3: 'rgba(0,0,0,0.58)',
+      accent: '#0B7A6E', accentEdge: 'rgba(0,0,0,0.1)', onAccent: '#FFFFFF', accentSoft: 'rgba(11,122,110,0.07)', link: '#0B7A6E', ok: '#1A7F37',
+      amber: '#B87700', amberInk: '#FFFFFF', amberHead: '#8F5300', amberText: '#7A4600', amberFill: '#FFF2D6', amberEdge: 'rgba(184,119,0,0.45)',
+      violetText: '#5B3CC4',
+      mark: '#C2185B', markKeep: '#1E7A46'
+    };
+    const t = theme === 'light' ? light : dark;
+    const row = (title, glyph, status, machine, age, o = {}) => ({
+      title, glyph, status, machine, age,
+      statusColor: o.statusColor ?? t.text2, driven: !!o.driven, unread: !!o.unread, selected: !!o.selected,
+      weight: o.unread ? 600 : 400, fill: o.selected ? t.sel : 'transparent', mark: !!o.mark, needs: glyph === 'needs'
+    });
+    const all = [
+      row('Ship 0.1.691 prerelease', 'needs', 'Waiting on you', 'ULTRA', '2m', { statusColor: t.amberText }),
+      row('Fix trust-wait banner', 'working', 'Editing LaunchView.xaml.cs', 'ULTRA', '', { unread: true }),
+      row('Release notes for 0.1.691', 'needs', 'Waiting on you', 'DEV-VM1', '4m', { statusColor: t.amberText, selected: true, mark: before }),
+      row('Fluent V8 to V9 migration', 'needs', 'Delegate Check ubuntu CI asks', 'DEV-VM1', '9m', { statusColor: t.amberText }),
+      row('Nightly issue triage', 'idle', 'Driven by an agent', 'ULTRA', '1h', { driven: true, statusColor: t.violetText }),
+      row('Testing code functionality', 'idle', 'Idle', 'ULTRA', '32m')
+    ];
+    return {
+      theme, t,
+      isNative: !web, isWeb: web,
+      frameRadius: web ? '0px' : '8px',
+      mono: "'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace",
+      isBefore: before, isAfter: !before, filterOn,
+      filterAria: filterOn ? 'true' : 'false',
+      toggleFill: filterOn ? t.sel : 'transparent',
+      toggleEdge: filterOn ? t.stroke2 : t.stroke2,
+      toggleWeight: filterOn ? 600 : 400,
+      showPinned: !filterOn,
+      rows: filterOn ? all.filter(r => r.needs) : all
+    };
+  }
+}
+</script>
+</body>
+</html>
