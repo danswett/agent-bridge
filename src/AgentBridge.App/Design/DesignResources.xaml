@@ -126,8 +126,8 @@
                 <ControlTemplate TargetType="ContentControl">
                     <Viewbox Stretch="Uniform">
                         <Canvas Width="16" Height="16">
-                            <Path Data="F1 M14.6,8 A6.6,6.6 0 0 1 1.4,8 A6.6,6.6 0 0 1 14.6,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="1" StrokeDashArray="1.6 1.9" Opacity="0.7" />
-                            <Path Data="F1 M11,8 A3,3 0 0 1 5,8 A3,3 0 0 1 11,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.8" />
+                            <Path Data="F1 M14.6,8 A6.6,6.6 0 0 1 1.4,8 A6.6,6.6 0 0 1 14.6,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="1" StrokeMiterLimit="4" StrokeDashArray="1.6 1.9" Opacity="0.7" />
+                            <Path Data="F1 M11,8 A3,3 0 0 1 5,8 A3,3 0 0 1 11,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.8" StrokeMiterLimit="4" />
                             <Canvas x:Name="Orbit">
                                 <Canvas.RenderTransform><RotateTransform CenterX="8" CenterY="8" /></Canvas.RenderTransform>
                                 <Path Data="F1 M16.1,8 A1.5,1.5 0 0 1 13.1,8 A1.5,1.5 0 0 1 16.1,8 Z" Fill="{TemplateBinding Foreground}" />
@@ -148,7 +148,7 @@
                 <ControlTemplate TargetType="ContentControl">
                     <Viewbox Stretch="Uniform">
                         <Canvas Width="16" Height="16">
-                            <Path Data="F1 M13.8,8 A5.8,5.8 0 0 1 2.2,8 A5.8,5.8 0 0 1 13.8,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5" />
+                            <Path Data="F1 M13.8,8 A5.8,5.8 0 0 1 2.2,8 A5.8,5.8 0 0 1 13.8,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5" StrokeMiterLimit="4" />
                             <Path Data="F1 M5.3,8.2 L7.2,10.1 L10.8,6.3" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
                         </Canvas>
                     </Viewbox>
@@ -165,7 +165,7 @@
                 <ControlTemplate TargetType="ContentControl">
                     <Viewbox Stretch="Uniform">
                         <Canvas Width="16" Height="16">
-                            <Path Data="F1 M13.866,10.896 L15.704,12.734 A0.8,0.8 45 0 1 15.704,13.866 L13.866,15.704 A0.8,0.8 45 0 1 12.734,15.704 L10.896,13.866 A0.8,0.8 45 0 1 10.896,12.734 L12.734,10.896 A0.8,0.8 45 0 1 13.866,10.896 Z" Fill="{TemplateBinding Foreground}" Stroke="{TemplateBinding Background}" StrokeThickness="1.2" />
+                            <Path Data="F1 M13.866,10.896 L15.704,12.734 A0.8,0.8 45 0 1 15.704,13.866 L13.866,15.704 A0.8,0.8 45 0 1 12.734,15.704 L10.896,13.866 A0.8,0.8 45 0 1 10.896,12.734 L12.734,10.896 A0.8,0.8 45 0 1 13.866,10.896 Z" Fill="{TemplateBinding Foreground}" Stroke="{TemplateBinding Background}" StrokeThickness="1.2" StrokeMiterLimit="4" />
                         </Canvas>
                     </Viewbox>
                 </ControlTemplate>
@@ -181,7 +181,7 @@
                 <ControlTemplate TargetType="ContentControl">
                     <Viewbox Stretch="Uniform">
                         <Canvas Width="16" Height="16">
-                            <Path Data="F1 M13.6,8 A5.6,5.6 0 0 1 2.4,8 A5.6,5.6 0 0 1 13.6,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeDashArray="0.071 1.857" StrokeDashCap="Round" />
+                            <Path Data="F1 M13.6,8 A5.6,5.6 0 0 1 2.4,8 A5.6,5.6 0 0 1 13.6,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeMiterLimit="4" StrokeDashArray="0.071 1.857" StrokeDashCap="Round" />
                         </Canvas>
                     </Viewbox>
                 </ControlTemplate>
@@ -197,8 +197,8 @@
                 <ControlTemplate TargetType="ContentControl">
                     <Viewbox Stretch="Uniform">
                         <Canvas Width="16" Height="16">
-                            <Path Data="F1 M13.8,8 A5.8,5.8 0 0 1 2.2,8 A5.8,5.8 0 0 1 13.8,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.6" />
-                            <Path Data="F1 M5.9,5.9 L10.1,10.1 M10.1,5.9 L5.9,10.1" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            <Path Data="F1 M13.8,8 A5.8,5.8 0 0 1 2.2,8 A5.8,5.8 0 0 1 13.8,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.6" StrokeMiterLimit="4" />
+                            <Path Data="F1 M5.9,5.9 L10.1,10.1 M10.1,5.9 L5.9,10.1" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeMiterLimit="4" />
                         </Canvas>
                     </Viewbox>
                 </ControlTemplate>
@@ -214,7 +214,7 @@
                 <ControlTemplate TargetType="ContentControl">
                     <Viewbox Stretch="Uniform">
                         <Canvas Width="16" Height="16">
-                            <Path Data="F1 M13.6,8 A5.6,5.6 0 0 1 2.4,8 A5.6,5.6 0 0 1 13.6,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.6" />
+                            <Path Data="F1 M13.6,8 A5.6,5.6 0 0 1 2.4,8 A5.6,5.6 0 0 1 13.6,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.6" StrokeMiterLimit="4" />
                         </Canvas>
                     </Viewbox>
                 </ControlTemplate>
@@ -231,7 +231,7 @@
                     <Viewbox Stretch="Uniform">
                         <Canvas Width="16" Height="16">
                             <Path Data="F1 M14.6,8 A6.6,6.6 0 0 1 1.4,8 A6.6,6.6 0 0 1 14.6,8 Z" Fill="{TemplateBinding Foreground}" />
-                            <Path Data="F1 M8,4.6 L8,8.8" Stroke="{ThemeResource AbNeedsInk}" StrokeThickness="1.9" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            <Path Data="F1 M8,4.6 L8,8.8" Stroke="{ThemeResource AbNeedsInk}" StrokeThickness="1.9" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeMiterLimit="4" />
                             <Path Data="F1 M9.1,11.3 A1.1,1.1 0 0 1 6.9,11.3 A1.1,1.1 0 0 1 9.1,11.3 Z" Fill="{ThemeResource AbNeedsInk}" />
                         </Canvas>
                     </Viewbox>
@@ -248,8 +248,8 @@
                 <ControlTemplate TargetType="ContentControl">
                     <Viewbox Stretch="Uniform">
                         <Canvas Width="16" Height="16">
-                            <Path Data="F1 M13.8,8 A5.8,5.8 0 0 1 2.2,8 A5.8,5.8 0 0 1 13.8,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="2" Opacity="0.3" />
-                            <Path x:Name="Spin" Data="F1 M8,2.2 A5.8,5.8 0 0 1 13.8,8" Stroke="{TemplateBinding Foreground}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round">
+                            <Path Data="F1 M13.8,8 A5.8,5.8 0 0 1 2.2,8 A5.8,5.8 0 0 1 13.8,8 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="2" StrokeMiterLimit="4" Opacity="0.3" />
+                            <Path x:Name="Spin" Data="F1 M8,2.2 A5.8,5.8 0 0 1 13.8,8" Stroke="{TemplateBinding Foreground}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeMiterLimit="4">
                                 <Path.RenderTransform><RotateTransform CenterX="8" CenterY="8" /></Path.RenderTransform>
                             </Path>
                         </Canvas>
@@ -384,7 +384,7 @@
                 <ControlTemplate TargetType="ContentControl">
                     <Viewbox Stretch="Uniform">
                         <Canvas Width="48" Height="48">
-                            <Path Data="F1 M28.5,28 A9.5,9.5 0 0 1 9.5,28 A9.5,9.5 0 0 1 28.5,28 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="3.4" />
+                            <Path Data="F1 M28.5,28 A9.5,9.5 0 0 1 9.5,28 A9.5,9.5 0 0 1 28.5,28 Z" Stroke="{TemplateBinding Foreground}" StrokeThickness="3.4" StrokeMiterLimit="4" />
                             <Path Data="F1 M41,12.6 A5,5 0 0 1 31,12.6 A5,5 0 0 1 41,12.6 Z" Fill="{TemplateBinding Foreground}" />
                         </Canvas>
                     </Viewbox>

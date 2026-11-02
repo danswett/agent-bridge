@@ -136,3 +136,14 @@ test('a face the tokens promise but design/fonts lacks is refused', () => {
   rmSync(path.join(root, 'design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-BoldItalic.woff2'));
   assert.throws(() => generate(root), /lacks woff2\/AgentBridgeMono-BoldItalic\.woff2/);
 });
+
+test('a mitred corner bevels in XAML where SVG bevels it, rather than at WinUI\'s limit of 10', () => {
+  // M4 14L8 2L9 14 has a miter ratio of about 4.97: SVG's limit of 4 bevels its apex.
+  const root = copy('miter');
+  writeFileSync(path.join(root, 'design/glyphs/zz-spike.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M4 14L8 2L9 14" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2 2L14 2" stroke="currentColor" stroke-linejoin="round"/></svg>');
+  const xaml = generate(root)[XAML];
+  const spike = /<Style x:Key="AbGlyphZzSpike"[\s\S]*?<\/Style>/.exec(xaml)?.[0] ?? '';
+  assert.match(spike, /Data="F1 M4,14 L8,2 L9,14"[^>]*StrokeMiterLimit="4"/);
+  assert.match(spike, /Data="F1 M2,2 L14,2"[^>]*StrokeLineJoin="Round"/);
+  assert.doesNotMatch(spike.split('M2,2')[1], /StrokeMiterLimit/);
+});

@@ -57,7 +57,10 @@ function partXaml(node, svg, indent, names) {
     const cap = CAPS[s['stroke-linecap'] ?? 'butt'];
     if (cap !== 'Flat') { a.push(`StrokeStartLineCap="${cap}"`, `StrokeEndLineCap="${cap}"`); }
     const join = JOINS[s['stroke-linejoin'] ?? 'miter'];
-    if (join !== 'Miter') { a.push(`StrokeLineJoin="${join}"`); }
+    // WinUI's miter limit is 10, SVG's 4 (the subset has no stroke-miterlimit). Direct2D measures
+    // its miter from the vertex against half the thickness, the same ratio SVG's 4 bounds, so an
+    // acute corner bevels in both rather than spiking in XAML.
+    if (join !== 'Miter') { a.push(`StrokeLineJoin="${join}"`); } else { a.push('StrokeMiterLimit="4"'); }
     if (s['stroke-dasharray'] && s['stroke-dasharray'] !== 'none') {
       // XAML measures dashes in stroke widths, SVG in user units.
       const dashes = s['stroke-dasharray'].split(/[\s,]+/).filter(Boolean).map((d) => fmt(Number(d) / width));
