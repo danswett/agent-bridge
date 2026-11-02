@@ -14,7 +14,7 @@
 //
 // Needs: dotnet build spikes/s4-relay/src/S4.DevStack -c Release
 import { test, expect } from '@playwright/test';
-import { go } from '../nav.mjs';
+import { go, open, view } from '../nav.mjs';
 import { spawn } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -80,7 +80,8 @@ async function signIn(page) {
   await expect(page.locator('#host-state')).toContainText('demo-host:', { timeout: 30000 });
 }
 
-const card = (page, id) => page.locator(`.session[data-id="${id}"]`);
+// A session's view (#179); page.locator('.session') is its row.
+const card = (page, id) => view(page, id);
 const subscribes = () => host.log.filter((op) => op === 'sessions.subscribe').length;
 
 test('a signed-in phone sees a machine\'s live sessions over an end-to-end channel', async ({ page, context }) => {
@@ -113,8 +114,8 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   await expect(card(page, CLAUDE)).toHaveCount(0);
 
   // session.get, for the tool history.
-  await card(page, CODEX).locator('details.history summary').click();
-  await expect(card(page, CODEX).locator('details.history')).toContainText('No tool calls yet.');
+  await open(page, CODEX);
+  await expect(card(page, CODEX).locator('.tools-panel')).toContainText('No tool calls yet.');
   expect(host.log).toContain('session.get');
 
   // The socket drops. While the phone is away a session ends; the new subscription's
@@ -148,6 +149,9 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   await opened.goto(`${appUrl}?host=${host.deviceId}`);
   await expect(opened.locator('#sessions-h')).toHaveText('Sessions on fixture-host', { timeout: 30000 });
   await expect(opened.locator('.session').first()).toBeVisible();
+  // A session chosen, so the address names it and its machine.
+  await opened.locator('.session').first().locator('.row-main').click();
+  await expect.poll(() => new URL(opened.url()).hash).toContain(`/sessions/${host.deviceId}/`);
 
   // The relay stops accepting this sign-in. Nothing from it may stay on screen or carry
   // over to the next account: not the sessions, nor the remembered machine.
@@ -156,6 +160,8 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   await expect(opened.locator('#sessions')).toBeHidden();
   expect(await opened.evaluate(() => window.agentBridge.store.size)).toBe(0);
   expect(await opened.evaluate(() => localStorage.getItem('agent-bridge.app.lastHost'))).toBeNull();
+  // Nor the session's address, which names the old account's machine.
+  expect(new URL(opened.url()).hash).toBe('#/sessions');
   await opened.click('#signin-button');
   await expect(opened.locator('#conn')).toHaveText('Connected', { timeout: 30000 });
   await expect(opened.locator('#machine-tabs [data-device-name="fixture-host"]')).toBeVisible();
@@ -195,6 +201,7 @@ test('a phone answers a question through the relay, and an answer in flight when
   await page.click('#machine-tabs [data-device-name="fixture-host"]');
   const q1 = card(page, 'ask-1').locator('.question');
   await expect(q1).toHaveAttribute('data-answerable', 'true', { timeout: 30000 });
+  await open(page, 'ask-1');
   await expect(q1.locator('.choice[data-value]').first()).toHaveText('B (Recommended)');
   await q1.locator('.choice[data-value="a"]').click();
   await expect(card(page, 'ask-1').locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.', { timeout: 15000 });
@@ -208,6 +215,7 @@ test('a phone answers a question through the relay, and an answer in flight when
   await ask('ask-2', 'q2');
   const q2 = card(page, 'ask-2').locator('.question');
   await expect(q2).toHaveAttribute('data-answerable', 'true', { timeout: 15000 });
+  await open(page, 'ask-2');
   await q2.locator('.choice[data-value="b"]').click();
   await expect.poll(() => sentFor('ask-2').length, { timeout: 10000 }).toBe(1);
   for (const ws of sockets.splice(0)) { await ws.close({ code: 4000, reason: 'test drop' }); }
@@ -238,6 +246,8 @@ test('a phone replies to a session through the relay, and a reply in flight when
 
   await signIn(page);
   await page.click('#machine-tabs [data-device-name="fixture-host"]');
+  await expect(page.locator('.session[data-id="reply-1"]')).toBeVisible({ timeout: 30000 });
+  await open(page, 'reply-1');
   const reply = card(page, 'reply-1').locator('form.reply');
   const input = reply.getByRole('textbox', { name: 'Reply' });
   await expect(input).toBeEnabled({ timeout: 30000 });
@@ -358,10 +368,14 @@ test.describe('notifications', () => {
     await expect(card(page, 'linked-1').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
     expect(new URL(page.url()).search).toBe('');
 
+    // At two panes, where Tools is a tab: one left on Tools still opens on its question.
+    await page.setViewportSize({ width: 900, height: 800 });
+    await (await open(page, 'linked-2')).locator('.view-tab', { hasText: 'Tools' }).click();
+    await open(page, 'linked-1');
     // A search that hides the session a notification is about gives way to it.
     await page.keyboard.press('Control+k');
     await page.keyboard.type('linked-1');
-    await expect(card(page, 'linked-2')).toHaveCount(0);
+    await expect(page.locator('.session[data-id="linked-2"]')).toHaveCount(0);
     // What the worker tells an open app when one of its notifications is tapped.
     await page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
       `${appUrl}?host=${host.deviceId}&session=linked-2&question=q-linked-2`);

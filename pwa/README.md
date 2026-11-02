@@ -21,7 +21,7 @@ Larger files come next.
 
 | Light | Dark | Answering | A permission request | All machines | Needs you |
 |---|---|---|---|---|---|
-| ![Demo mode, light](docs/demo-light.png) | ![Demo mode, dark](docs/demo-dark.png) | ![Answering the worked example's question](docs/answer.png) | ![An approval, answered with a tap](docs/approval.png) | ![Every machine's sessions at once, each card naming its machine](docs/all-machines.png) | ![Needs you: every pending question above the list, an approval answered in place](docs/needs-you-light.png) |
+| ![Demo mode, light](docs/demo-light.png) | ![Demo mode, dark](docs/demo-dark.png) | ![Answering the worked example's question](docs/answer.png) | ![An approval, answered with a tap](docs/approval.png) | ![Every machine's sessions at once, each row naming its machine](docs/all-machines.png) | ![Needs you: every pending question above the list, an approval answered in place](docs/needs-you-light.png) |
 
 ## Modules
 
@@ -59,11 +59,11 @@ Larger files come next.
 | `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
 | `js/ui/needs-you-view.js` | Needs you on screen, above the list and apart from it, its entries kept in place across redraws |
-| `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each card's answers, replies, files, End session and the launch panel to the machine it is for; the heading, count, empty state and a line per machine that can't be reached |
-| `js/ui/delegates-view.js` | A card's Delegates block: a row per delegate (glyph, name, how long or finished, its latest line), "N finished" folded, and a row opened to its task and its own latest response and reasoning (`session.get` with `agent`). Nothing in it replies to or stops a delegate |
+| `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each session's answers, replies, files, End session and the launch panel to the machine it is for; which session is chosen (from the address, kept across a resize) and which panes show; the heading, count, empty state and a line per machine that can't be reached |
+| `js/ui/delegates-view.js` | A session's Delegates block, in the inspector beside the conversation and in the Delegates tab where the inspector isn't a pane (ui.md §6.3): a row per delegate (glyph, name, how long or finished, its latest line), "N finished" folded, and a row opened to its task and its own latest response and reasoning (`session.get` with `agent`). Nothing in it replies to or stops a delegate |
 | `js/ui/glyph.js` | The status glyphs at 12, 14, 16, 20 and 24 px and the design icons, drawn from the generated sprite with `<use>`: the role colour from `data-glyph`, the driven diamond over it, and the moving part (`glyph-spin`, `glyph-orbit`) its own group, which `app.css` turns and reduced motion stops |
 | `js/ui/shell.js` | The shell ([ui.md](../docs/design/ui.md) §7, #179): the 56 px web app bar (mark and name, search, machines online, account) and a rail on a desktop; the page's title row and a bottom navigation bar with a Bridge indicator on a phone. Each page is a route in the hash (`#/sessions`, `#/machines`, `#/launch`, `#/usage`, `#/settings`), so a reload stays on it and the browser's back goes between them. Ctrl/Cmd+K focuses search, which narrows the sessions list |
-| `js/ui/*` | Session cards, the row menu (Move up, Move down, Pin), the question and its answer form, the reply box, End session, the Start a session panel (agent-ha-bridge's launch card, without its 255-character prompt), machines list (offline machines after the online ones, with when each was last seen and Forget, each row two lines: name and state, then at most two facts; #213), the machine tabs over the sessions, the usage page, fold state, relative times |
+| `js/ui/*` | The sessions page's panes (#179, ui.md §5.2): each session's two-line row and its view (header, conversation, reply box, and the inspector's Details and Tools; `session-card.js`), facts joined by separators that never start a line and paths cut in the middle (`meta.js`), the row menu (Move up, Move down, Pin), the question and its answer form, the reply box, End session, the Start a session panel (agent-ha-bridge's launch card, without its 255-character prompt), machines list (offline machines after the online ones, with when each was last seen and Forget, each row two lines: name and state, then at most two facts; #213), the machine tabs over the sessions, the usage page, relative times |
 | `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering, replying, ending and launching sessions and usage included; `?machines=2` adds a second machine, Laptop, and `?machines=3` a read-only shadow, DEV-VM1 (shadow), behind a simulated relay (`DemoConnection`); `?updates=1` a machine whose app found a release, and installs it when asked (`?updateStep=<ms>` per step); `?delegates=1` a session whose delegates are working, the main agent's words apart from theirs |
 | `tools/build-site.mjs` | Assembles the site for Pages: `config.js` with the relay, CSP in the page, and `sw.js` stamped with a hash of everything served, so any change reaches an open app as an update (the app then offers Reload) |
 | `design/tokens.css`, `design/sprite.svg` | Generated by `tools/design-gen` from `/design` ([design/README.md](../design/README.md)); never edit them. The colour roles and surfaces as `--ab-*` custom properties (light, dark and forced colours), the glyphs and icons as symbols, and `@font-face` for Agent Bridge Mono, whose WOFF2s and `OFL.txt` (SIL Open Font License, not MIT) `tools/build-site.mjs` copies from `/design/fonts` into the site's `design/fonts/`. `app.css` takes every colour from them |
@@ -117,10 +117,10 @@ app bar says how many machines are online ("3 machines").
 * **The list.** Every machine's sessions together, in your order (`js/session-order.js`,
   #164): a session goes to the top once, when first seen, and then moves only when you
   move it; Most recent sorts them as the app used to, most recently updated first (ties by
-  session id, then machine). Each card names its machine ahead of
-  its agent, as the app's cards do; the heading reads "Sessions on all machines" and the count
-  "7 live on 3 machines". With one machine online, All shows it as that machine. A card's
-  fold, and its place in the order, are remembered by machine and session.
+  session id, then machine). Each row names its machine on its second line; the heading reads
+  "Sessions on all machines" and the count "7 live on 3 machines". With one machine online,
+  All shows it as that machine. A session chosen (`#/sessions/<machine>/<session>`), and its
+  place in the order, are remembered by machine and session.
 * **One machine at a time, still.** Each machine has its own channel, store, hello, retries
   and read-only state. A machine that can't be reached, is still connecting or does not
   support sessions gets a line of its own above the cards ("Couldn't reach Laptop: the
@@ -221,7 +221,7 @@ next outcomes), and asks a follow-up question a little after each answer.
 
 ### Replying
 
-Each card has a reply box when the machine's `hello` lists `sessions.reply`: a prompt for
+Each session has a reply box, at the foot of its conversation, when the machine's `hello` lists `sessions.reply`: a prompt for
 the session, typed into its input on the machine, whether it is idle or working. Enter is
 a new line and Ctrl+Enter (Cmd+Enter) or Send sends; the host types line breaks as spaces,
 and the box says so when there are any. Before it goes the reply is checked as the host
@@ -288,8 +288,9 @@ would (`window.agentBridgeDemo.host.attachments`).
 
 ### Ending a session
 
-Each card ends with **End session** when the machine's `hello` lists `sessions.stop`: a
-small, muted footer link at the bottom left, furthest from Send, as on the old dashboard.
+Each session's Details ends with **End session** when the machine's `hello` lists
+`sessions.stop` (on a phone, the header's overflow menu has it too): small and muted,
+furthest from Send.
 An idle session ends on one press. One that is working, waiting on you, or waiting for
 background work it started takes two, and the machine enforces it: the first press comes
 back asking for a second ("Press End session again to end it: this session is still

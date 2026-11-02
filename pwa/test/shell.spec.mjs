@@ -2,7 +2,7 @@
 // phone, the page's title row and the bottom navigation. Every page is a route, so a reload stays
 // on it and the browser's own back goes between them.
 import { test, expect } from '@playwright/test';
-import { go } from './nav.mjs';
+import { go, open } from './nav.mjs';
 
 const CODEX = '019a1b2c-codex-example';
 const IDLE = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
@@ -135,7 +135,8 @@ test('a page retired with its account no longer answers the routes', async ({ pa
 
 test('a reply being written outlives a search that hides its session, with its text when search lets it back', async ({ page }) => {
   await openDemo(page);
-  const input = page.locator(`.session[data-id="${IDLE}"] form.reply`).getByRole('textbox', { name: 'Reply' });
+  await open(page, IDLE);
+  const input = page.locator(`.session-view[data-id="${IDLE}"] form.reply`).getByRole('textbox', { name: 'Reply' });
   await input.fill('Half a thought');
   await page.keyboard.press('Control+k');
   await page.keyboard.type('flaky');
@@ -335,6 +336,15 @@ test.describe('at a desktop\'s width on a touch screen', () => {
       expect(b.height).toBeGreaterThanOrEqual(44);
     }
     expect((await page.locator('#search').boundingBox()).height).toBeGreaterThanOrEqual(44);
+    // And the session's header buttons, and the tabs once the inspector is hidden.
+    await page.locator('.session-view:not([hidden]) .inspector-button').click();
+    const controls = await page.locator('.session-view:not([hidden]) .header-actions .icon-button, .session-view:not([hidden]) .view-tab').filter({ visible: true }).all();
+    expect(controls.length).toBeGreaterThanOrEqual(4);
+    for (const c of controls) {
+      const b = await c.boundingBox();
+      expect(b.width).toBeGreaterThanOrEqual(44);
+      expect(b.height).toBeGreaterThanOrEqual(44);
+    }
   });
 });
 

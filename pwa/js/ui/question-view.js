@@ -85,8 +85,10 @@ function readOnlyField(field, idBase) {
   return h('li', { class: `field field-${field.type}`, dataset: { field: field.name, type: field.type } }, parts);
 }
 
-function shell(q, idBase, answerable) {
-  const heading = q.kind === 'approval' ? 'Permission requested' : 'Waiting on you';
+// asker: who asks, as the conversation says it (ui.md §6.4): "Main agent asks", or the delegate's
+// name. Without one (the Needs you lane), what kind of question it is.
+function shell(q, idBase, answerable, asker = null) {
+  const heading = asker ?? (q.kind === 'approval' ? 'Permission requested' : 'Waiting on you');
   const section = h('section', {
     class: `question${answerable ? ' answerable' : ''}`, 'aria-labelledby': `${idBase}-h`,
     dataset: { kind: q.kind, question: q.id, answerable: answerable ? 'true' : 'false' },
@@ -101,9 +103,9 @@ function shell(q, idBase, answerable) {
 // answer, such as a permission prompt of a kind no host drives), 'approvalOff' (a permission
 // prompt at a machine where approving from the phone is turned off) or 'machine' (the
 // machine takes no answers from the phone).
-export function renderQuestion(q, { machineName, why = 'machine', readOnly = null } = {}) {
+export function renderQuestion(q, { machineName, why = 'machine', readOnly = null, asker = null } = {}) {
   const idBase = `q${++seq}`;
-  const section = shell(q, idBase, false);
+  const section = shell(q, idBase, false, asker);
   // A prompt answered at the machine shows what it asks, not choices nobody can make here.
   const atMachine = why === 'atMachine' || why === 'approvalOff';
   if (q.fields.length && !atMachine) {
@@ -200,7 +202,7 @@ export class QuestionPanel {
 
   // answering: { service, hostId, sessionId }. state: what a previous panel for the same
   // question held, so a re-render loses nothing.
-  constructor(q, { machineName, answering, state = null }) {
+  constructor(q, { machineName, answering, state = null, asker = null }) {
     this.q = q;
     this.machineName = machineName;
     this.answering = answering;
@@ -209,7 +211,7 @@ export class QuestionPanel {
     this.tap = tapToAnswer(q);
     this.state = state ?? initialState(q);
     this.otherOpen = this.tap && this.state[q.fields[0].name].otherChosen === true;
-    this.element = shell(q, this.idBase, true);
+    this.element = shell(q, this.idBase, true, asker);
     this.#build();
     const { service, hostId, sessionId } = answering;
     this.#unwatch = service.watch(hostId, sessionId, q.id, (e) => this.#show(e));

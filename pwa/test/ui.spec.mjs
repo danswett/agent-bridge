@@ -1,6 +1,7 @@
 // The app in demo mode (?demo=1): a simulated host speaking the real protocol to the real
 // client, so these tests cover event handling through to what is on screen.
 import { test, expect } from '@playwright/test';
+import { open, row, view } from './nav.mjs';
 import { readFileSync } from 'node:fs';
 
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/sessions-list.json', import.meta.url), 'utf8'));
@@ -9,7 +10,8 @@ const CLAUDE = '6f1c2b7e-claude-example';
 const CODEX = '019a1b2c-codex-example';
 const DELEGATING = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
 
-const card = (page, id) => page.locator(`.session[data-id="${id}"]`);
+// A session's view in the session pane (#179); its row in the list is row().
+const card = (page, id) => view(page, id);
 const order = (page) => page.locator('.session').evaluateAll((els) => els.map((e) => e.dataset.id));
 const calls = (page, op) => page.evaluate((o) => window.agentBridgeDemo.calls.filter((c) => c === o).length, op);
 const later = () => new Date(Date.now() + 1000).toISOString();
@@ -38,24 +40,28 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(page.locator('.session')).toHaveCount(4);
   await expect(page.locator('#sessions-h')).toHaveText('Sessions on Demo machine');
 
-  const copilot = card(page, COPILOT);
+  const copilot = await open(page, COPILOT);
   await expect(copilot).toHaveAttribute('data-status', 'waiting');
-  await expect(copilot.locator('.title-text')).toHaveText('Plan Migration to Windows App');
-  await expect(copilot.locator('.meta')).toContainText('Copilot');
-  await expect(copilot.locator('.meta')).toContainText('danswett/agent-ha-bridge');
-  await expect(copilot.locator('.meta')).toContainText('detached@5e59309');
-  await expect(copilot.locator('.meta')).toContainText('claude-opus-5.5');
+  await expect(row(page, COPILOT)).toHaveAttribute('data-status', 'waiting');
+  await expect(copilot.locator('.session-title')).toHaveText('Plan Migration to Windows App');
+  await expect(row(page, COPILOT).locator('.row-title')).toHaveText('Plan Migration to Windows App');
+  // The header's one meta line: status, machine, repository (ui.md §6.2); the rest is in Details.
+  await expect(copilot.locator('.status-line')).toHaveText('Waiting on you · Demo machine · danswett/agent-ha-bridge');
+  await expect(copilot.locator('.facts')).toContainText('Copilot');
+  await expect(copilot.locator('.facts')).toContainText('danswett/agent-ha-bridge');
+  await expect(copilot.locator('.facts')).toContainText('detached@5e59309');
+  await expect(copilot.locator('.facts')).toContainText('claude-opus-5.5');
   await expect(copilot.locator('.status-text')).toHaveText('Waiting on you');
   await expect(copilot.locator('.since')).toHaveText(/^for /);
   await expect(copilot.locator('.facts')).toContainText('412 turns');
   await expect(copilot.locator('.facts')).toContainText('1 compaction');
   await expect(copilot.locator('.facts')).toContainText('pid 39844');
   await expect(copilot.locator('details.reasoning')).toBeVisible();
-  await expect(copilot.locator('details.user-message')).toBeVisible();
+  await expect(copilot.locator('.user-message')).toBeVisible();
 
   // The question, read-only, from the contract's fields.
   const q = copilot.locator('.question');
-  await expect(q.locator('.question-head')).toHaveText('Waiting on you');
+  await expect(q.locator('.question-head')).toHaveText('Main agent asks');
   await expect(q.locator('.question-message')).toContainText('Is that the right focus?');
   await expect(q.locator('.field')).toHaveCount(5);
   expect(await q.locator('.field').evaluateAll((els) => els.map((e) => e.dataset.type))).toEqual(['choice', 'multi', 'boolean', 'text', 'number']);
@@ -73,7 +79,7 @@ test('demo mode shows every session from the worked example, with every field', 
   // Read-only: nothing in the question can be operated.
   await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
 
-  const claude = card(page, CLAUDE);
+  const claude = await open(page, CLAUDE);
   await expect(claude).toHaveAttribute('data-status', 'working');
   await expect(claude.locator('.status-text')).toHaveText('Working');
   await expect(claude.locator('.tool-line')).toBeVisible();
@@ -81,7 +87,7 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(claude.locator('.tool-line .tool-summary')).toHaveText('dotnet test');
   await expect(claude.locator('.question')).toHaveCount(0);
 
-  const codex = card(page, CODEX);
+  const codex = await open(page, CODEX);
   await expect(codex).toHaveAttribute('data-status', 'idle');
   await expect(codex.locator('.status-text')).toHaveText('Idle');
   await expect(codex.locator('.tool-line')).toBeHidden();
@@ -92,7 +98,8 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(delegating).toHaveAttribute('data-view', 'delegating');
   await expect(delegating.locator('.status-text')).toHaveText('Delegating to 2 agents · details not reported');
   await expect(delegating.locator('.since')).toHaveText(/^for /);
-  await expect(delegating.locator('.facts')).toContainText('2 background agents · 1 background command · 5 turns');
+  await expect(delegating.locator('.fact-background dd')).toHaveText('2 background agents · 1 background command');
+  await expect(delegating.locator('.fact-turns dd')).toHaveText('5 turns');
 
   expect(await order(page)).toEqual([COPILOT, CLAUDE, CODEX, DELEGATING]);
   expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
@@ -125,7 +132,8 @@ test('a machine where agent-ha-bridge runs is shown read-only with its reason, a
 });
 
 // The status glyph and words (docs/design/ui.md §2), which replaced the coloured edges and glows.
-const glyphOf = (page, id) => card(page, id).locator('.status-line .glyph');
+// A row's glyph: the one named for a screen reader, as the row reads (ui.md §9).
+const glyphOf = (page, id) => row(page, id).locator('.row-main .glyph');
 const role = (page, name) => page.evaluate((n) => {
   const probe = document.createElement('i');
   probe.style.color = `var(--ab-${n})`;
@@ -137,7 +145,7 @@ const role = (page, name) => page.evaluate((n) => {
 const colourOf = (locator) => locator.evaluate((e) => getComputedStyle(e).color);
 const turning = (locator) => locator.evaluate((e) => getComputedStyle(e).animationName);
 
-test('each status has its glyph and no card has a status edge or glow: working turns, waiting is the needs disc, idle is still', async ({ page }) => {
+test('each status has its glyph and no row has a status edge or glow: working turns, waiting is the needs disc, idle is still', async ({ page }) => {
   await openDemo(page);
   await expect(glyphOf(page, CLAUDE)).toHaveAttribute('data-glyph', 'working');
   await expect(glyphOf(page, COPILOT)).toHaveAttribute('data-glyph', 'needs');
@@ -147,9 +155,9 @@ test('each status has its glyph and no card has a status edge or glow: working t
   expect(await colourOf(glyphOf(page, CLAUDE))).toBe(await role(page, 'active'));
   expect(await colourOf(glyphOf(page, COPILOT))).toBe(await role(page, 'needs'));
   expect(await colourOf(glyphOf(page, CODEX))).toBe(await role(page, 'neutral'));
-  // Every card's edge is the same quiet stroke, whatever its status, and nothing breathes.
+  // Every row's edge is the same, whatever its status, and nothing breathes.
   await expect(page.locator('.glow')).toHaveCount(0);
-  const edges = await page.locator('.session .frame').evaluateAll((els) => els.map((e) => `${getComputedStyle(e).borderTopColor} ${getComputedStyle(e).borderTopStyle} ${getComputedStyle(e).boxShadow}`));
+  const edges = await page.locator('.session .row-main').evaluateAll((els) => els.map((e) => `${getComputedStyle(e).borderTopColor} ${getComputedStyle(e).borderTopStyle} ${getComputedStyle(e).boxShadow}`));
   expect(new Set(edges).size).toBe(1);
 });
 
@@ -265,6 +273,7 @@ test('every glyph is named with its state, as a row reads: title, status, machin
   await expect(glyphOf(page, COPILOT)).toHaveAccessibleName('Plan Migration to Windows App, waiting on you, Demo machine');
   await expect(page.getByRole('img', { name: 'Refactor the relay client, working, Demo machine' })).toHaveCount(1);
   // The tool's words are its name and summary, so its glyph says whether it is running, done or failed.
+  await open(page, CLAUDE);
   await expect(card(page, CLAUDE).locator('.tool-line .glyph')).toHaveAccessibleName('running');
 });
 
@@ -303,13 +312,16 @@ test('raw HTML and script links from a host are shown as text and never run', as
   await page.route('**/fixtures/sessions-list.json', (route) => route.fulfill({ json: hostile }));
   await openDemo(page);
 
-  const list = page.locator('#session-list');
+  // The rows and the sessions' views: everything a host's words reach.
+  const list = page.locator('#session-list, #session-views');
   await expect(list.locator('.session')).toHaveCount(4);
   await expect(list.locator('img, script, iframe, svg[onload], b, i, object, embed')).toHaveCount(0);
   const hrefs = await list.locator('a[href]').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
   expect(hrefs).toEqual(['https://example.com/']);
   // The text is shown as written, so a reader can see what the agent sent.
-  await expect(card(page, COPILOT).locator('.title-text')).toContainText('<img src=x onerror=');
+  await open(page, COPILOT);
+  await expect(card(page, COPILOT).locator('.session-title')).toContainText('<img src=x onerror=');
+  await expect(row(page, COPILOT).locator('.row-title')).toContainText('<img src=x onerror=');
   await expect(card(page, COPILOT).locator('.response')).toContainText('<script>window.__xss=2</script>');
   await expect(card(page, COPILOT).locator('.response')).toContainText('click me');
   await card(page, COPILOT).locator('.response').getByText('click me').click();
@@ -344,7 +356,7 @@ test('an unknown event is ignored and does not count as a gap', async ({ page })
     d.frame({ ev: 'session.sparkles', seq: d.host.seq + 1, data: { id: '6f1c2b7e-claude-example', status: 'idle' } });
   });
   await upsert(page, CODEX, { title: 'After the unknown event', updatedAt: later() });
-  await expect(card(page, CODEX).locator('.title-text')).toHaveText('After the unknown event');
+  await expect(card(page, CODEX).locator('.session-title')).toHaveText('After the unknown event');
   await expect(card(page, CLAUDE)).toHaveAttribute('data-status', 'working');
   expect(await calls(page, 'sessions.subscribe')).toBe(before);
 });
@@ -383,60 +395,57 @@ test('in Most recent, an upsert moves a session to the top', async ({ page }) =>
   await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
 });
 
-test('folding is remembered across a reload, and a new question unfolds the card', async ({ page }) => {
+// Panes, not expanding cards (ui.md §1.4, #179): what folding a card did, a row and its view do.
+test('the session chosen is remembered across a reload, and a new question shows in its view at once', async ({ page }) => {
   await openDemo(page);
-  const codex = card(page, CODEX);
-  const fold = codex.locator('button.fold');
-  await expect(fold).toHaveAttribute('aria-expanded', 'true');
-  await fold.click();
-  await expect(fold).toHaveAttribute('aria-expanded', 'false');
-  await expect(codex.locator('.body')).toBeHidden();
-  // Folded, the header still says what the session is doing.
-  await expect(codex.locator('.status-text')).toBeVisible();
+  const codex = await open(page, CODEX);
+  await expect(row(page, CODEX)).toHaveClass(/\bselected\b/);
+  await expect(card(page, CLAUDE)).toBeHidden();
 
   await page.reload();
   await page.waitForSelector('html[data-demo-ready]');
-  await expect(card(page, CODEX).locator('button.fold')).toHaveAttribute('aria-expanded', 'false');
-  await expect(card(page, CODEX).locator('.body')).toBeHidden();
-  await expect(card(page, CLAUDE).locator('button.fold')).toHaveAttribute('aria-expanded', 'true');
+  await expect(card(page, CODEX)).toBeVisible();
+  await expect(row(page, CODEX).locator('.row-main')).toHaveAttribute('aria-current', 'true');
+  await expect(card(page, CLAUDE)).toBeHidden();
 
   const question = { id: 'toolu_new', kind: 'form', message: 'Ship it?', fields: [{ name: 'ok', type: 'boolean' }], askedAt: later() };
   await upsert(page, CODEX, { status: 'waiting', statusSince: later(), updatedAt: later(), question });
-  await expect(card(page, CODEX).locator('button.fold')).toHaveAttribute('aria-expanded', 'true');
-  await expect(card(page, CODEX).locator('.question')).toBeVisible();
-
-  // Folded again while the same question waits, it stays folded.
-  await card(page, CODEX).locator('button.fold').click();
-  await upsert(page, CODEX, { updatedAt: later(), activity: { response: 'Still waiting.' } });
-  await expect(card(page, CODEX).locator('.response')).toHaveText('Still waiting.');
-  await expect(card(page, CODEX).locator('button.fold')).toHaveAttribute('aria-expanded', 'false');
+  await expect(codex.locator('.question')).toBeVisible();
+  // Its row says so, and stays where it is.
+  await expect(row(page, CODEX).locator('.row-status')).toHaveText('Waiting on you');
+  expect(await order(page)).toEqual([COPILOT, CLAUDE, CODEX, DELEGATING]);
 });
 
-test('a folded card stays folded through ordinary updates, and one tap opens it', async ({ page }) => {
+test('a session not chosen keeps its row through ordinary updates, and one tap on the row opens it', async ({ page }) => {
   await openDemo(page);
   const codex = card(page, CODEX);
-  await codex.locator('button.fold').click();
   await upsert(page, CODEX, { updatedAt: later(), activity: { response: 'A plain update.' } });
   await expect(codex.locator('.response')).toHaveText('A plain update.');
-  await expect(codex.locator('.frame')).toHaveClass(/\bcollapsed\b/);
-  await expect(codex.locator('.status-line .glyph')).toHaveAttribute('data-glyph', 'idle');
-  await codex.locator('button.fold').click();
-  await expect(codex.locator('button.fold')).toHaveAttribute('aria-expanded', 'true');
-  await expect(codex.locator('.body')).toBeVisible();
+  await expect(codex).toBeHidden();
+  await expect(row(page, CODEX).locator('.row-main .glyph')).toHaveAttribute('data-glyph', 'idle');
+  await expect(row(page, CODEX)).toHaveClass(/\bunread\b/);
+  await row(page, CODEX).locator('.row-main').click();
+  await expect(codex).toBeVisible();
+  await expect(codex.locator('.response')).toBeVisible();
+  // Seen now: its row loses the dot.
+  await expect(row(page, CODEX)).not.toHaveClass(/\bunread\b/);
 });
 
-test('the fold button is a labelled disclosure that works from the keyboard', async ({ page }) => {
+test('a row is a labelled button that opens its session from the keyboard, and Up and Down go between rows', async ({ page }) => {
   await openDemo(page);
-  const fold = card(page, CLAUDE).locator('button.fold');
-  const controls = await fold.getAttribute('aria-controls');
-  await expect(page.locator(`#${controls}`)).toBeVisible();
-  await expect(fold).toHaveAccessibleName(/Refactor the relay client/);
-  await fold.focus();
+  const open1 = row(page, CLAUDE).locator('.row-main');
+  await expect(open1).toHaveAccessibleName(/Refactor the relay client/);
+  await expect(card(page, CLAUDE)).toBeHidden();
+  await open1.focus();
   await page.keyboard.press('Enter');
-  await expect(fold).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.locator(`#${controls}`)).toBeHidden();
+  await expect(card(page, CLAUDE)).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await expect(row(page, CODEX).locator('.row-main')).toBeFocused();
   await page.keyboard.press(' ');
-  await expect(fold).toHaveAttribute('aria-expanded', 'true');
+  await expect(card(page, CODEX)).toBeVisible();
+  await expect(card(page, CLAUDE)).toBeHidden();
+  await page.keyboard.press('ArrowUp');
+  await expect(open1).toBeFocused();
 });
 
 test('a truncated question and response say so, and point to the machine', async ({ page }) => {
@@ -446,7 +455,7 @@ test('a truncated question and response say so, and point to the machine', async
     activity: { response: '…the end of a long answer.', responseTruncated: true },
     question: { ...fixture.sessions[0].question, fields: [], truncated: true },
   });
-  const c = card(page, COPILOT);
+  const c = await open(page, COPILOT);
   await expect(c.locator('.note.truncated')).toBeVisible();
   // The machine takes answers, but not to a question it couldn't send whole.
   await expect(c.locator('.question')).toHaveAttribute('data-answerable', 'false');
@@ -468,7 +477,8 @@ test('a permission prompt only the machine can answer shows no buttons and says 
   const c = card(page, COPILOT);
   await expect(c.locator('.status-text')).toHaveText('Waiting on you · answer at the machine');
   await expect(c.locator('.question')).toHaveAttribute('data-answerable', 'false');
-  await expect(c.locator('.question .question-head')).toHaveText('Permission requested');
+  // Who asks, in the stream (ui.md §6.4).
+  await expect(c.locator('.question .question-head')).toHaveText('Main agent asks');
   await expect(c.locator('.question .question-message')).toContainText('rm -rf build');
   await expect(c.locator('.question .read-only-why')).toHaveText('This prompt can only be answered at the machine on Demo machine.');
   await expect(c.locator('.question .field')).toHaveCount(0);
@@ -478,13 +488,15 @@ test('a permission prompt only the machine can answer shows no buttons and says 
   await expect(c.locator('.reply-input')).toBeDisabled();
 });
 
-test('opening the tool history fetches the session with session.get', async ({ page }) => {
+test('opening a session\'s tools fetches the session with session.get, once', async ({ page }) => {
   await openDemo(page);
-  const history = card(page, CLAUDE).locator('details.history');
-  expect(await calls(page, 'session.get')).toBe(0);
-  await history.locator('summary').click();
+  const history = card(page, CLAUDE).locator('.tools-panel');
+  const before = await calls(page, 'session.get');
+  await expect(history.locator('li.tool')).toHaveCount(0);
+  // At the three-pane width the inspector shows them as the session opens.
+  await open(page, CLAUDE);
   await expect(history.locator('li.tool')).toHaveCount(6);
-  expect(await calls(page, 'session.get')).toBe(1);
+  expect(await calls(page, 'session.get')).toBe(before + 1);
   await expect(history.locator('li.tool').first()).toContainText('Bash');
   await expect(history.locator('li.tool.failed')).toHaveCount(1);
 });
@@ -506,7 +518,7 @@ test.describe('installed', () => {
   });
 });
 
-test('a long unbroken path never makes a card wider than a phone screen', async ({ page }) => {
+test('a long unbroken path never makes a row or a session wider than a phone screen', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openDemo(page);
   const path = 'C:\\Users\\AdminUser\\AppData\\Local\\AgentBridge\\default\\attachments\\5900c7370ce946f98d9cc5a6a7e669b4-IMG_3499.jpeg';
@@ -515,27 +527,18 @@ test('a long unbroken path never makes a card wider than a phone screen', async 
     title: `Read${'_'.repeat(20)}${path}`,
     activity: { currentTool: { id: 'toolu_wide', name: 'Read', summary: path, status: 'running', startedAt: new Date().toISOString() } },
   });
-  await expect(card(page, CLAUDE).locator('.tool-line')).toBeVisible();
-
-  const widths = await page.evaluate(() => ({
+  const rows = () => page.evaluate(() => ({
     page: document.documentElement.scrollWidth,
     view: document.documentElement.clientWidth,
-    cards: [...document.querySelectorAll('.session')].map((e) => Math.ceil(e.getBoundingClientRect().right)),
+    cards: [...document.querySelectorAll('.session, .session-view:not([hidden]), .session-view:not([hidden]) .tool-line')].map((e) => Math.ceil(e.getBoundingClientRect().right)),
   }));
+  let widths = await rows();
   expect(widths.page).toBeLessThanOrEqual(widths.view);
   for (const right of widths.cards) expect(right).toBeLessThanOrEqual(widths.view);
-});
-test('a desktop-wide window puts the sessions side by side, a phone keeps one column', async ({ page }) => {
-  const columns = () => page.locator('.session').evaluateAll((els) => new Set(els.map((e) => Math.round(e.getBoundingClientRect().left))).size);
-  const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await openDemo(page);
-  await expect(page.locator('.session')).toHaveCount(4);
-  expect(await columns()).toBeGreaterThanOrEqual(2);
-  expect(await overflow()).toBeLessThanOrEqual(0);
-
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect.poll(columns).toBe(1);
-  expect(await overflow()).toBeLessThanOrEqual(0);
+  // And its view, pushed over the list.
+  await open(page, CLAUDE);
+  await expect(card(page, CLAUDE).locator('.tool-line')).toBeVisible();
+  widths = await rows();
+  expect(widths.page).toBeLessThanOrEqual(widths.view);
+  for (const right of widths.cards) expect(right).toBeLessThanOrEqual(widths.view);
 });

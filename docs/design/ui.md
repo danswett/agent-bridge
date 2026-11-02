@@ -221,6 +221,13 @@ The window decides, not the device.
 
 Selection survives a resize across breakpoints. #166 has the acceptance criteria.
 
+- **Which session:** the one chosen, or with none chosen yet on a desktop, the first row.
+  A phone shows the list until one is chosen.
+- **The inspector's toggle** is remembered on the device.
+- **A pushed session** takes the whole screen on a phone, with the reply box at its foot: the
+  bottom navigation gives way to it, and Back (the header's, or the platform's own) returns
+  to the list.
+
 ## 6. Surfaces
 
 ### 6.1 Session list
@@ -282,6 +289,15 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 - **Trailing:** the age (tabular), when there's no unread dot.
 - **Never on a row:** the model, the repo SHA, turn and compaction counts, or the pid.
   Those live in session details.
+- **Line 2 is one line,** cut short at its end; the title is too. Every fact is still in the
+  session's header or Details, and the row reads in full to a screen reader (§9).
+
+**Facts on a line (#214).** Wherever facts are joined by "·" (a row's line 2, the header's
+meta line, the status words themselves): the separator is in the text face whatever face its
+neighbours are in (§4.2), with the same space on both sides, and it **stays with the fact before
+it**. A line may end with a separator, and **no line ever starts with one**. In the PWA that is a
+no-break space before the dot and an ordinary space after it; in WinUI, a run that keeps the
+dot with the preceding fact.
 
 **Machine filter:**
 - Windows and the PWA: SelectorBar-style text tabs.
@@ -296,6 +312,14 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 - **Actions:** icon buttons with tooltips: Pin, Details (everything removed from rows),
   and toggle inspector. End session lives in Details on desktop, and in the overflow menu
   on phones.
+- **Phone:** Back (to the list) leads the header, and Pin, Details and End session are in its
+  overflow menu.
+- **Details** is a property list: Agent, Machine, Repository, Branch (mono), Folder (mono, and
+  a long path gives up its middle, never a word), Model, Started, how long in this state,
+  background agents and commands, turns, compactions and the process id; then End session.
+  At three panes it heads the inspector, over Tools (each call: glyph, name and arguments in
+  mono, age). Below three panes Tools is a tab beside Conversation, and Details takes the
+  conversation's place until pressed again. Delegates (#176) join the inspector and the tabs.
 
 ### 6.3 Delegates (#84)
 
@@ -328,6 +352,8 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 - **Questions:** in the stream, as a card in Needs you colours. The header reads "Main agent
   asks" or "*Delegate* asks", followed by the question and the platform's own radio,
   checkbox and text controls, with Answer in Bridge.
+- **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
+  tool's name and arguments in mono).
 
 ### 6.5 Reply box
 
@@ -404,6 +430,10 @@ machine, online ones first, then the account's offline machines (#213):
     reconnecting, paused, an error), and as the search row while searching.
 - **Pages are routes** in the address's hash (`#/sessions`, `#/machines`, `#/launch`, `#/usage`,
   `#/settings`): a reload stays on the page, and the browser's own back goes between them.
+  A session chosen is `#/sessions/<machine>/<session>`: a new entry on a phone, so the
+  browser's back returns to the list; on a desktop it replaces the last, so back still goes
+  between pages. A window narrowed to a phone's width with a session chosen gets the list's
+  entry under it.
 - **Search** narrows the sessions list to the sessions whose title, repository, branch, folder,
   agent or machine has it. Rows don't move while it narrows the list.
 - **A folder-trust question** waiting on a machine that takes no launches puts a Needs you dot on

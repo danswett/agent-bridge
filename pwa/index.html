@@ -97,31 +97,37 @@
 
       <div class="route route-sessions" data-route="sessions" hidden>
         <section id="sessions" class="sessions" aria-labelledby="sessions-h" tabindex="-1" hidden>
-          <div class="sessions-head">
-            <h2 id="sessions-h" class="page-title">Sessions</h2>
-            <span id="session-count" class="count"></span>
-            <select id="session-sort" class="sort" aria-label="Sort sessions" title="Sort sessions"></select>
-            <div class="head-actions">
-              <button type="button" class="icon-button search-open" aria-label="Search sessions" title="Search sessions">
-                <svg class="ab-icon ab-icon-24" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-search"/></svg>
-              </button>
-              <a class="button new-session" href="#/launch" data-attention-for="launch" aria-label="New session" title="New session">
-                <svg class="ab-icon ab-icon-20" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-plus"/></svg>
-                <span class="new-label">New</span>
-              </a>
+          <div id="list-pane" class="list-pane">
+            <div class="sessions-head">
+              <h2 id="sessions-h" class="page-title">Sessions</h2>
+              <span id="session-count" class="count"></span>
+              <select id="session-sort" class="sort" aria-label="Sort sessions" title="Sort sessions"></select>
+              <div class="head-actions">
+                <button type="button" class="icon-button search-open" aria-label="Search sessions" title="Search sessions">
+                  <svg class="ab-icon ab-icon-24" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-search"/></svg>
+                </button>
+                <a class="button new-session" href="#/launch" data-attention-for="launch" aria-label="New session" title="New session">
+                  <svg class="ab-icon ab-icon-20" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-plus"/></svg>
+                  <span class="new-label">New</span>
+                </a>
+              </div>
             </div>
+            <div id="machine-tabs" class="machine-tabs" role="tablist" aria-label="Machines" hidden></div>
+            <p id="host-state" class="note" role="status" aria-live="polite"></p>
+            <!-- Needs you · N (#165, ui.md §6.1): every pending question, oldest first, at the top of
+                 the list pane. It refers to sessions and never moves their rows. -->
+            <div id="needs-you" class="needs-you" role="region" aria-labelledby="needs-you-h" hidden>
+              <h3 id="needs-you-h" class="needs-you-head">Needs you</h3>
+              <ol class="needs-you-list"></ol>
+            </div>
+            <div id="session-list" class="session-list"></div>
+            <p id="sessions-empty" class="note empty" hidden>No live sessions on this machine.</p>
+            <a id="usage-line" class="usage-line" href="#/usage" hidden><span class="usage-summary"></span></a>
           </div>
-          <div id="machine-tabs" class="machine-tabs" role="tablist" aria-label="Machines" hidden></div>
-          <p id="host-state" class="note" role="status" aria-live="polite"></p>
-          <!-- Needs you · N (#165): every pending question, oldest first. It refers to sessions and
-               never moves their rows. -->
-          <div id="needs-you" class="needs-you" role="region" aria-labelledby="needs-you-h" hidden>
-            <h3 id="needs-you-h" class="needs-you-head">Needs you</h3>
-            <ol class="needs-you-list"></ol>
+          <div id="session-pane" class="session-pane">
+            <p id="no-session" class="note no-session">No session selected</p>
+            <div id="session-views" class="session-views"></div>
           </div>
-          <div id="session-list" class="session-list"></div>
-          <p id="sessions-empty" class="note empty" hidden>No live sessions on this machine.</p>
-          <a id="usage-line" class="usage-line" href="#/usage" hidden><span class="usage-summary"></span></a>
         </section>
       </div>
 

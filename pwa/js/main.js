@@ -104,19 +104,16 @@ function focusLinked() {
   if (!linked || !page?.hosts.shows(linked.host)) { return; }
   const card = page.view.card(linked.host, linked.session);
   if (!card) { return; }
-  // Taken before search is closed: closing it redraws the list, which comes back here.
+  // Taken before the session is shown: showing it closes a search that hid it, which redraws
+  // the list, which comes back here.
   linked = null;
-  if (page.view.hidden(card)) { shell.closeSearch(); }
-  if (shell.route !== 'sessions') { shell.go('sessions'); }
-  if (card.folded) { card.setFolded(false); }
-  const el = card.element;
-  el.classList.add('linked');
-  setTimeout(() => el.classList.remove('linked'), 4000);
-  el.scrollIntoView({ block: 'start' });
+  page.showSession(card.id, card.hostId);
   // The question's answer controls, not a code block's Copy button in its message: Enter on
   // a notification's question must answer it, not copy the command it shows.
-  const target = el.querySelector('.question-slot button:not([disabled]):not(.md-copy), .question-slot input:not([disabled]), .question-slot textarea:not([disabled])') ?? el.querySelector('.fold');
+  const el = card.view;
+  const target = el.querySelector('.question-slot button:not([disabled]):not(.md-copy), .question-slot input:not([disabled]), .question-slot textarea:not([disabled])');
   target?.focus({ preventScroll: true });
+  target?.scrollIntoView({ block: 'nearest' });
 }
 
 // A tap on a notification while the app is open: the worker says where to go.
@@ -179,6 +176,8 @@ async function startDemo() {
   const answerDelayMs = Number(params.get('answerDelay') ?? 700);
   const stopWindowMs = Number(params.get('stopWindow')) || 10000;
   const host = new DemoHost(fixture, {
+    // ?name=: the demo machine's name, for a long one (#214).
+    ...(params.get('name') ? { machineName: params.get('name').slice(0, 120) } : {}),
     readOnly: ahb ? 'agent-ha-bridge is running for this user (AgentBridgeDaemon); answer at the machine or through it' : null,
     answerDelayMs,
     answering: params.get('answer') !== '0' && !ahb,
@@ -269,7 +268,7 @@ async function startDemo() {
   demoUpdates.onChange(() => page.drawMachines());
   fleet.onChange(() => page.drawMachines());
   $('machines').hidden = false;
-  hosts.restoreTarget(null);
+  hosts.restoreTarget(page.routedHost ?? null);
   fleet.start();
   // Ready once every machine shown has sent what it has. One remembered from a demo with more
   // machines is not there to send anything, and says it is offline.
@@ -534,7 +533,7 @@ function begin(account) {
   fleet.onChange(() => page.drawMachines());
   forgets.onChange(() => page.drawMachines());
   updates.onChange(() => page.drawMachines());
-  hosts.restoreTarget(link?.host ?? null);
+  hosts.restoreTarget(link?.host ?? page.routedHost ?? null);
   fleet.start();
   // "last seen 5m ago" moves on with nothing else to redraw the list: every machine may be offline.
   // So does "checked 5m ago" under a machine's updates.
@@ -575,6 +574,9 @@ function begin(account) {
     updates.clear();
     lastKnown = null;
     page.clear();
+    // A session's address names this account's machine: the next sign-in, perhaps another
+    // account, would otherwise start on it. A link that arrives after this is kept.
+    if (shell.route === 'sessions' && shell.rest.length) { shell.go('sessions', { replace: true }); }
     accountStore.clear();
     dropKeptUsage();
     connection.stop();

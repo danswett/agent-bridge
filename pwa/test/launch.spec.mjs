@@ -2,7 +2,7 @@
 // a real one does (session.launch): it refuses what it does not offer, in its words, and a
 // started session arrives as any other, with the panel jumping to its card.
 import { test, expect } from '@playwright/test';
-import { go } from './nav.mjs';
+import { go, view } from './nav.mjs';
 
 const RESUMABLE = '7d3c1a2e-5b6f-4c8d-9e0a-1b2c3d4e5f60';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -68,7 +68,8 @@ test.describe('on a phone', () => {
       model: 'gpt-6-sol', effort: 'high', context: '', permissions: 'allowAll', prompt,
     });
     const id = await page.evaluate(() => window.agentBridgeDemo.launches.get('demo').detail.session);
-    const card = page.locator(`.session[data-id="${id}"]`);
+    // Jumped to: its session's view, pushed on a phone (#179).
+    const card = view(page, id);
     await expect(card).toBeInViewport();
     await expect(card).toHaveAttribute('data-status', 'working');
     await expect(field(page, 'prompt')).toHaveValue('');
@@ -88,7 +89,7 @@ test.describe('on a phone', () => {
     const [sent] = await log(page);
     expect(sent.resume).toBe(RESUMABLE);
     expect(sent.workspace).toBeUndefined();
-    await expect(page.locator(`.session[data-id="${RESUMABLE}"]`)).toBeInViewport();
+    await expect(view(page, RESUMABLE)).toBeInViewport();
     await expect(field(page, 'resume').locator(`option[value="${RESUMABLE}"]`)).toHaveCount(0);
   });
 
@@ -182,7 +183,8 @@ test.describe('bringing a session from another machine', () => {
     // A new session, under a new id, with the original's title.
     const id = await page.evaluate(() => window.agentBridgeDemo.launches.get('demo').detail.session);
     expect(id).not.toBe(AWAY);
-    const card = page.locator(`.session[data-id="${id}"]`);
+    // Jumped to: its session's view, pushed on a phone (#179).
+    const card = view(page, id);
     await expect(card).toBeInViewport();
     await expect(card).toContainText('Draft the transfer docs');
   });
@@ -557,6 +559,137 @@ test.describe('a folder-trust question', () => {
     await field(page, 'machine').selectOption('demo-shadow');
     await expect(panel(page).locator('.launch-title')).toHaveText('Waiting on DEV-VM1 (shadow)');
     await expect(card(page).locator('.trust-folder')).toHaveText('C:\\Users\\demo\\untrusted\\web');
+  });
+  test('with every machine shown and none taking launches, a question on a machine not picked lights the Launch way', async ({ page }) => {
+    await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
+    await page.waitForSelector('html[data-demo-ready]');
+    await page.evaluate(() => {
+      const laptop = window.agentBridgeDemo.machines['demo-laptop'];
+      laptop.machine = { ...laptop.machine, readOnly: 'this is a read-only comparison host (delivery.readOnly in its config); answer at the machine' };
+      laptop.capabilities = laptop.capabilities.filter((c) => c !== 'sessions.launch');
+      laptop.disconnect();
+      window.agentBridgeDemo.machines['demo-shadow'].askTrust({ id: '6e1d0a4f-3c2b-4d9e-8f7a-5b4c3d2e1f0a', agent: 'claude', kind: 'claude', label: 'Claude Code', workspace: 'web', folder: 'C:\\Users\\demo\\untrusted\\web', warning: 'Do you trust the files in this folder?', answerable: false, atMachine: 'Answer at the machine.' });
+    });
+    await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
+    const way = page.locator('#nav [data-nav="launch"]');
+    await expect(way).toHaveClass(/attention/);
+    await expect(way).toHaveAttribute('aria-label', 'Launch, a question is waiting');
+    expect(await page.evaluate(() => window.agentBridgeDemo.launchPanel.hostId)).toBe('demo-laptop');
+  });
+  test('an older reading of a machine not picked, arriving after it was picked and left, does not take its dot away', async ({ page }) => {
+    await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
+    await page.waitForSelector('html[data-demo-ready]');
+    // The first reading of DEV-VM1 (shadow) as a machine not picked is held, with what it said then.
+    await page.evaluate(() => {
+      const p = window.agentBridgeDemo.page;
+      const was = p.launchTarget.bind(p);
+      window.__held = [];
+      let first = true;
+      p.launchTarget = (id) => {
+        const t = was(id);
+        if (id !== 'demo-shadow' || !first) { return t; }
+        first = false;
+        return { ...t, load: () => t.load().then((o) => new Promise((go) => { window.__held.push(() => go(o)); })) };
+      };
+      const laptop = window.agentBridgeDemo.machines['demo-laptop'];
+      laptop.machine = { ...laptop.machine, readOnly: 'this is a read-only comparison host (delivery.readOnly in its config); answer at the machine' };
+      laptop.capabilities = laptop.capabilities.filter((c) => c !== 'sessions.launch');
+      laptop.disconnect();
+    });
+    await expect.poll(() => page.evaluate(() => window.__held.length)).toBe(1);
+    // Then a question there, seen once it is picked; and another machine picked again.
+    await page.evaluate(() => window.agentBridgeDemo.machines['demo-shadow'].askTrust({ id: '6e1d0a4f-3c2b-4d9e-8f7a-5b4c3d2e1f0a', agent: 'claude', kind: 'claude', label: 'Claude Code', workspace: 'web', folder: 'C:\\Users\\demo\\untrusted\\web', warning: 'Do you trust the files in this folder?', answerable: false, atMachine: 'Answer at the machine.' }));
+    await go(page, 'launch');
+    await field(page, 'machine').selectOption('demo-shadow');
+    await expect(panel(page).locator('.launch-title')).toHaveText('Waiting on DEV-VM1 (shadow)');
+    await field(page, 'machine').selectOption('demo-laptop');
+    await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
+    const way = page.locator('#nav [data-nav="launch"]');
+    await expect(way).toHaveClass(/attention/);
+    // The held reading, from before the question, arrives last.
+    await page.evaluate(() => { for (const go of window.__held.splice(0)) { go(); } });
+    await page.waitForTimeout(500);
+    await expect(way).toHaveClass(/attention/);
+  });
+  test('a reading of a machine not picked, arriving after the machines shown leave it out, lights nothing', async ({ page }) => {
+    await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
+    await page.waitForSelector('html[data-demo-ready]');
+    // DEV-VM1 (shadow) has a question; its first reading as a machine not picked is held.
+    await page.evaluate(() => {
+      const p = window.agentBridgeDemo.page;
+      const was = p.launchTarget.bind(p);
+      window.__held = [];
+      let first = true;
+      p.launchTarget = (id) => {
+        const t = was(id);
+        if (id !== 'demo-shadow' || !first) { return t; }
+        first = false;
+        return { ...t, load: () => t.load().then((o) => new Promise((go) => { window.__held.push(() => go(o)); })) };
+      };
+      window.agentBridgeDemo.machines['demo-shadow'].askTrust({ id: '6e1d0a4f-3c2b-4d9e-8f7a-5b4c3d2e1f0a', agent: 'claude', kind: 'claude', label: 'Claude Code', workspace: 'web', folder: 'C:\\Users\\demo\\untrusted\\web', warning: 'Do you trust the files in this folder?', answerable: false, atMachine: 'Answer at the machine.' });
+      const laptop = window.agentBridgeDemo.machines['demo-laptop'];
+      laptop.machine = { ...laptop.machine, readOnly: 'this is a read-only comparison host (delivery.readOnly in its config); answer at the machine' };
+      laptop.capabilities = laptop.capabilities.filter((c) => c !== 'sessions.launch');
+      laptop.disconnect();
+    });
+    await expect.poll(() => page.evaluate(() => window.__held.length)).toBe(1);
+    // Only Laptop shown now: DEV-VM1's question can't be reached from this Launch page.
+    await page.locator('#machine-tabs [data-device-id="demo-laptop"]').click();
+    await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
+    await page.evaluate(() => { for (const go of window.__held.splice(0)) { go(); } });
+    await page.waitForTimeout(500);
+    await expect(page.locator('#nav [data-nav="launch"]')).not.toHaveClass(/attention/);
+  });
+  test('a question beginning or ending on a machine not picked lights or clears the Launch way with nothing else changing', async ({ page }) => {
+    await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
+    await page.waitForSelector('html[data-demo-ready]');
+    await page.evaluate(() => {
+      window.agentBridgeDemo.launchPanel.constructor.recheckMs = 400;
+      const laptop = window.agentBridgeDemo.machines['demo-laptop'];
+      laptop.machine = { ...laptop.machine, readOnly: 'this is a read-only comparison host (delivery.readOnly in its config); answer at the machine' };
+      laptop.capabilities = laptop.capabilities.filter((c) => c !== 'sessions.launch');
+      laptop.disconnect();
+    });
+    await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
+    const way = page.locator('#nav [data-nav="launch"]');
+    await page.waitForTimeout(600);
+    await expect(way).not.toHaveClass(/attention/);
+    // Only DEV-VM1 (shadow)'s own list changes: no update reaches this page.
+    await page.evaluate(() => window.agentBridgeDemo.machines['demo-shadow'].askTrust({ id: '6e1d0a4f-3c2b-4d9e-8f7a-5b4c3d2e1f0a', agent: 'claude', kind: 'claude', label: 'Claude Code', workspace: 'web', folder: 'C:\\Users\\demo\\untrusted\\web', warning: 'Do you trust the files in this folder?', answerable: false, atMachine: 'Answer at the machine.' }));
+    await expect(way).toHaveClass(/attention/, { timeout: 5000 });
+    await page.evaluate(() => { const m = window.agentBridgeDemo.machines['demo-shadow']; m.launchOptions = { ...m.launchOptions, trust: [] }; });
+    await expect(way).not.toHaveClass(/attention/, { timeout: 5000 });
+  });
+  test('machines not picked are not asked for their lists while the tab is hidden', async ({ page }) => {
+    await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
+    await page.waitForSelector('html[data-demo-ready]');
+    await page.evaluate(() => {
+      const d = window.agentBridgeDemo;
+      d.launchPanel.constructor.recheckMs = 300;
+      // Every reading of DEV-VM1 (shadow) as a machine not picked, counted.
+      const was = d.page.launchTarget.bind(d.page);
+      window.__reads = 0;
+      d.page.launchTarget = (id) => {
+        const t = was(id);
+        return id === 'demo-shadow' ? { ...t, load: () => { window.__reads += 1; return t.load(); } } : t;
+      };
+      const laptop = d.machines['demo-laptop'];
+      laptop.machine = { ...laptop.machine, readOnly: 'this is a read-only comparison host (delivery.readOnly in its config); answer at the machine' };
+      laptop.capabilities = laptop.capabilities.filter((c) => c !== 'sessions.launch');
+      laptop.disconnect();
+    });
+    await expect.poll(() => page.evaluate(() => window.__reads), { timeout: 5000 }).toBeGreaterThan(1);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.waitForTimeout(400);
+    const hidden = await page.evaluate(() => window.__reads);
+    await page.waitForTimeout(1500);
+    expect(await page.evaluate(() => window.__reads)).toBe(hidden);
+    // Shown again, they are.
+    await page.evaluate(() => { delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange')); });
+    await expect.poll(() => page.evaluate(() => window.__reads), { timeout: 5000 }).toBeGreaterThan(hidden);
   });
   test('with every machine shown, picking a machine with no question keeps the Launch dot for another machine\'s', async ({ page }) => {
     await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');

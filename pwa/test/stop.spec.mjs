@@ -3,16 +3,33 @@
 // or waiting for background work it started only on a second press that carries the token
 // the first was given, within the window. Then it shows as ending, and its card goes.
 import { test, expect } from '@playwright/test';
+import { open, view } from './nav.mjs';
 
 const CLAUDE = '6f1c2b7e-claude-example';
 const CODEX = '019a1b2c-codex-example';
 const DELEGATING = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-const card = (page, id) => page.locator(`.session[data-id="${id}"]`);
+// A session's view (#179): End session is in its Details.
+const card = (page, id) => view(page, id);
 const footer = (page, id) => card(page, id).locator('.end-session');
 const end = (page, id) => footer(page, id).getByRole('button', { name: 'End session' });
 const log = (page) => page.evaluate(() => window.agentBridgeDemo.host.stopLog);
+
+// End session lives in Details (ui.md §6.2): the inspector at the three-pane width, the header's
+// Details below it, and on a phone the overflow menu's.
+async function showEnd(page, id) {
+  const v = await open(page, id);
+  if (await end(page, id).isVisible()) { return; }
+  const more = v.locator('.session-header .more');
+  if (await more.isVisible()) {
+    await more.click();
+    await v.getByRole('menuitem', { name: 'Details' }).click();
+  } else {
+    await v.locator('.details-button').click();
+  }
+  await expect(end(page, id)).toBeVisible();
+}
 const script = (page, ...outcomes) => page.evaluate((o) => window.agentBridgeDemo.scriptStops(...o), outcomes);
 
 // Records each way a card is drawn, as it is drawn, for a state too short to poll for:
@@ -23,7 +40,7 @@ async function recordCard(page, id) {
   await page.evaluate((id) => {
     const drawn = window.__drawn = [];
     const note = () => {
-      const c = document.querySelector(`.session[data-id="${id}"]`);
+      const c = document.querySelector(`.session-view[data-id="${id}"]`);
       if (!c) { return; }
       const now = {
         status: c.dataset.status,
@@ -58,6 +75,7 @@ test.describe('on a phone', () => {
   test('an idle session ends on one press: it shows as ending, then its card goes', async ({ page }) => {
     await openDemo(page, '&answerDelay=800');
     await recordCard(page, CODEX);
+    await showEnd(page, CODEX);
     await end(page, CODEX).tap();
     await expect(card(page, CODEX)).toHaveCount(0);
     expect(await drawn(page)).toContainEqual({ status: 'ending', text: 'Ending session…', endDisabled: true });
@@ -67,6 +85,7 @@ test.describe('on a phone', () => {
 
   test('a working session takes two presses: the first asks for the second and ends nothing', async ({ page }) => {
     await openDemo(page);
+    await showEnd(page, CLAUDE);
     await end(page, CLAUDE).tap();
     await expect(footer(page, CLAUDE).locator('.stop-status')).toHaveText(/^Press End session again to end it: this session is still working; the confirmation lapses in 10 s\. (10|9|8) s left\.$/);
     await expect(footer(page, CLAUDE)).toHaveAttribute('data-stop', 'confirm');
@@ -82,6 +101,7 @@ test.describe('on a phone', () => {
 
   test('a second press after the window lapsed is a first press again, and the card says it was not confirmed', async ({ page }) => {
     await openDemo(page, '&stopWindow=1500');
+    await showEnd(page, CLAUDE);
     await end(page, CLAUDE).tap();
     await expect(footer(page, CLAUDE)).toHaveAttribute('data-stop', 'confirm');
     await expect(footer(page, CLAUDE).locator('.stop-status')).toHaveText('End session NOT confirmed: no second press within 2 s. The session is still running.', { timeout: 5000 });
@@ -95,15 +115,18 @@ test.describe('on a phone', () => {
 
   test('a session waiting for background agents it started takes two presses too', async ({ page }) => {
     await openDemo(page);
+    await showEnd(page, DELEGATING);
     await end(page, DELEGATING).tap();
     await expect(footer(page, DELEGATING).locator('.stop-status')).toHaveText(/^Press End session again to end it: this session is waiting for background agents it started;/);
     await expect(card(page, DELEGATING)).toBeVisible();
   });
 
-  test('End session sits last on the card, apart from Send, and is at least 44 px tall', async ({ page }) => {
+  test('End session sits last in Details, apart from Send, and is at least 44 px tall', async ({ page }) => {
     await openDemo(page);
-    const last = await card(page, CODEX).locator('.body').evaluate((b) => b.lastElementChild.className);
+    await showEnd(page, CODEX);
+    const last = await card(page, CODEX).locator('.details').evaluate((b) => b.lastElementChild.className);
     expect(last).toBe('stop-slot');
+    await expect(card(page, CODEX).locator('.details form.reply, .inspector form.reply')).toHaveCount(0);
     const box = await end(page, CODEX).boundingBox();
     expect(box.height).toBeGreaterThanOrEqual(44);
   });
@@ -115,6 +138,7 @@ test.describe('outcomes', () => {
   test('a refusal or a failure says why and the card stays', async ({ page }) => {
     await openDemo(page);
     await script(page, 'refused', 'failed');
+    await showEnd(page, CODEX);
     await end(page, CODEX).click();
     await expect(footer(page, CODEX).locator('.stop-status')).toHaveText('The machine refused to end this session: the session runs as administrator, and the host does not end elevated sessions; end it at the machine.');
     await expect(footer(page, CODEX).locator('.stop-status')).toHaveClass(/\bbad\b/);
@@ -126,6 +150,7 @@ test.describe('outcomes', () => {
   test('an outcome from a newer host reads as failed, never as ended', async ({ page }) => {
     await openDemo(page);
     await script(page, { outcome: 'paused', reason: 'later' });
+    await showEnd(page, CODEX);
     await end(page, CODEX).click();
     await expect(footer(page, CODEX)).toHaveAttribute('data-stop', 'failed');
     await expect(card(page, CODEX)).toBeVisible();
@@ -134,6 +159,7 @@ test.describe('outcomes', () => {
   test('a press whose response is lost is resent with the same request, and the session ends once', async ({ page }) => {
     await openDemo(page, '&timeout=800&retry=100');
     await script(page, { outcome: 'ended', drop: true });
+    await showEnd(page, CODEX);
     await end(page, CODEX).click();
     await expect(card(page, CODEX)).toHaveCount(0, { timeout: 10000 });
     const sent = await log(page);
@@ -144,6 +170,7 @@ test.describe('outcomes', () => {
 
 test('a machine that cannot end sessions shows no End session', async ({ page }) => {
   await openDemo(page, '&stop=0');
+  await open(page, CODEX);
   await expect(card(page, CODEX)).toBeVisible();
   await expect(page.locator('.end-session')).toHaveCount(0);
 });

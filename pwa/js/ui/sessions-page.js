@@ -27,6 +27,12 @@ import { AppBadge } from '../needs-you.js';
 
 // The machine last launched on, or picked to launch on, with every machine shown.
 export const LAUNCH_HOST = 'agent-bridge.app.launchHost';
+// Whether the person hid the inspector, at the three-pane width (ui.md §5.2).
+export const INSPECTOR = 'agent-bridge.app.inspector';
+
+// The widths of ui.md §5.2: three panes from 1280, two from 760, one column below.
+export const WIDE = '(min-width: 1280px)';
+export const PHONE = '(max-width: 759px)';
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
@@ -51,8 +57,17 @@ export function hostNote(link, name, { online, named = false }) {
   }
 }
 
+const OVER_LIST = Object.freeze({ overList: true });
+
 export class SessionsPage {
   #shownCaps = new Map();
+  // The session the address names (#/sessions/<machine>/<session>), until it has arrived.
+  #want = null;
+  // Whether the address names a session: on a phone, its view is pushed over the list.
+  #open = false;
+  #inspectorHidden = false;
+  // What had focus in the list when a session was opened on a phone.
+  #returnTo = null;
   // The machine last launched on or picked to launch on: kept here, and on the device as far as
   // its storage allows, so a picker never depends on a write that may fail.
   #launchHost = null;
@@ -85,7 +100,15 @@ export class SessionsPage {
       waiting: (on) => this.shell?.setAttention('launch', on),
     });
     this.order = new SessionOrder({ storage });
+    const media = (q) => globalThis.matchMedia?.(q) ?? { matches: false, addEventListener() {} };
+    this.wide = media(WIDE);
+    this.phone = media(PHONE);
+    this.#inspectorHidden = this.#read(INSPECTOR) === 'hidden';
     this.view = new SessionListView($('session-list'), hosts.sessions, {
+      views: $('session-views'),
+      layout: () => ({ inspector: this.wide.matches && !this.#inspectorHidden }),
+      // Only while Sessions shows: news that comes while another page does waits for it.
+      viewing: () => (!shell || shell.route === 'sessions') && (!this.phone.matches || this.#open),
       fetchDetail: (hostId, id) => {
         const client = hosts.link(hostId)?.client;
         return client ? client.getSession(id) : Promise.reject(new Error('not connected'));
@@ -99,9 +122,13 @@ export class SessionsPage {
       order: this.order,
       shows: (hostId) => hosts.shows(hostId),
       settled: (hostId) => hosts.link(hostId)?.client?.synced !== false,
-      visible: () => !shell || shell.route === 'sessions',
     });
-    this.view.onRender = (n) => this.#drawCount(n);
+    this.view.onRender = (n) => { this.#drawCount(n); this.#settleSelection(); };
+    this.view.onSelect = (card) => this.#choose(card);
+    this.view.onBack = () => this.#back();
+    this.view.onInspector = () => this.#toggleInspector();
+    for (const m of [this.wide, this.phone]) { m.addEventListener('change', () => this.#resized()); }
+    this.#drawPanes();
     // Needs you · N (#165): above the list, and apart from it. Its count is the app's badge.
     this.lane = new NeedsYouLane($('needs-you'), hosts.sessions, {
       answering: (hostId) => this.answering(hostId),
@@ -121,14 +148,22 @@ export class SessionsPage {
       // Search narrows the sessions list; the launch page's panel is open while it shows, and
       // asks its machine again each time it opens.
       shell.onSearch((q) => this.view.setFilter(q));
+      // On a phone a pushed session hides the list and its search: back to the list first.
+      shell.beforeSearch = () => {
+        if (!this.phone.matches || !this.#open || shell.route !== 'sessions') { return false; }
+        const popped = this.#overList() && globalThis.history?.length > 1;
+        this.#back();
+        return popped;
+      };
       // Kept, so a page retired with its account (clear()) stops answering routes: a second
       // sign-in in the same tab would otherwise have two pages rendering into one list.
-      this.#unroute = shell.onRoute(({ route }) => {
+      this.#unroute = shell.onRoute(({ route, rest }) => {
         this.launchPanel.setOpen(route === 'launch');
         // Back on Sessions, what it shows is seen now.
-        if (route === 'sessions') { this.view.schedule(); }
+        if (route === 'sessions') { this.#route(rest); this.view.schedule(); this.view.layoutChanged(); }
       });
       this.launchPanel.setOpen(shell.route === 'launch');
+      if (shell.route === 'sessions') { this.#route(shell.rest); }
       this.view.setFilter(shell.query);
     }
   }
@@ -148,21 +183,184 @@ export class SessionsPage {
     };
   }
 
-  // A session's card, once it has arrived: on the sessions page, unfolded and scrolled to. False
-  // until then.
+  // A session, once it has arrived: selected on the sessions page, its row scrolled to and its
+  // view shown (pushed, on a phone). False until then.
   showSession(id, hostId = null) {
     const card = this.view.card(hostId, id);
     if (!card) { return false; }
     // A launch whose session search would hide: the search goes, and the session shows.
     if (this.view.hidden(card)) { this.shell?.closeSearch(); }
-    if (this.shell && this.shell.route !== 'sessions') { this.shell.go('sessions'); }
-    if (card.folded) { card.setFolded(false); }
-    const el = card.element;
-    el.classList.add('linked');
-    setTimeout(() => el.classList.remove('linked'), 4000);
-    el.scrollIntoView({ block: 'start' });
-    el.querySelector('.fold')?.focus({ preventScroll: true });
+    // Its question, or what it was opened for, is in the conversation, which a tab may hide.
+    card.setTab('conversation');
+    this.#choose(card);
+    for (const el of [card.element, card.view]) {
+      el.classList.add('linked');
+      setTimeout(() => el.classList.remove('linked'), 4000);
+    }
+    card.element.scrollIntoView({ block: 'nearest' });
+    card.els.titleText.tabIndex = -1;
+    card.els.titleText.focus({ preventScroll: true });
+    // A question it was opened for is in sight, however far its conversation was scrolled.
+    card.view.querySelector('.question-slot .question')?.scrollIntoView({ block: 'nearest' });
     return true;
+  }
+
+  // A row chosen: the address names it, so a reload, a resize or the browser's back keeps it.
+  // On a phone that is a new entry (Back returns to the list); on a desktop it replaces the last.
+  #choose(card) {
+    const rest = [card.hostId ?? '', card.id];
+    // What had focus in the list (a row, a Needs you entry) gets it back when a phone returns there.
+    const had = globalThis.document?.activeElement;
+    this.#returnTo = had && this.$('list-pane')?.contains(had) ? had : card.els.open;
+    if (!this.shell) { this.view.select(SessionListView.key(card.hostId, card.id)); this.#open = true; this.#drawPanes(); return; }
+    const phone = this.phone.matches;
+    const onSessions = this.shell.route === 'sessions';
+    const already = onSessions && this.shell.rest.join('/') === rest.join('/');
+    if (already) { this.#route(rest); return; }
+    if (!phone) {
+      // From another page (Launch, say) a new entry, so back returns there.
+      const onSession = onSessions && this.shell.rest.length >= 2;
+      this.shell.go('sessions', { rest, replace: onSessions, state: onSession ? globalThis.history?.state ?? null : null });
+      return;
+    }
+    // A phone's back from a session is always the list: one session replaces another, and from
+    // another page (Launch, a notification's) the list goes in first.
+    const onSession = onSessions && this.shell.rest.length >= 2;
+    if (onSession) {
+      this.shell.go('sessions', { rest, replace: true, state: globalThis.history?.state ?? null });
+    } else {
+      if (!onSessions) { this.shell.go('sessions'); }
+      this.shell.go('sessions', { rest, state: OVER_LIST });
+    }
+    // The row that had focus went with the list: the session's title has it now.
+    const title = card.els.titleText;
+    title.tabIndex = -1;
+    title.focus({ preventScroll: true });
+  }
+
+  // Whether this entry is a session's with the list beneath it (history.state, so it holds
+  // across a reload and the browser's back and forward).
+  #overList() { return globalThis.history?.state?.overList === true; }
+
+  // On a phone, a session's entry always has the list beneath it, so back from it is the list,
+  // not out of the app: an address opened directly, or a desktop's that became a phone's.
+  #listBeneath() {
+    if (!this.phone.matches || !this.#open || this.shell?.route !== 'sessions' || this.#overList()) { return; }
+    const rest = this.shell.rest;
+    this.shell.go('sessions', { replace: true });
+    this.shell.go('sessions', { rest, state: OVER_LIST });
+  }
+
+  // The address said which session, or none.
+  #route(rest) {
+    if (rest.length >= 2) {
+      this.#want = SessionListView.key(rest[0], rest[1]);
+      this.#open = true;
+      // A machine not shown (a link, or a reload after another was picked) is shown on its own,
+      // as a notification's is, without changing what is remembered; until the account's
+      // machines are known, startup does the same with what the address names.
+      if (this.hosts.selection !== null && rest[0] && !this.hosts.shows(rest[0])) { this.hosts.visit(rest[0]); }
+    } else {
+      const was = this.#open;
+      this.#want = null;
+      this.#open = false;
+      this.#settleSelection();
+      this.#drawPanes();
+      // On a phone the view that had focus went: focus goes back where it came from in the list,
+      // or to the list's heading.
+      // Only focus the session took with it: focus already in a field (search, typed into on the
+      // way here) or in the list stays. (WebKit gives a pressed button's focus to the nearest
+      // focusable ancestor, the Sessions section, so that counts as lost too.)
+      const active = globalThis.document?.activeElement;
+      const lost = !(active?.matches?.('input, textarea, select') || this.$('list-pane')?.contains(active));
+      if (was && this.phone.matches && lost) {
+        const back = this.#returnTo?.isConnected && this.#returnTo.getClientRects().length ? this.#returnTo : this.$('sessions-h');
+        if (back && !back.matches('button, a, [tabindex]')) { back.tabIndex = -1; }
+        back?.focus({ preventScroll: false });
+      }
+      this.#returnTo = null;
+      return;
+    }
+    this.#settleSelection();
+    this.#drawPanes();
+    this.#listBeneath();
+  }
+
+  // What is selected, after the list or the address changed: the session the address names,
+  // once it has arrived; one that went is let go. With none named, a desktop shows the first
+  // row's (without saying so in the address), and a phone shows the list.
+  #settleSelection() {
+    this.#pickSelection();
+    this.#drawPanes();
+  }
+
+  #pickSelection() {
+    const view = this.view;
+    if (!view) { return; }
+    if (this.#want) {
+      const card = view.card(this.#want.split('\n')[0], this.#want.split('\n')[1]);
+      if (card) {
+        if (view.selected !== card) { view.select(this.#want); }
+        return;
+      }
+      const [hostId] = this.#want.split('\n');
+      // Named but gone, once its machine has sent its whole list: back to the list.
+      if (this.hosts.link(hostId)?.client?.synced === true) {
+        this.#want = null;
+        if (this.shell?.route === 'sessions' && this.shell.rest.length) { this.#back(); return; }
+      } else {
+        // Still on its way: nothing shown meanwhile, so another session's Reply and End session
+        // never stand under an address that names this one.
+        if (view.selected) { view.select(null); }
+        return;
+      }
+    }
+    if (this.phone.matches) {
+      if (view.selected) { view.select(null); }
+      return;
+    }
+    const shown = view.shownCards();
+    if (!view.selected || !shown.includes(view.selected)) {
+      const first = shown[0];
+      if (first || view.selected) { view.select(first ? SessionListView.key(first.hostId, first.id) : null); }
+    }
+  }
+
+  // Back to the list: the entry beneath, when it is the list, so the browser's own back and this
+  // agree; otherwise the list replaces the session's entry.
+  #back() {
+    if (this.#overList() && globalThis.history?.length > 1) {
+      globalThis.history.back();
+      return;
+    }
+    this.shell?.go('sessions', { replace: true });
+  }
+
+  // The window crossed a width of §5.2. The session named stays selected; a phone that now shows
+  // one gets an entry under it, so its back goes to the list rather than out of the app.
+  #resized() {
+    this.#listBeneath();
+    this.#settleSelection();
+    this.view.layoutChanged();
+    this.#drawPanes();
+  }
+
+  #toggleInspector() {
+    this.#inspectorHidden = !this.#inspectorHidden;
+    this.#write(INSPECTOR, this.#inspectorHidden ? 'hidden' : 'shown');
+    this.view.layoutChanged();
+    this.#drawPanes();
+  }
+
+  // Which panes show: on a phone, the list or the session pushed over it; the inspector, as its
+  // own pane at the three-pane width unless hidden.
+  #drawPanes() {
+    const body = globalThis.document?.body;
+    if (!body) { return; }
+    body.dataset.sessionOpen = this.#open && this.view?.selected ? 'true' : 'false';
+    body.dataset.inspector = this.#inspectorHidden ? 'hidden' : 'shown';
+    const none = this.$('no-session');
+    if (none) { none.hidden = !!this.view?.selected; }
   }
 
   // Everything tied to the signed-in account goes with it.
@@ -295,6 +493,8 @@ export class SessionsPage {
     const pick = hosts.all ? [this.#launchHost, this.#read(LAUNCH_HOST), panel.hostId].find(has) ?? can[0]?.id ?? null : can[0]?.id ?? null;
     panel.setMachines(hosts.all ? can.map((l) => ({ hostId: l.id, name: hosts.nameOf(l.id) ?? l.id.slice(0, 8) })) : null, pick);
     panel.setTarget(pick ? this.launchTarget(pick) : null);
+    // The others shown only for their questions: a question on one lights the Launch way too.
+    panel.probeOthers(inspect.filter((l) => l.id !== pick && l.phase === 'open').map((l) => ({ hostId: l.id, load: this.launchTarget(l.id).load })));
   }
 
   #launches(l) {
@@ -349,10 +549,23 @@ export class SessionsPage {
     renderMachineTabs($('machine-tabs'), {
       presence, me: this.me, current: hosts.selection, controls: 'session-list',
       nameOf: (id) => hosts.nameOf(id),
-      onSelect: (id) => hosts.select(id),
+      onSelect: (id) => this.#pickMachine(id),
     });
     this.shell?.setOnline(n);
   }
+
+  // A machine picked in the tabs: a session named on another stops being the one shown, so the
+  // first of the machine's rows is, rather than a pane waiting for a session it no longer lists.
+  #pickMachine(id) {
+    this.hosts.select(id);
+    const host = this.#want?.split('\n')[0];
+    if (host === undefined || this.hosts.shows(host)) { return; }
+    this.#want = null;
+    if (this.shell?.route === 'sessions' && this.shell.rest.length) { this.shell.go('sessions', { replace: true }); } else { this.#route([]); }
+  }
+
+  // A session route's machine, for startup: shown on its own when it isn't the one remembered.
+  get routedHost() { return this.shell?.route === 'sessions' && this.shell.rest.length >= 2 ? this.shell.rest[0] || null : null; }
 
   #rememberLaunch(hostId) {
     this.#launchHost = hostId;

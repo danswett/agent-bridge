@@ -120,7 +120,7 @@ class DelegateRow {
     e.reasoning = h('details', { class: 'reasoning', hidden: true }, h('summary', null, 'Reasoning'), e.reasoningText);
     e.detail = h('details', { class: 'delegate-detail' },
       h('summary', { class: 'delegate-summary' },
-        h('span', { class: 'delegate-head' }, e.glyph, e.name, e.under, e.time, icon('chevron', 'icon delegate-chevron')), e.line),
+        h('span', { class: 'delegate-head' }, e.glyph, h('span', { class: 'delegate-words' }, e.name, e.under, e.time), icon('chevron', 'icon delegate-chevron')), e.line),
       h('div', { class: 'delegate-body' }, e.facts, e.taskBlock, e.status, e.latestBlock, e.reasoning));
     e.detail.addEventListener('toggle', () => {
       if (e.detail.open) { this.#load(); } else { this.#stop(); }

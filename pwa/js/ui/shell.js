@@ -77,11 +77,13 @@ export class Shell {
   // replace: no new history entry (a page chosen for you, not by you). Applied at once, not on
   // the hashchange event that a location.hash write fires later, so whoever went can scroll to
   // what it went for straight away.
-  go(route, { rest = [], replace = false } = {}) {
+  // state: what the entry carries in history.state (the sessions page marks a session's entry
+  // that has the list beneath it).
+  go(route, { rest = [], replace = false, state = null } = {}) {
     const hash = routeHash(route, ...rest);
     if (this.win.location.hash !== hash) {
       const url = `${this.win.location.pathname}${this.win.location.search}${hash}`;
-      if (replace) { this.win.history.replaceState(null, '', url); } else { this.win.history.pushState(null, '', url); }
+      if (replace) { this.win.history.replaceState(state, '', url); } else { this.win.history.pushState(state, '', url); }
     }
     this.#apply();
   }
@@ -135,11 +137,21 @@ export class Shell {
     }
   }
 
+  // beforeSearch: what a page does first (the sessions page, on a phone, goes back to the list
+  // from a session pushed over it, where search lives).
   openSearch() {
     if (!this.#signedIn) { return; }
+    const back = this.beforeSearch?.() === true;
     this.doc.body.classList.add('searching');
-    this.els.search?.focus();
-    this.els.search?.select();
+    const focus = () => { this.els.search?.focus(); this.els.search?.select(); };
+    // Going back is the browser's own, so it lands a moment later: search takes focus once it
+    // shows, looked for a frame at a time (WebKit settles the page a frame after popstate).
+    const whenShown = (frames) => {
+      if (!this.els.search || this.els.search.getClientRects().length > 0) { focus(); return; }
+      if (frames > 0) { this.win.requestAnimationFrame(() => whenShown(frames - 1)); }
+    };
+    if (back) { this.win.addEventListener('popstate', () => whenShown(30), { once: true }); }
+    focus();
   }
 
   closeSearch() {
