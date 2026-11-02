@@ -26,7 +26,16 @@ public sealed class MachineRowViewModel : Observable
 
     // The machine's key (Machine.Key), or "offline:" and the relay's id for one offline.
     public string Key { get; }
-    public string Name { get => name; internal set => Set(ref name, value); }
+    public string Name
+    {
+        get => name;
+        internal set
+        {
+            if (!Set(ref name, value)) { return; }
+            Raise(nameof(ShowSessionsName));
+            Raise(nameof(CheckHereName));
+        }
+    }
     public string Facts { get => facts; internal set => Set(ref facts, value); }
     public string Status { get => status; internal set => Set(ref status, value); }
     public bool ViewOnly => viewOnlyWhy is not null;

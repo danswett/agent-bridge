@@ -386,7 +386,12 @@ static partial class SelfTest
         var contrast = await HighContrastPass.BeginAsync();
         result["highContrast"] = contrast.How;
         AppLog.Write($"self-test: high contrast {contrast.How}");
-        if (!contrast.On) { return; }
+        if (!contrast.On)
+        {
+            // Skipped only off CI, where a developer's own setting is never changed.
+            if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true") { check(false, $"turns Windows' high contrast on for the pass ({contrast.How})"); }
+            return;
+        }
         try
         {
             var on = await Until(() => new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast, TimeSpan.FromSeconds(15));

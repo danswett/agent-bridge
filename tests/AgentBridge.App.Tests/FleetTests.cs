@@ -695,6 +695,19 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.False(Rows().Single(r => r.Name == "Test PC").ViewOnly);
     }
 
+    [Fact]
+    public void A_machine_rows_button_names_follow_the_machine_being_renamed()
+    {
+        var row = new MachineRowViewModel("remote-id") { Name = "Connecting machine" };
+        var raised = new List<string?>();
+        row.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        row.Name = "Build server";
+
+        Assert.Contains(nameof(MachineRowViewModel.ShowSessionsName), raised);
+        Assert.Contains(nameof(MachineRowViewModel.CheckHereName), raised);
+        Assert.Equal("Show the sessions on Build server", row.ShowSessionsName);
+    }
     static KnownMachine Gone(string id, string name, int minutesAgo) => new(id, name, "host", Make.T0.AddMinutes(-minutesAgo));
 
     [Fact]

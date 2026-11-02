@@ -53,6 +53,14 @@ public sealed class WindowPlacementTests : IDisposable
     }
 
     [Fact]
+    public void A_screen_shorter_than_the_smallest_window_at_its_scale_keeps_the_window_on_it()
+    {
+        // 1040 px at 200 % is 520 effective pixels: under 600, so the window is the screen's height.
+        var scaled = new Display(new PixelRect(0, 0, 1920, 1040), 2);
+        Assert.Equal((720, 1040), WindowPlacement.Smallest(scaled));
+        Assert.Equal(new WindowPlacement(0, 0, 1920, 1040), WindowPlacement.Place(null, [scaled], scaled));
+    }
+    [Fact]
     public void A_window_never_opens_smaller_than_360_by_600_at_its_screens_scale()
     {
         Assert.Equal((360, 600), WindowPlacement.Smallest(1));

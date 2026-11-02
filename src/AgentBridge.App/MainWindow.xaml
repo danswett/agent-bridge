@@ -51,7 +51,6 @@
                 AutomationProperties.Name="Search sessions"
                 ToolTipService.ToolTip="Search sessions (Ctrl+K)"
                 TextChanged="OnSearchChanged"
-                SuggestionChosen="OnSearchChosen"
                 QuerySubmitted="OnSearchSubmitted">
                 <AutoSuggestBox.ItemTemplate>
                     <DataTemplate x:DataType="core:SearchHit">
@@ -315,7 +314,7 @@
                                                             Text="{x:Bind Update.Note, Mode=OneWay}"
                                                             Visibility="{x:Bind local:Ui.Some(Update.Note), Mode=OneWay, FallbackValue=Collapsed}" />
                                                     </StackPanel>
-                                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,0" AutomationProperties.AutomationId="MachineButtons">
+                                                    <local:WrapRow Spacing="8" Margin="0,8,0,0" AutomationProperties.AutomationId="MachineButtons">
                                                         <Button
                                                             Content="Show sessions"
                                                             Tag="{x:Bind}"
@@ -354,7 +353,7 @@
                                                             IsEnabled="{x:Bind Offline.CanForget, Mode=OneWay}"
                                                             Visibility="{x:Bind local:Ui.Show(IsOffline)}"
                                                             Click="OnForgetMachine" />
-                                                    </StackPanel>
+                                                    </local:WrapRow>
                                                 </StackPanel>
                                             </Grid>
                                         </Border>
