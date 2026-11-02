@@ -167,19 +167,20 @@ struct SessionWorkbench: View {
     }
 
     private func detail(_ entry: SessionEntry) -> some View {
-        SessionDetail(session: entry.session, readOnlyReason: entry.host?.readOnlyReason,
-                      machineName: entry.machineName, canAnswer: !entry.ended && entry.host?.can("sessions.answer") == true,
-                      onLoadHistory: entry.host.map { host in
-                          { @MainActor @Sendable id in
-                              // Leaving the detail must not cancel the shared transport.
-                              try await Task { try await host.call("session.get", data: ["id": .string(id)]) }.value
-                          }
-                      }, onLoadDelegate: delegateLoader(for: entry), onAskMainToStop: delegateStopDraft(for: entry))
+        let answerAvailable = canAnswer(entry)
+        return SessionDetail(session: entry.session, readOnlyReason: entry.host?.readOnlyReason,
+                             machineName: entry.machineName, canAnswer: answerAvailable,
+                             onLoadHistory: entry.host.map { host in
+                                 { @MainActor @Sendable id in
+                                     // Leaving the detail must not cancel the shared transport.
+                                     try await Task { try await host.call("session.get", data: ["id": .string(id)]) }.value
+                                 }
+                             }, onLoadDelegate: delegateLoader(for: entry), onAskMainToStop: delegateStopDraft(for: entry))
             .id(entry.id)
             .toolbar {
                 if let host = entry.host, !entry.ended {
                     ToolbarItem {
-                        Button(entry.session.question == nil ? "Reply / Actions" : "Answer", systemImage: entry.session.question == nil ? "paperplane" : "questionmark.bubble") { showingActions = true }
+                        Button(entry.session.question == nil ? "Reply / Actions" : answerAvailable ? "Answer" : "View Question", systemImage: entry.session.question == nil ? "paperplane" : "questionmark.bubble") { showingActions = true }
                             .disabled(!host.isLive)
                     }
                 }
@@ -189,6 +190,12 @@ struct SessionWorkbench: View {
                     SessionActions(sessionID: entry.session.id, store: store, host: host).id(entry.id)
                 }
             }
+    }
+
+    private func canAnswer(_ entry: SessionEntry) -> Bool {
+        guard !entry.ended, let host = entry.host, host.can("sessions.answer"), host.readOnlyReason == nil,
+              let raw = entry.session.question, let question = BridgeQuestion(json: raw) else { return false }
+        return question.readOnlyReason(capabilities: host.capabilities, sessionAgent: entry.session.agent) == nil
     }
 
     private func delegateLoader(for entry: SessionEntry) -> (@MainActor (String, String) async throws -> JSONValue)? {
