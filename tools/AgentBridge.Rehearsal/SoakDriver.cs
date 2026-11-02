@@ -359,13 +359,13 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
         return Attr(a, "updated") ?? (Attr(a, "response") is { } r ? "r:" + r.GetHashCode(StringComparison.Ordinal) : "");
     }
 
-    // A prompt as the reply box sends it: words, then Send (agent-ha-bridge's replyToSession).
-    async Task SendAsync(string node, string text, CancellationToken ct)
-    {
-        await ha.CallAsync("text", "set_value", new() { ["entity_id"] = $"text.{node}_reply", ["value"] = text }, ct);
-        await wait(TimeSpan.FromSeconds(1), ct);
-        await ha.CallAsync("button", "press", new() { ["entity_id"] = $"button.{node}_submit" }, ct);
-    }
+    // A prompt as the reply card sends it: a publish of its words, not retained. Not the reply
+    // box and Send: after a form was answered with Send, agent-ha-bridge 1.33.33 armed that same
+    // press as a reply once it cleared the card ("send armed ... the typed text has not reached
+    // Home Assistant yet"), and the prompt typed next was never delivered (seen on VM-M,
+    // 2026-11-02, on every turn after an answer).
+    async Task SendAsync(string node, string text, CancellationToken ct) =>
+        await ha.PublishAsync($"copilot/cli/{node}/replypayload/set", new JsonObject { ["at"] = now().ToString("o"), ["text"] = text }.ToJsonString(), false, ct);
 
     // Runs one turn to its end: answering what it asks, and waiting out background work it
     // started. True when the session was ended (a question abandoned).

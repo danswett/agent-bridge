@@ -79,13 +79,11 @@ public class SoakTests
         Assert.True(launched.Count(e => e.Scenario.Agent == SoakScript.Codex) >= 10);
         Assert.True(plan.Sum(e => e.Scenario.Turns.Count(t => t.Question is not null)) >= 150);
         Assert.True(plan.Sum(e => e.Scenario.Turns.Count(t => t.Compact)) >= 10);
-        // A launch prompt rides the launch payload; every later one fits the reply box, so it is sent as a person types it.
-        Assert.All(plan, e => Assert.All(e.Scenario.Turns.Skip(1), t => Assert.True(SoakScript.Prompt(t, e).Length <= 255, "a prompt fits the reply box")));
     }
 
     // A disposable Home Assistant played by the test: agent-ha-bridge launches (the card a few
     // reads after the outcome, as on VM-M), asks one question, takes the answer from Send, runs
-    // each later prompt from the reply box to idle, and ends the session on End session.
+    // each later prompt from the reply card to idle, and ends the session on End session.
     sealed class FakeHa : ISoakHa
     {
         public readonly Dictionary<string, HaState> States = [];
@@ -155,8 +153,14 @@ public class SoakTests
 
         public Task PublishAsync(string topic, string payload, bool retain, CancellationToken ct)
         {
-            Calls.Add($"publish {topic}");
+            Calls.Add($"publish {topic}{(retain ? " retained" : "")}");
             var node = JsonNode.Parse(payload)!;
+            if (topic == $"copilot/cli/{Node}/replypayload/set")
+            {
+                // The reply card's words: the session takes them as its next prompt.
+                Status("working");
+                return Task.CompletedTask;
+            }
             Launches.Add(node);
             Request = (string?)node["request"];
             States["sensor.agent_bridge_rehearsal_m_new_prompt_payload"] = State("sensor.agent_bridge_rehearsal_m_new_prompt_payload", "x", new { request = Request });
@@ -189,7 +193,9 @@ public class SoakTests
             var answeredAt = fake.Calls.FindIndex(c => c.StartsWith($"select.select_option select.{Node}_decision", StringComparison.Ordinal));
             Assert.True(answeredAt > 0);
             Assert.Equal($"button.press button.{Node}_submit", fake.Calls[answeredAt + 1]);
-            Assert.Contains($"text.set_value text.{Node}_reply", fake.Calls);
+            // The next prompt goes as the reply card publishes it, not retained, never through Send.
+            Assert.Contains($"publish copilot/cli/{Node}/replypayload/set", fake.Calls);
+            Assert.Single(fake.Calls, c => c == $"button.press button.{Node}_submit");
             Assert.Equal($"button.press button.{Node}_stop", fake.Calls[^1]);
         }
         finally { Directory.Delete(dir, true); }

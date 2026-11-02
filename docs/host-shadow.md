@@ -329,8 +329,10 @@ two `Task` sub-agents, one nested, and a background Bash, and Codex with a `spaw
 Then a block of twelve repeats: for each agent a question-heavy, a background (shells and
 sub-agents), and a compaction session, Codex with approvals asked on the card, and a resume of
 each agent's last session. Each is launched by the launch request agent-ha-bridge's MCP tool
-publishes (agent, workspace, a small model, permissions) and the Launch button, then prompted from
-the reply box. Questions are Copilot's `ask_user` (choice, text, a form, a choice allowing words,
+publishes (agent, workspace, a small model, permissions) and the Launch button, then prompted by
+the reply card's publish, not the reply box and Send: after a form was answered with Send,
+agent-ha-bridge 1.33.33 armed that press as a reply too, and the prompt typed next was lost.
+Questions are Copilot's `ask_user` (choice, text, a form, a choice allowing words,
 a multi-select) and Claude's `AskUserQuestion` (one question, two, multi-select), held 35 seconds
 so both sides sample them, then answered as the dashboard does: the field slots or the selector
 and Send, the reply box and Send, or the reply card's publish; some after three minutes, and some
