@@ -196,6 +196,7 @@ tells them apart by folder, as agent-ha-bridge did.
 | `homeAssistant.agentUserIds`, `agentTokenEnvVar` | `homeAssistant.agentUserIds`, `agentTokenEnvVar` (read by the connector from its stage 2) |
 | `notifications.*`, `answerButtons.*` | `homeAssistant.notifications.*`, `homeAssistant.answerButtons.*` (the connector's phone notifications, stage 5b; a key it does not know is named as not carried) |
 | `updates.checkForUpdates`, `updates.checkHours` | `homeAssistant.updates.checkForUpdates`, `homeAssistant.updates.checkHours` (whether, and how often, the connector looks for this host's own releases, stage 6). The rest of `updates` is about agent-ha-bridge's own install and is named as not carried; `updates.token` is a secret and never copied |
+| `devBox.keepAwake`, `devBox.intervalMinutes` (or 1.25.0's `devBox.intervalHours`, in minutes; a nonsense value as 15 and anything over 30 as 30, as `Get-BridgeDevBoxIntervalMinutes` ran it, and reported) | `devBox.keepAwake`, `devBox.intervalMinutes` (#47). Migrate disables agent-ha-bridge's `AgentBridgeDevBoxKeepAwake_<id>`, and the restarted host takes over keeping the Dev Box awake ([host-config.md](host-config.md#dev-box-keep-awake)). Without this a migrated Dev Box would hibernate on disconnect |
 
 #38's table lists `detailedActivity` and `homeAssistant.*` as having no equivalent. The HA
 connector (#60) has since given the first four rows above one, so they are carried. The
@@ -203,7 +204,7 @@ connector is pointed at the same Home Assistant and **left off**. It needs a tok
 given at the machine (`agent-bridge-host ha token set`), and then `homeAssistant.enabled`.
 
 Everything else is named in the report as not carried and stays in agent-ha-bridge's file:
-`codexStartPrompt`, `discoverWorkspaces`, `platform.*`, `devBox.*`, `usage.*`,
+`codexStartPrompt`, `discoverWorkspaces`, `platform.*`, `usage.*`,
 `updates.*`, `clients`, the rest of `homeAssistant.*`
 and `dashboard.*`. **No secret is ever copied**: `homeAssistant.token`, `agentToken` and
 `updates.token` are named as such. `dashboard.publication` is never carried: this host never
@@ -308,6 +309,12 @@ own, so this pointer is never changed under those sessions.
 * Sessions the host launches do not get agent-ha-bridge's agent token in their environment
   (`AGENT_HA_AGENT_TOKEN`), because the secret is not copied. The connector's stage 2 owns
   agent attribution.
+* On a Dev Box, the host keeps the machine awake in place of agent-ha-bridge's disabled
+  `AgentBridgeDevBoxKeepAwake_<id>` task, if `devBox.keepAwake` was carried on
+  ([host-config.md](host-config.md#dev-box-keep-awake)). `agent-bridge-host devbox status` says
+  who keeps it awake. After a rollback re-enables that task, the host sees it enabled and stands
+  back before its next pass, whether or not it was restarted, so the schedule never has two
+  writers.
 
 ## What the live rehearsal still checks
 

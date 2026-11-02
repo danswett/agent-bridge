@@ -1,0 +1,211 @@
+namespace AgentBridge.Host.Core.DevBox;
+
+// One pass at a time, across every profile and process of this user: two hosts (a profile beside
+// the default one, say) each moving the same Dev Box's schedule would be two writers to it. A
+// lock file rather than agent-ha-bridge's named mutex, because a mutex belongs to the thread that
+// took it and a pass awaits across threads. Taken without waiting: a pass that finds one running
+// has nothing left to do.
+public interface IKeepAwakeLock
+{
+    IDisposable? TryTake();
+}
+
+public sealed class FileKeepAwakeLock(string path) : IKeepAwakeLock
+{
+    public IDisposable? TryTake()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None);
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+    }
+}
+
+// What the keep-awake needs from the machine, so tests stand in for all of it.
+public sealed class KeepAwakeOptions
+{
+    public required DevBoxSettings Settings { get; init; }
+    // This machine's Dev Box identity, read again for every pass (a reprovision moves it), with why
+    // there is none when there is a settings file it could not use.
+    public required Func<(DevBoxIdentity? Identity, string? Problem)> FindIdentity { get; init; }
+    public required IDevCenterToken Token { get; init; }
+    public required IDevCenterHttp Http { get; init; }
+    public required IKeepAwakeLock Lock { get; init; }
+    // Why agent-ha-bridge's own keep-awake owns this Dev Box's schedule now (its task is enabled,
+    // or a pass of it runs, or that could not be told), or null when it does not. Asked before
+    // every pass: two writers to one schedule is the double-writer problem G5 exists for.
+    public Func<string?> AgentHaBridgeKeepAwake { get; init; } = () => null;
+    // How soon after the host starts the first pass runs: soon, since a host started on a Dev Box
+    // nobody is connected to may have a stop already pending.
+    public TimeSpan FirstPass { get; init; } = TimeSpan.FromSeconds(30);
+    public TimeProvider Time { get; init; } = TimeProvider.System;
+}
+
+// The keep-awake inside the host (design §6.1 Host.DevBox: agent-ha-bridge's behaviour, scheduled
+// inside the host instead of by a task of its own): a short first pass, then one every
+// devBox.intervalMinutes while devBox.keepAwake is on. Every pass is logged, no-action included,
+// and a failure loudly, since a keep-awake that fails quietly looks exactly like a Dev Box that
+// hibernated for no reason.
+public sealed class KeepAwakeService : IAsyncDisposable
+{
+    readonly KeepAwakeOptions options;
+    readonly Action<string> log;
+    readonly CancellationTokenSource stop = new();
+    readonly object sync = new();
+    // Completed to bring the next pass forward (keep-awake just turned on); replaced once seen.
+    TaskCompletionSource woken = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    volatile bool enabled;
+    Task? loop;
+    (DateTimeOffset At, KeepAwakeResult Result)? last;
+    DateTimeOffset? next;
+    bool isDevBox;
+    string? identityProblem;
+
+    public KeepAwakeService(KeepAwakeOptions options, Action<string>? log = null)
+    {
+        this.options = options;
+        this.log = log ?? (_ => { });
+        enabled = options.Settings.KeepAwake;
+        (var identity, identityProblem) = options.FindIdentity();
+        isDevBox = identity is not null;
+    }
+
+    public event Action? Changed;
+
+    // Whether passes run: devBox.keepAwake, applied at once when the app changes it.
+    public bool Enabled
+    {
+        get => enabled;
+        set
+        {
+            if (enabled == value) { return; }
+            enabled = value;
+            log($"keep-awake is {(value ? "on" : "off")} (devBox.keepAwake, set by the app; applies now)");
+            // Turned on: a pass now, rather than up to an interval from now.
+            if (value) { lock (sync) { woken.TrySetResult(); } }
+            Changed?.Invoke();
+        }
+    }
+
+    public TimeSpan Interval => TimeSpan.FromMinutes(options.Settings.IntervalMinutes);
+
+    // What the app and status show: whether this is a Dev Box at all, the last pass and the next.
+    public KeepAwakeState State
+    {
+        get { lock (sync) { return new KeepAwakeState(isDevBox, identityProblem, enabled, options.Settings.IntervalMinutes, last?.At, last?.Result, enabled ? next : null); } }
+    }
+
+    public void Start()
+    {
+        if (isDevBox)
+        {
+            log(enabled ? $"keep-awake is on (devBox.keepAwake): a pass in {options.FirstPass.TotalSeconds:F0} s, then every {options.Settings.IntervalMinutes} min"
+                : "keep-awake is off (devBox.keepAwake): unless agent-ha-bridge's own keep-awake runs here, this Dev Box may hibernate when its last session disconnects");
+        }
+        else if (enabled)
+        {
+            log($"keep-awake is on (devBox.keepAwake) but this machine is not a Dev Box{(identityProblem is { } p ? $": {p}" : "")}; it is looked for again before every pass");
+        }
+        // Started whether or not this looks like a Dev Box now: the agent's settings file can be
+        // unreadable for a moment (the agent rewriting or updating it), and one bad read at logon
+        // must not leave the Dev Box to hibernate until the host restarts. agent-ha-bridge's task
+        // read it afresh on every run too.
+        loop ??= Task.Run(async () =>
+        {
+            var wait = options.FirstPass;
+            while (!stop.IsCancellationRequested)
+            {
+                DateTimeOffset due;
+                lock (sync) { next = due = options.Time.GetUtcNow() + wait; }
+                Changed?.Invoke();
+                try { await WaitAsync(due); }
+                catch (OperationCanceledException) { break; }
+                try
+                {
+                    if (enabled) { await PassAsync(dryRun: false, stop.Token); }
+                    // Off, it still looks, so the app offers the switch once this is seen to be a Dev Box.
+                    else { Identify(); }
+                }
+                catch (OperationCanceledException) when (stop.IsCancellationRequested) { break; }
+                catch (Exception e) { Record(new KeepAwakeResult(KeepAwakeResult.Failed, $"the pass failed: {e.GetType().Name}: {e.Message}")); }
+                wait = Interval;
+            }
+        });
+    }
+
+    DevBoxIdentity? Identify()
+    {
+        var (identity, problem) = options.FindIdentity();
+        bool changed;
+        lock (sync)
+        {
+            changed = isDevBox != (identity is not null);
+            isDevBox = identity is not null;
+            identityProblem = problem;
+        }
+        if (changed) { Changed?.Invoke(); }
+        return identity;
+    }
+
+    // Until the pass is due or brought forward, on the injected clock. Measured to when it is due,
+    // not for a fixed time from now, so a clock that moved on meanwhile does not put it off again.
+    async Task WaitAsync(DateTimeOffset due)
+    {
+        Task signal;
+        lock (sync) { signal = woken.Task; }
+        using var waiting = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
+        var remaining = due - options.Time.GetUtcNow();
+        var delay = Task.Delay(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, options.Time, waiting.Token);
+        await Task.WhenAny(signal, delay);
+        waiting.Cancel();
+        stop.Token.ThrowIfCancellationRequested();
+        lock (sync)
+        {
+            if (woken.Task.IsCompleted) { woken = new(TaskCreationOptions.RunContinuationsAsynchronously); }
+        }
+    }
+
+    // One pass now: with dryRun, only reads Dev Center and says what it would do.
+    public async Task<KeepAwakeResult> PassAsync(bool dryRun = false, CancellationToken cancellationToken = default)
+    {
+        var identity = Identify();
+        if (identity is null) { return Record(new(KeepAwakeResult.NotADevBox, State.Problem ?? "this machine is not a Dev Box"), dryRun); }
+        // A dry run changes nothing, so agent-ha-bridge's keep-awake running beside it does not
+        // matter, nor does another pass.
+        if (!dryRun && options.AgentHaBridgeKeepAwake() is { } owner) { return Record(new(KeepAwakeResult.StoodBack, owner), dryRun); }
+        using var held = dryRun ? null : options.Lock.TryTake();
+        if (!dryRun && held is null) { return Record(new(KeepAwakeResult.Busy, "another keep-awake pass is running; no Dev Center call was made"), dryRun); }
+        var result = await KeepAwakePass.RunAsync(identity, options.Token, options.Http, options.Time.GetUtcNow(), dryRun, log, cancellationToken);
+        return Record(result, dryRun);
+    }
+
+    KeepAwakeResult Record(KeepAwakeResult result, bool dryRun = false)
+    {
+        var line = $"keep-awake{(dryRun ? " (dry run)" : "")}: {result.Outcome}: {result.Detail}";
+        // On a machine that is not a Dev Box with keep-awake on anyway, said once, not every pass.
+        bool repeated;
+        lock (sync) { repeated = !dryRun && result.Outcome == KeepAwakeResult.NotADevBox && last?.Result == result; }
+        if (!repeated) { log(result.Alarming ? $"{line} -- THIS DEV BOX MAY HIBERNATE WHEN DISCONNECTED" : line); }
+        if (dryRun) { return result; }
+        lock (sync) { last = (options.Time.GetUtcNow(), result); }
+        Changed?.Invoke();
+        return result;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        stop.Cancel();
+        if (loop is not null)
+        {
+            try { await loop; }
+            catch (OperationCanceledException) { }
+        }
+        stop.Dispose();
+    }
+}
+
+// The keep-awake's state for the host's status (HostStatus.DevBox).
+public sealed record KeepAwakeState(bool IsDevBox, string? Problem, bool Enabled, int IntervalMinutes, DateTimeOffset? LastAt, KeepAwakeResult? Last, DateTimeOffset? NextAt);

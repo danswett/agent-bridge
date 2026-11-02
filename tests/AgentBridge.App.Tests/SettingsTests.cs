@@ -135,6 +135,39 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Keeping_a_Dev_Box_awake_is_offered_on_a_Dev_Box_only_and_turned_on_through_the_host()
+    {
+        Saves(d => new HostSettingsView(true, DevBoxKeepAwake: d.GetProperty("devBoxKeepAwake").GetBoolean()));
+        await Connected();
+        Assert.False(settings.ShowDevBox);
+        // Not a Dev Box: nothing to offer, and nothing is sent.
+        settings.DevBoxKeepAwake = true;
+        Assert.Empty(host.Sent(HostOps.Settings));
+
+        host.Status = FakeHost.StatusOf() with { DevBox = new DevBoxStatus(false, 15) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.ShowDevBox, "the Dev Box's setting");
+        Assert.False(settings.DevBoxKeepAwake);
+        Assert.StartsWith("Off:", settings.DevBoxText);
+
+        settings.DevBoxKeepAwake = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "host.settings");
+        Assert.True(host.Sent(HostOps.Settings)[0].GetProperty("devBoxKeepAwake").GetBoolean());
+
+        // A pass that failed is said in words a person can act on.
+        host.Status = FakeHost.StatusOf() with
+        {
+            Settings = new HostSettingsView(true, DevBoxKeepAwake: true),
+            DevBox = new DevBoxStatus(true, 15, new DevBoxPass(DateTimeOffset.UtcNow, "failed", "No Dev Center token. Run 'az login' as this user.", Alarming: true)),
+        };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.DevBoxAlarm is not null, "the alarm");
+        Assert.True(settings.DevBoxKeepAwake);
+        Assert.Contains("az login", settings.DevBoxAlarm);
+        Assert.Contains("Last pass at", settings.DevBoxText);
+    }
+
+    [Fact]
     public async Task Answering_folder_trust_from_devices_is_turned_on_here_with_this_app_approved_and_each_device_is_approved_here()
     {
         const string phone = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", gone = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3";

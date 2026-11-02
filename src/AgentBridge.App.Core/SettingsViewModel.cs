@@ -245,6 +245,27 @@ public sealed class SettingsViewModel : Observable
         device.Reraise();
     }
 
+    // devBox.keepAwake, offered on a Dev Box only (the host's status has DevBox only there): the host
+    // skips or delays the Dev Box's pending stop-on-disconnect, so it does not hibernate under the
+    // sessions it runs. Applies at once.
+    public bool ShowDevBox => Status?.DevBox is not null;
+
+    public bool DevBoxKeepAwake
+    {
+        get => Status?.Settings.DevBoxKeepAwake ?? false;
+        set { if (Status is { DevBox: not null } s && s.Settings.DevBoxKeepAwake != value) { _ = RunAsync(() => host.CallAsync(HostOps.Settings, new SettingsRequest(DevBoxKeepAwake: value))); } }
+    }
+
+    public string DevBoxText => Status?.DevBox is not { } d ? ""
+        : !d.KeepAwake ? "Off: this host does not keep the Dev Box awake. If its pool stops it on disconnect, it hibernates once your last session has been gone for the pool's grace period, sessions running here or not, unless agent-ha-bridge keeps it awake."
+        : d.Last is not { } last ? $"On: the first pass runs shortly, then one every {d.IntervalMinutes} minutes."
+        : $"On, every {d.IntervalMinutes} minutes. Last pass at {last.At.ToLocalTime():t}: {last.Outcome}, {last.Detail}.{(d.NextAt is { } next ? $" Next at {next.ToLocalTime():t}." : "")}";
+
+    // What a person should act on: the last pass failed (az not signed in, say) or could not move
+    // the stop, so the Dev Box may hibernate.
+    public string? DevBoxAlarm => Status?.DevBox is { KeepAwake: true, Last: { Alarming: true } last }
+        ? $"The last pass did not keep this Dev Box awake ({last.Outcome}), so it may hibernate when you disconnect: {last.Detail}" : null;
+
     // Each setter acts only on a change: a binding refreshing pushes the same value back.
     public bool StartAtSignIn
     {

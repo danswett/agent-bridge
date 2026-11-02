@@ -192,6 +192,26 @@ public sealed class HostSettingsTests : IDisposable
     }
 
     [Fact]
+    public void Dev_Box_keep_awake_is_off_by_default_and_set_at_the_machine_never_slower_than_every_30_minutes()
+    {
+        Assert.False(With(null).Settings.DevBox.KeepAwake);
+        var (wrong, problem) = With("""{ "permissions": { "remoteApproval": false }, "devBox": { "keepAwake": "yes" } }""");
+        Assert.Null(problem);
+        Assert.False(wrong.RemoteApproval);
+        Assert.False(wrong.DevBox.KeepAwake);
+        Assert.Contains(wrong.SectionProblems, p => p.Contains("devBox.keepAwake", StringComparison.Ordinal));
+
+        File.Delete(Path.Combine(folder, HostSettings.FileName));
+        Assert.Equal(0, Run("config", "set", "devBox.keepAwake", "true"));
+        // An interval that could miss a pending stop entirely is not written: it would be read as 30.
+        Assert.Equal(1, Run("config", "set", "devBox.intervalMinutes", "60"));
+        Assert.Contains("Not written", Said);
+        Assert.Equal(0, Run("config", "set", "devBox.intervalMinutes", "10"));
+        var devBox = HostSettings.Load(folder).Settings.DevBox;
+        Assert.Equal((true, 10), (devBox.KeepAwake, devBox.IntervalMinutes));
+    }
+
+    [Fact]
     public void Usage_is_set_at_the_machine_and_a_token_pasted_where_a_login_belongs_is_not_written_or_repeated()
     {
         Assert.Equal(0, Run("config", "set", "usage.copilotAccounts", """["dswett_microsoft"]"""));

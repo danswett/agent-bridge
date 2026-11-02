@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.HomeAssistant;
+using AgentBridge.Host.Core.DevBox;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery.Launch;
 
@@ -38,6 +39,9 @@ namespace AgentBridge.Host;
 // usage: how agents' allowances are read (UsageSettings): whether at all, the pace, and further
 // Copilot accounts. What is wrong is said, and read in the direction that does least.
 //
+// devBox: keeping a Microsoft Dev Box from hibernating on disconnect (DevBoxSettings,
+// KeepAwakeService). Off unless turned on; a file that cannot be read leaves it off.
+//
 // version: the schema's. A file from a newer schema is not guessed at: both are off.
 public sealed record HostSettings(bool RemoteApproval)
 {
@@ -63,8 +67,13 @@ public sealed record HostSettings(bool RemoteApproval)
 
     public IReadOnlyList<string> UsageProblems { get; init; } = [];
 
+    // The Dev Box keep-awake (docs/host-config.md): off unless turned on here.
+    public DevBoxSettings DevBox { get; init; } = DevBoxSettings.Default;
+
+    public IReadOnlyList<string> DevBoxProblems { get; init; } = [];
+
     // Every problem a section reported, for the log, config show, and config set's check.
-    public IEnumerable<string> SectionProblems => LaunchProblems.Concat(HomeAssistantProblems).Concat(UsageProblems);
+    public IEnumerable<string> SectionProblems => LaunchProblems.Concat(HomeAssistantProblems).Concat(UsageProblems).Concat(DevBoxProblems);
 
     public bool Push { get; init; } = true;
 
@@ -119,6 +128,7 @@ public sealed record HostSettings(bool RemoteApproval)
             var (launch, launchProblems) = LaunchConfig.Read(root.TryGetProperty("launch", out var l) ? l : null);
             var (homeAssistant, homeAssistantProblems) = HaSettings.Read(root.TryGetProperty("homeAssistant", out var h) ? h : null);
             var (usage, usageProblems) = UsageSettings.Read(root.TryGetProperty("usage", out var u) ? u : null);
+            var (devBox, devBoxProblems) = DevBoxSettings.Read(root.TryGetProperty("devBox", out var d) ? d : null);
             var settings = Default with
             {
                 Launch = launch,
@@ -127,6 +137,8 @@ public sealed record HostSettings(bool RemoteApproval)
                 HomeAssistantProblems = homeAssistantProblems.Count == 0 ? [] : homeAssistantProblems,
                 Usage = usage,
                 UsageProblems = usageProblems.Count == 0 ? [] : usageProblems,
+                DevBox = devBox,
+                DevBoxProblems = devBoxProblems.Count == 0 ? [] : devBoxProblems,
             };
             if (root.TryGetProperty("delivery", out var delivery) && delivery.ValueKind != JsonValueKind.Null)
             {

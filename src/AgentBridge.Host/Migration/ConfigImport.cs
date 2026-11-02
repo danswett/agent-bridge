@@ -28,6 +28,8 @@ namespace AgentBridge.Host.Migration;
 //   notifications.*, answerButtons.*            homeAssistant.notifications.*, homeAssistant.answerButtons.*
 //   updates.checkForUpdates, checkHours         homeAssistant.updates.checkForUpdates, checkHours (whether,
 //                                               and how often, the host looks for its own releases)
+//   devBox.keepAwake, intervalMinutes           devBox.keepAwake, intervalMinutes (1.25.0's intervalHours
+//                                               too; at most 30, as agent-ha-bridge ran it)
 //
 // A setting this profile already has is kept, and the report says so: the person set it here.
 public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, IReadOnlyList<string> Kept, IReadOnlyList<string> NotCarried, IReadOnlyList<string> Problems)
@@ -239,7 +241,40 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                     notCarried.Add(Named(key, "publication") ? "dashboard.publication (this host never publishes the dashboard, G7)" : $"dashboard.{key}");
                 }
             }
-            foreach (var (key, value) in ahb.Where(p => !Named(p.Key, "newSession", "homeAssistant", "dashboard", "detailedActivity", "notifications", "answerButtons", "updates")))
+            // The Dev Box keep-awake (#47), whose task migrate disables: without these the host
+            // would not take it over, and the Dev Box would hibernate on disconnect.
+            if (ahb["devBox"] is JsonObject devBox)
+            {
+                var target3 = new JsonObject();
+                if (Bool(devBox["keepAwake"]) is { } keepAwake) { target3["keepAwake"] = keepAwake; }
+                // As Get-BridgeDevBoxIntervalMinutes reads it: intervalMinutes, else 1.25.0's
+                // intervalHours; a nonsense value is the default, and none is more than the cap.
+                var hasMinutes = devBox.ContainsKey("intervalMinutes");
+                var from = hasMinutes ? "devBox.intervalMinutes" : devBox.ContainsKey("intervalHours") ? "devBox.intervalHours" : null;
+                if (from is not null)
+                {
+                    var raw = hasMinutes ? Number(devBox["intervalMinutes"]) : Number(devBox["intervalHours"]) * 60;
+                    // PowerShell's -as [int] rounds half to even.
+                    int? configured = raw is { } r ? (int)Math.Round(Math.Clamp(r, -1, 1_000_000), MidpointRounding.ToEven) : null;
+                    var interval = configured is not { } c || c < 1 ? AgentBridge.Host.Core.DevBox.DevBoxSettings.DefaultIntervalMinutes
+                        : Math.Min(c, AgentBridge.Host.Core.DevBox.DevBoxSettings.MaxIntervalMinutes);
+                    if (!hasMinutes || configured != interval)
+                    {
+                        kept.Add($"devBox.intervalMinutes: agent-ha-bridge's {from} is {devBox[hasMinutes ? "intervalMinutes" : "intervalHours"]?.ToJsonString() ?? "null"}; it ran every {interval} minutes, and so does this host");
+                    }
+                    target3["intervalMinutes"] = interval;
+                }
+                if (target3.Count > 0)
+                {
+                    var section = Section(host, "devBox");
+                    foreach (var (key, value) in target3.ToList()) { Put(section, key, value!.DeepClone(), key == "intervalMinutes" ? from! : $"devBox.{key}", $"devBox.{key}"); }
+                }
+                foreach (var (key, _) in devBox.Where(p => !Named(p.Key, "keepAwake", "intervalMinutes", "intervalHours")))
+                {
+                    notCarried.Add($"devBox.{key}");
+                }
+            }
+            foreach (var (key, value) in ahb.Where(p => !Named(p.Key, "newSession", "homeAssistant", "dashboard", "detailedActivity", "notifications", "answerButtons", "updates", "devBox")))
             {
                 notCarried.Add(value is JsonObject ? $"{key}.*" : key);
             }

@@ -129,7 +129,25 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
-    
+
+                <!-- A Dev Box only: its pending stop-on-disconnect kept away while the host runs. -->
+                <StackPanel Spacing="8" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowDevBox), Mode=OneWay}">
+                    <ToggleSwitch
+                        Header="Keep this Dev Box awake while the host runs"
+                        AutomationProperties.AutomationId="DevBoxKeepAwake"
+                        IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}"
+                        IsOn="{x:Bind ViewModel.DevBoxKeepAwake, Mode=TwoWay}" />
+                    <TextBlock
+                        Style="{StaticResource AbSecondaryText}"
+                        Text="The host asks Dev Center, as you (through your Azure CLI sign-in, az login), to skip or delay this Dev Box's pending stop-on-disconnect, and nothing else. A Dev Box kept awake keeps costing money. Applies at once." />
+                    <TextBlock TextWrapping="Wrap" AutomationProperties.AutomationId="DevBoxState" Text="{x:Bind ViewModel.DevBoxText, Mode=OneWay}" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        Foreground="{ThemeResource AbDangerText}"
+                        AutomationProperties.AutomationId="DevBoxAlarm"
+                        Text="{x:Bind ViewModel.DevBoxAlarm, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Some(ViewModel.DevBoxAlarm), Mode=OneWay}" />
+                </StackPanel>    
                 <!-- The app itself. -->
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="This app" />
                 <ToggleSwitch Header="Show reasoning and tool history on cards" AutomationProperties.AutomationId="ShowDetail" IsOn="{x:Bind ViewModel.ShowDetail, Mode=TwoWay}" />

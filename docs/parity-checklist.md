@@ -600,7 +600,8 @@ These rows have no step. Each has its reason. A row moves into a step when its i
 | §11 "Transfers signed" | Intentionally different: signed commands replace the fleet secret |
 | §12 "Register hooks" | Missing for fresh installs (#54). A migrated machine keeps agent-ha-bridge's registrations, which D-04 and F-02 check |
 | §14 "Detect agents", §14 "Layout migration" | Missing (#54); N/A (migration starts from 1.33.x) |
-| §16 "macOS and Linux", §16 "Dev Box keep-awake" | Missing (#48, #47); not on a Windows VM |
+| §16 "macOS and Linux" | Missing (#48); not on a Windows VM |
+| §16 "Dev Box keep-awake" | Implemented (#47), but only a real Dev Box has the Dev Box agent and a pending stop to clear: checked live there, not on a Windows VM ([host-config.md](host-config.md#dev-box-keep-awake)) |
 | §17 "A new machine joins" | Missing (#55) |
 | §17 "Control requests validated" | Intentionally different: covered offline by the request tests |
 | §18 "Generated Lovelace", §18 "Publication authority", §18 "Entity-registry pinning", §18 "255-character text", §18 "HA image store", §18 "HA REST and WebSocket", §18 "Pairing through HA", §18 "Detached-entity repair", §18 "The test runner's HTTP guard" | N/A: Home Assistant plumbing the design replaces. The old dashboard itself is exercised in B and F |

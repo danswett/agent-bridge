@@ -36,10 +36,11 @@ public static class HostConfigFile
         return clean.TrimEnd();
     }
 
-    // Sets permissions.remoteApproval, launch.remoteFolderTrust(Devices) and name (an empty name removes
-    // it). A file that is not valid JSON is left alone and the change refused, rather than
+    // Sets permissions.remoteApproval, launch.remoteFolderTrust(Devices), devBox.keepAwake and name (an
+    // empty name removes it). A file that is not valid JSON is left alone and the change refused, rather than
     // replaced by one that has lost whatever the person meant it to say.
-    public static void Patch(string folder, bool? remoteApproval, string? name, bool? remoteFolderTrust = null, IReadOnlyList<string>? remoteFolderTrustDevices = null)
+    public static void Patch(string folder, bool? remoteApproval, string? name, bool? remoteFolderTrust = null, IReadOnlyList<string>? remoteFolderTrustDevices = null,
+        bool? devBoxKeepAwake = null)
     {
         var path = Path.Combine(folder, HostSettings.FileName);
         JsonObject root;
@@ -76,6 +77,15 @@ public static class HostConfigFile
             }
             if (remoteFolderTrust is { } trust) { launch["remoteFolderTrust"] = trust; }
             if (remoteFolderTrustDevices is { } devices) { launch["remoteFolderTrustDevices"] = new JsonArray([.. devices.Select(d => (JsonNode)JsonValue.Create(d))]); }
+        }
+        if (devBoxKeepAwake is { } keepAwake)
+        {
+            if (root["devBox"] is not JsonObject devBox)
+            {
+                if (root["devBox"] is not null) { throw new InvalidOperationException($"devBox in {path} is not an object; fix it by hand first"); }
+                root["devBox"] = devBox = [];
+            }
+            devBox["keepAwake"] = keepAwake;
         }
         if (name is not null)
         {

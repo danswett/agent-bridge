@@ -283,7 +283,9 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Empty(loaded.LaunchProblems);
         Assert.Contains("Not carried", report.ToString());
         Assert.Contains("newSession.codexStartPrompt", report.ToString());
-        Assert.Contains("devBox.*", report.ToString());
+        // The Dev Box keep-awake is carried (#47): migrate disables agent-ha-bridge's task for it.
+        Assert.False((bool)settings["devBox"]!["keepAwake"]!);
+        Assert.DoesNotContain("devBox.*", report.ToString());
 
         // agent-ha-bridge's own files are as they were; its task is disabled, not deleted.
         Assert.Equal(ahbConfig, File.ReadAllBytes(_f.ConfigPath));
@@ -1773,6 +1775,47 @@ public sealed class MigrationTests : IAsyncLifetime
         // A setting this profile already has is kept.
         var again = ConfigImport.Build(ahb, """{"version":1,"homeAssistant":{"notifications":{"enabled":false}}}""");
         Assert.Contains(again.Kept, k => k.StartsWith("homeAssistant.notifications.enabled", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_Dev_Box_keep_awake_is_carried_so_the_host_takes_over_the_task_migrate_disables()
+    {
+        var ahb = (JsonObject)JsonNode.Parse("""
+            {"DevBox":{"KeepAwake":true,"intervalMinutes":20,"future":1}}
+            """, new JsonNodeOptions { PropertyNameCaseInsensitive = true })!;
+
+        var import = ConfigImport.Build(ahb, null);
+
+        Assert.Empty(import.Problems);
+        Assert.Contains("devBox.keepAwake -> devBox.keepAwake", import.Imported);
+        Assert.Contains("devBox.intervalMinutes -> devBox.intervalMinutes", import.Imported);
+        Assert.Equal(["devBox.future"], import.NotCarried);
+        var (settings, problem) = HostSettings.Parse(import.Text!, "config.json");
+        Assert.Null(problem);
+        Assert.Empty(settings.DevBoxProblems);
+        Assert.True(settings.DevBox.KeepAwake);
+        Assert.Equal(20, settings.DevBox.IntervalMinutes);
+    }
+
+    [Theory]
+    // As agent-ha-bridge ran it: never more than every 30 minutes, 1.25.0's hours read as minutes,
+    // and nonsense as the default.
+    [InlineData("""{"intervalMinutes":240}""", 30)]
+    [InlineData("""{"intervalHours":4}""", 30)]
+    [InlineData("""{"intervalMinutes":15,"intervalHours":4}""", 15)]
+    [InlineData("""{"intervalMinutes":0}""", 15)]
+    [InlineData("""{"intervalMinutes":"soon"}""", 15)]
+    public void A_Dev_Box_interval_is_carried_as_agent_ha_bridge_ran_it(string devBox, int minutes)
+    {
+        var ahb = (JsonObject)JsonNode.Parse($$"""{"devBox":{{devBox}}}""", new JsonNodeOptions { PropertyNameCaseInsensitive = true })!;
+
+        var import = ConfigImport.Build(ahb, null);
+
+        var (settings, problem) = HostSettings.Parse(import.Text!, "config.json");
+        Assert.Null(problem);
+        Assert.Empty(settings.DevBoxProblems);
+        Assert.Equal(minutes, settings.DevBox.IntervalMinutes);
+        Assert.False(settings.DevBox.KeepAwake);
     }
 
     [Fact]

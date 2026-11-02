@@ -36,6 +36,11 @@ public sealed class HostControlOptions
     public Action<bool>? ApplyRemoteFolderTrust { get; init; }
     // And launch.remoteFolderTrustDevices, the devices approved to answer them.
     public Action<IReadOnlyList<string>>? ApplyRemoteFolderTrustDevices { get; init; }
+    // Applies devBox.keepAwake to the running host's keep-awake; null where there is none (not
+    // Windows), and a change takes a restart.
+    public Action<bool>? ApplyDevBoxKeepAwake { get; init; }
+    // The Dev Box keep-awake's state for the status; null when this is not a Dev Box.
+    public Func<DevBoxStatus?> DevBox { get; init; } = () => null;
     // Other devices' presses of Check and Install, carried to the app in the status, and the
     // app's reports of its updater (host.update.report); null where there is nothing to carry.
     public UpdateService? Updates { get; init; }
@@ -124,6 +129,7 @@ public sealed class HostControl
             Log = options.Log,
             UpdateAsks = options.Updates?.Asks is { Count: > 0 } asks ? asks : null,
             ReadOnly = fresh && options.ReadOnlyNow is { } afresh ? afresh() : options.ReadOnly(),
+            DevBox = options.DevBox(),
         };
     }
 
@@ -134,7 +140,7 @@ public sealed class HostControl
     }
 
     public static HostSettingsView Settings(HostSettings settings, string? name) =>
-        new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null);
+        new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null, settings.DevBox.KeepAwake);
 
     // The relay loop reports each change of its connection here.
     public void SetRelay(RelayState state, string? detail = null)
@@ -212,7 +218,7 @@ public sealed class HostControl
             log("settings not changed by the app: the devices approved for folder trust changed meanwhile");
             return new SettingsResult(before, before != Volatile.Read(ref running), Conflict: true);
         }
-        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices);
+        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices, request.DevBoxKeepAwake);
         // Answering folder-trust questions from devices applies at once, so it can be allowed
         // while a question waits; the rest when the host restarts.
         if (request.RemoteFolderTrust is { } trust && options.ApplyRemoteFolderTrust is { } apply)
@@ -225,7 +231,14 @@ public sealed class HostControl
             approve(devices);
             lock (gate) { running = running with { RemoteFolderTrustDevices = devices.Count > 0 ? devices : null }; }
         }
-        log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.RemoteFolderTrust is { } t ? $"; folder trust from devices {(t ? "on" : "off")}" : "")}{(devices is not null ? $"; devices approved for folder trust: {(devices.Count == 0 ? "none" : string.Join(", ", devices.Select(d => d[..8])))}" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
+        // So does the Dev Box keep-awake: turned off, the next pass does not run; turned on, one
+        // runs now.
+        if (request.DevBoxKeepAwake is { } keepAwake && options.ApplyDevBoxKeepAwake is { } keep)
+        {
+            keep(keepAwake);
+            lock (gate) { running = running with { DevBoxKeepAwake = keepAwake }; }
+        }
+        log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.RemoteFolderTrust is { } t ? $"; folder trust from devices {(t ? "on" : "off")}" : "")}{(devices is not null ? $"; devices approved for folder trust: {(devices.Count == 0 ? "none" : string.Join(", ", devices.Select(d => d[..8])))}" : "")}{(request.DevBoxKeepAwake is { } k ? $"; Dev Box keep-awake {(k ? "on" : "off")}" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
         var now = Configured();
         Changed();
         return new SettingsResult(now, now != Volatile.Read(ref running));
