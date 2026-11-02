@@ -56,12 +56,12 @@ public sealed class UsageProbeTests : IDisposable
 
     const string ClaudeBody = """{"limits":[{"kind":"session","percent":12,"resets_at":"2026-10-28T22:00:00Z"},{"kind":"weekly_all","percent":41,"resets_at":"2026-11-02T00:00:00Z"}]}""";
 
-    void ClaudeSaved(DateTimeOffset fetched, double session = 12)
+    void ClaudeSaved(DateTimeOffset fetched, double session = 12, string account = "AAAA-1111")
     {
         Directory.CreateDirectory(Path.GetDirectoryName(AccountPath)!);
         var body = ClaudeBody.Replace("\"percent\":12", $"\"percent\":{session}", StringComparison.Ordinal);
-        File.WriteAllText(AccountPath, "{\"oauthAccount\":{\"accountUuid\":\"AAAA-1111\",\"organizationUuid\":\"BBBB-2222\"},"
-            + $"\"cachedUsageUtilization\":{{\"fetchedAtMs\":{fetched.ToUnixTimeMilliseconds()},\"accountUuid\":\"AAAA-1111\",\"utilization\":{body}}}}}");
+        File.WriteAllText(AccountPath, $"{{\"oauthAccount\":{{\"accountUuid\":\"{account}\",\"organizationUuid\":\"BBBB-2222\"}},"
+            + $"\"cachedUsageUtilization\":{{\"fetchedAtMs\":{fetched.ToUnixTimeMilliseconds()},\"accountUuid\":\"{account}\",\"utilization\":{body}}}}}");
     }
 
     const string SignedInClaudeAi = """{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}""";
@@ -238,6 +238,57 @@ public sealed class UsageProbeTests : IDisposable
         usage = await claude.CollectAsync();
         Assert.Equal((20, null), (usage!.Windows[0].Percent, usage.Error));
         Assert.Equal(outKey, usage.AccountKey);
+    }
+
+    [Fact]
+    public async Task A_sign_out_of_one_Claude_account_is_never_shown_under_the_next_one_signed_in()
+    {
+        ClaudeSaved(Now.AddHours(-2));
+        ClaudeScript(auth: SignedOutClaude, authExit: 1);
+        var claude = Claude();
+        await claude.CollectAsync();
+        await Settled(claude);
+        var first = (await claude.CollectAsync())!;
+        Assert.Equal("Claude Code is signed out on this machine", first.Error);
+
+        // Another account signed in, within the hour: its own reading, and auth status not asked early.
+        ClaudeSaved(time.GetUtcNow(), session: 40, account: "CCCC-3333");
+        time.Advance(TimeSpan.FromMinutes(5));
+        var next = (await claude.CollectAsync())!;
+        await Settled(claude);
+
+        Assert.Equal((40, null), (next.Windows[0].Percent, next.Error));
+        Assert.NotEqual(first.AccountKey, next.AccountKey);
+        Assert.Single(launcher.Started);
+    }
+
+    [Fact]
+    public async Task An_auth_status_answer_is_taken_for_the_account_it_was_asked_about_and_timed_when_it_came()
+    {
+        ClaudeSaved(Now.AddHours(-2));
+        FakeProbe? asked = null;
+        launcher.Next = c => asked = new FakeProbe(c, time);
+        var claude = Claude();
+        await claude.CollectAsync();
+        await Until(() => asked is not null);
+
+        // Slow to answer: the sign-out is timed at the answer, not when it was asked.
+        time.Advance(TimeSpan.FromSeconds(20));
+        var answered = time.GetUtcNow();
+        asked!.Answer(SignedOutClaude, 1);
+        await Settled(claude);
+        Assert.Equal(answered, (await claude.CollectAsync())!.MeasuredAt);
+
+        // Asked about one account, answered after another signed in: not taken as the new one's.
+        asked = null;
+        time.Advance(TimeSpan.FromHours(1) + TimeSpan.FromMinutes(1));
+        await claude.CollectAsync();
+        await Until(() => asked is not null);
+        ClaudeSaved(time.GetUtcNow(), session: 40, account: "CCCC-3333");
+        asked!.Answer(SignedOutClaude, 1);
+        await Settled(claude);
+        var usage = (await claude.CollectAsync())!;
+        Assert.Equal((40, null), (usage.Windows[0].Percent, usage.Error));
     }
 
     [Fact]
@@ -932,6 +983,55 @@ public sealed class UsageProbeTests : IDisposable
 
         // The probe's own reading, taken before the sign-out showed, not the older transcript's.
         Assert.Equal((UsageSource.Api, 23.0, CodexUsageProbe.SignedOutError), (usage.Source, usage.Windows[0].Percent, usage.Error));
+    }
+
+    [Fact]
+    public async Task A_later_probe_that_reads_the_allowance_before_finding_the_sign_out_again_publishes_its_reading()
+    {
+        CodexUsed();
+        AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        await codex.CollectAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        var first = (await codex.CollectAsync())!;
+        Assert.Empty(first.Windows);
+
+        // Two hours on, the next probe reads the allowance, then finds the sign-out still there.
+        AppServer(s => s.Answers["account/read"] = n => n == 1 ? FakeAppServer.Result(Account())
+            : FakeAppServer.Error("Your access token could not be refreshed. Please log out and sign in again."));
+        time.Advance(TimeSpan.FromHours(2) + TimeSpan.FromMinutes(1));
+        await codex.CollectAsync();
+        await Until(() => launcher.Started.Count == 2);
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+
+        var usage = (await codex.CollectAsync())!;
+        Assert.Equal((23.0, CodexUsageProbe.SignedOutError), (usage.Windows[0].Percent, usage.Error));
+    }
+
+    [Fact]
+    public async Task A_sign_out_Codex_reports_after_the_probe_stopped_waiting_still_holds_the_probes_off()
+    {
+        CodexUsed();
+        var release = new TaskCompletionSource();
+        var server = AppServer(s =>
+        {
+            s.Before["account/rateLimits/read"] = release.Task;
+            s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized");
+        });
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        await codex.CollectAsync();
+        await Until(() => server.Received.Any(r => r.Method == "account/rateLimits/read"));
+        await AdvanceUntil(time, () => log.Any(l => l.Contains("did not answer within", StringComparison.Ordinal)), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(70));
+
+        release.SetResult();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+
+        Assert.Equal(CodexUsageProbe.SignedOutError, (await codex.CollectAsync())!.Error);
+        // The two-hour hold, not the 15-minute back-off of a failure.
+        time.Advance(TimeSpan.FromMinutes(30));
+        await codex.CollectAsync();
+        await Task.Delay(100);
+        Assert.Single(launcher.Started);
     }
 
     [Fact]

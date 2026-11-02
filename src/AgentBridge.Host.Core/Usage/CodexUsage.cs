@@ -138,6 +138,9 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                 {
                     var outcome = await run.Reported;
                     Apply(outcome);
+                    // An answer after the report gave up: a sign-out or a reading still counts; a
+                    // failure was already counted as the timeout.
+                    if (await run.Late is { Kind: not CodexProbeKind.Failed } late) { Apply(late); }
                     await run.Finished;
                 }
                 catch (Exception e)
@@ -174,11 +177,10 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                     break;
                 case CodexProbeKind.SignedOut:
                     // No more probes until the longest back-off ends or a Codex session runs here.
-                    if (signedOutAt is null)
-                    {
-                        signedOutAt = now;
-                        signedOutReading = outcome.Reading is { } fresh && ReferenceEquals(fresh, probed) ? fresh : null;
-                    }
+                    // Timed at the first finding; the reading of every probe that found it, the
+                    // newest, still goes out.
+                    signedOutAt ??= now;
+                    if (outcome.Reading is { } fresh && ReferenceEquals(fresh, probed)) { signedOutReading = fresh; }
                     pace.Hold(now);
                     line = $"usage: {CodexUsageProbe.SignedOutError} ({outcome.Why}); not asking it again for {options.ProbeBackoffMax.TotalHours:0} hours or until a Codex session runs here";
                     break;

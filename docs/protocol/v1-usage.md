@@ -226,9 +226,11 @@ refresh and locking, and runs no model turn.
   command: no model is asked. A probe that ends with the file unchanged (rate limited) is a failure.
   `claude auth status`, at most hourly, gates it: only a `claude.ai` login is probed, and one that
   says `loggedIn: false` is the failure `Claude Code is signed out on this machine`, under the
-  login's key and timed when the sign-out was first seen (so newer than the last reading, which a
-  client keeps and shows it beside), with no probe until it says otherwise. The probe's exit code cannot say this: it exits 0
-  with the last bars after a sign-out.
+  login's key and timed when auth status first answered so (so newer than the last reading, which a
+  client keeps and shows it beside), with no probe until it says otherwise. What auth status said
+  holds only for the account it was asked about: another signed in since is shown by its own
+  reading until the next hourly check. The probe's exit code cannot say this: it exits 0 with the
+  last bars after a sign-out.
 * **Codex.** The route follows what Codex runs here:
   * no Codex process: a standalone `codex app-server` over stdio (JSON lines, `CODEX_HOME` set,
     made absolute, for a home that is not the default);
@@ -255,7 +257,9 @@ refresh and locking, and runs no model turn.
   finds it, and whatever the usage read answered between them) is the failure
   `Codex needs signing in again on this machine`, timed when it was found and under the newest
   reading's key (none for a transcript reading); found only by the second `account/read`, the
-  usage the probe read just before goes out as the reading, carrying that error. No probe follows for 2 hours or
+  usage the probe read just before goes out as the reading, carrying that error (a later probe's
+  too, should it find the same). An answer that comes after the 60 s the host waits to report
+  (below) still counts: a sign-out found then is a sign-out. No probe follows for 2 hours or
   until a Codex session next runs here. `codex login status` cannot tell: Codex's access token lives 240 hours,
   and a lost refresh token only shows at the next refresh. A slow sign-in service
   ("...cloud config: request timed out", "workspace routing discovery timed out", "...application

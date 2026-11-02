@@ -44,6 +44,9 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
     // When auth status first said signed out: the failure's own time (below).
     DateTimeOffset? signedOutAt;
     string? plan;
+    // The saved account auth status was asked about. Another one signed in since has not been
+    // asked about: what was said (signed out, the plan) is not taken as its.
+    string? authKey;
     bool sessionOpen, busy;
     // A pass of auth status and the probe, while it runs; and processes it stopped waiting for
     // that have not ended yet, each of which holds the next one off.
@@ -85,11 +88,14 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
         // Never signed in to claude.ai here: nothing to show, and nothing to ask Claude Code.
         if (saved.Account is null) { return Task.FromResult<AgentUsage?>(null); }
         lock (gate) { finished = false; }
-        if (probes is not null) { Consider(saved.Reading?.MeasuredAt, now); }
+        if (probes is not null) { Consider(saved.Reading?.MeasuredAt, saved.Key, now); }
         Auth known;
         string? named;
         DateTimeOffset? outAt;
-        lock (gate) { (known, named, outAt) = (auth, plan, signedOutAt); }
+        lock (gate)
+        {
+            (known, named, outAt) = authKey == saved.Key ? (auth, plan, signedOutAt) : (Auth.Unknown, null, null);
+        }
         var reading = saved.Reading is { } r ? r with { Plan = named ?? r.Plan } : null;
         if (known == Auth.SignedOut)
         {
@@ -105,7 +111,7 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
     // Whether to ask Claude Code now: auth status at most hourly, and only when a probe would
     // otherwise run or Claude Code was found signed out (to see it sign in again); the probe only
     // on a claude.ai login, when the pace allows.
-    void Consider(DateTimeOffset? readingAt, DateTimeOffset now)
+    void Consider(DateTimeOffset? readingAt, string? key, DateTimeOffset now)
     {
         bool checkAuth, probe;
         lock (gate)
@@ -114,7 +120,7 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
             if (cycle is not null || lingering > 0) { return; }
             var authDue = now - authCheckedAt >= options.ClaudeAuthEvery || now < authCheckedAt;
             var probeDue = pace.Due(readingAt, busy, now);
-            switch (auth)
+            switch (authKey == key ? auth : Auth.Unknown)
             {
                 case Auth.ClaudeAi:
                     checkAuth = probeDue && authDue;
@@ -136,19 +142,19 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
                     break;
             }
             if (!checkAuth && !probe) { return; }
-            cycle = Task.Run(() => CycleAsync(checkAuth, probe, now));
+            cycle = Task.Run(() => CycleAsync(checkAuth, probe, key, now));
         }
     }
 
-    async Task CycleAsync(bool checkAuth, bool probe, DateTimeOffset now)
+    async Task CycleAsync(bool checkAuth, bool probe, string? key, DateTimeOffset now)
     {
         try
         {
-            if (checkAuth) { await CheckAuthAsync(now); }
+            if (checkAuth) { await CheckAuthAsync(key, now); }
             if (!probe) { return; }
             lock (gate)
             {
-                if (auth != Auth.ClaudeAi) { return; }
+                if (auth != Auth.ClaudeAi || authKey != key) { return; }
                 pace.Started(now);
             }
             var ok = await ProbeAsync();
@@ -173,19 +179,25 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
         }
     }
 
-    async Task CheckAuthAsync(DateTimeOffset now)
+    // key: the saved account when the check began, which the answer is taken to be about.
+    async Task CheckAuthAsync(string? key, DateTimeOffset now)
     {
         var (state, subscription) = await AuthStatusAsync();
+        // When the answer came: auth status can take its 30 s, and a reading taken meanwhile must
+        // not outrank the sign-out it then reports.
+        var answeredAt = clock.GetUtcNow();
         Auth before;
         lock (gate)
         {
-            before = auth;
+            var same = authKey == key;
+            before = same ? auth : Auth.Unknown;
             authCheckedAt = now;
+            authKey = key;
             // Not knowing is not a change: an answer that could not be read keeps what was known,
             // except that it is no claude.ai login to probe.
             auth = state == Auth.Unknown && before != Auth.ClaudeAi ? before : state;
-            if (subscription is not null) { plan = subscription; }
-            signedOutAt = auth == Auth.SignedOut ? signedOutAt ?? now : null;
+            plan = subscription ?? (same ? plan : null);
+            signedOutAt = auth == Auth.SignedOut ? (same ? signedOutAt : null) ?? answeredAt : null;
         }
         if (state == before) { return; }
         var said = state switch

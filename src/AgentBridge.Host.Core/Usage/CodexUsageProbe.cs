@@ -25,8 +25,10 @@ internal sealed record CodexProbeOutcome(CodexProbeKind Kind, AgentUsage? Readin
 // Reported gave up waiting: until then, the host's exit would close its input mid-answer.
 // Released: when the host may go without cutting the probe short: a standalone app-server's input
 // closed after its answers and the grace period (or given up on as hung); at once on any other
-// route, which leaves nothing of the probe's tied to this process (#238).
-internal sealed record CodexProbeRun(Task<CodexProbeOutcome> Reported, Task Finished, Task Answered, Task Released);
+// route, which leaves nothing of the probe's tied to this process (#238). Late: what the
+// conversation came to after Reported gave up waiting (a sign-out found then still counts), or
+// null, no later than Finished.
+internal sealed record CodexProbeRun(Task<CodexProbeOutcome> Reported, Task Finished, Task Answered, Task Released, Task<CodexProbeOutcome?> Late);
 
 // Codex's own reading of its allowance, asked of its app-server (#200, spike #197 X-1 to X-5).
 // Codex answers account/rateLimits/read with its own credentials and refresh, and the request
@@ -50,8 +52,12 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
     // can apply Reserve, not for passive readers (X-1).
     internal static readonly string[] Methods = ["initialize", "initialized", "account/read", "account/rateLimits/read"];
 
+    TaskCompletionSource<CodexProbeOutcome?> late = new();
+
     public CodexProbeRun Start()
     {
+        late = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lateOutcome = late;
         var reported = new TaskCompletionSource<CodexProbeOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
         var answered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -64,9 +70,10 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
                 reported.TrySetResult(new(CodexProbeKind.Failed, Why: "the probe ended without an answer"));
                 answered.TrySetResult();
                 released.TrySetResult();
+                lateOutcome.TrySetResult(null);
             }
         });
-        return new(reported.Task, finished, answered.Task, released.Task);
+        return new(reported.Task, finished, answered.Task, released.Task, lateOutcome.Task);
     }
 
     async Task RunAsync(TaskCompletionSource<CodexProbeOutcome> reported, TaskCompletionSource answered, TaskCompletionSource released)
@@ -218,12 +225,15 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
     // passed. Returns whether it answered in time.
     async Task<bool> SettleAsync(Task<CodexProbeOutcome> conversation, TaskCompletionSource<CodexProbeOutcome> reported, DateTimeOffset started)
     {
+        var lateOutcome = late;
         if (await WithinAsync(conversation, started + options.CodexReportTimeout - clock.GetUtcNow()))
         {
             reported.TrySetResult(Outcome(conversation));
+            lateOutcome.TrySetResult(null);
             return true;
         }
         reported.TrySetResult(new(CodexProbeKind.Failed, Why: $"Codex did not answer within {options.CodexReportTimeout.TotalSeconds:0} s"));
+        _ = conversation.ContinueWith(c => lateOutcome.TrySetResult(Outcome(c)), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         return false;
     }
 
