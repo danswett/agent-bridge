@@ -12,6 +12,9 @@ public struct BridgeSessionNotice: Sendable, Equatable, Identifiable {
     public let kind: Kind
     public let title: String
     public let body: String
+    public let sessionVersion: String?
+    public let questionSnapshot: JSONValue?
+    public let actions: [BridgeNoticeAction]
 }
 
 public struct BridgeNotificationPlan: Sendable, Equatable {
@@ -22,7 +25,7 @@ public struct BridgeNotificationPlan: Sendable, Equatable {
 
 public enum BridgeNotificationPlanner {
     public static func plan(machineID: String, machineName: String, before: [BridgeSession], after: [BridgeSession],
-                            showPreviews: Bool = false, initialSnapshot: Bool = false) -> BridgeNotificationPlan
+                            showPreviews: Bool = false, initialSnapshot: Bool = false, capabilities: Set<String> = []) -> BridgeNotificationPlan
     {
         let previous = Dictionary(before.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         let current = Dictionary(after.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
@@ -33,31 +36,33 @@ public enum BridgeNotificationPlanner {
                 removeIDs.append(identifier(machineID: machineID, sessionID: old.id, version: question, kind: .question))
             }
         }
-        if !initialSnapshot {
+        if !initialSnapshot || current.values.contains(where: { pendingQuestion($0) != nil }) {
             for session in current.values.sorted(by: { $0.id < $1.id }) {
                 let old = previous[session.id]
                 let question = pendingQuestion(session)
                 let kind: BridgeSessionNotice.Kind
                 let version: String
-                if let question, question != pendingQuestion(old) {
+                if let question, initialSnapshot || question != pendingQuestion(old) {
                     kind = .question
                     version = question
-                } else if let old, ["working", "waiting"].contains(old.status), isFinished(session) {
+                } else if !initialSnapshot, let old, ["working", "waiting"].contains(old.status), isFinished(session), session.response?.isEmpty == false {
                     kind = .finished
-                    version = session.updatedAt ?? session.response ?? "finished"
+                    version = session.response ?? session.updatedAt ?? "finished"
                 } else {
                     continue
                 }
                 let title = showPreviews ? clean(session.title, limit: 80) : "Agent Bridge"
                 let body: String
                 if showPreviews {
-                    let detail = kind == .question ? session.question?["message"]?.string ?? "Waiting for your answer." : "Finished its current turn."
+                    let detail = kind == .question ? session.question?["message"]?.string ?? "Waiting for your answer." : session.response ?? "Finished its current turn."
                     body = clean("\(machineName): \(detail)", limit: 200)
                 } else {
                     body = kind == .question ? "A session is waiting for your answer." : "A session finished its current turn."
                 }
                 notices.append(BridgeSessionNotice(id: identifier(machineID: machineID, sessionID: session.id, version: version, kind: kind),
-                                                   machineID: machineID, sessionID: session.id, questionID: question, version: version, kind: kind, title: title, body: body))
+                                                   machineID: machineID, sessionID: session.id, questionID: question, version: version, kind: kind, title: title, body: body,
+                                                   sessionVersion: session.updatedAt, questionSnapshot: session.question,
+                                                   actions: BridgeNotificationActions.offered(session: session, kind: kind, showPreviews: showPreviews && (kind != .question || clean("\(machineName): \(session.question?["message"]?.string ?? "Waiting for your answer.")", limit: Int.max).count <= 200), capabilities: capabilities)))
             }
         }
         return BridgeNotificationPlan(notices: notices, removeIDs: removeIDs.sorted(), waitingCount: current.values.filter { pendingQuestion($0) != nil }.count)
@@ -68,7 +73,7 @@ public enum BridgeNotificationPlanner {
         if notice.kind == .question {
             return pendingQuestion(session) == notice.questionID
         }
-        return isFinished(session) && (session.updatedAt ?? session.response ?? "finished") == notice.version
+        return isFinished(session) && (session.response ?? session.updatedAt ?? "finished") == notice.version
     }
 
     public static func pendingQuestion(_ session: BridgeSession?) -> String? {
