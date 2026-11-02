@@ -12,7 +12,7 @@ targets:
   AgentBridgeMac:
     type: application
     platform: macOS
-    sources: [Apps]
+    sources: [Apps, State]
     dependencies:
       - package: AgentBridgeAppleCore
     settings:
@@ -22,7 +22,7 @@ targets:
   AgentBridgeMobile:
     type: application
     platform: iOS
-    sources: [Apps]
+    sources: [Apps, State]
     dependencies:
       - package: AgentBridgeAppleCore
     settings:

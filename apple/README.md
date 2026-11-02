@@ -1,46 +1,84 @@
 # Agent Bridge — native Apple clients
 
-Swift 6 core and native SwiftUI apps for macOS 15+, iOS 18+ and iPadOS 18+.
+Swift 6 protocol and state libraries, with SwiftUI apps for macOS 15+, iOS 18+
+and iPadOS 18+.
 
-## Open and run
+## Run
 
-Install Xcode, XcodeGen and SwiftFormat (`brew install xcodegen swiftformat`). From this directory:
+Install Xcode, XcodeGen and SwiftFormat (`brew install xcodegen swiftformat`):
 
 ```sh
 xcodegen generate
 open AgentBridgeApple.xcodeproj
 ```
 
-Select **AgentBridgeMac** or **AgentBridgeMobile**. The mobile target supports both iPhone and iPad. Choose your signing team for physical devices. Generated projects and build output are ignored; `project.yml` is the source of truth.
+Select **AgentBridgeMac** or **AgentBridgeMobile**. Choose a signing team for
+physical devices. `project.yml` is authoritative; generated projects are ignored.
 
-The Mac app connects to an already-running host's `default` profile. Use **Connection → Host profile** for another profile. The endpoint resolver matches the host's profile validation, UTF-8 socket path limit, SHA-256 fallback name and private runtime directory precedence. The app does not install, start, stop, migrate or reconfigure a host.
+The Mac app observes an already-running host's `default` profile. Change the
+profile in **Connection Settings**. Sign in with the same GitHub account as your
+hosts to connect remote machines on any Apple platform. The default relay is the
+one used by the Windows app. Custom relays require HTTPS; authentication and blob
+HTTP requests refuse redirects. Tokens and device keys are scoped to the relay
+and GitHub account and stored in this installation's Keychain.
 
-**Explore Sample Sessions** works offline on all three platforms. The connection footer explicitly labels sample mode, including on the phone's detail screen. For deterministic preview launches, add `--sample-sessions` to the scheme's launch arguments. Samples never mix with live sessions.
+The app does not install, restart, migrate or reconfigure a local host. Mac/Linux
+hosts currently advertise read-only session capabilities. Actions work only when
+the connected host offers them, such as a capable remote Windows host.
 
-## Verified functionality
+## Workflows
 
-- `hello` protocol and `sessions.read` capability negotiation, followed by a persistent `sessions.subscribe` feed.
-- Nonblocking macOS Unix socket reader, bounded frames and event queue, response correlation, timeout/cancellation cleanup, and connection generation isolation.
-- Replacement snapshots begin at the matching subscribe response; old-feed messages before it cannot enter the snapshot. Unknown events participate in sequence checking. A gap triggers one resubscription and quarantines updates until the replacement starts.
-- A subscription that never completes its snapshot times out. Disconnects are visible; cached rows are never marked live. Manual reconnect creates a new channel.
-- Shared searchable session list, adaptive navigation, main-agent response/reasoning, current tool, question message, delegate summaries and read-only details. Main-agent text is never taken from a delegate. Session and delegate identity remain stable during updates.
-- Host discovery holds and read-only reasons remain visible. All questions are currently answered at the machine; no action requests are sent.
+- Local and encrypted remote fleet feeds; reconnect, snapshots and sequence-gap
+  recovery; explicit offline state and canonical local/remote machine identity.
+- Global search, Needs You, pins, persistent manual/recent/machine order, unread
+  state, recently ended sessions, Markdown, reasoning, recent tools and delegates.
+- Structured questions/approvals, replies and two-step stop. An uncertain action
+  remains bound to its original UUID and host process; reconnect never silently
+  sends a fresh press.
+- Files, PhotosPicker and Mac image paste, resizing when needed, removable staged
+  attachments, bounded chunk uploads and encrypted blob uploads up to host limits.
+- Host-provided launch/resume choices, signed full-disclosure folder-trust answers,
+  and signed copy-and-resume between remote machines. Local targets use an
+  authenticated relay connection for signed operations.
+- Usage and machine updates, confirmed offline-machine Forget, account-scoped
+  usage retention, opt-in notifications, quiet/private previews, a Mac menu,
+  local host diagnostics and an explicit Open at Login preference. Notification
+  answer/reply actions revalidate the current question, account and live connection,
+  then show a delivery receipt; stale actions never queue a later send.
 
-## Verification
+**Explore Sample Sessions** is offline and clearly labelled. `--sample-sessions`
+is the equivalent launch argument. Debug builds also support `--ui-fixture` for
+interactive, simulated answer/reply/stop/launch receipts. That fixture opens no
+socket, starts no process and types no keys into agents. Never use it as evidence
+of a live host connection.
+
+## Verify
 
 ```sh
 bash scripts/verify.sh
 ```
 
-This runs Swift tests, SwiftFormat lint, generates the project, and builds macOS and iOS Simulator applications without signing. The Apple clients CI workflow runs the same command. Socket tests use uniquely named disposable sockets in `/tmp`, never installed profiles or live agents.
+This runs all protocol/state tests, SwiftFormat lint and unsigned macOS/iOS
+Simulator builds. Tests cover upstream Noise/command/blob vectors, malicious
+frames, response ordering, cancellation, final socket data, reconnect races,
+mutation identity, attachments, cache isolation and delayed account transitions.
+Fixtures use disposable sockets, files and in-memory peers, never installed
+profiles or live agents.
 
-Local validation on November 2, 2026: Xcode 27.2 / Swift 6.4.2; 21 tests passed; both app builds passed. The macOS app was launched and inspected through accessibility; iPhone 18 Pro and iPad Pro 11-inch simulator sample layouts were rendered and inspected. Device signing, minimum-OS runtime compatibility, VoiceOver interaction, and interoperability with a running .NET host are not yet verified. The tests exercise a fixture speaking the documented protocol.
+Validated locally with Xcode 27.2 / Swift 6.4.2. The Mac UI was exercised through
+accessibility against the isolated fixture; iPhone/iPad layouts are checked in
+simulators. Unsigned builds do not establish release signing or Keychain/device
+entitlement readiness. Real relay/.NET-host interoperability, OS notification
+permission/delivery, minimum-OS devices and VoiceOver still need acceptance tests.
 
-## Remaining work
+## Local development scope
 
-1. Remote iOS/iPadOS and Mac connectivity: relay device-code sign-in, Keychain identity/token persistence, relay proof and roster, and Noise XX P-256/AES-GCM/SHA-256 channels. Require byte-identical results against `tests/AgentBridge.Transport.Tests/testdata/noise-xx-p256-vectors.json` before connecting to a real relay.
-2. Authenticated remote session subscriptions, foreground/background recovery and trusted device lifecycle. The mobile app currently provides the shared offline interface only and reports remote pairing as unavailable.
-3. Capability-gated answers/replies/launch, full session/delegate history, Markdown rendering, usage, notifications and APNs.
-4. The complete shared design language (generated tokens and custom glyphs), accessibility/device testing, signed distribution and host installation/update integration.
+The current delivery target is local development builds only. App Store/TestFlight,
+notarization, signed installers and release update channels are deferred by choice.
 
-The .NET host is authoritative for all operations. Never bypass its authorization or use an unencrypted remote shortcut. Existing hooks and live Home Assistant infrastructure are untouched.
+
+See [`docs/apple-parity.md`](../docs/apple-parity.md). iOS notifications currently
+operate while the app is open; background APNs needs provider and entitlement
+integration. Mac self-updates, host installation and the missing Mac host action backends remain
+separate platform work. Native login-item registration still needs OS acceptance. The Windows
+Task Scheduler/registry/Velopack implementations are not Apple platform APIs.
