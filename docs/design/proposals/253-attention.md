@@ -200,11 +200,15 @@ Every state, below, is on [the states board](253-attention/proposal-253-states.p
   `truncated` flag changing) updates the card in place. It never adds a second card.
 - **The Now line gives way.** While the session waits on its question (rule 1 or 2), the
   conversation doesn't show the running tool's line above it. The card says what is happening.
-- **Answered:** the card quietens, with no Needs you fill and the `done` glyph:
-  - it reads "Main agent asked", then the question, then "You answered *Pre-release only* · 1m";
-  - it stays in the conversation as long as the session's activity holds it;
-  - an answer sent from another device, or at the machine, shows what the host reports, as
-    today's receipt does.
+- **Resolved:** the card quietens, with no Needs you fill. The client keeps the question it was
+  shown, since the host clears it, and draws it with "Main agent asked" and then the question.
+  Below that:
+  - answered from this device and confirmed by the host: the `done` glyph and "You answered
+    *Pre-release only* · 1m", from the answer service's own record (as today's receipt);
+  - otherwise (answered at the machine or on another device, or the call ended without an
+    answer): the `idle` glyph and "No longer waiting · 1m". Protocol v1 doesn't say what another
+    device or the terminal answered, or whether anything was, so the card doesn't claim to know;
+  - it stays until the session's next turn replaces what the conversation shows.
 - **Answer at the machine:**
   - the card shows the whole question with no controls, and one line in Needs you's text colour:
     "Answer at the machine · DEV-VM1";
@@ -233,6 +237,10 @@ approval:
   in the prose, a fence not last, or an info string other than none, json or diff
   (`literalShape`). Nothing can hide behind a link's words or a fence the agent's own words
   closed.
+- **A prompt with a table** is drawn literal too. `literalShape` lets a table through, but the
+  Markdown renderer drops body cells beyond the header's columns (`pwa/js/markdown.js`) and a
+  table scrolls sideways. So a table could hide part of what is approved. The lane refused such
+  prompts (`HasTable`), and the card keeps that check.
 - **Length:** the card wraps and never cuts, so a long command or an edit's diff is shown whole
   and Approve once stays. U2's 600-character and 12-line cap was the lane's room, not a
   security rule.
@@ -244,15 +252,20 @@ approval:
 ### 4.5 Tools, and the delegate inspector
 
 - **The `ask_user` call whose id is the pending question's** (Question `id` is "the id of the tool
-  call that asked it") is one line with no arguments:
+  call that asked it") is one line without its summary:
   - the `needs` glyph, `ask_user` in mono, then "Waiting on you" as a link that goes to the
     question, then the age;
-  - answered, the `done` glyph and "Answered": a link while the conversation holds the question,
-    and plain words after.
-- **Every other `ask_user` call** shows "Answered" the same way, never its arguments.
-- **Its arguments, for diagnosis:** "Show arguments" in the row's menu (right-click, long press,
-  Shift+F10) discloses them under the row (§5.3 *Disclosure*). They are closed by default and
-  never open on their own.
+  - once the question clears, the call's reported status, with its glyph: "Done" (`done`) or
+    "Failed" (`failed`), since a call can end without an answer (`CopilotParser` clears the
+    question whatever the completion). "Answered" is said only when this device's answer to that
+    question was confirmed. The words link to the question while the conversation holds it, and
+    are plain words after.
+- **Every other `ask_user` call** follows the same rule: its status in words, never its summary.
+- **Its summary, for diagnosis:** "Show summary" in the row's menu (right-click, long press,
+  Shift+F10) discloses it under the row (§5.3 *Disclosure*). It is closed by default and never
+  opens on its own. This is the `summary` the host already sends (at most 200 bytes), labelled
+  as such, not the call's arguments: protocol v1 sends none, even in `session.get`. Showing
+  real arguments would need host and protocol work, and a privacy review, outside this change.
 - **The call an approval holds** (say `powershell git push …`) keeps its name and arguments: it is
   the action, not the question, and a permission prompt's id (`<requestId>#<digest>`) names no
   tool call to link from.
@@ -406,8 +419,10 @@ one presentation kept. High contrast isn't drawn: the canvas has no such theme (
 -  At three panes it heads the inspector, over Tools (each call: glyph, name and arguments in
 -  mono, age).
 +  At three panes it heads the inspector, over Tools (each call: glyph, name and arguments in
-+  mono, age). An `ask_user` call has no arguments there: it reads "Waiting on you", a link to
-+  its question, or "Answered". "Show arguments" in the row's menu discloses them, for diagnosis.
++  mono, age). An `ask_user` call has no summary there: it reads "Waiting on you", a link to
++  its question, or its reported status ("Done", "Failed"; "Answered" only for an answer this
++  device sent and the host confirmed). "Show summary" in the row's menu discloses the summary the
++  host sent, for diagnosis.
 ```
 
 ```diff
@@ -436,12 +451,13 @@ one presentation kept. High contrast isn't drawn: the canvas has no such theme (
 +    private-use or unassigned code points, U+2028/2029) is a visible escape (`\u202E`). Its
 +    code keeps right-to-left letters in the order they run. A prompt not shaped as a host writes
 +    a permission (§6.1's old rule: prose, then at most one fenced block ending it, its fence
-+    naming no language but json or diff, and no link whose words hide where it goes) is drawn
-+    as literal text, not Markdown.
++    naming no language but json or diff, and no link whose words hide where it goes), or with a
++    table, is drawn as literal text, not Markdown.
 +  - `answerAtMachine`: the question, no controls, and "Answer at the machine · *machine*".
 +    Leaving it is never an answer.
-+  - Answered, it quietens ("Main agent asked", the `done` glyph) and shows what was sent, for as
-+    long as the session's activity holds it.
++  - Resolved, it quietens ("Main agent asked") and stays until the next turn: "You answered
++    *value*" (`done`) for an answer this device sent and the host confirmed, otherwise "No
++    longer waiting" (`idle`), since the protocol doesn't say what was answered elsewhere.
 +  - Several at once (if a host sends them): one card each, in the order asked, "1 of N" in the
 +    heading.
 +- **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
@@ -509,7 +525,7 @@ device approves on a machine. So each takes an independent security review befor
   bidi-override.
 - `ui/session-card.js`:
   - drops the Now line while waiting;
-  - draws the linked `ask_user` row in Tools, with Show arguments in its menu;
+  - draws the linked `ask_user` row in Tools, with its reported status and Show summary in its menu;
   - lands focus on the question when opened from a waiting row.
 - `ui/delegates-view.js` gets the Status link.
 - The lane's markup in `index.html` and its rules in `app.css` go.
@@ -517,7 +533,7 @@ device approves on a machine. So each takes an independent security review befor
 **App (slice 3):**
 - `App.Core`:
   - `NeedsYouEntry`'s checks (`WholePrompt`, `LiteralShape`, `HasHidden`, `HasRightToLeft`,
-    `Reveal`) move to an `ApprovalPrompt` helper that `QuestionViewModel` uses;
+    `Reveal`, `HasTable`) move to an `ApprovalPrompt` helper that `QuestionViewModel` uses;
   - `MainViewModel.NeedsYou` becomes a `NeedsYouFilter` (pressed, N, "N on *machine*") and a
     filter over `Sessions`, with `Waiting` from the cards;
   - `SessionCardViewModel` gets `ShowNowLine` and an `ask_user` `ToolRow` with a question link;
@@ -525,7 +541,7 @@ device approves on a machine. So each takes an independent security review befor
 - `App`:
   - in `SessionsPage.xaml`, the `ListView.Header` lane becomes a `ToggleButton`;
   - `QuestionView.xaml` draws the escapes and the literal shape;
-  - `ToolList.xaml` gets the link row and Show arguments in a context menu;
+  - `ToolList.xaml` gets the link row and Show summary in a context menu;
   - in `SessionView.xaml`, the Now line hides while waiting;
   - the tray and Sessions badge bind to `Waiting`, unchanged.
 - `SelfTest` checks follow.
@@ -543,8 +559,8 @@ device approves on a machine. So each takes an independent security review befor
     order it runs;
   - an approval whose command holds right-to-left letters draws them in the order they run, not
     reordered;
-  - an approval whose prompt a link or a fence could make draw differently is drawn as literal
-    text, not Markdown;
+  - an approval whose prompt a link, a fence or a table could make draw differently is drawn as
+    literal text, not Markdown;
   - Approve once sends the request for exactly the question id shown, and nothing in the list
     sends an answer (no list control is wired to the answer service);
   - a prompt that arrived cut short still can't be answered from here;
@@ -563,10 +579,15 @@ device approves on a machine. So each takes an independent security review befor
     width;
   - an update to the same question id changes its card in place, and never adds a second;
   - the Now line gives way to the question while the session waits on it;
-  - an answered question stays in the conversation, quiet, with what was sent.
+  - a question this device answered stays in the conversation, quiet, with what was sent and
+    confirmed;
+  - a question resolved elsewhere, or whose call ended without an answer, says "No longer
+    waiting" and claims no answer.
 - **Tools and delegates:**
-  - the `ask_user` call in Tools names no arguments, links to its question, and Show arguments
-    discloses them;
+  - the `ask_user` call in Tools shows no summary, links to its question, and Show summary
+    discloses the summary the host sent;
+  - an `ask_user` call that ended without an answer shows its reported status (Done or Failed),
+    never "Answered";
   - a delegate that asks has a Status link to its question, and its question shows once.
 - **Accessibility:**
   - the toggle is named for its count and scope and reports its pressed state;
