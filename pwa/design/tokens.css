@@ -85,6 +85,10 @@
   --ab-icon-stroke: 1.5;
 
   --ab-font-mono: "Agent Bridge Mono", "Cascadia Mono", "SF Mono", "Roboto Mono", ui-monospace, monospace;
+  /* Inline mono (docs/design/ui.md §4.2): the text face's x-height ratio, for font-size-adjust,
+     and the scale mono takes where a browser has no font-size-adjust. Windows' Segoe UI Variable,
+     unless the page names its platform on <html data-platform>. */
+  --ab-inline-mono-x: 0.5; --ab-inline-mono-scale: 0.9615;
   --ab-radius-control: 4px;
   --ab-radius-card: 8px;
   --ab-radius-pill: 999px;
@@ -130,6 +134,10 @@
     --ab-shadow: rgba(0, 0, 0, 0.18);
   }
 }
+
+/* Inline mono beside each platform's system face (tokens.json type.inlineMono). */
+:root[data-platform="apple"] { --ab-inline-mono-x: 0.5078; --ab-inline-mono-scale: 0.9766; }
+:root[data-platform="android"] { --ab-inline-mono-x: 0.5137; --ab-inline-mono-scale: 0.9878; }
 
 /* High contrast: every role and surface is a system colour (tokens.json hc). */
 @media (forced-colors: active) {
