@@ -66,16 +66,29 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
 public struct RelaySignIn: Sendable {
     private let base: URL
     private let session: URLSession
+    private let now: @Sendable () -> ContinuousClock.Instant
+    private let sleep: @Sendable (Duration) async throws -> Void
 
     public init(relay: String) throws {
-        base = try RelayAddress.validated(relay)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 20
-        session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
+        try self.init(relay: relay, session: URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil))
+    }
+
+    /// Tests supply a private URL loading session and monotonic clock; production
+    /// always uses the HTTPS origin, redirect refusal and bounded reader below.
+    init(relay: String, session: URLSession, now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now },
+         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) throws
+    {
+        base = try RelayAddress.validated(relay)
+        self.session = session
+        self.now = now
+        self.sleep = sleep
     }
 
     public func start() async throws -> RelayDeviceCode {
         let (data, response) = try await post("v1/auth/device", body: nil)
+        try Task.checkCancellation()
         guard response.statusCode == 200 else { throw RelayError.refused("Sign-in is unavailable (\(response.statusCode)).") }
         let code = try JSONDecoder().decode(RelayDeviceCode.self, from: data)
         guard !code.deviceCode.isEmpty, !code.userCode.isEmpty, code.expiresIn > 0,
@@ -87,15 +100,18 @@ public struct RelaySignIn: Sendable {
     }
 
     public func wait(for code: RelayDeviceCode) async throws -> RelayAccount {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(code.expiresIn))
+        let deadline = now().advanced(by: .seconds(code.expiresIn))
         var interval = code.interval
-        while clock.now < deadline {
-            try await Task.sleep(for: .seconds(interval))
+        while now() < deadline {
+            try await sleep(min(.seconds(interval), now().duration(to: deadline)))
             try Task.checkCancellation()
-            guard clock.now < deadline else { break }
+            guard now() < deadline else { break }
             let body = try JSONEncoder().encode(["deviceCode": code.deviceCode])
             let (data, response) = try await post("v1/auth/token", body: body)
+            try Task.checkCancellation()
+            // A response can arrive after the code expired, even if its request
+            // began on time. Never turn that late response into a signed-in account.
+            guard now() < deadline else { break }
             if response.statusCode == 202 {
                 if let json = try? JSONDecoder().decode(JSONValue.self, from: data),
                    let next = json["interval"]?.number, next.isFinite, next >= 1, next <= 60
@@ -116,6 +132,7 @@ public struct RelaySignIn: Sendable {
     }
 
     private func post(_ path: String, body: Data?) async throws -> (Data, HTTPURLResponse) {
+        try Task.checkCancellation()
         var request = URLRequest(url: base.appendingPathComponent(path))
         request.httpMethod = "POST"
         request.httpBody = body
