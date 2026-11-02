@@ -40,10 +40,10 @@
                         TextWrapping="Wrap" IsTextSelectionEnabled="True"
                         Text="{x:Bind Warning, Mode=OneWay}"
                         Visibility="{x:Bind local:Ui.Show(ShowWarning), Mode=OneWay}" />
-                    <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind local:Ui.Show(CanAnswer), Mode=OneWay}">
+                    <local:WrapRow Spacing="8" Visibility="{x:Bind local:Ui.Show(CanAnswer), Mode=OneWay}">
                         <Button Style="{StaticResource AccentButtonStyle}" Content="Trust" AutomationProperties.AutomationId="TrustYes" Click="OnTrust" />
                         <Button Content="Quit" AutomationProperties.AutomationId="TrustNo" Click="OnQuit" />
-                    </StackPanel>
+                    </local:WrapRow>
                     <Button
                         Content="Try again" AutomationProperties.AutomationId="TrustResend"
                         Visibility="{x:Bind local:Ui.Show(ShowResend), Mode=OneWay}" Click="OnTrustResend" />
@@ -181,14 +181,14 @@
                     Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
                     Foreground="{x:Bind local:Ui.ToneBrush(ViewModel.StatusTone), Mode=OneWay}"
                     Visibility="{x:Bind local:Ui.Some(ViewModel.StatusText), Mode=OneWay}" />
-                <StackPanel Orientation="Horizontal" Spacing="8">
+                <local:WrapRow Spacing="8">
                     <Button
                         Content="Try again" AutomationProperties.AutomationId="LaunchResend"
                         Visibility="{x:Bind local:Ui.Show(ViewModel.ShowResend), Mode=OneWay}" Click="OnResend" />
                     <Button
                         Content="Open session" AutomationProperties.AutomationId="LaunchOpen"
                         Visibility="{x:Bind local:Ui.Show(ViewModel.ShowOpen), Mode=OneWay}" Click="OnOpen" />
-                </StackPanel>
+                </local:WrapRow>
                 <Button
                     Content="{x:Bind ViewModel.ReloadText, Mode=OneWay}" AutomationProperties.AutomationId="LaunchReload"
                     IsEnabled="{x:Bind ViewModel.CanReload, Mode=OneWay}"

@@ -180,6 +180,7 @@ static partial class SelfTest
             Check(window.CurrentPage == "sessions" && !sought.Folded && window.Search.Text.Length == 0, "opens a session chosen in the search box on the Sessions page");
 
             await CheckMachinesPage(window, main, Check, outFile);
+            await CheckNarrowest(window, Check, outFile);
             await CheckPagesInEveryTheme(window, Check, outFile);
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
@@ -338,6 +339,54 @@ static partial class SelfTest
         await Picture(window.RootElement, Path.ChangeExtension(outFile, ".machines.png"));
     }
 
+    // At the smallest window (360×600, ui.md §5.2), every control on every page is within the
+    // window: none cut off at the right, where nothing scrolls to reach it.
+    static async Task CheckNarrowest(MainWindow window, Action<bool, string> check, string outFile)
+    {
+        var root = window.RootElement;
+        var before = window.AppWindow.Size;
+        Resize(window, DesignLayout.MinWidth, DesignLayout.MinHeight);
+        try
+        {
+            await Until(() => root.ActualWidth <= DesignLayout.MinWidth + 1, TimeSpan.FromSeconds(10));
+            var cut = new List<string>();
+            foreach (var (tag, pane) in Pages.Where(p => p.Tag != "sessions"))
+            {
+                window.ShowPage(tag);
+                await Task.Delay(500);
+                if (ById<FrameworkElement>(root, pane) is not { } page) { cut.Add($"{tag}: no page"); continue; }
+                foreach (var control in Find<Control>(page).Where(c => c is Button or ComboBox or TextBox or ToggleSwitch && Shown(c, page)))
+                {
+                    var right = control.TransformToVisual(root).TransformPoint(new Windows.Foundation.Point(control.ActualWidth, 0)).X;
+                    if (right > root.ActualWidth + 1) { cut.Add($"{tag}: {(AutomationProperties.GetAutomationId(control) is { Length: > 0 } id ? id : control.GetType().Name)} to {right:0}"); }
+                }
+                await Picture(root, Path.ChangeExtension(outFile, $".{tag}.narrow.png"));
+            }
+            check(cut.Count == 0, $"keeps every control on every page inside a {DesignLayout.MinWidth:0} px window{(cut.Count > 0 ? $": not {string.Join(", ", cut)}" : "")}");
+        }
+        finally
+        {
+            window.AppWindow.Resize(before);
+            await Task.Delay(500);
+        }
+    }
+
+    // On screen: itself and everything up to the page visible, and given room.
+    static bool Shown(FrameworkElement element, FrameworkElement page)
+    {
+        if (element.ActualWidth <= 0 || element.ActualHeight <= 0) { return false; }
+        for (DependencyObject? up = element; up is not null && up != page; up = VisualTreeHelper.GetParent(up))
+        {
+            if (up is UIElement { Visibility: Visibility.Collapsed }) { return false; }
+        }
+        return true;
+    }
+
+    static void Resize(MainWindow window, double width, double height)
+    {
+        var scale = window.RootElement.XamlRoot.RasterizationScale;
+        window.AppWindow.Resize(new Windows.Graphics.SizeInt32((int)Math.Ceiling(width * scale), (int)Math.Ceiling(height * scale)));
+    }
     // Every page loads and draws in Light and Dark, and in high contrast with system colours for
     // every role. A resource missing from one theme fails only where that theme is used, and a XAML
     // failure shows only as 0xC000027B, so each page is drawn in each. High contrast is a Windows
