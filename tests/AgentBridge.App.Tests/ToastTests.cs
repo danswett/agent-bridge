@@ -174,7 +174,7 @@ public sealed class ToastTests
     static Session AskedByDelegate(string id, string response) => Make.Session(id, question: Make.Choice() with { Agent = "agent-1" }, response: response) with { WaitingOn = "agent-1" };
 
     [Fact]
-    public void Answering_a_delegates_question_ends_a_turn_only_if_the_main_agent_was_working_or_wrote_since()
+    public void Answering_a_delegates_question_ends_a_turn_only_if_the_main_agent_was_working_asking_or_wrote_since()
     {
         var p = Planner();
         // Idle, then a delegate asks, answered within two seconds, and the main agent stays idle
@@ -186,6 +186,11 @@ public sealed class ToastTests
         p.Upsert(Make.Session("busy", status: SessionStatus.Working, response: "Old."));
         p.Upsert(AskedByDelegate("busy", "Old."));
         p.Upsert(Make.Session("busy", response: "Old."));
+        // Mid-turn, the main agent asks, and a delegate straight after: still that turn.
+        p.Upsert(Make.Session("asked", status: SessionStatus.Working, response: "Old."));
+        p.Upsert(Make.Session("asked", question: Make.Choice(), response: "Old."));
+        p.Upsert(AskedByDelegate("asked", "Old."));
+        p.Upsert(Make.Session("asked", response: "Old."));
         // Idle, a delegate asks, and the main agent writes something new by the end.
         p.Upsert(Make.Session("wrote", response: "Old."));
         p.Upsert(AskedByDelegate("wrote", "Old."));
@@ -193,7 +198,7 @@ public sealed class ToastTests
         clock.Advance(TimeSpan.FromSeconds(3));
         p.Tick();
 
-        Assert.Equal(["busy", "wrote"], sink.Shown.Select(n => n.Tag).Order());
+        Assert.Equal(["asked", "busy", "wrote"], sink.Shown.Select(n => n.Tag).Order());
     }
 
     [Fact]

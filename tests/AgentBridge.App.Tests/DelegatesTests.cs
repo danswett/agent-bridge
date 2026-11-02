@@ -213,6 +213,49 @@ public sealed class DelegatesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_tool_the_open_delegate_finishes_is_fetched_again_before_the_next_poll()
+    {
+        Resize(1440);
+        Select("del");
+        var card = Card("del");
+        ui.Post(() => layout.OpenDelegate("witness"));
+        await Wait.UntilAsync(() => Gets().Count == 1 && card.Delegates.Detail.Note == "", "the first fetch");
+
+        // Three seconds on, well inside the ten-second poll: only its tool changed.
+        clock.Advance(TimeSpan.FromSeconds(3));
+        var next = Delegating() with
+        {
+            Subagents = [.. Delegating().Subagents!.Select(a => a.Id == "witness" ? a with { CurrentTool = a.CurrentTool! with { Status = ToolStatus.Done, EndedAt = Now.AddSeconds(2) } } : a)],
+            UpdatedAt = Now.AddSeconds(3),
+        };
+        host.Sessions[0] = next;
+        await host.SendAsync(Events.SessionUpsert, next);
+
+        await Wait.UntilAsync(() => Gets().Count == 2, "the fetch of its tools");
+    }
+
+    [Fact]
+    public async Task A_finished_delegate_whose_load_failed_is_tried_again_while_it_stays_open()
+    {
+        var fail = true;
+        host.On(Ops.SessionGet, _ => fail
+            ? throw new InvalidOperationException("the machine is busy")
+            : Delegating().Subagents!.Single(a => a.Id == "lint") with { Response = "Lint the PWA: everything it said." });
+        Resize(1440);
+        Select("del");
+        var card = Card("del");
+        ui.Post(() => layout.OpenDelegate("lint"));
+        await Wait.UntilAsync(() => card.Delegates.Detail.Note.StartsWith("Couldn't load the delegate", StringComparison.Ordinal), "the failed load");
+
+        // It ended, so no poll would ask again: the failure itself does, on the next tick.
+        fail = false;
+        clock.Advance(TimeSpan.FromSeconds(3));
+        ui.Post(card.RefreshTimes);
+        await Wait.UntilAsync(() => card.Delegates.Detail.Latest == "Lint the PWA: everything it said." && card.Delegates.Detail.Note == "", "the retried load");
+        Assert.Equal(2, Gets().Count);
+    }
+
+    [Fact]
     public async Task A_newer_line_a_fetch_brings_is_kept_until_the_list_brings_another()
     {
         // A delegate still thinking: no response yet, only its latest line, which changes without

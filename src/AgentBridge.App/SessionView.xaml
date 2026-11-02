@@ -341,7 +341,10 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="core:DelegateEvent">
-                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                <!-- A flowing line, not a horizontal StackPanel: that measured a long name at full
+                                     width and the one-column pane clipped the outcome and age after it. The name
+                                     trims to the line; "reported back · 22m" moves to the next line. -->
+                                <local:FlowPanel Spacing="4" LineSpacing="0">
                                     <ContentControl Margin="0,0,4,0" VerticalAlignment="Center" Style="{StaticResource AbIconDelegate}" Width="12" Height="12" Foreground="{ThemeResource AbText2}" IsTabStop="False" Visibility="{x:Bind local:Ui.Show(Started)}" />
                                     <local:StatusGlyphView Margin="0,0,4,0" VerticalAlignment="Center" Size="12" Glyph="{x:Bind GlyphShown}" Visibility="{x:Bind local:Ui.Show(HasGlyph)}" />
                                     <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Before}" Visibility="{x:Bind local:Ui.Some(Before)}" />
@@ -350,14 +353,15 @@
                                         Padding="0"
                                         MinHeight="0"
                                         FontSize="12"
-                                        Content="{x:Bind Name}"
                                         Tag="{x:Bind AgentId}"
                                         AutomationProperties.Name="{x:Bind Text}"
                                         ToolTipService.ToolTip="Show this delegate"
                                         Visibility="{x:Bind local:Ui.Show(HasName)}"
-                                        Click="OnDelegateEvent" />
+                                        Click="OnDelegateEvent">
+                                        <TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                    </HyperlinkButton>
                                     <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind After}" Visibility="{x:Bind local:Ui.Some(After)}" />
-                                </StackPanel>
+                                </local:FlowPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>

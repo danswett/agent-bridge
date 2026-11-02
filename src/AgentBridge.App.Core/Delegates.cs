@@ -351,7 +351,8 @@ public sealed class DelegatesViewModel : Observable
         if ((due && now - lastLoad >= OnChange) || (running && now - lastLoad >= Poll)) { _ = LoadAsync(); }
     }
 
-    static string Key(Subagent a) => $"{a.Status}|{a.Outcome}|{a.Line}|{a.EndedAt:O}";
+    // A tool starting or finishing is a change too: the detail's Tools list is fetched, not listed.
+    static string Key(Subagent a) => $"{a.Status}|{a.Outcome}|{a.Line}|{a.EndedAt:O}|{a.CurrentTool?.Id}|{a.CurrentTool?.Status}";
 
     // The selected delegate's task and latest line as its list entry has them. A new line from the
     // list moves lineRev on, so a fetch sent before it can't put back an older one; one the same
@@ -543,7 +544,13 @@ public sealed class DelegatesViewModel : Observable
         {
             if (mine != generation) { return; }
             loading = false;
-            if (problem is not null) { Detail.Note = $"Couldn't load the delegate: {problem}"; }
+            // A failed load is tried again, at most every OnChange, while the detail is open: an
+            // idle or ended delegate is not polled, so its words would otherwise stay missing.
+            if (problem is not null)
+            {
+                Detail.Note = $"Couldn't load the delegate: {problem}";
+                due = true;
+            }
             else if (full is null) { Detail.Note = "This delegate is no longer listed."; }
             else
             {

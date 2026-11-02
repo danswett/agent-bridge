@@ -133,7 +133,9 @@ public sealed class ToastPlanner
     static void NoteWait(Tracked t, Session? before, Session s)
     {
         if (s.Status != SessionStatus.Waiting || s.WaitingOn is null || before is { Status: SessionStatus.Waiting, WaitingOn: not null }) { return; }
-        t.WaitFromTurn = before?.Status == SessionStatus.Working;
+        // Waiting on its own question is mid-turn too: a delegate's question straight after it
+        // still belongs to that turn.
+        t.WaitFromTurn = before is { Status: SessionStatus.Working } or { Status: SessionStatus.Waiting, WaitingOn: null };
         t.ResponseBeforeWait = MainResponse(before ?? s);
     }
 
