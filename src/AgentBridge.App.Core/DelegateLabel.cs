@@ -18,8 +18,10 @@ public static class DelegateLabel
     // 1. Bidi controls, zero-width and other format characters, controls and default-ignorables
     //    go; any whitespace, line and paragraph separators included, becomes one space.
     // 2. Longer than MaxLength, it is cut at a whole character with an ellipsis.
-    // 3. Nothing left: the delegate is named by the start of its id.
-    // 4. A name that reads as the main agent's ("Main agent", "MAIN AGENT asks", "Main-agent",
+    // 3. A middle dot, and the dots drawn like it, becomes "-": it is the separator between a
+    //    status's facts, and a name with one ("Idle · Read logs") read as a fact of its own (#286).
+    // 4. Nothing left: the delegate is named by the start of its id.
+    // 5. A name that reads as the main agent's ("Main agent", "MAIN AGENT asks", "Main-agent",
     //    fullwidth, accented or Cyrillic and Greek look-alike forms) is quoted after the word
     //    Delegate.
     // The look-alike check can't be complete, so it is not the guard: every line that says who
@@ -27,13 +29,19 @@ public static class DelegateLabel
     // never has it.
     public static string For(string? name, string? id)
     {
-        var clean = Clean(name, MaxLength);
+        var clean = Undotted(Clean(name, MaxLength));
         if (clean.Length == 0) { return ShortId(id) is { Length: > 0 } s ? $"Delegate {s}" : "Delegate"; }
         return PosesAsMainAgent(clean) ? $"Delegate “{Unquoted(clean)}”" : clean;
     }
 
+    // U+00B7 and what is drawn like it or normalises to it, as pwa/js/attribution.js's DOTS: the
+    // fact separator, real or forged.
+    const string Dots = "\u00B7\u0387\u16EB\u2022\u2027\u2219\u22C5\u2E31\u30FB\uA78F\uFF65";
+
+    static string Undotted(string s) => s.AsSpan().IndexOfAny(Dots) < 0 ? s : string.Concat(s.Select(c => Dots.Contains(c) ? '-' : c));
+
     // Inside the quotes, a quote of its own could close them and carry on as other words.
-    static string Unquoted(string s) => string.Concat(s.Select(c => c is '"' or '“' or '”' or '„' or '‟' or '«' or '»' or '＂' ? '\'' : c));
+    static string Unquoted(string s) => string.Concat(s.Select(c => c is '"' or '“' or '”' or '„' or '‟' or '«' or '»' or '″' or '‹' or '›' or '＂' ? '\'' : c));
 
     // Whether a label already says it is a delegate's, so a line can say "Delegate" once.
     public static bool SaysDelegate(string label) => label == "Delegate" || label.StartsWith("Delegate ", StringComparison.Ordinal);

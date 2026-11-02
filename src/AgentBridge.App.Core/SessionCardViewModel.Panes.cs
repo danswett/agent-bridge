@@ -26,9 +26,10 @@ public sealed partial class SessionCardViewModel
     // Line 2: at most two facts (§6.1), what the session is doing then where, on one line, so no
     // separator ever starts a line (#214). A question's words win over "Driven by an agent" (§2.2
     // rules 1, 2 and 7). Where: the machine once there is more than one, else the repository.
-    // Only the status's first fact: "Waiting on you · 2 delegates still running" is one fact on a
-    // row and both in the header.
-    public string RowStatus => Driven && Glyph != StatusGlyph.Needs ? "Driven by an agent" : StatusText.Split(" · ")[0];
+    // Only the status's first fact, as StatusRules made it, never its words cut at a separator
+    // (#286): "Waiting on you · 2 delegates still running" is one fact on a row and both in the
+    // header.
+    public string RowStatus => Driven && Glyph != StatusGlyph.Needs ? "Driven by an agent" : Line.FirstFact;
     public string RowPlace => Machine ?? Place;
     public string RowFacts => string.Join(" · ", new[] { RowStatus, RowPlace }.Where(s => !string.IsNullOrEmpty(s)));
     // A row read aloud (§9): its glyph's name already says the status and machine.

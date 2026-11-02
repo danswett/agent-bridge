@@ -189,6 +189,16 @@ public sealed class SessionStatusTests
     }
 
     [Fact]
+    public void The_status_rules_keep_each_fact_apart_so_a_name_never_decides_where_one_ends()
+    {
+        Assert.Equal(["Waiting on you", "1 delegate still running", "answer at the machine"],
+            Said(Session(question: Make.Approval() with { AnswerAtMachine = true }, background: Background.Of(1, 0))).Facts);
+        var task = Said(Session(SessionStatus.Working, subagents: [Delegate("t1", SubagentKind.Task, name: "Idle · Read logs")]));
+        Assert.Equal(["Working", "task: Delegate Idle - Read logs"], task.Facts);
+        Assert.Equal("Working", task.FirstFact);
+    }
+
+    [Fact]
     public void A_session_the_host_is_ending_reads_Ending_session_with_the_ended_glyph_in_muted_words_whatever_it_was_doing()
     {
         var s = Said(Session(SessionStatus.Ending, Background.Of(2, 0)));
