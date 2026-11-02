@@ -151,8 +151,17 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.StartsWith("Off:", settings.DevBoxText);
 
         settings.DevBoxKeepAwake = true;
-        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "host.settings");
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "host.settings");
         Assert.True(host.Sent(HostOps.Settings)[0].GetProperty("devBoxKeepAwake").GetBoolean());
+        // Turned on and straight back off before the host's status says either: off is what is
+        // kept, not lost as no change.
+        host.Status = FakeHost.StatusOf() with { DevBox = new DevBoxStatus(false, 15) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => !settings.DevBoxKeepAwake, "the host's word");
+        settings.DevBoxKeepAwake = true;
+        settings.DevBoxKeepAwake = false;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 3 && !settings.Busy, "both changes");
+        Assert.False(host.Sent(HostOps.Settings)[2].GetProperty("devBoxKeepAwake").GetBoolean());
 
         // A pass that failed is said in words a person can act on.
         host.Status = FakeHost.StatusOf() with

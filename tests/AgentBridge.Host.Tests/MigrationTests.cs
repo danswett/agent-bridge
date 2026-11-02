@@ -1805,6 +1805,9 @@ public sealed class MigrationTests : IAsyncLifetime
     [InlineData("""{"intervalMinutes":15,"intervalHours":4}""", 15)]
     [InlineData("""{"intervalMinutes":0}""", 15)]
     [InlineData("""{"intervalMinutes":"soon"}""", 15)]
+    // PowerShell's -as [int] first: numeric text is a number, and hours are whole before they are minutes.
+    [InlineData("""{"intervalMinutes":"1"}""", 1)]
+    [InlineData("""{"intervalHours":0.5}""", 15)]
     public void A_Dev_Box_interval_is_carried_as_agent_ha_bridge_ran_it(string devBox, int minutes)
     {
         var ahb = (JsonObject)JsonNode.Parse($$"""{"devBox":{{devBox}}}""", new JsonNodeOptions { PropertyNameCaseInsensitive = true })!;

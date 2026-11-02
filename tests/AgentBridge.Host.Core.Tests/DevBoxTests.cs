@@ -215,7 +215,45 @@ public sealed class DevBoxTests : IDisposable
 
         Assert.Equal(KeepAwakeResult.Blocked, result.Outcome);
         Assert.True(result.Alarming);
+        Assert.Contains("already as far out as the service allows (DelayUntilTimeExceedLimit)", result.Detail);
         Assert.Equal(1 + 1 + KeepAwakePass.DelayLadder.Length, dc.Calls.Count);
+    }
+
+    [Fact]
+    public async Task Levers_that_never_reach_Dev_Center_are_blocked_without_blaming_the_services_limit()
+    {
+        var dc = new FakeDevCenter
+        {
+            Answer = (m, _) => m == HttpMethod.Get ? Task.FromResult(Actions(Stop("2026-09-30T23:00:00Z"))) : throw new HttpRequestException("connection reset"),
+        };
+
+        var result = await Pass(dc);
+
+        Assert.Equal(KeepAwakeResult.Blocked, result.Outcome);
+        Assert.DoesNotContain("as far out as the service allows", result.Detail);
+        Assert.Contains("the last with connection reset", result.Detail);
+    }
+
+    [Fact]
+    public async Task A_lock_that_cannot_be_taken_at_all_fails_loudly_rather_than_reading_as_busy()
+    {
+        var notAFolder = Path.Combine(root, "a-file");
+        File.WriteAllText(notAFolder, "");
+        var dc = new FakeDevCenter { Answer = Serving(Actions(Stop("2026-09-30T23:00:00Z"))) };
+        var service = new KeepAwakeService(new KeepAwakeOptions
+        {
+            Settings = new DevBoxSettings { KeepAwake = true },
+            FindIdentity = () => (Box, null),
+            Token = new FakeToken(),
+            Http = dc,
+            Lock = new FileKeepAwakeLock(Path.Combine(notAFolder, "devbox-keepawake.lock")),
+        }, log.Add);
+
+        var result = await service.PassAsync();
+
+        Assert.Equal(KeepAwakeResult.Failed, result.Outcome);
+        Assert.Contains("lock could not be taken", result.Detail);
+        Assert.Empty(dc.Calls);
     }
 
     [Fact]

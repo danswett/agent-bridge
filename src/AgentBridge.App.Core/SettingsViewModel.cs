@@ -250,10 +250,36 @@ public sealed class SettingsViewModel : Observable
     // sessions it runs. Applies at once.
     public bool ShowDevBox => Status?.DevBox is not null;
 
+    // While changes are on their way, the last one asked for (1 on, 0 off, -1 none), so a switch
+    // turned on and straight back off is not taken for no change (the host's status still says
+    // off) and left on. Sent one at a time, each with what was asked last.
+    int keepAwakeWanted = -1;
+    int keepAwakePending;
+    readonly SemaphoreSlim keepAwakeGate = new(1, 1);
+
     public bool DevBoxKeepAwake
     {
-        get => Status?.Settings.DevBoxKeepAwake ?? false;
-        set { if (Status is { DevBox: not null } s && s.Settings.DevBoxKeepAwake != value) { _ = RunAsync(() => host.CallAsync(HostOps.Settings, new SettingsRequest(DevBoxKeepAwake: value))); } }
+        get => Volatile.Read(ref keepAwakeWanted) is var w and >= 0 ? w == 1 : Status?.Settings.DevBoxKeepAwake ?? false;
+        set
+        {
+            if (Status?.DevBox is null || DevBoxKeepAwake == value) { return; }
+            Volatile.Write(ref keepAwakeWanted, value ? 1 : 0);
+            Interlocked.Increment(ref keepAwakePending);
+            _ = RunAsync(async () =>
+            {
+                await keepAwakeGate.WaitAsync();
+                try
+                {
+                    if (Volatile.Read(ref keepAwakeWanted) is var w and >= 0) { await host.CallAsync(HostOps.Settings, new SettingsRequest(DevBoxKeepAwake: w == 1)); }
+                }
+                finally
+                {
+                    keepAwakeGate.Release();
+                    // The last one in: the switch shows what the host has now.
+                    if (Interlocked.Decrement(ref keepAwakePending) == 0) { Volatile.Write(ref keepAwakeWanted, -1); }
+                }
+            });
+        }
     }
 
     public string DevBoxText => Status?.DevBox is not { } d ? ""

@@ -12,16 +12,21 @@ public interface IKeepAwakeLock
 
 public sealed class FileKeepAwakeLock(string path) : IKeepAwakeLock
 {
+    // Null only while another pass holds it. A lock that cannot be had at all (a folder that cannot
+    // be made, a file it may not open) throws, so the pass fails loudly instead of reading as busy
+    // for ever.
     public IDisposable? TryTake()
     {
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None);
-        }
-        catch (IOException) { return null; }
-        catch (UnauthorizedAccessException) { return null; }
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None); }
+        catch (IOException e) when (Held(e)) { return null; }
     }
+
+    // As UserLock reads it: ERROR_SHARING_VIOLATION or ERROR_LOCK_VIOLATION on Windows, the flock's
+    // EWOULDBLOCK (Linux 11, macOS 35) elsewhere.
+    static bool Held(IOException e) => OperatingSystem.IsWindows()
+        ? e.HResult is unchecked((int)0x80070020) or unchecked((int)0x80070021)
+        : e.HResult is 11 or 35;
 }
 
 // What the keep-awake needs from the machine, so tests stand in for all of it.
@@ -176,10 +181,21 @@ public sealed class KeepAwakeService : IAsyncDisposable
         // A dry run changes nothing, so agent-ha-bridge's keep-awake running beside it does not
         // matter, nor does another pass.
         if (!dryRun && options.AgentHaBridgeKeepAwake() is { } owner) { return Record(new(KeepAwakeResult.StoodBack, owner), dryRun); }
-        using var held = dryRun ? null : options.Lock.TryTake();
-        if (!dryRun && held is null) { return Record(new(KeepAwakeResult.Busy, "another keep-awake pass is running; no Dev Center call was made"), dryRun); }
-        var result = await KeepAwakePass.RunAsync(identity, options.Token, options.Http, options.Time.GetUtcNow(), dryRun, log, cancellationToken);
-        return Record(result, dryRun);
+        IDisposable? held = null;
+        if (!dryRun)
+        {
+            try { held = options.Lock.TryTake(); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return Record(new(KeepAwakeResult.Failed, $"the keep-awake lock could not be taken ({e.Message}); no Dev Center call was made"));
+            }
+            if (held is null) { return Record(new(KeepAwakeResult.Busy, "another keep-awake pass is running; no Dev Center call was made")); }
+        }
+        using (held)
+        {
+            var result = await KeepAwakePass.RunAsync(identity, options.Token, options.Http, options.Time.GetUtcNow(), dryRun, log, cancellationToken);
+            return Record(result, dryRun);
+        }
     }
 
     KeepAwakeResult Record(KeepAwakeResult result, bool dryRun = false)

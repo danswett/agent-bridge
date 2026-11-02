@@ -214,8 +214,9 @@ instead of as a task of its own:
   takes over; `rollback` enables it again, and the host stands back from its next pass.
 * **What it says.** Every pass is a line in the host's log, beginning `keep-awake:` and its
   outcome: `skipped`, `delayed`, `safe`, `no-action` (nothing scheduled: the normal state while
-  anyone is connected), `blocked` (a stop the service would not move), `failed` (no `az login`,
-  Dev Center unreachable or refusing), `stood-back` or `busy`. `failed` and `blocked` add
+  anyone is connected), `blocked` (a stop the service would not move, or levers that never reached
+  it), `failed` (no `az login`, Dev Center unreachable or refusing, the lock file unusable),
+  `stood-back` or `busy`. `failed` and `blocked` add
   `THIS DEV BOX MAY HIBERNATE WHEN DISCONNECTED`. The app's Settings shows the switch on a Dev Box
   only, with the last pass and the next, and `failed` or `blocked` in red (`devBox` in the host's
   status, [local-pipe.md](protocol/local-pipe.md)).

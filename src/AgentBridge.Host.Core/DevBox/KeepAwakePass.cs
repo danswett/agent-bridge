@@ -103,6 +103,7 @@ public static class KeepAwakePass
         if (skipped.Ok) { return new(KeepAwakeResult.Skipped, $"skipped '{name}'"); }
         log($"keep-awake: skip refused for '{name}' ({skipped.Code}); trying delay");
 
+        var lastCode = skipped.Code;
         foreach (var hours in DelayLadder)
         {
             var until = scheduled.ToUniversalTime().AddHours(hours).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
@@ -113,8 +114,13 @@ public static class KeepAwakePass
                 return new(KeepAwakeResult.Delayed, $"delayed '{name}' by {hours}h to {moved}");
             }
             log($"keep-awake: delay +{hours}h refused ({delayed.Code})");
+            lastCode = delayed.Code;
         }
-        return new(KeepAwakeResult.Blocked, $"could not move '{name}'; it is already as far out as the service allows");
+        // Said as it was: the service's limit only when that is what it answered, since a request
+        // that never reached it (a network failure, say) leaves the ladder exhausted just the same.
+        return new(KeepAwakeResult.Blocked, lastCode.Contains("DelayUntilTimeExceedLimit", StringComparison.Ordinal)
+            ? $"could not move '{name}'; it is already as far out as the service allows ({lastCode})"
+            : $"could not move '{name}': skip and every delay failed, the last with {lastCode}");
     }
 
     // A refusal and a request that never got an answer are both "that lever did not work": as in

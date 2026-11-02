@@ -253,9 +253,10 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                 var from = hasMinutes ? "devBox.intervalMinutes" : devBox.ContainsKey("intervalHours") ? "devBox.intervalHours" : null;
                 if (from is not null)
                 {
-                    var raw = hasMinutes ? Number(devBox["intervalMinutes"]) : Number(devBox["intervalHours"]) * 60;
-                    // PowerShell's -as [int] rounds half to even.
-                    int? configured = raw is { } r ? (int)Math.Round(Math.Clamp(r, -1, 1_000_000), MidpointRounding.ToEven) : null;
+                    // Each read with PowerShell's -as [int] before anything else, as there: hours
+                    // are made whole before they are made minutes (0.5 h ran every 15 minutes, the
+                    // default, not every 30).
+                    int? configured = hasMinutes ? AsInt(devBox["intervalMinutes"]) : AsInt(devBox["intervalHours"]) is { } h ? h * 60 : null;
                     var interval = configured is not { } c || c < 1 ? AgentBridge.Host.Core.DevBox.DevBoxSettings.DefaultIntervalMinutes
                         : Math.Min(c, AgentBridge.Host.Core.DevBox.DevBoxSettings.MaxIntervalMinutes);
                     if (!hasMinutes || configured != interval)
@@ -457,6 +458,22 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
     static bool? Bool(JsonNode? n) => n is JsonValue v && v.TryGetValue<bool>(out var b) ? b : null;
 
     static double? Number(JsonNode? n) => n is JsonValue v && v.TryGetValue<double>(out var d) ? d : null;
+
+    // A value as PowerShell's -as [int] reads it: a number or numeric text rounded half to even, a
+    // boolean as 1 or 0, anything else none. Kept to a range nothing reaches by accident.
+    static int? AsInt(JsonNode? n)
+    {
+        if (n is not JsonValue v) { return null; }
+        double? d = v.GetValueKind() switch
+        {
+            JsonValueKind.Number => v.GetValue<double>(),
+            JsonValueKind.String when double.TryParse(v.GetValue<string>().Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) => parsed,
+            JsonValueKind.True => 1,
+            JsonValueKind.False => 0,
+            _ => null,
+        };
+        return d is { } x && double.IsFinite(x) ? (int)Math.Round(Math.Clamp(x, -1_000_000, 1_000_000), MidpointRounding.ToEven) : null;
+    }
 
     // agent-ha-bridge reads its lists through @(...), so one string is a list of one.
     static List<string>? Strings(JsonNode? n) => n is JsonArray a ? a.Select(Str).OfType<string>().ToList() : Str(n) is { } one ? [one] : null;
