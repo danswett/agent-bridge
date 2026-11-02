@@ -6,8 +6,10 @@
 // Outputs: pwa/design/tokens.css and pwa/design/sprite.svg; the PWA's theme colours in
 // pwa/index.html and pwa/manifest.webmanifest; src/AgentBridge.App/Design/DesignResources.xaml
 // and DesignKeys.cs; and the layout sizes for the app's view models in
-// src/AgentBridge.App.Core/DesignLayout.cs. design/preview.png is drawn by preview.mjs, which
-// needs a browser.
+// src/AgentBridge.App.Core/DesignLayout.cs. With them, the app icon (lib/app-icon.mjs):
+// design/app-icon/*.svg, pwa/icon.svg, pwa/icons/*.png, and the app's Assets/AgentBridge.ico
+// and AgentBridge.png, whose rasters are compared by their pixels. design/preview.png is drawn
+// by preview.mjs, which needs a browser.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -17,6 +19,7 @@ import { readDesignDir } from './lib/svg.mjs';
 import { tokensCss, spriteSvg } from './lib/emit-pwa.mjs';
 import { designXaml, designKeysCs, designLayoutCs } from './lib/emit-xaml.mjs';
 import { toCssColor } from './lib/color.mjs';
+import { staleAppIcons, writeAppIcons } from './lib/app-icon.mjs';
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -95,14 +98,16 @@ export function write(root = repoRoot) {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   if (process.argv.includes('--check')) {
-    const stale = staleFiles();
+    // The app icon's rasters take seconds to draw, so they stay out of generate(), which the tests
+    // call many times over, and have their own test.
+    const stale = [...staleFiles(), ...staleAppIcons(repoRoot)];
     if (stale.length) {
       console.error(`Stale against design/ (run node tools/design-gen/generate.mjs and commit the result):\n${stale.map((s) => `  ${s}`).join('\n')}`);
       process.exit(1);
     }
     console.log('Every generated file matches design/.');
   } else {
-    const written = write();
+    const written = [...write(), ...writeAppIcons(repoRoot)];
     console.log(written.length ? `Wrote:\n${written.map((s) => `  ${s}`).join('\n')}` : 'Every generated file already matches design/.');
   }
 }
