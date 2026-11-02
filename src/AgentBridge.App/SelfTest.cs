@@ -156,7 +156,8 @@ static partial class SelfTest
                 var stayed = main.Selected == openNow;
                 PressKey(0x28);
                 var opened = await Until(() => main.Selected == reached, TimeSpan.FromSeconds(5));
-                Check(stayed && opened, $"opens the row Down reaches in the list, and not a row only given focus (focus: {(stayed ? "opened nothing" : "opened its row")}; Down: {main.Selected?.Id ?? "none"})");
+                var focusNow = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is ListViewItem { Content: SessionCardViewModel f } ? f.Id : "not a row";
+                Check(stayed && opened, $"opens the row Down reaches in the list, and not a row only given focus (focus: {(stayed ? "opened nothing" : "opened its row")}; Down: {main.Selected?.Id ?? "none"}, focus on {focusNow})");
             }
             else { Check(false, "finds two rows to move between with Down"); }
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".window.png"));

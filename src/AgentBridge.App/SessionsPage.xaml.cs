@@ -148,11 +148,13 @@ public sealed partial class SessionsPage : UserControl
     // it, so a row given focus back after a move, or a focused row drawn again as the list
     // reordered, took the open session from one opened by a toast, search or Needs you. Moving
     // through the rows with the keys still opens each row reached, here.
-    void OnListFocus(object sender, RoutedEventArgs e)
+    // GettingFocus, raised as the key moves focus; GotFocus comes later, after the flag is reset.
+    // Chosen once the focus change is done.
+    void OnListFocus(UIElement sender, GettingFocusEventArgs e)
     {
-        if (!navigating || viewModel is null || e.OriginalSource is not ListViewItem { Content: SessionCardViewModel card }) { return; }
+        if (!navigating || viewModel is null || e.NewFocusedElement is not ListViewItem { Content: SessionCardViewModel card }) { return; }
         navigating = false;
-        viewModel.Selected = card;
+        DispatcherQueue.TryEnqueue(() => { if (viewModel.Sessions.Contains(card)) { viewModel.Selected = card; } });
     }
 
     // Shift+F10 or the menu key on a row: its menu, as right-click opens it.
