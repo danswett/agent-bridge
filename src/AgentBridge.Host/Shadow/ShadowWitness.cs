@@ -108,7 +108,6 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
         var plains = new List<string>();
         var changed = false;
         var dropped = false;
-        var fromName = new HashSet<string>(StringComparer.Ordinal);
         foreach (var e in entries)
         {
             var (plain, repeated) = Unrepeated(e.Label, e.Id);
@@ -136,8 +135,9 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
             var prefixed = LaunchService.Title(entry, prefixed: true) == plain;
             if (!prefixed && LaunchService.Title(entry, prefixed: false) != plain) { return null; }
             changed = true;
-            var prompt = ResumableStore.FirstPrompt(Path.Combine(paths.CopilotHome, "session-state", e.Id.ToLowerInvariant(), "events.jsonl"), DaemonPromptEnds);
-            if (prompt.Length > 0) { relabelled.Add((LaunchService.Title(entry with { Summary = prompt }, prefixed), e.Id, e.Agent, e.Launcher)); fromName.Add(e.Id); }
+            var prompt = Prompt(Path.Combine(paths.CopilotHome, "session-state", e.Id.ToLowerInvariant(), "events.jsonl"));
+            if (prompt is null) { return null; }
+            if (prompt.Length > 0) { relabelled.Add((LaunchService.Title(entry with { Summary = prompt }, prefixed), e.Id, e.Agent, e.Launcher)); }
             else { dropped = true; }
         }
         if (!changed) { return null; }
@@ -161,13 +161,10 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
         var labels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // The host also reserves labels for live sessions, which are eligible but not offered. A
         // title the daemon makes from a first prompt can meet one of those where the name did not
-        // (found in review), and the daemon would then tell it apart. So a relabelled title that a
-        // live session could hold leaves the list unexplained.
+        // (found in review), and so can a title freed of its suffix. The daemon would then tell
+        // them apart, so any title a live session could hold leaves the list unexplained.
         if (LiveTitles(host, entries) is not { } live) { return null; }
-        foreach (var (title, id, _, _) in relabelled)
-        {
-            if (fromName.Contains(id) && live.Contains(title)) { return null; }
-        }
+        if (relabelled.Any(r => live.Contains(r.Title))) { return null; }
         var mine = new List<string>();
         foreach (var (title, id, _, _) in relabelled)
         {
@@ -200,14 +197,27 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
             if (!Guid.TryParseExact(s.Id, "D", out _)) { return null; }
             var dir = Path.Combine(paths.CopilotHome, "session-state", s.Id.ToLowerInvariant());
             if (!Directory.Exists(dir)) { return null; }
-            var yaml = ResumableStore.ReadYaml(Path.Combine(dir, "workspace.yaml"));
-            var summary = yaml.TryGetValue("summary", out var v) ? v : ResumableStore.FirstPrompt(Path.Combine(dir, "events.jsonl"), DaemonPromptEnds);
+            var yamlPath = Path.Combine(dir, "workspace.yaml");
+            var yaml = ResumableStore.ReadYaml(yamlPath);
+            if (yaml.Count == 0 && File.Exists(yamlPath)) { return null; }
+            var summary = yaml.TryGetValue("summary", out var v) ? v : Prompt(Path.Combine(dir, "events.jsonl"));
+            if (summary is null) { return null; }
             if (string.IsNullOrWhiteSpace(summary)) { continue; }
             var entry = new ResumeEntry(s.Id, AgentKind.Copilot, "copilot", summary, yaml.GetValueOrDefault("cwd"), null);
             titles.Add(LaunchService.Title(entry, prefixed: true));
             titles.Add(LaunchService.Title(entry, prefixed: false));
         }
         return titles;
+    }
+
+    // The daemon's first prompt for a Copilot session: "" when it has none, as when its transcript
+    // is missing, and null when the transcript is there but could not be read, which tells nothing
+    // about what the daemon read (found in review).
+    static string? Prompt(string events)
+    {
+        if (!File.Exists(events)) { return ""; }
+        var prompt = ResumableStore.FirstPrompt(events, DaemonPromptEnds, out var read);
+        return read ? prompt : null;
     }
 
     // A label the host told apart with " (<first 8 of its id>)", and the label before that.

@@ -74,9 +74,12 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
 
     // A Copilot session's first prompt as a title, from the user.message lines in the first and
     // last `ends` bytes of its events.jsonl; "" when none is one.
-    public static string FirstPrompt(string events, int ends)
+    public static string FirstPrompt(string events, int ends) => FirstPrompt(events, ends, out _);
+
+    // The same, and whether the file could be read at all: "" is also what an unreadable one gives.
+    public static string FirstPrompt(string events, int ends, out bool read)
     {
-        foreach (var line in FileEnds(events, ends))
+        foreach (var line in FileEnds(events, ends, out read))
         {
             if (!line.Contains("\"type\":\"user.message\"", StringComparison.Ordinal)) { continue; }
             if (Parse(line) is { } r && r.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object && data.TryGetProperty("content", out var content)
@@ -239,10 +242,13 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
 
     // The complete lines in the first and last 64 KiB of a file, without reading the middle:
     // transcripts run to tens of megabytes, and what a resume list needs sits at either end.
-    internal static IEnumerable<string> FileEnds(string path, int ends = Ends)
+    internal static IEnumerable<string> FileEnds(string path, int ends = Ends) => FileEnds(path, ends, out _);
+
+    internal static IEnumerable<string> FileEnds(string path, int ends, out bool read)
     {
         byte[] head, tail;
         long length;
+        read = false;
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -253,6 +259,7 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
             {
                 tail = new byte[length - head.Length];
                 stream.ReadExactly(tail);
+                read = true;
                 return Lines(Encoding.UTF8.GetString([.. head, .. tail]), dropFirst: false, dropLast: false);
             }
             tail = new byte[ends];
@@ -260,6 +267,7 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
             stream.ReadExactly(tail);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return []; }
+        read = true;
         return Lines(Encoding.UTF8.GetString(head), dropFirst: false, dropLast: true).Concat(Lines(Encoding.UTF8.GetString(tail), dropFirst: true, dropLast: false));
     }
 

@@ -699,6 +699,25 @@ public sealed class ShadowWitnessTests : IDisposable
         // Agency's entries are Copilot sessions too, but their labels come from Agency, not workspace.yaml.
         Assert.All(Resume(daemon, new ShadowResumeEntry("Copilot: Fix The Widget - repo", Named, "copilot", "agency", @"C:\r\repo", null), Entry("Claude: Hello - repo", Claude, "claude")),
             x => Assert.Null(x.Known));
+
+        // A title freed of its suffix is held by a live session just the same.
+        CopilotSession(Summarised, "cwd: C:\\r\\repo\nsummary: Fix The Widget\n", "widget");
+        CopilotSession(Live, "cwd: C:\\r\\repo\nname: Other\n", "Fix The Widget");
+        Assert.All(Resume(["Copilot: fix the widget please - repo", "Copilot: Fix The Widget - repo", "Claude: Hello - repo"], "copilot", Live,
+            Entry("Copilot: Fix The Widget - repo", Named, "copilot"), Entry("Copilot: Fix The Widget - repo (22222222)", Summarised, "copilot"), Entry("Claude: Hello - repo", Claude, "claude")),
+            x => Assert.Null(x.Known));
+    }
+
+    [Fact]
+    public void A_transcript_that_cannot_be_read_is_no_evidence_the_daemon_found_no_prompt()
+    {
+        CopilotSession(Named, "cwd: C:\\r\\repo\nname: Fix The Widget\n", "fix the widget please");
+        ShadowResumeEntry[] host = [Entry("Copilot: Fix The Widget - repo", Named, "copilot"), Entry("Claude: Hello - repo", Claude, "claude")];
+        using (new FileStream(Path.Combine(f.CopilotHome, "session-state", Named, "events.jsonl"), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.All(Resume(["Hello - repo"], host), x => Assert.Null(x.Known));
+        }
+        Assert.All(Resume(["Copilot: fix the widget please - repo", "Claude: Hello - repo"], host), x => Assert.Equal("agent-ha-bridge#278", x.Known));
     }
 
     [Fact]
