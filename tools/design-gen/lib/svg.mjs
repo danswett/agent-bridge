@@ -163,7 +163,8 @@ function parseTransform(t, file) {
     if (!counts.includes(a.length)) { throw new Error(`${file}: ${m[1]}() takes ${counts.join(' or ')} numbers, not ${a.length}`); }
     if (m[1] === 'rotate') { ops.push({ rotate: a[0], cx: a[1] ?? 0, cy: a[2] ?? 0 }); } else { ops.push({ tx: a[0], ty: a[1] ?? 0 }); }
   }
-  if (t.replace(/(\w+)\s*\(([^)]*)\)/g, '').trim()) { throw new Error(`${file}: cannot read transform "${t}"`); }
+  // SVG separates transform functions with whitespace, commas or both.
+  if (t.replace(/(\w+)\s*\(([^)]*)\)/g, '').replace(/[\s,]+/g, '')) { throw new Error(`${file}: cannot read transform "${t}"`); }
   return ops;
 }
 

@@ -133,3 +133,10 @@ test('a part may clear the dashes it inherits with stroke-dasharray none', () =>
 test('an arc with a negative radius takes its absolute value and one with a zero radius is a line, as SVG draws them', () => {
   assert.equal(formatCommands(parsePathData('M2 8A-3 -3 0 0 1 8 8a0 4 0 0 1 4 0')), 'M2,8 A3,3 0 0 1 8,8 L12,8');
 });
+
+test('transform functions separated by a comma read as they do in SVG, and anything else between them is refused', () => {
+  const g = (t) => `<g transform="${t}"><path d="M2 8L14 8" stroke="currentColor"/></g>`;
+  const comma = parts(readDesignSvg(svgFile('comma', g('translate(1 0), translate(0 2)')), 'glyph'))[0];
+  assert.equal(formatCommands(comma.commands), 'M3,10 L15,10');
+  assert.throws(() => readDesignSvg(svgFile('junk', g('translate(1 0) ; translate(0 2)')), 'glyph'), /cannot read transform/);
+});
