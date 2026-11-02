@@ -179,3 +179,33 @@ private func controlFixture(_ socket: ControlRelay) -> RelayBridge {
     withExtendedLifetime(events) {}
     await relay.disconnect()
 }
+
+@Test func failedBlobUploadCleanupStillDeletesTheTicketWhenItsCallerIsCancelled() async throws {
+    let socket = ControlRelay()
+    let relay = controlFixture(socket)
+    let events = try await relay.connect()
+    let cleanup = Task {
+        withUnsafeCurrentTask { $0?.cancel() }
+        await RelayBlobUpload.cleanup(ticket: "AAAAAAAAAAAAAAAAAAAAAA.AA.AA", relay: relay)
+    }
+    await cleanup.value
+    #expect(await socket.controls.map { $0["t"]?.string } == ["blob-delete"])
+    #expect(await socket.closed == false)
+    withExtendedLifetime(events) {}
+    await relay.disconnect()
+}
+
+@Test func blobDeletionTimeoutDoesNotDisconnectOrReplayOtherRelayControls() async throws {
+    let socket = ControlRelay(behavior: .silent)
+    let relay = controlFixture(socket)
+    let events = try await relay.connect()
+    await #expect(throws: RelayError.timeout) {
+        try await relay.blobDelete(ticket: "AAAAAAAAAAAAAAAAAAAAAA.AA.AA", timeout: .milliseconds(100))
+    }
+    await socket.setBehavior(.automatic)
+    try await relay.forget(machineID: String(repeating: "a", count: 32))
+    #expect(await socket.controls.map { $0["t"]?.string } == ["blob-delete", "forget"])
+    #expect(await socket.closed == false)
+    withExtendedLifetime(events) {}
+    await relay.disconnect()
+}

@@ -495,17 +495,16 @@ final class BridgeStore {
         let connection = host.connectionID
         let (attachment, ticket, key) = try await RelayBlobUpload.prepare(file: url, name: url.lastPathComponent,
                                                                           type: type, recipient: host.id, relay: relay, origin: RelayAddress.validated(activeOrigin))
-        do {
-            guard token == generation, host.connectionID == connection else { throw RelayError.disconnected }
-            let operation = try attachment.start(ticket: ticket, key: key, capabilities: host.capabilities, isLocal: false)
-            let result = try await host.call(operation.op, data: operation.data, timeout: .seconds(120), onlyOn: connection)
-            let state = try BridgeAttachmentState(json: result)
-            guard state.complete, state.received == attachment.size else { throw BridgeOperationError("The machine has not confirmed this file.") }
-            return attachment.id
-        } catch {
-            try? await relay.blobDelete(ticket: ticket)
-            throw error
-        }
+        return try await BridgeBlobStaging.confirm(attachment, ticket: ticket, key: key, capabilities: host.capabilities,
+                                                   validateConnection: {
+                                                       try await MainActor.run {
+                                                           guard token == self.generation, host.connectionID == connection, host.isLive else { throw RelayError.disconnected }
+                                                       }
+                                                   }, send: { operation, timeout in
+                                                       try await host.call(operation.op, data: operation.data, timeout: timeout, onlyOn: connection)
+                                                   }, deleteBlob: {
+                                                       try await relay.blobDelete(ticket: ticket, timeout: .seconds(5))
+                                                   })
     }
 
     func forget(_ machineID: String) async throws {
