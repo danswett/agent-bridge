@@ -103,7 +103,7 @@ private actor ReplyDraftHost {
     defer { host.stop() }
     host.replyDrafts["s1"] = "Thanks.\n"
     let operation = try BridgeSessionOperations.reply(sessionID: "s1", text: "Thanks.\n", hasQuestion: false, capabilities: host.capabilities)
-    let sending = Task { await host.perform(operation, slot: "session:s1") }
+    let sending = Task { await host.perform(operation, slot: "session:s1", consumesReplyDraft: true) }
     try await awaitDraftState { await fixture.isPending }
     host.replyDrafts["s1", default: ""] += "Please stop your delegate witness."
     await fixture.finish()
@@ -118,11 +118,11 @@ private actor ReplyDraftHost {
     defer { host.stop() }
     let operation = try BridgeSessionOperations.reply(sessionID: "s1", text: "Continue", hasQuestion: false, capabilities: host.capabilities)
     host.replyDrafts["s1"] = "Continue"
-    await host.perform(operation, slot: "session:s1")
+    await host.perform(operation, slot: "session:s1", consumesReplyDraft: true)
     #expect(host.replyDrafts["s1"] == "")
     host.replyDrafts["s1"] = "Continue"
     // A duplicate request gets the same receipt, as a host's request cache does.
-    await host.perform(operation, slot: "session:s1")
+    await host.perform(operation, slot: "session:s1", consumesReplyDraft: true)
     #expect(host.replyDrafts["s1"] == "Continue")
     #expect(await fixture.replyRequests.map { $0.data["request"] } == [operation.data["request"], operation.data["request"]])
 }
@@ -133,12 +133,26 @@ private actor ReplyDraftHost {
     defer { host.stop() }
     host.replyDrafts["s1"] = "Continue"
     let operation = try BridgeSessionOperations.reply(sessionID: "s1", text: "Continue", hasQuestion: false, capabilities: host.capabilities)
-    await host.perform(operation, slot: "session:s1")
+    await host.perform(operation, slot: "session:s1", consumesReplyDraft: true)
     #expect(host.attempts["session:s1"]?.uncertain == true)
     #expect(host.replyDrafts["s1"] == "Continue")
     host.replyDrafts["s1", default: ""] += " Please stop your delegate witness."
     await host.retry("session:s1")
     #expect(host.replyDrafts["s1"] == "Please stop your delegate witness.")
+    #expect(await fixture.replyRequests.map { $0.data["request"] } == [operation.data["request"], operation.data["request"]])
+}
+
+@MainActor @Test func retryOfANonComposerReplyPreservesTheMatchingSavedDraft() async throws {
+    let fixture = ReplyDraftHost(.loseFirst)
+    let host = try await connectedDraftHost(fixture)
+    defer { host.stop() }
+    host.replyDrafts["s1"] = "Continue with tests"
+    let operation = try BridgeSessionOperations.reply(sessionID: "s1", text: "Continue", hasQuestion: false, capabilities: host.capabilities)
+    await host.perform(operation, slot: "session:s1")
+    #expect(host.attempts["session:s1"]?.uncertain == true)
+    await host.retry("session:s1")
+    #expect(host.attempts["session:s1"]?.result?["outcome"] == .string("delivered"))
+    #expect(host.replyDrafts["s1"] == "Continue with tests")
     #expect(await fixture.replyRequests.map { $0.data["request"] } == [operation.data["request"], operation.data["request"]])
 }
 
@@ -148,7 +162,7 @@ private actor ReplyDraftHost {
     defer { host.stop() }
     host.replyDrafts["s1"] = "Continue"
     let operation = try BridgeSessionOperations.reply(sessionID: "s1", text: "Continue", hasQuestion: false, capabilities: host.capabilities)
-    let sending = Task { await host.perform(operation, slot: "session:s1") }
+    let sending = Task { await host.perform(operation, slot: "session:s1", consumesReplyDraft: true) }
     try await awaitDraftState { await fixture.isPending }
     try await fixture.askQuestion()
     try await awaitDraftState { host.sessions.first?.question?["id"]?.string == "q1" }
@@ -171,7 +185,7 @@ func undeliveredOrUncertainReceiptsKeepTheWholeDraft(outcome: String) async thro
     defer { host.stop() }
     host.replyDrafts["s1"] = "Continue and keep this draft."
     let operation = try BridgeSessionOperations.reply(sessionID: "s1", text: "Continue", hasQuestion: false, capabilities: host.capabilities)
-    let sending = Task { await host.perform(operation, slot: "session:s1") }
+    let sending = Task { await host.perform(operation, slot: "session:s1", consumesReplyDraft: true) }
     try await awaitDraftState { await fixture.isPending }
     await fixture.finish(outcome)
     await sending.value
@@ -185,6 +199,6 @@ func deliveredReplyLeavesAChangedOrMerelyCanonicallyEquivalentDraft(draft: Strin
     defer { host.stop() }
     host.replyDrafts["s1"] = draft
     let operation = try BridgeSessionOperations.reply(sessionID: "s1", text: "Café", hasQuestion: false, capabilities: host.capabilities)
-    await host.perform(operation, slot: "session:s1")
+    await host.perform(operation, slot: "session:s1", consumesReplyDraft: true)
     #expect(host.replyDrafts["s1"]?.utf8.elementsEqual(draft.utf8) == true)
 }

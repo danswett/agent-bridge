@@ -12,6 +12,9 @@ struct HostTransport: Sendable {
 struct MutationAttempt {
     let operation: BridgeOperation
     let hostInstance: String
+    // Notification text is a separate draft, even when it matches the saved composer.
+    // Retain the origin on the attempt so an explicit retry has the same cleanup intent.
+    let consumesReplyDraft: Bool
     let firstSentAt = ContinuousClock.now
     var isSending = true
     var result: JSONValue?
@@ -72,6 +75,10 @@ final class HostStore: Identifiable {
     @ObservationIgnored private var transport: HostTransport?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var nextID = 0
+    private enum Report { case usage, update }
+    /// Responses and subscription events share a wire-ordered stream. Applying a
+    /// response from its awaiting task could overwrite a newer event (or vice versa).
+    @ObservationIgnored private var reportRequests: [Int: Report] = [:]
     /// One receipt per session, like the retained mutation slot. A view reopening or a
     /// duplicate receipt must not erase a newly composed draft with the same text.
     @ObservationIgnored private var cleanedReplyRequests: [String: UUID] = [:]
@@ -112,9 +119,9 @@ final class HostStore: Identifiable {
         start()
     }
 
-    func perform(_ operation: BridgeOperation, slot: String) async {
+    func perform(_ operation: BridgeOperation, slot: String, consumesReplyDraft: Bool = false) async {
         guard isLive, attempts[slot]?.isSending != true, attempts[slot]?.uncertain != true else { return }
-        attempts[slot] = MutationAttempt(operation: operation, hostInstance: instance)
+        attempts[slot] = MutationAttempt(operation: operation, hostInstance: instance, consumesReplyDraft: consumesReplyDraft)
         await deliver(slot)
     }
 
@@ -148,7 +155,9 @@ final class HostStore: Identifiable {
             let result = try await call(attempt.operation.op, data: attempt.operation.data,
                                         timeout: timeout, onlyTo: attempt.hostInstance)
             attempts[slot]?.result = result
-            cleanDeliveredReplyDraft(attempt.operation, result: result)
+            if attempt.consumesReplyDraft {
+                cleanDeliveredReplyDraft(attempt.operation, result: result)
+            }
             onMutationResult?(attempt.operation, result)
         } catch { attempts[slot]?.error = "Delivery was not confirmed. Check the session before trying again. \(error.localizedDescription)" }
         attempts[slot]?.isSending = false
@@ -186,6 +195,7 @@ final class HostStore: Identifiable {
         snapshotTimer?.cancel()
         let old = transport
         transport = nil
+        reportRequests.removeAll()
         if let old {
             Task { await old.close() }
         }
@@ -211,7 +221,7 @@ final class HostStore: Identifiable {
     func refreshUsage() async {
         guard can("usage") else { return }
         let token = connectionID
-        do { usage = try await call("usage.get", data: ["shared": .bool(capabilities.contains("usage.shared"))]) }
+        do { _ = try await call("usage.get", data: ["shared": .bool(capabilities.contains("usage.shared"))]) }
         catch {
             if token == connectionID {
                 status = error.localizedDescription
@@ -226,9 +236,39 @@ final class HostStore: Identifiable {
     private func send(_ op: String, data: [String: JSONValue] = [:], transport: HostTransport,
                       timeout: Duration = .seconds(15)) async throws -> JSONValue
     {
-        let response = try await transport.send(.init(id: allocate(), op: op, data: data), timeout)
-        guard response.ok == true else { throw RelayError.refused(response.error ?? "The host refused the request.") }
-        return response.result ?? .null
+        let id = allocate()
+        let connection = connectionID
+        switch op {
+        case "usage.get", "usage.subscribe": reportRequests[id] = .usage
+        case "update.get", "update.subscribe": reportRequests[id] = .update
+        default: break
+        }
+        do {
+            let response = try await transport.send(.init(id: id, op: op, data: data), timeout)
+            guard response.ok == true else { throw RelayError.refused(response.error ?? "The host refused the request.") }
+            return response.result ?? .null
+        } catch {
+            // A previous connection's late failure must not remove a reused request ID.
+            if connection == connectionID {
+                reportRequests.removeValue(forKey: id)
+            }
+            throw error
+        }
+    }
+
+    private func receiveReport(_ envelope: BridgeEnvelope) {
+        if let id = envelope.re, let report = reportRequests.removeValue(forKey: id), envelope.ok == true {
+            switch report {
+            case .usage: usage = envelope.result
+            case .update: update = envelope.result
+            }
+        }
+        if envelope.ev == "usage.update" {
+            usage = envelope.data
+        }
+        if envelope.ev == "update.state" {
+            update = envelope.data
+        }
     }
 
     private func run(generation token: UUID) async {
@@ -246,6 +286,7 @@ final class HostStore: Identifiable {
                 connectionID = UUID()
                 let attempt = connectionID
                 nextID = 0
+                reportRequests.removeAll()
                 let greeting = try await send("hello", transport: current)
                 guard greeting["protocol"] == .number(1),
                       greeting["capabilities"]?.array?.contains(.string("sessions.read")) == true
@@ -260,14 +301,12 @@ final class HostStore: Identifiable {
                 var initialSnapshot = true
                 try await subscribe(&state, transport: current, generation: token)
                 if capabilities.contains("usage") {
-                    let report = try await send("usage.subscribe", data: ["shared": .bool(capabilities.contains("usage.shared"))], transport: current)
+                    _ = try await send("usage.subscribe", data: ["shared": .bool(capabilities.contains("usage.shared"))], transport: current)
                     guard token == generation else { await current.close(); return }
-                    usage = report
                 }
                 if capabilities.contains("update") {
-                    let state = try await send("update.subscribe", transport: current)
+                    _ = try await send("update.subscribe", transport: current)
                     guard token == generation else { await current.close(); return }
-                    update = state
                 }
                 refreshTask = Task {
                     do {
@@ -288,26 +327,20 @@ final class HostStore: Identifiable {
                 for try await envelope in current.messages {
                     try Task.checkCancellation()
                     guard token == generation, attempt == connectionID else { break }
-                    if envelope.ev == "usage.update" {
-                        usage = envelope.data
-                    }
-                    if envelope.ev == "update.state" {
-                        update = envelope.data
-                    }
                     if !state.receive(envelope) {
                         isLive = false
                         status = "Resynchronizing…"
                         try await subscribe(&state, transport: current, generation: token)
                         if capabilities.contains("usage") {
-                            let report = try await send("usage.subscribe", data: ["shared": .bool(capabilities.contains("usage.shared"))], transport: current)
+                            _ = try await send("usage.subscribe", data: ["shared": .bool(capabilities.contains("usage.shared"))], transport: current)
                             guard token == generation else { await current.close(); return }
-                            usage = report
                         }
                         if capabilities.contains("update") {
-                            let report = try await send("update.subscribe", transport: current)
+                            _ = try await send("update.subscribe", transport: current)
                             guard token == generation else { await current.close(); return }
-                            update = report
                         }
+                    } else {
+                        receiveReport(envelope)
                     }
                     if state.isSynchronized {
                         snapshotTimer?.cancel()
@@ -338,6 +371,7 @@ final class HostStore: Identifiable {
                 }
                 guard token == generation else { return }
                 transport = nil
+                reportRequests.removeAll()
                 refreshTask?.cancel()
                 snapshotTimer?.cancel()
                 isLive = false

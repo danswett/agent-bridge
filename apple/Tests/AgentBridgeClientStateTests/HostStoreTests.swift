@@ -96,7 +96,7 @@ private actor FixtureHost {
 }
 
 @Test func unknownMutationOutcomesRemainUncertainAndUpdateAcceptanceIsRecognized() {
-    var attempt = MutationAttempt(operation: .init(op: "update.install"), hostInstance: "fixture")
+    var attempt = MutationAttempt(operation: .init(op: "update.install"), hostInstance: "fixture", consumesReplyDraft: false)
     attempt.isSending = false
     attempt.result = .object(["outcome": .string("future-value")])
     #expect(attempt.uncertain)
