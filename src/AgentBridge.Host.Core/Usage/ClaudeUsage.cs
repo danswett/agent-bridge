@@ -218,7 +218,7 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
         if (probes!.Find(AgentKind.Claude) is not { } exe) { return (Auth.Unavailable, null); }
         if (Environment() is not { } environment)
         {
-            say($"usage: Claude Code's home ({options.ClaudeHome}) is a relative path, which a probe could not be given without changing whose sign-in it reads; not asking it");
+            say($"usage: Claude Code's home ({options.ClaudeHome}) cannot be given to a probe as its own sessions see it (a relative path, or its account kept outside it); not asking it");
             return (Auth.Unavailable, null);
         }
         var process = probes.Launcher.Start(new ProbeCommand(exe, ["auth", "status"], WorkingDirectory(), environment));
@@ -338,7 +338,21 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
         return probes.WorkingDirectory;
     }
 
-    Dictionary<string, string?>? Environment() => ProbeEnvironment.Home("CLAUDE_CONFIG_DIR", options.ClaudeHome, ".claude", namespaced: true);
+    // The probe's environment, or null where a probe would not be this profile's: a relative home
+    // (ProbeEnvironment.Home), or one whose account this host reads somewhere other than where the
+    // probe would save it. Claude Code keeps .claude.json inside CLAUDE_CONFIG_DIR when that is set
+    // and beside the default home when it is not; a --claude-home laid out as another home's
+    // ~/.claude, its account beside it, would be probed under CLAUDE_CONFIG_DIR as another profile,
+    // with another credential, and its reading saved where it is never read.
+    Dictionary<string, string?>? Environment()
+    {
+        const string variable = "CLAUDE_CONFIG_DIR";
+        if (ProbeEnvironment.Home(variable, options.ClaudeHome, ".claude", namespaced: true) is not { } environment) { return null; }
+        var config = environment.TryGetValue(variable, out var set) ? set : System.Environment.GetEnvironmentVariable(variable);
+        var saves = config is null ? Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile), ".claude.json")
+            : Path.Combine(config, ".claude.json");
+        return options.ClaudeAccountPath is { } read && ProbeEnvironment.Same(saves, read) ? environment : null;
+    }
 
     // What .claude.json says: whose account it is (its digest), and Claude Code's last reading of
     // its allowance when that reading is the same account's. A reading saved for another account

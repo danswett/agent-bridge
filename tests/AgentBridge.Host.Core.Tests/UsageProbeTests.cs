@@ -28,13 +28,14 @@ public sealed class UsageProbeTests : IDisposable
     public void Dispose() => f.Dispose();
 
     string Probe => Path.Combine(f.Root, "probe");
-    string AccountPath => Path.Combine(f.Root, "home", ".claude.json");
+    // Inside the home, where Claude Code keeps it under the CLAUDE_CONFIG_DIR a probe of this (not the default) home is given.
+    string AccountPath => Path.Combine(f.ClaudeHome, ".claude.json");
 
-    UsageOptions Options(string? socket = null) => new()
+    UsageOptions Options(string? socket = null, string? claudeAccount = null) => new()
     {
         CopilotHome = f.CopilotHome,
         ClaudeHome = f.ClaudeHome,
-        ClaudeAccountPath = AccountPath,
+        ClaudeAccountPath = claudeAccount ?? AccountPath,
         CodexHome = f.CodexHome,
         CodexControlSocket = socket ?? Path.Combine(f.Root, "no-daemon.sock"),
     };
@@ -289,6 +290,24 @@ public sealed class UsageProbeTests : IDisposable
         await Settled(claude);
         var usage = (await claude.CollectAsync())!;
         Assert.Equal((40, null), (usage.Windows[0].Percent, usage.Error));
+    }
+
+    [Fact]
+    public async Task A_Claude_home_whose_account_is_kept_beside_it_is_read_and_never_probed_as_another_profile()
+    {
+        // A --claude-home laid out as another home's ~/.claude: its account beside it, which a probe
+        // given CLAUDE_CONFIG_DIR would neither read nor save to.
+        ClaudeSaved(Now.AddHours(-2));
+        var beside = Path.Combine(f.Root, "home", ".claude.json");
+        File.Move(AccountPath, beside);
+        ClaudeScript(refresh: true);
+        var claude = new ClaudeUsageCollector(Options(claudeAccount: beside), time, Probes(), Log);
+
+        var usage = await claude.CollectAsync();
+        await Settled(claude);
+
+        Assert.Equal(12, usage!.Windows[0].Percent);
+        Assert.Empty(launcher.Started);
     }
 
     [Fact]
@@ -901,11 +920,17 @@ public sealed class UsageProbeTests : IDisposable
             var key = UsageProbes.LeaseKey(AgentKind.Codex, real);
             Assert.Equal(key, UsageProbes.LeaseKey(AgentKind.Codex, Path.Combine(root, "home-link")));
             Assert.Equal(key, UsageProbes.LeaseKey(AgentKind.Codex, Path.Combine(root, "parent-link", ".codex")));
+            // `..` after a link: from the folder it led to, except on Windows, which takes it from the text.
+            Directory.CreateDirectory(Path.Combine(root, "real", "nested"));
+            Directory.CreateDirectory(Path.Combine(root, "home"));
+            DiscoveryHoldTests.Link(Path.Combine(root, "nested-link"), Path.Combine(root, "real", "nested"));
+            var through = Path.Combine(root, "nested-link", "..", ".codex");
+            Assert.Equal(UsageProbes.LeaseKey(AgentKind.Codex, OperatingSystem.IsWindows() ? Path.Combine(root, ".codex") : real), UsageProbes.LeaseKey(AgentKind.Codex, through));
             Assert.NotEqual(key, UsageProbes.LeaseKey(AgentKind.Codex, Path.Combine(root, "real", "other")));
         }
         finally
         {
-            foreach (var link in new[] { "home-link", "parent-link" })
+            foreach (var link in new[] { "home-link", "parent-link", "nested-link" })
             {
                 var path = Path.Combine(root, link);
                 if (Directory.Exists(path)) { Directory.Delete(path); }
@@ -1250,13 +1275,17 @@ public sealed class UsageProbeTests : IDisposable
 
     [Theory]
     // The usage read refused for want of a ChatGPT login: signed out since the first read, or not.
-    [InlineData(true, "signed out", nameof(CodexProbeKind.SignedOut))]
-    [InlineData(true, "api key", nameof(CodexProbeKind.NotApplicable))]
+    [InlineData("refused", "signed out", nameof(CodexProbeKind.SignedOut))]
+    [InlineData("refused", "api key", nameof(CodexProbeKind.NotApplicable))]
     // The usage read answered with no windows: what the second read says still counts.
-    [InlineData(false, "signed out", nameof(CodexProbeKind.SignedOut))]
-    [InlineData(false, "api key", nameof(CodexProbeKind.NotApplicable))]
-    [InlineData(false, "chatgpt", nameof(CodexProbeKind.Failed))]
-    public async Task What_the_second_account_read_says_counts_whatever_the_usage_read_answered(bool refused, string second, string kind)
+    [InlineData("empty", "signed out", nameof(CodexProbeKind.SignedOut))]
+    [InlineData("empty", "api key", nameof(CodexProbeKind.NotApplicable))]
+    [InlineData("empty", "chatgpt", nameof(CodexProbeKind.Failed))]
+    // The usage read failed for a passing reason: so does the second read count.
+    [InlineData("failed", "signed out", nameof(CodexProbeKind.SignedOut))]
+    [InlineData("failed", "api key", nameof(CodexProbeKind.NotApplicable))]
+    [InlineData("failed", "chatgpt", nameof(CodexProbeKind.Failed))]
+    public async Task What_the_second_account_read_says_counts_whatever_the_usage_read_answered(string usage, string second, string kind)
     {
         object login = second switch
         {
@@ -1267,7 +1296,12 @@ public sealed class UsageProbeTests : IDisposable
         AppServer(s =>
         {
             s.Answers["account/read"] = n => FakeAppServer.Result(n == 1 ? Account() : login);
-            s.Answers["account/rateLimits/read"] = _ => refused ? FakeAppServer.Error("chatgpt authentication required to read rate limits") : FakeAppServer.Result(new { });
+            s.Answers["account/rateLimits/read"] = _ => usage switch
+            {
+                "refused" => FakeAppServer.Error("chatgpt authentication required to read rate limits"),
+                "failed" => FakeAppServer.Error("failed to fetch codex rate limits: application network policy is unavailable"),
+                _ => FakeAppServer.Result(new { }),
+            };
         });
 
         var outcome = await RunToEnd(CodexProbe().Start());

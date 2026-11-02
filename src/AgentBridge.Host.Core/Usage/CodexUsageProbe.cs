@@ -268,12 +268,6 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
         if (Login(first.Result) is { } login) { watch?.End(); return login; }
         var limits = await rpc.CallAsync("account/rateLimits/read", new { excludeResetCreditDetails = true });
         var measured = clock.GetUtcNow();
-        var notChatGpt = limits.Error is { } limitsError && limitsError.Contains("chatgpt authentication required", StringComparison.OrdinalIgnoreCase);
-        if (limits.Error is { } failed && !notChatGpt)
-        {
-            watch?.End();
-            return Failure(failed, rateLimits: true);
-        }
         var second = await rpc.CallAsync("account/read", new { refreshToken = false });
         var others = watch?.End() ?? true;
         // What the second read says of the login, looked at before the usage read is: the usage
@@ -283,12 +277,13 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
         var changed = second.Error is { } secondError
             ? SignedOut(secondError) && !Slow(secondError) ? new CodexProbeOutcome(CodexProbeKind.SignedOut, null, secondError) : Failure(secondError)
             : Login(second.Result);
-        if (notChatGpt)
+        if (limits.Error is { } limitsError)
         {
-            // No ChatGPT login to read: another kind of login now, or none since the first read
-            // (another daemon client signing out), which is a sign-out.
-            return changed is { Kind: CodexProbeKind.SignedOut or CodexProbeKind.Failed } ? changed
-                : new(CodexProbeKind.NotApplicable, Why: "Codex is not signed in with ChatGPT");
+            // Whatever the usage read's error, a login gone or changed since the first read
+            // (another daemon client signing out, or onto an API key) is what it was.
+            if (changed is { Kind: CodexProbeKind.SignedOut or CodexProbeKind.NotApplicable }) { return changed; }
+            if (!limitsError.Contains("chatgpt authentication required", StringComparison.OrdinalIgnoreCase)) { return Failure(limitsError, rateLimits: true); }
+            return changed is { Kind: CodexProbeKind.Failed } ? changed : new(CodexProbeKind.NotApplicable, Why: "Codex is not signed in with ChatGPT");
         }
         // Signed in some other way by the second read (an API key, another provider): the usage
         // read may have been the old login's, and is not this one's, so it is dropped.

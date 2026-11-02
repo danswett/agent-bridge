@@ -222,7 +222,10 @@ refresh and locking, and runs no model turn.
   executable found as a launch finds it, in a folder the host owns and keeps empty
   (`<profile>/usage-probe`), with no standard input, and `CLAUDE_CONFIG_DIR` set only for a profile
   that is not the default (Claude Code names its Windows credential by it, so a relative home, which
-  the probe would read from its own folder, is not probed at all). `/usage` is a local
+  the probe would read from its own folder, is not probed at all; nor is a home whose account this
+  host reads anywhere but where the probe would save it, such as a `--claude-home` laid out as
+  another home's `~/.claude` with its account beside it: given `CLAUDE_CONFIG_DIR`, the probe would
+  be another profile). `/usage` is a local
   command: no model is asked. A probe that ends with the file unchanged (rate limited) is a failure.
   `claude auth status`, at most hourly, gates it: only a `claude.ai` login is probed, and one that
   says `loggedIn: false` is the failure `Claude Code is signed out on this machine`, under the
@@ -283,7 +286,7 @@ what the agents saved), at most every 15 minutes while no session of it is open 
 while one is, and only at the idle pace while agent-ha-bridge's daemon runs for the user. One runs at a time per
 agent home on the machine: a lease file per agent home under the product's own folder
 (`usage-probes/<agent>-<digest>.lock`, the digest of the home's folder with every link on its
-path followed, so a home and a link to it share one), shared by hosts serving different bridge profiles, is
+path followed, and `..` taken after them as the system does, so a home and a link to it share one), shared by hosts serving different bridge profiles, is
 taken before the host looks at what runs and kept until the probe's process ends, even after the
 host stopped waiting for it. None starts beside a Claude probe already running on the machine (one
 left by a host that has since stopped; any Claude process ending with the probe's options counts,

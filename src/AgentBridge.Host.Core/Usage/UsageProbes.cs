@@ -59,30 +59,47 @@ public sealed class UsageProbes
         return $"{agent.ToString().ToLowerInvariant()}-{hash}";
     }
 
-    // The path with every link along it followed (symbolic links, and junctions on Windows). A
-    // part that cannot be looked at is taken as it is.
-    internal static string Physical(string path, int depth = 0)
+    // The path with every link along it followed (symbolic links, and junctions on Windows), as
+    // the system resolves it: on Windows `..` is taken from the text before anything is looked at,
+    // elsewhere from the folder a link led to (`/r/link/../home`, with link at /r/real/nested, is
+    // /r/real/home). A part that cannot be looked at is taken as it is.
+    internal static string Physical(string path)
     {
-        var full = Path.GetFullPath(path);
-        var root = Path.GetPathRoot(full) ?? "";
-        var parts = full[root.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
+        var start = OperatingSystem.IsWindows() ? Path.GetFullPath(path)
+            : Path.IsPathRooted(path) ? path : Path.Combine(Directory.GetCurrentDirectory(), path);
+        var root = Path.GetPathRoot(start) ?? "";
+        var pending = new Stack<string>(start[root.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries).Reverse());
         var current = root;
-        for (var i = 0; i < parts.Length; i++)
+        var links = 0;
+        while (pending.TryPop(out var part))
         {
-            current = Path.Combine(current, parts[i]);
-            if (depth >= 16) { continue; }
+            if (part == ".") { continue; }
+            if (part == "..")
+            {
+                current = Path.GetDirectoryName(current) ?? current;
+                continue;
+            }
+            var next = Path.Combine(current, part);
             string? target = null;
-            try
+            if (links < 32)
             {
-                var info = new DirectoryInfo(current);
-                if (info.LinkTarget is not null) { target = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName; }
+                try
+                {
+                    var info = new DirectoryInfo(next);
+                    if (info.LinkTarget is { } link) { target = Path.IsPathRooted(link) ? link : Path.Combine(current, link); }
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
             }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
-            if (target is not null)
+            if (target is null)
             {
-                // The target's own path may pass through links too.
-                return Physical(Path.Combine([target, .. parts[(i + 1)..]]), depth + 1);
+                current = next;
+                continue;
             }
+            // The link's target, itself walked part by part: it may pass through links, or `..`.
+            links++;
+            var targetRoot = Path.GetPathRoot(target) ?? "";
+            foreach (var p in target[targetRoot.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries).Reverse()) { pending.Push(p); }
+            current = targetRoot;
         }
         return current;
     }
@@ -227,11 +244,11 @@ internal static class ProbeEnvironment
         return environment;
     }
 
-    static bool Same(string a, string b)
+    public static bool Same(string a, string b)
     {
         try
         {
-            return string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)), Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)),
+            return string.Equals(Path.TrimEndingDirectorySeparator(UsageProbes.Physical(a)), Path.TrimEndingDirectorySeparator(UsageProbes.Physical(b)),
                 OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
         }
         catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
