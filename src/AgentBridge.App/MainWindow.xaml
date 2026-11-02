@@ -162,6 +162,8 @@
                                                         </HyperlinkButton>
                                                         <TextBlock
                                                             TextWrapping="Wrap"
+                                                            FlowDirection="LeftToRight"
+                                                            TextReadingOrder="DetectFromContent"
                                                             Text="{x:Bind Line}"
                                                             Visibility="{x:Bind local:Ui.Show(ShowLine)}" />
                                                         <!-- An approval answered here shows its prompt whole: everything Approve once allows. -->

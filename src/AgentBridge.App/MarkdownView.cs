@@ -111,7 +111,9 @@ public sealed class MarkdownView : StackPanel
         CornerRadius = new CornerRadius(6),
         Padding = new Thickness(10, 8, 10, 8),
         Child = WrapCode
-            ? new TextBlock { Text = c.Text.TrimEnd('\n'), FontFamily = Mono, FontSize = 13, IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap }
+            // The lane's code reads in the order it runs: left to right, not reordered by its
+            // surroundings (NeedsYouEntry refuses or escapes anything drawn elsewhere).
+            ? new TextBlock { Text = c.Text.TrimEnd('\n'), FontFamily = Mono, FontSize = 13, IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap, FlowDirection = FlowDirection.LeftToRight, TextReadingOrder = TextReadingOrder.DetectFromContent }
             : new ScrollViewer
         {
             HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,

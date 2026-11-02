@@ -1,3 +1,6 @@
+using System.Buffers;
+using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using AgentBridge.Protocol;
 
@@ -166,9 +169,52 @@ public sealed partial class NeedsYouEntry : Observable
     // a host writes a permission (LiteralShape).
     public static bool WholePrompt(Question q)
     {
+        // A character that is not drawn, or is drawn somewhere other than where it runs, is never on
+        // screen as it will run: a bidi control can make `curl ... | sh` read as a comment.
+        if (HasHidden(q.Message)) { return false; }
         // Every line ending the renderer breaks on is counted: a bare CR is a line too.
         var m = q.Message.Trim().Replace("\r\n", "\n").Replace('\r', '\n');
         return m.Length > 0 && m.Length <= PromptMaxChars && m.Split('\n').Length <= PromptMaxLines && LiteralShape(m) && !HasTable(MarkdownModel.Parse(m));
+    }
+
+    // Characters a reader cannot see as they run: format characters (bidi controls, zero-width
+    // spaces and joiners), controls other than a newline or a tab (a CR too: a shell runs it as part
+    // of the command), private-use and unassigned code points, unpaired surrogates, and the line and
+    // paragraph separators (pwa/js/needs-you.js HIDDEN).
+    public static bool HasHidden(string text)
+    {
+        for (var i = 0; i < text.Length;)
+        {
+            if (Rune.DecodeFromUtf16(text.AsSpan(i), out var r, out var n) != OperationStatus.Done || Hidden(r)) { return true; }
+            i += n;
+        }
+        return false;
+    }
+
+    static bool Hidden(Rune r) => r.Value is 0x2028 or 0x2029 || Rune.GetUnicodeCategory(r) switch
+    {
+        UnicodeCategory.Format or UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned or UnicodeCategory.Surrogate => true,
+        UnicodeCategory.Control => r.Value is not ('\n' or '\t'),
+        _ => false,
+    };
+
+    // Any such character drawn as a visible escape (\u202E), so the lane's line reads in the order it
+    // runs.
+    public static string Reveal(string text)
+    {
+        var b = new StringBuilder(text.Length);
+        for (var i = 0; i < text.Length;)
+        {
+            if (Rune.DecodeFromUtf16(text.AsSpan(i), out var r, out var n) != OperationStatus.Done)
+            {
+                b.Append($"\\u{(int)text[i]:X4}");
+                i += Math.Max(n, 1);
+                continue;
+            }
+            if (Hidden(r)) { b.Append(r.Value > 0xFFFF ? $"\\u{{{r.Value:X}}}" : $"\\u{r.Value:X4}"); } else { b.Append(r.ToString()); }
+            i += n;
+        }
+        return b.ToString();
     }
 
     // Whether a prompt has the shape a host writes for a permission, so that what is drawn is what is
@@ -258,8 +304,8 @@ public sealed partial class NeedsYouEntry : Observable
         var message = q.Message.Replace("\r\n", "\n").Replace('\r', '\n');
         var (prose, code) = MarkdownModel.Outline(message);
         var lines = message.Split('\n');
-        if (prose is int at && at < lines.Length && PlainLine(Container().Replace(lines[at], "")) is { Length: > 0 } line) { return line; }
-        return code is null ? "" : Cut(Spaces().Replace(code, " ").Trim());
+        if (prose is int at && at < lines.Length && PlainLine(Container().Replace(Reveal(lines[at]), "")) is { Length: > 0 } line) { return line; }
+        return code is null ? "" : Cut(Spaces().Replace(Reveal(code), " ").Trim());
     }
 
     [GeneratedRegex(@"^(?: {0,3}(?:>\s?|[-*+]\s+|\d+[.)]\s+))+")]

@@ -115,7 +115,9 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
   own buttons (its `QuestionViewModel`), offered only for Copilot's prompts, which a host writes
   whole and literal, and only under the whole prompt (600 characters and 12 lines at most, no
   table, code wrapped, shaped as a host writes it: prose, then at most one fenced block ending
-  it, its fence naming no language but json or diff, and no link, whose words hide where it goes) since Approve once allows all of it; a
+  it, its fence naming no language but json or diff, no link, whose words hide where it goes, and no
+  character drawn other than where it runs, such as a bidi control or a zero-width space, which
+  the entry's line shows as an escape like `\u202E`) since Approve once allows all of it; a
   longer approval, a Codex one, a
   form and anything this app can't answer open the card, with focus; a prompt marked
   `answerAtMachine` says so, with no controls. The lane never moves a card. Its count is the
