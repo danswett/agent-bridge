@@ -32,8 +32,8 @@ public sealed record ShadowSession
     // last-writer text on both sides, does not.
     public string? CardResponseTail { get; init; }
     // The host only: the ids of the background sub-agents it counts in Agents, from its subagents
-    // list, or null when the list does not show all of them (none listed for its budget, or capped
-    // with no finished entry after the running ones).
+    // list, or null when the list does not show as many running as it counts (some capped, or
+    // none listed at all).
     public IReadOnlyList<string>? RunningSubagents { get; init; }
     public ShadowQuestion? Question { get; init; }
     // The host only: a Copilot permission prompt is pending, which it offers to approve and so

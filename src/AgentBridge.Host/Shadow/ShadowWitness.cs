@@ -332,6 +332,18 @@ public sealed partial class TranscriptEvidence(string path)
                     }
                     break;
                 }
+            // The host ends a failed agent's run there (BackgroundWork.AgentFailed): a change the
+            // daemon may not have read yet, as for any other end (found in review).
+            case "subagent.failed":
+                {
+                    var key = agentId ?? (Str(data, "toolCallId") is { } call && agentByCall.TryGetValue(call, out var k) ? k : null);
+                    if (key is not null && agents.TryGetValue(key, out var failed))
+                    {
+                        EndRun(failed, at);
+                        failed.ChangedAt = at;
+                    }
+                    break;
+                }
             case "system.notification" when data.ValueKind == JsonValueKind.Object && data.TryGetProperty("kind", out var kind) && kind.ValueKind == JsonValueKind.Object:
                 switch (Str(kind, "type"))
                 {

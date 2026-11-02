@@ -32,16 +32,14 @@ public static class HostSide
     };
 
     // What background.agents counts, entry by entry: background sub-agents working or waiting, at
-    // any depth (subagents.md §2). Running ones are listed first, so the list holds them all unless
-    // nothing finished follows them and some were left out. A host that lists none while it counts
-    // some (one from before sub-agents, or an agent that reports counts only, rule 8) is compared
-    // by its count alone.
+    // any depth (subagents.md §2). The list holds them all exactly when it lists as many running
+    // as the host counts; the budget may have dropped finished entries, or the cap running ones
+    // (found in review). A host that lists fewer, none included (one from before sub-agents, or an
+    // agent that reports counts only, rule 8), is compared by its count alone.
     static IReadOnlyList<string>? RunningSubagents(Session s)
     {
-        var list = s.Subagents ?? [];
-        if (list.Count == 0 && s.Activity.Background is { Agents: > 0 }) { return null; }
-        if (s.SubagentsMore is > 0 && !list.Any(a => a.Finished)) { return null; }
-        return [.. list.Where(a => a.Kind == SubagentKind.Background && !a.Finished).Select(a => a.Id)];
+        IReadOnlyList<string> running = [.. (s.Subagents ?? []).Where(a => a.Kind == SubagentKind.Background && !a.Finished).Select(a => a.Id)];
+        return running.Count == (s.Activity.Background?.Agents ?? 0) ? running : null;
     }
 
     // Permission prompts are not compared: agent-ha-bridge only mirrors them as an alert and arms

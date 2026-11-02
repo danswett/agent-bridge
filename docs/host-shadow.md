@@ -404,7 +404,7 @@ five, and the comparison now classifies each as below.
 **Sub-agents, entry by entry (#175).** Since S1 (#173) the host lists the agents behind its
 `background.agents` (`subagents`: background entries `working` or `waiting`, at any depth,
 the same ones the daemon counts from `subagent.started`). When that list holds them all
-(nothing left out, or a finished entry after the running ones), the agents are matched one
+(it lists as many running as the host counts; the budget drops finished entries first), the agents are matched one
 by one as well as counted. A host that counts agents but lists none (one from before
 sub-agents, or an agent that reports counts only) is compared by its count alone. Each of the daemon's tool calls is mapped to its agent through
 the transcript's `subagent.started`. Each agent the host counts and the daemon does not must
@@ -414,7 +414,7 @@ the transcript does not map, or a list of a different length from the host's own
 explains nothing. The counts must still add up as above, so this only ever narrows what is
 put down to the daemon. The same number of different agents on each side is now a
 `background.agents` difference ("not the same agents"), judged by the same rule. Agents
-that started, stopped, completed or were woken at or past the daemon's `Offset` are left
+that started, stopped (a run's end or `subagent.failed`), completed or were woken at or past the daemon's `Offset` are left
 out of that check: the daemon a poll behind a handoff is not a disagreement, and
 successive handoffs caught a sample each would otherwise join into one long episode. A wrong
 agent on one side is no longer hidden by another on the other. The daemon still counts every

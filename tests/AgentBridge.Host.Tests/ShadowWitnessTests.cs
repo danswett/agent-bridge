@@ -304,8 +304,13 @@ public sealed class ShadowWitnessTests : IDisposable
             Assert.Empty(Explain(read, [$"c{n}"], [$"a{n + 1}"]));
             read = new FileInfo(Paths.CopilotTranscript(Id)!).Length;
         }
+        // A failure is a handoff too: the host ends a failed agent's run there (found in review).
+        Write(Event("subagent.failed", new { toolCallId = "c4" }, agentId: "a4"),
+            Event("subagent.started", new { toolCallId = "c5", executionMode = "background" }, agentId: "a5"));
+        Assert.Empty(Explain(read, ["c4"], ["a5"]));
+        read = new FileInfo(Paths.CopilotTranscript(Id)!).Length;
         // Once the daemon has read the handoff, the same count of different agents is a mismatch.
-        Assert.Null(Assert.Single(Explain(read, ["c3"], ["a4"])).Known);
+        Assert.Null(Assert.Single(Explain(read, ["c4"], ["a5"])).Known);
     }
 
     // Found in review (#77): a shell polled more often than the witness kept starts lost the start
