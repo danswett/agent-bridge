@@ -237,6 +237,15 @@ test.describe('on a phone', () => {
     await expect(view(page, CLAUDE).locator('.session-title')).toBeFocused();
   });
 
+  test('Ctrl+K over a pushed session goes back to the list and focuses search', async ({ page }) => {
+    await openDemo(page);
+    const v = await open(page, CLAUDE);
+    await page.keyboard.press('Control+k');
+    await expect(v).toBeHidden();
+    await expect(page.locator('#list-pane')).toBeVisible();
+    await expect(page.locator('#search')).toBeFocused();
+  });
+
   test('the header\'s overflow menu holds Pin, Details and End session', async ({ page }) => {
     await openDemo(page);
     const v = await open(page, CODEX);
@@ -280,6 +289,18 @@ test('Tools are not fetched while another page shows, and are fetched once on co
   expect(await calls()).toBe(before);
   await page.locator('#nav [data-nav="sessions"]').click();
   await expect.poll(calls).toBe(before + 1);
+});
+
+test('a Needs you entry opens its session on Conversation, where its question is, even if Tools was left open', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 900 });
+  await openDemo(page);
+  const v = await open(page, COPILOT);
+  await v.locator('.view-tab', { hasText: 'Tools' }).click();
+  await open(page, CLAUDE);
+  await page.locator(`#needs-you .needs-entry[data-id="${COPILOT}"] .needs-title`).click();
+  await expect(v).toBeVisible();
+  await expect(v.locator('.view-tab', { hasText: 'Conversation' })).toHaveAttribute('aria-selected', 'true');
+  await expect(v.locator('.question')).toBeVisible();
 });
 
 test('Tools left while the session changed are fetched again when they show', async ({ page }) => {

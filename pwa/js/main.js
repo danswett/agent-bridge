@@ -107,8 +107,6 @@ function focusLinked() {
   // Taken before the session is shown: showing it closes a search that hid it, which redraws
   // the list, which comes back here.
   linked = null;
-  // Its question is in the conversation, which a tab may have hidden.
-  card.setTab('conversation');
   page.showSession(card.id, card.hostId);
   // The question's answer controls, not a code block's Copy button in its message: Enter on
   // a notification's question must answer it, not copy the command it shows.

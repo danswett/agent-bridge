@@ -137,11 +137,21 @@ export class Shell {
     }
   }
 
+  // beforeSearch: what a page does first (the sessions page, on a phone, goes back to the list
+  // from a session pushed over it, where search lives).
   openSearch() {
     if (!this.#signedIn) { return; }
+    const back = this.beforeSearch?.() === true;
     this.doc.body.classList.add('searching');
-    this.els.search?.focus();
-    this.els.search?.select();
+    const focus = () => { this.els.search?.focus(); this.els.search?.select(); };
+    // Going back is the browser's own, so it lands a moment later: search takes focus once it
+    // shows, looked for a frame at a time (WebKit settles the page a frame after popstate).
+    const whenShown = (frames) => {
+      if (!this.els.search || this.els.search.getClientRects().length > 0) { focus(); return; }
+      if (frames > 0) { this.win.requestAnimationFrame(() => whenShown(frames - 1)); }
+    };
+    if (back) { this.win.addEventListener('popstate', () => whenShown(30), { once: true }); }
+    focus();
   }
 
   closeSearch() {

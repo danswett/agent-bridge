@@ -146,6 +146,13 @@ export class SessionsPage {
       // Search narrows the sessions list; the launch page's panel is open while it shows, and
       // asks its machine again each time it opens.
       shell.onSearch((q) => this.view.setFilter(q));
+      // On a phone a pushed session hides the list and its search: back to the list first.
+      shell.beforeSearch = () => {
+        if (!this.phone.matches || !this.#open || shell.route !== 'sessions') { return false; }
+        const popped = this.#overList() && globalThis.history?.length > 1;
+        this.#back();
+        return popped;
+      };
       // Kept, so a page retired with its account (clear()) stops answering routes: a second
       // sign-in in the same tab would otherwise have two pages rendering into one list.
       this.#unroute = shell.onRoute(({ route, rest }) => {
@@ -181,6 +188,8 @@ export class SessionsPage {
     if (!card) { return false; }
     // A launch whose session search would hide: the search goes, and the session shows.
     if (this.view.hidden(card)) { this.shell?.closeSearch(); }
+    // Its question, or what it was opened for, is in the conversation, which a tab may hide.
+    card.setTab('conversation');
     this.#choose(card);
     for (const el of [card.element, card.view]) {
       el.classList.add('linked');
