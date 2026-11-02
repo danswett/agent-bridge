@@ -131,7 +131,9 @@ public sealed partial class MainWindow : Window
     void OnCheckHere(object sender, RoutedEventArgs e)
     {
         ShowPage("settings");
-        if (ViewModel.Settings is { } s) { _ = s.CheckForUpdatesAsync(); }
+        // Not while Settings is busy with another operation, as its own Check is disabled then: two
+        // at once would each clear Busy as it ended, with the other still running.
+        if (ViewModel.Settings is { Busy: false } s) { _ = s.CheckForUpdatesAsync(); }
     }
     void OnCheckMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Check();
     void OnInstallMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Install();
