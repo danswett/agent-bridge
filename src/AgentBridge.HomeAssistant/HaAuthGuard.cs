@@ -18,9 +18,10 @@ namespace AgentBridge.HomeAssistant;
 // (its test-auth-backoff.ps1, 2026-09-28).
 //
 // So every request the host makes with a Home Assistant token goes through this guard, which
-// counts refusals per token and per Home Assistant across every caller and every process of this
-// user (the connector, ha shadow, shadow run), in a file beside the profiles, so a restart starts
-// nothing over:
+// counts refusals per token, and in all for this machine, across every caller and every process of
+// this user (the connector, ha shadow, shadow run), in a file beside the profiles, so a restart
+// starts nothing over. In all, not per address: Home Assistant counts by the client's address, and
+// homeassistant.local, its IP and http or https are one Home Assistant to it:
 //   * a rejected token (401, auth_invalid) is tried at most MaxRejections times in all, Spacing
 //     apart, and then never again until it, or the address it is used with, changes;
 //   * once Home Assistant has refused MaxRejections times without a WebSocket login succeeding in
@@ -48,11 +49,14 @@ public sealed class HaAuthGuard
     readonly TimeProvider time;
     readonly Action<string> log;
     readonly object gate = new();
-    readonly Dictionary<string, SemaphoreSlim> probes = new(StringComparer.Ordinal);
+    readonly SemaphoreSlim probe = new(1, 1);
     readonly List<HaCredential> known = [];
     State state = new();
     bool unreadableSaid;
     bool unlockedSaid;
+    // The record could not be written once: from then on this process keeps its own count, which
+    // a read of the stale file must not undo (a refusal lost that way would be repeated for ever).
+    bool unwritable;
 
     // path: the shared record (FileFor); null keeps it in this process only.
     public HaAuthGuard(string? path = null, TimeProvider? time = null, Action<string>? log = null)
@@ -127,11 +131,6 @@ public sealed class HaAuthGuard
         lock (gate) { decision = Decide(credential, time.GetUtcNow()); }
         if (decision.Gate == Gate.Clear) { return new Lease(this, credential, null); }
         if (decision.Gate == Gate.Held) { throw Refusal(credential, decision.Kind, sent: false); }
-        SemaphoreSlim probe;
-        lock (gate)
-        {
-            if (!probes.TryGetValue(credential.Server, out probe!)) { probes[credential.Server] = probe = new SemaphoreSlim(1, 1); }
-        }
         await probe.WaitAsync(cancellationToken);
         try
         {
@@ -216,6 +215,7 @@ public sealed class HaAuthGuard
 
     Decision Decide(HaCredential credential, DateTimeOffset now)
     {
+        // Nothing known of this address: a token not tried here before, the one attempt a change earns.
         if (!state.Servers.TryGetValue(credential.Server, out var server)) { return new(Gate.Probe); }
         server.Credentials.TryGetValue(credential.Id, out var c);
         if (server.BannedSince is { } since)
@@ -227,18 +227,18 @@ public sealed class HaAuthGuard
         }
         if (c is { Rejections: > 0 })
         {
-            if (Stopped(server, c)) { return new(Gate.Held); }
-            return now < NextAttempt(server, c) ? new(Gate.Held) : new(Gate.Probe);
+            if (Stopped(c)) { return new(Gate.Held); }
+            return now < NextAttempt(c) ? new(Gate.Held) : new(Gate.Probe);
         }
         return c is { Accepted: true } ? new(Gate.Clear) : new(Gate.Probe);
     }
 
-    static bool Stopped(Server server, Cred c) => c.Rejections >= MaxRejections || server.Strikes >= MaxRejections;
+    bool Stopped(Cred c) => c.Rejections >= MaxRejections || state.Strikes >= MaxRejections;
 
-    static DateTimeOffset NextAttempt(Server server, Cred c)
+    DateTimeOffset NextAttempt(Cred c)
     {
         var last = c.RejectedAt ?? DateTimeOffset.MinValue;
-        if (server.StrikeAt is { } strike && strike > last) { last = strike; }
+        if (state.StrikeAt is { } strike && strike > last) { last = strike; }
         return last + Spacing[Math.Min(c.Rejections - 1, Spacing.Count - 1)];
     }
 
@@ -288,8 +288,8 @@ public sealed class HaAuthGuard
                     }
                     c.Rejections++;
                     c.RejectedAt = now;
-                    server.Strikes++;
-                    server.StrikeAt = now;
+                    s.Strikes++;
+                    s.StrikeAt = now;
                 }
             });
             said = DescribeLocked(credential) ?? Message(credential, kind);
@@ -310,7 +310,7 @@ public sealed class HaAuthGuard
             var server = state.Servers.GetValueOrDefault(credential.Server);
             var c = server?.Credentials.GetValueOrDefault(credential.Id);
             changed = server is null || c is not { Accepted: true, Rejections: 0 } || server.BannedSince is not null || server.Forbidden > 0
-                || (resetsCount && server.Strikes > 0);
+                || (resetsCount && state.Strikes > 0);
             if (!changed)
             {
                 c!.AttemptAt = now;
@@ -331,8 +331,8 @@ public sealed class HaAuthGuard
                 sv.Forbidden = 0;
                 if (resetsCount)
                 {
-                    sv.Strikes = 0;
-                    sv.StrikeAt = null;
+                    s.Strikes = 0;
+                    s.StrikeAt = null;
                 }
             });
         }
@@ -365,12 +365,12 @@ public sealed class HaAuthGuard
         }
         if (!server.Credentials.TryGetValue(credential.Id, out var c) || c.Rejections == 0) { return null; }
         var head = Message(credential, HaAuthKind.Rejected);
-        if (Stopped(server, c))
+        if (Stopped(c))
         {
             return $"{head}. Stopped after {c.Rejections} refused attempt{(c.Rejections == 1 ? "" : "s")} with it: " +
                 "nothing more is sent with it until it changes, so Home Assistant has no reason to ban this machine.";
         }
-        var next = NextAttempt(server, c);
+        var next = NextAttempt(c);
         return $"{head}. {c.Rejections} of {MaxRejections} attempts used; " +
             (next > now ? $"the next is not before {Clock(next)}" : "the next is due") + ", to stay well short of Home Assistant's ban threshold.";
     }
@@ -429,7 +429,8 @@ public sealed class HaAuthGuard
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
                 // Still counted in this process, which is what keeps it from repeating itself.
-                log($"Home Assistant's refusals could not be recorded in {path}: {e.Message}");
+                if (!unwritable) { log($"Home Assistant's refusals could not be recorded in {path} ({e.GetType().Name}); counting in this process"); }
+                unwritable = true;
             }
         }
     }
@@ -441,7 +442,7 @@ public sealed class HaAuthGuard
 
     State Read()
     {
-        if (path is null) { return state; }
+        if (path is null || unwritable) { return state; }
         try
         {
             if (!File.Exists(path)) { return state.Servers.Count == 0 ? new State() : state; }
@@ -489,15 +490,16 @@ public sealed class HaAuthGuard
     sealed class State
     {
         public int Version { get; set; } = 1;
+        // Refusals Home Assistant has counted against this machine since a WebSocket login last
+        // reset its count: by any token, at any address it was reached by.
+        public int Strikes { get; set; }
+        public DateTimeOffset? StrikeAt { get; set; }
         public Dictionary<string, Server> Servers { get; set; } = new(StringComparer.Ordinal);
     }
 
     // One Home Assistant, by address.
     sealed class Server
     {
-        // Refusals Home Assistant has counted since a WebSocket login last reset its count.
-        public int Strikes { get; set; }
-        public DateTimeOffset? StrikeAt { get; set; }
         // 403s running, with nothing accepted between.
         public int Forbidden { get; set; }
         public DateTimeOffset? BannedSince { get; set; }

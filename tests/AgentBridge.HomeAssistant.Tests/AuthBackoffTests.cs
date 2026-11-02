@@ -104,6 +104,39 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Null(guard.Describe(guard.Credential(Url, "third-token-not-a-secret")));
     }
 
+    // Home Assistant counts by this machine's address, not by the URL it was reached at.
+    [Fact]
+    public async Task Another_spelling_of_the_address_is_a_change_that_earns_one_attempt_not_three_more()
+    {
+        var ha = new Answering(time);
+        var guard = new HaAuthGuard(Record, time);
+        await Hammer(Client(ha, guard), TimeSpan.FromHours(1));
+        Assert.Equal(3, ha.Seen.Count);
+
+        foreach (var url in new[] { "https://ha.test:8123", "http://homeassistant.test:8123" })
+        {
+            await Hammer(new HomeAssistantClient(new Uri(url), Token, new HttpClient(ha), auth: guard), TimeSpan.FromHours(2));
+        }
+        Assert.Equal(5, ha.Seen.Count);
+    }
+
+    // A record that cannot be written must not forget a refusal when it is read again, or the token
+    // would be tried every five minutes for ever.
+    [Fact]
+    public async Task A_record_that_cannot_be_written_still_stops_a_rejected_token_after_three_attempts()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var guard = new HaAuthGuard(Record, time);
+        Assert.Null(await Publish(Client(ha, guard, "other-token-not-a-secret")));
+        Assert.True(File.Exists(Record));
+        Directory.CreateDirectory(Record + ".tmp");
+
+        ha.Status = HttpStatusCode.Unauthorized;
+        await Hammer(Client(ha, guard), TimeSpan.FromDays(1));
+
+        Assert.Equal(1 + HaAuthGuard.MaxRejections, ha.Seen.Count);
+    }
+
     [Fact]
     public async Task A_403_once_the_token_was_accepted_is_reported_as_a_ban_and_only_looked_at_now_and_then()
     {

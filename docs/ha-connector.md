@@ -1230,9 +1230,11 @@ agent-ha-bridge's (`test-auth-backoff.ps1`):
 - **A rejected token** (401 or `auth_invalid`) is tried at most 3 times in all, at least 5 and
   then 15 minutes apart. After that it is never sent again: not on a timer, and not after a
   restart. Only a change of token or address gives an attempt.
-- **A change** (`ha token set`, even with the same token, or a new `homeAssistant.baseUrl`) earns
-  exactly one attempt once Home Assistant has refused 3 times without a WebSocket login since.
-  Until then, a new token has the same 3 attempts.
+- **Refusals are counted for the machine**, whatever the token and however the address is
+  written (`homeassistant.local`, its IP, `http` or `https`), since Home Assistant counts by the
+  client's address. Once it has refused 3 times without a WebSocket login since, a change
+  (`ha token set`, even with the same token, or a new `homeAssistant.baseUrl`) earns exactly one
+  attempt.
 - **A token not yet accepted** goes one request at a time, so a burst of callers spends one
   attempt, not one each. That covers a fresh start, a fresh token, and a look during a ban.
 - **A ban** is recognised as a 403 from a token Home Assistant accepted before, or as 403 twice
