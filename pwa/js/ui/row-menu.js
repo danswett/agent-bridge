@@ -2,6 +2,7 @@
 // a long press on a phone, a right-click, or the context-menu key (Shift+F10) from a keyboard.
 // Arrow keys move between items, Escape closes it, and focus goes back where it came from.
 import { h } from './dom.js';
+import { enter, leave } from './motion.js';
 
 export class RowMenu {
   #el = null;
@@ -43,7 +44,10 @@ export class RowMenu {
     const bar = document.getElementById('nav');
     const fixed = bar && !bar.hidden && getComputedStyle(bar).position === 'fixed';
     const floor = fixed ? bar.getBoundingClientRect().top : window.innerHeight;
-    if (r.bottom > floor && anchor.getBoundingClientRect().top - r.height > 0) { el.classList.add('up'); }
+    const up = r.bottom > floor && anchor.getBoundingClientRect().top - r.height > 0;
+    if (up) { el.classList.add('up'); }
+    // Menu (ui.md §5.3): it settles in from its anchor, and is usable as it does.
+    enter(el, 'menu', { dy: up ? 1 : -1 });
     el.scrollIntoView?.({ block: 'nearest' });
     (buttons.find((b) => !b.disabled) ?? el).focus?.();
   }
@@ -53,6 +57,8 @@ export class RowMenu {
     this.#off?.();
     this.#off = null;
     const had = this.#el.contains(document.activeElement);
+    // What was chosen acts at once; the menu fades out where it was.
+    leave(this.#el, 'menu');
     this.#el.remove();
     this.#el = null;
     if (refocus && had && this.#back?.isConnected) { this.#back.focus({ preventScroll: true }); }

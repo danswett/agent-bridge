@@ -39,6 +39,7 @@ import { FleetStatus } from './fleet.js';
 import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UpdateControl } from './update.js';
 import { UsageView } from './ui/usage-view.js';
+import { reveal, watchDisclosures } from './ui/motion.js';
 import { DemoBlobStore, DemoConnection, DemoHost, demoDelegating, demoMachines, demoTransfers, demoTrust, runScript } from './demo.js';
 import { RelayBlobs } from './blobs.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
@@ -201,7 +202,7 @@ function registerServiceWorker() {
     });
   }).catch((e) => console.warn('service worker:', e.message));
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (hadController) { $('update-banner').hidden = false; }
+    if (hadController) { reveal($('update-banner')); }
   });
   $('reload').onclick = () => location.reload();
 }
@@ -607,7 +608,7 @@ function begin(account) {
   connection.on('presence', () => page.drawMachines());
   connection.on('log', (line) => console.log(line));
   connection.on('state', ({ state }) => {
-    $('replaced-banner').hidden = state !== 'replaced';
+    if (state === 'replaced') { reveal($('replaced-banner')); } else { $('replaced-banner').hidden = true; }
     switch (state) {
       // News, as reconnecting is: the strip shows on a phone, in plain words.
   case 'connecting': return setPill('Connecting…', 'busy');
@@ -673,6 +674,7 @@ async function startLive() {
 }
 
 registerServiceWorker();
+watchDisclosures(document);
 (params.get('demo') === '1' ? startDemo() : startLive()).catch((e) => {
   console.error(e);
   setPill('Error', 'bad');

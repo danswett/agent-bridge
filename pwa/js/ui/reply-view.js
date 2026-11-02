@@ -21,6 +21,7 @@ import { ReplyLimits, checkReply, replyRequest } from '../replies.js';
 import { AttachmentLimits, describeSize, prepareAttachment } from '../attachments.js';
 import { CANCELLED } from '../reply-service.js';
 import { isSendKey, shortcutHints } from '../platform.js';
+import { enter } from './motion.js';
 
 let seq = 0;
 const where = (machineName) => (machineName ? ` on ${machineName}` : '');
@@ -356,8 +357,11 @@ export class ReplyBox {
     const shown = entry ? describeReply(entry, { machineName: this.machineName, working: this.#session?.status === 'working' }) : { text: '', tone: '' };
     if (this.#preparing > 0 && !this.#pending(entry)) { shown.text = 'Reading the attachment…'; shown.tone = 'progress'; }
     e.form.dataset.reply = entry ? (entry.state === 'done' ? (OUTCOME_TEXT[entry.outcome] ? entry.outcome : 'unconfirmed') : entry.state) : 'none';
+    const was = e.status.className;
     e.status.textContent = shown.text;
     e.status.className = `answer-status reply-status${shown.tone ? ` ${shown.tone}` : ''}`;
+    // Send acknowledged (ui.md §5.3): each new state of the reply rises into place.
+    if (shown.text && e.status.className !== was) { enter(e.status, 'acknowledge', { dy: 1 }); }
     e.form.setAttribute('aria-busy', shown.tone === 'progress' ? 'true' : 'false');
     e.resend.hidden = entry?.state !== 'failed' || entry.request === this.#edited || entry.reason === CANCELLED;
     const { service, hostId, sessionId } = this.replying;

@@ -6,6 +6,8 @@
 // still hide themselves when they have nothing to show, inside it.
 import { isSearchKey, shortcutHints } from '../platform.js';
 
+import { slide } from './motion.js';
+
 export const ROUTES = Object.freeze(['sessions', 'machines', 'launch', 'usage', 'settings']);
 export const HOME = 'sessions';
 
@@ -194,8 +196,17 @@ export class Shell {
       // Focus that was in the page left goes to the new page's content, not to the document.
       if (leaving) { this.els.main?.focus({ preventScroll: true }); }
     }
+    const shown = (a) => a.getClientRects().length > 0;
+    const was = this.links.find((a) => a.getAttribute('aria-current') === 'page' && shown(a));
+    const left = was ? was.getBoundingClientRect() : null;
     for (const a of this.links) {
       if (a.dataset.nav === route) { a.setAttribute('aria-current', 'page'); } else { a.removeAttribute('aria-current'); }
+    }
+    // Selection (ui.md §5.3): the navigation's pill slides from the way left to the way taken.
+    const now = this.links.find((a) => a.dataset.nav === route && shown(a));
+    if (left && now && now !== was) {
+      const r = now.getBoundingClientRect();
+      slide(now, 'selection', left.left - r.left, left.top - r.top, { pseudo: '::before' });
     }
     this.doc.body.dataset.page = route;
     const changed = from.route !== route || from.rest.join('/') !== this.#current.rest.join('/');

@@ -9,6 +9,7 @@
 // the same request, until there is an outcome.
 import { h } from './dom.js';
 import { renderMarkdown } from '../markdown.js';
+import { enter } from './motion.js';
 import {
   Limits, draftText, initialState, isRecommended, optionTone, orderOptions, prepareAnswer,
   tapToAnswer, utf8Bytes,
@@ -485,8 +486,12 @@ export class QuestionPanel {
     const { again, pause } = answerControls(entry);
     const held = !!this.#held;
     this.element.dataset.answer = answerState(entry);
+    const was = e.status.className;
     e.status.textContent = shown.text;
     e.status.className = `answer-status${shown.tone ? ` ${shown.tone}` : ''}`;
+    // Answer acknowledged (ui.md §5.3): each new state of the answer rises into place. The
+    // question and its buttons never move.
+    if (shown.text && e.status.className !== was) { enter(e.status, 'acknowledge', { dy: 1 }); }
     e.status.hidden = !shown.text;
     e.form.setAttribute('aria-busy', shown.tone === 'progress' ? 'true' : 'false');
     e.controls.disabled = !again || pause || held;

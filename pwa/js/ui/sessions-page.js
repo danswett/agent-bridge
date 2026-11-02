@@ -24,6 +24,7 @@ import { maxPlain } from '../blobs.js';
 import { SessionOrder, SORTS, SORT_LABELS } from '../session-order.js';
 import { NeedsYouLane } from './needs-you-view.js';
 import { AppBadge } from '../needs-you.js';
+import { enter, scrollBehavior } from './motion.js';
 
 // The machine last launched on, or picked to launch on, with every machine shown.
 export const LAUNCH_HOST = 'agent-bridge.app.launchHost';
@@ -321,11 +322,13 @@ export class SessionsPage {
       el.classList.add('linked');
       setTimeout(() => el.classList.remove('linked'), 4000);
     }
-    card.element.scrollIntoView({ block: 'nearest' });
+    // Scroll to a question (ui.md §5.3): smoothly, or at once under reduced motion.
+    const behavior = scrollBehavior();
+    card.element.scrollIntoView({ block: 'nearest', behavior });
     card.els.titleText.tabIndex = -1;
     card.els.titleText.focus({ preventScroll: true });
     // A question it was opened for is in sight, however far its conversation was scrolled.
-    card.view.querySelector('.question-slot .question')?.scrollIntoView({ block: 'nearest' });
+    card.view.querySelector('.question-slot .question')?.scrollIntoView({ block: 'nearest', behavior });
     return true;
   }
 
@@ -486,6 +489,9 @@ export class SessionsPage {
     this.#write(INSPECTOR, this.#inspectorHidden ? 'hidden' : 'shown');
     this.view.layoutChanged();
     this.#drawPanes();
+    // Pane and inspector (ui.md §5.3): its column opens at once, and its content slides in from
+    // the trailing edge. Hiding closes the column at once.
+    if (!this.#inspectorHidden && this.wide.matches) { enter(this.view.selected?.els.inspector, 'pane', { dx: 1 }); }
   }
 
   // Which panes show: on a phone, the list or the session pushed over it; the inspector, as its
@@ -493,10 +499,19 @@ export class SessionsPage {
   #drawPanes() {
     const body = globalThis.document?.body;
     if (!body) { return; }
+    const was = body.dataset.sessionOpen;
     body.dataset.sessionOpen = this.#open && this.view?.selected ? 'true' : 'false';
     body.dataset.inspector = this.#inspectorHidden ? 'hidden' : 'shown';
     const none = this.$('no-session');
     if (none) { none.hidden = !!this.view?.selected; }
+    // Push and pop (ui.md §5.3): on a phone the screen that comes covers the other at once, and
+    // only its content slides in, from the trailing side going in and the leading side coming
+    // back. Not the first drawing, which is the app starting.
+    if (was !== undefined && was !== body.dataset.sessionOpen && this.phone.matches) {
+      const opened = body.dataset.sessionOpen === 'true';
+      const content = opened ? this.view.selected?.view : this.$('list-pane');
+      enter(content, 'push', { dx: opened ? 1 : -1 });
+    }
   }
 
   // Everything tied to the signed-in account goes with it.

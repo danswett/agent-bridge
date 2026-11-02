@@ -3,6 +3,8 @@
 // own. Colour is the role's, set in app.css from data-glyph; the moving part is its own group
 // so app.css can turn it, and reduced motion stops it there.
 
+import { enter, leave } from './motion.js';
+
 const NS = 'http://www.w3.org/2000/svg';
 const SPRITE = 'design/sprite.svg';
 
@@ -47,6 +49,10 @@ export function setGlyph(svg, name, { size = 16, label = null, driven = false } 
   }
   const drawn = `${g}${driven ? '+driven' : ''}`;
   if (svg.dataset.drawn !== drawn) {
+    // A status glyph's state change (ui.md §5.3): the old glyph cross-fades into the new one.
+    // Not its first drawing, and only where it is on screen.
+    const change = !!svg.dataset.drawn && svg.isConnected;
+    if (change) { leave(svg, 'glyph'); }
     svg.dataset.drawn = drawn;
     const part = MOVING[g];
     const parts = [use(part ? `glyph-${g}--still` : `glyph-${g}`)];
@@ -58,6 +64,7 @@ export function setGlyph(svg, name, { size = 16, label = null, driven = false } 
     }
     if (driven) { parts.push(use('glyph-driven-badge', 'glyph-badge')); }
     svg.replaceChildren(...parts);
+    if (change) { enter(svg, 'glyph'); }
   }
   return svg;
 }

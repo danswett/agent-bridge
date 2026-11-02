@@ -323,6 +323,8 @@ for (const width of [900, 1440]) {
       await page.mouse.up();
       await expect.poll(() => order(page)).toEqual([COPILOT, DELEGATING, CLAUDE, CODEX]);
       await expect(page.locator('.drop-before, .drop-after, .dragging')).toHaveCount(0);
+      // The row dropped slides into its place (ui.md §5.3): measured once it is there.
+      await page.waitForFunction(() => !document.getAnimations().some((a) => a.id === 'ab-motion-reorder' && a.playState === 'running'));
 
       // Escape puts a drag back.
       await card(page, CLAUDE).hover();

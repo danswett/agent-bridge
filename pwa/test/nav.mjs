@@ -42,5 +42,7 @@ export async function open(page, id, hostId = null) {
   await backToList(page);
   await row(page, id, hostId).locator('.row-main').click();
   await expect(v).toBeVisible();
+  // On a phone its content slides in (ui.md §5.3): what a test measures next is where it lands.
+  await page.waitForFunction(() => !document.getAnimations().some((a) => a.id === 'ab-motion-push' && a.playState === 'running'));
   return v;
 }

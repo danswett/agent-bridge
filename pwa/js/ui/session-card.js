@@ -31,6 +31,7 @@ import { RowMenu } from './row-menu.js';
 import { DelegatesBlock } from './delegates-view.js';
 import { mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
+import { enter, leave, scrollBehavior, slide } from './motion.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // A tool call's glyph: running turns, as working does; a finished one is done or failed.
@@ -74,6 +75,10 @@ export class SessionCard {
   // the words that said so when last drawn, which move on with the clock.
   #stale = null;
   #shownStale = null;
+  // The question last drawn (undefined before the first drawing), and whether a finger or the
+  // mouse is on the conversation: what decides a scroll to a question that arrives.
+  #asked = undefined;
+  #touching = false;
   #menu = new RowMenu();
 
   // hostId: the machine the session is on, which everything the view sends goes to.
@@ -170,8 +175,11 @@ export class SessionCard {
     e.question = h('div', { class: 'question-slot' });
     e.stream = h('div', { class: 'stream' }, e.user, e.agentBlock, e.question);
     e.reply = h('div', { class: 'reply-slot' });
+    e.scroll = h('div', { class: 'stream-scroll' }, e.stream);
+    e.scroll.addEventListener('pointerdown', () => { this.#touching = true; });
+    for (const end of ['pointerup', 'pointercancel', 'pointerleave']) { e.scroll.addEventListener(end, () => { this.#touching = false; }); }
     e.conversation = h('div', { class: 'conversation', id: this.ids.conversation, role: 'tabpanel', 'aria-labelledby': this.ids.tabC },
-      h('div', { class: 'stream-scroll' }, e.stream), e.reply);
+      e.scroll, e.reply);
 
     // The inspector: Details, then Tools.
     e.facts = h('dl', { class: 'facts' });
@@ -290,8 +298,11 @@ export class SessionCard {
     e.delegates.hidden = !listed;
     e.tabD.hidden = !listed;
     if (!listed && this.#tab === 'delegates') { this.setTab('conversation'); }
+    const said = (s.activity.userMessage ?? '') !== e.userText.textContent;
     e.user.hidden = !s.activity.userMessage;
     e.userText.textContent = s.activity.userMessage ?? '';
+    // Send acknowledged (ui.md §5.3): your message, back from the machine, rises into place.
+    if (!first && said && s.activity.userMessage) { enter(e.user, 'acknowledge', { dy: 1 }); }
 
     if (this.#changed('facts', [s.agent, s.model, s.repository, s.branch, s.cwd, this.machineName, s.startedAt, s.activity.turnCount, s.activity.compactions, s.activity.background, s.processId])) {
       this.#renderFacts(s);
@@ -367,7 +378,11 @@ export class SessionCard {
       e.unread = h('span', { class: 'unread-dot' }, h('span', { class: 'sr-only', id: this.ids.unread }, 'New activity'));
       e.rowLine1.append(e.unread);
       e.open.setAttribute('aria-labelledby', `${this.ids.glyph} ${this.ids.unread}`);
+      this.element.classList.add('unread');
+      // Activity dot (ui.md §5.3): fades in, and later out; it never pulses or repeats.
+      enter(e.unread, 'activityDot');
     } else if (!unread && e.unread) {
+      leave(e.unread, 'activityDot');
       e.unread.remove();
       e.unread = null;
       e.open.setAttribute('aria-labelledby', this.ids.glyph);
@@ -405,10 +420,25 @@ export class SessionCard {
 
   // Conversation or Tools, where they are tabs; Details, from the header's button.
   setTab(tab) {
+    const was = this.#tab;
+    const before = this.#tabEl(was);
+    const from = before?.getClientRects().length ? before.getBoundingClientRect() : null;
     this.#tab = tab === 'tools' || tab === 'details' || (tab === 'delegates' && !this.els.tabD.hidden) ? tab : 'conversation';
     this.#applyTab();
     this.#revealTools();
+    if (this.#tab === was) { return; }
+    // Tab switch (ui.md §5.3): the bar under the tab slides from the one left, and what the tab
+    // shows fades in without sliding.
+    const now = this.#tabEl(this.#tab);
+    if (from && now?.getClientRects().length) {
+      const r = now.getBoundingClientRect();
+      slide(now, 'selection', from.left - r.left, 0, { pseudo: '::after', scaleX: from.width / r.width });
+    }
+    const shown = { conversation: this.els.conversation, delegates: this.els.delegates, tools: this.els.tools, details: this.els.details }[this.#tab];
+    if (from && shown?.getClientRects().length) { enter(shown, 'tab'); }
   }
+
+  #tabEl(tab) { return { conversation: this.els.tabC, delegates: this.els.tabD, tools: this.els.tabT }[tab] ?? null; }
 
   #applyTab() {
     const e = this.els;
@@ -559,13 +589,26 @@ export class SessionCard {
     }
     // A new question replaces a receipt that has said its last word.
     if (q && this.#receipt?.final) { this.#dropReceipt(); }
+    // Scroll to a question (ui.md §5.3): one that arrives while the conversation is read to its
+    // end comes into sight, smoothly; one scrolled back through, or held, is left where it is.
+    const arrived = this.#asked !== undefined && !!q && q.id !== this.#asked;
+    const sc = this.els.scroll;
+    const atEnd = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 24;
+    this.#asked = q?.id ?? null;
     this.els.question.replaceChildren(...[this.#orphanView(), this.#receipt?.element, view].filter(Boolean));
+    if (this.#receipt?.fresh) {
+      this.#receipt.fresh = false;
+      enter(this.#receipt.element, 'acknowledge', { dy: 1 });
+    }
+    if (arrived && view && atEnd && !this.#touching && this.#selected && this.viewing() && sc.getClientRects().length) {
+      view.scrollIntoView({ block: 'nearest', behavior: scrollBehavior() });
+    }
   }
 
   #watchReceipt({ service, hostId, sessionId }, questionId) {
     this.#dropReceipt();
     const element = h('p', { class: 'answer-receipt', role: 'status', 'aria-live': 'polite' });
-    const receipt = { element, final: false, unwatch: null };
+    const receipt = { element, final: false, unwatch: null, fresh: true };
     const show = (entry) => {
       if (!entry) { return; }
       const { text, tone } = describeAnswer(entry, this.machineName);
