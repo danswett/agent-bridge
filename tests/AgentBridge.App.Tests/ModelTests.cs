@@ -295,4 +295,20 @@ public sealed class WordsTests
         Assert.Equal("short", Words.Middle("short", 40));
         Assert.Equal("", Words.Middle(null, 40));
     }
+
+    [Theory]
+    // The head's cut would fall between an emoji's two halves.
+    [InlineData("C:\\\U0001F4C1\\some-long-folder\\file.txt", 9, "C:\\\u2026.txt")]
+    // The tail's.
+    [InlineData("C:\\some-long-folder\\notes-\U0001F4C1.md", 9, "C:\\s\u2026.md")]
+    // Whole on either side of the cut.
+    [InlineData("\U0001F4C1\U0001F4C1-some-long-folder-\U0001F4C1\U0001F4C1", 11, "\U0001F4C1\U0001F4C1-\u2026-\U0001F4C1\U0001F4C1")]
+    public void A_path_cut_in_the_middle_never_keeps_half_a_character(string path, int most, string cut)
+    {
+        var got = Words.Middle(path, most);
+        Assert.Equal(cut, got);
+        Assert.True(got.Length <= most);
+        Assert.DoesNotContain(got.EnumerateRunes(), r => r == System.Text.Rune.ReplacementChar);
+        Assert.True(System.Text.Unicode.Utf8.FromUtf16(got, new byte[got.Length * 3], out _, out _, replaceInvalidSequences: false) == System.Buffers.OperationStatus.Done);
+    }
 }

@@ -45,6 +45,10 @@ public static class Words
         if (string.IsNullOrEmpty(text) || text.Length <= most || most < 5) { return text ?? ""; }
         var tail = (most - 1) / 2 + (most - 1) % 2;
         var head = most - 1 - tail;
+        // Never half a character: a folder named with an emoji is two UTF-16 units, and a cut
+        // between them drew a replacement glyph. The half is left out, a unit shorter.
+        if (char.IsHighSurrogate(text[head - 1])) { head--; }
+        if (char.IsLowSurrogate(text[^tail])) { tail--; }
         return $"{text[..head]}\u2026{text[^tail..]}";
     }
 
