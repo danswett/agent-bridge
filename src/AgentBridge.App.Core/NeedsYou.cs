@@ -183,10 +183,21 @@ public sealed partial class NeedsYouEntry : Observable
         // command's lines; and no link anywhere hides where it goes behind its words.
         var blocks = MarkdownModel.Parse(message);
         if (HasHiddenLink(blocks)) { return false; }
-        if (at < 0) { return !blocks.OfType<MdCode>().Any(); }
-        return blocks.Count > 0 && blocks[^1] is MdCode code && blocks.OfType<MdCode>().Count() == 1
+        // Counted at every depth: a block nested in a quote or a list item escapes the opening-fence
+        // check above, and its info string is not drawn either.
+        var codes = CodeBlocks(blocks);
+        if (at < 0) { return codes == 0; }
+        return blocks.Count > 0 && blocks[^1] is MdCode code && codes == 1
             && code.Text == string.Join('\n', lines[(at + 1)..^1]);
     }
+
+    static int CodeBlocks(IEnumerable<MdBlock> blocks) => blocks.Sum(b => b switch
+    {
+        MdCode => 1,
+        MdQuote q => CodeBlocks(q.Blocks),
+        MdList l => l.Items.Sum(CodeBlocks),
+        _ => 0,
+    });
 
     // A link whose words are not its address (an autolink's are), at any depth.
     static bool HasHiddenLink(IEnumerable<MdBlock> blocks) => blocks.Any(b => b switch

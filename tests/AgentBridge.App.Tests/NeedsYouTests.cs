@@ -253,6 +253,9 @@ public sealed class NeedsYouTests : IAsyncLifetime
     // Words after the opening fence are not drawn: a tool's description could say one thing there
     // and another in the block.
     [InlineData("Allow **mytool**?\n\n``` Deletes all backups\nPrint the current status\n```")]
+    // A fence nested in a quote or a list escapes the opening-fence check, info string and all.
+    [InlineData("> ```sh Deletes all backups\n> Print the current status\n> ```")]
+    [InlineData("Allow **shell**?\n\n- ```sh Deletes all backups\n  a\n  ```\n\n```\nls\n```")]
     // A shortcut reference link defined inside a quote draws its label, not where it goes.
     [InlineData("> Send to [backup]\n>\n> [backup]: https://other.example")]
     // Lines a bare CR breaks count too: thirteen of them are more than the lane shows whole.
