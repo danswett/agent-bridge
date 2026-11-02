@@ -886,6 +886,13 @@ said "Logged in using ChatGPT", which confirms X-5.
   - A catalogue fetch whose `auth()` came after the usage read's, just as the window
     opened, would refresh outside every response. EOF would then drop it at runtime
     teardown. No run held the token response for that case.
+- **The cloud-config background refresher also takes `auth()` on its own timer**
+  (`cloud-config/src/service.rs:433-447`): 15 min after start, or 5 s after a start-up
+  timeout. A short probe meets it only after a start-up timeout, which means the token
+  endpoint is already too slow.
+  - Its refresh is bounded by the same 20 s limit, which cut it off in (a) and (b).
+  - So it can still be running when stdin closes, but only when rotations are being lost
+    anyway.
 - **In the runs that waited for all their responses, the lost refreshes were cancelled by
   Codex's own timeouts:** 20 s for cloud config at start-up, and 15 s for routing
   discovery. There the stdin timing made no difference: in (c2), (i) and (ii) gave
