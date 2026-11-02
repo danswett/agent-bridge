@@ -174,21 +174,52 @@ struct SessionWorkbench: View {
                               // Leaving the detail must not cancel the shared transport.
                               try await Task { try await host.call("session.get", data: ["id": .string(id)]) }.value
                           }
-                      })
-                      .id(entry.id)
-                      .toolbar {
-                          if let host = entry.host, !entry.ended {
-                              ToolbarItem {
-                                  Button(entry.session.question == nil ? "Reply / Actions" : "Answer", systemImage: entry.session.question == nil ? "paperplane" : "questionmark.bubble") { showingActions = true }
-                                      .disabled(!host.isLive)
-                              }
-                          }
-                      }
-                      .sheet(isPresented: $showingActions) {
-                          if let host = entry.host {
-                              SessionActions(sessionID: entry.session.id, store: store, host: host).id(entry.id)
-                          }
-                      }
+                      }, onLoadDelegate: delegateLoader(for: entry), onAskMainToStop: delegateStopDraft(for: entry))
+            .id(entry.id)
+            .toolbar {
+                if let host = entry.host, !entry.ended {
+                    ToolbarItem {
+                        Button(entry.session.question == nil ? "Reply / Actions" : "Answer", systemImage: entry.session.question == nil ? "paperplane" : "questionmark.bubble") { showingActions = true }
+                            .disabled(!host.isLive)
+                    }
+                }
+            }
+            .sheet(isPresented: $showingActions) {
+                if let host = entry.host {
+                    SessionActions(sessionID: entry.session.id, store: store, host: host).id(entry.id)
+                }
+            }
+    }
+
+    private func delegateLoader(for entry: SessionEntry) -> (@MainActor (String, String) async throws -> JSONValue)? {
+        guard let host = entry.host, !entry.ended else { return nil }
+        let connection = host.connectionID
+        return { sessionID, delegateID in
+            guard sessionID == entry.session.id, store.selectedSessionID == entry.id,
+                  host.sessions.first(where: { $0.id == sessionID })?.delegates.contains(where: { $0.id == delegateID }) == true
+            else {
+                throw BridgeOperationError("This delegate is no longer selected or listed.")
+            }
+            // The selection owns the connection; navigating away must not cancel the shared channel.
+            let result = try await Task {
+                try await host.call("session.get", data: ["id": .string(sessionID), "agent": .string(delegateID)], onlyOn: connection)
+            }.value
+            guard store.selectedSessionID == entry.id else { throw BridgeOperationError("The selected session changed.") }
+            return result
+        }
+    }
+
+    private func delegateStopDraft(for entry: SessionEntry) -> (@MainActor (String) -> Void)? {
+        guard let host = entry.host, !entry.ended, host.can("sessions.reply"), entry.session.question == nil else { return nil }
+        let connection = host.connectionID
+        return { id in
+            guard store.selectedSessionID == entry.id, host.connectionID == connection, host.can("sessions.reply"),
+                  let session = host.sessions.first(where: { $0.id == entry.session.id }), session.question == nil,
+                  session.delegates.contains(where: { $0.id == id && $0.status != "ended" }),
+                  let draft = BridgeDelegatePresentation.stopDraft(delegateID: id, existing: host.replyDrafts[session.id] ?? "") else { return }
+            host.replyDrafts[session.id] = draft
+            showingActions = true
+        }
     }
 
     private var emptyState: some View {
