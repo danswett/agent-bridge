@@ -20,7 +20,11 @@ public static class DelegateLabel
     // 2. Longer than MaxLength, it is cut at a whole character with an ellipsis.
     // 3. Nothing left: the delegate is named by the start of its id.
     // 4. A name that reads as the main agent's ("Main agent", "MAIN AGENT asks", "Main-agent",
-    //    fullwidth or accented forms) is quoted after the word Delegate.
+    //    fullwidth, accented or Cyrillic and Greek look-alike forms) is quoted after the word
+    //    Delegate.
+    // The look-alike check can't be complete, so it is not the guard: every line that says who
+    // asks or works names a delegate with the word Delegate in front (Titled), and the main agent
+    // never has it.
     public static string For(string? name, string? id)
     {
         var clean = Clean(name, MaxLength);
@@ -35,7 +39,7 @@ public static class DelegateLabel
     public static bool SaysDelegate(string label) => label == "Delegate" || label.StartsWith("Delegate ", StringComparison.Ordinal);
 
     // The label with "Delegate" in front, unless it says so already: the inspector's heading read
-    // aloud, and the conversation's events.
+    // aloud, the conversation's events, the status line, a question's heading and Needs you.
     public static string Titled(string label) => SaysDelegate(label) ? label : $"Delegate {label}";
 
     // The id as a reply to the main agent may quote it ("Ask main agent to stop it"): Copilot's
@@ -99,15 +103,18 @@ public static class DelegateLabel
     // NFKD folds fullwidth and other compatibility forms, its marks are dropped, and case goes;
     // then the words, split at anything but a letter or digit: "main" followed by "agent…", or
     // "mainagent…" run together. By rune, not UTF-16 unit, so a mark outside the BMP (U+1D165)
-    // is dropped like any other rather than splitting the word.
+    // is dropped like any other rather than splitting the word. Letters of other scripts that
+    // look like those in "main agent" are read as them (a subset of Unicode's confusables).
     static bool PosesAsMainAgent(string clean)
     {
         var folded = new StringBuilder();
         foreach (var r in clean.Normalize(NormalizationForm.FormKD).EnumerateRunes())
         {
             if (Rune.GetUnicodeCategory(r) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark) { continue; }
-            if (Rune.IsLetterOrDigit(r)) { folded.Append(Rune.ToLowerInvariant(r).ToString()); }
-            else { folded.Append(' '); }
+            if (!Rune.IsLetterOrDigit(r)) { folded.Append(' '); continue; }
+            var lower = Rune.ToLowerInvariant(r);
+            if (LookAlike(lower.Value) is { } latin) { folded.Append(latin); }
+            else { folded.Append(lower.ToString()); }
         }
         var words = folded.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries);
         for (var i = 0; i < words.Length; i++)
@@ -117,4 +124,18 @@ public static class DelegateLabel
         }
         return false;
     }
+
+    // Lower case, after NFKD: Cyrillic, Greek, Armenian and Latin IPA letters drawn like the
+    // letters of "main agent" in some case. Unlisted look-alikes still get the word Delegate.
+    static char? LookAlike(int v) => v switch
+    {
+        0x043C or 0x03BC => 'm',                                      // м (from М), μ (from Μ)
+        0x0430 or 0x03B1 or 0x0251 => 'a',                            // а, α, ɑ
+        0x0456 or 0x04CF or 0x03B9 or 0x0131 or 0x0269 or 0x04C0 => 'i', // і, ӏ, ι, ı, ɩ, Ӏ
+        0x03BD or 0x0578 or 0x057C => 'n',                            // ν (from Ν), ո, ռ
+        0x0261 or 0x050D or 0x0581 => 'g',                            // ɡ, ԍ, ց
+        0x0435 or 0x03B5 => 'e',                                      // е, ε (from Ε)
+        0x0442 or 0x03C4 => 't',                                      // т (from Т), τ (from Τ)
+        _ => null,
+    };
 }

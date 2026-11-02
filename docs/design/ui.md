@@ -68,8 +68,8 @@ an overlay applied after rules 1–6 (or 8) have picked the glyph and the words.
 | # | When | Glyph | Status text |
 |---|---|---|---|
 | 1 | The session itself has a pending question | `needs` | "Waiting on you", plus "· N delegates still running" when there are any, and "· answer at the machine" when no host can answer it from another device (`answerAtMachine`) |
-| 2 | A delegate has a pending question (`waitingOn`, or the question's `agent`) | `needs` | "*Delegate name* asks", or "… · answer at the machine" when the host can't prove where the answer lands (`answerAtMachine`). A delegate the list left out is "A delegate asks" |
-| 3 | The main agent is working | `working` | "Working", or "Working · task: *name*" while a foreground task agent runs (a running `kind: task` sub-agent whose starters are all task agents too; one a background delegate started is that delegate's work) |
+| 2 | A delegate has a pending question (`waitingOn`, or the question's `agent`) | `needs` | "Delegate *name* asks", or "… · answer at the machine" when the host can't prove where the answer lands (`answerAtMachine`). The word "Delegate" is always there, so no name reads as "Main agent asks" (§6.3). A delegate the list left out is "A delegate asks" |
+| 3 | The main agent is working | `working` | "Working", or "Working · task: Delegate *name*" while a foreground task agent runs (a running `kind: task` sub-agent whose starters are all task agents too; one a background delegate started is that delegate's work) |
 | 4 | Main agent idle, background agents running | `delegating` | "Delegating to N agents", N from `background.agents` (a nested delegate counts once, under its parent, and a list cut short still counts them all) |
 | 5 | Main agent idle, only background commands | `delegating` | "N background commands" |
 | 6 | Nothing running | `idle` | "Idle" |
@@ -365,7 +365,7 @@ Sections, top to bottom:
 1. **Needs you · N** (#165): one entry per pending question across machines, oldest first.
    - Each entry shows: the session title, the question's first line or the approval's
      action, and its age; the machine (once more than one is shown) and the agent; and for
-     a delegate's question, "*Delegate name* asks" (§2.2 rule 2).
+     a delegate's question, "Delegate *name* asks" (§2.2 rule 2).
    - Approvals (`kind: approval`, not `answerAtMachine`) can be answered inline: "Approve
      once" (Bridge) and "Deny" (secondary). They are the card's own buttons: the same
      request, progress and outcomes. The action is the whole prompt, drawn as the card
@@ -471,9 +471,15 @@ dot with the preceding fact.
   zero-width, format, control and other default-ignorable characters are removed, any
   whitespace (line and paragraph separators too) becomes one space, and the result is cut to
   60 characters with "…". With nothing left, it is "Delegate" and the first 8 characters of
-  its id. A name that reads as the main agent's (NFKD-folded, marks and case dropped by code
-  point, so a combining mark outside the BMP is dropped too: "main"
-  then "agent…", or "mainagent…") shows as `Delegate “<name>”`. The inspector's heading has a
+  its id. A name that reads as the main agent's shows as `Delegate “<name>”`: it is
+  NFKD-folded, with marks and case dropped by code point (so a combining mark outside the BMP
+  goes too), and Cyrillic, Greek, Armenian and Latin IPA letters drawn like those of "main
+  agent" are read as them (а, і, М, Μ, α, ι, ո, ɑ, ı and the like), then checked for "main"
+  followed by "agent…", or "mainagent…". No such list is complete, so it is not the guard:
+  every line that says who asks or works puts the word "Delegate" before the label ("Delegate
+  *name* asks" in the status line, the question's heading and Needs you; "Working · task:
+  Delegate *name*"), as the conversation's events do, and the main agent's own lines never
+  have it. The inspector's heading has a
   fixed "Delegate" overline above the name, and the pre-filled reply names the delegate by its
   id alone ("Please stop your delegate *id*."), never by its name; an id with anything but
   ASCII letters, digits, `-`, `_`, `.` or `:` gets no action.
@@ -490,7 +496,7 @@ dot with the preceding fact.
   26m", "Delegate *Read witness shell logic* reported back · 22m". The name links to the
   delegate, and the word "Delegate" stays outside the link.
 - **Questions:** in the stream, as a card in Needs you colours. The header reads "Main agent
-  asks" or "*Delegate* asks", followed by the question and the platform's own radio,
+  asks" or "Delegate *name* asks", followed by the question and the platform's own radio,
   checkbox and text controls, with Answer in Bridge.
 - **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
   tool's name and arguments in mono).
@@ -593,7 +599,8 @@ machine, online ones first, then the account's offline machines (#213):
   - "Main agent" (never "parent").
   - "Delegate" in the UI ("sub-agent" in code and specs).
   - A delegate's name is always its safe label (§6.3), never the text the host sent, and
-    never reads as "Main agent".
+    never reads as "Main agent". Wherever a line says who asks or works ("asks", "task:"), the
+    label follows the word "Delegate", which the main agent's own lines never have.
   - "Needs you".
   - "End session" (not "Stop" for the whole session).
 - **Numbers before nouns:** "3 delegates", "1 background command".

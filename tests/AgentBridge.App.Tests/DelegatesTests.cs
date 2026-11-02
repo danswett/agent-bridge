@@ -367,9 +367,9 @@ public sealed class DelegatesTests : IAsyncLifetime
         Select("asking");
         var card = Card("asking");
 
-        Assert.Equal(("Read witness shell logic asks", "Read witness shell logic asks"), TestUi.Read(() => (card.StatusText, card.AsksText)));
+        Assert.Equal(("Delegate Read witness shell logic asks", "Delegate Read witness shell logic asks"), TestUi.Read(() => (card.StatusText, card.AsksText)));
         Assert.Equal((StatusGlyph.Needs, "Asks"), TestUi.Read(() => card.Delegates.Strip.Single(i => i.Id == "witness") is var w ? (w.Glyph, w.Words) : default));
-        Assert.Equal("Read witness shell logic", NeedsYouEntry.DelegateOf(card.Session));
+        Assert.Equal("Delegate Read witness shell logic", NeedsYouEntry.DelegateOf(card.Session));
     }
 
     [Fact]
@@ -568,6 +568,39 @@ public sealed class DelegatesTests : IAsyncLifetime
         Assert.Equal(("tnega niaM", "Delegate tnega niaM"), TestUi.Read(() => (card.Delegates.Detail.Name, card.Delegates.Detail.Heading)));
         ui.Post(() => layout.OpenDelegate("done"));
         Assert.Equal(("Delegate “Main agent”", "Delegate “Main agent”"), TestUi.Read(() => (card.Delegates.Detail.Name, card.Delegates.Detail.Heading)));
+    }
+
+    [Theory]
+    // Cyrillic М, а and і: a look-alike the label quotes.
+    [InlineData("\u041C\u0430\u0456n agent", "Delegate “\u041C\u0430\u0456n agent”")]
+    // Cherokee Ꮇ, which it doesn't: the word Delegate is still there.
+    [InlineData("\u13B7ain agent", "Delegate \u13B7ain agent")]
+    public async Task A_delegate_whose_name_looks_like_main_agent_asks_as_a_delegate_in_the_status_the_question_and_needs_you(string name, string who)
+    {
+        var posing = Delegating("lookalike") with
+        {
+            Question = Make.Choice() with { Agent = "asker", AskedAt = Now },
+            WaitingOn = "asker",
+            Status = SessionStatus.Waiting,
+            Subagents = [Delegate("asker", name, SubagentKind.Task, SubagentStatus.Waiting, started: -3)],
+            SubagentsMore = 0,
+        };
+        await host.SendAsync(Events.SessionUpsert, posing);
+        await Wait.UntilAsync(() => main.NeedsYou.Any(e => e.Card.Id == "lookalike"), "the question");
+        var card = Card("lookalike");
+
+        Assert.Equal(($"{who} asks", $"{who} asks"), TestUi.Read(() => (card.StatusText, card.AsksText)));
+        Assert.Contains($"{who} asks", TestUi.Read(() => main.NeedsYou.Single(e => e.Card.Id == "lookalike").Meta));
+    }
+
+    [Fact]
+    public void A_foreground_task_working_for_the_main_agent_is_named_as_a_delegate()
+    {
+        var working = Make.Session("task", status: SessionStatus.Working) with
+        {
+            Subagents = [Delegate("t1", "\u041C\u0430\u0456n agent", SubagentKind.Task, started: -1)],
+        };
+        Assert.Equal("Working · task: Delegate “\u041C\u0430\u0456n agent”", StatusRules.For(working).Text);
     }
 
     [Theory]

@@ -161,7 +161,9 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
   never show it as sent and never quote it into a reply. They show the safe label of
   [ui.md §6.3](ui.md#63-delegates-84): bidi, zero-width and other invisible characters
   removed, whitespace collapsed, cut to 60 characters, the id's start when nothing is left,
-  and `Delegate “<name>”` for a name that reads as "Main agent".
+  and `Delegate “<name>”` for a name that reads as "Main agent", look-alike letters included.
+  A line that says a sub-agent asks or works always puts the word "Delegate" before its label
+  ("Delegate *name* asks"), so no name, however spelt, reads as "Main agent asks".
 
 ## 7. Notifications and Home Assistant
 
