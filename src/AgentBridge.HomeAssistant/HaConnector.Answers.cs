@@ -141,7 +141,8 @@ public sealed partial class HaConnector
             catch (OperationCanceledException) when (changed.IsCancellationRequested) { }
             catch (Exception e)
             {
-                Problem("watch", $"Home Assistant connector watch failed: {Describe(e)}; watching again in {backoff.TotalSeconds:F0}s");
+                if (e is HomeAssistantAuthException auth) { Refusal(auth); }
+                else { Problem("watch", $"Home Assistant connector watch failed: {Describe(e)}; watching again in {backoff.TotalSeconds:F0}s"); }
                 try { await Task.Delay(backoff, time, token); } catch (OperationCanceledException) { return; }
                 backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, TimeSpan.FromSeconds(60).Ticks));
             }

@@ -179,12 +179,16 @@ public sealed class DaemonHaReader : IDisposable
     readonly HttpClient http;
     readonly TimeProvider clock;
     readonly TimeSpan patience;
+    readonly HaAuthGuard auth;
     readonly string resumeEntity;
     readonly IReadOnlyList<(string Client, string Entity)> usageEntities;
 
-    public DaemonHaReader(string machineName, HttpMessageHandler? transport = null, TimeSpan? timeout = null, TimeProvider? time = null)
+    // auth: the host's guard against repeating a refused token (HaAuthGuard), shared with every
+    // other caller; without one, the reader keeps its own.
+    public DaemonHaReader(string machineName, HttpMessageHandler? transport = null, TimeSpan? timeout = null, TimeProvider? time = null, HaAuthGuard? auth = null)
     {
         clock = time ?? TimeProvider.System;
+        this.auth = auth ?? new HaAuthGuard(time: clock);
         Slug = HaContract.MachineSlug(machineName);
         // The numbered sensors of further Copilot logins too (usage.copilotAccounts), each compared
         // with the host's reading in the same place.
@@ -388,9 +392,16 @@ public sealed class DaemonHaReader : IDisposable
         var ct = deadline.Token;
         using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(access.BaseUrl, "api/states/" + Uri.EscapeDataString(entity)));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.Token);
+        // Read once a minute for as long as the comparison runs: with a token Home Assistant
+        // refuses, that alone would have the machine banned in ten minutes.
+        var credential = auth.Credential(access.BaseUrl, access.Token, "agent-ha-bridge's token", "correct homeAssistant.token in agent-ha-bridge's config.json");
+        HaAuthGuard.Lease lease;
+        try { lease = await auth.EnterAsync(credential, ct); }
+        catch (HomeAssistantAuthException e) { throw new Unavailable(Refused(e)); }
+        using var held = lease;
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (lease.Answered(response.StatusCode) is { } refused) { throw new Unavailable(Refused(refused)); }
         if (response.StatusCode == HttpStatusCode.NotFound) { return null; }
-        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) { throw new Unavailable("Home Assistant refused agent-ha-bridge's token"); }
         if (!response.IsSuccessStatusCode) { throw new Unavailable($"Home Assistant answered {(int)response.StatusCode}"); }
         if (response.Content.Headers.ContentLength > MaxStateBytes) { throw new Unavailable("Home Assistant sent a state too large to be one"); }
         await using var body = await response.Content.ReadAsStreamAsync(ct);
@@ -409,6 +420,10 @@ public sealed class DaemonHaReader : IDisposable
         }
         catch (JsonException) { throw new Unavailable("Home Assistant sent a state that is not JSON"); }
     }
+
+    // Stable, so a day's report counts one reason rather than one per minute.
+    static string Refused(HomeAssistantAuthException e) =>
+        e.Kind == HaAuthKind.Banned ? "Home Assistant has banned this machine's address" : "Home Assistant refused agent-ha-bridge's token";
 
     // The same figure read again, republished or not, has held since it was first measured: the
     // daemon publishes every change, and percent used only rises within a window.

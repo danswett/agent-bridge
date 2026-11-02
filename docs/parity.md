@@ -36,13 +36,13 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 | Status | Rows |
 |---|---|
 | `Verified` | 49 |
-| `Implemented, untested live` | 46 |
+| `Implemented, untested live` | 47 |
 | `Partial` | 1 |
 | `Missing` | 13 |
 | `Intentionally different` | 18 |
 | `N/A` | 12 |
 | `In flight (…)` | 8: Claude/Codex live 8 |
-| **Total** | **147** feature rows in §1–§18 |
+| **Total** | **148** feature rows in §1–§18 |
 
 Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Partial`. Every `Missing` and `Partial` row links an issue labelled
 [`parity`](https://github.com/danswett/agent-bridge/issues?q=label%3Aparity).
@@ -284,7 +284,8 @@ working (G9). The new product itself replaces them.
 | Entity-registry pinning, legacy and unscoped entity sweeps | All | `tests/test-registration-isolation.ps1`, `test-multi-machine.ps1` | `N/A` | | |
 | 255-character text, optimistic selects, position-encoded multi-select, 10-option cap | All | `tests/test-choices-form.ps1`, `test-decision-select-race.ps1` | `N/A` | | Design §1 parity contract |
 | HA image store for pasted images | All | `/api/image/upload`, `image/delete` | `N/A` | In-channel attachments, and the relay's blob store for larger ones | |
-| HA REST and WebSocket client (state snapshot, filtered reads, retry, auth backoff, HTTP session reuse) | All | `tests/test-state-read.ps1`, `test-state-snapshot.ps1`, `test-reliability.ps1`, `test-auth-backoff.ps1`, `test-http-session.ps1` | `N/A` | Relay reconnect and backoff: `ChannelTests`, `RelayTests.A_relay_that_is_stopping_tells_connected_devices_to_reconnect_at_once_with_1012` | |
+| HA REST and WebSocket client (state snapshot, filtered reads, retry, HTTP session reuse) | All | `tests/test-state-read.ps1`, `test-state-snapshot.ps1`, `test-reliability.ps1`, `test-http-session.ps1` | `N/A` | Relay reconnect and backoff: `ChannelTests`, `RelayTests.A_relay_that_is_stopping_tells_connected_devices_to_reconnect_at_once_with_1012` | |
+| HA auth backoff: a refused token is never repeated into an IP ban, and a ban is named as one | All | `Register-BridgeAuthRejected`, `Test-BridgeAuthRejection`; `tests/test-auth-backoff.ps1` | `Implemented, untested live` | `HaAuthGuard`, shared by the connector, `ha shadow` and `shadow run` through `ha-auth.json` ([ha-connector.md](ha-connector.md#troubleshooting)). `AuthBackoffTests` (8), `ClientTests.A_websocket_login_and_an_image_fetch_spend_the_same_budget_as_a_publish`, `ShadowTests.The_shadow_reader_sends_nothing_with_a_token_the_connector_has_stopped_using`, `HostSettingsTests.Ha_status_says_Home_Assistant_rejected_the_token_and_ha_token_set_earns_it_one_fresh_attempt` | Intentionally stricter (#227): stops after 3 attempts per token instead of retrying every 15 minutes, and survives a restart |
 | Pairing through HA helper state (`input_text.agent_bridge_pairing`) | All | `bridge-pairing-io.ps1` | `N/A` | Replaced by device approval (#55) | |
 | Detached-entity repair, global reassert, peer stand-in sessions | All | `agent-bridge-daemon.ps1` (`DetachedEntity*`, `GlobalReassertSeconds`, `PeerSessionsStandInSeconds`) | `N/A` | Snapshot plus ordered events with gap detection: `ConnectionTests.A_gap_in_the_events_after_a_reconnect_reads_the_sessions_status_and_usage_again`. For the old dashboard, the HA connector ports the repair and the reassert (`UpkeepTests`, stage 7); peer stand-ins are the writer's | |
 | The test runner's HTTP guard and offline isolation | — | `tests/test-http-guard.ps1`, `test-runner.ps1`, `test-install-http-guard.ps1` | `N/A` | xUnit with fakes; no test reaches a real agent, HA or relay | Design §6.5 |
@@ -314,7 +315,7 @@ All 87 agent-ha-bridge suites, grouped by feature, with where the behaviour stan
 | Install, update, uninstall | `test-install-clients`, `test-install-command`, `test-install-connection` [HA], `test-install-deps`, `test-install-workspaces`, `test-install-http-guard` [HA], `test-layout-migration`, `test-bootstrap-download`, `test-bootstrap.sh`, `test-update`, `test-update-cli`, `test-update-intake`, `test-update-outcome`, `test-vbs-launchers`, `claude/test-claude-install` | `HostManagerTests`, `SettingsTests`, `HostSettingsTests` (§14). Hooks: #54. Migration: #38. Remote update: §9, `update.*` (#51) |
 | Pairing and secrets | `test-pairing`, `test-pairing-flow` [HA], `test-secret-owner-rights` | #55 |
 | Control and security | `test-control-policy`, `test-security`, `test-service-target` | §17 |
-| Restart and reliability | `test-restart-restore`, `test-reliability` [HA], `test-state-read` [HA], `test-state-snapshot` [HA], `test-auth-backoff` [HA], `test-http-session` [HA] | `ConnectionTests`, `PushNotifierTests.A_question_already_pending_when_the_host_starts_is_notified_as_after_a_daemon_restart`, the answer ledger (§2) |
+| Restart and reliability | `test-restart-restore`, `test-reliability` [HA], `test-state-read` [HA], `test-state-snapshot` [HA], `test-auth-backoff` [HA], `test-http-session` [HA] | `ConnectionTests`, `AuthBackoffTests` (§18), `PushNotifierTests.A_question_already_pending_when_the_host_starts_is_notified_as_after_a_daemon_restart`, the answer ledger (§2) |
 | Platforms | `test-platform`, `test-terminal-window` | #48 |
 | Dev Box | `test-devbox-keepawake` | `DevBoxTests` (§16); the installer's task decisions are replaced by `devBox.keepAwake` in the app's Settings |
 | Detail toggle | `test-verbose-toggle` [HA] | Intentionally different (§1) |

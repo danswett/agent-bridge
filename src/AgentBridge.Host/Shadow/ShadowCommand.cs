@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Windows;
@@ -95,7 +96,11 @@ public static class ShadowCommand
         IDaemonHomeAssistant HomeAssistant()
         {
             if (Flag("--no-home-assistant")) { return new NoDaemonHomeAssistant(); }
-            reader ??= new DaemonHaReader(Environment.MachineName);
+            // Through the same record of Home Assistant's refusals as serve: after the migration
+            // agent-ha-bridge's token is usually the host's too, and a token serve has stopped
+            // using is not tried here either.
+            reader ??= new DaemonHaReader(Environment.MachineName,
+                auth: new HaAuthGuard(HaAuthGuard.FileFor(folder), log: sub == "run" ? HostLog.Write : error.WriteLine));
             return new CachedDaemonHomeAssistant(paths, reader, time);
         }
         try

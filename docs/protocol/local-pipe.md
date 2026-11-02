@@ -169,6 +169,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `relay` | `{ state, url?, detail?, since? }`; `state` is `off` (`--local-only`), `signedOut`, `connecting`, `connected` or `refused` (sign in again) |
 | `signIn` | `{ state, userCode?, verificationUri?, expiresAt?, error? }`; `state` is `idle`, `pending` or `failed` |
 | `agentHaBridge` | Why answering, replying and stopping are off: agent-ha-bridge runs for this user (design G5). Absent when not |
+| `homeAssistant` | Why the Home Assistant connector is not reaching Home Assistant: it rejected the token, or has banned this machine's address, with what to do and when it is next tried ([ha-connector.md](../ha-connector.md#troubleshooting)). Absent when nothing is refused |
 | `settings` | `{ remoteApproval, name?, remoteFolderTrust, remoteFolderTrustDevices?, devBoxKeepAwake }` as `config.json` says now (`launch.remoteFolderTrust`, the approved device ids, absent when none, and `devBox.keepAwake`) |
 | `restartRequired` | `config.json` differs from what the running host read |
 | `log` | Path of the host's log file |

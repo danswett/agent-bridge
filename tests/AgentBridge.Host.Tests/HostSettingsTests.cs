@@ -264,4 +264,40 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Equal(0, HaCommands.Run(["ha", "token", "clear"], folder, () => null, output, error, devBuild: true, agentHaBridge: () => null));
         Assert.Null(AgentBridge.HomeAssistant.HaTokenStore.Load(folder));
     }
+
+    // ha status reads what the host has recorded of Home Assistant's refusals, and never asks Home
+    // Assistant; ha token set is a change, so the token gets one attempt of its own (#227).
+    [Fact]
+    public async Task Ha_status_says_Home_Assistant_rejected_the_token_and_ha_token_set_earns_it_one_fresh_attempt()
+    {
+        const string token = "test-token-not-a-secret";
+        var profile = Directory.CreateDirectory(Path.Combine(folder, "default")).FullName;
+        File.WriteAllText(Path.Combine(profile, HostSettings.FileName), """{ "homeAssistant": { "baseUrl": "http://ha.test:8123" } }""");
+        AgentBridge.HomeAssistant.HaTokenStore.Save(profile, token);
+        var guard = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(profile));
+        var client = new AgentBridge.HomeAssistant.HomeAssistantClient(new Uri("http://ha.test:8123"), token, new HttpClient(new Refusing()), auth: guard);
+        await Assert.ThrowsAsync<AgentBridge.HomeAssistant.HomeAssistantAuthException>(() => client.PublishAsync("t", "p", false));
+        Assert.NotNull(client.Refused);
+
+        string Status()
+        {
+            var output = new StringWriter();
+            Assert.Equal(0, HaCommands.Run(["ha", "status"], profile, () => null, output, new StringWriter(), devBuild: false, agentHaBridge: null));
+            return output.ToString();
+        }
+        Assert.Contains("refused: Home Assistant rejected the token: run `agent-bridge-host ha token set`", Status(), StringComparison.Ordinal);
+        Assert.DoesNotContain(token, Status(), StringComparison.Ordinal);
+
+        Assert.Equal(0, HaCommands.Run(["ha", "token", "set"], profile, () => token, new StringWriter(), new StringWriter(), devBuild: false, agentHaBridge: null));
+        Assert.DoesNotContain("refused:", Status(), StringComparison.Ordinal);
+        var restarted = new AgentBridge.HomeAssistant.HomeAssistantClient(new Uri("http://ha.test:8123"), token, new HttpClient(new Refusing()),
+            auth: new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(profile)));
+        Assert.Null(restarted.Refused);
+    }
+
+    sealed class Refusing : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized));
+    }
 }

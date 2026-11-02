@@ -23,6 +23,12 @@
                     IsOpen="{x:Bind ViewModel.HasAgentHaBridge, Mode=OneWay}"
                     Message="{x:Bind local:SettingsView.HaNote(ViewModel.AgentHaBridge), Mode=OneWay}" />
                 <InfoBar
+                    Severity="Error"
+                    Title="Home Assistant refuses this machine"
+                    IsClosable="False"
+                    IsOpen="{x:Bind ViewModel.HasHomeAssistantRefused, Mode=OneWay}"
+                    Message="{x:Bind ViewModel.HomeAssistantRefused, Mode=OneWay}" />
+                <InfoBar
                     Severity="Warning"
                     Title="The host is elevated"
                     IsClosable="False"

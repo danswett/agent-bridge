@@ -177,6 +177,8 @@ public sealed partial class HaConnector : IAsyncDisposable
     long usageVersion = -1;
     bool verbose;
     bool helperExists;
+    // Whether this pass met a refusal (Refusal), so it does not say the problem has gone.
+    bool authFailed;
     CancellationTokenSource? stop;
     Task loop = Task.CompletedTask;
     Task watch = Task.CompletedTask;
@@ -350,6 +352,14 @@ public sealed partial class HaConnector : IAsyncDisposable
             }
             if (pausedFor is not null) { log("Home Assistant connector resuming: agent-ha-bridge is no longer running for this user"); }
             pausedFor = null;
+            // Home Assistant has refused this machine and may not be asked again yet (HaAuthGuard):
+            // the pass is skipped whole, so nothing in it is tried and fails, request by request.
+            if (ha.Refused is { } refused)
+            {
+                Problem("auth", $"Home Assistant connector: {refused}");
+                return;
+            }
+            authFailed = false;
             if (!started)
             {
                 if (now < retryAt) { return; }
@@ -361,7 +371,9 @@ public sealed partial class HaConnector : IAsyncDisposable
                 catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
                 {
                     retryAt = now + options.RetryDelay;
-                    Problem("startup", $"Home Assistant connector could not start: {Describe(e)}; trying again in {options.RetryDelay.TotalSeconds:F0}s");
+                    // Not tried again in RetryDelay: the guard says when, if ever.
+                    if (e is HomeAssistantAuthException auth) { Refusal(auth); }
+                    else { Problem("startup", $"Home Assistant connector could not start: {Describe(e)}; trying again in {options.RetryDelay.TotalSeconds:F0}s"); }
                     return;
                 }
             }
@@ -382,6 +394,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 await Step("entities", () => SessionUpkeepAsync(now, cancellationToken));
                 await Step("retire", () => RetireAsync(now, cancellationToken));
             }
+            if (!authFailed) { Resolved("auth"); }
         }
         // agent-ha-bridge started during the pass: the write that found it was not made, and
         // nothing after it is.
@@ -407,10 +420,19 @@ public sealed partial class HaConnector : IAsyncDisposable
             await step();
             Resolved(name);
         }
+        catch (HomeAssistantAuthException e) { Refusal(e); }
         catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning))
         {
             Problem(name, $"Home Assistant connector {name} failed: {Describe(e)}; trying again");
         }
+    }
+
+    // Home Assistant refused this machine, or the guard held a request back because it had: one
+    // problem for every step and loop that met it, said once, in the guard's words.
+    void Refusal(HomeAssistantAuthException e)
+    {
+        authFailed = true;
+        Problem("auth", $"Home Assistant connector: {e.Reason}");
     }
 
     // Once per start, and again after a pause: declare liveness, read what is already there, and
@@ -1197,6 +1219,8 @@ public sealed partial class HaConnector : IAsyncDisposable
         {
             if (agentHaBridge() is { } active) { throw new AgentHaBridgeRunning(active); }
         }
+
+        public string? Refused => inner.Refused;
 
         public Task PublishAsync(string topic, string payload, bool retain, CancellationToken cancellationToken = default)
         {

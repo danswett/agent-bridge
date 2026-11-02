@@ -1,0 +1,248 @@
+using System.Net;
+using AgentBridge.HomeAssistant;
+using Microsoft.Extensions.Time.Testing;
+using Xunit;
+
+// Home Assistant bans an address after login_attempts_threshold (10) failed logins. On 2026-11-02 a
+// just-migrated machine's connector repeated a rejected token every 30 s until it was banned (#227).
+// These hold the guard to what agent-ha-bridge's test-auth-backoff.ps1 holds its daemon to, and to
+// the stricter rule that a rejected token stops rather than being repeated on a timer for ever.
+public sealed class AuthBackoffTests : IDisposable
+{
+    const string Token = "test-token-not-a-secret";
+    static readonly Uri Url = new("http://ha.test:8123");
+    readonly string folder = Path.Combine(Path.GetTempPath(), "abau-" + Guid.NewGuid().ToString("N"));
+    readonly FakeTimeProvider time = new(FakeSessions.T0);
+
+    public void Dispose()
+    {
+        if (Directory.Exists(folder)) { Directory.Delete(folder, true); }
+    }
+
+    string Record => Path.Combine(folder, HaAuthGuard.FileName);
+
+    // Home Assistant answering whatever Status says, and when each request reached it.
+    sealed class Answering(FakeTimeProvider time) : HttpMessageHandler
+    {
+        public HttpStatusCode Status { get; set; } = HttpStatusCode.Unauthorized;
+        public Exception? Fail { get; set; }
+        public List<DateTimeOffset> Seen { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            lock (Seen) { Seen.Add(time.GetUtcNow()); }
+            if (Fail is { } e) { throw e; }
+            return Task.FromResult(new HttpResponseMessage(Status) { Content = new StringContent("[]") });
+        }
+    }
+
+    HomeAssistantClient Client(HttpMessageHandler handler, HaAuthGuard guard, string token = Token) => new(Url, token, new HttpClient(handler), auth: guard);
+
+    static async Task<Exception?> Publish(HomeAssistantClient client)
+    {
+        try
+        {
+            await client.PublishAsync("copilot/cli/agent_bridge_x/status/state", "idle", true);
+            return null;
+        }
+        catch (HttpRequestException e) { return e; }
+    }
+
+    // A caller retrying every 30 s for as long as it takes, as the connector's startup did.
+    async Task Hammer(HomeAssistantClient client, TimeSpan howLong)
+    {
+        for (var t = TimeSpan.Zero; t < howLong; t += TimeSpan.FromSeconds(30))
+        {
+            await Publish(client);
+            time.Advance(TimeSpan.FromSeconds(30));
+        }
+    }
+
+    [Fact]
+    public async Task A_rejected_token_is_sent_at_most_three_times_minutes_apart_and_never_again_until_it_changes()
+    {
+        var ha = new Answering(time);
+        var guard = new HaAuthGuard(Record, time);
+
+        await Hammer(Client(ha, guard), TimeSpan.FromDays(2));
+
+        Assert.Equal(HaAuthGuard.MaxRejections, ha.Seen.Count);
+        Assert.All(ha.Seen.Zip(ha.Seen.Skip(1)), p => Assert.True(p.Second - p.First >= TimeSpan.FromMinutes(5), $"{p.First:t} then {p.Second:t}"));
+        var said = guard.Describe(guard.Credential(Url, Token))!;
+        Assert.StartsWith("Home Assistant rejected the token: run `agent-bridge-host ha token set`", said, StringComparison.Ordinal);
+        Assert.Contains("Stopped after 3", said, StringComparison.Ordinal);
+
+        // The host restarted: the record is read again, and the token is still not sent.
+        var restarted = new HaAuthGuard(Record, time);
+        var held = Assert.IsType<HomeAssistantAuthException>(await Publish(Client(ha, restarted)));
+        Assert.False(held.Sent);
+        Assert.Equal(HaAuthGuard.MaxRejections, ha.Seen.Count);
+    }
+
+    [Fact]
+    public async Task A_changed_token_gets_exactly_one_fresh_attempt_and_a_good_one_then_goes_through()
+    {
+        var ha = new Answering(time);
+        var guard = new HaAuthGuard(Record, time);
+        await Hammer(Client(ha, guard), TimeSpan.FromHours(1));
+        Assert.Equal(3, ha.Seen.Count);
+
+        // ha token set with another token Home Assistant also refuses: one attempt, then nothing.
+        await Hammer(Client(ha, guard, "second-token-not-a-secret"), TimeSpan.FromDays(1));
+        Assert.Equal(4, ha.Seen.Count);
+
+        // The same one given again is a change too, and earns one more.
+        guard.Forget(guard.Credential(Url, "second-token-not-a-secret"));
+        await Hammer(Client(ha, guard, "second-token-not-a-secret"), TimeSpan.FromDays(1));
+        Assert.Equal(5, ha.Seen.Count);
+
+        // A token Home Assistant accepts is tried once and, accepted, used as freely as ever.
+        ha.Status = HttpStatusCode.OK;
+        var good = Client(ha, guard, "third-token-not-a-secret");
+        for (var i = 0; i < 10; i++) { Assert.Null(await Publish(good)); }
+        Assert.Equal(15, ha.Seen.Count);
+        Assert.Null(guard.Describe(guard.Credential(Url, "third-token-not-a-secret")));
+    }
+
+    [Fact]
+    public async Task A_403_once_the_token_was_accepted_is_reported_as_a_ban_and_only_looked_at_now_and_then()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var guard = new HaAuthGuard(Record, time);
+        var client = Client(ha, guard);
+        Assert.Null(await Publish(client));
+
+        ha.Status = HttpStatusCode.Forbidden;
+        var banned = Assert.IsType<HomeAssistantAuthException>(await Publish(client));
+        Assert.Equal((HaAuthKind.Banned, true), (banned.Kind, banned.Sent));
+        Assert.StartsWith("Home Assistant has banned this machine's address", banned.Message, StringComparison.Ordinal);
+        Assert.Contains("see docs/ha-connector.md", banned.Message, StringComparison.Ordinal);
+        Assert.Contains("/config/ip_bans.yaml", guard.Describe(guard.Credential(Url, Token)), StringComparison.Ordinal);
+
+        // A banned address is refused before its token is read, so a look costs nothing towards a
+        // ban; but nor does it achieve anything, so it is rare.
+        var before = ha.Seen.Count;
+        await Hammer(client, TimeSpan.FromDays(1));
+        var looks = ha.Seen.Skip(before).ToList();
+        Assert.InRange(looks.Count, 1, 8);
+        Assert.All(looks.Prepend(ha.Seen[before - 1]).Zip(looks), p => Assert.True(p.Second - p.First >= TimeSpan.FromMinutes(15)));
+
+        // Cleared (the entry removed and Home Assistant restarted): the next look finds it, and
+        // everything goes through again.
+        ha.Status = HttpStatusCode.OK;
+        await Hammer(client, TimeSpan.FromHours(5));
+        Assert.Null(guard.Describe(guard.Credential(Url, Token)));
+        Assert.Null(await Publish(client));
+    }
+
+    [Fact]
+    public async Task A_403_twice_running_is_a_ban_even_from_a_token_never_accepted()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.Forbidden };
+        var guard = new HaAuthGuard(Record, time);
+        var client = Client(ha, guard);
+
+        var first = Assert.IsType<HomeAssistantAuthException>(await Publish(client));
+        Assert.Equal(HaAuthKind.Rejected, first.Kind);
+        time.Advance(TimeSpan.FromMinutes(5));
+        var second = Assert.IsType<HomeAssistantAuthException>(await Publish(client));
+        Assert.Equal(HaAuthKind.Banned, second.Kind);
+        Assert.Equal(2, ha.Seen.Count);
+    }
+
+    [Fact]
+    public async Task A_server_error_or_a_timeout_is_no_refusal_and_is_retried_as_often_as_the_caller_likes()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.InternalServerError };
+        var guard = new HaAuthGuard(Record, time);
+        var client = Client(ha, guard);
+
+        for (var i = 0; i < 12; i++) { Assert.IsNotType<HomeAssistantAuthException>(await Publish(client)); }
+        ha.Fail = new TaskCanceledException("timed out");
+        for (var i = 0; i < 12; i++)
+        {
+            try { await client.PublishAsync("t", "p", false); } catch (TaskCanceledException) { }
+        }
+
+        Assert.Equal(24, ha.Seen.Count);
+        Assert.Null(guard.Describe(guard.Credential(Url, Token)));
+        Assert.Null(guard.Problem);
+    }
+
+    [Fact]
+    public async Task Callers_with_a_token_not_yet_accepted_go_one_at_a_time_so_a_burst_spends_one_attempt()
+    {
+        var gate = new TaskCompletionSource();
+        var seen = 0;
+        var handler = new Waiting(async () =>
+        {
+            Interlocked.Increment(ref seen);
+            await gate.Task;
+            return HttpStatusCode.Unauthorized;
+        });
+        var guard = new HaAuthGuard(Record, time);
+        var client = new HomeAssistantClient(Url, Token, new HttpClient(handler), auth: guard);
+
+        var burst = Enumerable.Range(0, 6).Select(_ => Publish(client)).ToList();
+        await Task.Delay(200);
+        gate.SetResult();
+        var outcomes = await Task.WhenAll(burst);
+
+        Assert.Equal(1, seen);
+        Assert.All(outcomes, e => Assert.IsType<HomeAssistantAuthException>(e));
+        Assert.Single(outcomes, e => ((HomeAssistantAuthException)e!).Sent);
+    }
+
+    sealed class Waiting(Func<Task<HttpStatusCode>> answer) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            new(await answer());
+    }
+
+    // The incident itself: the connector's startup, with a token Home Assistant rejects, retried
+    // every RetryDelay (30 s) as it always has been for a Home Assistant that is down.
+    [Fact]
+    public async Task A_connector_started_with_a_rejected_token_tries_three_times_then_stops_and_says_to_run_ha_token_set()
+    {
+        var ha = new Answering(time);
+        var log = new List<string>();
+        void Log(string m) { lock (log) { log.Add(m); } }
+        var guard = new HaAuthGuard(Record, time, Log);
+        await using var c = new HaConnector(new HaConnectorOptions { MachineName = "DSWETT-ARM8", Version = "0.1.914", Dev = true },
+            Client(ha, guard), new FakeSessions(), () => null, log: Log, time: time);
+
+        for (var t = TimeSpan.Zero; t < TimeSpan.FromHours(6); t += TimeSpan.FromSeconds(30))
+        {
+            await c.TickAsync();
+            time.Advance(TimeSpan.FromSeconds(30));
+        }
+
+        Assert.Equal(3, ha.Seen.Count);
+        Assert.False(c.Started);
+        Assert.Contains(log, l => l.Contains("Home Assistant rejected the token: run `agent-bridge-host ha token set`", StringComparison.Ordinal));
+        Assert.DoesNotContain(log, l => l.Contains("trying again in 30s", StringComparison.Ordinal));
+        // Said when something changes, not on every pass.
+        Assert.InRange(log.Count, 3, 10);
+        Assert.Contains("Stopped after 3", guard.Problem, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_connector_whose_Home_Assistant_answers_500_keeps_trying_every_30_seconds()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.InternalServerError };
+        var log = new List<string>();
+        var guard = new HaAuthGuard(Record, time);
+        await using var c = new HaConnector(new HaConnectorOptions { MachineName = "DSWETT-ARM8", Version = "0.1.914", Dev = true },
+            Client(ha, guard), new FakeSessions(), () => null, log: m => { lock (log) { log.Add(m); } }, time: time);
+
+        for (var t = TimeSpan.Zero; t < TimeSpan.FromMinutes(10); t += TimeSpan.FromSeconds(30))
+        {
+            await c.TickAsync();
+            time.Advance(TimeSpan.FromSeconds(30));
+        }
+
+        Assert.Equal(20, ha.Seen.Count);
+        Assert.Contains(log, l => l.Contains("trying again in 30s", StringComparison.Ordinal));
+        Assert.Null(guard.Problem);
+    }
+}

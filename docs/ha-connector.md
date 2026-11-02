@@ -915,7 +915,8 @@ files; `ha shadow` compares what each would *publish* to Home Assistant.
 300 s; the beat every 60 s, each followed by the liveness check (stage 7); usage on a new
 reading; pending pins; and every 15 s (the daemon's reconcile) the Detailed activity switch, the
 check of each live session's entities (stage 7) and the retirement queue. A failing call is
-retried on the next pass and logged once per kind of failure until it clears.
+retried on the next pass and logged once per kind of failure until it clears; a refused token
+or a banned address is not ([Troubleshooting](#troubleshooting)).
 
 **A session ending** leaves the session list at once, so the writer regenerates the dashboard
 without its card. Its entities are retired only when **the dashboard served to browsers no
@@ -1200,9 +1201,74 @@ agent-bridge-host config set homeAssistant.baseUrl http://127.0.0.1:8123
 agent-bridge-host config set homeAssistant.disposable true
 agent-bridge-host config set homeAssistant.enabled true
 agent-bridge-host ha token set            # paste the token; it is not shown
-agent-bridge-host ha status               # on, or why not; never the token
+agent-bridge-host ha status               # on, or why not, and any refusal; never the token
 agent-bridge-host ha shadow               # compare with agent-ha-bridge's retained topics; writes nothing
 ```
 
 `serve` logs `the Home Assistant connector is on: <url> as agent_bridge_<slug>` or why it is
 off, and `Home Assistant connector paused: …` while agent-ha-bridge runs.
+
+## Troubleshooting
+
+### Refused tokens are never repeated into a ban
+
+Home Assistant's `http.ip_ban_enabled` bans a client address after `login_attempts_threshold`
+failed logins (10 by default). Every request it answers 401 counts, and so does every WebSocket
+`auth_invalid`. Only a WebSocket `auth_ok` resets the count; a successful REST request does not.
+A banned address gets 403 on everything, whatever the token, until the ban is cleared by hand.
+On 2026-11-02 a machine was banned this way just after `migrate` ([#227](https://github.com/danswett/agent-bridge/issues/227)):
+its connector tried `mqtt.publish` again every 30 s with a token Home Assistant had rejected.
+
+Every request the host makes with a Home Assistant token therefore goes through one guard
+(`HaAuthGuard`): the connector's REST calls and WebSocket logins (publishing, the registry, the
+watch, notifications, the launch card, the reply card's images), `ha shadow`, and `shadow run`'s
+reads with agent-ha-bridge's token. They all share one record, `ha-auth.json` beside the profiles
+(`%LOCALAPPDATA%\AgentBridge\ha-auth.json` on Windows). It holds counts and digests, never a token
+or an address, and a restart of the host starts nothing over. The rules, which are stricter than
+agent-ha-bridge's (`test-auth-backoff.ps1`):
+
+- **A rejected token** (401 or `auth_invalid`) is tried at most 3 times in all, at least 5 and
+  then 15 minutes apart. After that it is never sent again: not on a timer, and not after a
+  restart. Only a change of token or address gives an attempt.
+- **A change** (`ha token set`, even with the same token, or a new `homeAssistant.baseUrl`) earns
+  exactly one attempt once Home Assistant has refused 3 times without a WebSocket login since.
+  Until then, a new token has the same 3 attempts.
+- **A token not yet accepted** goes one request at a time, so a burst of callers spends one
+  attempt, not one each. That covers a fresh start, a fresh token, and a look during a ban.
+- **A ban** is recognised as a 403 from a token Home Assistant accepted before, or as 403 twice
+  running. Nothing the host calls is otherwise answered 403: Home Assistant answers a refused or
+  under-privileged token with 401. Requests from a banned address are refused before any token
+  is read, so they count for nothing but achieve nothing either. The host only looks again after
+  15 minutes, then an hour, then every 4 hours.
+- **Anything else** is not a refusal: a 5xx, a timeout or a refused connection (Home Assistant
+  restarting, say). Those are retried as before, the connector's start every 30 s.
+
+The host log, `ha status` (a `refused:` line) and the app's Settings page all say the same thing:
+what was refused, what to do, and when the next attempt is, or that there will be none.
+
+### "Home Assistant rejected the token"
+
+The token was revoked, belongs to a user that was removed or is not an administrator, or was
+mistyped. Make a new long-lived access token for an administrator (your profile in Home
+Assistant, *Security*). Give it at the machine, then restart the host:
+
+```
+agent-bridge-host ha token set
+```
+
+The host tries it once. If it is refused too, `ha status` says so again.
+
+### "Home Assistant has banned this machine's address"
+
+Home Assistant has written this machine's address to `/config/ip_bans.yaml` and refuses
+everything from it. That includes agent-ha-bridge after a rollback, and a browser on the same
+machine. Home Assistant reads the file at start and keeps the ban in memory, so neither
+restarting Home Assistant nor editing the file is enough on its own. To clear it:
+
+1. Fix whatever caused it first, usually the token (above), or the machine is banned again.
+2. In `/config/ip_bans.yaml` (the File editor, Studio Code Server or the SSH add-on), remove
+   this machine's entry: its address followed by an indented `banned_at:` line. Leave any others.
+3. Restart Home Assistant (*Settings*, *System*, restart). Every machine's entities read
+   `unavailable` for a minute or two while it starts.
+4. The host's next look finds Home Assistant answering again and carries on by itself. To look at
+   once, give the token again with `ha token set` and restart the host.

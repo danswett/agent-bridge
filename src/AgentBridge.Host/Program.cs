@@ -384,8 +384,11 @@ async Task<int> ServeAsync()
     // (delivery.readOnly), which acts on nothing from another device: the buttons are withdrawn.
     var hostUpdates = VelopackHostUpdates.For(ReadOnlyReason(), OperatingSystem.IsWindows(),
         () => new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, profile, () => stop.Cancel(), Log));
+    // Home Assistant's refusals of this machine, counted with every other process of this user so a
+    // rejected token is never repeated into a ban (#227); the app shows what it says.
+    var haAuth = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(identity.Folder), log: Log);
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
-        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers);
+        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth);
     // What takes answering, replying, ending and launching away while it runs (design G5).
     // Asked afresh, as the delivery services ask it for what hello offers: a cached answer
     // could say read-only beside actions offered, or offer none without saying why.
@@ -460,6 +463,7 @@ async Task<int> ServeAsync()
         Credential = () => Volatile.Read(ref credential),
         Relay = ServeRelay,
         AgentHaBridge = agentHaCached,
+        HomeAssistant = () => haAuth.Problem,
         ReadOnly = () => ReadOnlyReason() ?? agentHaCached(),
         ReadOnlyNow = ServeReadOnly,
         SignIn = async (relay, show, ct) =>
@@ -489,6 +493,7 @@ async Task<int> ServeAsync()
     }, Log);
     // A pass, or keep-awake turned on or off, changes what the app's Settings shows.
     if (keepAwake is not null) { keepAwake.Changed += control.Refresh; }
+    haAuth.Changed += control.Refresh;
     LocalServer? local = null;
     try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log), Log); }
     catch (EndpointInUseException e)

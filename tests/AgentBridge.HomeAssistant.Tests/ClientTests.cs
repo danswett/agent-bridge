@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using AgentBridge.HomeAssistant;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // The client's wire: what goes to Home Assistant's REST and WebSocket APIs, through an in-process
@@ -58,7 +59,7 @@ public class ClientTests
             : new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent("echo of something sent") });
         var client = new HomeAssistantClient(new Uri("http://ha.test:8123/"), Token, new HttpClient(handler));
         Assert.Null(await client.GetStateAsync("sensor.missing"));
-        var e = await Assert.ThrowsAsync<HttpRequestException>(() => client.GetStateAsync("sensor.other"));
+        var e = await Assert.ThrowsAsync<HomeAssistantAuthException>(() => client.GetStateAsync("sensor.other"));
         Assert.Contains("401", e.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("echo", e.Message, StringComparison.Ordinal);
     }
@@ -116,11 +117,12 @@ public class ClientTests
     }
 
     // A Home Assistant WebSocket endpoint: asks for auth, checks the token, answers one command.
-    static (HomeAssistantClient Client, List<JsonObject> Received, List<Uri> Connected) Server(Func<JsonObject, JsonObject> answer, string accept = Token)
+    static (HomeAssistantClient Client, List<JsonObject> Received, List<Uri> Connected) Server(Func<JsonObject, JsonObject> answer, string accept = Token,
+        HttpMessageHandler? rest = null, HaAuthGuard? auth = null)
     {
         var received = new List<JsonObject>();
         var connected = new List<Uri>();
-        var client = new HomeAssistantClient(new Uri("https://ha.test"), Token, new HttpClient(new Handler((_, _) => new HttpResponseMessage(HttpStatusCode.OK))), (uri, ct) =>
+        var client = new HomeAssistantClient(new Uri("https://ha.test"), Token, new HttpClient(rest ?? new Handler((_, _) => new HttpResponseMessage(HttpStatusCode.OK))), (uri, ct) =>
         {
             connected.Add(uri);
             var (c, s) = Pipe.Pair();
@@ -146,7 +148,7 @@ public class ClientTests
                 await Send(server, reply);
             });
             return Task.FromResult(WebSocket.CreateFromStream(c, new WebSocketCreationOptions { IsServer = false }));
-        });
+        }, auth);
         return (client, received, connected);
 
         static Task Send(WebSocket ws, JsonObject message) =>
@@ -382,7 +384,51 @@ public class ClientTests
     public async Task A_refused_token_fails_the_command()
     {
         var (client, _, _) = Server(_ => new JsonObject { ["success"] = true }, accept: "some-other-token");
-        var e = await Assert.ThrowsAsync<HaCommandException>(() => client.ListEntityRegistryAsync());
-        Assert.Equal("auth_invalid", e.Code);
+        var e = await Assert.ThrowsAsync<HomeAssistantAuthException>(() => client.ListEntityRegistryAsync());
+        Assert.Equal((HaAuthKind.Rejected, true), (e.Kind, e.Sent));
+        Assert.StartsWith("Home Assistant rejected the token", e.Message, StringComparison.Ordinal);
+    }
+
+    // Home Assistant counts a refused WebSocket login and a refused REST request alike, per address,
+    // so the connector's publishes, its registry and watch connections and the reply card's image
+    // fetches all spend one budget (#227).
+    [Fact]
+    public async Task A_websocket_login_and_an_image_fetch_spend_the_same_budget_as_a_publish()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 2, 8, 0, 0, TimeSpan.Zero));
+        var guard = new HaAuthGuard(time: time);
+        var rest = new Handler((_, _) => new HttpResponseMessage(HttpStatusCode.Unauthorized));
+        var (client, _, connected) = Server(_ => new JsonObject { ["success"] = true }, accept: "some-other-token", rest: rest, auth: guard);
+
+        await Assert.ThrowsAsync<HomeAssistantAuthException>(() => client.PublishAsync("t", "p", false));
+        time.Advance(TimeSpan.FromMinutes(5));
+        await Assert.ThrowsAsync<HomeAssistantAuthException>(() => client.ListEntityRegistryAsync());
+        time.Advance(TimeSpan.FromMinutes(15));
+        await Assert.ThrowsAsync<HomeAssistantAuthException>(() => client.DownloadImageAsync("abc123", 1024));
+        Assert.Equal((2, 1), (rest.Seen.Count, connected.Count));
+
+        time.Advance(TimeSpan.FromDays(1));
+        foreach (var call in new Func<Task>[]
+        {
+            () => client.PublishAsync("t", "p", false),
+            () => client.GetStateAsync("sensor.x"),
+            () => client.DownloadImageAsync("abc123", 1024),
+            () => client.ListEntityRegistryAsync(),
+            async () => { await foreach (var _ in client.WatchAsync(["sensor.x"])) { } },
+            async () => { await foreach (var _ in client.EventsAsync("mobile_app_notification_action")) { } },
+        })
+        {
+            Assert.False((await Assert.ThrowsAsync<HomeAssistantAuthException>(call)).Sent);
+        }
+        Assert.Equal((2, 1), (rest.Seen.Count, connected.Count));
+        Assert.NotNull(client.Refused);
+    }
+
+    [Fact]
+    public void A_refused_websocket_upgrade_is_read_for_its_status_as_dotnet_words_it()
+    {
+        Assert.Equal(HttpStatusCode.Forbidden, HomeAssistantClient.UpgradeStatus(new WebSocketException("The server returned status code '403' when status code '101' was expected.")));
+        Assert.Equal(HttpStatusCode.Forbidden, HomeAssistantClient.UpgradeStatus(new HttpRequestException("x", null, HttpStatusCode.Forbidden)));
+        Assert.Null(HomeAssistantClient.UpgradeStatus(new WebSocketException("Unable to connect to the remote server")));
     }
 }

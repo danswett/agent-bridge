@@ -107,7 +107,8 @@ public sealed partial class HaConnector
             catch (Exception e)
             {
                 listening = false;
-                Problem("taps", $"Home Assistant connector could not hold the notification-action subscription: {Describe(e)}; trying again in {backoff.TotalSeconds:F0}s");
+                if (e is HomeAssistantAuthException auth) { Refusal(auth); }
+                else { Problem("taps", $"Home Assistant connector could not hold the notification-action subscription: {Describe(e)}; trying again in {backoff.TotalSeconds:F0}s"); }
                 try { await Task.Delay(backoff, time, token); } catch (OperationCanceledException) { return; }
                 backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, TimeSpan.FromSeconds(60).Ticks));
             }

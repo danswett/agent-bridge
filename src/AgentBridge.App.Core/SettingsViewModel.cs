@@ -81,6 +81,8 @@ public sealed class SettingsViewModel : Observable
     public string Profile => manager.Layout.Profile;
     public string? AgentHaBridge => Status?.AgentHaBridge;
     public bool HasAgentHaBridge => !string.IsNullOrEmpty(Status?.AgentHaBridge);
+    public string? HomeAssistantRefused => Status?.HomeAssistant;
+    public bool HasHomeAssistantRefused => !string.IsNullOrEmpty(Status?.HomeAssistant);
     public bool RestartRequired => Status?.RestartRequired == true;
     public bool ElevatedWarning => Status?.Elevated == true;
 
