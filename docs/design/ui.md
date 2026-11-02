@@ -471,7 +471,8 @@ dot with the preceding fact.
   zero-width, format, control and other default-ignorable characters are removed, any
   whitespace (line and paragraph separators too) becomes one space, and the result is cut to
   60 characters with "…". With nothing left, it is "Delegate" and the first 8 characters of
-  its id. A name that reads as the main agent's (NFKD-folded, marks and case dropped: "main"
+  its id. A name that reads as the main agent's (NFKD-folded, marks and case dropped by code
+  point, so a combining mark outside the BMP is dropped too: "main"
   then "agent…", or "mainagent…") shows as `Delegate “<name>”`. The inspector's heading has a
   fixed "Delegate" overline above the name, and the pre-filled reply names the delegate by its
   id alone ("Please stop your delegate *id*."), never by its name; an id with anything but

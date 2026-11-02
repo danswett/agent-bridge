@@ -98,14 +98,16 @@ public static class DelegateLabel
 
     // NFKD folds fullwidth and other compatibility forms, its marks are dropped, and case goes;
     // then the words, split at anything but a letter or digit: "main" followed by "agent…", or
-    // "mainagent…" run together.
+    // "mainagent…" run together. By rune, not UTF-16 unit, so a mark outside the BMP (U+1D165)
+    // is dropped like any other rather than splitting the word.
     static bool PosesAsMainAgent(string clean)
     {
         var folded = new StringBuilder();
-        foreach (var c in clean.Normalize(NormalizationForm.FormKD))
+        foreach (var r in clean.Normalize(NormalizationForm.FormKD).EnumerateRunes())
         {
-            if (CharUnicodeInfo.GetUnicodeCategory(c) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark) { continue; }
-            folded.Append(char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : ' ');
+            if (Rune.GetUnicodeCategory(r) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark) { continue; }
+            if (Rune.IsLetterOrDigit(r)) { folded.Append(Rune.ToLowerInvariant(r).ToString()); }
+            else { folded.Append(' '); }
         }
         var words = folded.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries);
         for (var i = 0; i < words.Length; i++)

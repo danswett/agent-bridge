@@ -414,6 +414,51 @@ public sealed class DelegatesTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_minute_passing_changes_each_conversation_events_age_in_place_and_keeps_the_same_item()
+    {
+        var card = Card("del");
+        var before = TestUi.Read(() => card.Delegates.Events.ToList());
+
+        clock.Advance(TimeSpan.FromMinutes(1));
+        ui.Post(card.RefreshTimes);
+
+        var after = TestUi.Read(() => card.Delegates.Events.ToList());
+        Assert.Equal(before.Count, after.Count);
+        for (var i = 0; i < before.Count; i++) { Assert.Same(before[i], after[i]); }
+        Assert.Equal(["Started 2 delegates · 18m", "Started delegate Lint the PWA · 16m", "Delegate Lint the PWA failed · 15m"], TestUi.Read(() => after.Select(e => e.Text).ToList()));
+    }
+
+    [Fact]
+    public async Task A_task_the_list_brings_while_a_fetch_is_out_is_not_overwritten_by_the_fetchs_older_one()
+    {
+        using var fetched = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        host.On(Ops.SessionGet, _ =>
+        {
+            fetched.Set();
+            release.Wait(FakeHost.Patience);
+            return Delegating().Subagents![1] with { Task = "The old task.", Response = "Run full test suite: everything it said." };
+        });
+        Resize(1440);
+        Select("del");
+        var card = Card("del");
+        ui.Post(() => layout.OpenDelegate("suite"));
+        Assert.True(fetched.Wait(FakeHost.Patience), "the fetch");
+
+        var next = Delegating() with
+        {
+            Subagents = [.. Delegating().Subagents!.Select(a => a.Id == "suite" ? a with { Task = "The new task." } : a)],
+            UpdatedAt = Now.AddSeconds(1),
+        };
+        await host.SendAsync(Events.SessionUpsert, next);
+        await Wait.UntilAsync(() => card.Delegates.Detail.Task == "The new task.", "the listed task");
+
+        release.Set();
+        await Wait.UntilAsync(() => card.Delegates.Detail.Latest == "Run full test suite: everything it said.", "the fetched words");
+        Assert.Equal("The new task.", TestUi.Read(() => card.Delegates.Detail.Task));
+    }
+
+    [Fact]
     public async Task Ask_main_agent_to_stop_it_only_fills_the_reply_box_and_send_goes_to_the_main_agent_alone()
     {
         Resize(1440);

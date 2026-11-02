@@ -81,14 +81,33 @@ public sealed class DelegateItem : Observable
 // "Delegate *name* reported back · 22m", the name linking to the delegate and the word Delegate
 // before it, so no name reads as the main agent's (DelegateLabel). Only the main agent's own
 // delegates, which report to it; a nested one reports to its parent, in the inspector. Drawn as
-// its words before the name, the name, and its words after.
-public sealed record DelegateEvent(string Key, StatusGlyph? Glyph, string Before, string? Name, string? AgentId, string After, DateTimeOffset At)
+// its words before the name, the name, and its words after. Kept per key and changed in place, as
+// its age moves on each minute: a replaced item would take a focused link with it.
+public sealed class DelegateEvent : Observable
 {
+    StatusGlyph? glyph;
+    string before = "";
+    string? name;
+    string? agentId;
+    string after = "";
+
+    internal DelegateEvent(string key) { Key = key; }
+
+    public string Key { get; }
+    public StatusGlyph? Glyph { get => glyph; internal set { if (Set(ref glyph, value)) { Raise(nameof(Started)); Raise(nameof(HasGlyph)); Raise(nameof(GlyphShown)); } } }
+    public string Before { get => before; internal set { if (Set(ref before, value)) { Raise(nameof(Text)); } } }
+    public string? Name { get => name; internal set { if (Set(ref name, value)) { Raise(nameof(HasName)); Raise(nameof(Text)); } } }
+    public string? AgentId { get => agentId; internal set => Set(ref agentId, value); }
+    public string After { get => after; internal set { if (Set(ref after, value)) { Raise(nameof(Text)); } } }
+    public DateTimeOffset At { get; internal set; }
+
     public bool Started => Glyph is null;
     public bool HasName => Name is not null;
     public bool HasGlyph => Glyph is not null;
     public StatusGlyph GlyphShown => Glyph ?? StatusGlyph.Idle;
     public string Text => string.Join(" ", new[] { Before, Name, After }.Where(s => !string.IsNullOrEmpty(s)));
+
+    public override string ToString() => Text;
 }
 
 // The delegate the inspector shows (§6.3), or the Delegates tab's pushed view: its name and glyph;
@@ -163,6 +182,7 @@ public sealed class DelegatesViewModel : Observable
     readonly CardContext ctx;
     readonly Func<ReplyViewModel?> reply;
     readonly Dictionary<string, DelegateItem> items = new(StringComparer.Ordinal);
+    readonly Dictionary<string, DelegateEvent> events = new(StringComparer.Ordinal);
     readonly DelegateItem fold = DelegateItem.Fold();
     Session session;
     DelegateGroups? groups;
@@ -177,6 +197,8 @@ public sealed class DelegatesViewModel : Observable
     string keptLine = "";
     string? listLine;
     int lineRev;
+    string? listTask;
+    int taskRev;
     string? entryKey;
     int generation;
     bool loading;
@@ -252,8 +274,8 @@ public sealed class DelegatesViewModel : Observable
         selectedId = id;
         fetched = null;
         keptTask = keptLine = "";
-        listLine = null;
-        lineRev = 0;
+        listLine = listTask = null;
+        lineRev = taskRev = 0;
         generation++;
         loading = false;
         again = false;
@@ -372,7 +394,14 @@ public sealed class DelegatesViewModel : Observable
             lineRev++;
         }
         listLine = entry.Line;
-        if (entry.Task is { } task) { keptTask = task; }
+        // Its task the same way: one the list brought while a fetch was out is newer than the
+        // fetch's, which was read before it.
+        if (entry.Task is { } task && task != listTask)
+        {
+            keptTask = task;
+            taskRev++;
+        }
+        listTask = entry.Task;
     }
 
     // Its descendants in the session's list, in list order, each with its depth below it. A parent
@@ -432,7 +461,20 @@ public sealed class DelegatesViewModel : Observable
     void SyncEvents(IReadOnlyList<Subagent> list, DateTimeOffset now)
     {
         var mine = list.Where(a => a.Parent is null).ToList();
-        var events = new List<DelegateEvent>();
+        var wanted = new List<DelegateEvent>();
+        void Event(string key, StatusGlyph? glyph, string before, string? name, string? agentId, string after, DateTimeOffset at)
+        {
+            // A host that lists one id twice (a broken one) gets one line for it, not two.
+            if (wanted.Any(w => w.Key == key)) { return; }
+            if (!events.TryGetValue(key, out var e)) { events[key] = e = new DelegateEvent(key); }
+            e.Glyph = glyph;
+            e.Before = before;
+            e.Name = name;
+            e.AgentId = agentId;
+            e.After = after;
+            e.At = at;
+            wanted.Add(e);
+        }
         var starts = mine.Where(a => a.StartedAt is not null).OrderBy(a => a.StartedAt).ToList();
         for (var i = 0; i < starts.Count;)
         {
@@ -441,9 +483,8 @@ public sealed class DelegatesViewModel : Observable
             var at = batch[0].StartedAt!.Value;
             var age = $"· {Words.Age(at, now)}";
             var name = NameOf(batch[0]);
-            events.Add(batch.Count == 1
-                ? new DelegateEvent($"start|{batch[0].Id}", null, DelegateLabel.SaysDelegate(name) ? "Started" : "Started delegate", name, batch[0].Id, age, at)
-                : new DelegateEvent($"start|{batch[0].Id}", null, $"Started {batch.Count} delegates {age}", null, null, "", at));
+            if (batch.Count == 1) { Event($"start|{batch[0].Id}", null, DelegateLabel.SaysDelegate(name) ? "Started" : "Started delegate", name, batch[0].Id, age, at); }
+            else { Event($"start|{batch[0].Id}", null, $"Started {batch.Count} delegates {age}", null, null, "", at); }
         }
         foreach (var a in mine.Where(a => a.EndedAt is not null && a.Status is SubagentStatus.Idle or SubagentStatus.Ended))
         {
@@ -455,23 +496,11 @@ public sealed class DelegatesViewModel : Observable
                 _ => (StatusGlyph.Idle, "reported back"),
             };
             var name = NameOf(a);
-            events.Add(new DelegateEvent($"end|{a.Id}", glyph, DelegateLabel.SaysDelegate(name) ? "" : "Delegate", name, a.Id, $"{said} · {Words.Age(a.EndedAt!.Value, now)}", a.EndedAt!.Value));
+            Event($"end|{a.Id}", glyph, DelegateLabel.SaysDelegate(name) ? "" : "Delegate", name, a.Id, $"{said} · {Words.Age(a.EndedAt!.Value, now)}", a.EndedAt!.Value);
         }
-        var ordered = events.OrderBy(e => e.At).ToList();
-        // Records equal by value: a tick that changes nothing moves nothing.
-        for (var i = Events.Count - 1; i >= 0; i--)
-        {
-            if (!ordered.Any(e => e.Key == Events[i].Key)) { Events.RemoveAt(i); }
-        }
-        for (var i = 0; i < ordered.Count; i++)
-        {
-            if (i < Events.Count && Events[i] == ordered[i]) { continue; }
-            var at = -1;
-            for (var j = i; j < Events.Count; j++) { if (Events[j].Key == ordered[i].Key) { at = j; break; } }
-            if (at >= 0) { Events.RemoveAt(at); }
-            Events.Insert(i, ordered[i]);
-        }
-        while (Events.Count > ordered.Count) { Events.RemoveAt(Events.Count - 1); }
+        foreach (var gone in events.Keys.Where(k => !wanted.Any(e => e.Key == k)).ToList()) { events.Remove(gone); }
+        // Stable, so events at the same moment keep the order they were built in.
+        Sync(Events, wanted.OrderBy(e => e.At));
         Raise(nameof(HasEvents));
     }
 
@@ -545,7 +574,7 @@ public sealed class DelegatesViewModel : Observable
         due = false;
         lastLoad = ctx.Time.GetUtcNow();
         var mine = generation;
-        var rev = lineRev;
+        var (rev, revTask) = (lineRev, taskRev);
         Subagent? full = null;
         string? problem = null;
         try { full = await fetch(session.Id, agent); }
@@ -566,7 +595,7 @@ public sealed class DelegatesViewModel : Observable
             {
                 fetched = full;
                 if (full.Line is { } line && rev == lineRev) { keptLine = line; }
-                if (full.Task is { } task) { keptTask = task; }
+                if (full.Task is { } task && revTask == taskRev) { keptTask = task; }
                 Detail.Note = "";
             }
             SyncDetail(ctx.Time.GetUtcNow());

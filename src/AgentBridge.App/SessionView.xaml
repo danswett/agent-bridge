@@ -345,22 +345,22 @@
                                      width and the one-column pane clipped the outcome and age after it. The name
                                      trims to the line; "reported back · 22m" moves to the next line. -->
                                 <local:FlowPanel Spacing="4" LineSpacing="0">
-                                    <ContentControl Margin="0,0,4,0" VerticalAlignment="Center" Style="{StaticResource AbIconDelegate}" Width="12" Height="12" Foreground="{ThemeResource AbText2}" IsTabStop="False" Visibility="{x:Bind local:Ui.Show(Started)}" />
-                                    <local:StatusGlyphView Margin="0,0,4,0" VerticalAlignment="Center" Size="12" Glyph="{x:Bind GlyphShown}" Visibility="{x:Bind local:Ui.Show(HasGlyph)}" />
-                                    <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Before}" Visibility="{x:Bind local:Ui.Some(Before)}" />
+                                    <ContentControl Margin="0,0,4,0" VerticalAlignment="Center" Style="{StaticResource AbIconDelegate}" Width="12" Height="12" Foreground="{ThemeResource AbText2}" IsTabStop="False" Visibility="{x:Bind local:Ui.Show(Started), Mode=OneWay}" />
+                                    <local:StatusGlyphView Margin="0,0,4,0" VerticalAlignment="Center" Size="12" Glyph="{x:Bind GlyphShown, Mode=OneWay}" Visibility="{x:Bind local:Ui.Show(HasGlyph), Mode=OneWay}" />
+                                    <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Before, Mode=OneWay}" Visibility="{x:Bind local:Ui.Some(Before), Mode=OneWay}" />
                                     <HyperlinkButton
                                         VerticalAlignment="Center"
                                         Padding="0"
                                         MinHeight="0"
                                         FontSize="12"
-                                        Tag="{x:Bind AgentId}"
-                                        AutomationProperties.Name="{x:Bind Text}"
+                                        Tag="{x:Bind AgentId, Mode=OneWay}"
+                                        AutomationProperties.Name="{x:Bind Text, Mode=OneWay}"
                                         ToolTipService.ToolTip="Show this delegate"
-                                        Visibility="{x:Bind local:Ui.Show(HasName)}"
+                                        Visibility="{x:Bind local:Ui.Show(HasName), Mode=OneWay}"
                                         Click="OnDelegateEvent">
-                                        <TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                        <TextBlock Text="{x:Bind Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                                     </HyperlinkButton>
-                                    <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind After}" Visibility="{x:Bind local:Ui.Some(After)}" />
+                                    <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind After, Mode=OneWay}" Visibility="{x:Bind local:Ui.Some(After), Mode=OneWay}" />
                                 </local:FlowPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
