@@ -32,3 +32,13 @@ re-rendering on another OS changes pixels without changing layout. Commit only t
 whose source or renderer changed.
 
 Phone boards render at 2×, and everything else at 1×.
+
+## Motion preview
+
+`npm run motion` records [`docs/design/motion-preview.html`](../../docs/design/motion-preview.html)
+to `motion-preview.gif`, and again under reduced motion to `motion-preview-reduced.gif`, beside
+it (docs/design/ui.md §5.3). The page is timed by the generated `--ab-motion-*` tokens, so
+re-record it after changing `design/tokens.json` `motion`. It serves the repository on a
+loopback port, since a page opened from `file://` can't use the sprite. It steps the page's
+own clock 30 ms a frame rather than recording in real time, so a slow machine records the
+same frames. It uses the machine's `system-ui` font, not the stand-ins above.

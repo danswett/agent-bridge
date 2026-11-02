@@ -1,10 +1,10 @@
 // The Windows app's generated files: one ResourceDictionary with the colour roles and surfaces
 // as ThemeDictionaries (Light, Dark and HighContrast, the last mapped to system colours), the
-// monospace stack, radii and spacing, and a Style per glyph and icon; and the keys as C#, so
+// monospace stack, radii, spacing and motion, and a Style per glyph and icon; and the keys as C#, so
 // the app can check at run time that every one of them resolves in every theme.
 
 import { toXamlColor } from './color.mjs';
-import { SYSTEM_COLORS, roleTokens, surfaceTokens, monoFamilies, monoFont, radii, spaces, accentShades, hyperlinkTokens, layoutSizes, typeRamp, inlineMono, inlineMonoSizes } from './tokens.mjs';
+import { SYSTEM_COLORS, roleTokens, surfaceTokens, monoFamilies, monoFont, radii, spaces, accentShades, hyperlinkTokens, layoutSizes, typeRamp, inlineMono, inlineMonoSizes, motion, xamlCase } from './tokens.mjs';
 import { MOVING_CLASSES, formatCommands, fmt } from './svg.mjs';
 
 const pascal = (s) => s.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
@@ -158,9 +158,48 @@ ${layoutSizes(tokens).map((s) => `    <x:Double x:Key="${s.xaml}">${s.value}</x:
     <!-- The type ramp (docs/design/ui.md §4.3): tabular figures, no added tracking. -->
 ${typeRamp(tokens).map((t) => typeStyle(t, tokens)).join('\n')}
 
+    <!-- Motion (docs/design/ui.md §5.3), the same in every theme, so outside the theme
+         dictionaries. A duration and a KeySpline are strings, as WinUI's own
+         ControlFastAnimationDuration and ControlFastOutSlowInKeySpline are: {StaticResource}
+         makes them a KeyTime, Duration or KeySpline where they're used. With Windows' animation
+         effects off, an entry's Reduced says what it becomes: CrossFade (no travel, over
+         AbMotionCrossFade) or Instant. -->
+${motionResources(tokens).map((r) => `    <x:${r.type} x:Key="${r.key}">${r.value}</x:${r.type}>`).join('\n')}
+
 ${[...glyphs, ...icons].map(styleXaml).join('\n')}
 </ResourceDictionary>
 `;
+}
+
+// 1200 ms is 00:00:01.200, the TimeSpan form WinUI's own durations take.
+export function timeSpan(msValue) {
+  const pad = (n, w = 2) => String(n).padStart(w, '0');
+  const s = Math.floor(msValue / 1000);
+  return `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}.${pad(msValue % 1000, 3)}`;
+}
+
+// The motion resources the app gets, in order: { key, type (String or Double), value }.
+export function motionResources(tokens) {
+  const m = motion(tokens, 'windows');
+  const out = [];
+  const str = (key, value) => out.push({ key, type: 'String', value });
+  const dbl = (key, value) => out.push({ key, type: 'Double', value: String(value) });
+  for (const d of m.durations) { str(`AbMotion${xamlCase(d.name)}`, timeSpan(d.ms)); }
+  for (const e of m.easings) { str(`AbMotionEase${xamlCase(e.name)}`, e.curve.join(',')); }
+  for (const d of m.distances) { dbl(`AbMotionDistance${xamlCase(d.name)}`, d.px); }
+  for (const g of m.glyphs) { str(`AbMotionGlyph${xamlCase(g.name)}Period`, timeSpan(g.periodMs)); }
+  for (const c of m.catalogue) {
+    const p = `AbMotion${xamlCase(c.id)}`;
+    str(`${p}Duration`, timeSpan(c.duration.ms));
+    str(`${p}Ease`, c.easing.curve.join(','));
+    if (c.distance) { dbl(`${p}Distance`, c.distance.px); }
+    if (c.exit) {
+      str(`${p}ExitDuration`, timeSpan(c.exit.duration.ms));
+      str(`${p}ExitEase`, c.exit.easing.curve.join(','));
+    }
+    str(`${p}Reduced`, xamlCase(c.reduced));
+  }
+  return out;
 }
 
 // The font files the app bundles, relative to its folder: what the XAML points at, and the OFL.
@@ -220,6 +259,13 @@ ${list(icons.map(styleKey))}
     public static readonly string[] InlineMono =
     [
 ${list(['AbInlineMonoScale', ...inlineMonoSizes(tokens).map((r) => r.xaml)])}
+    ];
+
+    // The motion resources (docs/design/ui.md §5.3), outside the theme dictionaries: durations
+    // and KeySplines as strings, distances as doubles, and each catalogue entry's Reduced form.
+    public static readonly string[] Motion =
+    [
+${list(motionResources(tokens).map((r) => r.key))}
     ];
 
     // The bundled monospace and its licence, as the app's folder holds them
