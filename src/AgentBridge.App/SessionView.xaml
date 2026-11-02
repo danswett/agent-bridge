@@ -243,7 +243,7 @@
                 x:Name="ConversationScroll"
                 AutomationProperties.AutomationId="Conversation"
                 Visibility="{x:Bind local:Ui.Show(Layout.ShowConversation), Mode=OneWay}">
-                <StackPanel
+                <local:ReadingColumn
                     x:Name="Conversation"
                     MaxWidth="{StaticResource AbLayoutReadingMax}"
                     HorizontalAlignment="Left"
@@ -280,19 +280,24 @@
                         Foreground="{x:Bind local:Ui.ToneBrush(Card.ReceiptTone), Mode=OneWay}"
                         Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}" />
 
-                    <!-- Your message: a bubble on the right. -->
-                    <Border
-                        HorizontalAlignment="Right"
-                        MaxWidth="560"
-                        Padding="16,10"
-                        Background="{ThemeResource AbCard}"
-                        BorderBrush="{ThemeResource AbStroke}"
-                        BorderThickness="1"
-                        CornerRadius="{StaticResource AbRadiusCard}"
-                        AutomationProperties.AutomationId="YourMessage"
-                        Visibility="{x:Bind local:Ui.Show(Card.HasUserMessage), Mode=OneWay}">
-                        <TextBlock Style="{StaticResource AbTypeReading}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.UserMessage, Mode=OneWay}" />
-                    </Border>
+                    <!-- Your message: a bubble at the column's right, at most 85% of it, as in the PWA. -->
+                    <Grid Visibility="{x:Bind local:Ui.Show(Card.HasUserMessage), Mode=OneWay}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="15*" />
+                            <ColumnDefinition Width="85*" />
+                        </Grid.ColumnDefinitions>
+                        <Border
+                            Grid.Column="1"
+                            HorizontalAlignment="Right"
+                            Padding="16,10"
+                            Background="{ThemeResource AbCard}"
+                            BorderBrush="{ThemeResource AbStroke}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource AbRadiusCard}"
+                            AutomationProperties.AutomationId="YourMessage">
+                            <TextBlock Style="{StaticResource AbTypeReading}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.UserMessage, Mode=OneWay}" />
+                        </Border>
+                    </Grid>
 
                     <!-- The main agent: a label line ("Main agent" only where the host says whose the words are, else the agent's name), then its words; its reasoning behind a disclosure. -->
                     <StackPanel Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasVoice), Mode=OneWay}">
@@ -377,7 +382,7 @@
                             <Run Text="{x:Bind Card.ToolName, Mode=OneWay}" Foreground="{ThemeResource AbText}" /><Run Text=" " /><Run Text="{x:Bind Card.ToolSummary, Mode=OneWay}" />
                         </TextBlock>
                     </Grid>
-                </StackPanel>
+                </local:ReadingColumn>
             </ScrollViewer>
 
             <!-- The Delegates tab (§6.3, §5.2): every delegate, nested under its parent, and one opened
@@ -387,7 +392,7 @@
                     <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" AutomationProperties.AutomationId="DelegatesText" Text="{x:Bind Card.DelegatesText, Mode=OneWay}" />
                 </StackPanel>
                 <ScrollViewer AutomationProperties.AutomationId="DelegateList" Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegateList), Mode=OneWay, FallbackValue=Collapsed}">
-                    <StackPanel Padding="12,8,12,24" Spacing="8" MaxWidth="{StaticResource AbLayoutReadingMax}" HorizontalAlignment="Left">
+                    <local:ReadingColumn Padding="12,8,12,24" Spacing="8" MaxWidth="{StaticResource AbLayoutReadingMax}" HorizontalAlignment="Left">
                         <ListView
                             SelectionMode="None"
                             IsItemClickEnabled="True"
@@ -419,10 +424,12 @@
                             Foreground="{ThemeResource AbText2}"
                             Text="{x:Bind Card.Delegates.MoreText, Mode=OneWay}"
                             Visibility="{x:Bind local:Ui.Show(Card.Delegates.HasMore), Mode=OneWay, FallbackValue=Collapsed}" />
-                    </StackPanel>
+                    </local:ReadingColumn>
                 </ScrollViewer>
                 <ScrollViewer AutomationProperties.AutomationId="DelegateDetail" Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegateDetail), Mode=OneWay, FallbackValue=Collapsed}">
-                    <local:DelegateInspector x:Name="TabDelegate" Margin="24,8,24,24" MaxWidth="{StaticResource AbLayoutReadingMax}" HorizontalAlignment="Left" Card="{x:Bind Card, Mode=OneWay}" />
+                    <local:ReadingColumn Margin="24,8,24,24" MaxWidth="{StaticResource AbLayoutReadingMax}" HorizontalAlignment="Left">
+                        <local:DelegateInspector x:Name="TabDelegate" Card="{x:Bind Card, Mode=OneWay}" />
+                    </local:ReadingColumn>
                 </ScrollViewer>
             </Grid>
 
@@ -440,7 +447,7 @@
             Grid.Row="3"
             VerticalScrollBarVisibility="Auto"
             Visibility="{x:Bind local:Ui.Some(Card.Reply), Mode=OneWay}">
-            <StackPanel
+            <local:ReadingColumn
                 Padding="24,0,24,20"
                 Spacing="6"
                 MaxWidth="{StaticResource AbLayoutReadingMax}"
@@ -565,7 +572,7 @@
                     Text="{x:Bind Card.Reply.StatusText, Mode=OneWay}"
                     Foreground="{x:Bind local:Ui.ToneBrush(Card.Reply.StatusTone), Mode=OneWay}"
                     Visibility="{x:Bind local:Ui.Some(Card.Reply.StatusText), Mode=OneWay, FallbackValue=Collapsed}" />
-            </StackPanel>
+            </local:ReadingColumn>
         </ScrollViewer>
     </Grid>
 </UserControl>

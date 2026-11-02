@@ -486,7 +486,10 @@ dot with the preceding fact.
 
 ### 6.4 Conversation
 
-- **Your messages:** a right-aligned bubble (card fill, platform radius).
+- **Your messages:** a bubble at the right edge of the conversation's column (card fill,
+  platform radius), at most 85% of the column's width. The column is the pane's width up to the
+  reading measure (§4.2), whatever it holds, so a short message beside a short reply is still at
+  the right (#255).
 - **Main agent:** a label line ("Main agent", then the age in meta style), then reading
   text. Reasoning is behind a "Show reasoning" disclosure, and is always the main agent's
   own. "Main agent" only where the host says whose the words are (`activity.source`, `own`
@@ -503,6 +506,8 @@ dot with the preceding fact.
 
 ### 6.5 Reply box
 
+- **Width:** the conversation's column, the pane's width up to the reading measure (§4.2), whatever
+  has been typed (#294).
 - **Placeholder:** "Message the main agent". Replies only ever go to the main agent.
 - **Controls:** Attach, then Send (Bridge, icon only, with a tooltip naming the shortcut:
   Ctrl+Enter, or ⌘↩ on Apple).

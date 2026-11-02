@@ -486,7 +486,7 @@ reaches the real host or its profile.
   design resources in every theme, draws every glyph and icon, checks the status words' colours on rows and in the header and the tool glyph's name and that words and glyphs follow a theme flip, measures inline mono's x-height against the text face's in each ramp role (within 1 px, #215), sets code in the bundled
   font, narrows the list with the machine tabs, resizes the window across the breakpoints (three panes at 1440, two with
   tabs at 1000, one column at 400×900, Back, and the session open kept through each), launches a session from the Launch page
-  and waits for its row,
+  and waits for its row, then checks your message in it and in the session with delegates is at the right of the conversation's column, at most 85% of it, and the reply box at the same measure, at 1440, 1200 and 400 px (#255, #294),
   checks Codex on the other machine is not launched without a prompt, checks the shell (the 48 px title bar, the
   search box finding and opening another machine's session, the rail and its Bridge pill, the layer's radius, an
   accent button in Bridge, the caption buttons in the app's theme, the 360×600 minimum), checks the Machines page's rows (#213), draws every page, the Sessions page in three panes with the inspector, in Light and
