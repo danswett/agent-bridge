@@ -327,6 +327,33 @@ test('a Needs you entry scrolls its question into sight, however far its convers
   await expect(v.locator('.question-slot .question')).toBeInViewport();
 });
 
+test('a Tools refresh queued just before leaving Sessions is not sent', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  const v = await open(page, CLAUDE);
+  await expect(v.locator('.tools-panel li.tool')).toHaveCount(6);
+  const calls = () => page.evaluate(() => window.agentBridgeDemo.calls.filter((c) => c === 'session.get').length);
+  const before = await calls();
+  await upsert(page, CLAUDE, { updatedAt: new Date(Date.now() + 1000).toISOString() });
+  await page.locator('#nav [data-nav="settings"]').click();
+  await page.waitForTimeout(2600);
+  expect(await calls()).toBe(before);
+});
+
+test('narrowed to a phone on Settings with a session chosen, Ctrl+K and typing keep focus in search', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openDemo(page);
+  await open(page, CLAUDE);
+  await page.locator('#nav [data-nav="settings"]').click();
+  await expect(page.locator('[data-route="settings"]')).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  await page.keyboard.press('Control+k');
+  await page.keyboard.type('relay');
+  await expect(page.locator('#search')).toHaveValue('relay');
+  await expect(page.locator('#search')).toBeFocused();
+});
+
 test('Tools left while the session changed are fetched again when they show', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 900 });
   await openDemo(page);

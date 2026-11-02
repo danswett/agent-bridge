@@ -530,7 +530,9 @@ export class SessionCard {
   }
 
   async #loadHistory() {
-    if (this.#history.loading || !this.fetchDetail) { return; }
+    // A refresh queued while Tools showed is dropped if they no longer do (another page, tab or
+    // session): revealing them again fetches what is stale.
+    if (this.#history.loading || !this.fetchDetail || !this.#toolsShown()) { return; }
     this.#history.loading = true;
     const body = this.els.historyBody;
     if (!this.#history.loaded) { body.replaceChildren(h('p', { class: 'note', role: 'status' }, 'Loading…')); }

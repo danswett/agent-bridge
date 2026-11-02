@@ -268,7 +268,12 @@ export class SessionsPage {
       this.#drawPanes();
       // On a phone the view that had focus went: focus goes back where it came from in the list,
       // or to the list's heading.
-      if (was && this.phone.matches) {
+      // Only focus the session took with it: focus already in a field (search, typed into on the
+      // way here) or in the list stays. (WebKit gives a pressed button's focus to the nearest
+      // focusable ancestor, the Sessions section, so that counts as lost too.)
+      const active = globalThis.document?.activeElement;
+      const lost = !(active?.matches?.('input, textarea, select') || this.$('list-pane')?.contains(active));
+      if (was && this.phone.matches && lost) {
         const back = this.#returnTo?.isConnected && this.#returnTo.getClientRects().length ? this.#returnTo : this.$('sessions-h');
         if (back && !back.matches('button, a, [tabindex]')) { back.tabIndex = -1; }
         back?.focus({ preventScroll: false });
