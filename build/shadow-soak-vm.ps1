@@ -252,6 +252,10 @@ if ('__FRESH__' -eq 'True') {
     # A running driver would write its old episodes back over the fresh state.
     Stop-ScheduledTask -TaskName 'AgentBridgeSoakDriver' -ErrorAction SilentlyContinue
     Get-CimInstance Win32_Process -Filter "Name='agent-bridge-rehearsal.exe'" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    # An episode stopped part-way names the session only its driver can end: -Start without
+    # -Fresh ends it (and carries on), so that comes first.
+    $state = if (Test-Path '__SOAK__\state\soak.json') { Get-Content '__SOAK__\state\soak.json' -Raw | ConvertFrom-Json } else { $null }
+    if ($state -and @($state.episodes | Where-Object { -not $_.ended -and $_.node }).Count) { throw 'an episode was stopped part-way, with its session still running: -Start without -Fresh first, so the driver ends it, then -Stop and -Start -Fresh' }
     Remove-Item '__SOAK__\state\soak.json' -ErrorAction SilentlyContinue
 }
 Register-ScheduledTask -TaskName 'AgentBridgeSoakDriver' -Action $action -Principal $principal -Trigger $trigger -Settings $settings -Force | Out-Null
