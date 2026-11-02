@@ -110,6 +110,8 @@ static partial class SelfTest
             // closes with its row.
             var watched = main.AllCards.First(c => !c.Id.StartsWith("demo-remote", StringComparison.Ordinal) && c.Id != "demo-approval");
             main.Selected = main.AllCards.First(c => c.Id == "demo-approval");
+            var traced = new List<string>();
+            SessionRow.Trace = t => { if (t.Contains(watched.Id, StringComparison.Ordinal)) { traced.Add(t); } };
             main.SelectedMachine = main.Machines.First(m => m.Key == DemoHost.RemoteId);
             var narrowed = await Until(() => Rows(window).Count == remote.Count, TimeSpan.FromSeconds(10));
             Check(narrowed && tabs?.SelectedItem?.Text == remote.MachineName, "shows only the chosen machine's rows, its tab selected");
@@ -137,7 +139,8 @@ static partial class SelfTest
             var settled = await Until(() => Listeners(watched) is var n && n <= shown && n > hidden, TimeSpan.FromSeconds(10));
             var again = await Choose(window, main, "demo-approval", "Option:approve");
             Check(again is not null && ById<Button>(again, "Option:approve") is { IsEnabled: true }, "still shows a question's choices on a session chosen again after the tabs change");
-            Check(settled && shown > hidden && hidden >= 0, $"a row's control listens while shown and lets go when hidden, however often the tabs change ({hidden} listeners hidden: {hiddenBy}; {shown} shown: {shownBy}; {Listeners(watched)} after five more changes: {ListenersBy(watched)})");
+            Check(settled && shown > hidden && hidden >= 0, $"a row's control listens while shown and lets go when hidden, however often the tabs change ({hidden} listeners hidden: {hiddenBy}; {shown} shown: {shownBy}; {Listeners(watched)} after five more changes: {ListenersBy(watched)}; rows: {string.Join(" | ", traced.Take(30))})");
+            SessionRow.Trace = null;
 
             await CheckPanes(window, main, Check, outFile);
 
