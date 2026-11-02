@@ -38,9 +38,19 @@ test('with more than one machine, every machine is shown at first: one list, new
   expect(new Set(all.map((e) => e.host))).toEqual(new Set(['demo', LAPTOP, SHADOW]));
   await expect(page.locator('.session')).toHaveCount(all.length);
   await expect(page.locator('#session-count')).toHaveText(`${all.length} live on 3 machines`);
-  // In the order the app sorts them, most recently updated first, whichever machine they are on.
-  const drawn = await page.locator('.session').evaluateAll((cards) => cards.map((c) => ({ host: c.dataset.hostId, id: c.dataset.id })));
-  expect(drawn).toEqual(all);
+  const drawn = () => page.locator('.session').evaluateAll((cards) => cards.map((c) => ({ host: c.dataset.hostId, id: c.dataset.id })));
+  // In your order (#164), first seen: each machine's sessions newest first, placed as each
+  // machine finished sending them.
+  await expect(page.locator('#session-sort')).toHaveValue('yours');
+  const yours = await drawn();
+  expect(new Set(yours.map((e) => `${e.host}/${e.id}`))).toEqual(new Set(all.map((e) => `${e.host}/${e.id}`)));
+  for (const host of ['demo', LAPTOP, SHADOW]) {
+    expect(yours.filter((e) => e.host === host)).toEqual(all.filter((e) => e.host === host));
+  }
+  // Most recent: as the app sorted them before, most recently updated first, whichever machine
+  // they are on.
+  await page.locator('#session-sort').selectOption('recent');
+  await expect.poll(drawn).toEqual(all);
   const updated = await page.evaluate(() => window.agentBridgeDemo.store.list().map((e) => e.session.updatedAt));
   expect(updated).toEqual([...updated].sort().reverse());
 

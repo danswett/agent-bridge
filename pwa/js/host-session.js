@@ -73,7 +73,8 @@ export class HostSession {
     // The sessions on screen, from every machine shown, as one list.
     const self = this;
     this.sessions = {
-      // [{ hostId, session }], most recently updated first, as the app and each store order them.
+      // [{ hostId, session }], most recently updated first, as each store orders them: the Most
+      // recent sort. The list on screen is in the person's order (session-order.js).
       list: () => self.#sessionList(),
       get size() { let n = 0; for (const l of self.links()) { n += l.store.size; } return n; },
       get: (hostId, id) => self.#links.get(hostId)?.store.get(id) ?? null,

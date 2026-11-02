@@ -37,7 +37,8 @@ Larger files come next.
 | `js/protocol.js` | Op and event names, and the tolerant reader: unknown fields dropped, unknown enum values read as the C# reader reads them |
 | `js/host-client.js` | The sessions protocol over any transport: requests by `id`/`re`, events by `ev`, `seq` checking, the subscription snapshot |
 | `js/host-session.js` | Which machines are shown, one or all (`ALL`), each with a channel and store of its own kept across reconnects; remembers the choice; honours `?host=`; `route(hostId)`, the only way to a machine's channel for what a card sends |
-| `js/sessions-store.js` | The live sessions, most recently updated first |
+| `js/sessions-store.js` | The live sessions, most recently updated first (the Most recent sort); a removed session goes with its change, for the Ended group |
+| `js/session-order.js` | The list's order, kept on this device (#164): Your order (new sessions at the top once, then never moved by the host), pins, Most recent and Machine sorts, the Ended group, and which rows have news since last open. Blocked storage falls back to Most recent |
 | `js/answers.js` | An answer as the form holds it, as the request sends it, and checked first: `checkAnswer` mirrors the C# `Answers.Check` case for case, with its wording |
 | `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect |
 | `js/replies.js` | A reply checked before it goes: `checkReply` mirrors the C# `Replies.Check`, with its wording |
@@ -55,7 +56,7 @@ Larger files come next.
 | `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
 | `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each card's answers, replies, files, End session and the launch panel to the machine it is for; the heading, count, empty state and a line per machine that can't be reached |
-| `js/ui/*` | Session cards, the question and its answer form, the reply box, End session, the Start a session panel (agent-ha-bridge's launch card, without its 255-character prompt), machines list (offline machines after the online ones, with when each was last seen and Forget), the usage panel, fold state, relative times |
+| `js/ui/*` | Session cards, the row menu (Move up, Move down, Pin), the question and its answer form, the reply box, End session, the Start a session panel (agent-ha-bridge's launch card, without its 255-character prompt), machines list (offline machines after the online ones, with when each was last seen and Forget), the usage panel, fold state, relative times |
 | `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering, replying, ending and launching sessions and usage included; `?machines=2` adds a second machine, Laptop, and `?machines=3` a read-only shadow, DEV-VM1 (shadow), behind a simulated relay (`DemoConnection`); `?updates=1` a machine whose app found a release, and installs it when asked (`?updateStep=<ms>` per step) |
 | `tools/build-site.mjs` | Assembles the site for Pages: `config.js` with the relay, CSP in the page, and `sw.js` stamped with a hash of everything served, so any change reaches an open app as an update (the app then offers Reload) |
 
@@ -105,11 +106,13 @@ alone otherwise, or when its machine turns out to be offline; either way what is
 stays as picked in the panel. Folded, the panel reads
 "Viewing all · 4 online".
 
-* **The list.** Every machine's sessions together, most recently updated first (ties by
-  session id, then machine), as the app sorts them. Each card names its machine ahead of
+* **The list.** Every machine's sessions together, in your order (`js/session-order.js`,
+  #164): a session goes to the top once, when first seen, and then moves only when you
+  move it; Most recent sorts them as the app used to, most recently updated first (ties by
+  session id, then machine). Each card names its machine ahead of
   its agent, as the app's cards do; the heading reads "Sessions on all machines" and the count
   "7 live on 3 machines". With one machine online, All shows it as that machine. A card's
-  fold is remembered by machine and session.
+  fold, and its place in the order, are remembered by machine and session.
 * **One machine at a time, still.** Each machine has its own channel, store, hello, retries
   and read-only state. A machine that can't be reached, is still connecting or does not
   support sessions gets a line of its own above the cards ("Couldn't reach Laptop: the
@@ -381,7 +384,8 @@ running another checkout's tests at the same time.
   token, a lapsed window asking again, refusals and failures, an unknown outcome as failed,
   a resend after a lost response, 44 px, and no End session without `sessions.stop`.
 * `test/machines.spec.mjs`, in demo mode with three machines (`?machines=3`): All machines
-  first and chosen at first, every machine's sessions newest first with each card naming its
+  first and chosen at first, every machine's sessions in one list (each machine's newest first
+  when first seen, and newest first overall in Most recent) with each card naming its
   machine, the count and the folded summary; one machine picked, and the choice remembered
   across a reload, as All is; an answer, a reply with a small file and a large one through
   the blob store, and End session from a Laptop card reaching Laptop only; the shadow
@@ -395,8 +399,15 @@ running another checkout's tests at the same time.
 * `test/ui.spec.mjs`, in demo mode: every field type and status from the worked example,
   glow per status, the delegating state (idle with `background` work), reduced motion,
   Markdown, an XSS payload in every text field, unknown
-  status/agent/fields/events, a `seq` gap, reordering and removal, fold persistence and
+  status/agent/fields/events, a `seq` gap, an upsert leaving every row in place (and moving
+  one in Most recent), removal into Ended, fold persistence and
   auto-unfold, truncation notes, tool history via `session.get`, the worker's scope.
+* `test/order.spec.mjs`, in demo mode (#164): three sessions updating in turn never move a
+  row; a new session at the top once; Alt+Up/Down, a drag by the handle (at 900 and 1440
+  px), and the row menu from a right-click, Shift+F10 and a long press (at 390 px with
+  touch) moving and pinning rows, each surviving a reload; the new activity dot on a
+  folded row; Ended · N; the sort menu; blocked storage falling back to Most recent.
+  `test/unit/session-order.test.mjs` covers the same below the page.
 * `test/e2e/e2e.spec.mjs`, through the spike dev stack's real relay with a fake GitHub:
   sign-in, key proof, presence, a Noise channel to a Node fixture host, the snapshot, live
   upserts and removes, `session.get`, recovery after the socket drops (a session that

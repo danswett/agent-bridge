@@ -54,8 +54,9 @@ export class SessionCard {
   // answering() -> { service, replies, stops, hostId, capabilities } | null: who answers
   // questions, sends replies and ends sessions, and whether the card's machine takes each at
   // all. labelled: whether the card names its machine, as it does with every machine shown.
-  constructor(session, { hostId = null, folds, fetchDetail, machineName, labelled = false, answering = () => null }) {
-    Object.assign(this, { hostId, folds, fetchDetail, machineName, labelled, answering });
+  // onFold(folded): told whenever the card is folded or opened, by its title or from outside.
+  constructor(session, { hostId = null, folds, fetchDetail, machineName, labelled = false, answering = () => null, onFold = () => {} }) {
+    Object.assign(this, { hostId, folds, fetchDetail, machineName, labelled, answering, onFold });
     const n = ++seq;
     this.ids = { title: `s${n}-title`, body: `s${n}-body` };
     this.#build();
@@ -212,6 +213,24 @@ export class SessionCard {
     if (this.#s) { this.update(this.#s); }
   }
 
+  // Activity since the card was last open (session-order.js): the "new activity" dot at the
+  // title's trailing edge (ui.md §6.1), named for a screen reader.
+  setUnread(unread) {
+    const e = this.els;
+    if (unread && !e.unread) {
+      e.unread = h('span', { class: 'unread-dot' }, h('span', { class: 'sr-only' }, 'New activity'));
+      e.fold.insertBefore(e.unread, e.titleText.nextSibling);
+    } else if (!unread && e.unread) {
+      e.unread.remove();
+      e.unread = null;
+    }
+    this.element.classList.toggle('unread', unread);
+  }
+
+  setPinned(pinned) {
+    if (pinned) { this.element.dataset.pinned = 'true'; } else { delete this.element.dataset.pinned; }
+  }
+
   // The card is going: its session ended or another machine is shown.
   dispose() {
     this.#panel?.destroy();
@@ -356,6 +375,7 @@ export class SessionCard {
   setFolded(folded) {
     this.folds.setFolded(this.#foldKey, folded);
     this.#applyFolded(folded);
+    this.onFold(folded);
   }
 
   #applyFolded(folded) {

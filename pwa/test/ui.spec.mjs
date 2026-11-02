@@ -343,15 +343,23 @@ test('a gap in seq subscribes again, and the new snapshot replaces the list', as
   expect(await calls(page, 'sessions.list')).toBe(0);
 });
 
-test('an upsert moves a session to the top, and a remove takes it away', async ({ page }) => {
+test('an upsert leaves every row where it is, and a remove takes the session to Ended', async ({ page }) => {
   await openDemo(page);
   await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later() });
-  await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
   await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
+  expect(await order(page)).toEqual([COPILOT, CLAUDE, CODEX, DELEGATING]);
   await page.evaluate((id) => window.agentBridgeDemo.remove(id), CLAUDE);
   await expect(card(page, CLAUDE)).toHaveCount(0);
-  expect(await order(page)).toEqual([CODEX, COPILOT, DELEGATING]);
+  expect(await order(page)).toEqual([COPILOT, CODEX, DELEGATING]);
   await expect(page.locator('#session-count')).toHaveText('3 live');
+  await expect(page.locator('.ended-group > summary')).toHaveText('Ended \u00b7 1');
+});
+
+test('in Most recent, an upsert moves a session to the top', async ({ page }) => {
+  await openDemo(page);
+  await page.locator('#session-sort').selectOption('recent');
+  await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later() });
+  await expect.poll(() => order(page)).toEqual([CODEX, COPILOT, CLAUDE, DELEGATING]);
 });
 
 test('folding is remembered across a reload, and a new question unfolds the card', async ({ page }) => {

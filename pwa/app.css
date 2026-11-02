@@ -22,6 +22,9 @@
   --code-bg: #eff2f5;
   --radius: 14px;
   --tap: 44px;
+  /* TODO(#177): the Bridge colour role, copied by hand from design/tokens.json (color.role.bridge)
+     until the generator writes it. */
+  --bridge: #0B7A6E;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: 16px;
   line-height: 1.45;
@@ -44,6 +47,7 @@
     --danger: #f85149;
     --ok: #3fb950;
     --code-bg: #0d1117;
+    --bridge: #2DD4BF; /* TODO(#177): design/tokens.json color.role.bridge, dark */
   }
 }
 
@@ -190,9 +194,67 @@ a { color: var(--primary); }
 /* ---- sessions ---- */
 .sessions { margin-top: 16px; }
 .sessions:focus { outline: none; }
-.sessions-head { display: flex; align-items: baseline; gap: 8px; }
+.sessions-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
+/* The sort menu wraps below the heading and count, rather than squeezing them, on a phone. */
+.sessions-head > * { flex: none; max-width: 100%; }
 .count { color: var(--muted); font-size: .9rem; }
+.sort {
+  margin-left: auto; align-self: center; min-height: 32px; max-width: 45%;
+  font: inherit; font-size: .88rem; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 2px 6px;
+}
+@media (pointer: coarse) { .sort { min-height: var(--tap); } }
 .session-list { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
+
+/* The person's order (ui.md §6.1, #164): Pinned and Sessions headers once anything is pinned,
+   then Ended · N, folded. */
+.list-group { grid-column: 1 / -1; margin: 4px 0 -6px; font-size: .8125rem; line-height: 1.125rem; font-weight: 600; color: var(--muted); }
+/* Both span every column of the wide grid: a heading beside its first card, or Ended beside the
+   last live one, would read as part of the row. */
+.ended-group { grid-column: 1 / -1; }
+.ended-group > summary { cursor: pointer; color: var(--muted); font-weight: 600; font-size: .8125rem; min-height: var(--tap); display: flex; align-items: center; }
+.ended-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.ended { display: flex; flex-wrap: wrap; gap: 0 8px; padding: 6px 14px; color: var(--muted); }
+.ended-title { color: var(--text); overflow-wrap: anywhere; min-width: 0; }
+.ended-meta { font-size: .8rem; }
+/* The "new activity" dot: 6 px, Bridge, at the title's trailing edge. */
+.unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--bridge); flex: none; }
+@media (forced-colors: active) { .unread-dot { background: Highlight; forced-color-adjust: none; } }
+/* Moving rows: a grip on hover with a mouse, and a line where a dragged row will go. */
+.drag-handle { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .session-list[data-sort="yours"] .drag-handle {
+    display: block; position: absolute; left: 1px; top: 14px; width: 12px; height: 32px;
+    cursor: grab; opacity: 0; color: var(--muted);
+    background-image: radial-gradient(circle, currentColor 1.5px, transparent 1.6px);
+    background-size: 6px 6px; background-position: center;
+  }
+  .session-list[data-sort="yours"] .session:hover .drag-handle { opacity: 1; }
+}
+.session.dragging { opacity: .6; }
+.session.dragging .drag-handle { cursor: grabbing; }
+.session.drop-before::before, .session.drop-after::after {
+  content: ""; position: absolute; left: 0; right: 0; height: 2px; border-radius: 1px; background: var(--bridge);
+}
+.session.drop-before::before { top: -8px; }
+.session.drop-after::after { bottom: -8px; }
+/* High contrast drops background images and colours: the grip and the drop line keep system
+   colours so they can still be seen. */
+@media (forced-colors: active) {
+  .drag-handle { forced-color-adjust: none; color: CanvasText; }
+  .session.drop-before::before, .session.drop-after::after { forced-color-adjust: none; background: Highlight; }
+}
+.row-menu {
+  position: absolute; right: 8px; top: 48px; z-index: 5; min-width: 168px;
+  display: grid; padding: 4px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 8px 24px rgb(0 0 0 / .18);
+}
+.row-menu-item {
+  min-height: var(--tap); padding: 0 12px; text-align: left; font: inherit; color: var(--text);
+  background: none; border: 0; border-radius: 4px; cursor: pointer;
+}
+.row-menu-item:hover:not(:disabled), .row-menu-item:focus-visible { background: var(--surface-2); }
+.row-menu-item:disabled { color: var(--muted); cursor: default; }
 
 /* A grid item is min-width:auto, so one long unbroken path in a card (a tool summary, a title,
    a question option) made the card wider than the screen and iOS zoomed the page out. */

@@ -408,6 +408,8 @@ test.describe('when the question changes', () => {
 
 test('a card that moves to the top while you type keeps your place', async ({ page }) => {
   await openDemo(page);
+  // Cards move on an update only in Most recent; in your order they never do (#164).
+  await page.locator('#session-sort').selectOption('recent');
   const q = await ask(page, { id: 'q-move', message: 'Notes?', fields: [{ name: 'n', title: 'Notes', type: 'text' }] });
   // Other sessions update, so this one is no longer first.
   for (const id of ['6f1c2b7e-claude-example', COPILOT]) {
