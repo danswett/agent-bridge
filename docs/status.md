@@ -121,27 +121,29 @@ current. The sources:
   image, for reference only (ui.md stays the spec). The source is in `/design/canvas` and
   the renderer in `tools/design-mockups`.
 
-| Slice | Issue | What |
-|---|---|---|
-| S1 | #173 | Sub-agents: host model and protocol, Copilot first. May start before sign-off |
-| S2 | #174 | Sub-agents: Claude and Codex sources |
-| S5 | #175 | Sub-agents: HA connector and shadow |
-| U1 | #164 | Session list keeps the person's order |
-| U2 | #165 | "Needs you" lane |
-| U3 | #177 | Design tokens generator; both clients switch to the colour roles |
-| U4 | #178 | Status glyphs and icons replace card edges and glows |
-| U5 | #179 | PWA layout (half of #166) |
-| U6 | #180 | Windows app layout (half of #166) |
-| U7 | #168 | PWA platform layer |
-| U8 | #176 | Delegates in both clients |
-| | #181 | Monospace: **Agent Bridge Mono** (our OFL build of Iosevka, `design/fonts/agent-bridge-mono`), decided 2026-11-01. #177 bundles it in both clients |
-| | #183 | Light-theme `needs` glyph and `text3` fail contrast; fixed in U3 |
+| Slice | Issue | What | State (2026-11-01, 18:30 PT) |
+|---|---|---|---|
+| S1 | #173 | Sub-agents: host model and protocol, Copilot first. May start before sign-off | Merged (#187) |
+| S2 | #174 | Sub-agents: Claude and Codex sources | Track A |
+| S5 | #175 | Sub-agents: HA connector and shadow | Track A (#199) |
+| U1 | #164 | Session list keeps the person's order | **Done**: #190 (PWA), #194 (app) |
+| U2 | #165 | "Needs you" lane | In review: #202 (PWA), #203 (app) |
+| U3 | #177 | Design tokens generator; both clients switch to the colour roles | **Done**: #188 (generator, PWA), #193 (app) |
+| U4 | #178 | Status glyphs and icons replace card edges and glows | PWA done (#204); app in review (#205) |
+| U5 | #179 | PWA layout (half of #166) | Next, after U2 |
+| U6 | #180 | Windows app layout (half of #166) | Next, after U2 and U4 |
+| U7 | #168 | PWA platform layer | After U5 |
+| U8 | #176 | Delegates in both clients | After U5 and U6 (S1 has merged) |
+| | #181 | Monospace: **Agent Bridge Mono** (our OFL build of Iosevka, `design/fonts/agent-bridge-mono`), decided 2026-11-01 | Bundled in both clients (U3) |
+| | #183 | Light-theme `needs` glyph and `text3` fail contrast | Fixed in #188 |
 
-**In progress (2026-11-01):** U1 and U3, as delegates. Track B runs in this order:
+Track B runs as delegates, in this order:
 1. U1 then U2, and U3 then U4, as two chains in parallel;
 2. then U5 and U6, in parallel;
 3. then U7;
-4. U8 once S1 (#173) has merged.
+4. U8, now that S1 has merged.
+
+UI PRs merge as soon as each meets the merge rule. A backend PR that overlaps them, such as #186, rebases onto them (decided 2026-11-01, 16:05).
 
 ui-plan.md §1 shows the dependencies. Changes to the layout touch both the PWA (`pwa/`)
 and the app (`src/AgentBridge.App`) and keep them at parity.
@@ -292,4 +294,5 @@ agent-ha-bridge releases from this work:
 | 11-01 | Monospace (#181): the fallback stack for now (Cascadia Mono, SF Mono, Roboto Mono); Berkeley Mono decided later |
 | 11-01 | Monospace (#181), later the same day: Agent Bridge Mono, a custom OFL build of Iosevka in the repository. Berkeley Mono rejected, because its Commercial license limits embedding to apps without text entry, requires the font to be unextractable and bars public sharing |
 | 11-01 | Track B order: U1→U2 and U3→U4 in parallel, then U5 and U6, then U7, then U8 after S1 |
+| 11-01 | UI PRs no longer wait for overlapping backend PRs (#186); they merge when ready and the backend PR rebases (overall coordinator, 16:05) |
 | 11-01 | Usage belongs to an account: hosts share readings with each other, any online host serves the freshest per account, and the app and PWA keep the last one (#172) |
