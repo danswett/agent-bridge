@@ -287,7 +287,12 @@ into one folder with one version. An app update is a host update, so they never 
   `%LOCALAPPDATA%\AgentBridge`: that is the host's data root (device keys, accounts,
   config, logs), and Velopack deletes its install folder on uninstall.
 * `OnBeforeUpdateFastCallback` (the old version, before files are replaced) stops the host
-  over the pipe and waits for its process to exit, so nothing in `current\` is locked;
+  over the pipe and waits for its process to exit, so nothing in `current\` is locked. Every
+  update the app starts has stopped the host already, after waiting for its usage probes (below),
+  so the hook finds it stopped and begins nothing. One it finds running (an update the app did
+  not start) is stopped only if its usage probes are done within 10 s of the hook's 25 s; if not,
+  it is not asked to stop at all, and Velopack ends it with the package, which can cut a Codex
+  app-server it started mid-refresh (#238). The same holds for uninstall, which then goes on;
   `OnAfterUpdateFastCallback` (the new version) starts it again through its logon task.
   The app also stops the host itself before `ApplyUpdatesAndRestart`, and starts it on
   launch if it is not running.
@@ -351,7 +356,9 @@ into one folder with one version. An app update is a host update, so they never 
   out. A host that cannot say, or is still busy after 11 minutes, is neither stopped nor ended;
   the stop fails and says why. An install that is due waits a tick at a time for that, the
   six-hour one too, and the host
-  starts no new probe meanwhile.
+  starts no new probe meanwhile. Before an update (Settings' or automatic), every other profile's
+  host running from the package is held and waited for the same way, since Velopack ends them
+  too; one that cannot confirm stops the update before anything is stopped.
   The path is that of "Update and restart": the host stopped over the pipe, then
   `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
   host again. The new version's first start shows a toast: the version it came from, and the

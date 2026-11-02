@@ -180,6 +180,8 @@ public sealed class HostManager
         this.connect = connect ?? (ct => LocalClient.ConnectAsync(LocalEndpoint.For(layout.ProfileFolder), TimeSpan.FromSeconds(1), ct));
         this.userId = userId ?? CurrentUserId();
         this.userSid = userSid ?? CurrentUserSid();
+        OtherProfiles = ProfilesBeside;
+        InPackage = RunsFromApp;
     }
 
     public TimeSpan StartTimeout { get; init; } = TimeSpan.FromSeconds(20);
@@ -343,7 +345,12 @@ public sealed class HostManager
             begin();
             installing = true;
             // On the thread pool, so Quit can wait for it from the UI thread.
-            stop = updateStop = Task.Run(() => StopAsync());
+            // The other profiles' hosts first, which the update ends without a stop of their own.
+            stop = updateStop = Task.Run(async () =>
+            {
+                await OthersDoneAsync(CancellationToken.None);
+                await StopAsync();
+            });
         }
         try
         {
@@ -409,7 +416,9 @@ public sealed class HostManager
     // that answers no is not: it is running, and refused this process (one inside an agent
     // session, design §6.3 invariant 13), so ending it anyway would be the very thing it refused.
     // The 2026-10-29 review found an agent could run this through the app's uninstall hook.
-    public async Task StopAsync(CancellationToken ct = default)
+    public Task StopAsync(CancellationToken ct = default) => StopAsync(ProbeWait, ct);
+
+    async Task StopAsync(TimeSpan probeWait, CancellationToken ct)
     {
         // A stop on purpose: the launcher must not start the host again after it (#106). Before
         // the stop itself, so a host that crashes while stopping is not started again either.
@@ -436,7 +445,7 @@ public sealed class HostManager
             await using var ch = await connect(ct);
             await ch.HelloAsync(ct);
             pid = (await ch.CallAsync<HostStatus>(HostOps.Status, ct: ct)).ProcessId;
-            await ProbesDoneAsync(ch, ct);
+            await ProbesDoneAsync(ch, probeWait, "the host", ct);
             try { await ch.CallAsync(HostOps.Stop, ct: ct); }
             catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
         }
@@ -488,6 +497,18 @@ public sealed class HostManager
     bool LauncherRunning() =>
         tasks.Exists(TaskName) && tasks.IsRunning(TaskName) || launcher is { } pid && processes.IsRunning(pid);
 
+    // For Velopack's update and uninstall hooks, which have about 25 s: a host the app already
+    // stopped (every update the app starts) is left alone, so no stop is begun only to be abandoned.
+    // One still running is stopped only once its usage probes are done within probeWait; otherwise
+    // it is not asked to stop at all, and the reason is returned: Velopack ends it with the package.
+    public async Task<string?> StopWithinAsync(TimeSpan probeWait, CancellationToken ct = default)
+    {
+        if (!await IsRunningAsync(ct)) { return null; }
+        try { await StopAsync(probeWait, ct); }
+        catch (HostBusyException e) { return e.Message; }
+        return null;
+    }
+
     // Restarting is stopping first, so a refused stop starts nothing either.
     public async Task RestartAsync(CancellationToken ct = default)
     {
@@ -500,6 +521,65 @@ public sealed class HostManager
     // minutes, then its grace.
     public TimeSpan ProbeWait { get; init; } = TimeSpan.FromMinutes(11);
     public TimeSpan ProbePoll { get; init; } = TimeSpan.FromSeconds(1);
+    // One host.probes.hold call: a host that does not answer within it cannot say, and is not stopped.
+    public TimeSpan ProbeCallTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    // The other profiles' folders beside this one, whose hosts an update ends too; the pipe of one,
+    // and whether a process runs from this installation (by default, its executable under the app's
+    // folder; one that cannot be looked at counts, as for PackageProcesses).
+    public Func<IEnumerable<string>> OtherProfiles { get; init; }
+    public Func<string, CancellationToken, Task<LocalChannel>> ConnectTo { get; init; } =
+        (folder, ct) => LocalClient.ConnectAsync(LocalEndpoint.For(folder), TimeSpan.FromSeconds(1), ct);
+    public Func<int, bool> InPackage { get; init; }
+
+    IEnumerable<string> ProfilesBeside()
+    {
+        if (!Directory.Exists(layout.DataRoot)) { return []; }
+        return Directory.EnumerateDirectories(layout.DataRoot)
+            .Where(d => !string.Equals(Path.GetFileName(d), layout.Profile, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(Path.GetFullPath(d), Path.GetFullPath(layout.AppDataFolder), StringComparison.OrdinalIgnoreCase));
+    }
+
+    bool RunsFromApp(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return p.MainModule?.FileName is not { } path || path.StartsWith(Path.GetFullPath(layout.AppFolder), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (ArgumentException) { return false; }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { return true; }
+    }
+
+    // Before an update (#238): Velopack ends every process in the package, the other profiles'
+    // hosts too, so their usage probes are held and waited for as this profile's are. One that
+    // cannot confirm stops the update before anything is stopped. They are left running: the
+    // update ends them once this host has stopped.
+    async Task OthersDoneAsync(CancellationToken ct)
+    {
+        foreach (var folder in OtherProfiles())
+        {
+            var name = Path.GetFileName(folder);
+            LocalChannel ch;
+            try { ch = await ConnectTo(folder, ct); }
+            catch (Exception e) when (e is IOException or TimeoutException or HostErrorException or OperationCanceledException && !ct.IsCancellationRequested) { continue; }
+            await using (ch)
+            {
+                int pid;
+                try
+                {
+                    await ch.HelloAsync(ct);
+                    pid = (await ch.CallAsync<HostStatus>(HostOps.Status, timeout: ProbeCallTimeout, ct: ct)).ProcessId;
+                }
+                catch (Exception e) when (e is IOException or TimeoutException or HostErrorException)
+                {
+                    throw new HostBusyException($"profile {name}'s host could not say whether a usage probe it started is still finishing, so nothing was stopped: {e.Message}");
+                }
+                if (!InPackage(pid)) { continue; }
+                await ProbesDoneAsync(ch, ProbeWait, $"profile {name}'s host", ct);
+            }
+        }
+    }
 
     // Before the host is stopped, by a person, an update or anything else here: it starts no probe
     // whose process goes with it, and one running is let finish its answers and the grace after
@@ -507,27 +587,29 @@ public sealed class HostManager
     // waiting is done here, while the host runs, never after. Only an older host's "unknown op"
     // lets the stop go on unconfirmed (it runs no such probe); a host that cannot say, or that is
     // still busy at ProbeWait, is not stopped at all, and never reaches the kill below.
-    async Task ProbesDoneAsync(LocalChannel ch, CancellationToken ct)
+    async Task ProbesDoneAsync(LocalChannel ch, TimeSpan wait, string who, CancellationToken ct)
     {
-        var deadline = DateTime.UtcNow + ProbeWait;
+        var deadline = DateTime.UtcNow + wait;
         while (true)
         {
             ProbeHoldResult held;
-            try { held = await ch.CallAsync<ProbeHoldResult>(HostOps.ProbeHold, ct: ct); }
+            try { held = await ch.CallAsync<ProbeHoldResult>(HostOps.ProbeHold, timeout: ProbeCallTimeout, ct: ct); }
             catch (HostErrorException e) when (e.Message.StartsWith($"unknown op {HostOps.ProbeHold}", StringComparison.Ordinal)) { return; }
             catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
             catch (Exception e) when (e is IOException or TimeoutException)
             {
-                throw new HostBusyException($"the host could not say whether a usage probe it started is still finishing, so it was not stopped: {e.Message}");
+                throw new HostBusyException($"{who} could not say whether a usage probe it started is still finishing, so nothing was stopped: {e.Message}");
             }
             if (!held.Busy) { return; }
             if (DateTime.UtcNow >= deadline)
             {
-                throw new HostBusyException($"the host was not stopped: {held.Why ?? "a usage probe it started is still finishing"}, {ProbeWait.TotalMinutes:0} minutes on; try again later");
+                throw new HostBusyException($"nothing was stopped: {who}: {held.Why ?? "a usage probe it started is still finishing"}, after {FormatWait(wait)}; try again later");
             }
             await Task.Delay(ProbePoll, ct);
         }
     }
+
+    static string FormatWait(TimeSpan wait) => wait >= TimeSpan.FromMinutes(1) ? $"{wait.TotalMinutes:0} minutes" : $"{wait.TotalSeconds:0} s";
 
     async Task WaitAsync(bool running, TimeSpan timeout, CancellationToken ct)
     {

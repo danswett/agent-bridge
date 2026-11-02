@@ -302,8 +302,13 @@ E4). So the host never kills a probe:
   for it however long it has waited already, a forced one at six hours too. A host restarting
   itself (`host.restart`) waits the same way, at most 90 s, before it starts its replacement. A
   host stopped by anything else holds its probes and waits for the answers and the grace, at most
-  90 s from the stop. Only a host that is killed outright, or Velopack ending the package's
-  processes for an update not started by the app, cannot wait.
+  90 s from the stop. Before an update the app also holds and waits for every other profile's host
+  running from the package, which Velopack ends too. Home Assistant's Install, run by the host
+  itself, holds and waits for this host's probes and refuses while another profile's host runs
+  from the package, whose probes it cannot hold. Velopack's own update and uninstall hooks wait
+  only within their 25 s, and leave a busy host to Velopack. So only a host that is killed
+  outright, or a busy one Velopack ends for an update or uninstall the app did not start, can
+  still have a probe cut short.
 
 **Leaving the agents' credentials alone.** A host never reads, refreshes, copies or logs Claude's
 or Codex's credentials: Anthropic retires a refresh token once used and Codex's are single-use too,

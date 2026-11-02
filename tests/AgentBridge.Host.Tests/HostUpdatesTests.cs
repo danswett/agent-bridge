@@ -19,6 +19,29 @@ public sealed class HostUpdatesTests : IDisposable
     }
 
     [Fact]
+    public async Task Installing_from_Home_Assistant_waits_for_this_hosts_usage_probe_and_refuses_what_it_cannot_confirm()
+    {
+        TimeSpan? waited = null;
+        var stops = 0;
+        var updates = new VelopackHostUpdates(root, "default", () => stops++, _ => { },
+            ready: _ => HostUpdateGate.ReadyAsync(() => null, wait => { waited = wait; return Task.FromResult(true); }));
+        await updates.ReadyAsync(CancellationToken.None);
+        Assert.Equal(TimeSpan.FromMinutes(11), waited);
+
+        // Still finishing when the wait is up.
+        var busy = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new VelopackHostUpdates(root, "default", () => stops++, _ => { }, ready: _ => HostUpdateGate.ReadyAsync(() => null, _ => Task.FromResult(false))).ReadyAsync(CancellationToken.None));
+        Assert.Contains("still finishing after 11 minutes", busy.Message, StringComparison.Ordinal);
+
+        // Another profile's host, whose probes cannot be held from here: refused before this one's are waited for.
+        var settled = false;
+        var why = await HostUpdateGate.ReadyAsync(() => "another profile's host (pid 4242) runs from this installation", _ => { settled = true; return Task.FromResult(true); });
+        Assert.StartsWith("another profile's host (pid 4242) runs from this installation, whose usage probes cannot be held from here", why, StringComparison.Ordinal);
+        Assert.False(settled);
+        Assert.Equal(0, stops);
+    }
+
+    [Fact]
     public void A_read_only_host_is_given_no_updater_and_so_serves_no_update_buttons()
     {
         var made = 0;

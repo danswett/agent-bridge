@@ -673,6 +673,28 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task Settling_the_probes_says_whether_a_busy_Codex_probe_was_done_in_time()
+    {
+        CodexUsed();
+        var release = new TaskCompletionSource();
+        var server = AppServer(s => s.Before["account/rateLimits/read"] = release.Task);
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        var monitor = new UsageMonitor([codex], new FakeSessions(), Options(), time, log: Log);
+        await monitor.PassAsync();
+        await Until(() => server.Received.Any(r => r.Method == "account/rateLimits/read"));
+
+        var late = monitor.SettleProbesAsync(TimeSpan.FromSeconds(10));
+        await AdvanceUntil(time, () => late.IsCompleted, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(15));
+        Assert.False(await late);
+
+        release.SetResult();
+        var inTime = monitor.SettleProbesAsync(TimeSpan.FromMinutes(1));
+        await AdvanceUntil(time, () => inTime.IsCompleted, TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(1));
+        Assert.True(await inTime);
+        Assert.NotNull(launcher.Started.Single().InputClosedAt);
+    }
+
+    [Fact]
     public async Task Holding_the_probes_says_a_Codex_probe_is_busy_until_its_answers_and_its_grace_are_done()
     {
         CodexUsed();

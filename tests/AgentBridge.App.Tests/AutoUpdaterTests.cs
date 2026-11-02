@@ -207,23 +207,141 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
-    public async Task A_host_that_cannot_confirm_its_usage_probe_is_done_is_neither_asked_to_stop_nor_ended()
+    public async Task A_stop_still_waiting_on_a_usage_probe_when_its_wait_is_up_refuses_rather_than_ends_the_host()
     {
         await StartAsync();
-
-        // Still finishing when the wait is up.
         host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+
         var busy = await Assert.ThrowsAsync<HostBusyException>(() => manager.StopAsync());
+
         Assert.Contains("Codex's app-server is still finishing", busy.Message, StringComparison.Ordinal);
-
-        // Or failing the question.
-        host.On(HostOps.ProbeHold, _ => throw new InvalidOperationException("the probes could not be looked at"));
-        await Assert.ThrowsAsync<HostRefusedException>(() => manager.StopAsync());
-
         Assert.Empty(host.Sent(HostOps.Stop));
         Assert.Empty(processes.Killed);
         Assert.True(await manager.IsRunningAsync());
     }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_hold_that_times_out_or_is_refused_never_reaches_the_stop_or_the_kill()
+    {
+        await StartAsync();
+        var quick = Manager(callTimeout: TimeSpan.FromMilliseconds(300));
+
+        // No answer in time.
+        host.On(HostOps.ProbeHold, _ => { Thread.Sleep(2000); return new ProbeHoldResult(false); });
+        var timedOut = await Assert.ThrowsAsync<HostBusyException>(() => quick.StopAsync());
+        Assert.Contains("could not say whether a usage probe", timedOut.Message, StringComparison.Ordinal);
+
+        // An answer that is an error.
+        host.On(HostOps.ProbeHold, _ => throw new InvalidOperationException("the probes could not be looked at"));
+        await Assert.ThrowsAsync<HostRefusedException>(() => quick.StopAsync());
+
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Empty(processes.Killed);
+        Assert.True(await quick.IsRunningAsync());
+    }
+
+    [Fact]
+    public async Task An_older_host_that_does_not_know_the_hold_is_stopped_as_before()
+    {
+        await StartAsync();
+
+        await manager.StopAsync();
+
+        Assert.Single(host.Sent(HostOps.ProbeHold));
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.False(await manager.IsRunningAsync());
+    }
+
+    [Fact]
+    public async Task An_update_holds_and_waits_for_the_other_profiles_hosts_in_the_package_before_stopping_this_one()
+    {
+        await StartAsync();
+        await using var other = new FakeHost();
+        await using var elsewhere = new FakeHost();
+        other.Start();
+        elsewhere.Start();
+        var otherHolds = 0;
+        var otherHoldsAtStop = -1;
+        other.On(HostOps.ProbeHold, _ => new ProbeHoldResult(Interlocked.Increment(ref otherHolds) < 3, "finishing"));
+        elsewhere.Status = FakeHost.StatusOf() with { ProcessId = 5151 };
+        host.On(HostOps.Stop, data =>
+        {
+            otherHoldsAtStop = Volatile.Read(ref otherHolds);
+            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
+            return new { stopping = true };
+        });
+        var updating = Manager(others: [other.Folder, elsewhere.Folder, Path.Combine(app, "no-host-here")], inPackage: pid => pid != 5151);
+        var applied = false;
+
+        // Settings' Update and restart, and the automatic update, both come this way.
+        await updating.StopAndApplyAsync(() => { }, () => applied = true);
+
+        Assert.True(applied);
+        Assert.Equal(3, otherHoldsAtStop);
+        // Left running for the update to end, not stopped; and one not from the package is not asked.
+        Assert.Empty(other.Sent(HostOps.Stop));
+        Assert.Empty(elsewhere.Sent(HostOps.ProbeHold));
+    }
+
+    [Fact]
+    public async Task An_update_stops_nothing_when_another_profiles_host_cannot_confirm_its_usage_probe_is_done()
+    {
+        await StartAsync();
+        await using var other = new FakeHost();
+        other.Start();
+        other.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+        var updating = Manager(others: [other.Folder], inPackage: _ => true);
+        var applied = false;
+
+        var busy = await Assert.ThrowsAsync<HostBusyException>(() => updating.StopAndApplyAsync(() => { }, () => applied = true));
+
+        Assert.Contains("still finishing", busy.Message, StringComparison.Ordinal);
+        Assert.False(applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Empty(host.Sent(HostOps.ProbeHold));
+        Assert.Empty(processes.Killed);
+    }
+
+    [Fact]
+    public async Task Velopacks_hooks_begin_no_stop_they_would_abandon()
+    {
+        await StartAsync();
+        var hook = Manager();
+
+        // Busy past what the hook has: left running, unasked, for Velopack to end.
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+        Assert.Contains("still finishing", await hook.StopWithinAsync(TimeSpan.FromMilliseconds(300)), StringComparison.Ordinal);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Empty(processes.Killed);
+
+        // Done: stopped as any stop is.
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(false));
+        Assert.Null(await hook.StopWithinAsync(TimeSpan.FromMilliseconds(300)));
+        Assert.Single(host.Sent(HostOps.Stop));
+
+        // Already stopped, as the app leaves it before every update it starts: nothing is asked.
+        var holds = host.Sent(HostOps.ProbeHold).Count;
+        Assert.Null(await hook.StopWithinAsync(TimeSpan.FromMilliseconds(300)));
+        Assert.Equal(holds, host.Sent(HostOps.ProbeHold).Count);
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    HostManager Manager(IReadOnlyList<string>? others = null, Func<int, bool>? inPackage = null, TimeSpan? callTimeout = null) =>
+        new(new InstallLayout(app, host.Folder, "test"), tasks, processes,
+            ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(2),
+            Poll = TimeSpan.FromMilliseconds(50),
+            ProbeWait = TimeSpan.FromSeconds(3),
+            ProbePoll = TimeSpan.FromMilliseconds(50),
+            ProbeCallTimeout = callTimeout ?? TimeSpan.FromSeconds(5),
+            OtherProfiles = () => others ?? [],
+            ConnectTo = (folder, ct) => LocalClient.ConnectAsync(LocalEndpoint.For(folder), TimeSpan.FromMilliseconds(300), ct),
+            InPackage = inPackage ?? (_ => true),
+            Elevated = () => false,
+        };
 
     [Fact]
     [Trait("Category", "Network")]

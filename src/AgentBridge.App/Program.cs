@@ -124,12 +124,27 @@ static class Lifecycle
         return true;
     }
 
-    // In the old version, before its folder is replaced: the host runs from that folder.
-    public static void BeforeUpdate()
+    // How long Velopack's hooks wait for a usage probe tied to the host (#238), within the 25 s
+    // they give the whole stop: the rest is the stop itself.
+    static readonly TimeSpan HookProbeWait = TimeSpan.FromSeconds(10);
+
+    // In the old version, before its folder is replaced: the host runs from that folder. Every
+    // update the app starts has stopped the host already, waiting for its usage probes however long
+    // they took (HostManager.StopAndApplyAsync), so nothing is begun here. One started otherwise
+    // finds it running: it is stopped only if its probes are done within HookProbeWait; if not, it
+    // is left to Velopack, which ends it with the package (docs/app-windows.md says what that leaves).
+    public static void BeforeUpdate() => StopForHook("update");
+
+    static void StopForHook(string what)
     {
-        if (Refused("update")) { return; }
-        try { Manager().StopAsync().Wait(TimeSpan.FromSeconds(25)); }
-        catch (Exception e) { AppLog.Write($"update: the host did not stop: {e.Message}"); }
+        if (Refused(what)) { return; }
+        try
+        {
+            var stop = Manager().StopWithinAsync(HookProbeWait);
+            if (!stop.Wait(TimeSpan.FromSeconds(25))) { AppLog.Write($"{what}: the host had not stopped after 25 s"); }
+            else if (stop.Result is { } busy) { AppLog.Write($"{what}: the host was left running, and Velopack ends it: {busy}"); }
+        }
+        catch (Exception e) { AppLog.Write($"{what}: the host did not stop: {e.GetBaseException().Message}"); }
     }
 
     // In the new version. The app restarts after an update and starts the host itself; this is
@@ -153,6 +168,10 @@ static class Lifecycle
         if (Refused("uninstall")) { return; }
         var manager = Manager();
         // Velopack terminates this callback after 30 seconds; reserve time for registration cleanup.
+        // The stop waits for a busy usage probe (#238) only within those 12 s: past them it is not
+        // stopped, its hooks are left alone, and Velopack ends it with the package. Not StopWithinAsync:
+        // its "not running" is also a host that refused this app or is not answering, whose hooks
+        // must stay.
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(12));
         var stopped = false;
         try { manager.StopAsync(stop.Token).GetAwaiter().GetResult(); stopped = true; }

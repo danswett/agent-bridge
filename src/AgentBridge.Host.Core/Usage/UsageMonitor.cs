@@ -279,13 +279,16 @@ public sealed class UsageMonitor : IAsyncDisposable
     }
 
     // Holds the probes and waits, at most max, for any still running to be done with this process.
-    public async Task SettleProbesAsync(TimeSpan max)
+    // Returns whether none is any more.
+    public async Task<bool> SettleProbesAsync(TimeSpan max)
     {
-        if (!HoldProbes(max + options.CodexGrace)) { return; }
+        if (!HoldProbes(max + options.CodexGrace)) { return true; }
         log($"usage: waiting up to {max.TotalSeconds:0} s for Codex's app-server to answer and finish first");
+        var done = Task.WhenAll(collectors.Select(c => c.StoppingAsync()));
         using var limit = new CancellationTokenSource();
-        await Task.WhenAny(Task.WhenAll(collectors.Select(c => c.StoppingAsync())), Task.Delay(max, time, limit.Token));
+        await Task.WhenAny(done, Task.Delay(max, time, limit.Token));
         await limit.CancelAsync();
+        return done.IsCompleted;
     }
 
     sealed class State

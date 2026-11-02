@@ -688,12 +688,15 @@ public sealed class LocalApiTests : IAsyncLifetime
 
         var hello = await ch.HelloAsync();
         Assert.DoesNotContain(HostOps.Capability, hello.Capabilities);
-        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Stop));
-        Assert.EndsWith($"which is not the {Product.App} beside this host; only the {Product.App} beside this host may stop, restart, sign in, change settings or read the relay account", refused.Message);
+        foreach (var op in new[] { HostOps.Stop, HostOps.ProbeHold })
+        {
+            var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(op));
+            Assert.EndsWith($"which is not the {Product.App} beside this host; only the {Product.App} beside this host may stop, restart, sign in, change settings or read the relay account", refused.Message);
+        }
         var answered = await ch.CallAsync<AnswerResult>(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), text = "yes" });
         Assert.Equal("this host does not take answers; answer at the machine", answered.Reason);
         await Task.Delay(200);
-        Assert.Equal(0, Volatile.Read(ref stops));
+        Assert.Equal((0, 0), (Volatile.Read(ref stops), Volatile.Read(ref probeHolds)));
     }
 
     [Fact]
@@ -702,11 +705,12 @@ public sealed class LocalApiTests : IAsyncLifetime
         callers.Current = new FixedCallerGuard(new Caller(CallerKind.HostCli, "agent-bridge-host's command line (pid 30)"));
         var ch = await ConnectAsync();
 
-        foreach (var op in new[] { HostOps.Stop, HostOps.Settings, HostOps.SignIn })
+        foreach (var op in new[] { HostOps.Stop, HostOps.Settings, HostOps.SignIn, HostOps.ProbeHold })
         {
             var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(op, new { }));
             Assert.Contains($"only the {Product.App} beside this host may", refused.Message);
         }
+        Assert.Equal(0, Volatile.Read(ref probeHolds));
         await ch.CallAsync(HostOps.Restart);
 
         await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
