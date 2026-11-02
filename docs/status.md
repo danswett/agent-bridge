@@ -70,7 +70,7 @@ The work has been built phone-first. All merged PRs are listed in §7.
 
 Check `gh pr list -R danswett/agent-bridge` for open PRs. Two coordinators work at once (decided 2026-11-01):
 - **Overall coordinator** (bridge session a6ed320ca83044c5, DEV-VM1): the whole project, track A of the UI plan (sub-agents S1 #173, S2 #174, S5 #175), #172 (shared usage), the relay, migration, the shadow gate, machines, and this page outside §5.
-- **UI coordinator** (bridge session f7ba0bcc0adb4319, DEV-VM1): track B (§5). It merges its own PRs under the same rule.
+- **UI coordinator**: track B (§5), which names the session currently holding it. It merges its own PRs under the same rule.
 - Cross-track needs go on #170.
 
 In flight on 2026-11-02 (overall coordinator):
@@ -156,7 +156,8 @@ Every PR that touches the Needs you lane, attribution or reply pre-fill gets an
 independent security review before it merges. Delegate names come from the agent, and a
 prompt-injected agent can choose them. So both clients clean each name, cap its length
 and never show it as "Main agent". The stop pre-fill names the delegate by id, not by
-name (#250, #252). The same cleaning at the host is #220 and track A.
+name (#250, #252). The same cleaning at the host and in HA's `subagents` attribute is
+#263 (track A). #220 is separate: bidi and invisible characters in an approval's command.
 
 UI PRs merge as soon as each meets the merge rule. A backend PR that overlaps them, such as #186, rebases onto them (decided 2026-11-01, 16:05).
 
