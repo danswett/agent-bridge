@@ -56,23 +56,33 @@ The glyph **replaces** today's coloured card edges and glows (`.frame.working`,
 `.frame.delegating`, `.frame.agent` in `pwa/app.css`, and the same in the app). Selection
 is a quiet fill plus the Bridge accent, never a status colour.
 
-### 2.2 What a session row says (first match wins)
+### 2.2 What a session row says
 
 Applies to the row, the session header, notifications and the Home Assistant card alike.
 
+Rules 1–6 are first match wins. Rule 8 refines rule 4. Rule 7 is not a row of its own: it is
+an overlay applied after rules 1–6 (or 8) have picked the glyph and the words.
+
 | # | When | Glyph | Status text |
 |---|---|---|---|
-| 1 | The session itself has a pending question | `needs` | "Waiting on you", plus "· N delegates still running" when there are any |
-| 2 | A delegate has a pending question | `needs` | "*Delegate name* asks", or "… · answer at the machine" when the host can't prove where the answer lands |
-| 3 | The main agent is working | `working` | "Working", or "Working · task: *name*" while a foreground task agent runs |
-| 4 | Main agent idle, background agents running | `delegating` | "Delegating to N agents" (a nested delegate counts once, under its parent) |
+| 1 | The session itself has a pending question | `needs` | "Waiting on you", plus "· N delegates still running" when there are any, and "· answer at the machine" when no host can answer it from another device (`answerAtMachine`) |
+| 2 | A delegate has a pending question (`waitingOn`, or the question's `agent`) | `needs` | "*Delegate name* asks", or "… · answer at the machine" when the host can't prove where the answer lands (`answerAtMachine`). A delegate the list left out is "A delegate asks" |
+| 3 | The main agent is working | `working` | "Working", or "Working · task: *name*" while a foreground task agent runs (a running `kind: task` sub-agent whose starters are all task agents too; one a background delegate started is that delegate's work) |
+| 4 | Main agent idle, background agents running | `delegating` | "Delegating to N agents", N from `background.agents` (a nested delegate counts once, under its parent, and a list cut short still counts them all) |
 | 5 | Main agent idle, only background commands | `delegating` | "N background commands" |
 | 6 | Nothing running | `idle` | "Idle" |
-| 7 | Any of the above while an agent drives | the same glyph plus `driven-badge` | Status text in agent colour, with "Driven by an agent" on rows |
-| 8 | The agent can't list its sub-agents (Claude `Task`, Codex threads, until #84's later slices) | `delegating` | "Delegating · details not reported". A count is shown when known, and nothing is ever wrongly attributed |
+| 7 | **Overlay.** Any of the above while an agent drives | the same glyph plus `driven-badge`; `working` and `delegating` turn from active to agent | The same words, in agent colour, with "Driven by an agent" on rows |
+| 8 | **Refines rule 4.** The agent can't list its sub-agents (Claude `Task`, Codex threads, until #84's later slices, or a host older than `subagents`): `background.agents` counts them but neither `subagents` nor `subagentsMore` lists any | `delegating` | "Delegating to N agents · details not reported". Nothing is ever wrongly attributed |
+
+While the host ends a session (`status: ending`), none of rules 1–6 apply: the row shows the
+`ended` glyph and "Ending session…" in secondary text, and rule 7's overlay still applies.
+
+N is a number before its noun, singular for one ("1 delegate", "1 agent", "1 background
+command"). A glyph's accessible name is the row read aloud (§9).
 
 Rule 1 matches the 2026-10-30 shadow finding on #84 ("question wins") and the host's
-current behaviour. Rule 7 keeps #46's meaning in a new form.
+current behaviour. Rule 7 keeps #46's meaning in a new form. The tests in both clients are
+named after these rules (`pwa/test/unit/status.test.mjs`, `SessionStatusTests`).
 
 ## 3. Colour
 

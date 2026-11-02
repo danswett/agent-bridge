@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { readSession, readHello, readBackground } from '../../js/protocol.js';
-import { cardState } from '../../js/ui/session-card.js';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 
@@ -39,15 +38,28 @@ test('background is read tolerantly: anything but whole counts above zero is non
   assert.equal(readSession({ id: 'x', activity: { background: 'lots' } }).activity.background, null);
 });
 
-test('only an idle session with background work reads as delegating, naming agents before commands', () => {
-  const s = (status, background) => readSession({ id: 'x', status, activity: { background } });
-  assert.deepEqual(cardState(s('idle', { agents: 2, shells: 1 })), { view: 'delegating', text: 'Waiting for background agents' });
-  assert.deepEqual(cardState(s('idle', { agents: 0, shells: 1 })), { view: 'delegating', text: 'Waiting for background commands' });
-  assert.deepEqual(cardState(s('idle', { agents: 0, shells: 0 })), { view: 'idle', text: 'Idle' });
-  assert.deepEqual(cardState(s('working', { agents: 1 })), { view: 'working', text: 'Working' });
-  assert.deepEqual(cardState(s('waiting', { shells: 1 })), { view: 'waiting', text: 'Waiting on you' });
-  // A newer status a client doesn't know reads as idle, and then background still counts.
-  assert.deepEqual(cardState(s('paused', { agents: 1 })), { view: 'delegating', text: 'Waiting for background agents' });
+test('sub-agents are read tolerantly: unknown kinds are tasks, unknown statuses idle, and an outcome only on a finished one', () => {
+  const s = readSession({
+    id: 'x',
+    subagents: [
+      { id: 'a', kind: 'background', name: 'Run the suite', status: 'working', outcome: 'failed' },
+      { id: 'b', parent: 'a', kind: 'swarm', status: 'sleeping' },
+      { id: 'c', kind: 'task', status: 'ended', outcome: 'exploded' },
+      { name: 'no id' }, 'junk',
+    ],
+    subagentsMore: 3,
+    waitingOn: 'a',
+    question: { id: 'q', agent: 'a' },
+  });
+  assert.deepEqual(s.subagents, [
+    { id: 'a', parent: null, kind: 'background', name: 'Run the suite', status: 'working', outcome: null },
+    { id: 'b', parent: 'a', kind: 'task', name: null, status: 'idle', outcome: null },
+    { id: 'c', parent: null, kind: 'task', name: null, status: 'ended', outcome: 'done' },
+  ]);
+  assert.deepEqual([s.subagentsMore, s.waitingOn, s.question.agent], [3, 'a', 'a']);
+  // A host that lists none sends none: absent, not an empty list.
+  const none = readSession({ id: 'y', subagentsMore: -1, waitingOn: 4, question: { id: 'q', agent: {} } });
+  assert.deepEqual([none.subagents, none.subagentsMore, none.waitingOn, none.question.agent], [null, 0, null, null]);
 });
 
 test('a session is the person\'s unless the host says an agent drives it, and only then has a principal', () => {

@@ -1,11 +1,9 @@
 /* Agent Bridge PWA. Mobile first (an iPhone on the Home Screen), fine on a desktop.
    Colours are the design language's roles and surfaces, from design/tokens.css (generated from
    design/tokens.json; docs/design/ui.md §3): never a colour of this file's own. Controls,
-   links, focus and selection are bridge. Status keeps the old Home Assistant cards' shapes in
-   the roles' colours: active while working, needs while waiting on you, calm when idle, a still
-   dashed active edge while idle but delegating, and agent in place of the colour while an agent
-   drives the session. Glyphs replace the edges in #178. No inline styles anywhere, so the CSP
-   can say style-src 'self'. */
+   links, focus and selection are bridge. Status is a glyph from the generated sprite and the
+   words of ui.md §2.2 (js/status.js), never a card's edge or glow (#178). No inline styles
+   anywhere, so the CSP can say style-src 'self'. */
 
 :root {
   color-scheme: light dark;
@@ -98,7 +96,7 @@ a { color: var(--ab-bridge); }
   font: inherit; color: var(--ab-text); background: var(--ab-subtle);
   border: 1px solid var(--ab-stroke2); border-radius: 10px; cursor: pointer;
 }
-.machine-button .icon { grid-row: 1 / 3; width: 24px; height: 24px; }
+.machine-button .icon { grid-row: 1 / 3; width: 24px; height: 24px; --ab-icon-stroke: 1.4; }
 .machine-name { font-weight: 600; }
 .machine-sub { grid-column: 2; grid-row: 2; color: var(--ab-text2); font-size: .8rem; min-width: 0; overflow-wrap: anywhere; }
 .machine-id { font: .8rem var(--ab-font-mono); }
@@ -112,7 +110,7 @@ a { color: var(--ab-bridge); }
   align-items: center; padding: 8px 12px;
   border: 1px dashed var(--ab-stroke2); border-radius: 10px; color: var(--ab-text2);
 }
-.machine-row .icon { grid-row: 1 / 3; width: 24px; height: 24px; }
+.machine-row .icon { grid-row: 1 / 3; width: 24px; height: 24px; --ab-icon-stroke: 1.4; }
 .machine-row .machine-name { color: var(--ab-text); }
 .machine-row .machine-state { color: var(--ab-text2); }
 .machine-forget { grid-column: 3; grid-row: 1 / 3; }
@@ -245,36 +243,30 @@ a { color: var(--ab-bridge); }
   overflow: hidden;
   transition: border-color .4s ease, box-shadow .4s ease;
 }
-/* The steady core of the glow, painted once per state change; the breathing halo is
-   .glow, below. */
-.frame.working { border-color: var(--ab-active); box-shadow: 0 0 6px 0 var(--ab-active); }
-.frame.waiting { border-color: var(--ab-needs); box-shadow: 0 0 6px 0 var(--ab-needs); }
-/* Delegating: the session's own turn is over but work it started is still running. Blue,
-   as on the old dashboard, but still and dashed, so it can't be mistaken for working at a
-   glance and doesn't read as finished either. */
-.frame.delegating { border-color: var(--ab-active); border-style: dashed; }
-/* Driven by an agent rather than by you (agent-ha-bridge's card): the same shapes, with purple
-   in place of the colour. A steady purple edge while idle, so a session left under an agent's
-   control still says so; while it works or waits, the same breathing glow, in purple. */
-.frame.agent { border-color: var(--ab-agent); }
-.frame.agent.working,
-.frame.agent.waiting { border-color: var(--ab-agent); box-shadow: 0 0 6px 0 var(--ab-agent); }
+/* Status is the glyph and its words (docs/design/ui.md §2), not the card's edge: the coloured
+   edges and the breathing glow that stood in for them are gone (#178). */
 
-/* The halo is its own layer with a shadow that never changes, faded by opacity. Animating
-   box-shadow on the card itself repaints the whole card on the main thread every frame;
-   that hung Home Assistant tabs with a few sessions working (old card, 1.37). Opacity is
-   composited. It is a sibling of the frame because the frame's overflow would clip it. */
-.glow {
-  position: absolute; inset: 0; border-radius: var(--radius);
-  opacity: 0; pointer-events: none;
-}
-.frame.working ~ .glow,
-.frame.waiting ~ .glow { animation: glow 1.6s ease-in-out infinite; will-change: opacity; }
-.frame.working ~ .glow { box-shadow: 0 0 16px 2px var(--ab-active); }
-.frame.waiting ~ .glow { box-shadow: 0 0 18px 3px var(--ab-needs); }
-.frame.agent.working ~ .glow,
-.frame.agent.waiting ~ .glow { box-shadow: 0 0 18px 3px var(--ab-agent); }
-@keyframes glow { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+/* ---- status glyphs and icons (design/README.md) ----
+   The glyph draws in its role's colour; the active colour turns to agent while an agent
+   drives the session, and the diamond over it is agent too. Forced colours keep the roles'
+   system colours rather than the browser's text colour, as tokens.css maps them. */
+.glyph { flex: none; color: var(--ab-neutral); overflow: visible; forced-color-adjust: none; }
+.glyph[data-glyph="needs"] { color: var(--ab-needs); }
+.glyph[data-glyph="working"], .glyph[data-glyph="delegating"] { color: var(--ab-active); }
+.glyph.driven[data-glyph="working"], .glyph.driven[data-glyph="delegating"] { color: var(--ab-agent); }
+.glyph[data-glyph="failed"] { color: var(--ab-danger); }
+.glyph .glyph-badge { color: var(--ab-agent); }
+/* The moving part turns about the glyph's centre: working's arc once per 1.2 s, delegating's
+   satellites once per 8 s. Nothing else on a card moves on its own. */
+.glyph .glyph-spin, .glyph .glyph-orbit { transform-box: view-box; transform-origin: 50% 50%; }
+.glyph .glyph-spin { animation: glyph-turn 1.2s linear infinite; }
+.glyph .glyph-orbit { animation: glyph-turn 8s linear infinite; }
+@keyframes glyph-turn { to { transform: rotate(360deg); } }
+/* An icon's stroke looks the same weight at every size: 1.5 on its 20 grid, 1.7 at 16 px
+   or below, 1.4 at 24 or above. */
+.ab-icon { --ab-icon-stroke: 1.5; flex: none; }
+.ab-icon-16 { --ab-icon-stroke: 1.7; }
+.ab-icon-24 { --ab-icon-stroke: 1.4; }
 
 .head { padding-top: 6px; }
 .title { margin: 0; font-size: 1.05rem; }
@@ -285,8 +277,9 @@ a { color: var(--ab-bridge); }
   background: none; border: 0; cursor: pointer;
 }
 .title-text { flex: 1; overflow-wrap: anywhere; }
-.chevron { transition: transform .2s ease; color: var(--ab-text2); }
-.collapsed .chevron { transform: rotate(-90deg); }
+/* The design chevron points along the line; open, it points down into the card. */
+.chevron { width: 20px; height: 20px; transform: rotate(90deg); transition: transform .2s ease; color: var(--ab-text2); }
+.collapsed .chevron { transform: none; }
 
 /* Which agent, by its mark alone: the design language has no colours for agents' brands. */
 .agent-badge {
@@ -304,33 +297,25 @@ a { color: var(--ab-bridge); }
 .branch { font-family: var(--ab-font-mono); font-size: .82rem; }
 
 .status-line { margin: 2px 0; font-size: .9rem; color: var(--ab-text2); display: flex; flex-wrap: wrap; align-items: center; }
+.status-line .glyph { margin-right: 7px; }
+/* The words take a role only where §3 allows one: needs' text for a question, agent's text
+   while an agent drives (rule 7). Active and neutral are glyph colours, never words. */
 .status-text { font-weight: 600; color: var(--ab-text); }
+.status-text[data-tone="needs"] { color: var(--ab-needs-text); }
+.status-text[data-tone="agent"] { color: var(--ab-agent-text); }
+.status-text[data-tone="muted"] { color: var(--ab-text2); }
 .status-line .since:not(:empty)::before, .status-line .updated:not(:empty)::before { content: "·"; margin: 0 6px; }
-.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ab-neutral); margin-right: 7px; flex: none; }
-.session[data-status="working"] .dot { background: var(--ab-active); }
-.session[data-status="waiting"] .dot { background: var(--ab-needs); }
-.session[data-status="waiting"] .status-text { color: var(--ab-needs-text); }
-.session[data-view="delegating"] .dot { background: transparent; box-shadow: inset 0 0 0 2px var(--ab-active); }
 .driver { color: var(--ab-agent-text); font-weight: 600; }
 .status-line .driver::before { content: "·"; margin: 0 6px; color: var(--ab-text2); font-weight: 400; }
 
 .tool-line { margin: 4px 0 0; font-size: .88rem; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+.tool-line .glyph { align-self: center; }
 .tool-line .tool-name { font-weight: 600; font-family: var(--ab-font-mono); }
 .tool-line .tool-summary { color: var(--ab-text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.spinner {
-  width: 10px; height: 10px; flex: none; align-self: center;
-  border: 2px solid var(--ab-active); border-right-color: transparent; border-radius: 50%;
-}
-.tool-line[data-status="running"] .spinner { animation: spin 1s linear infinite; }
-.tool-line:not([data-status="running"]) .spinner { border-right-color: var(--ab-active); }
-@keyframes spin { to { transform: rotate(360deg); } }
 
-/* The breathing and spinning are decoration. A viewer who asked for less motion keeps the
-   colours and the glow, held at the middle of the pulse. */
+/* Reduced motion stops every glyph (ui.md §9): the state is in the shape, never the motion. */
 @media (prefers-reduced-motion: reduce) {
-  .frame.working ~ .glow,
-  .frame.waiting ~ .glow { animation: none; opacity: .6; will-change: auto; }
-  .tool-line[data-status="running"] .spinner { animation: none; }
+  .glyph .glyph-spin, .glyph .glyph-orbit { animation: none; }
   .frame, .chevron { transition: none; }
 }
 
@@ -351,9 +336,7 @@ summary {
 .tool .tool-name { font-family: var(--ab-font-mono); font-weight: 600; }
 .tool .tool-summary { color: var(--ab-text2); overflow-wrap: anywhere; }
 .tool .tool-time { color: var(--ab-text2); font-size: .78rem; white-space: nowrap; }
-.tool.done .tool-mark { color: var(--ab-text2); }
-.tool.failed .tool-mark { color: var(--ab-danger-text); }
-.tool.running .tool-mark { color: var(--ab-active); }
+.tool .tool-mark { align-self: center; display: flex; }
 
 /* ---- Markdown ---- */
 .md { overflow-wrap: anywhere; }
@@ -522,6 +505,7 @@ summary {
 .answer-actions:not(:has(.button:not([hidden]))) { display: none; }
 .answer-error { color: var(--ab-danger-text); font-weight: 600; font-size: .92rem; margin: 8px 0 0; }
 .answer-status, .answer-receipt { margin: 8px 0 0; font-size: .92rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .answer-status:empty { display: none; }
 .answer-status.progress::before, .answer-receipt.progress::before {
   content: ""; width: 12px; height: 12px; flex: none; border-radius: 50%;
@@ -547,16 +531,11 @@ summary {
   display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); padding: 6px 2px;
   font: inherit; font-size: .88rem; color: var(--ab-text2); background: none; border: 0; cursor: pointer;
 }
-.end-button .icon { width: 18px; height: 18px; }
+.end-button .icon { width: 16px; height: 16px; --ab-icon-stroke: 1.7; }
 .end-button:disabled { opacity: .55; cursor: default; }
 .end-session[data-stop="confirm"] .end-button { color: var(--ab-danger-text); font-weight: 600; }
 .end-session .stop-status { margin: 0 0 6px; }
 .end-session .resend { margin-bottom: 6px; }
-/* Being ended: still, grey and dotted, neither working nor finished. */
-.frame.ending { border-color: var(--ab-neutral); border-style: dotted; }
-/* Still the agent's while the machine ends it: dotted, in purple. */
-.frame.agent.ending { border-color: var(--ab-agent); }
-.session[data-status="ending"] .status-text { color: var(--ab-text2); }
 
 /* ---- account ---- */
 .account { margin: 24px 0 0; color: var(--ab-text2); font-size: .88rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }

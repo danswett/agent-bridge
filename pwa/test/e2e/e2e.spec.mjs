@@ -101,7 +101,7 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   await expect(card(page, CLAUDE)).toHaveAttribute('data-status', 'working');
   // Idle, but waiting on work it started: background crosses the relay intact.
   await expect(card(page, DELEGATING)).toHaveAttribute('data-view', 'delegating');
-  await expect(card(page, DELEGATING).locator('.status-text')).toHaveText('Waiting for background agents');
+  await expect(card(page, DELEGATING).locator('.status-text')).toHaveText('Delegating to 2 agents · details not reported');
 
   // Live changes, pushed by the host.
   const t = new Date(Date.now() + 1000).toISOString();

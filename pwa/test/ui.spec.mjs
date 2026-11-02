@@ -90,7 +90,7 @@ test('demo mode shows every session from the worked example, with every field', 
   const delegating = card(page, DELEGATING);
   await expect(delegating).toHaveAttribute('data-status', 'idle');
   await expect(delegating).toHaveAttribute('data-view', 'delegating');
-  await expect(delegating.locator('.status-text')).toHaveText('Waiting for background agents');
+  await expect(delegating.locator('.status-text')).toHaveText('Delegating to 2 agents · details not reported');
   await expect(delegating.locator('.since')).toHaveText(/^for /);
   await expect(delegating.locator('.facts')).toContainText('2 background agents · 1 background command · 5 turns');
 
@@ -120,38 +120,53 @@ test('a machine where agent-ha-bridge runs is shown read-only with its reason, a
   await expect(q.locator('.read-only-machine')).toHaveText(`This machine is read-only from the phone: ${reason}.`);
 });
 
-test('each status has its glow: working and waiting breathe, idle is calm', async ({ page }) => {
+// The status glyph and words (docs/design/ui.md §2), which replaced the coloured edges and glows.
+const glyphOf = (page, id) => card(page, id).locator('.status-line .glyph');
+const role = (page, name) => page.evaluate((n) => {
+  const probe = document.createElement('i');
+  probe.style.color = `var(--ab-${n})`;
+  document.body.append(probe);
+  const colour = getComputedStyle(probe).color;
+  probe.remove();
+  return colour;
+}, name);
+const colourOf = (locator) => locator.evaluate((e) => getComputedStyle(e).color);
+const turning = (locator) => locator.evaluate((e) => getComputedStyle(e).animationName);
+
+test('each status has its glyph and no card has a status edge or glow: working turns, waiting is the needs disc, idle is still', async ({ page }) => {
   await openDemo(page);
-  const glow = (id) => card(page, id).locator('.glow').evaluate((e) => getComputedStyle(e).animationName);
-  await expect(card(page, CLAUDE).locator('.frame')).toHaveClass(/\bworking\b/);
-  await expect(card(page, COPILOT).locator('.frame')).toHaveClass(/\bwaiting\b/);
-  await expect(card(page, CODEX).locator('.frame')).toHaveClass(/\bidle\b/);
-  expect(await glow(CLAUDE)).toBe('glow');
-  expect(await glow(COPILOT)).toBe('glow');
-  expect(await glow(CODEX)).toBe('none');
-  const border = (id) => card(page, id).locator('.frame').evaluate((e) => getComputedStyle(e).borderTopColor);
-  expect(await border(CLAUDE)).not.toBe(await border(COPILOT));
-  expect(await border(CODEX)).not.toBe(await border(CLAUDE));
+  await expect(glyphOf(page, CLAUDE)).toHaveAttribute('data-glyph', 'working');
+  await expect(glyphOf(page, COPILOT)).toHaveAttribute('data-glyph', 'needs');
+  await expect(glyphOf(page, CODEX)).toHaveAttribute('data-glyph', 'idle');
+  expect(await turning(glyphOf(page, CLAUDE).locator('.glyph-spin'))).toBe('glyph-turn');
+  await expect(glyphOf(page, CODEX).locator('.glyph-spin, .glyph-orbit')).toHaveCount(0);
+  expect(await colourOf(glyphOf(page, CLAUDE))).toBe(await role(page, 'active'));
+  expect(await colourOf(glyphOf(page, COPILOT))).toBe(await role(page, 'needs'));
+  expect(await colourOf(glyphOf(page, CODEX))).toBe(await role(page, 'neutral'));
+  // Every card's edge is the same quiet stroke, whatever its status, and nothing breathes.
+  await expect(page.locator('.glow')).toHaveCount(0);
+  const edges = await page.locator('.session .frame').evaluateAll((els) => els.map((e) => `${getComputedStyle(e).borderTopColor} ${getComputedStyle(e).borderTopStyle} ${getComputedStyle(e).boxShadow}`));
+  expect(new Set(edges).size).toBe(1);
 });
 
-test('an idle session still waiting on background work is delegating: its own still, dashed edge and text', async ({ page }) => {
+test('an idle session still waiting on background work is delegating: its own glyph, whose satellites drift, and its words', async ({ page }) => {
   await openDemo(page);
   const c = card(page, DELEGATING);
-  const frame = c.locator('.frame');
-  const style = () => frame.evaluate((e) => ({ border: getComputedStyle(e).borderTopStyle, color: getComputedStyle(e).borderTopColor }));
-  const working = await card(page, CLAUDE).locator('.frame').evaluate((e) => getComputedStyle(e).borderTopColor);
-  const idle = await card(page, CODEX).locator('.frame').evaluate((e) => ({ border: getComputedStyle(e).borderTopStyle, color: getComputedStyle(e).borderTopColor }));
+  await expect(c).toHaveAttribute('data-view', 'delegating');
+  await expect(glyphOf(page, DELEGATING)).toHaveAttribute('data-glyph', 'delegating');
+  expect(await turning(glyphOf(page, DELEGATING).locator('.glyph-orbit'))).toBe('glyph-turn');
+  expect(await colourOf(glyphOf(page, DELEGATING))).toBe(await role(page, 'active'));
+  // The worked example counts its agents but lists none (rule 8).
+  await expect(c.locator('.status-text')).toHaveText('Delegating to 2 agents · details not reported');
 
-  await expect(frame).toHaveClass(/\bdelegating\b/);
-  await expect(frame).not.toHaveClass(/\bidle\b/);
-  expect(await style()).toEqual({ border: 'dashed', color: working });
-  expect(idle.border).toBe('solid');
-  // Still: delegating is not working, so it does not breathe.
-  expect(await c.locator('.glow').evaluate((e) => getComputedStyle(e).animationName)).toBe('none');
+  // Listed, they are just counted (rule 4).
+  await upsert(page, DELEGATING, { updatedAt: later(), subagents: [{ id: 'a1', kind: 'background', name: 'Build U4', status: 'working' }, { id: 'a2', kind: 'background', name: 'Build U5', status: 'working' }] });
+  await expect(c.locator('.status-text')).toHaveText('Delegating to 2 agents');
 
   // Only shells left: it says commands.
   await upsert(page, DELEGATING, { updatedAt: later(), activity: { background: { agents: 0, shells: 1 } } });
-  await expect(c.locator('.status-text')).toHaveText('Waiting for background commands');
+  await expect(c.locator('.status-text')).toHaveText('1 background command');
+  await expect(glyphOf(page, DELEGATING)).toHaveAttribute('data-glyph', 'delegating');
   await expect(c.locator('.facts')).toContainText('1 background command');
   await expect(c.locator('.facts')).not.toContainText('background agent');
 
@@ -159,10 +174,8 @@ test('an idle session still waiting on background work is delegating: its own st
   await upsert(page, DELEGATING, { updatedAt: later(), activity: { background: null } });
   await expect(c).toHaveAttribute('data-view', 'idle');
   await expect(c.locator('.status-text')).toHaveText('Idle');
-  await expect(frame).toHaveClass(/\bidle\b/);
-  await expect(frame).not.toHaveClass(/\bdelegating\b/);
+  await expect(glyphOf(page, DELEGATING)).toHaveAttribute('data-glyph', 'idle');
   await expect(c.locator('.since')).toHaveText('');
-  expect((await style()).border).toBe('solid');
 
   // A session working on its own turn is working, whatever it has in the background.
   await upsert(page, DELEGATING, { status: 'working', statusSince: later(), updatedAt: later(), activity: { background: { agents: 1, shells: 0 } } });
@@ -171,80 +184,84 @@ test('an idle session still waiting on background work is delegating: its own st
   await expect(c.locator('.facts')).toContainText('1 background agent');
 });
 
-test('with reduced motion the glow holds still and the spinner stops', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await openDemo(page);
-  const style = (id, sel) => card(page, id).locator(sel).evaluate((e) => ({ animation: getComputedStyle(e).animationName, opacity: getComputedStyle(e).opacity }));
-  expect(await style(CLAUDE, '.glow')).toEqual({ animation: 'none', opacity: '0.6' });
-  expect(await style(COPILOT, '.glow')).toEqual({ animation: 'none', opacity: '0.6' });
-  expect((await style(CLAUDE, '.tool-line .spinner')).animation).toBe('none');
-});
-
-test('a session an agent drives has a purple edge, steady while idle and breathing while it works, says so, and goes back when the person takes it', async ({ page }) => {
+test('a delegate\'s question and a foreground task are named in the status words', async ({ page }) => {
   await openDemo(page);
   const c = card(page, CODEX);
-  const frame = c.locator('.frame');
-  // The edge's colour eases over 0.4 s, so it is read once the frame's transitions have finished.
-  const border = (id) => card(page, id).locator('.frame').evaluate(async (e) => {
-    await Promise.all(e.getAnimations().map((a) => a.finished));
-    return getComputedStyle(e).borderTopColor;
+  await upsert(page, CODEX, {
+    status: 'working', statusSince: later(), updatedAt: later(),
+    subagents: [{ id: 't1', kind: 'task', name: 'Bisect RestartAfterResume', status: 'working' }],
   });
-  const glow = () => c.locator('.glow').evaluate((e) => ({ animation: getComputedStyle(e).animationName, shadow: getComputedStyle(e).boxShadow }));
-  // The agent role's colour.
-  const purple = await page.evaluate(() => {
-    const probe = document.createElement('i');
-    probe.style.color = 'var(--ab-agent)';
-    document.body.append(probe);
-    const colour = getComputedStyle(probe).color;
-    probe.remove();
-    return colour;
+  await expect(c.locator('.status-text')).toHaveText('Working · task: Bisect RestartAfterResume');
+  await upsert(page, CODEX, {
+    status: 'waiting', statusSince: later(), updatedAt: later(), waitingOn: 'b1',
+    subagents: [{ id: 'b1', kind: 'background', name: 'Check ubuntu CI failure', status: 'waiting' }],
+    question: { id: 'q-b1', kind: 'form', message: 'Which run?', fields: [], askedAt: later(), answerAtMachine: true, agent: 'b1' },
   });
-  const calm = await border(CODEX);
-  const working = await border(CLAUDE);
-  const workingGlow = await card(page, CLAUDE).locator('.glow').evaluate((e) => getComputedStyle(e).boxShadow);
+  await expect(c.locator('.status-text')).toHaveText('Check ubuntu CI failure asks · answer at the machine');
+  await expect(glyphOf(page, CODEX)).toHaveAttribute('data-glyph', 'needs');
+  expect(await colourOf(c.locator('.status-text'))).toBe(await role(page, 'needs-text'));
+});
+
+test('with reduced motion every glyph holds still', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await openDemo(page);
+  await upsert(page, CODEX, { driver: 'agent', status: 'working', statusSince: later(), updatedAt: later() });
+  await expect(glyphOf(page, CODEX)).toHaveAttribute('data-glyph', 'working');
+  const moving = await page.locator('.glyph-spin, .glyph-orbit').evaluateAll((els) => els.map((e) => getComputedStyle(e).animationName));
+  // Working (twice: one driven), delegating, and the running tool's.
+  expect(moving.length).toBeGreaterThanOrEqual(4);
+  expect(new Set(moving)).toEqual(new Set(['none']));
+  expect(await page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0);
+});
+
+test('a session an agent drives has the violet diamond on its glyph, says so in agent colour, and goes back when the person takes it', async ({ page }) => {
+  await openDemo(page);
+  const c = card(page, CODEX);
+  const agent = await role(page, 'agent');
   await expect(c).toHaveAttribute('data-driver', 'person');
   await expect(c.locator('.driver')).toBeHidden();
+  await expect(glyphOf(page, CODEX).locator('.glyph-badge')).toHaveCount(0);
 
   await upsert(page, CODEX, { driver: 'agent', driverPrincipal: 'homeassistant:0f1e2d3c', updatedAt: later() });
   await expect(c).toHaveAttribute('data-driver', 'agent');
-  await expect(frame).toHaveClass(/\bagent\b/);
   await expect(c.locator('.driver')).toHaveText('Driven by an agent');
   await expect(c.locator('.driver')).toHaveAttribute('title', 'homeassistant:0f1e2d3c');
-  expect(purple).not.toBe(calm);
-  expect(purple).not.toBe(working);
-  expect(await border(CODEX)).toBe(purple);
-  // Idle: a steady edge, no breathing.
-  expect((await glow()).animation).toBe('none');
+  // Idle: the idle glyph, still neutral, with the diamond in agent colour.
+  await expect(glyphOf(page, CODEX)).toHaveAttribute('data-glyph', 'idle');
+  await expect(glyphOf(page, CODEX).locator('.glyph-badge')).toHaveCount(1);
+  expect(await colourOf(glyphOf(page, CODEX).locator('.glyph-badge'))).toBe(agent);
+  expect(await colourOf(glyphOf(page, CODEX))).toBe(await role(page, 'neutral'));
+  expect(await colourOf(c.locator('.status-text'))).toBe(await role(page, 'agent-text'));
+  await expect(glyphOf(page, CODEX)).toHaveAccessibleName('Fix flaky test, idle, driven by an agent, Demo machine');
 
+  // Working: the active colour turns to agent.
   await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later() });
-  await expect(frame).toHaveClass(/\bworking\b/);
-  expect(await border(CODEX)).toBe(purple);
-  const breathing = await glow();
-  expect(breathing.animation).toBe('glow');
-  expect(breathing.shadow).not.toBe(workingGlow);
+  await expect(glyphOf(page, CODEX)).toHaveAttribute('data-glyph', 'working');
+  expect(await colourOf(glyphOf(page, CODEX))).toBe(agent);
+  expect(agent).not.toBe(await colourOf(glyphOf(page, CLAUDE)));
 
-  // Still the agent's while the machine ends it: dotted, in purple.
+  // Still the agent's while the machine ends it: the ended glyph, with the diamond.
   await upsert(page, CODEX, { status: 'ending', statusSince: later(), updatedAt: later() });
-  await expect(frame).toHaveClass(/\bending\b/);
-  expect(await border(CODEX)).toBe(purple);
-  expect(await frame.evaluate((e) => getComputedStyle(e).borderTopStyle)).toBe('dotted');
+  await expect(glyphOf(page, CODEX)).toHaveAttribute('data-glyph', 'ended');
+  await expect(glyphOf(page, CODEX).locator('.glyph-badge')).toHaveCount(1);
+  await expect(c.locator('.status-text')).toHaveText('Ending session…');
   await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later() });
 
   // The person answers or replies: the host sends the session as theirs again.
   await upsert(page, CODEX, { driver: null, driverPrincipal: null, updatedAt: later() });
   await expect(c).toHaveAttribute('data-driver', 'person');
-  await expect(frame).not.toHaveClass(/\bagent\b/);
   await expect(c.locator('.driver')).toBeHidden();
-  expect(await border(CODEX)).toBe(working);
+  await expect(glyphOf(page, CODEX).locator('.glyph-badge')).toHaveCount(0);
+  expect(await colourOf(glyphOf(page, CODEX))).toBe(await role(page, 'active'));
 });
 
-test('with reduced motion an agent\'s purple glow holds still too', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+test('every glyph is named with its state, as a row reads: title, status, machine', async ({ page }) => {
   await openDemo(page);
-  await upsert(page, CLAUDE, { driver: 'agent', updatedAt: later() });
-  await expect(card(page, CLAUDE).locator('.frame')).toHaveClass(/\bagent\b/);
-  const glow = await card(page, CLAUDE).locator('.glow').evaluate((e) => ({ animation: getComputedStyle(e).animationName, opacity: getComputedStyle(e).opacity }));
-  expect(glow).toEqual({ animation: 'none', opacity: '0.6' });
+  await expect(glyphOf(page, DELEGATING)).toHaveAccessibleName('Land the P1 slices, delegating to 2 agents · details not reported, Demo machine');
+  await expect(glyphOf(page, COPILOT)).toHaveAccessibleName('Plan Migration to Windows App, waiting on you, Demo machine');
+  await expect(page.getByRole('img', { name: 'Refactor the relay client, working, Demo machine' })).toHaveCount(1);
+  // The tool's glyph is decoration beside its words.
+  await expect(card(page, CLAUDE).locator('.tool-line .glyph')).toHaveAttribute('aria-hidden', 'true');
 });
 
 test('the latest response is rendered as Markdown', async ({ page }) => {
@@ -308,7 +325,7 @@ test('an unknown status shows as idle, an unknown agent generically, and unknown
   const c = card(page, 'from-the-future');
   await expect(c).toHaveAttribute('data-status', 'idle');
   await expect(c.locator('.status-text')).toHaveText('Idle');
-  await expect(c.locator('.frame')).toHaveClass(/\bidle\b/);
+  await expect(c.locator('.status-line .glyph')).toHaveAttribute('data-glyph', 'idle');
   await expect(c).toHaveAttribute('data-agent', 'unknown');
   await expect(c.locator('.agent-name')).toHaveText('Agent');
   await expect(c.locator('.tool-line')).toHaveAttribute('data-status', 'done');
@@ -398,7 +415,7 @@ test('a folded card stays folded through ordinary updates, and one tap opens it'
   await upsert(page, CODEX, { updatedAt: later(), activity: { response: 'A plain update.' } });
   await expect(codex.locator('.response')).toHaveText('A plain update.');
   await expect(codex.locator('.frame')).toHaveClass(/\bcollapsed\b/);
-  await expect(codex.locator('.frame')).toHaveClass(/\bidle\b/);
+  await expect(codex.locator('.status-line .glyph')).toHaveAttribute('data-glyph', 'idle');
   await codex.locator('button.fold').click();
   await expect(codex.locator('button.fold')).toHaveAttribute('aria-expanded', 'true');
   await expect(codex.locator('.body')).toBeVisible();
@@ -445,7 +462,7 @@ test('a permission prompt only the machine can answer shows no buttons and says 
     },
   });
   const c = card(page, COPILOT);
-  await expect(c.locator('.status-text')).toHaveText('Waiting at the machine');
+  await expect(c.locator('.status-text')).toHaveText('Waiting on you · answer at the machine');
   await expect(c.locator('.question')).toHaveAttribute('data-answerable', 'false');
   await expect(c.locator('.question .question-head')).toHaveText('Permission requested');
   await expect(c.locator('.question .question-message')).toContainText('rm -rf build');

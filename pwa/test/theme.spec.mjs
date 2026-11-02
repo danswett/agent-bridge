@@ -38,9 +38,10 @@ for (const scheme of ['light', 'dark']) {
     const copilot = page.locator(`.session[data-id="${COPILOT}"]`);
     const claude = page.locator(`.session[data-id="${CLAUDE}"]`);
     expect(await settled(copilot.locator('.frame'), 'backgroundColor')).toBe(rgb(surface[scheme].card));
-    // Status in the status roles: working in active, waiting in needs, its words in needs' text.
-    expect(await settled(claude.locator('.frame'), 'borderTopColor')).toBe(rgb(v(role.active)));
-    expect(await settled(copilot.locator('.frame'), 'borderTopColor')).toBe(rgb(v(role.needs)));
+    // Status in the status roles, drawn by the glyph: working in active, waiting in needs, its
+    // words in needs' text.
+    expect(await claude.locator('.status-line .glyph').evaluate((e) => getComputedStyle(e).color)).toBe(rgb(v(role.active)));
+    expect(await copilot.locator('.status-line .glyph').evaluate((e) => getComputedStyle(e).color)).toBe(rgb(v(role.needs)));
     expect(await copilot.locator('.status-text').evaluate((e) => getComputedStyle(e).color)).toBe(rgb(role.needs[`text${scheme === 'light' ? 'Light' : 'Dark'}`]));
     // Active is a glyph colour, never words: the working card says so in plain text.
     expect(await claude.locator('.status-text').evaluate((e) => getComputedStyle(e).color)).toBe(rgb(surface[scheme].text));
@@ -105,9 +106,10 @@ test('in forced colours every role is a system colour', async ({ page, browserNa
 
 test('the generated sprite draws the needs glyph in its role colour with its ink, under the page\'s CSP', async ({ page, context }) => {
   await page.emulateMedia({ colorScheme: 'light' });
+  // The cards' own glyphs fetch the sprite as the page opens.
+  const loaded = page.waitForResponse((r) => r.url().endsWith('/design/sprite.svg') && r.ok());
   await openDemo(page);
   // Built through the DOM, as the app builds everything: no markup is parsed.
-  const loaded = page.waitForResponse((r) => r.url().endsWith('/design/sprite.svg') && r.ok());
   await page.evaluate(() => {
     const NS = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(NS, 'svg');

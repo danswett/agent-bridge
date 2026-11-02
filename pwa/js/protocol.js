@@ -48,6 +48,10 @@ export const readDriver = tolerant(['person', 'agent'], 'person');
 // An outcome from a newer host is unconfirmed: never delivered, and never a reason to
 // answer again.
 export const readOutcome = tolerant(Outcomes, 'unconfirmed');
+// A sub-agent (Subagent in the spec): its kind, status and how its latest run went.
+export const readSubagentKind = tolerant(['background', 'task'], 'task');
+export const readSubagentStatus = tolerant(['working', 'idle', 'waiting', 'ended'], 'idle');
+export const readSubagentOutcome = tolerant(['done', 'failed'], 'done');
 
 export const StopOutcomes = Object.freeze(['ended', 'confirm', 'stale', 'busy', 'refused', 'failed']);
 // A stop outcome from a newer host is failed: never ended, and never confirm, which would
@@ -108,6 +112,24 @@ export function readQuestion(raw) {
     askedAt: str(q.askedAt),
     truncated: q.truncated === true,
     answerAtMachine: q.answerAtMachine === true,
+    // The sub-agent that asked, when it is not the session's own question.
+    agent: str(q.agent),
+  };
+}
+
+// One sub-agent the session started, as far as the list and status need it: who it is,
+// where it sits and whether it runs. Its words and tools are for the delegate views (#176).
+export function readSubagent(raw) {
+  const a = obj(raw);
+  if (!a || !str(a.id)) { return null; }
+  const status = readSubagentStatus(a.status);
+  return {
+    id: a.id,
+    parent: str(a.parent),
+    kind: readSubagentKind(a.kind),
+    name: str(a.name),
+    status,
+    outcome: status === 'idle' || status === 'ended' ? (a.outcome === undefined || a.outcome === null ? null : readSubagentOutcome(a.outcome)) : null,
   };
 }
 
@@ -156,6 +178,10 @@ export function readSession(raw) {
       background: readBackground(a.background),
     },
     question: readQuestion(s.question),
+    // Absent (null) from a host that lists none, or can't: Claude and Codex so far.
+    subagents: Array.isArray(s.subagents) ? s.subagents.map(readSubagent).filter(Boolean) : null,
+    subagentsMore: Number.isSafeInteger(s.subagentsMore) && s.subagentsMore > 0 ? s.subagentsMore : 0,
+    waitingOn: str(s.waitingOn),
   };
 }
 
