@@ -102,7 +102,9 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
         var state = Load(stateDir);
         if (state.Began == default) { state.Began = now(); }
         var plan = SoakScript.Plan(options.Count);
-        Log($"soak: {plan.Count} episode(s), one every {options.Every.TotalMinutes:0} min, from episode {state.Episodes.Count}");
+        // After the last episode recorded, not after as many as were recorded: --only skips some.
+        var next = state.Episodes.Count == 0 ? 0 : state.Episodes.Max(e => e.Index) + 1;
+        Log($"soak: {plan.Count} episode(s), one every {options.Every.TotalMinutes:0} min, from episode {next}");
         // An episode a stopped driver left under way: its session is ended, not left running.
         if (state.Episodes.LastOrDefault() is { Ended: null } interrupted)
         {
@@ -111,7 +113,7 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
             interrupted.Ended = now();
             Save(state);
         }
-        for (var i = state.Episodes.Count; i < plan.Count && !ct.IsCancellationRequested; i++)
+        for (var i = next; i < plan.Count && !ct.IsCancellationRequested; i++)
         {
             var episode = plan[i];
             if (options.Only is { } only && episode.Scenario.Name != only) { continue; }
@@ -119,19 +121,15 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
             // After a stop, the overdue ones are spread out again rather than run back to back.
             if (state.Episodes.LastOrDefault()?.Ended is { } last && last + options.Every / 4 > due) { due = last + options.Every / 4; }
             if (due > now()) { Log($"waiting until {due:HH:mm:ss}Z for episode {i}"); await wait(due - now(), ct); }
-            if (options.RestartDaemonAt == i && !state.DaemonRestarted)
+            if (i >= options.RestartDaemonAt && !state.DaemonRestarted)
             {
-                Log("restarting agent-ha-bridge's daemon (agent-ha-bridge restart)");
-                Log(await RunPwshAsync($"& \"{Path.Combine(homes.BridgeHome, "bin", "agent-ha-bridge.ps1")}\" restart", ct));
-                state.DaemonRestarted = true;
+                state.DaemonRestarted = await RestartAsync("agent-ha-bridge's daemon (agent-ha-bridge restart)", $"& \"{Path.Combine(homes.BridgeHome, "bin", "agent-ha-bridge.ps1")}\" restart", ct);
                 Save(state);
                 await wait(TimeSpan.FromSeconds(90), ct);
             }
-            if (options.RestartShadowAt == i && !state.ShadowRestarted)
+            if (i >= options.RestartShadowAt && !state.ShadowRestarted)
             {
-                Log("restarting the shadow host (its logon task)");
-                Log(await RunPwshAsync(ShadowRestartScript, ct));
-                state.ShadowRestarted = true;
+                state.ShadowRestarted = await RestartAsync("the shadow host (its logon task)", ShadowRestartScript, ct);
                 Save(state);
                 await wait(TimeSpan.FromSeconds(60), ct);
             }
@@ -160,13 +158,32 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
         "Get-CimInstance Win32_Process -Filter \"Name='agent-bridge-host.exe'\" | Where-Object { $_.ExecutablePath -like \"$env:LOCALAPPDATA\\AgentBridgeShadow\\bin\\*\" -and $_.CommandLine -match ' serve ' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; " +
         "Start-Sleep 5; Start-ScheduledTask -TaskName $t.TaskName; 'restarted ' + $t.TaskName";
 
+    // True once done. A refused or failed restart is logged and not counted, so the next
+    // episode tries it again rather than the soak going without it.
+    async Task<bool> RestartAsync(string what, string command, CancellationToken ct)
+    {
+        Log($"restarting {what}");
+        try
+        {
+            Log(await RunPwshAsync(command, ct));
+            return true;
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            Log($"restarting {what} failed: {e.Message}");
+            return false;
+        }
+    }
+
     static async Task<string> RunPwshAsync(string command, CancellationToken ct)
     {
         var psi = new ProcessStartInfo("pwsh", ["-NoProfile", "-NonInteractive", "-Command", command]) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         using var p = Process.Start(psi) ?? throw new InvalidOperationException("pwsh did not start");
         var output = await p.StandardOutput.ReadToEndAsync(ct) + await p.StandardError.ReadToEndAsync(ct);
         await p.WaitForExitAsync(ct);
-        return $"exit {p.ExitCode}: {output.Trim()}";
+        // A refused or failed restart is not counted as done (RestartAsync).
+        if (p.ExitCode != 0) { throw new InvalidOperationException($"exit {p.ExitCode}: {output.Trim()}"); }
+        return output.Trim();
     }
 
     async Task EpisodeAsync(SoakEpisode episode, SoakRecord record, SoakState state, CancellationToken ct)
@@ -202,7 +219,7 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
             }
             record.Turns++;
             if (turn.Compact) { record.Compactions++; }
-            ended = await TurnAsync(started, turn, marker, record, handled, ct);
+            ended = await TurnAsync(started, turn, marker, record, handled, ct, freshLaunch: resume is null);
             record.Session ??= FullId(started);
             Save(state);
         }
@@ -214,14 +231,15 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
         var settings = new JsonObject
         {
             ["agent"] = s.Agent,
-            ["workspace"] = options.Workspace,
             ["permissions"] = s.AskPermission ? "Ask permission" : "Allow all",
         };
         if (options.Models.TryGetValue(s.Agent, out var model)) { settings["model"] = model; }
         if (options.Efforts.TryGetValue(s.Agent, out var effort)) { settings["effort"] = effort; }
-        if (resume is not null) { settings["resume"] = resume; }
+        // A resumed session reopens in its own folder: agent-ha-bridge refuses a workspace beside it.
+        if (resume is not null) { settings["resume"] = resume; } else { settings["workspace"] = options.Workspace; }
         for (var attempt = 0; attempt < 6; attempt++)
         {
+            var before = await SessionNodesAsync(ct);
             var request = Guid.NewGuid().ToString();
             var payload = new JsonObject { ["at"] = now().ToString("o"), ["text"] = prompt, ["request"] = request, ["settings"] = settings.DeepClone() };
             // Retained, as the launch card and agent-ha-bridge's MCP tool publish it; the press
@@ -236,21 +254,49 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
             if (!landed) { Log("the launch request did not show in the slot; trying again"); continue; }
             await ha.CallAsync("button", "press", new() { ["entity_id"] = M("button", "new_session") }, ct);
             var until = now() + TimeSpan.FromMinutes(3);
-            while (now() < until)
+            var busy = false;
+            while (now() < until && !busy)
             {
                 var outcome = Outcome(await ha.StateAsync(M("sensor", "new_session_result"), ct), request);
                 if (outcome is { } o && o.Outcome is "started" or "refused" or "failed" or "busy" or "unconfirmed")
                 {
                     if (o.Outcome == "started" && o.Session is { Length: > 0 } sid) { return NodeOf(sid); }
                     Log($"launch {o.Outcome}: {o.Note}");
-                    if (o.Outcome is "busy" or "unconfirmed") { break; }
-                    return null;
+                    if (o.Outcome is "refused" or "failed") { return null; }
+                    busy = o.Outcome == "busy";
+                    if (!busy) { break; }
                 }
-                await wait(TimeSpan.FromSeconds(2), ct);
+                else { await wait(TimeSpan.FromSeconds(2), ct); }
+            }
+            if (!busy)
+            {
+                // Unconfirmed, or no answer: it may have started all the same, and a second
+                // request would leave that one running untracked. A new session on the machine's
+                // list is taken as this one; otherwise nothing more is launched for it.
+                await wait(TimeSpan.FromSeconds(30), ct);
+                var added = (await SessionNodesAsync(ct)).Except(before).ToList();
+                if (added.Count == 1) { Log($"taking {added[0]} as the launch's session"); return added[0]; }
+                Log($"the launch's outcome is unknown and {added.Count} new session(s) appeared; not launching again");
+                return null;
             }
             await wait(TimeSpan.FromSeconds(30), ct);
         }
         return null;
+    }
+
+    // The nodes of the sessions agent-ha-bridge lists for this machine.
+    async Task<HashSet<string>> SessionNodesAsync(CancellationToken ct)
+    {
+        var nodes = new HashSet<string>(StringComparer.Ordinal);
+        var s = await ha.StateAsync(M("sensor", "sessions"), ct);
+        if (s is not null && s.Attributes.ValueKind == JsonValueKind.Object && s.Attributes.TryGetProperty("sessions", out var list) && list.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var e in list.EnumerateArray())
+            {
+                if (e.ValueKind == JsonValueKind.Object && e.TryGetProperty("node", out var n) && n.GetString() is { Length: > 0 } node) { nodes.Add(node); }
+            }
+        }
+        return nodes;
     }
 
     static (string Outcome, string? Session, string? Note)? Outcome(HaState? result, string request)
@@ -323,10 +369,11 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
 
     // Runs one turn to its end: answering what it asks, and waiting out background work it
     // started. True when the session was ended (a question abandoned).
-    async Task<bool> TurnAsync(string node, SoakTurn turn, string? marker, SoakRecord record, HashSet<string> handled, CancellationToken ct)
+    async Task<bool> TurnAsync(string node, SoakTurn turn, string? marker, SoakRecord record, HashSet<string> handled, CancellationToken ct, bool freshLaunch = false)
     {
         var until = now() + options.TurnTimeout + (turn.Background ? TimeSpan.FromMinutes(6) : TimeSpan.Zero);
-        var moved = marker is null;
+        var launchTurn = marker is null;
+        var moved = false;
         DateTimeOffset? idleSince = null;
         var seen = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var asked = false;
@@ -346,7 +393,13 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
                 return true;
             }
             if (status is "working" or "waiting" or "agents" or "shell") { sawWork = true; }
-            if (!moved && await MarkerAsync(node, ct) != marker) { moved = true; }
+            var current = await MarkerAsync(node, ct);
+            // A launch's turn is measured from the card as first seen (a resumed session's shows
+            // what it said last time); a later turn's from just before its prompt was sent.
+            marker ??= current;
+            if (current != marker) { moved = true; }
+            // A new session's first reply, if the turn was over before the first look.
+            var replied = freshLaunch && launchTurn && Attr(await ha.StateAsync($"sensor.{node}_activity", ct), "response") is { Length: > 0 };
             var q = CardQuestion.Read(await ha.StateAsync($"select.{node}_decision", ct));
             if (q is not null && !handled.Contains(q.DecisionId))
             {
@@ -374,9 +427,9 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
                 asked = true;
                 continue;
             }
-            // A launched session reads idle for a moment before it starts, so the first turn is over
-            // only once it has been seen working; a later one once its response has moved on too.
-            if (status == "idle" && (asked || sawWork || (marker is not null && moved)))
+            // A launched session reads idle for a moment before it starts, so a turn is over once
+            // it has been seen working, its response has moved on, or a new session has replied.
+            if (status == "idle" && (asked || sawWork || moved || replied))
             {
                 idleSince ??= now();
                 // Idle for a while: a background shell's end, a woken agent or a question can

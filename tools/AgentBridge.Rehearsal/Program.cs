@@ -251,7 +251,9 @@ internal static class Program
             missingOnHost = daemon.Except(host, StringComparer.Ordinal),
             missingOnDaemon = host.Except(daemon, StringComparer.Ordinal),
         };
-        return daemon.SequenceEqual(host, StringComparer.Ordinal) ? Outcome.Pass($"both offer the same {host.Count}", data) : Outcome.Fail($"daemon {daemon.Count}, host {host.Count}", data);
+        // As the shadow judges them: the counts, and each side's labels in the other's, not the order.
+        var same = daemon.Count == host.Count && !data.missingOnHost.Any() && !data.missingOnDaemon.Any();
+        return same ? Outcome.Pass($"both offer the same {host.Count}", data) : Outcome.Fail($"daemon {daemon.Count}, host {host.Count}", data);
     }
 
     static Dictionary<string, string> Pairs(IReadOnlyList<string> values, string option)

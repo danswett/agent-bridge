@@ -83,23 +83,47 @@ public class SoakTests
         Assert.All(plan, e => Assert.All(e.Scenario.Turns.Skip(1), t => Assert.True(SoakScript.Prompt(t, e).Length <= 255, "a prompt fits the reply box")));
     }
 
-    // A disposable Home Assistant played by the test: agent-ha-bridge launches, asks one
-    // question, takes the answer from Send, and ends the session on End session.
+    // A disposable Home Assistant played by the test: agent-ha-bridge launches (the card a few
+    // reads after the outcome, as on VM-M), asks one question, takes the answer from Send, runs
+    // each later prompt from the reply box to idle, and ends the session on End session.
     sealed class FakeHa : ISoakHa
     {
         public readonly Dictionary<string, HaState> States = [];
         public readonly List<string> Calls = [];
+        public readonly List<JsonNode> Launches = [];
         public string? Request;
         public DateTimeOffset Now = DateTimeOffset.UnixEpoch;
         int polls;
+        int unseen;
+        bool launched;
+        bool asked;
+        int updated = 1;
+
+        void Status(string state) => States[$"sensor.{Node}_status"] = State($"sensor.{Node}_status", state);
+        void Reply(string text) => States[$"sensor.{Node}_activity"] = State($"sensor.{Node}_activity", text, new { updated = $"{++updated}", response = text });
 
         public Task<HaState?> StateAsync(string entityId, CancellationToken ct)
         {
+            if (entityId == $"sensor.{Node}_status" && launched && !States.ContainsKey(entityId) && ++unseen > 3)
+            {
+                Status("working");
+                launched = false;
+            }
             if (entityId == $"sensor.{Node}_status" && States.TryGetValue(entityId, out var s) && s.State == "working" && ++polls > 2)
             {
-                // The agent gets to its question.
-                States[entityId] = State(entityId, "waiting");
-                States[$"select.{Node}_decision"] = State($"select.{Node}_decision", "Awaiting answer...", new { decision_id = "q1", choices = new[] { "alpha", "beta" }, field_count = 0 });
+                polls = 0;
+                if (!asked)
+                {
+                    // The agent gets to its question.
+                    asked = true;
+                    Status("waiting");
+                    States[$"select.{Node}_decision"] = State($"select.{Node}_decision", "Awaiting answer...", new { decision_id = "q1", choices = new[] { "alpha", "beta" }, field_count = 0 });
+                }
+                else
+                {
+                    Status("idle");
+                    Reply("ok");
+                }
             }
             return Task.FromResult(States.GetValueOrDefault(entityId));
         }
@@ -112,14 +136,18 @@ public class SoakTests
             {
                 States["sensor.agent_bridge_rehearsal_m_new_session_result"] = State("sensor.agent_bridge_rehearsal_m_new_session_result", "started",
                     new { recent = new[] { new { request = Request, outcome = "started", session = "14867bc704dd45aa" } } });
-                States[$"sensor.{Node}_status"] = State($"sensor.{Node}_status", "working");
+                launched = true;
                 States[$"sensor.{Node}_activity"] = State($"sensor.{Node}_activity", "Thinking", new { updated = "1" });
             }
-            if (id == $"button.{Node}_submit" && States.ContainsKey($"select.{Node}_decision"))
+            if (id == $"button.{Node}_submit")
             {
-                States[$"select.{Node}_decision"] = State($"select.{Node}_decision", "Idle");
-                States[$"sensor.{Node}_status"] = State($"sensor.{Node}_status", "idle");
-                States[$"sensor.{Node}_activity"] = State($"sensor.{Node}_activity", "beta", new { updated = "2", response = "beta" });
+                if (States.TryGetValue($"select.{Node}_decision", out var d) && d.State != "Idle")
+                {
+                    States[$"select.{Node}_decision"] = State($"select.{Node}_decision", "Idle");
+                    Status("idle");
+                    Reply("beta");
+                }
+                else { Status("working"); }
             }
             if (id == $"button.{Node}_stop") { States.Remove($"sensor.{Node}_status"); }
             return Task.CompletedTask;
@@ -128,34 +156,63 @@ public class SoakTests
         public Task PublishAsync(string topic, string payload, bool retain, CancellationToken ct)
         {
             Calls.Add($"publish {topic}");
-            Request = (string?)JsonNode.Parse(payload)!["request"];
+            var node = JsonNode.Parse(payload)!;
+            Launches.Add(node);
+            Request = (string?)node["request"];
             States["sensor.agent_bridge_rehearsal_m_new_prompt_payload"] = State("sensor.agent_bridge_rehearsal_m_new_prompt_payload", "x", new { request = Request });
             return Task.CompletedTask;
         }
     }
 
+    static SoakOptions Options(string only, int count = 66) => new("rehearsal_m", "Rehearsal", new Dictionary<string, string> { ["Copilot"] = "claude-haiku-4.5" }, new Dictionary<string, string>(),
+        TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(35), TimeSpan.FromMinutes(6), count, null, null, only);
+
+    static SoakDriver Driver(FakeHa fake, SoakOptions options, string dir) =>
+        new(fake, options, Path.Combine(dir, "state"), Homes.For(dir), () => fake.Now, (d, _) => { fake.Now += d; return Task.CompletedTask; });
+
     [Fact]
-    public async Task An_episode_launches_holds_its_question_for_the_samplers_answers_it_and_ends_the_session()
+    public async Task An_episode_waits_for_its_card_holds_its_question_for_the_samplers_answers_it_runs_its_next_prompt_and_ends_the_session()
     {
         var dir = Directory.CreateTempSubdirectory("soak-test").FullName;
         try
         {
             var fake = new FakeHa();
-            var options = new SoakOptions("rehearsal_m", "Rehearsal", new Dictionary<string, string> { ["Copilot"] = "claude-haiku-4.5" }, new Dictionary<string, string>(),
-                TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(35), TimeSpan.FromMinutes(6), 1, null, null, "copilot-nested");
-            var homes = Homes.For(dir);
-            var driver = new SoakDriver(fake, options, Path.Combine(dir, "state"), homes, () => fake.Now, (d, _) => { fake.Now += d; return Task.CompletedTask; });
-            await driver.RunAsync(CancellationToken.None);
-            var state = SoakDriver.Load(Path.Combine(dir, "state"));
-            var record = Assert.Single(state.Episodes);
+            await Driver(fake, Options("copilot-nested"), dir).RunAsync(CancellationToken.None);
+            var record = Assert.Single(SoakDriver.Load(Path.Combine(dir, "state")).Episodes);
+            Assert.Empty(record.Problems);
+            Assert.Equal(2, record.Turns);
             Assert.Equal(1, record.Answered);
             Assert.Equal(1, record.Questions);
             // Launched with the request, held for the samplers, answered on the selector with Send, ended.
             Assert.StartsWith("publish copilot/cli/machine/rehearsal_m/newsession/promptpayload", fake.Calls[0]);
-            Assert.Contains(fake.Calls, c => c.StartsWith($"select.select_option select.{Node}_decision ", StringComparison.Ordinal));
+            Assert.Equal("Rehearsal", (string?)fake.Launches[0]["settings"]!["workspace"]);
             var answeredAt = fake.Calls.FindIndex(c => c.StartsWith($"select.select_option select.{Node}_decision", StringComparison.Ordinal));
+            Assert.True(answeredAt > 0);
             Assert.Equal($"button.press button.{Node}_submit", fake.Calls[answeredAt + 1]);
-            Assert.Contains($"button.press button.{Node}_stop", fake.Calls);
+            Assert.Contains($"text.set_value text.{Node}_reply", fake.Calls);
+            Assert.Equal($"button.press button.{Node}_stop", fake.Calls[^1]);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public async Task A_resume_names_the_session_and_no_workspace_and_a_restarted_driver_carries_on_after_the_last_episode()
+    {
+        var dir = Directory.CreateTempSubdirectory("soak-test").FullName;
+        try
+        {
+            // The block's copilot-resume is plan index 12; a Copilot episode before it ended cleanly.
+            Directory.CreateDirectory(Path.Combine(dir, "state"));
+            var earlier = new SoakState { Began = DateTimeOffset.UnixEpoch, Episodes = [new SoakRecord { Index = 3, Scenario = "copilot-questions", Agent = "Copilot", Session = "0894c91f-f3f5-4546-8684-a8f9e6ad58e7", Ended = DateTimeOffset.UnixEpoch }] };
+            File.WriteAllText(Path.Combine(dir, "state", "soak.json"), JsonSerializer.Serialize(earlier, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            var fake = new FakeHa { Now = DateTimeOffset.UnixEpoch.AddHours(10) };
+            await Driver(fake, Options("copilot-resume", count: 13), dir).RunAsync(CancellationToken.None);
+            var settings = fake.Launches[0]["settings"]!.AsObject();
+            Assert.Equal("0894c91f-f3f5-4546-8684-a8f9e6ad58e7", (string?)settings["resume"]);
+            Assert.False(settings.ContainsKey("workspace"));
+            var episodes = SoakDriver.Load(Path.Combine(dir, "state")).Episodes;
+            Assert.Equal([3, 12], episodes.Select(e => e.Index));
+            Assert.Equal("0894c91f-f3f5-4546-8684-a8f9e6ad58e7", episodes[1].ResumedFrom);
         }
         finally { Directory.Delete(dir, true); }
     }

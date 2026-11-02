@@ -101,8 +101,9 @@ function Invoke-Guest([string] $Role, [string] $Script, [switch] $AsDesktopUser,
 function Get-RefCommit([string] $Ref) {
     $line = git ls-remote $repoUrl $Ref "refs/heads/$Ref" 2>$null | Select-Object -First 1
     if ($line) { return ($line -split '\s+')[0] }
-    if ($Ref -match '^[0-9a-f]{7,40}$') { return $Ref }
-    throw "no branch or commit $Ref in $repoUrl"
+    # A commit by its full id only: the checkout compares it with what it fetched.
+    if ($Ref -match '^[0-9a-f]{40}$') { return $Ref }
+    throw "no branch $Ref in $repoUrl (name a commit by its full 40-character id)"
 }
 
 $dotnetEnv = @'
@@ -142,9 +143,12 @@ wsl.exe -d Ubuntu -u root -- docker ps --format '{{.Names}} {{.Status}}' 2>&1
     Write-Information "VM-M: the tunnel to VM-W's Home Assistant" -InformationAction Continue
     Invoke-Guest M -Script @'
 $user = 'rehearsal'
-$dir = 'C:\ProgramData\AgentBridgeSoak'
-New-Item -ItemType Directory -Path $dir -Force | Out-Null
-& icacls.exe $dir /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' "${user}:(OI)(CI)RX" | Out-Null
+# Under Program Files, made only by administrators (Get-ProtectedDirectory): a folder in
+# ProgramData could be pre-created, and so owned, by the standard user, who could then swap the
+# script a logon task runs. The user may only read it.
+$dir = Get-ProtectedDirectory 'soak'
+& icacls.exe $dir /grant "${user}:(OI)(CI)RX" | Out-Null
+if ($LASTEXITCODE) { throw "icacls $dir failed" }
 $loop = Join-Path $dir 'tunnel.ps1'
 Set-Content -Path $loop -Encoding utf8 -Value @"
 # VM-M's forward to VM-W's Home Assistant (parity-checklist A-04), kept up for the soak.
@@ -226,7 +230,9 @@ if ($Start) {
     foreach ($role in 'W', 'M') { & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $role -AutoShutdown Off 6>$null }
     Invoke-Guest M -Script @'
 $user = 'rehearsal'
-$dir = 'C:\ProgramData\AgentBridgeSoak'
+$dir = Get-ProtectedDirectory 'soak'
+& icacls.exe $dir /grant "${user}:(OI)(CI)RX" | Out-Null
+if ($LASTEXITCODE) { throw "icacls $dir failed" }
 $run = Join-Path $dir 'driver.ps1'
 # Restarted after a failure, and at logon, so a reboot carries on from soak.json.
 Set-Content -Path $run -Encoding utf8 -Value @"
@@ -242,7 +248,12 @@ $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -Ru
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 $trigger.Delay = 'PT3M'
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
-if ('__FRESH__' -eq 'True') { Remove-Item '__SOAK__\state\soak.json' -ErrorAction SilentlyContinue }
+if ('__FRESH__' -eq 'True') {
+    # A running driver would write its old episodes back over the fresh state.
+    Stop-ScheduledTask -TaskName 'AgentBridgeSoakDriver' -ErrorAction SilentlyContinue
+    Get-CimInstance Win32_Process -Filter "Name='agent-bridge-rehearsal.exe'" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Remove-Item '__SOAK__\state\soak.json' -ErrorAction SilentlyContinue
+}
 Register-ScheduledTask -TaskName 'AgentBridgeSoakDriver' -Action $action -Principal $principal -Trigger $trigger -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName 'AgentBridgeSoakDriver'
 'driver started: ' + (Get-ScheduledTask -TaskName 'AgentBridgeSoakDriver').State
