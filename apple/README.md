@@ -1,33 +1,46 @@
 # Agent Bridge — native Apple clients
 
-Swift 6 protocol core and SwiftUI application targets for macOS, iOS and iPadOS.
+Swift 6 core and native SwiftUI apps for macOS 15+, iOS 18+ and iPadOS 18+.
 
-## Build
+## Open and run
 
-Install Xcode and XcodeGen. From this directory run:
+Install Xcode, XcodeGen and SwiftFormat (`brew install xcodegen swiftformat`). From this directory:
 
 ```sh
-swift test
 xcodegen generate
 open AgentBridgeApple.xcodeproj
 ```
 
-Build the **AgentBridgeMac** or **AgentBridgeMobile** scheme in Xcode. Both targets use the local `AgentBridgeAppleCore` Swift package. Set your own bundle identifiers and signing team.
+Select **AgentBridgeMac** or **AgentBridgeMobile**. The mobile target supports both iPhone and iPad. Choose your signing team for physical devices. Generated projects and build output are ignored; `project.yml` is the source of truth.
 
-## Implemented
+The Mac app connects to an already-running host's `default` profile. Use **Connection → Host profile** for another profile. The endpoint resolver matches the host's profile validation, UTF-8 socket path limit, SHA-256 fallback name and private runtime directory precedence. The app does not install, start, stop, migrate or reconfigure a host.
 
-- Protocol v1 JSON envelope and session models, frame codec, session snapshot reducer and unit tests.
-- SwiftUI navigation and session details on macOS, iPhone and iPad.
-- macOS local Unix socket transport with length-prefixed messages and response-ID checking.
-- macOS manual refresh using `hello` and paginated `sessions.list`.
+**Explore Sample Sessions** works offline on all three platforms. The connection footer explicitly labels sample mode, including on the phone's detail screen. For deterministic preview launches, add `--sample-sessions` to the scheme's launch arguments. Samples never mix with live sessions.
 
-## Not yet implemented or verified
+## Verified functionality
 
-- No macOS/iOS Xcode build has been run. The application code requires macOS compilation and testing.
-- Mobile clients have **no remote connection** yet; the screen displays a disconnected explanation.
-- No Noise XX / P-256 handshake, trusted device pairing, relay auth, APNs, notifications or session actions.
-- No streaming socket reader or live subscription. The local socket client is a blocking proof of concept and must become cancellation-aware and handle interleaved events before production.
-- macOS currently assumes `~/.agent-bridge/default/host.sock`; profile selection and the documented fallback socket path remain to be implemented.
-- Host installation, update and migration remain out of scope for this slice.
+- `hello` protocol and `sessions.read` capability negotiation, followed by a persistent `sessions.subscribe` feed.
+- Nonblocking macOS Unix socket reader, bounded frames and event queue, response correlation, timeout/cancellation cleanup, and connection generation isolation.
+- Replacement snapshots begin at the matching subscribe response; old-feed messages before it cannot enter the snapshot. Unknown events participate in sequence checking. A gap triggers one resubscription and quarantines updates until the replacement starts.
+- A subscription that never completes its snapshot times out. Disconnects are visible; cached rows are never marked live. Manual reconnect creates a new channel.
+- Shared searchable session list, adaptive navigation, main-agent response/reasoning, current tool, question message, delegate summaries and read-only details. Main-agent text is never taken from a delegate. Session and delegate identity remain stable during updates.
+- Host discovery holds and read-only reasons remain visible. All questions are currently answered at the machine; no action requests are sent.
 
-The .NET host is authoritative for all agent operations. Never bypass the authenticated encrypted channel for remote actions. Do not modify existing hooks or live Home Assistant infrastructure.
+## Verification
+
+```sh
+bash scripts/verify.sh
+```
+
+This runs Swift tests, SwiftFormat lint, generates the project, and builds macOS and iOS Simulator applications without signing. The Apple clients CI workflow runs the same command. Socket tests use uniquely named disposable sockets in `/tmp`, never installed profiles or live agents.
+
+Local validation on November 2, 2026: Xcode 27.2 / Swift 6.4.2; 21 tests passed; both app builds passed. The macOS app was launched and inspected through accessibility; iPhone 18 Pro and iPad Pro 11-inch simulator sample layouts were rendered and inspected. Device signing, minimum-OS runtime compatibility, VoiceOver interaction, and interoperability with a running .NET host are not yet verified. The tests exercise a fixture speaking the documented protocol.
+
+## Remaining work
+
+1. Remote iOS/iPadOS and Mac connectivity: relay device-code sign-in, Keychain identity/token persistence, relay proof and roster, and Noise XX P-256/AES-GCM/SHA-256 channels. Require byte-identical results against `tests/AgentBridge.Transport.Tests/testdata/noise-xx-p256-vectors.json` before connecting to a real relay.
+2. Authenticated remote session subscriptions, foreground/background recovery and trusted device lifecycle. The mobile app currently provides the shared offline interface only and reports remote pairing as unavailable.
+3. Capability-gated answers/replies/launch, full session/delegate history, Markdown rendering, usage, notifications and APNs.
+4. The complete shared design language (generated tokens and custom glyphs), accessibility/device testing, signed distribution and host installation/update integration.
+
+The .NET host is authoritative for all operations. Never bypass its authorization or use an unencrypted remote shortcut. Existing hooks and live Home Assistant infrastructure are untouched.
