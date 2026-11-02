@@ -26,6 +26,13 @@ static partial class SelfTest
         var checks = new List<string>();
         var failures = new List<string>();
         void Check(bool ok, string what) { (ok ? checks : failures).Add(what); }
+        // A ThemeResource or StaticResource that resolves to nothing, in any theme: logged, and a
+        // failure, since an installed app may die of it with nothing but 0xC000027B.
+        Application.Current.DebugSettings.XamlResourceReferenceFailed += (_, e) =>
+        {
+            AppLog.Write($"self-test: a XAML resource reference failed: {e.Message}");
+            failures.Add($"a XAML resource reference failed: {e.Message}");
+        };
         try
         {
             // This machine's sessions and the other machine's, through the demo's stand-in for the relay.
@@ -173,17 +180,28 @@ static partial class SelfTest
             Check(window.CurrentPage == "sessions" && !sought.Folded && window.Search.Text.Length == 0, "opens a session chosen in the search box on the Sessions page");
 
             await CheckMachinesPage(window, main, Check, outFile);
-            await CheckPagesInEveryTheme(window, Check, outFile, result);
+            await CheckPagesInEveryTheme(window, Check, outFile);
+            // What was seen so far, written down first: a failure in high contrast that ends the
+            // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
+            await Write(outFile, result, checks, failures, "high contrast");
+            await CheckHighContrast(window, Check, outFile, result);
         }
         catch (Exception e)
         {
             failures.Add($"crashed: {e}");
         }
+        await Write(outFile, result, checks, failures, null);
+        exit(failures.Count == 0 ? 0 : 1);
+    }
+
+    // The result file. unfinished: the check under way, when written part-way through.
+    static async Task Write(string outFile, Dictionary<string, object?> result, List<string> checks, List<string> failures, string? unfinished)
+    {
         result["passed"] = checks;
         result["failed"] = failures;
+        result["unfinished"] = unfinished;
         Directory.CreateDirectory(Path.GetDirectoryName(outFile)!);
         await File.WriteAllTextAsync(outFile, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
-        exit(failures.Count == 0 ? 0 : 1);
     }
 
     // The design's generated resources (Design/DesignResources.xaml, tools/design-gen): every brush
@@ -320,53 +338,72 @@ static partial class SelfTest
     // setting, not a window's: on CI the self-test turns it on for the pass and back off after.
     static readonly (string Tag, string Pane)[] Pages = [("sessions", "SessionsPage"), ("machines", "MachinesPane"), ("launch", "LaunchPane"), ("usage", "UsagePane"), ("settings", "SettingsPane")];
 
-    static async Task CheckPagesInEveryTheme(MainWindow window, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
+    static async Task<List<string>> DrawPages(MainWindow window, string theme, string outFile)
     {
         var root = window.RootElement;
-        async Task<List<string>> Draw(string theme)
+        var broken = new List<string>();
+        foreach (var (tag, pane) in Pages)
         {
-            var broken = new List<string>();
-            foreach (var (tag, pane) in Pages)
-            {
-                window.ShowPage(tag);
-                await Task.Delay(400);
-                var page = ById<FrameworkElement>(root, pane);
-                var title = page is null ? null : Find<TextBlock>(page).FirstOrDefault(t => AutomationProperties.GetHeadingLevel(t) == AutomationHeadingLevel.Level1);
-                if (page is not { IsLoaded: true, Visibility: Visibility.Visible } || page.ActualHeight <= 0 || title is not { FontSize: 20, ActualHeight: > 0 }) { broken.Add(tag); }
-                await Picture(root, Path.ChangeExtension(outFile, $".{tag}.{theme.ToLowerInvariant()}.png"));
-            }
-            return broken;
+            AppLog.Write($"self-test: the {tag} page in {theme}");
+            window.ShowPage(tag);
+            await Task.Delay(400);
+            var page = ById<FrameworkElement>(root, pane);
+            var title = page is null ? null : Find<TextBlock>(page).FirstOrDefault(t => AutomationProperties.GetHeadingLevel(t) == AutomationHeadingLevel.Level1);
+            if (page is not { IsLoaded: true, Visibility: Visibility.Visible } || page.ActualHeight <= 0 || title is not { FontSize: 20, ActualHeight: > 0 }) { broken.Add(tag); }
+            await Picture(root, Path.ChangeExtension(outFile, $".{tag}.{theme.ToLowerInvariant()}.png"));
         }
+        return broken;
+    }
 
+    static async Task CheckPagesInEveryTheme(MainWindow window, Action<bool, string> check, string outFile)
+    {
+        var root = window.RootElement;
         if (!new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast)
         {
             foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
             {
                 root.RequestedTheme = theme;
                 await Task.Delay(300);
-                var broken = await Draw(theme.ToString());
+                var broken = await DrawPages(window, theme.ToString(), outFile);
                 check(broken.Count == 0 && root.ActualTheme == theme, $"draws every page with its title in {theme}{(broken.Count > 0 ? $": not {string.Join(", ", broken)}" : "")}");
             }
             root.RequestedTheme = ElementTheme.Default;
         }
+    }
 
-        using var contrast = HighContrastPass.Begin();
+    // High contrast: every page drawn again, and every role and surface a system colour. Windows'
+    // setting is changed off the UI thread: SystemParametersInfo sends WM_SETTINGCHANGE to every
+    // window, this app's included, and from the UI thread that message would re-enter XAML in the
+    // middle of this method.
+    static async Task CheckHighContrast(MainWindow window, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
+    {
+        var contrast = await HighContrastPass.BeginAsync();
         result["highContrast"] = contrast.How;
+        AppLog.Write($"self-test: high contrast {contrast.How}");
         if (!contrast.On) { return; }
-        await Until(() => new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast, TimeSpan.FromSeconds(15));
-        await Task.Delay(1500);
-        var hcBroken = await Draw("HighContrast");
-        check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
-        var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
-            .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
-        var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();
-        check(system.Count > 0 && own.Count == 0, $"uses a system colour for every role and surface in high contrast{(own.Count > 0 ? $": not {string.Join(", ", own)}" : "")}");
-        window.ShowPage("sessions");
+        try
+        {
+            var on = await Until(() => new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast, TimeSpan.FromSeconds(15));
+            await Task.Delay(1500);
+            check(on, "sees Windows' high contrast turned on");
+            var hcBroken = await DrawPages(window, "HighContrast", outFile);
+            check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
+            var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
+                .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
+            var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();
+            check(system.Count > 0 && own.Count == 0, $"uses a system colour for every role and surface in high contrast{(own.Count > 0 ? $": not {string.Join(", ", own)}" : "")}");
+            window.ShowPage("sessions");
+        }
+        finally
+        {
+            await contrast.EndAsync();
+            AppLog.Write("self-test: high contrast put back");
+        }
     }
 
     // Windows' high contrast for the self-test's pass, on CI only: a developer's own setting is
     // never changed. Turned back as it was when the pass ends, however it ends.
-    sealed partial class HighContrastPass : IDisposable
+    sealed partial class HighContrastPass
     {
         const uint GetHighContrast = 0x42, SetHighContrast = 0x43, On_ = 0x1, SendChange = 0x2;
         uint before;
@@ -375,27 +412,39 @@ static partial class SelfTest
         public bool On { get; private set; }
         public string How { get; private set; } = "";
 
-        public static HighContrastPass Begin()
+        public static async Task<HighContrastPass> BeginAsync()
         {
             var pass = new HighContrastPass();
             if (new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast) { pass.On = true; pass.How = "on already"; return pass; }
             if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true") { pass.How = "not checked: high contrast is changed only on CI"; return pass; }
-            var hc = new HIGHCONTRAST { cbSize = (uint)Marshal.SizeOf<HIGHCONTRAST>() };
-            if (!SystemParametersInfo(GetHighContrast, hc.cbSize, ref hc, 0)) { pass.How = $"not checked: reading the setting failed ({Marshal.GetLastPInvokeError()})"; return pass; }
-            pass.before = hc.dwFlags;
-            hc.dwFlags |= On_;
-            pass.changed = SystemParametersInfo(SetHighContrast, hc.cbSize, ref hc, SendChange);
-            pass.On = pass.changed;
-            pass.How = pass.changed ? "turned on for the pass" : $"not checked: turning it on failed ({Marshal.GetLastPInvokeError()})";
+            var (read, flags, readError) = await Task.Run(() =>
+            {
+                var hc = new HIGHCONTRAST { cbSize = (uint)Marshal.SizeOf<HIGHCONTRAST>() };
+                var ok = SystemParametersInfo(GetHighContrast, hc.cbSize, ref hc, 0);
+                return (ok, hc.dwFlags, ok ? 0 : Marshal.GetLastPInvokeError());
+            });
+            if (!read) { pass.How = $"not checked: reading the setting failed ({readError})"; return pass; }
+            pass.before = flags;
+            var (set, setError) = await Task.Run(() => Set(flags | On_));
+            pass.changed = set;
+            pass.On = set;
+            pass.How = set ? "turned on for the pass" : $"not checked: turning it on failed ({setError})";
             return pass;
         }
 
-        public void Dispose()
+        public async Task EndAsync()
         {
             if (!changed) { return; }
             changed = false;
-            var hc = new HIGHCONTRAST { cbSize = (uint)Marshal.SizeOf<HIGHCONTRAST>(), dwFlags = before };
-            SystemParametersInfo(SetHighContrast, hc.cbSize, ref hc, SendChange);
+            var flags = before;
+            await Task.Run(() => Set(flags));
+        }
+
+        static (bool Ok, int Error) Set(uint flags)
+        {
+            var hc = new HIGHCONTRAST { cbSize = (uint)Marshal.SizeOf<HIGHCONTRAST>(), dwFlags = flags };
+            var ok = SystemParametersInfo(SetHighContrast, hc.cbSize, ref hc, SendChange);
+            return (ok, ok ? 0 : Marshal.GetLastPInvokeError());
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -410,7 +459,6 @@ static partial class SelfTest
         [return: MarshalAs(UnmanagedType.Bool)]
         private static partial bool SystemParametersInfo(uint action, uint param, ref HIGHCONTRAST value, uint winIni);
     }
-
     static T? FindAncestor<T>(DependencyObject? node) where T : DependencyObject
     {
         while (node is not null and not T) { node = VisualTreeHelper.GetParent(node); }
