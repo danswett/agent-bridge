@@ -210,7 +210,8 @@ instead of as a task of its own:
   waiting, so two profiles' hosts never move the schedule together, and holds the mutex each of
   agent-ha-bridge's keep-awake passes takes (`Local\<its task name>`) for every such task registered
   here, so a pass of that task started meanwhile (a rollback enables and starts it) exits without
-  a cloud call. A pass that finds either taken is `busy` and calls nothing.
+  a cloud call. A pass that finds either taken is `busy` and calls nothing; one that cannot read
+  Task Scheduler to tell is `failed`, not a quiet `busy`.
 * **Never beside agent-ha-bridge's own.** Before every pass, the host looks for agent-ha-bridge's
   `AgentBridgeDevBoxKeepAwake[_<id>]` tasks and the mutex each of its passes holds. While any is
   enabled or running, or the scheduler cannot be read, the host stands back (`stood-back`): two

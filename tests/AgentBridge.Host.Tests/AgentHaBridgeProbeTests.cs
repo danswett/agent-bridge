@@ -1,3 +1,4 @@
+using AgentBridge.Host.Core.DevBox;
 using AgentBridge.Host.Delivery.Windows;
 using Xunit;
 
@@ -71,5 +72,50 @@ public sealed class AgentHaBridgeProbeTests
         }
         using var free = AgentHaBridgeProbe.HoldMutexes([name]);
         Assert.NotNull(free);
+    }
+
+    // Unable to read the scheduler, a pass cannot tell whether one of agent-ha-bridge's runs, and
+    // must not read as busy (quiet): it fails, which the keep-awake raises as an alarm.
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public async Task A_pass_whose_scheduler_cannot_be_read_fails_loudly_instead_of_reading_as_busy()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.Throws<IOException>(() => AgentHaBridgeProbe.HoldKeepAwake(null));
+
+        var root = Path.Combine(Path.GetTempPath(), "abprobe-" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            var file = new FileKeepAwakeLock(Path.Combine(root, "devbox-keepawake.lock"));
+            await using var service = new KeepAwakeService(new KeepAwakeOptions
+            {
+                Settings = new DevBoxSettings { KeepAwake = true },
+                FindIdentity = () => (new DevBoxIdentity(new Uri("https://tenant-fake-dc.westus3.devcenter.azure.com"), "FakeProject", "fake-box"), null),
+                Token = new NoCalls(),
+                Http = new NoCalls(),
+                Lock = new KeepAwakeLocks(file, new DelegateKeepAwakeLock(() => AgentHaBridgeProbe.HoldKeepAwake(null))),
+            });
+
+            var result = await service.PassAsync();
+
+            Assert.Equal(KeepAwakeResult.Failed, result.Outcome);
+            Assert.True(result.Alarming);
+            Assert.Contains("Task Scheduler could not be read", result.Detail);
+            // The lock file it took first was let go.
+            using var again = file.TryTake();
+            Assert.NotNull(again);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    sealed class NoCalls : IDevCenterHttp, IDevCenterToken
+    {
+        public Task<DevCenterResponse> SendAsync(HttpMethod method, Uri uri, string token, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("no Dev Center call may be made");
+
+        public Task<string> GetAsync(CancellationToken cancellationToken = default) => throw new InvalidOperationException("no token may be asked for");
     }
 }

@@ -73,9 +73,14 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
     // passes takes (Local\<its task name>) for every keep-awake task registered here, so that a
     // pass of it started meanwhile (a rollback re-enables and starts its task) finds one running
     // and exits without a cloud call, as its own second pass would. Null when a pass of it holds
-    // one now, or the scheduler cannot be read.
-    public IDisposable? HoldKeepAwake() =>
-        KeepAwakeTasks() is { } tasks ? HoldMutexes([.. tasks.Select(t => t.Name).Distinct(StringComparer.OrdinalIgnoreCase)]) : null;
+    // one now. When the scheduler cannot be read it throws rather than say "a pass of it runs":
+    // that would be a quiet busy, while nothing may be keeping the Dev Box awake (the pass is a
+    // loud failure instead).
+    public IDisposable? HoldKeepAwake() => HoldKeepAwake(KeepAwakeTasks());
+
+    internal static IDisposable? HoldKeepAwake(IReadOnlyList<(string Name, bool Enabled, bool Running)>? tasks) => tasks is null
+        ? throw new IOException("Task Scheduler could not be read, so whether a pass of agent-ha-bridge's own keep-awake runs now cannot be told")
+        : HoldMutexes([.. tasks.Select(t => t.Name).Distinct(StringComparer.OrdinalIgnoreCase)]);
 
     // A mutex belongs to the thread that took it and a pass awaits across threads, so they are
     // taken, held and let go on a thread of their own.
