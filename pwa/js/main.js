@@ -101,7 +101,9 @@ function focusLinked() {
   if (!linked || !page?.hosts.shows(linked.host)) { return; }
   const card = page.view.card(linked.host, linked.session);
   if (!card) { return; }
+  // Taken before search is closed: closing it redraws the list, which comes back here.
   linked = null;
+  if (page.view.hidden(card)) { shell.closeSearch(); }
   if (shell.route !== 'sessions') { shell.go('sessions'); }
   if (card.folded) { card.setFolded(false); }
   const el = card.element;

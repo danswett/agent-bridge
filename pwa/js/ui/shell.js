@@ -47,6 +47,11 @@ export class Shell {
       e.preventDefault();
       this.openSearch();
     });
+    // Skip to content stays on the page it skips on: its #main is not a route (it would read as
+    // Sessions), so it focuses the content itself and leaves the address alone.
+    for (const a of doc.querySelectorAll('a.skip[href="#main"]')) {
+      a.addEventListener('click', (e) => { e.preventDefault(); this.els.main?.focus(); });
+    }
     for (const b of doc.querySelectorAll('.search-open')) { b.addEventListener('click', () => this.openSearch()); }
     $('search-close')?.addEventListener('click', () => this.closeSearch());
     this.els.search?.addEventListener('keydown', (e) => {

@@ -104,7 +104,9 @@ body:not(.searching) .appbar .search { display: none; }
   border: 1px solid var(--ab-stroke2); border-bottom-color: var(--ab-field-edge); border-radius: var(--ab-radius-control);
 }
 .search-input::placeholder { color: var(--ab-text2); }
-.search-icon { position: absolute; left: var(--ab-space-3); color: var(--ab-text2); pointer-events: none; }
+/* On a phone, Close search comes first (a back arrow): the glyph sits in the box past it, not
+   over it. On a desktop there is no Close, and the glyph is at the box's start. */
+.search-icon { position: absolute; left: calc(var(--tap) + var(--ab-space-3)); color: var(--ab-text2); pointer-events: none; }
 .search-close { order: -1; }
 .icon-button {
   display: inline-grid; place-items: center; flex: none;
@@ -182,6 +184,7 @@ body[data-conn="warn"] .content, body[data-conn="bad"] .content, body.searching 
   body.searching .appbar .appbar-end { display: flex; }
   .appbar-end { grid-column: 3; justify-self: end; }
   .search-close, .search-open { display: none; }
+  .search-icon { left: var(--ab-space-3); }
   .search-input { min-height: 32px; font-size: 14px; }
   body[data-signed-in="false"] .appbar { grid-template-columns: minmax(0, 1fr) auto; }
 
