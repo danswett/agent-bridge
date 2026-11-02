@@ -203,13 +203,13 @@ test('a delegate\'s question and a foreground task are named in the status words
     status: 'working', statusSince: later(), updatedAt: later(),
     subagents: [{ id: 't1', kind: 'task', name: 'Bisect RestartAfterResume', status: 'working' }],
   });
-  await expect(c.locator('.status-text')).toHaveText('Working · task: Bisect RestartAfterResume');
+  await expect(c.locator('.status-text')).toHaveText('Working · task: Delegate Bisect RestartAfterResume');
   await upsert(page, CODEX, {
     status: 'waiting', statusSince: later(), updatedAt: later(), waitingOn: 'b1',
     subagents: [{ id: 'b1', kind: 'background', name: 'Check ubuntu CI failure', status: 'waiting' }],
     question: { id: 'q-b1', kind: 'form', message: 'Which run?', fields: [], askedAt: later(), answerAtMachine: true, agent: 'b1' },
   });
-  await expect(c.locator('.status-text')).toHaveText('Check ubuntu CI failure asks · answer at the machine');
+  await expect(c.locator('.status-text')).toHaveText('Delegate Check ubuntu CI failure asks · answer at the machine');
   await expect(glyphOf(page, CODEX)).toHaveAttribute('data-glyph', 'needs');
   expect(await colourOf(c.locator('.status-text'))).toBe(await role(page, 'needs-text'));
 });

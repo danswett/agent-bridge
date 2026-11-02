@@ -307,8 +307,8 @@ test.describe('what an entry offers', () => {
     const e = await ask(page, LAND, permission({ agent: 'agent-7' }), {
       extra: { waitingOn: 'agent-7', subagents: [{ id: 'agent-7', kind: 'background', status: 'waiting', name: 'Read witness shell logic' }] },
     });
-    await expect(e.locator('.needs-delegate')).toHaveText('Read witness shell logic asks');
-    await expect(e.locator('.needs-meta')).toHaveText(/^Copilot · Read witness shell logic asks · \d+s$/);
+    await expect(e.locator('.needs-delegate')).toHaveText('Delegate Read witness shell logic asks');
+    await expect(e.locator('.needs-meta')).toHaveText(/^Copilot · Delegate Read witness shell logic asks · \d+s$/u);
   });
 });
 

@@ -6,7 +6,7 @@
 // Rules 1-6 are first match wins. Rule 8 refines rule 4. Rule 7 is not a row of its own but an
 // overlay: a driven session keeps the glyph and words rules 1-6 picked, gains the driven badge,
 // and its active colour and its words turn to the agent role.
-import { delegateName } from './attribution.js';
+import { delegateTitle } from './attribution.js';
 
 // A sub-agent still running: working, or waiting on a question of its own. An idle one waits
 // to be woken and is not counted (docs/design/subagents.md §2).
@@ -42,9 +42,9 @@ function pick(s) {
     // over it at the host, which then sends no waitingOn.
     const asker = s.waitingOn ?? q?.agent ?? null;
     if (asker) {
-      // Named as delegateName shows it: never "Main agent asks" for a delegate's question.
+      // "Delegate <name> asks": the word Delegate before any name, so never "Main agent asks".
       const agent = s.subagents?.find((a) => a.id === asker);
-      const name = agent ? delegateName(agent) : 'A delegate';
+      const name = agent ? delegateTitle(agent) : 'A delegate';
       return { rule: 2, glyph: 'needs', view: 'waiting', text: `${name} asks${atMachine}`, tone: 'needs' };
     }
     const n = runningDelegates(s);
@@ -52,7 +52,7 @@ function pick(s) {
   }
   if (s.status === 'working') {
     const task = foregroundTask(s);
-    return { rule: 3, glyph: 'working', view: 'working', text: task ? `Working · task: ${delegateName(task)}` : 'Working', tone: 'plain' };
+    return { rule: 3, glyph: 'working', view: 'working', text: task ? `Working · task: ${delegateTitle(task)}` : 'Working', tone: 'plain' };
   }
   const b = s.activity?.background;
   if (b?.agents) {

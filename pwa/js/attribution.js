@@ -44,18 +44,18 @@ export function mainVoice(session) {
 }
 
 // A delegate's name, as it is shown everywhere: its rows, the strip, the tab, the inspector, the
-// conversation, a question's heading, Needs you and notifications (ui.md §6.3, §8). An agent
-// chose it, so it can try to pass for the main agent or hide words in it; what is shown is:
+// conversation, a question's heading, Needs you and notifications (ui.md §6.3, §8); where a line
+// says who asks or works, after the word Delegate (delegateTitle). An agent chose it, so it can try
+// to pass for the main agent or hide words in it; what is shown is:
 //   - its text without the characters that steer or hide it (format and control characters,
 //     bidi controls, default-ignorables, line and paragraph separators), runs of white space one
 //     space;
 //   - no middle dot of its own, since a status splits its facts at one and a row shows only the
-//     first: "Main agent asks · Read logs" would have read "Main agent asks" there (#252);
+//     first: "Idle · Read logs" would have read "Delegate Idle" there (#252);
 //   - cut past NAME_MAX characters (whole graphemes), with an ellipsis;
 //   - with nothing left, "Delegate" and the start of its id;
-//   - and a name that reads as the main agent's, shown as Delegate “<name>”, so no delegate is
-//     ever labelled as the main agent (posesAsMainAgent).
-// The app's DelegateLabel (#250) follows the same rule.
+//   - and a name that reads as the main agent's, shown as Delegate “<name>” (posesAsMainAgent).
+// The app's DelegateLabel (#250) follows the same rule, but for the middle dot.
 export const NAME_MAX = 60;
 const BREAKS = /[\t\n\v\f\r\u0085\u2028\u2029]/gu;
 const HIDDEN = /[\p{Cf}\p{Cc}\p{Cs}\p{Co}\p{Cn}\p{Bidi_Control}\p{Default_Ignorable_Code_Point}]/gu;
@@ -117,6 +117,16 @@ export function delegateName(agent) {
   const chars = graphemes(name);
   const shown = chars.length > NAME_MAX ? `${chars.slice(0, NAME_MAX - 1).join('').trimEnd()}\u2026` : name;
   return posesAsMainAgent(name) ? `Delegate \u201c${shown.replace(QUOTES, "'")}\u201d` : shown;
+}
+
+// A delegate as a line names it when it says who asks or works: a question's heading, the row's
+// status (rules 2 and 3), Needs you. Always the word Delegate before the label (the app's
+// DelegateLabel.Titled), which the main agent's own lines never have, so that no name reads there
+// as the main agent's however it is drawn: a lookalike posesAsMainAgent misses (#250's security
+// review) still reads "Delegate Маіn agent asks". A label that says Delegate already keeps it once.
+export function delegateTitle(agent) {
+  const label = delegateName(agent);
+  return label === 'Delegate' || label.startsWith('Delegate ') ? label : `Delegate ${label}`;
 }
 
 // A delegate's state, as its glyph (ui.md §2.1) and its word. Waiting is a question of its own;

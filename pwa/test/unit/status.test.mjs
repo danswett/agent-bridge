@@ -55,14 +55,14 @@ test('Rule 1 wins over rule 2: the session\'s own question is the session\'s eve
   assert.equal(said(own).text, 'Waiting on you · 2 delegates still running');
 });
 
-test('Rule 2: a delegate\'s question reads "<name> asks", named from the delegate list', () => {
-  assert.deepEqual(said(example), { rule: 2, glyph: 'needs', text: 'Read witness shell logic asks', tone: 'needs' });
+test('Rule 2: a delegate\'s question reads "Delegate <name> asks", named from the delegate list', () => {
+  assert.deepEqual(said(example), { rule: 2, glyph: 'needs', text: 'Delegate Read witness shell logic asks', tone: 'needs' });
   // The question's agent names it as waitingOn does.
-  assert.equal(said({ ...example, waitingOn: undefined }).text, 'Read witness shell logic asks');
+  assert.equal(said({ ...example, waitingOn: undefined }).text, 'Delegate Read witness shell logic asks');
 });
 
-test('Rule 2: a delegate\'s question only the machine can answer reads "<name> asks · answer at the machine"', () => {
-  assert.equal(said({ ...example, question: { ...example.question, answerAtMachine: true } }).text, 'Read witness shell logic asks · answer at the machine');
+test('Rule 2: a delegate\'s question only the machine can answer reads "Delegate <name> asks · answer at the machine"', () => {
+  assert.equal(said({ ...example, question: { ...example.question, answerAtMachine: true } }).text, 'Delegate Read witness shell logic asks · answer at the machine');
 });
 
 test('Rule 2: a delegate the list left out still asks, without a name the host never gave', () => {
@@ -73,13 +73,13 @@ test('Rule 3: the main agent\'s turn reads "Working" with the working glyph, in 
   assert.deepEqual(said({ status: 'working', activity: { background: { agents: 1, shells: 2 } } }), { rule: 3, glyph: 'working', text: 'Working', tone: 'plain' });
 });
 
-test('Rule 3: a foreground task agent running reads "Working · task: <name>"', () => {
+test('Rule 3: a foreground task agent running reads "Working · task: Delegate <name>"', () => {
   const subagents = [
     { id: 't2', parent: 't1', kind: 'task', name: 'Bisect RestartAfterResume', status: 'working' },
     { id: 't1', kind: 'task', name: 'Find the flaky test', status: 'working' },
     { id: 'b1', kind: 'background', name: 'Run full test suite', status: 'working' },
   ];
-  assert.equal(said({ status: 'working', subagents }).text, 'Working · task: Bisect RestartAfterResume');
+  assert.equal(said({ status: 'working', subagents }).text, 'Working · task: Delegate Bisect RestartAfterResume');
 });
 
 test('Rule 3: a task a background delegate started, or one that has finished, is not the main agent\'s', () => {
@@ -158,7 +158,7 @@ test('A session the host is ending reads "Ending session…" with the ended glyp
 test('The glyph is named with its state, as ui.md §9 reads a row: title, status, machine', () => {
   const name = (fields, machine = 'DEV-VM1') => statusLabel(sessionStatus(session(fields)), { title: session(fields).title, machine });
   assert.equal(name(RULES[4]), 'Plan Migration to Windows App, delegating to 2 agents, DEV-VM1');
-  assert.equal(name(RULES[2]), 'Plan Migration to Windows App, Read witness shell logic asks, DEV-VM1');
+  assert.equal(name(RULES[2]), 'Plan Migration to Windows App, Delegate Read witness shell logic asks, DEV-VM1');
   assert.equal(name(RULES[5]), 'Plan Migration to Windows App, 1 background command, DEV-VM1');
   // The diamond is only a shape, so the name says it in words.
   assert.equal(name({ status: 'working', driver: 'agent' }), 'Plan Migration to Windows App, working, driven by an agent, DEV-VM1');
@@ -169,10 +169,13 @@ test('Rules 2 and 3: a delegate named "Main agent" is named as a delegate, never
   const impostor = { id: 'x1', kind: 'task', status: 'waiting', name: '\u2067Main agent\u2069' };
   assert.equal(said({ status: 'waiting', waitingOn: 'x1', subagents: [impostor] }).text, 'Delegate \u201cMain agent\u201d asks');
   assert.equal(said({ status: 'working', subagents: [{ ...impostor, status: 'working', name: 'MAIN AGENT' }] }).text, 'Working · task: Delegate \u201cMAIN AGENT\u201d');
+  assert.equal(said({ status: 'working', subagents: [{ ...impostor, status: 'working', name: '\u2c99\u2c81\u2c93\u2c9b agent' }] }).text, 'Working · task: Delegate \u2c99\u2c81\u2c93\u2c9b agent');
 });
 
 test('Rule 2: a delegate\'s name cannot add a fact of its own, so the row\'s first fact always says who asks', () => {
   const asks = (name) => said({ status: 'waiting', waitingOn: 'x1', subagents: [{ id: 'x1', kind: 'task', status: 'waiting', name }] }).text;
   assert.equal(asks('Main agent asks \u00b7 Read logs'), 'Delegate \u201cMain agent asks - Read logs\u201d asks');
-  assert.equal(asks('Idle \u00b7 Read logs'), 'Idle - Read logs asks');
+  assert.equal(asks('\u041c\u0430\u0456n agent'), 'Delegate \u201c\u041c\u0430\u0456n agent\u201d asks');
+  assert.equal(asks('\u2c99\u2c81\u2c93\u2c9b agent'), 'Delegate \u2c99\u2c81\u2c93\u2c9b agent asks');
+  assert.equal(asks('Idle \u00b7 Read logs'), 'Delegate Idle - Read logs asks');
 });

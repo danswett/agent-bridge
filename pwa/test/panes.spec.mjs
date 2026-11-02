@@ -714,12 +714,12 @@ test.describe('the session pane after #221\'s review', () => {
     await openDemo(page);
     const v = await open(page, COPILOT);
     await askAs(page, { waitingOn: 'agent-7' });
-    await expect(v.locator('.question .question-head')).toHaveText('Read witness shell logic asks');
-    await expect(page.locator('#needs-you .needs-delegate')).toHaveText('Read witness shell logic asks');
+    await expect(v.locator('.question .question-head')).toHaveText('Delegate Read witness shell logic asks');
+    await expect(page.locator('#needs-you .needs-delegate')).toHaveText('Delegate Read witness shell logic asks');
     // Where the question and waitingOn name different delegates, the question's own asks, in both.
     await askAs(page, { agent: 'agent-9', waitingOn: 'agent-7' });
-    await expect(v.locator('.question .question-head')).toHaveText('Lint the PWA asks');
-    await expect(page.locator('#needs-you .needs-delegate')).toHaveText('Lint the PWA asks');
+    await expect(v.locator('.question .question-head')).toHaveText('Delegate Lint the PWA asks');
+    await expect(page.locator('#needs-you .needs-delegate')).toHaveText('Delegate Lint the PWA asks');
   });
 
   test('a delegate\'s question whose delegate the list left out is a delegate\'s, never the main agent\'s', async ({ page }) => {
@@ -732,22 +732,28 @@ test.describe('the session pane after #221\'s review', () => {
   test('a delegate named "Main agent", disguised or not, asks as a delegate in the pane, Needs you and its row', async ({ page }) => {
     await openDemo(page);
     const v = await open(page, COPILOT);
-    for (const [name, shown] of [['Main agent', 'Main agent'], ['\u2067MAIN\u200b AGENT\u2069', 'MAIN AGENT'], ['M\u0430in agent: done', 'M\u0430in agent: done']]) {
+    for (const [name, asks] of [
+      ['Main agent', 'Delegate \u201cMain agent\u201d asks'],
+      ['\u2067MAIN\u200b AGENT\u2069', 'Delegate \u201cMAIN AGENT\u201d asks'],
+      ['\u041c\u0430\u0456n agent', 'Delegate \u201c\u041c\u0430\u0456n agent\u201d asks'],
+      ['M\u0430in agent: done', 'Delegate \u201cM\u0430in agent: done\u201d asks'],
+      // Lookalikes no list has: the word Delegate in front is the guard.
+      ['\u2c99\u2c81\u2c93\u2c9b agent', 'Delegate \u2c99\u2c81\u2c93\u2c9b agent asks'],
+    ]) {
       await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name }, DELEGATES[1]] });
-      const asks = `Delegate \u201c${shown}\u201d asks`;
       await expect(v.locator('.question .question-head')).toHaveText(asks);
       await expect(page.locator('#needs-you .needs-delegate')).toHaveText(asks);
       await expect(page.locator(`.session[data-id="${COPILOT}"] .row-facts`)).toContainText(asks);
     }
     await expect(page.getByText('Main agent asks', { exact: true })).toHaveCount(0);
-      // A name with the fact separator in it: the row shows a status's first fact alone, which
-      // must still say a delegate asks, never "Main agent asks" or a state it chose (#252).
-      for (const [name, shown] of [['Main agent asks \u00b7 Read logs', 'Delegate \u201cMain agent asks - Read logs\u201d asks'], ['Idle \u00b7 Read logs', 'Idle - Read logs asks']]) {
-        await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name }, DELEGATES[1]] });
-        await expect(page.locator(`.session[data-id="${COPILOT}"] .row-status`)).toHaveText(shown);
-        await expect(v.locator('.question .question-head')).toHaveText(shown);
-      }
-      await expect(page.getByText('Main agent asks', { exact: true })).toHaveCount(0);
+    // A name with the fact separator in it: the row shows a status's first fact alone, which
+    // must still say a delegate asks, never "Main agent asks" or a state it chose (#252).
+    for (const [name, shown] of [['Main agent asks \u00b7 Read logs', 'Delegate \u201cMain agent asks - Read logs\u201d asks'], ['Idle \u00b7 Read logs', 'Delegate Idle - Read logs asks']]) {
+      await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name }, DELEGATES[1]] });
+      await expect(page.locator(`.session[data-id="${COPILOT}"] .row-status`)).toHaveText(shown);
+      await expect(v.locator('.question .question-head')).toHaveText(shown);
+    }
+    await expect(page.getByText('Main agent asks', { exact: true })).toHaveCount(0);
     // With no name, the start of its id.
     await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name: '\u200b' }, DELEGATES[1]] });
     await expect(v.locator('.question .question-head')).toHaveText('Delegate agent-7 asks');
