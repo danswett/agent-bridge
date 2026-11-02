@@ -534,7 +534,7 @@ public sealed class DelegatesViewModel : Observable
         if ((fetched?.Model ?? entry.Model) is { Length: > 0 } model) { rows.Add(new("Model", model)); }
         rows.Add(new("Kind", entry.Kind == SubagentKind.Background ? "Background" : "Task"));
         rows.Add(new("ID", entry.Id, Mono: true));
-        SyncRows(d.Properties, rows);
+        SessionCardViewModel.SyncDetailRows(d.Properties, rows);
         d.Task = keptTask;
         var response = fetched?.Response;
         d.Latest = !string.IsNullOrEmpty(response) ? response : keptLine;

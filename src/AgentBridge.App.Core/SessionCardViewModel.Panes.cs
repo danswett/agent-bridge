@@ -42,24 +42,26 @@ public sealed partial class SessionCardViewModel
     // value again and lose a person's selection of a path or an id.
     public System.Collections.ObjectModel.ObservableCollection<DetailRow> Details { get; } = [];
 
-    void SyncDetails()
+    void SyncDetails() => SyncDetailRows(Details, CurrentDetails());
+
+    // Also the delegate inspector's: its Model can arrive after its Kind and ID rows.
+    internal static void SyncDetailRows(System.Collections.ObjectModel.ObservableCollection<DetailRow> rows, IReadOnlyList<DetailRow> want)
     {
-        var want = CurrentDetails();
         // A fact that has gone (Background at zero, For once idle) goes first, by label: inserting
         // before it instead made new copies of every row after it, the ID among them, and a
         // selection in one was lost to an ordinary update.
         var labels = want.Select(d => d.Label).ToHashSet();
-        for (var i = Details.Count - 1; i >= 0; i--)
+        for (var i = rows.Count - 1; i >= 0; i--)
         {
-            if (!labels.Contains(Details[i].Label)) { Details.RemoveAt(i); }
+            if (!labels.Contains(rows[i].Label)) { rows.RemoveAt(i); }
         }
         for (var i = 0; i < want.Count; i++)
         {
-            if (i < Details.Count && Details[i] == want[i]) { continue; }
-            if (i < Details.Count && Details[i].Label == want[i].Label) { Details[i] = want[i]; }
-            else { Details.Insert(i, want[i]); }
+            if (i < rows.Count && rows[i] == want[i]) { continue; }
+            if (i < rows.Count && rows[i].Label == want[i].Label) { rows[i] = want[i]; }
+            else { rows.Insert(i, want[i]); }
         }
-        while (Details.Count > want.Count) { Details.RemoveAt(Details.Count - 1); }
+        while (rows.Count > want.Count) { rows.RemoveAt(rows.Count - 1); }
     }
 
     List<DetailRow> CurrentDetails()

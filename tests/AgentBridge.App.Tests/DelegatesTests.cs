@@ -295,6 +295,40 @@ public sealed class DelegatesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_model_that_arrives_with_the_fetch_adds_its_row_and_keeps_the_rows_already_there()
+    {
+        using var fetching = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        host.On(Ops.SessionGet, _ =>
+        {
+            fetching.Set();
+            release.Wait(FakeHost.Patience);
+            return Delegating().Subagents![1] with { Model = "gpt-6-sol" };
+        });
+        var unknown = Delegating() with
+        {
+            Subagents = [.. Delegating().Subagents!.Select(a => a.Id == "suite" ? a with { Model = null } : a)],
+            UpdatedAt = Now.AddSeconds(1),
+        };
+        await host.SendAsync(Events.SessionUpsert, unknown);
+        await Wait.UntilAsync(() => Card("del").Session.UpdatedAt == Now.AddSeconds(1), "the update");
+        Resize(1440);
+        Select("del");
+        var detail = Card("del").Delegates.Detail;
+        ui.Post(() => layout.OpenDelegate("suite"));
+        Assert.True(fetching.Wait(FakeHost.Patience), "the fetch");
+        var before = TestUi.Read(() => detail.Properties.ToList());
+        Assert.Equal(["Status", "Kind", "ID"], before.Select(p => p.Label));
+
+        release.Set();
+        await Wait.UntilAsync(() => detail.Properties.Any(p => p.Label == "Model"), "the model");
+        var after = TestUi.Read(() => detail.Properties.ToList());
+        Assert.Equal(["Status", "Model", "Kind", "ID"], after.Select(p => p.Label));
+        Assert.Same(before[1], after[2]);
+        Assert.Same(before[2], after[3]);
+    }
+
+    [Fact]
     public async Task A_newer_line_a_fetch_brings_is_kept_until_the_list_brings_another()
     {
         // A delegate still thinking: no response yet, only its latest line, which changes without
