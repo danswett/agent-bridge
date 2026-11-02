@@ -87,10 +87,7 @@ struct AttachmentComposer: View {
         }, send: { operation in
             try await host.call(operation.op, data: operation.data, onlyOn: connection)
         }, uploadBlob: { url, type in
-            try await MainActor.run {
-                guard host.isLive, host.connectionID == connection else { throw BridgeOperationError("The machine connection changed. Attach the file again.") }
-            }
-            return try await store.uploadBlob(url, type: type, to: host)
+            try await store.uploadBlob(url, type: type, to: host, onlyOn: connection)
         })
     }
 
