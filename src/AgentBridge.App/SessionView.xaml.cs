@@ -3,6 +3,7 @@ using AgentBridge.App.Core;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
@@ -12,28 +13,27 @@ using Windows.System;
 
 namespace AgentBridge.App;
 
-// One session's card (pwa/js/ui/session-card.js). Everything it shows comes from its
-// SessionCardViewModel; this adds what only a window can do: pasting and picking files, the
-// clipboard and keyboard shortcuts. Its status glyph turns on its own (StatusGlyphView).
-public sealed partial class SessionCard : UserControl
+// The session pane (ui.md §6.2, §6.4, §6.5; pwa/js/ui/session-card.js before #179): the session
+// open in the list, MainViewModel.Selected. Everything it shows comes from its
+// SessionCardViewModel and the panes' PaneLayoutViewModel; this adds what only a window can do:
+// pasting and picking files, the clipboard and keyboard shortcuts. Its status glyph turns on its own
+// (StatusGlyphView).
+public sealed partial class SessionView : UserControl
 {
     // Pictures are read to be made smaller; nothing else over the limit is read at all.
     const long MostRead = 32 * 1024 * 1024;
 
     public static readonly DependencyProperty CardProperty = DependencyProperty.Register(
-        nameof(Card), typeof(object), typeof(SessionCard), new PropertyMetadata(null, (d, e) => ((SessionCard)d).OnCard(e.OldValue as SessionCardViewModel, e.NewValue as SessionCardViewModel)));
+        nameof(Card), typeof(object), typeof(SessionView), new PropertyMetadata(null, (d, e) => ((SessionView)d).OnCard(e.OldValue as SessionCardViewModel, e.NewValue as SessionCardViewModel)));
 
     QuestionView? questionView;
     // The Words state the status words are in; null until entered, or after a theme change.
     string? words;
-    // Listening to the card: only while on screen. The machine picker takes cards off the list
-    // and puts them back, which makes a new control each time while the card stays alive, so a
-    // control that kept listening once off screen would be kept, and called, for as long as the
-    // card lives. Loaded and Unloaded can come in either order when a control is moved, so
-    // Unloaded counts only once the control is no longer loaded.
+    // Listening to the card only while on screen (SessionRow says why).
     bool attached;
+    PaneLayoutViewModel? layout;
 
-    public SessionCard()
+    public SessionView()
     {
         InitializeComponent();
         Loaded += (_, _) => Attach();
@@ -49,10 +49,24 @@ public sealed partial class SessionCard : UserControl
         set => SetValue(CardProperty, value);
     }
 
-    public static double ChevronAngle(bool folded) => folded ? 0 : 90;
-    public static string FoldName(string title, bool folded) => $"{title}: {(folded ? "folded, press to open" : "open, press to fold")}";
-    public static string FoldLabel(string title, bool folded, bool unread) => unread ? $"{FoldName(title, folded)}, new activity" : FoldName(title, folded);
+    // The panes this view sits in: its back button, tabs and inspector toggle. Set once.
+    public PaneLayoutViewModel? Layout
+    {
+        get => layout;
+        set
+        {
+            if (layout is not null) { layout.PropertyChanged -= OnLayout; }
+            layout = value;
+            if (layout is not null) { layout.PropertyChanged += OnLayout; }
+            Bindings.Update();
+            ShowTab();
+        }
+    }
+
     public static string RemoveName(string name) => $"Remove {name}";
+    public static string PinName(bool pinned) => pinned ? "Unpin" : "Pin";
+    public static Brush PinBrush(bool pinned) => Ui.Brush(pinned ? "AbBridge" : "AbText2");
+    public static string WordsState(StatusTone tone) => $"Words{tone}";
 
     void OnCard(SessionCardViewModel? old, SessionCardViewModel? card)
     {
@@ -60,13 +74,16 @@ public sealed partial class SessionCard : UserControl
         if (card is not null)
         {
             if (attached) { card.PropertyChanged += OnCardChanged; }
-            Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(this, $"Card:{card.Id}");
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(this, $"Session:{card.Id}");
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(this, card.Title);
         }
+        DetailsFlyout.Card = card;
+        ToolsTabList.Card = card;
         if (!attached) { return; }
         SyncQuestion();
         Bindings.Update();
         ShowWords();
+        ConversationScroll.ChangeView(null, 0, null, disableAnimation: true);
     }
 
     void Attach()
@@ -78,18 +95,6 @@ public sealed partial class SessionCard : UserControl
         Bindings.Update();
         words = null;
         ShowWords();
-        TakeFocus();
-    }
-
-    public static string WordsState(StatusTone tone) => $"Words{tone}";
-
-    void ShowWords()
-    {
-        var next = WordsState(Card?.StatusTone ?? StatusTone.Plain);
-        if (words == next) { return; }
-        if (words is null) { VisualStateManager.GoToState(this, "WordsUnset", false); }
-        VisualStateManager.GoToState(this, next, false);
-        words = next;
     }
 
     void Detach()
@@ -108,119 +113,54 @@ public sealed partial class SessionCard : UserControl
         var all = string.IsNullOrEmpty(e.PropertyName);
         if (all || e.PropertyName == nameof(SessionCardViewModel.Question)) { SyncQuestion(); }
         if (all || e.PropertyName == nameof(SessionCardViewModel.StatusTone)) { ShowWords(); }
-        if (e.PropertyName == nameof(SessionCardViewModel.WantsFocus)) { TakeFocus(); }
     }
 
-    // After a keyboard move the card is drawn in its new place, perhaps by a new control: the
-    // title takes focus back there, so the next Alt+Up/Down moves the same card.
-    void TakeFocus()
+    void ShowWords()
     {
-        if (Card is not { WantsFocus: true } c) { return; }
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            if (!c.WantsFocus || Card != c || !IsLoaded) { return; }
-            c.WantsFocus = false;
-            FoldButton.Focus(FocusState.Keyboard);
-            FoldButton.StartBringIntoView();
-        });
+        var next = WordsState(Card?.StatusTone ?? StatusTone.Plain);
+        if (words == next) { return; }
+        if (words is null) { VisualStateManager.GoToState(this, "WordsUnset", false); }
+        VisualStateManager.GoToState(this, next, false);
+        words = next;
     }
 
-    // Alt+Up and Alt+Down on the title move the card within its group (#164).
-    void OnFoldKey(object sender, KeyRoutedEventArgs e)
+    void OnLayout(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.Key is not (VirtualKey.Up or VirtualKey.Down) || Card?.Row is null) { return; }
-        var alt = e.KeyStatus.IsMenuKeyDown || Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Menu).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-        if (!alt) { return; }
-        e.Handled = true;
-        MoveBy(e.Key == VirtualKey.Up ? -1 : 1);
+        if (e.PropertyName is nameof(PaneLayoutViewModel.Tab) or "" or null) { ShowTab(); }
     }
 
-    void OnRowMenuOpening(object sender, object e)
+    // The tab the panes say, picked in the bar (a resize can bring the bar back with it).
+    void ShowTab()
     {
-        var row = Card?.Row;
-        MoveUpItem.IsEnabled = row?.CanMoveUp == true;
-        MoveDownItem.IsEnabled = row?.CanMoveDown == true;
-        PinItem.Text = Card?.Pinned == true ? "Unpin" : "Pin";
-        PinItem.IsEnabled = row is not null;
+        if (layout is null) { return; }
+        var want = layout.Tab switch { SessionTab.Delegates => DelegatesTab, SessionTab.Tools => ToolsTab, _ => ConversationTab };
+        if (Tabs.SelectedItem != want) { Tabs.SelectedItem = want; }
     }
 
-    void OnMoveUp(object sender, RoutedEventArgs e) => MoveBy(-1);
-    void OnMoveDown(object sender, RoutedEventArgs e) => MoveBy(1);
-
-    void MoveBy(int delta)
+    void OnTab(SelectorBar sender, SelectorBarSelectionChangedEventArgs args)
     {
-        if (Card is not { Row: { } row } c) { return; }
-        c.WantsFocus = true;
-        if (!(delta < 0 ? row.MoveUp() : row.MoveDown())) { c.WantsFocus = false; return; }
-        Say(delta < 0 ? "Moved up" : "Moved down");
+        if (layout is null || sender.SelectedItem?.Tag is not string tag || !Enum.TryParse<SessionTab>(tag, out var tab)) { return; }
+        layout.Tab = tab;
     }
 
-    void OnPin(object sender, RoutedEventArgs e)
-    {
-        if (Card is not { Row: { } row } c) { return; }
-        c.WantsFocus = true;
-        var pinning = !c.Pinned;
-        row.TogglePin();
-        Say(pinning ? "Pinned" : "Unpinned");
-    }
-
-    // What a move did, said to a screen reader, as the PWA's live region does.
-    void Say(string text) =>
-        // Created if need be: FromElement finds only a peer something already asked for.
-        Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(FoldButton)?.RaiseNotificationEvent(
-            Microsoft.UI.Xaml.Automation.Peers.AutomationNotificationKind.ActionCompleted,
-            Microsoft.UI.Xaml.Automation.Peers.AutomationNotificationProcessing.MostRecent, text, "AgentBridgeRowMoved");
-
-    // A drag by the grip: the card being dragged, by key, while it is. Only this app's own cards
-    // are dropped here, so nothing else needs to travel in the data package.
-    static string? dragging;
-
-    void OnPointerEntered(object sender, PointerRoutedEventArgs e) => Grip.Opacity = Card?.Row?.CanDrag == true ? 1 : 0;
-    void OnPointerExited(object sender, PointerRoutedEventArgs e) => Grip.Opacity = 0;
-
-    void OnGripDragStarting(UIElement sender, DragStartingEventArgs args)
-    {
-        if (Card?.Row is not { CanDrag: true } row) { args.Cancel = true; return; }
-        dragging = row.Key;
-        args.Data.RequestedOperation = DataPackageOperation.Move;
-    }
-
-    void OnGripDropCompleted(UIElement sender, DropCompletedEventArgs args) => dragging = null;
-
-    void OnDragOver(object sender, DragEventArgs e)
-    {
-        if (dragging is null || Card?.Row is not { } row || row.Key == dragging) { return; }
-        e.AcceptedOperation = DataPackageOperation.Move;
-        e.DragUIOverride.Caption = e.GetPosition(this).Y > ActualHeight / 2 ? "Move below" : "Move above";
-    }
-
-    void OnDrop(object sender, DragEventArgs e)
-    {
-        if (dragging is not { } key || Card?.Row is not { } row || row.Key == key) { return; }
-        dragging = null;
-        if (row.Drop(key, after: e.GetPosition(this).Y > ActualHeight / 2)) { Say("Moved"); }
-    }
+    void OnBack(object sender, RoutedEventArgs e) => layout?.Back();
+    void OnToggleInspector(object sender, RoutedEventArgs e) => layout?.ToggleInspector();
+    void OnPin(object sender, RoutedEventArgs e) => Card?.Row?.TogglePin();
 
     void SyncQuestion()
     {
         var q = Card?.Question;
         if (questionView is not null && q is not null && ReferenceEquals(questionView.Tag, q)) { return; }
         questionView?.Detach();
-        questionView = q is null ? null : new QuestionView(q, Editing) { Tag = q };
+        questionView = q is null ? null : new QuestionView(q, Editing, Card?.AsksText) { Tag = q };
         QuestionHost.Content = questionView;
-        QuestionHost.Visibility = Ui.Some(questionView);
+        QuestionCard.Visibility = Ui.Some(questionView);
     }
 
     void Editing(bool on)
     {
         if (Card is { } c) { c.Editing = on; }
     }
-
-    void OnFold(object sender, RoutedEventArgs e)
-    {
-        if (Card is { } c) { c.Folded = !c.Folded; }
-    }
-
     void OnOrphanClosed(InfoBar sender, InfoBarClosedEventArgs args) => Card?.DismissOrphan();
 
     void OnCopyOrphan(object sender, RoutedEventArgs e)
@@ -246,25 +186,12 @@ public sealed partial class SessionCard : UserControl
 
     void OnSendReply(object sender, RoutedEventArgs e) => Card?.Reply?.Send();
     void OnResendReply(object sender, RoutedEventArgs e) => Card?.Reply?.Resend();
-    void OnEnd(object sender, RoutedEventArgs e) => Card?.End?.Press();
-    void OnResendEnd(object sender, RoutedEventArgs e) => Card?.End?.Resend();
 
     void OnRemoveAttachment(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { Tag: ReplyAttachment file }) { Card?.Reply?.Remove(file); }
     }
 
-    void OnHistoryOpen(Expander sender, ExpanderExpandingEventArgs args)
-    {
-        if (Card is not { } c) { return; }
-        c.HistoryOpen = true;
-        _ = c.LoadHistoryAsync();
-    }
-
-    void OnHistoryClosed(Expander sender, ExpanderCollapsedEventArgs args)
-    {
-        if (Card is { } c) { c.HistoryOpen = false; }
-    }
 
     // A pasted picture or file goes with the reply, as on the PWA; pasted text is just text.
     // These handlers are async void: anything they let escape would end the app and every

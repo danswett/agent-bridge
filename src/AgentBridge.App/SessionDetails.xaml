@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="AgentBridge.App.SessionDetails"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AgentBridge.App"
+    xmlns:core="using:AgentBridge.App.Core">
+    <!-- A session's Details (docs/design/ui.md §6.2): everything its row leaves out (§6.1), as a
+         property list, code in the mono (#215), then End session, last (pwa/js/ui/stop-view.js). In
+         the inspector and the header's Details. -->
+    <StackPanel Spacing="16" AutomationProperties.AutomationId="SessionDetails">
+        <ItemsControl ItemsSource="{x:Bind Card.Details, Mode=OneWay}" IsTabStop="False">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <StackPanel Spacing="4" />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="core:DetailRow">
+                    <Grid ColumnSpacing="12" AutomationProperties.Name="{x:Bind Label}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="96" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource AbTypeMeta}" LineHeight="20" Foreground="{ThemeResource AbText2}" Text="{x:Bind Label}" />
+                        <TextBlock
+                            Grid.Column="1"
+                            Style="{x:Bind local:SessionDetails.ValueStyle(Mono)}"
+                            TextTrimming="CharacterEllipsis"
+                            IsTextSelectionEnabled="True"
+                            ToolTipService.ToolTip="{x:Bind Tip}"
+                            AutomationProperties.AutomationId="{x:Bind local:SessionDetails.ValueId(Label)}"
+                            Text="{x:Bind Value}" />
+                    </Grid>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- End session: here on desktop (§6.2), with the host's two-press rule. -->
+        <StackPanel Spacing="4" Visibility="{x:Bind local:Ui.Some(Card.End), Mode=OneWay, FallbackValue=Collapsed}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button
+                    Content="End session"
+                    MinHeight="32"
+                    AutomationProperties.AutomationId="EndSession"
+                    AutomationProperties.Name="{x:Bind Card.End.ButtonName, Mode=OneWay}"
+                    Foreground="{ThemeResource AbDangerText}"
+                    IsEnabled="{x:Bind Card.End.CanPress, Mode=OneWay, FallbackValue=False}"
+                    Click="OnEnd" />
+                <Button
+                    Content="Send again"
+                    MinHeight="32"
+                    Visibility="{x:Bind local:Ui.Show(Card.End.ShowResend), Mode=OneWay, FallbackValue=Collapsed}"
+                    Click="OnResendEnd" />
+            </StackPanel>
+            <TextBlock
+                Style="{StaticResource AbTypeMeta}"
+                TextWrapping="Wrap"
+                AutomationProperties.AutomationId="EndStatus"
+                AutomationProperties.LiveSetting="Polite"
+                Text="{x:Bind Card.End.StatusText, Mode=OneWay}"
+                Foreground="{x:Bind local:Ui.ToneBrush(Card.End.StatusTone), Mode=OneWay}"
+                Visibility="{x:Bind local:Ui.Some(Card.End.StatusText), Mode=OneWay, FallbackValue=Collapsed}" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

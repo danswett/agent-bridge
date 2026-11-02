@@ -127,11 +127,12 @@ public sealed class MainTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_folded_card_gets_the_new_activity_dot_when_its_session_updates_and_opening_it_clears_the_dot()
+    public async Task A_row_not_open_gets_the_new_activity_dot_when_its_session_updates_and_opening_it_clears_the_dot()
     {
         await SnapshotAsync();
         var old = Card("old");
-        ui.Post(() => old.Folded = true);
+        // The open row is the selected one (ui.md §6.1, #180).
+        ui.Post(() => main.Selected = Card("asking"));
 
         await host.SendAsync(Events.SessionUpsert, Make.Session("old", response: "Later.", updated: Make.T0.AddMinutes(5)));
         await Wait.UntilAsync(() => old.Response == "Later.", "the update");
@@ -142,8 +143,14 @@ public sealed class MainTests : IAsyncLifetime
         await Wait.UntilAsync(() => Card("asking").Response == "Still asking.", "the other update");
         Assert.False(TestUi.Read(() => Card("asking").Unread));
 
-        ui.Post(() => old.Folded = false);
+        ui.Post(() => main.Selected = old);
         Assert.False(TestUi.Read(() => old.Unread));
+        Assert.True(TestUi.Read(() => old.Selected && !Card("asking").Selected));
+
+        // Once another row is open, the first one's news is news again.
+        await host.SendAsync(Events.SessionUpsert, Make.Session("asking", question: Make.Choice(), response: "Asking again.", updated: Make.T0.AddMinutes(7)));
+        await Wait.UntilAsync(() => Card("asking").Response == "Asking again.", "the third update");
+        Assert.True(TestUi.Read(() => Card("asking").Unread));
     }
 
     [Fact]
@@ -221,7 +228,9 @@ public sealed class MainTests : IAsyncLifetime
             File.Delete(file);
             Directory.CreateDirectory(file);
 
-            // An open card's update is only marked seen: nothing is written, nothing fails yet.
+            // An open row's update is only marked seen: nothing is written, nothing fails yet. Open is
+            // the selected row (#180).
+            ui.Post(() => other.Selected = other.Sessions.Single(c => c.Id == "old"));
             await host.SendAsync(Events.SessionUpsert, Make.Session("old", response: "Later.", updated: Make.T0.AddMinutes(9)));
             await Wait.UntilAsync(() => other.Sessions.Single(c => c.Id == "old").Response == "Later.", "the update");
             Assert.Equal((int)SessionSort.Yours, TestUi.Read(() => other.SortIndex));
@@ -338,8 +347,6 @@ public sealed class MainTests : IAsyncLifetime
         var opened = new List<string>();
         main.OpenRequested += c => opened.Add(c.Id);
         await SnapshotAsync();
-        main.Sessions.Single(c => c.Id == "old").Folded = true;
-
         // On the UI thread, as a toast click or the tray asks.
         ui.Post(() => main.Open("later"));
         Assert.Empty(opened);
@@ -349,7 +356,7 @@ public sealed class MainTests : IAsyncLifetime
 
         ui.Post(() => main.Open("old"));
         Assert.Equal(["later", "old"], opened);
-        Assert.False(main.Sessions.Single(c => c.Id == "old").Folded);
+        Assert.Same(Card("old"), TestUi.Read(() => main.Selected));
     }
 
     [Fact]
@@ -382,11 +389,10 @@ public sealed class MainTests : IAsyncLifetime
         var opened = new List<string>();
         main.OpenRequested += c => opened.Add(c.Id);
         await SnapshotAsync();
-        main.Sessions.Single(c => c.Id == "old").Folded = true;
 
         ui.Post(() => main.Open(main.Search("session").First(h => h.SessionId == "old")));
         await Wait.UntilAsync(() => opened.Count == 1, "the session to open");
         Assert.Equal(["old"], opened);
-        Assert.False(main.Sessions.Single(c => c.Id == "old").Folded);
+        Assert.Same(Card("old"), TestUi.Read(() => main.Selected));
     }
 }

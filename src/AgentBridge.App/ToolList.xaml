@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="AgentBridge.App.ToolList"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AgentBridge.App"
+    xmlns:core="using:AgentBridge.App.Core">
+    <!-- A session's tool calls, newest first (session.get): a glyph per call, the call in the mono at
+         the surrounding weight (#215), and when, in tabular figures. The inspector's Tools, and the
+         Tools tab. -->
+    <StackPanel Spacing="6" AutomationProperties.AutomationId="ToolList">
+        <TextBlock
+            Style="{StaticResource AbTypeMeta}"
+            Foreground="{ThemeResource AbText2}"
+            Text="{x:Bind Card.HistoryNote, Mode=OneWay}"
+            Visibility="{x:Bind local:Ui.Some(Card.HistoryNote), Mode=OneWay, FallbackValue=Collapsed}" />
+        <ItemsControl ItemsSource="{x:Bind Card.History, Mode=OneWay}" IsTabStop="False">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <StackPanel Spacing="4" />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="core:ToolRow">
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <local:StatusGlyphView VerticalAlignment="Center" Size="12" Glyph="{x:Bind Glyph}" Label="{x:Bind Status}" />
+                        <TextBlock Grid.Column="1" Style="{StaticResource AbTypeCode}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{x:Bind Summary}">
+                            <Run Text="{x:Bind Name}" /><Run Text=" " /><Run Text="{x:Bind Summary}" Foreground="{ThemeResource AbText2}" />
+                        </TextBlock>
+                        <TextBlock Grid.Column="2" Style="{StaticResource AbTypeMeta}" LineHeight="18" Foreground="{ThemeResource AbText2}" Text="{x:Bind When}" />
+                    </Grid>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </StackPanel>
+</UserControl>
