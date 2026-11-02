@@ -732,7 +732,9 @@ public sealed class HaAuthGuard
             basis = read;
             return null;
         }
-        if (!pending.Contains(markLost)) { pending.Add(markLost); }
+        // First, before what this process could not write yet: an acceptance waiting to be written
+        // is from before the loss, and must find the record lost, not restore the token over it.
+        if (!pending.Contains(markLost)) { pending.Insert(0, markLost); }
         // Nothing of what came before stands, here either, even if the record cannot be set aside
         // or replaced: another process may have stopped a token this one still knew as accepted.
         state = new State();

@@ -264,6 +264,27 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(HaAuthKind.RecordLost, Assert.IsType<HomeAssistantAuthException>(await Publish(serve)).Kind);
     }
 
+    // An acceptance this process could not write yet when the record was lost is from before the
+    // loss: written after it, it must not bring the token back past the hold, here or on restart.
+    [Fact]
+    public async Task An_acceptance_not_yet_written_when_the_record_is_lost_does_not_survive_the_loss()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var guard = new HaAuthGuard(Record, time);
+        using (var l = await guard.EnterAsync(guard.Credential(Url, "other-token-not-a-secret"))) { l.Answered(HttpStatusCode.OK); }
+        var token = guard.Credential(Url, Token);
+        var lease = await guard.EnterAsync(token);
+        Directory.CreateDirectory(Record + ".tmp");
+        lease.Answered(HttpStatusCode.OK);
+        lease.Dispose();
+
+        File.WriteAllBytes(Record, new byte[64]);
+        Directory.Delete(Record + ".tmp");
+        Assert.NotNull(guard.Refused(token));
+
+        Assert.Equal(HaAuthKind.RecordLost, Assert.IsType<HomeAssistantAuthException>(await Publish(Client(ha, new HaAuthGuard(Record, time)))).Kind);
+    }
+
     // A second loss is a loss of its own: an answer to a request let go between the two does not
     // make the token accepted.
     [Fact]
