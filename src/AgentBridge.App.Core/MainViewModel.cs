@@ -342,6 +342,9 @@ public sealed partial class MainViewModel : Observable
         launchOpens.Remove(wanted);
         // A card the picker hides is shown: it is what was asked for.
         if (!Visible(card)) { SelectedMachine = Machines[0]; }
+        // Unfolded too, as before the panes: the fold store still keeps it, and Needs you's tests
+        // (#165) hold opening to it.
+        card.Folded = false;
         Selected = card;
         OpenRequested?.Invoke(card);
     }

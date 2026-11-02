@@ -104,6 +104,23 @@ static partial class SelfTest
             result["needsYouButtons"] = lane is null ? null : Find<Button>(lane).Select(b => $"{AutomationProperties.GetAutomationId(b)}: {(b.IsEnabled ? "enabled" : "disabled")}, {b.Visibility}").ToList();
             Check(offered && main.NeedsYou.SingleOrDefault(e => e.Card.Id == "demo-approval") is { Approvable: true }, "offers Approve once and Deny in Needs you for the permission prompt");
             if (lane is not null) { await Picture(lane, Path.ChangeExtension(outFile, ".needs-you.png")); }
+            // ui.md §6.1: the list's first section, above Pinned and Sessions, inside the list pane;
+            // an entry opens its session in the session pane.
+            double Top(FrameworkElement e) => e.TransformToVisual(window.RootElement).TransformPoint(default).Y;
+            var listPane = ById<FrameworkElement>(window.Sessions, "ListPane");
+            var firstRow = Rows(window).OrderBy(Top).FirstOrDefault();
+            var inPane = lane is not null && listPane is not null && Above<FrameworkElement>(lane, e => e == listPane) is not null
+                && lane.TransformToVisual(listPane).TransformPoint(new Windows.Foundation.Point(lane.ActualWidth, 0)).X <= listPane.ActualWidth + 0.5;
+            Check(inPane && firstRow is not null && Top(lane!) < Top(firstRow), "puts Needs you at the top of the list pane, above the rows");
+            var formEntry = Entries().FirstOrDefault(g => main.NeedsYou.ElementAtOrDefault(Entries().IndexOf(g))?.Card.Id == "02d9e5d5-6b35-49bd-b083-39572fbff648");
+            if (formEntry is not null && ById<HyperlinkButton>(formEntry, "NeedsYouOpen") is { } open)
+            {
+                main.Selected = null;
+                ((IInvokeProvider)new HyperlinkButtonAutomationPeer(open).GetPattern(PatternInterface.Invoke)).Invoke();
+                var opened = await Until(() => main.Selected?.Id == "02d9e5d5-6b35-49bd-b083-39572fbff648" && window.Sessions.SessionPaneView.Card == main.Selected && window.Sessions.Rows.SelectedItem == main.Selected, TimeSpan.FromSeconds(5));
+                Check(opened, "opens a Needs you entry's session in the session pane, its row selected");
+            }
+            else { Check(false, "finds the form question's Needs you entry"); }
 
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".window.png"));
             await Picture(window.Sessions, Path.ChangeExtension(outFile, ".sessions.png"));

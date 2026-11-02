@@ -108,9 +108,10 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
   keeps the last reading of each allowance between runs in `<profile>-usage.json`, so a reading
   outlives its machine going offline; a row's age says `read on <machine>` in its tooltip and
   accessible description unless this machine read it (#172), not on the line, where the account
-  is shown whole instead, and the summary names each allowance's account (#225). A toast for another machine's question says which machine, and its answer goes there.
-* **Needs you** (#165, [ui.md](design/ui.md) §6.1). Above the cards, every pending question on
-  every machine, whatever the picker shows, oldest first: the session's title, the question's
+  is shown whole instead, and the summary names each allowance's account (#225). A toast for
+  another machine's question says which machine, and its answer goes there.
+* **Needs you** (#165, [ui.md](design/ui.md) §6.1). The list pane's first section, above the rows (#180), every pending question on
+  every machine, whatever the machine tabs show, oldest first: the session's title, the question's
   first line (an approval's whole prompt, when it fits), the machine and agent, how long it has
   waited, and a delegate's name when a delegate asks. Approve once and Deny press the card's
   own buttons (its `QuestionViewModel`), offered only for Copilot's prompts, which a host writes
@@ -121,8 +122,8 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
   variation selector or a right-to-left letter; a hidden character
   the entry's line shows as an escape like `\u202E`) since Approve once allows all of it; a
   longer approval, a Codex one, a
-  form and anything this app can't answer open the card, with focus; a prompt marked
-  `answerAtMachine` says so, with no controls. The lane never moves a card. Its count is the
+  form and anything this app can't answer open the session in the session pane, its row selected; a prompt marked
+  `answerAtMachine` says so, with no controls. The lane never moves a row. Its count is the
   tray's "N waiting on you" and the Sessions badge.
 
 ### Starting the host at logon: a scheduled task
