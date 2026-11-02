@@ -223,7 +223,8 @@ Sections, top to bottom:
      permission (prose, then at most one fenced block ending it, its fence naming no
      language but json or diff, no link, whose words hide where it goes, and no character
      drawn other than where it runs: bidi controls, zero-width and other format characters,
-     controls but newline and tab, private-use or unassigned code points, U+2028/2029), or from an agent whose prompt can reach the host cut short
+     controls but newline and tab, private-use or unassigned code points, U+2028/2029, or
+     right-to-left letters, which reorder what is drawn around them), or from an agent whose prompt can reach the host cut short
      (Codex, today; only Copilot's are whole and literal) opens the session instead.
    - Forms open the session. `answerAtMachine` entries say so and have no controls.
    - The lane references sessions; it never moves their rows.

@@ -161,7 +161,8 @@ sessions and never moves their rows. An entry leaves when its question does.
   final). A longer approval (an edit's diff, a long command), one with a table, one not shaped
   as a host writes a permission (a fence in its words, words after its command or its opening
   fence, a link, whose words hide where it goes, or a character drawn other than where it runs,
-  such as a bidi control or a zero-width space, which the entry's line shows as an escape like `\u202E`), or one from Codex (whose command can reach the machine cut short)
+  such as a bidi control or a zero-width space, or right-to-left letters, which reorder what is
+  drawn around them; a hidden character the entry's line shows as an escape like `\u202E`), or one from Codex (whose command can reach the machine cut short)
   opens its session instead.
 * **A form**, or a question this machine won't take from the phone, opens its session (the
   title), where the card says what it asks.

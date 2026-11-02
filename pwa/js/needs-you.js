@@ -141,7 +141,9 @@ export function wholePrompt(q) {
   const raw = q?.message ?? '';
   // A character that is not drawn, or is drawn somewhere other than where it runs, is never on
   // screen as it will run: a bidi control can make `curl ... | sh` read as a comment.
-  if (HIDDEN.test(raw)) { return false; }
+  // Nor is one with right-to-left letters, which reorder what is drawn around them without any
+  // control: three Hebrew letters before `; rm -rf / #` show its comment marker first.
+  if (HIDDEN.test(raw) || RTL.test(raw)) { return false; }
   // Every line ending the renderer breaks on is counted: a bare CR is a line too.
   const m = raw.trim().replace(/\r\n?/g, '\n');
   return m.length > 0 && m.length <= PROMPT_MAX.chars && m.split('\n').length <= PROMPT_MAX.lines
@@ -155,6 +157,9 @@ export function wholePrompt(q) {
 const HIDDEN_CLASS = '[\\p{Cf}\\p{Co}\\p{Cn}\\p{Cs}\\u2028\\u2029]|[^\\P{Cc}\\n\\t]';
 const HIDDEN = new RegExp(HIDDEN_CLASS, 'u');
 const HIDDEN_ALL = new RegExp(HIDDEN_CLASS, 'gu');
+// The right-to-left blocks: Hebrew to Arabic Extended, their presentation forms, and the
+// supplementary planes' right-to-left ranges.
+const RTL = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF\u{10800}-\u{10FFF}\u{1E800}-\u{1EFFF}]/u;
 
 // Any such character drawn as a visible escape (\u202E), so the lane's line reads in the order
 // it runs.
