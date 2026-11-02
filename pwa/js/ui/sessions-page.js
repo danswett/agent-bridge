@@ -98,6 +98,7 @@ export class SessionsPage {
       order: this.order,
       shows: (hostId) => hosts.shows(hostId),
       settled: (hostId) => hosts.link(hostId)?.client?.synced !== false,
+      visible: () => !shell || shell.route === 'sessions',
     });
     this.view.onRender = (n) => this.#drawCount(n);
     // Needs you · N (#165): above the list, and apart from it. Its count is the app's badge.
@@ -119,7 +120,11 @@ export class SessionsPage {
       // Search narrows the sessions list; the launch page's panel is open while it shows, and
       // asks its machine again each time it opens.
       shell.onSearch((q) => this.view.setFilter(q));
-      shell.onRoute(({ route }) => this.launchPanel.setOpen(route === 'launch'));
+      shell.onRoute(({ route }) => {
+        this.launchPanel.setOpen(route === 'launch');
+        // Back on Sessions, what it shows is seen now.
+        if (route === 'sessions') { this.view.schedule(); }
+      });
       this.launchPanel.setOpen(shell.route === 'launch');
       this.view.setFilter(shell.query);
     }

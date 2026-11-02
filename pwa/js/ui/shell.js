@@ -143,10 +143,18 @@ export class Shell {
   }
 
   closeSearch() {
+    const box = this.els.searchBox;
+    const had = !!box && box.contains(this.doc.activeElement);
     this.doc.body.classList.remove('searching');
     if (this.els.search && this.els.search.value) {
       this.els.search.value = '';
       this.#emitSearch();
+    }
+    // On a phone the row goes with the search, and its focus would go to the document: back to
+    // the Search that opened it, or else to the page.
+    if (had && box.getClientRects().length === 0) {
+      const open = [...this.doc.querySelectorAll('.search-open')].find((b) => b.getClientRects().length > 0);
+      (open ?? this.els.main)?.focus();
     }
   }
 

@@ -36,8 +36,8 @@ export class SessionListView {
   // answering(hostId) -> { service, replies, stops, hostId, capabilities, readOnly } | null.
   // order: the person's order (SessionOrder). shows(hostId): whether a machine is shown.
   // settled(hostId): whether a machine has sent its whole list yet.
-  constructor(container, sessions, { fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), folds = new FoldStore(), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true } = {}) {
-    Object.assign(this, { container, sessions, fetchDetail, fetchDelegate, machine, folds, answering, order, shows, settled });
+  constructor(container, sessions, { fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), folds = new FoldStore(), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, visible = () => true } = {}) {
+    Object.assign(this, { container, sessions, fetchDetail, fetchDelegate, machine, folds, answering, order, shows, settled, visible });
     sessions.onChange((change) => {
       this.order.observe(change);
       if (change?.type === 'synced' && change.hostId) {
@@ -129,7 +129,8 @@ export class SessionListView {
         card.setPinned(isPinned);
         if (!keep(entry)) { continue; }
         // Open on screen, its news is seen as it comes; folded, it gets the dot.
-        if (!card.folded) { this.order.markSeen(key, s.updatedAt); }
+        // Seen only while it is on screen: news that comes while another page shows waits for Sessions.
+        if (!card.folded && this.visible()) { this.order.markSeen(key, s.updatedAt); }
         card.setUnread(this.order.unread(key, s.updatedAt));
         want.push(card.element);
         shown += 1;

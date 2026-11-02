@@ -387,6 +387,14 @@ body[data-conn="busy"] .content, body[data-conn="warn"] .content, body[data-conn
 .machine-tab.away { font-style: italic; }
 @media (forced-colors: active) { .machine-tab[aria-selected="true"]::after { forced-color-adjust: none; background: Highlight; } }
 @media (min-width: 760px) { .machine-tab { min-height: 36px; min-width: 32px; } }
+/* A desktop's width on a touch screen (a tablet): the compact controls grow back to 44 (§9). */
+@media (min-width: 760px) and (pointer: coarse) {
+  .nav-item { width: var(--tap); height: var(--tap); min-height: var(--tap); }
+  .machine-tab { min-height: var(--tap); min-width: var(--tap); }
+  .search-input { min-height: var(--tap); }
+  .appbar .avatar { width: var(--tap); height: var(--tap); }
+  .new-session { min-height: var(--tap); }
+}
 .session-list { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
 
 /* The person's order (ui.md §6.1, #164): Pinned and Sessions headers once anything is pinned,

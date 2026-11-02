@@ -236,6 +236,21 @@ test.describe('on a phone', () => {
     }
   });
 
+  test('closing search, by Close search or Escape, gives focus back to Search rather than losing it', async ({ page }) => {
+    await openDemo(page);
+    const open = page.locator('.search-open').filter({ visible: true }).first();
+    await open.tap();
+    await expect(page.locator('#search')).toBeFocused();
+    await page.locator('#search-close').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#appbar')).toBeHidden();
+    await expect(open).toBeFocused();
+    await open.tap();
+    await expect(page.locator('#search')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(open).toBeFocused();
+  });
+
   test('a new page starts at its top, not where the last one was scrolled to', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 420 });
     await openDemo(page, '&machines=3');
@@ -259,6 +274,30 @@ test.describe('on a phone', () => {
     await page.evaluate(() => { document.body.dataset.conn = 'warn'; document.getElementById('conn').textContent = 'Reconnecting…'; });
     await expect(page.locator('#conn')).toBeVisible();
     await expect(page.locator('.brand')).toBeHidden();
+  });
+});
+
+test.describe('at a desktop\'s width on a touch screen', () => {
+  test.use({ viewport: { width: 1280, height: 800 }, hasTouch: true });
+
+  test('the rail, the machine tabs, search, Account and New are at least 44 px to a finger', async ({ page }) => {
+    await openDemo(page, '&machines=2');
+    test.skip(!(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)), 'this engine does not emulate a coarse pointer');
+    const all = [
+      ...await page.locator('#nav .nav-item').filter({ visible: true }).all(),
+      ...await page.locator('#machine-tabs [role="tab"]').all(),
+      page.locator('.new-session').filter({ visible: true }).first(),
+    ];
+    // Account shows only signed in, with a login; demo mode has none, so give it one.
+    await page.evaluate(() => { const a = document.getElementById('avatar'); a.hidden = false; a.textContent = 'D'; });
+    all.push(page.locator('#avatar'));
+    expect(all.length).toBeGreaterThan(6);
+    for (const c of all) {
+      const b = await c.boundingBox();
+      expect(b.width, await c.evaluate((e) => e.outerHTML.slice(0, 80))).toBeGreaterThanOrEqual(44);
+      expect(b.height).toBeGreaterThanOrEqual(44);
+    }
+    expect((await page.locator('#search').boundingBox()).height).toBeGreaterThanOrEqual(44);
   });
 });
 

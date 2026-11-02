@@ -145,6 +145,20 @@ test('a folded row gets the new activity dot when its session updates, and openi
   expect(await order(page)).toEqual(FIRST);
 });
 
+test('news that comes while another page shows is not marked seen until Sessions shows again', async ({ page }) => {
+  await openDemo(page);
+  await expect(card(page, CLAUDE).locator('.fold')).toHaveAttribute('aria-expanded', 'true');
+  const seen = () => page.evaluate((k) => JSON.parse(localStorage.getItem('demo:agent-bridge.app.order') ?? '{}').seen?.[k], `demo\n${CLAUDE}`);
+  await page.locator('#nav [data-nav="machines"]').click();
+  await expect(page.locator('#sessions')).toBeHidden();
+  const t = later();
+  await upsert(page, CLAUDE, { updatedAt: t });
+  await page.waitForTimeout(100);
+  expect(await seen()).not.toBe(t);
+  await page.locator('#nav [data-nav="sessions"]').click();
+  await expect.poll(seen).toBe(t);
+});
+
 test('ended sessions fold into Ended · N at the bottom', async ({ page }) => {
   await openDemo(page);
   await page.evaluate((ids) => { for (const id of ids) { window.agentBridgeDemo.remove(id); } }, [CLAUDE, DELEGATING]);
