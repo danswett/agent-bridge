@@ -139,27 +139,36 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(8 + HaAuthGuard.MaxRejections, ha.Seen.Count);
     }
 
-    // A record that cannot be written must not forget a refusal when it is read again, or the token
-    // would be tried every five minutes for ever.
+    // A record that cannot be written holds every token not already accepted, rather than letting
+    // one try with nothing to remember its refusals by; one already accepted carries on. Once the
+    // record can be written again, the rules apply as ever.
     [Fact]
-    public async Task A_record_that_cannot_be_written_still_stops_a_rejected_token_after_three_attempts()
+    public async Task A_record_that_cannot_be_written_holds_a_token_not_yet_accepted_until_it_can_be()
     {
         var ha = new Answering(time) { Status = HttpStatusCode.OK };
         var guard = new HaAuthGuard(Record, time);
-        Assert.Null(await Publish(Client(ha, guard, "other-token-not-a-secret")));
-        Assert.True(File.Exists(Record));
+        var other = Client(ha, guard, "other-token-not-a-secret");
+        Assert.Null(await Publish(other));
         Directory.CreateDirectory(Record + ".tmp");
 
         ha.Status = HttpStatusCode.Unauthorized;
-        await Hammer(Client(ha, guard), TimeSpan.FromDays(1));
+        var held = Assert.IsType<HomeAssistantAuthException>(await Publish(Client(ha, guard)));
+        Assert.Equal(HaAuthKind.Unrecorded, held.Kind);
+        Assert.False(held.Sent);
+        ha.Status = HttpStatusCode.OK;
+        Assert.Null(await Publish(other));
+        Assert.Equal(2, ha.Seen.Count);
 
-        Assert.Equal(1 + HaAuthGuard.MaxRejections, ha.Seen.Count);
+        Directory.Delete(Record + ".tmp");
+        ha.Status = HttpStatusCode.Unauthorized;
+        await Hammer(Client(ha, guard), TimeSpan.FromDays(1));
+        Assert.Equal(2 + HaAuthGuard.MaxRejections, ha.Seen.Count);
     }
 
     // Another process holding the record's lock for good: nothing is written over its record, and
-    // this one still counts for itself.
+    // nothing is sent that only the record could have stopped.
     [Fact]
-    public async Task A_record_that_cannot_be_locked_is_left_alone_and_a_rejected_token_still_stops_after_three_attempts()
+    public async Task A_record_that_cannot_be_locked_is_left_alone_and_a_token_not_yet_accepted_is_held()
     {
         var ha = new Answering(time) { Status = HttpStatusCode.OK };
         var guard = new HaAuthGuard(Record, time);
@@ -168,11 +177,83 @@ public sealed class AuthBackoffTests : IDisposable
         using (new FileStream(Record + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
         {
             ha.Status = HttpStatusCode.Unauthorized;
-            await Hammer(Client(ha, guard), TimeSpan.FromDays(1));
+            await Hammer(Client(ha, guard), TimeSpan.FromMinutes(30));
+            Assert.Equal(before, File.ReadAllText(Record));
         }
 
-        Assert.Equal(1 + HaAuthGuard.MaxRejections, ha.Seen.Count);
-        Assert.Equal(before, File.ReadAllText(Record));
+        Assert.Single(ha.Seen);
+    }
+
+    // On Windows a reader's open handle makes replacing the record fail. That once stopped the
+    // process recording for good, and a restart then found the refusal gone and the token clear.
+    [Fact]
+    public async Task A_refusal_recorded_while_a_reader_has_the_record_open_is_written_once_it_closes()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var guard = new HaAuthGuard(Record, time);
+        var serve = Client(ha, guard);
+        Assert.Null(await Publish(serve));
+
+        ha.Status = HttpStatusCode.Unauthorized;
+        using (new FileStream(Record, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+        {
+            Assert.True(Assert.IsType<HomeAssistantAuthException>(await Publish(serve)).Sent);
+            Assert.False(Assert.IsType<HomeAssistantAuthException>(await Publish(Client(ha, guard, "second-token-not-a-secret"))).Sent);
+        }
+        Assert.NotNull(serve.Refused);
+
+        var restarted = new HaAuthGuard(Record, time);
+        Assert.StartsWith("Home Assistant rejected the token", restarted.Describe(restarted.Credential(Url, Token)), StringComparison.Ordinal);
+        Assert.Equal(2, ha.Seen.Count);
+    }
+
+    // A record cut short or zero-filled (a power cut mid-write) is no clean record: it is set
+    // aside, and every token waits for a person, here and after a restart. ha token set allows one
+    // attempt; deleting the record starts over.
+    [Fact]
+    public async Task A_corrupt_record_is_set_aside_and_holds_every_token_until_a_person_allows_one()
+    {
+        var ha = new Answering(time);
+        var guard = new HaAuthGuard(Record, time);
+        foreach (var t in new[] { "a-not-a-secret", "b-not-a-secret", "c-not-a-secret" }) { await Publish(Client(ha, guard, t)); }
+        Assert.Equal(3, ha.Seen.Count);
+        File.WriteAllBytes(Record, new byte[File.ReadAllBytes(Record).Length]);
+
+        var restarted = new HaAuthGuard(Record, time);
+        var serve = Client(ha, restarted);
+        var held = Assert.IsType<HomeAssistantAuthException>(await Publish(serve));
+        Assert.Equal(HaAuthKind.RecordLost, held.Kind);
+        Assert.True(File.Exists(Record + HaAuthGuard.CorruptSuffix));
+        Assert.Equal(HaAuthKind.RecordLost, Assert.IsType<HomeAssistantAuthException>(await Publish(Client(ha, new HaAuthGuard(Record, time), "a-not-a-secret"))).Kind);
+        Assert.Equal(3, ha.Seen.Count);
+
+        restarted.Forget(restarted.Credential(Url, Token));
+        await Hammer(serve, TimeSpan.FromDays(1));
+        Assert.Equal(4, ha.Seen.Count);
+
+        File.Delete(Record);
+        await Publish(Client(ha, new HaAuthGuard(Record, time), "d-not-a-secret"));
+        Assert.Equal(5, ha.Seen.Count);
+    }
+
+    // A record that is there but cannot be read now (another program has it open exclusively) is
+    // not taken for an empty one: a fresh process sends nothing with a token until it can read it.
+    [Fact]
+    public async Task An_unreadable_record_holds_a_new_processs_tokens_until_it_can_be_read()
+    {
+        var ha = new Answering(time);
+        var guard = new HaAuthGuard(Record, time);
+        await Hammer(Client(ha, guard), TimeSpan.FromHours(1));
+        Assert.Equal(3, ha.Seen.Count);
+
+        using (new FileStream(Record, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var restarted = Client(ha, new HaAuthGuard(Record, time));
+            Assert.Equal(HaAuthKind.Unrecorded, Assert.IsType<HomeAssistantAuthException>(await Publish(restarted)).Kind);
+        }
+
+        await Hammer(Client(ha, new HaAuthGuard(Record, time)), TimeSpan.FromDays(1));
+        Assert.Equal(3, ha.Seen.Count);
     }
 
     [Fact]

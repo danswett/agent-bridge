@@ -422,8 +422,12 @@ public sealed class DaemonHaReader : IDisposable
     }
 
     // Stable, so a day's report counts one reason rather than one per minute.
-    static string Refused(HomeAssistantAuthException e) =>
-        e.Kind == HaAuthKind.Banned ? "Home Assistant has banned this machine's address" : "Home Assistant refused agent-ha-bridge's token";
+    static string Refused(HomeAssistantAuthException e) => e.Kind switch
+    {
+        HaAuthKind.Banned => "Home Assistant has banned this machine's address",
+        HaAuthKind.Unrecorded or HaAuthKind.RecordLost => "the record of Home Assistant's refusals is unavailable, so agent-ha-bridge's token is held",
+        _ => "Home Assistant refused agent-ha-bridge's token",
+    };
 
     // The same figure read again, republished or not, has held since it was first measured: the
     // daemon publishes every change, and percent used only rises within a window.

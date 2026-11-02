@@ -1250,6 +1250,16 @@ agent-ha-bridge's (`test-auth-backoff.ps1`):
   again after 15 minutes, then an hour, then every 4 hours.
 - **Anything else** is not a refusal: a 5xx, a timeout or a refused connection (Home Assistant
   restarting, say). Those are retried as before, the connector's start every 30 s.
+- **Without the record, nothing new is tried.** Every process reads and writes `ha-auth.json`
+  under its lock (`ha-auth.json.lock`), and writes it to a temporary file flushed to disk before
+  moving it into place. If the record can't be locked, read or written for a moment (another
+  program holding it open, say), the process keeps what it counted, holds every token not
+  already accepted, and writes what it counted as soon as it can. A token already accepted
+  carries on.
+- **A corrupt record is set aside, not trusted.** A record that isn't one (cut short, or zero-filled
+  by a power cut) is renamed `ha-auth.json.corrupt` and logged. Its counts are lost, so every
+  token not accepted since is held, in every process and after a restart, until a person acts.
+  `ha token set` allows that token one attempt; deleting `ha-auth.json` starts over.
 
 The host log, `ha status` (a `refused:` line) and the app's Settings page all say the same thing:
 what was refused, what to do, and when the next attempt is, or that there will be none.

@@ -33,7 +33,10 @@ namespace AgentBridge.HomeAssistant;
 //     requests from a banned address are refused before any token is read, and so are wasted
 //     rather than counted;
 //   * anything else (5xx, a timeout, no connection) is no refusal, and the callers' own retries
-//     and backoff go on as before.
+//     and backoff go on as before;
+//   * without the record, closed: while it cannot be locked, read or written, a token not already
+//     accepted is held, and a record found corrupt is set aside and holds every such token until a
+//     person allows one (ha token set) or deletes the record.
 public sealed class HaAuthGuard
 {
     public const string FileName = "ha-auth.json";
@@ -48,6 +51,12 @@ public sealed class HaAuthGuard
     // longer than any request the host makes takes to time out.
     static readonly TimeSpan Reservation = TimeSpan.FromSeconds(45);
     const int MaxCredentials = 16;
+    public const string CorruptSuffix = ".corrupt";
+    static readonly TimeSpan LockWait = TimeSpan.FromSeconds(3);
+    // Short once the record is known to be unavailable: tried again before every request, it must
+    // not hold each up for long.
+    static readonly TimeSpan RetryLockWait = TimeSpan.FromMilliseconds(50);
+    static readonly TimeSpan MoveWait = TimeSpan.FromSeconds(1);
     // Requests out at once from this process, even with an accepted token: one revoked while a
     // burst is on its way is refused once per request already sent, before the first refusal can
     // stop the rest. Each is then counted, by Home Assistant towards a ban and here towards the three.
@@ -61,12 +70,12 @@ public sealed class HaAuthGuard
     readonly SemaphoreSlim outstanding = new(MaxOutstanding, MaxOutstanding);
     readonly List<HaCredential> known = [];
     State state = new();
-    bool unreadableSaid;
-    bool unlockedSaid;
-    // The record could not be written, or locked, once: from then on this process keeps its own
-    // count, which a read of the stale file must not undo (a refusal lost that way would be
-    // repeated for ever).
-    bool unwritable;
+    // The record could not be locked, read or written the last time it was tried. Until it can be
+    // again, a token not already accepted is held, and what this process changed meanwhile is kept
+    // in pending, to be applied to whatever the record says by then rather than lost to it.
+    bool unavailable;
+    readonly List<Func<State, bool>> pending = [];
+    readonly Func<State, bool> markLost;
     // What the record said when this process last read or wrote it.
     string? readText;
     // The record was read again, with whatever another process recorded: what Problem says may have
@@ -79,7 +88,12 @@ public sealed class HaAuthGuard
         this.path = path;
         this.time = time ?? TimeProvider.System;
         this.log = log ?? (_ => { });
-        lock (gate) { state = Read(); }
+        markLost = s =>
+        {
+            s.Lost ??= this.time.GetUtcNow();
+            return true;
+        };
+        lock (gate) { Refresh(); }
     }
 
     // One record for every profile of this user: Home Assistant counts by address, not by profile.
@@ -147,12 +161,15 @@ public sealed class HaAuthGuard
     }
 
     // ha token set: the token was given again, which counts as a change, so it gets an attempt of
-    // its own even when the same one was refused before. The address's count is kept.
+    // its own even when the same one was refused before. The address's count is kept. With the
+    // record lost, this is the person's say-so for one attempt (Granted).
     public void Forget(HaCredential credential)
     {
+        var now = time.GetUtcNow();
         Mutate(s =>
         {
-            if (s.Servers.TryGetValue(credential.Server, out var server)) { server.Credentials.Remove(credential.Id); }
+            if (s.Lost is not null) { ServerOf(s, credential, now).Credentials[credential.Id] = new Cred { Granted = true }; }
+            else if (s.Servers.TryGetValue(credential.Server, out var server)) { server.Credentials.Remove(credential.Id); }
         });
         Changed?.Invoke();
     }
@@ -206,10 +223,10 @@ public sealed class HaAuthGuard
                 lock (gate)
                 {
                     var now = time.GetUtcNow();
-                    Mutate(s =>
+                    Func<State, bool> reserve = s =>
                     {
                         decision = Decide(credential, now);
-                        if (decision.Gate != Gate.Probe || path is null || unwritable) { return false; }
+                        if (decision.Gate != Gate.Probe || path is null || unavailable) { return false; }
                         if (s.ProbeBy is not null && s.ProbeUntil > now)
                         {
                             if (s.ProbeBy != waitingOn)
@@ -227,7 +244,16 @@ public sealed class HaAuthGuard
                         s.ProbeUntil = now + Reservation;
                         reserved = mine;
                         return true;
-                    });
+                    };
+                    Mutate(reserve);
+                    if (unavailable)
+                    {
+                        // A reservation that could not be recorded reserves nothing: not sent.
+                        pending.Remove(reserve);
+                        reserved = null;
+                        busy = false;
+                        decision = Decide(credential, now);
+                    }
                     seen = SeenLocked();
                 }
                 if (!busy) { break; }
@@ -348,9 +374,14 @@ public sealed class HaAuthGuard
 
     Decision Decide(HaCredential credential, DateTimeOffset now)
     {
+        state.Servers.TryGetValue(credential.Server, out var server);
+        Cred? c = null;
+        server?.Credentials.TryGetValue(credential.Id, out c);
+        // Without the record, closed: an attempt that could not be recorded could be repeated.
+        if (Unproven(c) && unavailable) { return new(Gate.Held, HaAuthKind.Unrecorded); }
+        if (Unproven(c) && state.Lost is not null && c is not { Granted: true }) { return new(Gate.Held, HaAuthKind.RecordLost); }
         // Nothing known of this address: a token not tried here before, the one attempt a change earns.
-        if (!state.Servers.TryGetValue(credential.Server, out var server)) { return new(Gate.Probe); }
-        server.Credentials.TryGetValue(credential.Id, out var c);
+        if (server is null) { return new(Gate.Probe); }
         // A token's own refusals first, ban or no ban: a stopped token is not the one to look with.
         if (c is { Rejections: > 0 } && (Stopped(c) || now < NextAttempt(c))) { return new(Gate.Held); }
         if (server.BannedSince is { } since)
@@ -363,6 +394,8 @@ public sealed class HaAuthGuard
         if (c is { Rejections: > 0 }) { return new(Gate.Probe); }
         return c is { Accepted: true } ? new(Gate.Clear) : new(Gate.Probe);
     }
+
+    static bool Unproven(Cred? c) => c is not { Accepted: true, Rejections: 0 };
 
     bool Stopped(Cred c) => c.Stopped || c.Rejections >= MaxRejections || state.Strikes >= MaxRejections;
 
@@ -421,7 +454,9 @@ public sealed class HaAuthGuard
                     // Stopped for good, not only while the count stands: a login with another token
                     // resets the count, and must not give these their attempts back. At the machine's
                     // limit, that is every token refused so far, not only this one.
-                    if (c.Rejections >= MaxRejections) { c.Stopped = true; }
+                    // With the record lost, how often it was refused before is not known: the one
+                    // attempt a person allowed is all it gets.
+                    if (c.Rejections >= MaxRejections || s.Lost is not null) { c.Stopped = true; }
                     if (s.Strikes >= MaxRejections)
                     {
                         foreach (var refused in s.Servers.Values.SelectMany(x => x.Credentials.Values).Where(x => x.Rejections > 0)) { refused.Stopped = true; }
@@ -491,14 +526,20 @@ public sealed class HaAuthGuard
     static string Message(HaCredential credential, HaAuthKind kind, HttpStatusCode? status = null)
     {
         var answered = status is { } s ? $" ({(int)s})" : "";
-        return kind == HaAuthKind.Banned
-            ? $"Home Assistant has banned this machine's address{answered}; see {BanHelp}"
-            : $"Home Assistant rejected {credential.Name}{answered}: {credential.Remedy}";
+        return kind switch
+        {
+            HaAuthKind.Banned => $"Home Assistant has banned this machine's address{answered}; see {BanHelp}",
+            HaAuthKind.Unrecorded => $"Home Assistant's refusals cannot be recorded in {FileName} now, so {credential.Name} is not sent until they can; see {BanHelp}",
+            HaAuthKind.RecordLost => $"{FileName} was unreadable and was set aside as {FileName}{CorruptSuffix}, so {credential.Name} is not sent until a person allows it: " +
+                $"run `agent-bridge-host ha token set`, or delete {FileName}; see {BanHelp}",
+            _ => $"Home Assistant rejected {credential.Name}{answered}: {credential.Remedy}",
+        };
     }
 
     string? DescribeLocked(HaCredential credential)
     {
         var now = time.GetUtcNow();
+        if (Decide(credential, now) is { Gate: Gate.Held, Kind: HaAuthKind.Unrecorded or HaAuthKind.RecordLost } d) { return Message(credential, d.Kind); }
         if (!state.Servers.TryGetValue(credential.Server, out var server)) { return null; }
         if (server.BannedSince is not null)
         {
@@ -580,91 +621,166 @@ public sealed class HaAuthGuard
     // change says whether it changed anything to write.
     void Mutate(Func<State, bool> change)
     {
-        lock (gate)
+        lock (gate) { Sync(change); }
+    }
+
+    // Reads the record again, for what another process has recorded since, and writes what this
+    // one could not record before.
+    void Refresh() => Sync(null);
+
+    // Brings state up to the record, applies what this process changed that the record does not
+    // have yet (pending) and change, and writes the result when anything changed. Readers take the
+    // lock too: on Windows a reader's open handle makes replacing the file fail, and once that
+    // failure stopped a process recording for the rest of its life, while a restart then found its
+    // refusals gone (#234 review). A failure now lasts until the next try: meanwhile the change is
+    // kept, counted here, and a token not already accepted is held (Decide).
+    void Sync(Func<State, bool>? change)
+    {
+        if (path is null)
         {
-            if (path is null || unwritable)
-            {
-                change(state);
-                return;
-            }
-            using var held = Lock();
-            // Without the lock, counted here only from now on: read and written unlocked, the record
-            // could lose what another process was recording at the same moment, and read again
-            // later, it would lose what this one counted.
-            if (held is null)
-            {
-                unwritable = true;
-                change(state);
-                return;
-            }
-            state = Read();
-            if (!change(state)) { return; }
-            try
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                var temp = path + ".tmp";
-                var text = JsonSerializer.Serialize(state, Json);
-                File.WriteAllText(temp, text);
-                File.Move(temp, path, overwrite: true);
-                readText = text;
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-                // Still counted in this process, which is what keeps it from repeating itself.
-                if (!unwritable) { log($"Home Assistant's refusals could not be recorded in {path} ({e.GetType().Name}); counting in this process"); }
-                unwritable = true;
-            }
+            change?.Invoke(state);
+            return;
         }
-    }
-
-    void Reload()
-    {
-        if (path is not null) { state = Read(); }
-    }
-
-    // Reads the record again, for what another process has recorded since.
-    void Refresh()
-    {
-        if (path is null || unwritable) { return; }
+        FileStream? held = null;
         try
         {
-            // Read every time, not by its file time: those move in coarse steps (on Windows, the
-            // clock's tick of up to 16 ms), so two writes close together can carry one time. It is
-            // small, and read with nothing new in it, it changes nothing.
-            state = Read();
+            State? basis = null;
+            held = Lock(unavailable ? RetryLockWait : LockWait);
+            var failure = held is null ? "it is locked by another process" : Load(out basis);
+            if (basis is null)
+            {
+                // Not to be had: what this process knows stands, with this change, kept for later.
+                if (change is not null && change(state)) { pending.Add(change); }
+                Unavailable(failure!);
+                return;
+            }
+            var write = pending.Count > 0;
+            foreach (var p in pending) { p(basis); }
+            // Before change, which decides (Decide) on state.
+            state = basis;
+            var changed = change is not null && change(basis);
+            if (!write && !changed)
+            {
+                Available();
+                return;
+            }
+            if (Write(basis) is { } error)
+            {
+                if (changed) { pending.Add(change!); }
+                Unavailable(error);
+                return;
+            }
+            pending.Clear();
+            Available();
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        finally { held?.Dispose(); }
     }
 
-    State Read()
+    // The record as it is now, in basis, or why it could not be had. A record that is there but is
+    // not one (a truncated write, a file zero-filled by a power cut) is set aside, never taken for a
+    // clean one: that let every token try again and the next write erase every process's refusals.
+    // Its loss is recorded instead (Lost), and holds every token not since accepted until a person
+    // allows it.
+    string? Load(out State? basis)
     {
-        if (path is null || unwritable) { return state; }
+        basis = null;
+        string text;
         try
         {
-            if (!File.Exists(path)) { return state.Servers.Count == 0 ? new State() : state; }
-            string text;
-            using (var reader = new StreamReader(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)))
+            if (!File.Exists(path))
             {
-                text = reader.ReadToEnd();
+                // Never written, or deleted by a person to start over.
+                if (readText is not null) { reread = true; }
+                readText = null;
+                basis = new State();
+                return null;
             }
-            if (text == readText) { return state; }
-            var read = JsonSerializer.Deserialize<State>(text, Json) ?? new State();
+            using var reader = new StreamReader(new FileStream(path!, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+            text = reader.ReadToEnd();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return $"it could not be read ({e.GetType().Name})";
+        }
+        State? read = null;
+        try { read = JsonSerializer.Deserialize<State>(text, Json); }
+        catch (JsonException) { }
+        if (read is { Servers: not null })
+        {
+            if (text != readText) { reread = true; }
             readText = text;
-            reread = true;
-            return read;
+            basis = read;
+            return null;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        if (!pending.Contains(markLost)) { pending.Add(markLost); }
+        try { File.Move(path!, path + CorruptSuffix, overwrite: true); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            // What this process has counted stands; an unreadable record is not taken for a clean one.
-            if (!unreadableSaid) { log($"Home Assistant's refusals could not be read from {path} ({e.GetType().Name}); counting in this process"); }
-            unreadableSaid = true;
-            return state;
+            return $"it is not a record of refusals and could not be set aside ({e.GetType().Name})";
+        }
+        log($"Home Assistant's refusal record {path} was not readable as one, and has been set aside as {FileName}{CorruptSuffix}. " +
+            "Nothing is sent with a token not already accepted until `agent-bridge-host ha token set` is run or the record deleted");
+        reread = true;
+        // What this process last read stands, with the loss recorded on it (markLost, pending).
+        basis = readText is { } good ? JsonSerializer.Deserialize<State>(good, Json) ?? new State() : new State();
+        return null;
+    }
+
+    // To a temporary file, flushed to the disk, then over the record in one move, so the record is
+    // never half written. A handle another program has open on it (a virus scanner, an indexer) is
+    // given a moment to close.
+    string? Write(State s)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var temp = path + ".tmp";
+            var text = JsonSerializer.Serialize(s, Json);
+            using (var file = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                file.Write(Encoding.UTF8.GetBytes(text));
+                file.Flush(flushToDisk: true);
+            }
+            var deadline = Environment.TickCount64 + (unavailable ? 0 : (long)MoveWait.TotalMilliseconds);
+            while (true)
+            {
+                try
+                {
+                    File.Move(temp, path!, overwrite: true);
+                    break;
+                }
+                catch (Exception e) when ((e is IOException or UnauthorizedAccessException) && Environment.TickCount64 < deadline) { Thread.Sleep(25); }
+            }
+            readText = text;
+            return null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return $"it could not be written ({e.GetType().Name})";
         }
     }
 
-    FileStream? Lock()
+    void Unavailable(string failure)
     {
-        var deadline = Environment.TickCount64 + 3000;
+        if (!unavailable)
+        {
+            log($"Home Assistant's refusals could not be recorded in {path}: {failure}. Until they can, nothing is sent with a token not already accepted");
+            reread = true;
+        }
+        unavailable = true;
+    }
+
+    void Available()
+    {
+        if (!unavailable) { return; }
+        unavailable = false;
+        reread = true;
+        log($"Home Assistant's refusals are recorded in {path} again");
+    }
+
+    FileStream? Lock(TimeSpan wait)
+    {
+        var deadline = Environment.TickCount64 + (long)wait.TotalMilliseconds;
         while (true)
         {
             try
@@ -673,12 +789,7 @@ public sealed class HaAuthGuard
                 return new FileStream(path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             }
             catch (IOException) when (Environment.TickCount64 < deadline) { Thread.Sleep(20); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-                if (!unlockedSaid) { log($"Home Assistant's refusals could not be locked ({e.GetType().Name}); counting in this process"); }
-                unlockedSaid = true;
-                return null;
-            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
         }
     }
 
@@ -704,6 +815,9 @@ public sealed class HaAuthGuard
         public string? ProbeBy { get; set; }
         public DateTimeOffset? ProbeUntil { get; set; }
         public Dictionary<string, Server> Servers { get; set; } = new(StringComparer.Ordinal);
+        // When the record was found unreadable and set aside: what it held is gone, so a token not
+        // accepted since waits for a person (Forget, or deleting the record).
+        public DateTimeOffset? Lost { get; set; }
     }
 
     // One Home Assistant, by address.
@@ -723,10 +837,13 @@ public sealed class HaAuthGuard
         public DateTimeOffset? RejectedAt { get; set; }
         public bool Accepted { get; set; }
         public DateTimeOffset? AttemptAt { get; set; }
+        // Allowed one attempt by a person while the record is lost.
+        public bool Granted { get; set; }
     }
 }
 
-public enum HaAuthKind { Rejected, Banned }
+// Unrecorded: the record of refusals cannot be had now. RecordLost: it was unreadable and was set aside.
+public enum HaAuthKind { Rejected, Banned, Unrecorded, RecordLost }
 
 // A token, for one Home Assistant address, as the guard knows it: digests only. Its ToString is
 // its name, never the token.
