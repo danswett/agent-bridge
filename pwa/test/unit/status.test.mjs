@@ -37,6 +37,11 @@ test('Rule 1: delegates still running beside the question are counted, with a nu
   assert.equal(said({ status: 'waiting', question: { id: 'q' }, subagents: [delegate('a', { kind: 'task' }), delegate('b', { status: 'ended' })] }).text, 'Waiting on you · 1 delegate still running');
   // An idle background delegate waits to be woken: it is not running.
   assert.equal(said({ status: 'waiting', question: { id: 'q' }, subagents: [delegate('a', { status: 'idle' })] }).text, 'Waiting on you');
+  // The host counts background agents, untrimmed; running tasks are added from the list, and a
+  // listed background agent is never counted twice. Ten background agents and a task, with the
+  // task and seven of the ten listed, are eleven.
+  const trimmed = [delegate('t', { kind: 'task' }), ...Array.from({ length: 7 }, (_, i) => delegate(`b${i}`))];
+  assert.equal(said({ status: 'waiting', question: { id: 'q' }, activity: { background: { agents: 10, shells: 0 } }, subagents: trimmed, subagentsMore: 3 }).text, 'Waiting on you · 11 delegates still running');
 });
 
 test('Rule 1: a question only the machine can answer says to answer it there', () => {

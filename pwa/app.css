@@ -301,7 +301,7 @@ a { color: var(--ab-bridge); }
 .status-lead { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; }
 /* The words take a role only where §3 allows one: needs' text for a question, agent's text
    while an agent drives (rule 7). Active and neutral are glyph colours, never words. */
-.status-text { font-weight: 600; color: var(--ab-text); }
+.status-text { font-weight: 600; color: var(--ab-text); min-width: 0; overflow-wrap: anywhere; }
 .status-text[data-tone="needs"] { color: var(--ab-needs-text); }
 .status-text[data-tone="agent"] { color: var(--ab-agent-text); }
 .status-text[data-tone="muted"] { color: var(--ab-text2); }

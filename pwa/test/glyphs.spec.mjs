@@ -181,14 +181,15 @@ for (const width of [390, 900, 1440]) {
   test(`at ${width} px every card's status line leads with its glyph, at 16 px, beside its words however long they are`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await openDemo(page);
-    // Words long enough to wrap on a phone: they wrap beside the glyph, never leaving it alone.
+    // Words long enough to wrap on a phone, and a name with nowhere to break (the protocol allows
+    // 120 bytes): they wrap beside the glyph, never leaving it alone or running out of the card.
     await page.evaluate(() => {
       const d = window.agentBridgeDemo;
       const s = d.host.get('019a1b2c-codex-example');
       const t = new Date(Date.now() + 1000).toISOString();
       d.upsert({
         ...s, status: 'waiting', statusSince: t, updatedAt: t, driver: 'agent', waitingOn: 'b1',
-        subagents: [{ id: 'b1', kind: 'background', name: 'Check the ubuntu CI failure on the relay and the witness', status: 'waiting' }],
+        subagents: [{ id: 'b1', kind: 'background', name: 'CheckTheUbuntuCIFailureOnTheRelayAndTheWitnessAndTheHostLogsAgain', status: 'waiting' }],
         question: { id: 'q-b1', kind: 'form', message: 'Which run?', fields: [], askedAt: t, answerAtMachine: true, agent: 'b1' },
       });
     });
@@ -198,10 +199,11 @@ for (const width of [390, 900, 1440]) {
       const text = line.querySelector('.status-text');
       const gr = g.getBoundingClientRect();
       const tr = text.getBoundingClientRect();
-      return { first: line.firstElementChild.firstElementChild === g, w: gr.width, h: gr.height, before: gr.right <= tr.left, centred: Math.abs((gr.top + gr.bottom) / 2 - (tr.top + tr.bottom) / 2) <= 3 };
+      const cr = line.closest('.frame').getBoundingClientRect();
+      return { inside: tr.right <= cr.right, first: line.firstElementChild.firstElementChild === g, w: gr.width, h: gr.height, before: gr.right <= tr.left, centred: Math.abs((gr.top + gr.bottom) / 2 - (tr.top + tr.bottom) / 2) <= 3 };
     }));
     expect(lines).toHaveLength(4);
-    for (const l of lines) { expect(l).toEqual({ first: true, w: 16, h: 16, before: true, centred: true }); }
+    for (const l of lines) { expect(l).toEqual({ inside: true, first: true, w: 16, h: 16, before: true, centred: true }); }
     // A running tool's glyph is the working one, at 12.
     const tool = page.locator(`.session[data-id="${CLAUDE}"] .tool-line .glyph`);
     await expect(tool).toHaveAttribute('data-glyph', 'working');

@@ -65,12 +65,14 @@ function pick(s) {
   return { rule: 6, glyph: 'idle', view: 'idle', text: 'Idle', tone: 'plain' };
 }
 
-// Delegates still running beside the session's own question: the host's background count, or
-// the listed ones running, whichever knows of more (a task agent isn't in the count, and a
-// list cut short undercounts).
+// Delegates still running beside the session's own question. The host's background count is
+// at any depth and never trimmed, but counts background agents only; task agents come from the
+// list (which a budget may trim). The listed background ones stand in for the count when a host
+// sends none, and are never counted twice.
 function runningDelegates(s) {
-  const listed = (s.subagents ?? []).filter((a) => RUNNING.has(a.status)).length;
-  return Math.max(s.activity?.background?.agents ?? 0, listed);
+  const listed = (s.subagents ?? []).filter((a) => RUNNING.has(a.status));
+  const background = listed.filter((a) => a.kind === 'background').length;
+  return Math.max(s.activity?.background?.agents ?? 0, background) + (listed.length - background);
 }
 
 // The task agent running as part of the main agent's own turn: a running task entry whose
