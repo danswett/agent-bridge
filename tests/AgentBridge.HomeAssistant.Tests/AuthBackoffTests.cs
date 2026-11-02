@@ -165,6 +165,30 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(2 + HaAuthGuard.MaxRejections, ha.Seen.Count);
     }
 
+    // A read that succeeds while writes still fail is no recovery: the record stays unavailable,
+    // and a token not yet accepted stays held, until a write does succeed.
+    [Fact]
+    public async Task A_record_that_can_be_read_but_not_written_stays_unavailable_until_a_write_succeeds()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var said = new List<string>();
+        var guard = new HaAuthGuard(Record, time, m => { lock (said) { said.Add(m); } });
+        Assert.Null(await Publish(Client(ha, guard, "other-token-not-a-secret")));
+        ha.Status = HttpStatusCode.Unauthorized;
+        Directory.CreateDirectory(Record + ".tmp");
+        var serve = Client(ha, guard);
+
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.Equal(HaAuthKind.Unrecorded, Assert.IsType<HomeAssistantAuthException>(await Publish(serve)).Kind);
+            Assert.NotNull(serve.Refused);
+        }
+
+        Assert.DoesNotContain(said, m => m.EndsWith(" again", StringComparison.Ordinal));
+        Directory.Delete(Record + ".tmp");
+        Assert.Null(serve.Refused);
+    }
+
     // Another process holding the record's lock for good: nothing is written over its record, and
     // nothing is sent that only the record could have stopped.
     [Fact]
@@ -371,7 +395,8 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(5, ha.Seen.Count);
     }
 
-    // JSON that parses but is no record (an address with nothing under it, a negative count) is
+    // JSON that parses but is no record (an address with nothing under it, a negative count, a
+    // field missing, as a stopped flag would be from a record cut short and patched) is
     // as corrupt as one that does not parse: recording a refusal in it must not fail and leave the
     // token free to be retried.
     [Theory]
@@ -379,6 +404,8 @@ public sealed class AuthBackoffTests : IDisposable
     [InlineData("""{ "servers": { "0123456789abcdef": { "credentials": null } } }""")]
     [InlineData("""{ "strikes": -100, "servers": {} }""")]
     [InlineData("""{ "servers": null }""")]
+    [InlineData("""{}""")]
+    [InlineData("""{ "version": 1, "strikes": 0, "strikeAt": null, "refusals": 0, "probeBy": null, "probeUntil": null, "lost": null, "servers": { "0123456789abcdef": { "bannedSince": null, "banLooks": 0, "banCheckAt": null, "touched": null, "credentials": { "fedcba9876543210": {} } } } }""")]
     public async Task A_record_that_parses_but_is_not_one_is_set_aside_and_holds_every_token(string record)
     {
         Directory.CreateDirectory(folder);

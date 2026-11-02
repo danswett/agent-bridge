@@ -2,6 +2,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace AgentBridge.HomeAssistant;
 
@@ -668,7 +669,9 @@ public sealed class HaAuthGuard
                 Unavailable(failure!);
                 return;
             }
-            var write = pending.Count > 0;
+            // Unavailable, it is written even with nothing new: a read alone does not show a write
+            // will succeed, and taking it for one would let a token not yet accepted try meanwhile.
+            var write = pending.Count > 0 || unavailable;
             foreach (var p in pending) { p(basis); }
             // Before change, which decides (Decide) on state.
             state = basis;
@@ -844,42 +847,63 @@ public sealed class HaAuthGuard
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
+    // Every field required: what this guard writes has them all, and a record missing one (a
+    // stopped flag, a ban) would quietly give back what it held, so it is taken for a corrupt one.
     sealed class State
     {
+        [JsonRequired]
         public int Version { get; set; } = 1;
         // Refusals Home Assistant has counted against this machine since a WebSocket login last
         // reset its count: by any token, at any address it was reached by.
+        [JsonRequired]
         public int Strikes { get; set; }
+        [JsonRequired]
         public DateTimeOffset? StrikeAt { get; set; }
         // Every refusal ever recorded, by any process: only ever rises.
+        [JsonRequired]
         public long Refusals { get; set; }
         // The process making the one attempt not yet known to be accepted, and until when.
+        [JsonRequired]
         public string? ProbeBy { get; set; }
+        [JsonRequired]
         public DateTimeOffset? ProbeUntil { get; set; }
+        [JsonRequired]
         public Dictionary<string, Server> Servers { get; set; } = new(StringComparer.Ordinal);
         // When the record was found unreadable and set aside: what it held is gone, so a token not
         // accepted since waits for a person (Forget, or deleting the record).
+        [JsonRequired]
         public DateTimeOffset? Lost { get; set; }
     }
 
     // One Home Assistant, by address.
     sealed class Server
     {
+        [JsonRequired]
         public DateTimeOffset? BannedSince { get; set; }
+        [JsonRequired]
         public int BanLooks { get; set; }
+        [JsonRequired]
         public DateTimeOffset? BanCheckAt { get; set; }
+        [JsonRequired]
         public DateTimeOffset? Touched { get; set; }
+        [JsonRequired]
         public Dictionary<string, Cred> Credentials { get; set; } = new(StringComparer.Ordinal);
     }
 
     sealed class Cred
     {
+        [JsonRequired]
         public int Rejections { get; set; }
+        [JsonRequired]
         public bool Stopped { get; set; }
+        [JsonRequired]
         public DateTimeOffset? RejectedAt { get; set; }
+        [JsonRequired]
         public bool Accepted { get; set; }
+        [JsonRequired]
         public DateTimeOffset? AttemptAt { get; set; }
         // Allowed one attempt by a person while the record is lost.
+        [JsonRequired]
         public bool Granted { get; set; }
     }
 }

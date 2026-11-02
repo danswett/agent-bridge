@@ -1254,10 +1254,10 @@ agent-ha-bridge's (`test-auth-backoff.ps1`):
   under its lock (`ha-auth.json.lock`), and writes it to a temporary file flushed to disk before
   moving it into place. If the record can't be locked, read or written for a moment (another
   program holding it open, say), the process keeps what it counted, holds every token not
-  already accepted, and writes what it counted as soon as it can. A token already accepted
-  carries on.
+  already accepted, and writes what it counted as soon as it can. Only a write that succeeds
+  ends that; a read alone doesn't. A token already accepted carries on.
 - **A corrupt record is set aside, not trusted.** A record that isn't one (cut short, zero-filled
-  by a power cut, or JSON missing a table or holding a negative count) is copied to `ha-auth.json.corrupt`, logged, and replaced by a record of its
+  by a power cut, or JSON missing a field or table, or holding a negative count) is copied to `ha-auth.json.corrupt`, logged, and replaced by a record of its
   loss; until that is written, the corrupt file stays where it is and goes on holding. Its counts
   are lost, so every token not accepted since is held, in every process and after a restart, even
   one a process still knew as accepted, until a person acts. `ha token set` allows that token
