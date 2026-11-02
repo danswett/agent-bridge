@@ -3,13 +3,29 @@ import SwiftUI
 
 /// Markdown is rendered as native text. Images and raw HTML never fetch or execute.
 struct BridgeMarkdown: View {
-    private let document: BridgeMarkdownDocument
+    private let source: String
 
     init(_ source: String) {
-        document = BridgeMarkdownDocument(source)
+        self.source = source
     }
 
     var body: some View {
+        MarkdownDocumentView(source: source).equatable()
+    }
+}
+
+private struct MarkdownDocumentView: View, Equatable {
+    let source: String
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        // Canonically equivalent strings can contain different link URL bytes.
+        lhs.source.utf8.elementsEqual(rhs.source.utf8)
+    }
+
+    var body: some View {
+        // Parsing in a View initializer repeats on unrelated parent updates.
+        // Unchanged input can now skip parsing during parent updates.
+        let document = BridgeMarkdownDocument(source)
         VStack(alignment: .leading, spacing: 12) {
             ForEach(document.blocks) { MarkdownBlockView(block: $0) }
             if document.isTruncated {
