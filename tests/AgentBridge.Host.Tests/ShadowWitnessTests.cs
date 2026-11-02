@@ -320,64 +320,90 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Null(Assert.Single(Explain(read, ["c4"], ["a5"])).Known);
     }
 
-    // Found in review: the host is read before the daemon, so a handoff between the two reads leaves
-    // the host listing the agent the daemon has seen end. Successive ones, each caught for a sample,
-    // are no difference; a host still on the wrong agent a sample later is.
-    [Fact]
-    public void A_handoff_the_host_has_not_read_yet_is_no_difference_however_many_follow()
+    // One sample of a session's background agents, the host listing these agents and the daemon
+    // these calls, read through offset.
+    IReadOnlyList<ShadowDifference> Sample(ShadowWitness witness, long offset, string[] daemonCalls, string[] hostAgents)
     {
-        var witness = new ShadowWitness(Paths);
-        IReadOnlyList<ShadowDifference> Explain(long offset, string[] daemonCalls, string[] hostAgents)
-        {
-            var (d, h) = (new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Daemon(offset, agents: daemonCalls) } },
-                new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Host(agents: hostAgents.Length) with { RunningSubagents = hostAgents } }, SeesAgentHaBridge = true });
-            return witness.Explain(d, h, ShadowCompare.Compare(d, h).Differences);
-        }
-
-        var read = Write(Event("subagent.started", new { toolCallId = "c1", executionMode = "background" }, agentId: "a1"));
-        Assert.Empty(Explain(read, ["c1"], ["a1"]));
-        for (var n = 1; n < 5; n++)
-        {
-            read = Write(
-                Event("assistant.turn_end", new { }, agentId: $"a{n}"),
-                Event("subagent.completed", new { toolCallId = $"c{n}" }),
-                Event("subagent.started", new { toolCallId = $"c{n + 1}", executionMode = "background" }, agentId: $"a{n + 1}"));
-            Assert.Empty(Explain(read, [$"c{n + 1}"], [$"a{n}"]));
-        }
-        // Still on a4 with nothing new since: the host is wrong, not behind.
-        Assert.Null(Assert.Single(Explain(read, ["c5"], ["a4"])).Known);
-        // And caught up, no difference.
-        Assert.Empty(Explain(read, ["c5"], ["a5"]));
+        var (d, h) = (new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Daemon(offset, agents: daemonCalls) } },
+            new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Host(agents: hostAgents.Length) with { RunningSubagents = hostAgents } }, SeesAgentHaBridge = true });
+        return witness.Explain(d, h, ShadowCompare.Compare(d, h).Differences);
     }
 
-    // Found in review: an agent stuck on one side is reported however the other side's agents
-    // change meanwhile, and the same two agents trading sides each sample are a handoff each time.
+    long Handoff(int from) => Write(
+        Event("assistant.turn_end", new { }, agentId: $"a{from}"),
+        Event("subagent.completed", new { toolCallId = $"c{from}" }),
+        Event("subagent.started", new { toolCallId = $"c{from + 1}", executionMode = "background" }, agentId: $"a{from + 1}"));
+
+    // Found in review: the host is read before the daemon, so a handoff between the two reads leaves
+    // the host listing the agent the daemon has seen end, for a sample. But a host always a handoff
+    // behind (one applying an event a pass late) lists other agents every sample, and is a bug.
     [Fact]
-    public void A_side_stuck_on_a_wrong_agent_is_reported_while_the_other_hands_off_and_agents_trading_sides_are_not()
+    public void A_handoff_the_host_has_not_read_yet_is_no_difference_but_a_host_always_one_behind_is()
     {
-        IReadOnlyList<ShadowDifference> Explain(ShadowWitness witness, long offset, string[] daemonCalls, string[] hostAgents)
+        var witness = new ShadowWitness(Paths);
+        var read = Write(Event("subagent.started", new { toolCallId = "c1", executionMode = "background" }, agentId: "a1"));
+        Assert.Empty(Sample(witness, read, ["c1"], ["a1"]));
+        // One read-order lag, then caught up: nothing.
+        read = Handoff(1);
+        Assert.Empty(Sample(witness, read, ["c2"], ["a1"]));
+        Assert.Empty(Sample(witness, read, ["c2"], ["a2"]));
+
+        // A handoff behind on every sample: reported from the third in a row, and on each after.
+        for (var n = 2; n < 7; n++)
         {
-            var (d, h) = (new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Daemon(offset, agents: daemonCalls) } },
-                new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Host(agents: hostAgents.Length) with { RunningSubagents = hostAgents } }, SeesAgentHaBridge = true });
-            return witness.Explain(d, h, ShadowCompare.Compare(d, h).Differences);
+            read = Handoff(n);
+            var found = Sample(witness, read, [$"c{n + 1}"], [$"a{n}"]);
+            if (n - 1 < ShadowWitness.ApartSamples) { Assert.Empty(found); }
+            else { Assert.Null(Assert.Single(found).Known); }
         }
+        Assert.Empty(Sample(witness, read, ["c7"], ["a7"]));
+    }
+
+    // Found in review: an agent stuck on one side is reported a sample later however the other side's
+    // agents change meanwhile. The same two agents trading sides are a handoff each time, until they
+    // have been apart as many samples in a row as any agents may be.
+    [Fact]
+    public void A_side_stuck_on_a_wrong_agent_is_reported_while_the_other_hands_off_and_agents_trading_sides_only_once_they_keep_on()
+    {
         var stuck = new ShadowWitness(Paths);
         Write(Event("subagent.started", new { toolCallId = "c1", executionMode = "background" }, agentId: "a1"),
             Event("assistant.turn_end", new { }, agentId: "a1"),
             Event("subagent.completed", new { toolCallId = "c1" }));
         var read = Write(Event("subagent.started", new { toolCallId = "c2", executionMode = "background" }, agentId: "a2"));
-        Assert.Empty(Explain(stuck, read, ["c2"], ["a1"]));
-        read = Write(
-            Event("assistant.turn_end", new { }, agentId: "a2"),
-            Event("subagent.completed", new { toolCallId = "c2" }),
-            Event("subagent.started", new { toolCallId = "c3", executionMode = "background" }, agentId: "a3"));
+        Assert.Empty(Sample(stuck, read, ["c2"], ["a1"]));
+        read = Handoff(2);
         // The host still on a1, the daemon handed on to a3.
-        Assert.Null(Assert.Single(Explain(stuck, read, ["c3"], ["a1"])).Known);
+        Assert.Null(Assert.Single(Sample(stuck, read, ["c3"], ["a1"])).Known);
 
         var trading = new ShadowWitness(Paths);
-        Assert.Empty(Explain(trading, read, ["c2"], ["a1"]));
-        Assert.Empty(Explain(trading, read, ["c1"], ["a2"]));
-        Assert.Empty(Explain(trading, read, ["c2"], ["a1"]));
+        Assert.Empty(Sample(trading, read, ["c2"], ["a1"]));
+        Assert.Empty(Sample(trading, read, ["c1"], ["a2"]));
+        Assert.Null(Assert.Single(Sample(trading, read, ["c2"], ["a1"])).Known);
+    }
+
+    // Found in review: a sample whose counts differ is ShadowCompare's difference, and used to wipe
+    // what was apart before it. A host stuck on a wrong agent, with other agents' starts a sample
+    // late on one side or the other in between, then never had two samples in a row to show it.
+    [Fact]
+    public void A_stuck_agent_between_count_lags_of_other_agents_is_still_reported()
+    {
+        var witness = new ShadowWitness(Paths);
+        Write(Event("subagent.started", new { toolCallId = "c1", executionMode = "background" }, agentId: "a1"),
+            Event("assistant.turn_end", new { }, agentId: "a1"),
+            Event("subagent.completed", new { toolCallId = "c1" }),
+            Event("subagent.started", new { toolCallId = "c2", executionMode = "background" }, agentId: "a2"));
+        var read = Write(Event("subagent.started", new { toolCallId = "c3", executionMode = "background" }, agentId: "a3"));
+        // The host has not shown a3 yet: the counts differ.
+        Assert.Contains(Sample(witness, read, ["c2", "c3"], ["a1"]), d => d.Kind == ShadowKinds.BackgroundAgents);
+        // The same count, a1 in place of a2: one sample apart.
+        Assert.Empty(Sample(witness, read, ["c2", "c3"], ["a1", "a3"]));
+        // The daemon has not read a4 yet: the counts differ the other way.
+        var before = read;
+        read = Write(Event("subagent.started", new { toolCallId = "c4", executionMode = "background" }, agentId: "a4"));
+        Assert.Contains(Sample(witness, before, ["c2", "c3"], ["a1", "a3", "a4"]), d => d.Kind == ShadowKinds.BackgroundAgents);
+        // a1 is still where a2 should be: every sample now has a background.agents difference.
+        var found = Assert.Single(Sample(witness, read, ["c2", "c3", "c4"], ["a1", "a3", "a4"]));
+        Assert.Equal((ShadowKinds.BackgroundAgents, (string?)null), (found.Kind, found.Known));
     }
 
     // Found in review (#77): a shell polled more often than the witness kept starts lost the start

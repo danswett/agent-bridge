@@ -271,6 +271,31 @@ public sealed class ShadowTests : IDisposable
         Assert.Contains(ShadowLedger.Read(reports, "2026-10-28")!.Mismatches, x => x.Kind == ShadowKinds.QuestionFields && x.Seconds == 105);
     }
 
+    // Found in review (#175): a host stuck on a wrong agent, between other agents' count lags first
+    // one way and then the other, is one disagreement: the lags no longer split it, or it never
+    // lasts the grace.
+    [Fact]
+    public void Count_lags_either_way_around_a_stuck_agent_are_one_disagreement_that_lasts_the_grace()
+    {
+        f.Time.SetLocalTimeZone(TimeZoneInfo.Utc);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), f.Time);
+        ShadowDifference Agents(string detail) => new(ShadowKinds.BackgroundAgents, "s1", detail);
+        void Sample(params ShadowDifference[] diffs)
+        {
+            ledger.Record(new ShadowComparison(true, 1, 1, diffs, ["s1"]), new ShadowView(), new ShadowView());
+            f.Time.Advance(TimeSpan.FromSeconds(15));
+        }
+
+        for (var i = 0; i < 3; i++)
+        {
+            Sample(Agents(i % 2 == 0 ? "daemon=3 host=2" : "daemon=2 host=3"));
+            Sample(Agents("daemon=2 host=2, not the same agents"));
+        }
+        Sample();
+        var m = Assert.Single(ShadowLedger.Read(reports, "2026-10-28")!.Mismatches);
+        Assert.Equal((ShadowKinds.BackgroundAgents, 75L), (m.Kind, m.Seconds));
+    }
+
     [Fact]
     public void A_disagreement_shorter_than_the_grace_is_timing_skew_and_one_that_lasts_it_is_a_mismatch()
     {

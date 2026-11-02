@@ -421,11 +421,28 @@ that started, stopped (a run's end or `subagent.failed`), completed or were woke
 out of that check: the daemon a poll behind a handoff is not a disagreement, and
 successive handoffs caught a sample each would otherwise join into one long episode. The
 host is read first and has no read offset of its own, so a handoff between the two reads
-gives the host's side the same lag; an agent must therefore be apart on the same side on
-two samples in a row before the difference is recorded. A side stuck on a wrong agent is
-still reported a sample later, whatever the other side hands off meanwhile; agents that
-change on every sample, or trade sides, are not, and a single `shadow once` sample never
-reports this one. A wrong
+gives the host's side the same lag for one sample. So one sample with agents apart is not
+yet a difference; it becomes one when either:
+
+* an agent is apart on the same side on two samples in a row, whatever the other side
+  hands off meanwhile (a side stuck on a wrong agent, reported a sample later); or
+* any agents at all are apart on three samples in a row (`ShadowWitness.ApartSamples`),
+  whichever they are: a side always a handoff behind, such as a host applying
+  `subagent.completed` a pass late, lists different agents every sample and is a bug. Three
+  because a read-order lag needs a handoff to land in the moment between the two reads (a
+  second or less of a 15 s interval), so three in a row, and then on every sample through
+  the 60 s grace, is a side behind, not a race; two could still be a busy session handing
+  off twice.
+
+Agents that trade sides from one sample to the next are therefore reported only by the
+second rule. A sample whose counts differ is `ShadowCompare`'s `background.agents`
+difference already; it leaves what was apart, and the run of samples, as they were, so a
+stuck agent between other agents' count lags is still reported. Both are forgotten only
+when the agents agree or the session leaves this check (not Copilot, no daemon offset, or a
+host list that does not hold every agent it counts); a sample whose transcript cannot say
+which agents its calls started leaves them as they were. In the ledger, an episode that has carried "not the same agents" no longer
+splits when a count lag around it turns the other way ("Grace and timing skew"). A single
+`shadow once` sample never reports this kind. A wrong
 agent on one side is no longer hidden by another on the other. The daemon still counts every
 agent's `subagent.started` at any depth and drops none for being nested, so nesting adds no
 difference. A delegate's shells are its own on the host and the session's on the daemon,
@@ -547,7 +564,8 @@ each judged against the grace on its own. On DEV-VM1 a shell ended and was start
 minute later, with the daemon a pass behind each time. Two opposite lags, each shorter than
 the grace, had run on as one 60 s mismatch. This applies to the kinds compared as two counts
 (`background.*`, `compactions`, `resumable.count`); a count that moves the same way stays one
-disagreement.
+disagreement. A `background.agents` episode that has also carried "not the same agents"
+(#175) is more than two lags, and lags either way around it stay part of it.
 
 ## Coverage
 

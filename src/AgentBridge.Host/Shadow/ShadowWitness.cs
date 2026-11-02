@@ -73,28 +73,52 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
     // The host is read before the daemon, and has no read offset of its own to leave its unread
     // handoffs out by, so a handoff between the two reads gives the same count of different agents
     // for one sample. Successive ones would join into one episode longer than the grace (found in
-    // review). So an agent must be apart on the same side on two samples in a row: one side stuck
-    // on a wrong agent is reported a sample later, whatever the other side hands off meanwhile,
-    // and only agents that change every sample are not. The side counts: a handoff back and forth
-    // between two agents puts each on the other side each time, which is no stuck agent.
+    // review). So one sample apart is not yet a difference. It is one once an agent is apart on the
+    // same side two samples in a row, whatever the other side hands off meanwhile (a handoff back
+    // and forth puts each agent on the other side each time, which is no stuck agent), or once any
+    // agents at all are apart ApartSamples samples in a row: a side always a handoff behind (one
+    // that applies an event a pass late) changes its agents every sample, and is still a bug.
+    //
+    // A sample whose counts differ is ShadowCompare's to report, and leaves both as they were: a
+    // stuck agent between count lags of other agents would otherwise start again each time, and
+    // never last the grace (found in review). They are forgotten only when the session leaves this
+    // check or the agents agree.
     IEnumerable<ShadowDifference> OtherAgents(ShadowView daemon, ShadowView host, IReadOnlyList<ShadowDifference> differences)
     {
-        foreach (var gone in apartBefore.Keys.Where(k => !daemon.Sessions.ContainsKey(k)).ToList()) { apartBefore.Remove(gone); }
+        foreach (var gone in apartBefore.Keys.Where(k => !daemon.Sessions.ContainsKey(k)).ToList()) { Forget(gone); }
         foreach (var (id, ds) in daemon.Sessions)
         {
-            if (ds.Agent != "copilot" || ds.Agents == 0 || ds.Offset is not { } through || !host.Sessions.TryGetValue(id, out var hs) || hs.Agents != ds.Agents
-                || hs.RunningSubagents is not { } running || ds.AgentIds.Distinct(StringComparer.Ordinal).Count() != ds.Agents) { apartBefore.Remove(id); continue; }
+            if (ds.Agent != "copilot" || ds.Offset is not { } through || !host.Sessions.TryGetValue(id, out var hs)
+                || hs.RunningSubagents is not { } running || ds.AgentIds.Distinct(StringComparer.Ordinal).Count() != ds.Agents) { Forget(id); continue; }
             var s = ShadowHash.Session(id);
-            if (differences.Any(d => d.Kind == ShadowKinds.BackgroundAgents && d.Session == s)) { apartBefore.Remove(id); continue; }
-            if (Evidence(id)?.AgentsApart(ds.AgentIds, running, through) is not { Count: > 0 } apart) { apartBefore.Remove(id); continue; }
+            if (hs.Agents != ds.Agents || differences.Any(d => d.Kind == ShadowKinds.BackgroundAgents && d.Session == s)) { continue; }
+            if (ds.Agents == 0) { Forget(id); continue; }
+            // A transcript that cannot be read, or does not know an agent, says nothing either way.
+            if (Evidence(id)?.AgentsApart(ds.AgentIds, running, through) is not { } apart) { continue; }
+            if (apart.Count == 0) { Forget(id); continue; }
             var again = apartBefore.TryGetValue(id, out var before) && before.Overlaps(apart);
+            var run = apartRun.GetValueOrDefault(id) + 1;
             apartBefore[id] = apart;
-            if (again) { yield return new(ShadowKinds.BackgroundAgents, s, $"daemon={ds.Agents} host={hs.Agents}, not the same agents"); }
+            apartRun[id] = run;
+            if (again || run >= ApartSamples) { yield return new(ShadowKinds.BackgroundAgents, s, $"daemon={ds.Agents} host={hs.Agents}, not the same agents"); }
         }
     }
 
-    // Per session, the agents found apart on the last sample, each with its side (OtherAgents).
+    // How many samples in a row with any agents apart are a difference, whichever agents they are.
+    // A read-order handoff needs a handoff inside the moment between the two reads; three of those
+    // in a row, and then on every sample through the grace, is not a race but a side behind.
+    public const int ApartSamples = 3;
+
+    void Forget(string id)
+    {
+        apartBefore.Remove(id);
+        apartRun.Remove(id);
+    }
+
+    // Per session, the agents found apart on the last sample compared, each with its side, and how
+    // many samples compared in a row have found any (OtherAgents).
     readonly Dictionary<string, IReadOnlySet<string>> apartBefore = new(StringComparer.Ordinal);
+    readonly Dictionary<string, int> apartRun = new(StringComparer.Ordinal);
 
     TranscriptEvidence? Evidence(string id)
     {
