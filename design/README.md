@@ -9,6 +9,7 @@ choice is [docs/design/ui.md](../docs/design/ui.md), and the order of work is
 | `tokens.json` | Colour roles (dark, light, high contrast), per-platform surfaces, type ramps, inline mono's x-heights (`type.inlineMono`), spacing, radii, breakpoints, motion (below) |
 | `glyphs/*.svg` | The status glyphs, on a 16 grid |
 | `icons/*.svg` | The icon set, on a 20 grid, with a 1.5 stroke and round ends. `mark.svg` is the app mark, on a 48 grid |
+| `app-icon/*.svg` | **Generated.** The app icon in each platform's container, from `tokens.json` `appIcon` and `icons/mark.svg` ([App icon](#app-icon)) |
 | `fonts/agent-bridge-mono/` | Agent Bridge Mono, the monospace: build plan, build script, TTF and WOFF2. **SIL OFL 1.1, not MIT** (see its README) |
 | `preview.png` | The glyphs, icons and colour roles rendered in dark and light. Regenerate it whenever a glyph, icon or role changes |
 | `canvas/` | The design canvas boards' source, rendered to [docs/design/mockups](../docs/design/mockups/README.md) by [tools/design-mockups](../tools/design-mockups/README.md) |
@@ -34,6 +35,9 @@ node tools/design-gen/preview.mjs                # preview.png (needs pwa's npm 
 | Windows | `src/AgentBridge.App/Design/DesignResources.xaml` | `ThemeDictionaries` (Light, Dark, HighContrast) of `Ab*` brushes, and the hyperlink brushes WinUI reads (`color.accent.hyperlink`); WinUI's accent palette, `SystemAccentColor` and its Light1–3/Dark1–3 shades, as Bridge (`color.accent.windows`), so accent buttons, the selection pill, checked controls, focused fields and links take Bridge rather than the Windows accent; `MonoFontFamily` (the bundled TTF, then the fallback stack), inline mono's scale and its size per ramp role (`AbInlineMono*`), radii, spacing and the layout sizes (`AbLayout*`, from `layout`); motion (`AbMotion*`, outside the theme dictionaries); a `TextBlock` style per role of the Windows type ramp (`AbType<Role>`, from `type.roles.windows`); a `ContentControl` style per glyph (`AbGlyph<Name>`) and icon (`AbIcon<Name>`) |
 | Windows | `src/AgentBridge.App.Core/DesignLayout.cs` | The layout sizes and breakpoints as constants, for the app's view models, which decide the panes by width and run on Linux CI |
 | Windows | `src/AgentBridge.App/Design/DesignKeys.cs` | Those keys, the accent palette's colours and the font files the app bundles, for the app's self-test |
+| Design | `design/app-icon/*.svg` | The app icon in each platform's container ([App icon](#app-icon)) |
+| PWA | `pwa/icon.svg`, `pwa/icons/*.png` | The app icon: the favicon and the manifest's `any` icons, its maskable icons, and the `apple-touch-icon` |
+| Windows | `src/AgentBridge.App/Assets/AgentBridge.ico`, `AgentBridge.png` | The app icon: the exe's, the window's, the tray's and the installer's, and the toast logo |
 
 Using them:
 - **PWA:** `<svg><use href="design/sprite.svg#glyph-needs"/></svg>`, coloured by its `color`.
@@ -123,6 +127,34 @@ What the clients get:
   turns them into a `KeyTime`, `Duration` or `KeySpline`:
   `<SplineDoubleKeyFrame KeyTime="{StaticResource AbMotionStandard}" KeySpline="{StaticResource AbMotionEaseDecelerate}" Value="1" />`.
   Code reads `UISettings.AnimationsEnabled` for reduced motion; no resource changes with it.
+
+## App icon
+
+`tokens.json` `appIcon` holds the app icon: `icons/mark.svg` on a plate, in each platform's
+container, specified in [ui.md §7](../docs/design/ui.md) (App icon). The colours are the
+plate, its edge, the mark (a colour role, whose dark value is used in every theme, since the
+plate is always dark) and the monochrome layer's. Each container has a `grid`, the size it is
+drawn on, and on it the plate's side (`plate`, centred), its corner `radius`, the `edge`
+hairline inside it, and the side of the mark's 48 box (`mark`, centred).
+
+| Container | Grid | What it is | Generated into |
+|---|---|---|---|
+| `windows` | 72 | Tile: radius 14, edge 1, mark 44 | `app-icon/windows.svg`, the app's `.ico` above 24 px and its toast logo (256), and the PWA's `icon.svg` and `icons/icon-192.png`, `icon-512.png` |
+| `windowsSmall` | 16 | Tile at `upTo` (24) px and under: radius 3, no edge, mark 13, so the ring stays a pixel thick | `app-icon/windows-small.svg`, the `.ico`'s 16, 20 and 24 |
+| `macos` | 1024 | Apple's grid: plate 824, radius 185, mark 504 | `app-icon/macos.svg` |
+| `ios` | 72 | Full bleed and opaque, mark 44; the system masks it | `app-icon/ios.svg`, the PWA's `icons/apple-touch-icon.png` (180) |
+| `android` | 108 | Adaptive icon layers: the plate, the mark 40 across, and the mark in `monochrome` | `app-icon/android-background.svg`, `-foreground.svg`, `-monochrome.svg` |
+| `maskable` | 72 | Full bleed, mark 35, inside the safe zone | `app-icon/maskable.svg`, the PWA's `icons/maskable-192.png`, `maskable-512.png` |
+
+The Windows `.ico` holds 16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96 and 256, every
+size Windows asks an app icon for. The macOS asset catalog and the Android mipmaps come with
+those apps (P5, P8), from the same SVGs.
+
+`tools/design-gen` draws the rasters itself (`lib/raster.mjs`), without a browser: the icon is
+only rounded squares and circles, so the mark must stay circles in `currentColor`, and the
+generator refuses one that isn't. It uses only arithmetic IEEE rounds exactly, so every
+machine draws the same pixels, and the check compares pixels, not PNG bytes, which zlib may
+compress differently.
 
 ## Changing the language
 
