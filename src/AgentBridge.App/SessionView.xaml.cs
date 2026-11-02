@@ -233,6 +233,7 @@ public sealed partial class SessionView : UserControl
             // at start or with animations off), and that queued scroll then stands down.
             var inQuestion = Motion.Within(target, QuestionCard);
             (inQuestion ? (UIElement)QuestionCard : target).StartBringIntoView(new BringIntoViewOptions { AnimationDesired = Ready && Motion.Scrolls });
+            questionScrolled |= inQuestion;
             if (focusPending) { focusPending = false; LayoutUpdated -= OnFocusLayout; }
         }
         else if (!focusPending)
@@ -261,14 +262,18 @@ public sealed partial class SessionView : UserControl
         Motion.Settle(TabContent);
         // A toast that started the app jumps to its question: nothing moves as the app starts.
         var smooth = Ready && Motion.Scrolls;
+        // Only a scroll focus made for this same request stands in for this one: focus left in the
+        // question from before (a toast reopening the session) scrolls nothing by itself.
+        questionScrolled = false;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
-            if (Card != card || QuestionCard.Visibility != Visibility.Visible || FocusedInQuestion()) { return; }
+            if (Card != card || QuestionCard.Visibility != Visibility.Visible || questionScrolled) { return; }
             QuestionCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = smooth });
         });
     }
 
-    bool FocusedInQuestion() => XamlRoot is { } root && FocusManager.GetFocusedElement(root) is DependencyObject focused && Motion.Within(focused, QuestionCard);
+    // Focus going into the question since the last request brought the card into view.
+    bool questionScrolled;
 
     // The Sessions page has drawn its list (SessionsPage): until then, nothing here moves.
     internal bool Ready { get; set; }
