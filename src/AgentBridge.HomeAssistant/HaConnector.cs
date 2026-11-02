@@ -290,6 +290,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         Slug = HaContract.MachineSlug(options.MachineName);
         verbose = options.DetailedActivityFallback;
         source.Changed += OnChanged;
+        source.UnbudgetedChanged += OnUnbudgetedChanged;
     }
 
     public string Slug { get; }
@@ -326,6 +327,13 @@ public sealed partial class HaConnector : IAsyncDisposable
     void OnChanged(object? sender, SessionChange change)
     {
         lock (gate) { dirty.Add(change.Id); }
+    }
+
+    // The card reads the session before the protocol budget (CardSession), which can change while
+    // nothing a client is sent does, and so with no Changed.
+    void OnUnbudgetedChanged(object? sender, string id)
+    {
+        lock (gate) { dirty.Add(id); }
     }
 
     // One pass: whatever is due. The loop calls it every Tick; tests call it directly.
@@ -683,9 +691,23 @@ public sealed partial class HaConnector : IAsyncDisposable
         baselinePass = false;
     }
 
+    // A session as its card shows it: the source's before the protocol budget, whose order trims
+    // what older clients ignore first and so can drop the main agent's own reply while a
+    // delegate's 16 KiB stays (found in review, #175). The connector keeps within Home
+    // Assistant's limits itself (HaPayloads). The question is the budgeted form's, the one the
+    // host answers: one cut to fit is answered at the machine there, and so here.
+    Session? CardSession(string id)
+    {
+        // Both forms of the one moment: one read each could straddle a change, and a Waiting status
+        // with the question from before it reads as Claude blocked with nothing to answer, a
+        // spurious push (found in review).
+        if (source.GetForms(id) is not var (budgeted, whole)) { return null; }
+        return whole with { Question = budgeted.Question };
+    }
+
     async Task SessionAsync(Session s, DateTimeOffset now, CancellationToken ct)
     {
-        var full = source.Get(s.Id) ?? s;
+        var full = CardSession(s.Id) ?? s;
         var name = HaPayloads.SessionName(s);
         var node = HaContract.NodeId(s.Id);
         var t = HaContract.Topics(node);
@@ -778,7 +800,7 @@ public sealed partial class HaConnector : IAsyncDisposable
 
         var summary = HaPayloads.ActivitySummary(full);
         var detail = HaPayloads.ActivityAttributes(full, name, options.MachineName, verbose, now, driver: p.Driver,
-            thinking: p.Observe(full.Activity.Response, full.Activity.Reasoning), answerConsumedAt: p.LastPayloadStamp);
+            thinking: p.Observe(HaPayloads.MainResponse(full.Activity), HaPayloads.MainReasoning(full.Activity)), answerConsumedAt: p.LastPayloadStamp);
         // Get-DaemonCardSummary: while End session waits for its second press, the card keeps
         // asking for it over whatever the session does meanwhile.
         if (p.Stop.Asking(now)) { summary = HaStop.ConfirmNote; detail["hint"] = p.Stop.Hint; }
@@ -1145,6 +1167,7 @@ public sealed partial class HaConnector : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         source.Changed -= OnChanged;
+        source.UnbudgetedChanged -= OnUnbudgetedChanged;
         if (stop is not null)
         {
             await stop.CancelAsync();

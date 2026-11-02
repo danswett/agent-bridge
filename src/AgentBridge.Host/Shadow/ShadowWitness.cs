@@ -25,6 +25,7 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
     public IReadOnlyList<ShadowDifference> Explain(ShadowView daemon, ShadowView host, IReadOnlyList<ShadowDifference> differences)
     {
         foreach (var gone in evidence.Keys.Where(k => !daemon.Sessions.ContainsKey(k)).ToList()) { evidence.Remove(gone); }
+        differences = [.. differences, .. OtherAgents(daemon, host, differences)];
         if (!differences.Any(Explainable)) { return differences; }
         var ids = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var id in daemon.Sessions.Keys) { ids.TryAdd(ShadowHash.Session(id), id); }
@@ -63,6 +64,61 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
     static bool Explainable(ShadowDifference d) =>
         d.Known is null && d.Session is not null && d.Kind is ShadowKinds.BackgroundAgents or ShadowKinds.BackgroundShells or ShadowKinds.Model
             or ShadowKinds.QuestionMissingOnHost or ShadowKinds.Status;
+
+    // Background agents compared entry by entry (#175): the same number on both sides can still be
+    // different agents, a daemon bug on each side cancelling out, or a host bug hidden behind one.
+    // Only the transcript maps the daemon's tool calls to the agents the host lists, so this is
+    // looked at only for a Copilot session whose host lists every agent it counts.
+    //
+    // The host is read before the daemon, and has no read offset of its own to leave its unread
+    // handoffs out by, so a handoff between the two reads gives the same count of different agents
+    // for one sample. Successive ones would join into one episode longer than the grace (found in
+    // review). So one sample apart is not yet a difference. It is one once an agent is apart on the
+    // same side two samples in a row, whatever the other side hands off meanwhile (a handoff back
+    // and forth puts each agent on the other side each time, which is no stuck agent), or once any
+    // agents at all are apart ApartSamples samples in a row: a side always a handoff behind (one
+    // that applies an event a pass late) changes its agents every sample, and is still a bug.
+    //
+    // A sample whose counts differ is ShadowCompare's to report, and leaves both as they were: a
+    // stuck agent between count lags of other agents would otherwise start again each time, and
+    // never last the grace (found in review). They are forgotten only when the session leaves this
+    // check or the agents agree.
+    IEnumerable<ShadowDifference> OtherAgents(ShadowView daemon, ShadowView host, IReadOnlyList<ShadowDifference> differences)
+    {
+        foreach (var gone in apartBefore.Keys.Where(k => !daemon.Sessions.ContainsKey(k)).ToList()) { Forget(gone); }
+        foreach (var (id, ds) in daemon.Sessions)
+        {
+            if (ds.Agent != "copilot" || ds.Offset is not { } through || !host.Sessions.TryGetValue(id, out var hs)
+                || hs.RunningSubagents is not { } running || ds.AgentIds.Distinct(StringComparer.Ordinal).Count() != ds.Agents) { Forget(id); continue; }
+            var s = ShadowHash.Session(id);
+            if (hs.Agents != ds.Agents || differences.Any(d => d.Kind == ShadowKinds.BackgroundAgents && d.Session == s)) { continue; }
+            if (ds.Agents == 0) { Forget(id); continue; }
+            // A transcript that cannot be read, or does not know an agent, says nothing either way.
+            if (Evidence(id)?.AgentsApart(ds.AgentIds, running, through) is not { } apart) { continue; }
+            if (apart.Count == 0) { Forget(id); continue; }
+            var again = apartBefore.TryGetValue(id, out var before) && before.Overlaps(apart);
+            var run = apartRun.GetValueOrDefault(id) + 1;
+            apartBefore[id] = apart;
+            apartRun[id] = run;
+            if (again || run >= ApartSamples) { yield return new(ShadowKinds.BackgroundAgents, s, $"daemon={ds.Agents} host={hs.Agents}, not the same agents"); }
+        }
+    }
+
+    // How many samples in a row with any agents apart are a difference, whichever agents they are.
+    // A read-order handoff needs a handoff inside the moment between the two reads; three of those
+    // in a row, and then on every sample through the grace, is not a race but a side behind.
+    public const int ApartSamples = 3;
+
+    void Forget(string id)
+    {
+        apartBefore.Remove(id);
+        apartRun.Remove(id);
+    }
+
+    // Per session, the agents found apart on the last sample compared, each with its side, and how
+    // many samples compared in a row have found any (OtherAgents).
+    readonly Dictionary<string, IReadOnlySet<string>> apartBefore = new(StringComparer.Ordinal);
+    readonly Dictionary<string, int> apartRun = new(StringComparer.Ordinal);
 
     TranscriptEvidence? Evidence(string id)
     {
@@ -145,6 +201,9 @@ public sealed partial class TranscriptEvidence(string path)
         // Where its first subagent.completed is, and where it was last woken after that.
         public long CompletedAt = -1;
         public long WokenAt = -1;
+        // Where it last started, stopped, completed or was woken: a change the daemon has not read
+        // while it lies at or past the daemon's Offset.
+        public long ChangedAt = -1;
     }
 
     readonly Dictionary<string, Shell> shells = new(StringComparer.Ordinal);
@@ -292,6 +351,7 @@ public sealed partial class TranscriptEvidence(string path)
                     if (call is not null) { agentByCall[call] = key; }
                     var agent = AgentFor(key, at);
                     agent.Working = true;
+                    agent.ChangedAt = at;
                     agent.AskedForTools = false;
                     break;
                 }
@@ -303,7 +363,20 @@ public sealed partial class TranscriptEvidence(string path)
                     {
                         agent.Completed = true;
                         agent.CompletedAt = at;
-                        EndRun(agent);
+                        EndRun(agent, at);
+                        agent.ChangedAt = at;
+                    }
+                    break;
+                }
+            // The host ends a failed agent's run there (BackgroundWork.AgentFailed): a change the
+            // daemon may not have read yet, as for any other end (found in review).
+            case "subagent.failed":
+                {
+                    var key = agentId ?? (Str(data, "toolCallId") is { } call && agentByCall.TryGetValue(call, out var k) ? k : null);
+                    if (key is not null && agents.TryGetValue(key, out var failed))
+                    {
+                        EndRun(failed, at);
+                        failed.ChangedAt = at;
                     }
                     break;
                 }
@@ -311,7 +384,7 @@ public sealed partial class TranscriptEvidence(string path)
                 switch (Str(kind, "type"))
                 {
                     case "agent_idle" when Str(kind, "agentId") is { } idle && agents.TryGetValue(idle, out var agent):
-                        if (agent.IdleOwed > 0) { agent.IdleOwed--; } else { agent.Working = false; }
+                        if (agent.IdleOwed > 0) { agent.IdleOwed--; } else if (agent.Working) { agent.Working = false; agent.ChangedAt = at; }
                         break;
                     case "shell_completed" when Str(kind, "shellId") is { } id:
                         ShellFor(id, at).Ended(at);
@@ -320,11 +393,11 @@ public sealed partial class TranscriptEvidence(string path)
                 }
                 break;
             case "session.shutdown" when agentId is null:
-                foreach (var a in agents.Values) { a.Working = false; a.AskedForTools = false; a.IdleOwed = 0; }
+                foreach (var a in agents.Values) { if (a.Working) { a.ChangedAt = at; } a.Working = false; a.AskedForTools = false; a.IdleOwed = 0; }
                 shutdownAt = at;
                 break;
             case "abort" or "session.shutdown" when agentId is not null && agents.TryGetValue(agentId, out var ended):
-                EndRun(ended);
+                EndRun(ended, at);
                 ended.AskedForTools = false;
                 break;
             case "tool.execution_start" when agentId is null && Str(data, "toolName") == "ask_user" && Str(data, "toolCallId") is { } askId:
@@ -336,7 +409,7 @@ public sealed partial class TranscriptEvidence(string path)
                 Wake(active, at);
                 break;
             case "assistant.turn_end" when agentId is not null && agents.TryGetValue(agentId, out var turned):
-                if (!turned.AskedForTools) { EndRun(turned); }
+                if (!turned.AskedForTools) { EndRun(turned, at); }
                 turned.AskedForTools = false;
                 break;
             case "assistant.message":
@@ -500,7 +573,10 @@ public sealed partial class TranscriptEvidence(string path)
     // The daemon counts fewer (or more) background agents than the host. Known when the host's
     // extra agents are exactly those working again after their first subagent.completed, which
     // the daemon stops counting there (#258), and the daemon's extra ones exactly those whose
-    // subagent.completed it has read past (#259).
+    // subagent.completed it has read past (#259). When the host lists the agents it counts
+    // (subagents, #84), each is checked as well, entry by entry: every one the daemon does not
+    // count must be such a woken one, and every one the daemon counts that the host does not must
+    // be one whose end it read past. Counts that add up from the wrong agents never pass.
     public string? Agents(ShadowSession daemon, ShadowSession host)
     {
         if (daemon.Offset is not { } through) { return null; }
@@ -513,10 +589,51 @@ public sealed partial class TranscriptEvidence(string path)
             .Select(a => a.Key).ToHashSet(StringComparer.Ordinal);
         // The daemon counts by tool call; none of those it lists may be one of the woken agents.
         if (listed.Any(c => agentByCall.TryGetValue(c, out var key) && woken.Contains(key))) { return null; }
+        if (host.RunningSubagents is { } running && !EachAgent(listed, running, woken, through, host.Agents)) { return null; }
         var issues = new SortedSet<int>();
         if (missed > 0) { issues.Add(259); }
         if (woken.Count > 0) { issues.Add(258); }
         return issues.Count > 0 && listed.Count - missed == host.Agents - woken.Count ? Name(issues) : null;
+    }
+
+    // The host's agents against the daemon's, by agent: the daemon's tool calls are each mapped to
+    // the agent they started.
+    bool EachAgent(IReadOnlyList<string> listed, IReadOnlyList<string> running, HashSet<string> woken, long through, int hostCount)
+    {
+        var hostIds = running.ToHashSet(StringComparer.Ordinal);
+        if (hostIds.Count != hostCount) { return false; }
+        var daemonIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var call in listed)
+        {
+            if (!agentByCall.TryGetValue(call, out var key)) { return false; }
+            daemonIds.Add(key);
+            if (!hostIds.Contains(key) && !(completed.TryGetValue(call, out var at) && at < through)) { return false; }
+        }
+        return hostIds.All(id => daemonIds.Contains(id) || woken.Contains(id));
+    }
+
+    // Whether the daemon's tool calls started exactly the agents the host lists, leaving out any
+    // agent that started, stopped, completed or was woken where the daemon has not yet read
+    // (through, its Offset): that is the daemon a poll behind a handoff, not a disagreement, and
+    // successive handoffs would otherwise join into one long episode (found in review). The
+    // agents on one side only, each named with its side ("daemon a1", "host a2"), empty when they
+    // agree; null when a call or a listed agent is one this transcript does not know, which says
+    // nothing.
+    public IReadOnlySet<string>? AgentsApart(IReadOnlyList<string> calls, IReadOnlyList<string> running, long through)
+    {
+        bool Settled(string id) => agents.TryGetValue(id, out var a) && a.ChangedAt < through;
+        var daemonIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var call in calls)
+        {
+            if (!agentByCall.TryGetValue(call, out var key)) { return null; }
+            daemonIds.Add(key);
+        }
+        if (running.Any(id => !agents.ContainsKey(id))) { return null; }
+        var daemonSettled = daemonIds.Where(Settled).ToHashSet(StringComparer.Ordinal);
+        var hostSettled = running.Where(Settled).ToHashSet(StringComparer.Ordinal);
+        // Which side lists each: the same agents on opposite sides are not the same difference.
+        return daemonSettled.Except(hostSettled).Select(id => "daemon " + id)
+            .Concat(hostSettled.Except(daemonSettled).Select(id => "host " + id)).ToHashSet(StringComparer.Ordinal);
     }
 
     // The daemon's model is the one a subagent's message named, the last message it has read
@@ -588,14 +705,16 @@ public sealed partial class TranscriptEvidence(string path)
     static void Wake(Agent agent, long at)
     {
         if (!agent.Working && agent.Completed) { agent.WokenAt = at; }
+        if (!agent.Working) { agent.ChangedAt = at; }
         agent.Working = true;
         agent.Last = at;
     }
 
-    static void EndRun(Agent agent)
+    static void EndRun(Agent agent, long at)
     {
         if (!agent.Working) { return; }
         agent.Working = false;
+        agent.ChangedAt = at;
         agent.IdleOwed++;
     }
 

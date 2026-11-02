@@ -34,7 +34,8 @@ stale heartbeat means the daemon is down, and nothing else is compared until it 
 Home Assistant (next section).
 
 **A Copilot session's transcript** (`<copilot home>/session-state/<id>/events.jsonl`), only
-for a session with a difference in background work or model, to check it against the
+for a session with a difference in background work or model, or with background agents the
+host lists one by one (below), to check it against the
 daemon's known bugs ("Known daemon bugs" below). Read once from the start, then only what is
 appended, with the same sharing as the daemon's files; what is kept is ids, byte offsets and
 model names, in memory.
@@ -295,7 +296,7 @@ Per session, for every session either side lists:
 | `session.missingOnHost`, `session.missingOnDaemon` | One side lists the session and the other does not |
 | `agent` | Copilot, Claude or Codex |
 | `status` | `working`, `waiting`, `idle` or `ending`, after the mappings below |
-| `background.agents`, `background.shells` | How many background agents and commands it is still waiting on |
+| `background.agents`, `background.shells` | How many background agents and commands it is still waiting on. For a Copilot session whose host lists every agent it counts (`subagents`, #84), its agents are also compared one by one with the daemon's, through the transcript: the same number of different agents is a `background.agents` difference too |
 | `model` | The model in use, following model changes |
 | `compactions` | How many compactions have finished |
 | `activity.response` | The end (last 200 characters, whitespace collapsed) of the latest response, when both have one |
@@ -348,6 +349,21 @@ comparing:
   left out, so it stays `working` through every `ask_user`, with background agents or without.
   The host's status logic is unchanged; only how the daemon's view is read.
 * **Long text is bounded differently** (§1). Only the end of a response is compared.
+* **The main agent's own text on the host's card** (#175, [design/subagents.md](design/subagents.md)
+  §7). The host's Home Assistant connector shows the main agent's own `response` and
+  `reasoning` (`activity.own`) while a sub-agent wrote last. agent-ha-bridge's card shows
+  whichever agent wrote last, and keeps doing so by the owner's decision of 2026-11-01. The
+  `activity.response` comparison is unchanged and stays strict: the host's top-level
+  `response`, still the latest writer's, against the daemon's. Only once those agree, and
+  the host's `activity.source.response` names a sub-agent, is the card's difference recorded,
+  as the known difference `main-agent-only (#175)`. It is tallied, never a mismatch. The
+  shadow reads the budgeted session and the card the whole one, so when the protocol
+  budget has dropped the main agent's own reply, nothing is labelled: what the card shows
+  is not known from that form.
+  Anything else about the response is still a mismatch (or `timing`, below), sub-agents or
+  not: the daemon showing words neither side wrote last, or the main agent's words where
+  the host's latest writer is a sub-agent. Reasoning is not compared ("Not compared"), so
+  the same rule for `reasoning` needs no label.
 * **Forms answered at the machine** (§2). Where either side cannot drive a prompt from
   another device (agent-ha-bridge's `terminalOnly`, the host's `answerAtMachine`, or a
   question the host had to cut), each shapes it its own way, so only that it is asked, and
@@ -387,6 +403,50 @@ else, an id with no signature or a count left over, keeps the difference a misma
 difference that matches is a **known difference**: tallied in the day's `known`, by kind and
 issue, and never a mismatch. The first minutes of the live run on DEV-VM1 showed three of the
 five, and the comparison now classifies each as below.
+
+**Sub-agents, entry by entry (#175).** Since S1 (#173) the host lists the agents behind its
+`background.agents` (`subagents`: background entries `working` or `waiting`, at any depth,
+the same ones the daemon counts from `subagent.started`). When that list holds them all
+(it lists as many running as the host counts; the budget drops finished entries first), the agents are matched one
+by one as well as counted. A host that counts agents but lists none (one from before
+sub-agents, or an agent that reports counts only) is compared by its count alone. Each of the daemon's tool calls is mapped to its agent through
+the transcript's `subagent.started`. Each agent the host counts and the daemon does not must
+be one woken again after its first completion (#258), and each the daemon counts and the
+host does not must be one whose `subagent.completed` the daemon has read past (#259). A call
+the transcript does not map, or a list of a different length from the host's own count,
+explains nothing. The counts must still add up as above, so this only ever narrows what is
+put down to the daemon. The same number of different agents on each side is now a
+`background.agents` difference ("not the same agents"), judged by the same rule. Agents
+that started, stopped (a run's end or `subagent.failed`), completed or were woken at or past the daemon's `Offset` are left
+out of that check: the daemon a poll behind a handoff is not a disagreement, and
+successive handoffs caught a sample each would otherwise join into one long episode. The
+host is read first and has no read offset of its own, so a handoff between the two reads
+gives the host's side the same lag for one sample. So one sample with agents apart is not
+yet a difference; it becomes one when either:
+
+* an agent is apart on the same side on two samples in a row, whatever the other side
+  hands off meanwhile (a side stuck on a wrong agent, reported a sample later); or
+* any agents at all are apart on three samples in a row (`ShadowWitness.ApartSamples`),
+  whichever they are: a side always a handoff behind, such as a host applying
+  `subagent.completed` a pass late, lists different agents every sample and is a bug. Three
+  because a read-order lag needs a handoff to land in the moment between the two reads (a
+  second or less of a 15 s interval), so three in a row, and then on every sample through
+  the 60 s grace, is a side behind, not a race; two could still be a busy session handing
+  off twice.
+
+Agents that trade sides from one sample to the next are therefore reported only by the
+second rule. A sample whose counts differ is `ShadowCompare`'s `background.agents`
+difference already; it leaves what was apart, and the run of samples, as they were, so a
+stuck agent between other agents' count lags is still reported. Both are forgotten only
+when the agents agree or the session leaves this check (not Copilot, no daemon offset, or a
+host list that does not hold every agent it counts); a sample whose transcript cannot say
+which agents its calls started leaves them as they were. In the ledger, an episode that has carried "not the same agents" no longer
+splits when a count lag around it turns the other way ("Grace and timing skew"). A single
+`shadow once` sample never reports this kind. A wrong
+agent on one side is no longer hidden by another on the other. The daemon still counts every
+agent's `subagent.started` at any depth and drops none for being nested, so nesting adds no
+difference. A delegate's shells are its own on the host and the session's on the daemon,
+which is #261 below, unchanged.
 
 | Kind | Signature in the transcript | Filed |
 |---|---|---|
@@ -479,7 +539,7 @@ The same runs, and review, found six host bugs, all fixed:
 |---|---|
 | Usage with no current reading of the account | A figure here older than the daemon's own pace allows (`usage.idleIntervalSeconds`, plus its re-assert, plus a minute) is one this machine's daemon has stopped reading, usually because another machine reads the account. The account reader's figure stands in for it ("Home Assistant reads"). When no machine the daemon names has a current one, the sample counts toward `notComparedWhy` ("usage: no current reading of the account, …"), not `usageCompared` |
 | Titles | agent-ha-bridge names sessions for Home Assistant ("Copilot: …") |
-| Reasoning and tool history | Bounded differently and shown differently (§1) |
+| Reasoning and tool history | Bounded differently and shown differently (§1). The host's card shows the main agent's own reasoning while a sub-agent's is the latest (#175), which is not compared either. Nor are a sub-agent's name, status and line, which the daemon does not list |
 | Driver, the purple edge | Set by the presses on the cards, which only the daemon reads while it runs: beside it, the host takes none, so its own would always read as the person's (#46) |
 | Notifications | Not state |
 
@@ -504,7 +564,8 @@ each judged against the grace on its own. On DEV-VM1 a shell ended and was start
 minute later, with the daemon a pass behind each time. Two opposite lags, each shorter than
 the grace, had run on as one 60 s mismatch. This applies to the kinds compared as two counts
 (`background.*`, `compactions`, `resumable.count`); a count that moves the same way stays one
-disagreement.
+disagreement. A `background.agents` episode that has also carried "not the same agents"
+(#175) is more than two lags, and lags either way around it stay part of it.
 
 ## Coverage
 

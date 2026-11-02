@@ -17,6 +17,10 @@ public static class HaPayloads
     public const int HistoryDepth = 12;
     public const int HistoryDepthDetailed = 24;
     public const string TruncatedNote = "\n\n_(truncated - see terminal)_";
+    // The subagents attribute (docs/design/subagents.md §7): the first entries of the session's
+    // list, running ones first. Each is bounded by the protocol's own limits, so five stay a few
+    // KiB, far inside Home Assistant's 16 KiB for a state's attributes, however many there are.
+    public const int SubagentsShown = 5;
 
     // Remove-CopilotTemplateMarkup. A session's name comes from its task or its folder, which
     // anyone can choose, and Home Assistant renders templates in the text a dashboard shows:
@@ -96,14 +100,31 @@ public static class HaPayloads
     {
         string summary;
         if (s.Activity.CurrentTool is { Status: ToolStatus.Running } tool) { summary = "Running: " + tool.Name; }
-        else if (FirstLine(s.Activity.Response) is { } line) { summary = line; }
+        else if (FirstLine(MainResponse(s.Activity)) is { } line) { summary = line; }
         else if (s.Status == SessionStatus.Working) { summary = "Thinking"; }
         else { summary = "Idle"; }
         return CapState(summary);
     }
 
     public static string CapState(string text) =>
-        text.Length > HaContract.StateMaxChars ? text[..(HaContract.StateMaxChars - 3)] + "..." : text;
+        text.Length > HaContract.StateMaxChars ? SafeCut(text, HaContract.StateMaxChars - 3) + "..." : text;
+
+    // The main agent's own response and reasoning (docs/design/subagents.md §5, §7): own's for a
+    // field source attributes to a sub-agent, else the top-level text, else own's when the host
+    // has the main agent's only from its skim. The card is the main agent's, so a delegate's line
+    // never stands in for its answer; agent-ha-bridge's card shows whichever wrote last.
+    public static string? MainResponse(Activity a)
+    {
+        // The budget dropped the main agent's reply, keeping only that it had one: said, never
+        // left blank and never filled with the delegate's (#175). The connector reads sessions
+        // before that budget, so this is a guard.
+        var own = a.Own?.Response ?? (a.Own?.ResponseTruncated == true ? OwnResponseDropped : null);
+        return a.Source?.Response is null ? a.Response ?? own : own;
+    }
+
+    public const string OwnResponseDropped = "_(the main agent's reply is too long to show here - see terminal)_";
+
+    public static string? MainReasoning(Activity a) => a.Source?.Reasoning is null ? a.Reasoning ?? a.Own?.Reasoning : a.Own?.Reasoning;
 
     // Inline agents show their thinking in the reply stream, in order; anything else keeps a
     // separate reasoning expander (InlineReasoning in hooks/daemon-agents.ps1).
@@ -126,15 +147,123 @@ public static class HaPayloads
             ["driver"] = driver,
             ["history"] = History(full, verbose),
         };
-        var response = full.Activity.Response;
-        var reasoning = full.Activity.Reasoning;
+        var response = MainResponse(full.Activity);
+        var reasoning = MainReasoning(full.Activity);
         var isThinking = !string.IsNullOrWhiteSpace(reasoning) && (thinking ?? string.IsNullOrWhiteSpace(response));
         AddCardText(detail, InlineReasoning(full.Agent), verbose, response, isThinking ? reasoning : response, isThinking, reasoning);
         // Add-DaemonAnswerStamp: the reply-card publish last used, on every update, so a card
         // that sent it can tell it was.
         if (!string.IsNullOrWhiteSpace(answerConsumedAt)) { detail["answer_consumed_at"] = answerConsumedAt; }
+        // The least the delegates take, an empty list and the count, is reserved before the card is
+        // fitted: a card fitted to the budget alone left them over it (found in review). They then
+        // take what room is left, and at worst come back to exactly this.
+        if (SubagentCount(full) > 0) { detail["subagents"] = new JsonArray(); detail["subagents_more"] = SubagentCount(full); }
+        FitCard(detail);
+        AddSubagents(detail, full);
         return detail;
     }
+
+    static int SubagentCount(Session s) => (s.Subagents?.Count ?? 0) + (s.SubagentsMore ?? 0);
+
+    static int Bytes(JsonObject o) => System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(o));
+
+    // Home Assistant keeps no more than 16 KiB of a state's attributes, and agent-ha-bridge's own
+    // layout can pass that: the reply goes in both response (to 6000 characters) and, its first
+    // line whole, in the trail, and JSON escaping can double either (found in review, #175, once
+    // the connector read sessions before the protocol budget). Only a card over the budget is
+    // touched, so any other is exactly the daemon's. First the trail: its long lines cut as the
+    // activity state is, since response already shows them, then its oldest lines; then the
+    // reasoning expander; then the shown text itself, its start kept with the truncation note,
+    // as the daemon cuts it.
+    internal static void FitCard(JsonObject detail)
+    {
+        if (Bytes(detail) <= ActivityAttributesBudget) { return; }
+        if (detail["history"] is JsonArray history)
+        {
+            var lines = history.Select(h => CapState(h!.GetValue<string>())).ToList();
+            detail["history"] = new JsonArray([.. lines.Select(l => (JsonNode)l)]);
+            // Then its oldest lines, the newest kept longest (found in review: 24 long multibyte
+            // tool names fill the budget on their own).
+            while (Bytes(detail) > ActivityAttributesBudget && lines.Count > 0)
+            {
+                lines.RemoveAt(0);
+                detail["history"] = new JsonArray([.. lines.Select(l => (JsonNode)l)]);
+            }
+            if (Bytes(detail) <= ActivityAttributesBudget) { return; }
+        }
+        foreach (var (key, note) in new[] { ("reasoning", "\u2026"), ("response", TruncatedNote) })
+        {
+            if (detail[key]?.GetValue<string>() is not { } text) { continue; }
+            var body = text.EndsWith(note, StringComparison.Ordinal) ? text[..^note.Length] : text;
+            string Cut(int n) => SafeCut(body, n).TrimEnd() + note;
+            // The longest start that fits, found by halving.
+            int lo = 0, hi = body.Length;
+            while (lo < hi)
+            {
+                var mid = (lo + hi + 1) / 2;
+                detail[key] = Cut(mid);
+                if (Bytes(detail) <= ActivityAttributesBudget) { lo = mid; } else { hi = mid - 1; }
+            }
+            detail[key] = Cut(lo);
+            if (Bytes(detail) <= ActivityAttributesBudget) { return; }
+        }
+    }
+
+    // The first n characters, never half a surrogate pair.
+    static string SafeCut(string text, int n) =>
+        n >= text.Length ? text : text[..(n > 0 && char.IsHighSurrogate(text[n - 1]) ? n - 1 : n)];
+
+    // An addition to agent-ha-bridge's attributes, only on a session that has sub-agents: what
+    // its delegates are doing, so the main agent's text can stay its own. subagents_more counts
+    // the entries left out, here or by the host. The card draws neither yet.
+    //
+    // Budgeted against everything else the attributes carry, never at its cost: a 6000-character
+    // reply in both response and history plus five delegates at their limits came to over 17 KiB
+    // (found in review), and Home Assistant keeps no more than 16 KiB of a state's attributes. So
+    // the lines go first, then entries from the end, each counted in subagents_more. A session
+    // whose card text alone fills the budget publishes an empty list and the count, which still
+    // says it has delegates.
+    internal static void AddSubagents(JsonObject detail, Session full)
+    {
+        var list = full.Subagents ?? [];
+        if (SubagentCount(full) == 0) { return; }
+        var entries = new List<JsonObject>();
+        foreach (var a in list.Take(SubagentsShown))
+        {
+            var entry = new JsonObject
+            {
+                ["name"] = NeutraliseTemplates(Limits.KeepStart(Flatten(a.Name), Limits.SubagentName) ?? ""),
+                ["status"] = a.Status.ToString().ToLowerInvariant(),
+            };
+            if (Limits.KeepEnd(Flatten(a.Line), Limits.SubagentLine).Text is { Length: > 0 } line) { entry["line"] = NeutraliseTemplates(line); }
+            entries.Add(entry);
+        }
+        void Put()
+        {
+            detail["subagents"] = new JsonArray([.. entries.Select(e => (JsonNode)e.DeepClone())]);
+            var more = list.Count - entries.Count + (full.SubagentsMore ?? 0);
+            if (more > 0) { detail["subagents_more"] = more; } else { detail.Remove("subagents_more"); }
+        }
+        bool Fits() => System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(detail)) <= ActivityAttributesBudget;
+        Put();
+        if (!Fits())
+        {
+            foreach (var e in entries) { e.Remove("line"); }
+            Put();
+        }
+        while (!Fits() && entries.Count > 0)
+        {
+            entries.RemoveAt(entries.Count - 1);
+            Put();
+        }
+    }
+
+    // What the activity attributes may come to with the delegates in them: Home Assistant's 16 KiB,
+    // less room for what is laid over them later (End session's hint) and the attributes Home
+    // Assistant adds itself (friendly_name, icon).
+    public const int ActivityAttributesBudget = 15 * 1024;
+
+    static string Flatten(string? text) => string.IsNullOrWhiteSpace(text) ? "" : string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     // Add-DaemonCardText, from the remembered text: the response (or, for an inline agent with
     // Detailed activity on, the newest line of either kind, with response_kind saying which),
@@ -170,8 +299,8 @@ public static class HaPayloads
         var items = new List<string>();
         if (!string.IsNullOrWhiteSpace(full.Activity.UserMessage)) { items.Add("Reading your message"); }
         foreach (var tool in full.Activity.History ?? []) { items.Add("Running: " + tool.Name); }
-        if (verbose && ThoughtLine(full.Activity.Reasoning) is { Length: > 0 } thought) { items.Add(thought); }
-        if (FirstLine(full.Activity.Response) is { } line) { items.Add(line); }
+        if (verbose && ThoughtLine(MainReasoning(full.Activity)) is { Length: > 0 } thought) { items.Add(thought); }
+        if (FirstLine(MainResponse(full.Activity)) is { } line) { items.Add(line); }
         var depth = verbose ? HistoryDepthDetailed : HistoryDepth;
         return [.. items.Skip(Math.Max(0, items.Count - depth)).Select(i => (JsonNode)i)];
     }

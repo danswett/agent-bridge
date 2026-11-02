@@ -251,6 +251,11 @@ public sealed partial class ShadowLedger
                 open.Remove(key);
             }
             if (!open.TryGetValue(key, out var episode)) { open[key] = episode = new Episode(d.Kind, d.Session, now) { Direction = direction }; }
+            // A count kind's disagreement that is not two counts (background.agents' "not the same
+            // agents", #175) makes the episode more than a lag: lags either way around it are the
+            // same disagreement, or a stuck agent between count lags of others would start again at
+            // each turn and never last the grace (found in review).
+            else if (direction is null) { episode.Direction = null; }
             episode.Last = now;
             episode.Samples++;
             if (episode.Details.Count < MaxDetails && !episode.Details.Contains(d.Detail)) { episode.Details.Add(d.Detail); }

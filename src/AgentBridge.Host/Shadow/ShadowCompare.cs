@@ -25,6 +25,16 @@ public sealed record ShadowSession
     public string? Model { get; init; }
     public int Compactions { get; init; }
     public string? ResponseTail { get; init; }
+    // The host only: the end of the main agent's own response, as its Home Assistant connector
+    // shows it (HaPayloads.MainResponse), while the latest response is a sub-agent's
+    // (activity.source.response); null otherwise. agent-ha-bridge's card shows the latest writer's,
+    // so the two cards then differ by design (subagents.md §7), which ResponseTail, the same
+    // last-writer text on both sides, does not.
+    public string? CardResponseTail { get; init; }
+    // The host only: the ids of the background sub-agents it counts in Agents, from its subagents
+    // list, or null when the list does not show as many running as it counts (some capped, or
+    // none listed at all).
+    public IReadOnlyList<string>? RunningSubagents { get; init; }
     public ShadowQuestion? Question { get; init; }
     // The host only: a Copilot permission prompt is pending, which it offers to approve and so
     // reads as waiting, where agent-ha-bridge only mirrors it and goes on saying working.
@@ -476,10 +486,19 @@ public static class ShadowCompare
         if (!string.Equals(d.Model ?? "", h.Model ?? "", StringComparison.Ordinal)) { Pair(ShadowKinds.Model, d.Model, h.Model); }
         if (d.Compactions != h.Compactions) { Pair(ShadowKinds.Compactions, d.Compactions.ToString(), h.Compactions.ToString()); }
         // Only when both have one: an empty response is not something either side shows, and
-        // either may still hold the last turn's words for a moment.
+        // either may still hold the last turn's words for a moment. This is the parser comparison,
+        // the latest writer's text on both sides, and nothing here waives it.
         if (d.ResponseTail is not null && h.ResponseTail is not null && d.ResponseTail != h.ResponseTail)
         {
             diffs.Add(new(ShadowKinds.Response, s, "the end of the latest response differs") { Known = responseLagging == true ? Timing : null });
+        }
+        // The two agree on the latest writer's text, a sub-agent's, and the host's card shows the
+        // main agent's own instead (subagents.md §7): agent-ha-bridge keeps showing the latest
+        // writer's, by the owner's decision of 2026-11-01. Labelled, never a mismatch; only ever
+        // reached when the comparison above found nothing.
+        else if (d.ResponseTail is not null && h.ResponseTail == d.ResponseTail && h.CardResponseTail is { } card && card != d.ResponseTail)
+        {
+            diffs.Add(new(ShadowKinds.Response, s, "the host's card shows the main agent's own response, the daemon's a sub-agent's") { Known = MainAgentOnly });
         }
         if (!d.QuestionUnknown) { Question(d.Question, h.Question, d.Agent, s, diffs); }
     }
@@ -525,6 +544,11 @@ public static class ShadowCompare
     }
 
     public const string Timing = "timing";
+    // The host's Home Assistant card shows the main agent's own text where agent-ha-bridge's shows
+    // a sub-agent's (subagents.md §7, #175): an intentional difference, not a daemon bug.
+    public const string MainAgentOnly = "main-agent-only (#175)";
+    // CardResponseTail when the main agent has no response of its own to show.
+    public const string NoResponse = "(none)";
 
     // Whether two sides' questions are the same one: the same call when both know it (Claude);
     // otherwise, since agent-ha-bridge names a Copilot question after its hook's clock and not the

@@ -55,6 +55,9 @@ public sealed class SessionSource : ISessionSource
         public SessionTracker Tracker { get; } = tracker;
         public Session ListForm = null!;
         public Session GetForm = null!;
+        // GetForm before SessionBudget.Fit (GetUnbudgeted), and its JSON when Fit changed it.
+        public Session Unbudgeted = null!;
+        public string? UnbudgetedJson;
         // What the transcript says, before the ending override; what SetEndingAsync shows
         // again when a stop fails.
         public Session Full = null!;
@@ -124,6 +127,18 @@ public sealed class SessionSource : ISessionSource
     {
         lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.GetForm : null; }
     }
+
+    public Session? GetUnbudgeted(string id)
+    {
+        lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.Unbudgeted : null; }
+    }
+
+    public (Session Budgeted, Session Unbudgeted)? GetForms(string id)
+    {
+        lock (_gate) { return _entries.TryGetValue(id, out var e) ? (e.GetForm, e.Unbudgeted) : null; }
+    }
+
+    public event EventHandler<string>? UnbudgetedChanged;
 
     // Read between passes, as a pass is what changes a tracker's state.
     public async Task<Subagent?> GetAgentAsync(string id, string agent, CancellationToken cancellationToken = default)
@@ -557,16 +572,39 @@ public sealed class SessionSource : ISessionSource
         var getForm = SessionBudget.Fit(shown);
         var listForm = SessionBudget.Fit(shown.WithoutHistory());
         var json = JsonSerializer.Serialize(getForm, ProtocolJson.Options);
+        // Only a session Fit trimmed has another form to tell apart.
+        var unbudgetedJson = ReferenceEquals(getForm, shown) ? null : JsonSerializer.Serialize(shown, ProtocolJson.Options);
         lock (_gate)
         {
-            if (json == entry.Json && _entries.ContainsKey(full.Id)) { return; }
-            entry.GetForm = getForm;
-            entry.ListForm = listForm;
-            entry.Json = json;
-            _entries[full.Id] = entry;
-            _revision++;
-            entry.Dirty = true;
-            ScheduleEmit(entry);
+            if (json == entry.Json && _entries.ContainsKey(full.Id))
+            {
+                if (unbudgetedJson == entry.UnbudgetedJson) { return; }
+                // Only what Fit trimmed changed: no client is sent anything new, so no revision and
+                // no upsert (each up to 40 KiB, a byte-identical repeat; found in review). Kept for
+                // GetUnbudgeted, and said to its readers below.
+                entry.Unbudgeted = shown;
+                entry.UnbudgetedJson = unbudgetedJson;
+            }
+            else
+            {
+                entry.GetForm = getForm;
+                entry.ListForm = listForm;
+                entry.Unbudgeted = shown;
+                entry.UnbudgetedJson = unbudgetedJson;
+                entry.Json = json;
+                _entries[full.Id] = entry;
+                _revision++;
+                entry.Dirty = true;
+                ScheduleEmit(entry);
+                return;
+            }
+        }
+        if (UnbudgetedChanged is not { } handlers) { return; }
+        // Each on its own, as Changed's are: one that throws must not keep the rest from hearing.
+        foreach (var handler in handlers.GetInvocationList().Cast<EventHandler<string>>())
+        {
+            try { handler(this, full.Id); }
+            catch (Exception) { }
         }
     }
 

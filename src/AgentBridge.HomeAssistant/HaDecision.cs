@@ -36,6 +36,9 @@ public sealed record DecisionPlan(
 {
     // Every question with fields is answered through its slots (Set-CopilotMqttDecision).
     public bool UsesFieldSlots => Fields.Count >= 1 && Fields.Count <= HaContract.MaxFields;
+    // A sub-agent's question (Question.Agent): its id and name, published beside the question.
+    public string? Agent { get; init; }
+    public string? AgentName { get; init; }
 }
 
 // One step of arming or clearing, in the order the daemon takes them.
@@ -69,6 +72,28 @@ public static partial class HaDecision
     public static string TerminalNote(string why) => $"\n\n**This one has to be answered in the terminal** - {why}";
 
     const string TooManyFields = "it has more fields than the dashboard can drive, so a reply typed here would not reach the prompt.";
+
+    // A session's question as its card and the phones show it. A sub-agent's (subagents.md §7)
+    // goes the same way as the session's own, said to be the delegate's: its name leads the text,
+    // so the card shows it without knowing about delegates, and agent and agent_name are published
+    // beside it. The name is added before the plan's length checks, so it can never be what makes
+    // an answerable question one the card would have to cut.
+    public static DecisionPlan Plan(Question question, Session session)
+    {
+        if (question.Agent is not { } agent) { return Plan(question, session.Agent); }
+        var name = Asker(question, session);
+        return Plan(question with { Message = $"{name} asks:\n\n{question.Message}" }, session.Agent) with { Agent = agent, AgentName = name };
+    }
+
+    // Who asked a sub-agent's question, as a line of plain text: its name from the session's list,
+    // else "A delegate" (one the list no longer carries).
+    public static string Asker(Question question, Session session)
+    {
+        var name = session.Subagents?.FirstOrDefault(a => a.Id == question.Agent)?.Name;
+        name = string.IsNullOrWhiteSpace(name) ? "" : string.Join(' ', name.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        name = Limits.KeepStart(name, Limits.SubagentName) ?? "";
+        return name.Length == 0 ? "A delegate" : HaPayloads.NeutraliseTemplates(name);
+    }
 
     // The host's question as the card should show it.
     public static DecisionPlan Plan(Question question, AgentKind agent)
@@ -233,6 +258,11 @@ public static partial class HaDecision
         };
         if (plan.AnswerOnTap) { attributes["answer_on_tap"] = true; }
         if (plan.TakesTypedAnswer) { attributes["takes_typed_answer"] = true; }
+        if (plan.Agent is { } agent)
+        {
+            attributes["agent"] = agent;
+            attributes["agent_name"] = plan.AgentName ?? "";
+        }
         if (plan.UsesFieldSlots)
         {
             for (var i = 1; i <= plan.Fields.Count; i++)

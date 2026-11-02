@@ -347,6 +347,38 @@ public sealed class AnswerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_delegates_permission_prompt_is_armed_and_answered_on_the_card_as_the_sessions_own_said_to_be_the_delegates()
+    {
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with
+        {
+            WaitingOn = "agent-3a91",
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "Run full test suite", Status = SubagentStatus.Waiting }],
+            Question = new Question
+            {
+                Id = "p1", Kind = QuestionKind.Approval, Message = "Allow dotnet test?", AskedAt = FakeSessions.T0, Agent = "agent-3a91",
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
+            },
+        });
+        await using var c = Connector();
+        await Pass(c);
+        var attributes = Attributes(SessionEntities.Decision(Node));
+        Assert.Equal("Run full test suite asks:\n\nAllow dotnet test?", attributes.GetProperty("question").GetString());
+        Assert.Equal(("agent-3a91", "Run full test suite"), (attributes.GetProperty("agent").GetString(), attributes.GetProperty("agent_name").GetString()));
+        Assert.True(attributes.GetProperty("answer_on_tap").GetBoolean());
+
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        var request = Assert.Single(answered);
+        Assert.Equal((A, "p1", "approve"), (request.Id, request.Question, request.Fields!["decision"].GetString()));
+
+        // The session's own next question carries no attribution.
+        Ask(Form("q2", Release));
+        await Pass(c);
+        attributes = Attributes(SessionEntities.Decision(Node));
+        Assert.Equal("Cut the release?", attributes.GetProperty("question").GetString());
+        Assert.False(attributes.TryGetProperty("agent", out _));
+    }
+
+    [Fact]
     public async Task An_answer_the_host_refuses_is_said_to_be_not_sent_and_can_be_given_again()
     {
         outcome = _ => new AnswerResult(AnswerOutcome.Busy, "another answer or reply to this session is being delivered");

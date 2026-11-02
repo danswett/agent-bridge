@@ -271,6 +271,31 @@ public sealed class ShadowTests : IDisposable
         Assert.Contains(ShadowLedger.Read(reports, "2026-10-28")!.Mismatches, x => x.Kind == ShadowKinds.QuestionFields && x.Seconds == 105);
     }
 
+    // Found in review (#175): a host stuck on a wrong agent, between other agents' count lags first
+    // one way and then the other, is one disagreement: the lags no longer split it, or it never
+    // lasts the grace.
+    [Fact]
+    public void Count_lags_either_way_around_a_stuck_agent_are_one_disagreement_that_lasts_the_grace()
+    {
+        f.Time.SetLocalTimeZone(TimeZoneInfo.Utc);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), f.Time);
+        ShadowDifference Agents(string detail) => new(ShadowKinds.BackgroundAgents, "s1", detail);
+        void Sample(params ShadowDifference[] diffs)
+        {
+            ledger.Record(new ShadowComparison(true, 1, 1, diffs, ["s1"]), new ShadowView(), new ShadowView());
+            f.Time.Advance(TimeSpan.FromSeconds(15));
+        }
+
+        for (var i = 0; i < 3; i++)
+        {
+            Sample(Agents(i % 2 == 0 ? "daemon=3 host=2" : "daemon=2 host=3"));
+            Sample(Agents("daemon=2 host=2, not the same agents"));
+        }
+        Sample();
+        var m = Assert.Single(ShadowLedger.Read(reports, "2026-10-28")!.Mismatches);
+        Assert.Equal((ShadowKinds.BackgroundAgents, 75L), (m.Kind, m.Seconds));
+    }
+
     [Fact]
     public void A_disagreement_shorter_than_the_grace_is_timing_skew_and_one_that_lasts_it_is_a_mismatch()
     {
@@ -332,6 +357,79 @@ public sealed class ShadowTests : IDisposable
         // showing a moment ago when one side moves on (found in review, #77).
         for (var i = 0; i < 20; i++) { Assert.Null(Response("a long-standing answer", "a long-standing answer")); }
         Assert.Equal(ShadowCompare.Timing, Response("a long-standing answer", "a newer answer")!.Known);
+    }
+
+    // #175: agent-ha-bridge's card shows whichever agent wrote last, by the owner's decision, and the
+    // host's Home Assistant card the main agent's own (subagents.md §7). With the two agreeing on the
+    // latest writer's text, that is a labelled intentional difference; any other disagreement about
+    // the response is the parser comparison's, and still a mismatch.
+    [Fact]
+    public void The_main_agents_own_text_on_the_hosts_card_is_labelled_intentional_and_an_unrelated_response_mismatch_still_counts()
+    {
+        var host = HostSide.From(new Session
+        {
+            Id = Id,
+            Agent = AgentKind.Copilot,
+            Status = SessionStatus.Idle,
+            StatusSince = Fixture.T0,
+            UpdatedAt = Fixture.T0,
+            Activity = new Activity
+            {
+                Response = "Delegate: all 40 tests pass",
+                Source = new ActivitySource { Response = "agent-3a91" },
+                Own = new OwnActivity { Response = "Done: the release is cut." },
+            },
+        });
+        ShadowDifference? Response(string daemonText, ShadowSession h) =>
+            ShadowCompare.Compare(View(new ShadowSession { Id = Id, Agent = "copilot", Status = "idle", ResponseTail = ShadowHash.Tail(daemonText) }), View(h))
+                .Differences.SingleOrDefault(d => d.Kind == ShadowKinds.Response);
+
+        Assert.Equal(ShadowCompare.MainAgentOnly, Response("Delegate:  all 40 tests pass\n", host)!.Known);
+        // The daemon showing other words than the latest writer's is a mismatch, sub-agents or not.
+        Assert.Null(Response("Something else entirely", host)!.Known);
+        // Even the main agent's own: the two disagree on what was written last.
+        Assert.Null(Response("Done: the release is cut.", host)!.Known);
+        // With the main agent the latest writer, there is nothing to label.
+        Assert.Null(Response("Done: the release is cut.", HostSide.From(new Session
+        {
+            Id = Id, Agent = AgentKind.Copilot, Status = SessionStatus.Idle, StatusSince = Fixture.T0, UpdatedAt = Fixture.T0,
+            Activity = new Activity { Response = "Done: the release is cut." },
+        })));
+        // The main agent's own reply dropped by the protocol budget: what the card shows is not
+        // known from the budgeted form, so nothing is labelled (found in review).
+        Assert.Null(Response("Delegate: all 40 tests pass", HostSide.From(new Session
+        {
+            Id = Id, Agent = AgentKind.Copilot, Status = SessionStatus.Idle, StatusSince = Fixture.T0, UpdatedAt = Fixture.T0,
+            Activity = new Activity
+            {
+                Response = "Delegate: all 40 tests pass",
+                Source = new ActivitySource { Response = "agent-3a91" },
+                Own = new OwnActivity { ResponseTruncated = true },
+            },
+        })));
+    }
+
+    // #175: the agents behind the host's background.agents, entry by entry, for ShadowWitness.Agents.
+    [Fact]
+    public void The_hosts_counted_agents_are_read_from_its_list_only_when_the_list_holds_them_all()
+    {
+        Subagent A(string id, SubagentStatus status, SubagentKind kind = SubagentKind.Background) => new() { Id = id, Kind = kind, Status = status };
+        IReadOnlyList<string>? Running(IReadOnlyList<Subagent>? list, int? more = null, int counted = 0) => HostSide.From(new Session
+        {
+            Id = Id, Agent = AgentKind.Copilot, Status = SessionStatus.Idle, StatusSince = Fixture.T0, UpdatedAt = Fixture.T0,
+            Activity = new Activity { Background = counted > 0 ? Background.Of(counted, 0) : null }, Subagents = list, SubagentsMore = more,
+        }).RunningSubagents;
+
+        Assert.Equal([], Running(null));
+        Assert.Equal(["a1", "a3"], Running([A("a1", SubagentStatus.Working), A("a2", SubagentStatus.Working, SubagentKind.Task), A("a3", SubagentStatus.Waiting), A("a4", SubagentStatus.Idle)], more: 4, counted: 2));
+        // Capped with nothing finished after the running ones: some may have been left out.
+        Assert.Null(Running([A("a1", SubagentStatus.Working)], more: 2, counted: 3));
+        // Finished ones dropped by the budget leave every running one listed (found in review).
+        Assert.Equal(["a1"], Running([A("a1", SubagentStatus.Working)], more: 5, counted: 1));
+        Assert.Null(Running(null, more: 3, counted: 1));
+        // A count with no list (a host from before sub-agents, or an agent that reports counts
+        // only) is compared by its count alone (found in review).
+        Assert.Null(Running(null, counted: 2));
     }
 
     // The live shadow's first minutes (#40): a session's subagents' shells counted by the daemon as

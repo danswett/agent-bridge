@@ -25,6 +25,22 @@ public interface ISessionSource : IAsyncDisposable
     // session.get: the full session with its tool history, or null once it has gone.
     Session? Get(string id);
 
+    // The same session before SessionBudget.Fit, within the field limits only, or null once it
+    // has gone. For a consumer that sends it on under limits of its own (the HA connector): Fit
+    // trims the fields older clients ignore first, activity.own among them, so the budgeted form
+    // can have lost the main agent's own reply while keeping a delegate's (#175). Never for a
+    // channel to a client, which the budget is for.
+    Session? GetUnbudgeted(string id) => GetForms(id)?.Unbudgeted;
+
+    // Both forms of one session, taken together, so they are of the same moment: what Get
+    // returns, and what GetUnbudgeted does. Null once it has gone.
+    (Session Budgeted, Session Unbudgeted)? GetForms(string id) => Get(id) is { } s ? (s, s) : null;
+
+    // A session whose form before the budget changed while nothing Get or the list returns did
+    // (a field Fit trims): no Changed and no upsert, as no client would see anything new, but a
+    // consumer of GetUnbudgeted has. Raised with the session's id.
+    event EventHandler<string>? UnbudgetedChanged { add { } remove { } }
+
     // session.get { id, agent }: one of the session's sub-agents with its own response,
     // reasoning and tool history, within the session budget. Null when the session has gone
     // or has no sub-agent by that id, or from a source that lists none.

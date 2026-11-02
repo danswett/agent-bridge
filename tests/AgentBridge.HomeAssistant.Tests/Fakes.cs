@@ -522,13 +522,38 @@ internal sealed class FakeSessions : ISessionSource
     public IReadOnlyList<Session> Snapshot()
     {
         IReadOnlyList<Session> snapshot;
-        lock (sessions) { snapshot = [.. sessions.Values.OrderByDescending(s => s.UpdatedAt).Select(s => s.WithoutHistory())]; }
+        lock (sessions) { snapshot = [.. sessions.Values.OrderByDescending(s => s.UpdatedAt).Select(s => SessionBudget.Fit(s.WithoutHistory()))]; }
         var after = AfterSnapshot;
         AfterSnapshot = null;
         after?.Invoke();
         return snapshot;
     }
-    public Session? Get(string id) { lock (sessions) { return sessions.TryGetValue(id, out var s) ? s : null; } }
+    // As the host's SessionSource hands them out: within the protocol budget, and before it.
+    public Session? Get(string id) => Read(() => sessions.TryGetValue(id, out var s) ? SessionBudget.Fit(s) : null);
+    public Session? GetUnbudgeted(string id) => Read(() => sessions.TryGetValue(id, out var s) ? s : null);
+    public (Session Budgeted, Session Unbudgeted)? GetForms(string id) =>
+        Read<(Session, Session)?>(() => sessions.TryGetValue(id, out var s) ? (SessionBudget.Fit(s), s) : null);
+    public event EventHandler<string>? UnbudgetedChanged;
+
+    // Runs once, after the next read: a change landing just after it, before any read that follows.
+    public Action? AfterRead { get; set; }
+
+    T Read<T>(Func<T> read)
+    {
+        T got;
+        lock (sessions) { got = read(); }
+        var after = AfterRead;
+        AfterRead = null;
+        after?.Invoke();
+        return got;
+    }
+
+    // A change to what only the form before the budget shows, said as SessionSource says it.
+    public void SetUnbudgeted(Session s)
+    {
+        lock (sessions) { sessions[s.Id] = s; }
+        UnbudgetedChanged?.Invoke(this, s.Id);
+    }
     public SessionList List(string? cursor = null) => new(Snapshot(), revision);
     public SessionSubscription Subscribe() => throw new NotSupportedException();
     public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;

@@ -456,6 +456,162 @@ public sealed class NotifyTests : IDisposable
         Assert.Empty(Buttons());
     }
 
+    // subagents.md §7: "finished" is the main agent's turn, told in its own words, and a
+    // delegate's question says whose it is.
+    [Fact]
+    public async Task A_finished_turn_is_pushed_in_the_main_agents_words_and_a_delegates_question_says_who_asks()
+    {
+        var notify = new HaNotifySettings { Enabled = true };
+        Ask(null, response: null);
+        await using var c = Connector(notify);
+        await Pass(c);
+        var delegated = sessions.Get(A)! with
+        {
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "Run full test suite", Status = SubagentStatus.Waiting }],
+            WaitingOn = "agent-3a91",
+            Question = new Question
+            {
+                Id = "p1", Kind = QuestionKind.Approval, Message = "Allow dotnet test?", AskedAt = FakeSessions.T0, Agent = "agent-3a91",
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")] }],
+            },
+            Status = SessionStatus.Waiting,
+        };
+        sessions.Set(delegated);
+        await Pass(c);
+        var asked = Assert.Single(Pushes());
+        Assert.Equal("Run full test suite asks · Copilot permission needed", asked["title"]!.GetValue<string>());
+        Assert.Equal("Run full test suite asks:\n\nAllow dotnet test?", asked["message"]!.GetValue<string>());
+
+        sessions.Set(delegated with
+        {
+            Question = null,
+            WaitingOn = null,
+            Status = SessionStatus.Idle,
+            Activity = new Activity
+            {
+                Response = "Delegate: all 40 tests pass", TurnCount = 1, UserMessage = "go",
+                Source = new ActivitySource { Response = "agent-3a91" },
+                Own = new OwnActivity { Response = "Done: the release is cut." },
+            },
+        });
+        await Pass(c);
+        await Pass(c, 5);
+        var done = Pushes()[^1];
+        Assert.Equal("Copilot response: Copilot: Fix the relay", done["title"]!.GetValue<string>());
+        Assert.Equal("Done: the release is cut.", done["message"]!.GetValue<string>());
+    }
+
+    // A delegate's question on the phones' answer buttons: titled with its name, and under the
+    // session's tag, so the newer of its and the session's questions replaces the older.
+    [Fact]
+    public async Task A_delegates_question_on_the_answer_buttons_is_titled_with_its_name_under_the_sessions_tag()
+    {
+        Ask(null);
+        await using var c = Connector();
+        await Pass(c);
+        sessions.Set(sessions.Get(A)! with
+        {
+            Status = SessionStatus.Waiting,
+            WaitingOn = "agent-3a91",
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "Run full test suite", Status = SubagentStatus.Waiting }],
+            Question = Form("q1", Release) with { Agent = "agent-3a91" },
+        });
+        await Pass(c);
+        var shown = Assert.Single(Buttons());
+        Assert.Equal("Run full test suite asks · Copilot: Fix the relay", shown["title"]!.GetValue<string>());
+        Assert.Equal(Tag, shown["data"]!["tag"]!.GetValue<string>());
+        Assert.StartsWith("Run full test suite asks: Cut the release?", shown["message"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    // Found in review (#175): the protocol budget trims what older clients ignore first, activity.own
+    // among them, so a session over it lost the main agent's reply from its budgeted form while a
+    // delegate's 16 KiB stayed. The card and the finished push read the session before that budget.
+    [Fact]
+    public async Task A_session_over_the_protocol_budget_keeps_the_main_agents_reply_on_the_card_and_in_its_finished_push()
+    {
+        var notify = new HaNotifySettings { Enabled = true };
+        Ask(null, response: null);
+        await using var c = Connector(notify);
+        await Pass(c);
+        var reply = "Done: the release is cut.\n" + new string('m', 5970);
+        var big = sessions.Get(A)! with
+        {
+            Status = SessionStatus.Idle,
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "Run full test suite", Status = SubagentStatus.Idle }],
+            Activity = new Activity
+            {
+                Response = new string('"', 16 * 1024), Reasoning = new string('k', 4 * 1024), TurnCount = 1, UserMessage = "go",
+                Source = new ActivitySource { Response = "agent-3a91" },
+                Own = new OwnActivity { Response = reply },
+                History = [.. Enumerable.Range(0, 50).Select(i => new ToolCall { Id = $"t{i}", Name = "view", Summary = new string('s', 200), Status = ToolStatus.Done, StartedAt = FakeSessions.T0 })],
+            },
+        };
+        // The budgeted form has lost it: what the card would have shown without this.
+        Assert.Null(SessionBudget.Fit(big).Activity.Own?.Response);
+        sessions.Set(big);
+        await Pass(c);
+        await Pass(c, 5);
+
+        var t = HaContract.Topics(Node);
+        Assert.Equal("Done: the release is cut.", ha.Retained[t.ActivityState]);
+        Assert.Equal(reply, JsonDocument.Parse(ha.Retained[t.ActivityAttributes]).RootElement.GetProperty("response").GetString());
+        var done = Pushes()[^1];
+        Assert.Equal("Copilot response: Copilot: Fix the relay", done["title"]!.GetValue<string>());
+        Assert.StartsWith("Done: the release is cut.", done["message"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    // Found in review (#175): a change only the form before the budget shows reaches no client,
+    // so no Changed says it. The card reads that form, so it still hears of it.
+    [Fact]
+    public async Task A_change_only_the_protocol_budget_hides_from_clients_still_reaches_the_card()
+    {
+        Ask(null, response: null);
+        await using var c = Connector();
+        await Pass(c);
+        var big = sessions.Get(A)! with
+        {
+            Activity = new Activity
+            {
+                Response = new string('"', 16 * 1024), Reasoning = new string('k', 4 * 1024), TurnCount = 1, UserMessage = "go",
+                Source = new ActivitySource { Response = "agent-3a91" },
+                Own = new OwnActivity { Response = "Cutting the release." },
+                History = [.. Enumerable.Range(0, 50).Select(i => new ToolCall { Id = $"t{i}", Name = "view", Summary = new string('s', 200), Status = ToolStatus.Done, StartedAt = FakeSessions.T0 })],
+            },
+        };
+        sessions.Set(big);
+        await Pass(c);
+        var t = HaContract.Topics(Node);
+        Assert.Equal("Cutting the release.", ha.Retained[t.ActivityState]);
+
+        var later = big with { Activity = big.Activity with { Own = new OwnActivity { Response = "The release is cut." } } };
+        Assert.Equal(JsonSerializer.Serialize(SessionBudget.Fit(big), ProtocolJson.Options), JsonSerializer.Serialize(SessionBudget.Fit(later), ProtocolJson.Options));
+        sessions.SetUnbudgeted(later);
+        await Pass(c);
+
+        Assert.Equal("The release is cut.", ha.Retained[t.ActivityState]);
+    }
+
+    // Found in review (#175): the card read the session's two forms one after the other, so a
+    // question landing between them gave a waiting Claude with no question, pushed as blocked.
+    [Fact]
+    public async Task A_question_landing_while_the_card_reads_its_session_is_no_spurious_waiting_push()
+    {
+        var notify = new HaNotifySettings { Enabled = true };
+        Ask(null, AgentKind.Claude, response: null);
+        await using var c = Connector(notify);
+        await Pass(c);
+
+        Ask(null, AgentKind.Claude, response: "Asking.");
+        sessions.AfterRead = () => Ask(Form("q1", Release), AgentKind.Claude, response: "Asking.");
+        await Pass(c);
+        Assert.Null(sessions.AfterRead);
+        await Pass(c);
+
+        var pushed = Assert.Single(Pushes());
+        Assert.NotEqual("Waiting: Claude: scratch", pushed["title"]!.GetValue<string>());
+        Assert.Contains("Cut the release?", pushed["message"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_question_and_a_finished_turn_are_pushed_once_each_as_the_hooks_push_them()
     {

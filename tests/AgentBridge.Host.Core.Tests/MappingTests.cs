@@ -182,6 +182,64 @@ public class LimitsTests
         Assert.Null(listed.Activity.History);
     }
 
+    // #175: the HA connector keeps Home Assistant's limits itself and reads a session before the
+    // protocol budget, whose order could otherwise drop the main agent's own reply from its card.
+    [Fact]
+    public async Task A_session_over_the_budget_is_also_kept_whole_within_its_field_limits_for_the_home_assistant_connector()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        // Quotes, which JSON escapes, put the reply alone near the budget.
+        Fixture.Append(events, Copilot.User("ask", 1), Copilot.Assistant(new string('"', 20_000), 2, reasoning: new string('k', 5000)));
+        Fixture.Append(events, [.. Enumerable.Range(0, 60).Select(i => Copilot.ToolStart("t" + i, "view", new { path = new string('p', 2000) }, 3 + i))]);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        var budgeted = source.Get(Id)!;
+        var whole = source.GetUnbudgeted(Id)!;
+        Assert.InRange(ProtocolJson.ByteCount(budgeted), 1, SessionBudget.MaxSessionBytes);
+        Assert.True(ProtocolJson.ByteCount(whole) > SessionBudget.MaxSessionBytes);
+        Assert.Equal(16 * 1024, whole.Activity.Response!.Length);
+        Assert.Equal(JsonSerializer.Serialize(SessionBudget.Fit(whole), ProtocolJson.Options), JsonSerializer.Serialize(budgeted, ProtocolJson.Options));
+    }
+
+    // Found in review (#175): a change only the form before the budget shows used to count as a
+    // change, sending every client a byte-identical upsert of up to 40 KiB. Only its readers hear.
+    [Fact]
+    public async Task A_change_only_to_what_the_budget_trims_sends_no_upsert_yet_tells_the_unbudgeted_readers()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        // Quotes, which JSON escapes: the reply and this reasoning do not both fit, so Fit drops the
+        // reasoning. Each message is dated as the last, so once updatedAt has moved to now (frozen),
+        // nothing a client is sent moves with the reasoning.
+        string Reasoning(string end) => new string('"', 4090) + end;
+        var reply = new string('"', 16 * 1024);
+        Fixture.Append(events, Copilot.User("ask", 1), Copilot.Assistant(reply, 2, reasoning: Reasoning("first")));
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Fixture.Append(events, Copilot.Assistant(reply, 2, reasoning: Reasoning("again")));
+        await source.RefreshAsync();
+        var before = JsonSerializer.Serialize(source.Get(Id), ProtocolJson.Options);
+        var revision = source.Revision;
+        var told = new List<string>();
+        source.UnbudgetedChanged += (_, id) => told.Add(id);
+
+        Fixture.Append(events, Copilot.Assistant(reply, 2, reasoning: Reasoning("other")));
+        await source.RefreshAsync();
+
+        Assert.Equal(revision, source.Revision);
+        Assert.Equal(before, JsonSerializer.Serialize(source.Get(Id), ProtocolJson.Options));
+        Assert.Equal([Id], told);
+        var (budgeted, whole) = source.GetForms(Id)!.Value;
+        Assert.Null(budgeted.Activity.Reasoning);
+        Assert.EndsWith("other", whole.Activity.Reasoning, StringComparison.Ordinal);
+        Assert.EndsWith("other", source.GetUnbudgeted(Id)!.Activity.Reasoning, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void A_tool_summary_prefers_the_description_then_the_main_argument_on_one_line()
     {

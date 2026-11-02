@@ -173,7 +173,7 @@ Per session:
 | Entity (pinned id) | Discovery topic | State / attributes |
 |---|---|---|
 | `sensor.<node>_status` | `homeassistant/sensor/<node>/status/config` | `working`, `waiting`, `idle`, `agents` (idle, background agents running), `shell` (idle, background commands running) or `ending`; attributes `session`, `machine`, `process_id`, `updated`, and only when non-empty or non-zero `model`, `background_agents`, `background_shells`, `compactions` (`Add-DaemonTuningAttributes`) |
-| `sensor.<node>_activity` | `homeassistant/sensor/<node>/activity/config` | a line, cut to 255 with `...`: `Running: <tool>`, the reply's first line, `Thinking`, or `Idle`; attributes `session`, `machine`, `verbose`, `updated`, `driver`, `history` (12 deep, 24 with Detailed activity), and the card text as `Add-DaemonCardText` lays it out: `response` (to 6000 characters, then `_(truncated - see terminal)_`) with `response_kind` `text` or `reasoning`, and for an agent that does not interleave its thinking, `reasoning` (to 4000) |
+| `sensor.<node>_activity` | `homeassistant/sensor/<node>/activity/config` | a line, cut to 255 with `...`: `Running: <tool>`, the reply's first line, `Thinking`, or `Idle`; attributes `session`, `machine`, `verbose`, `updated`, `driver`, `history` (12 deep, 24 with Detailed activity), and the card text as `Add-DaemonCardText` lays it out: `response` (to 6000 characters, then `_(truncated - see terminal)_`) with `response_kind` `text` or `reasoning`, and for an agent that does not interleave its thinking, `reasoning` (to 4000). Added, only for a session with sub-agents: `subagents` and `subagents_more` (below) |
 
 Both carry the device block (`identifiers: [<node>]`, `name`, `manufacturer: AI CLI bridge`,
 `model: <machine>`) and `availability` on `copilot/cli/<node>/available`. A renamed session
@@ -193,6 +193,49 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
   (`Get-BridgeThoughtLine`, ported and fixture-checked), the reply's first line.
 * `driver` is `human` until an answer from the card sets it (stage 2, below); replies and
   launches set it from stages 3 and 5.
+* **Sub-agents** ([design/subagents.md](design/subagents.md) §7, #175). The host's top-level
+  `response` and `reasoning` are the latest writer's, a delegate's included, as on
+  agent-ha-bridge's card. The connector publishes the **main agent's own** instead: `own`'s
+  text for a field `activity.source` gives to a sub-agent, else the top-level text, else
+  `own`'s. That holds for the card text, the activity line, the trail and the "finished"
+  push (stage 5b). A main agent with no words of its own shows none, never the delegate's.
+  This is a deliberate difference from agent-ha-bridge, which by the owner's decision of
+  2026-11-01 keeps showing the latest writer's. The shadow labels it `main-agent-only (#175)`
+  ([host-shadow.md](host-shadow.md)). The connector reads each session **before** the
+  protocol's 40 KiB budget (`ISessionSource.GetForms`), within the field limits only.
+  `SessionBudget.Fit` trims the fields older clients ignore first, `own` among them, so in a
+  session over it the budgeted form can have lost the main agent's reply while a delegate's
+  16 KiB stays (found in review). Both forms come from one read, so a card never mixes two
+  moments (a waiting Claude without its question would push as blocked). A change only
+  that form shows sends clients no upsert, since none would see anything new; the source
+  tells the connector through `UnbudgetedChanged` instead. Home Assistant's limits are the
+  connector's own: the card text and trail are capped as above, the delegates budgeted
+  below, and the question is still
+  the budgeted form's. That is the one the host answers, and a question cut to fit is
+  answered at the machine there and here alike. The whole activity payload is held to 15 KiB
+  as well (`HaPayloads.FitCard`), since agent-ha-bridge's layout can pass Home Assistant's
+  16 KiB: the reply goes in `response` and, its first line whole, in the trail, and JSON
+  escaping can double either. Only a card over that is touched, so any other is the daemon's
+  exactly. The trail's lines are cut first, as the activity state is (255 characters), then
+  its oldest lines go, then the reasoning expander, then the shown text, its start kept with
+  the truncation note.
+  Delegates are fitted after that, into whatever room is left. Should a reply be gone all the same
+  (`own.responseTruncated` with no `own.response`), the card says the reply is too long to
+  show here, never blank and never the delegate's. The delegates themselves go in two **additions** to the
+  activity attributes, present only while the session has any, so a session without
+  sub-agents publishes exactly the contract. `subagents` holds the first 5 entries of the
+  host's list (running first, then the most recently finished), each `{name, status, line}`:
+  `status` is `working`, `waiting`, `idle` or `ended`, and `line` is absent until the
+  delegate has said something. `subagents_more` counts the entries left out, here or by the
+  host, when there are any. Names keep their first 120 bytes and lines their last 300,
+  whitespace collapsed and template markup broken as in names, so five entries come to a few
+  KiB with any number of delegates. They are also budgeted against the rest of the
+  attributes, never at the card text's cost: past 15 KiB in all (Home Assistant keeps 16 KiB
+  of a state's attributes, less room for End session's hint and its own), the lines go, then
+  entries from the end, each counted in `subagents_more`. A session whose card text fills
+  that alone, or whose every entry the host's own budget dropped, publishes `subagents: []`
+  with the count. Room for that much is kept before the card text is fitted, so the 15 KiB
+  holds with it too. The card draws neither yet.
 
 ### What is withdrawn
 
@@ -250,6 +293,15 @@ empty multi-select options), three clears and the multi-select code table.
    a truncation note), `choices`, `mode`, `multi_field`, `field_count`, `session`, `machine`,
    `asked_at`, and per field `field_<i>_label`, `_multi`, `_options`, `_separator`, `_codes`,
    `_empty`, plus `answer_on_tap` and `takes_typed_answer` when they apply.
+
+A sub-agent's question (Question `agent`, [design/subagents.md](design/subagents.md) §7) is
+armed, read and answered exactly as the session's own: the card has one question, and it
+answers whichever the host says is pending. Two things differ, both additions. Its `question`
+begins with "*name* asks:" and a blank line, so the card shows whose it is without knowing
+about delegates. The name is added before the length check above, so it can never be what
+makes an answerable question one the card would have to cut. And the decision attributes
+gain `agent` (the sub-agent's id) and `agent_name`. The pushes for it (stage 5b) are titled
+"*name* asks · *their usual title*" and keep the session's tag.
 
 **Reading** an answer. Presses come from one held WebSocket `subscribe_trigger` on every armed
 session's Send button and reply payload sensor (the daemon's `Wait-CopilotHaStateChange`), and
@@ -567,7 +619,14 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   own notifier waits (a question answered at the machine passes through idle); a background
   agent's message while the session rests is not one, a reply that changes during the wait
   starts it again, and a later turn ending in the same words is a finished turn of its own. What sessions already show when the connector starts is not pushed again. A push that
-  fails is logged and holds nothing up.
+  fails is logged and holds nothing up. The reply is the main agent's own: while a delegate
+  wrote last, its words neither finish a turn nor appear in the push (design/subagents.md
+  §7). A delegate's question is pushed as the session's are, titled "*name* asks · " before
+  the usual title, its text led by "*name* asks:". Its answer buttons are titled the same
+  way, under the session's tag. The hooks' pushes carry no tag at all, the session's own
+  questions included, exactly as the daemon's hooks send them (`Fixtures/ha-notify.json`),
+  so on that path a delegate's question is treated as the session's are and neither
+  replaces the other; the answer buttons are where the newer replaces the older.
 
 Where stage 5b knowingly differs from the daemon:
 

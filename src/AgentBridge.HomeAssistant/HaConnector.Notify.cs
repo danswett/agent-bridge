@@ -130,7 +130,9 @@ public sealed partial class HaConnector
     {
         var marker = HaNotify.Marker(armed.Plan);
         var actions = HaNotify.Actions(marker, armed.Question.Id, HaNotify.Options(marker), Notify.MaxButtons, textAction: TakesWords(armed.Plan));
-        return (actions, HaNotify.Payload(sessionId, p.Name, marker, actions, options.DashboardUrlPath, options.MachineName,
+        // A sub-agent's question is titled with its name, under the session's tag as ever.
+        var title = armed.Plan.AgentName is { } asker ? HaNotify.AskerTitle(asker, p.Name) : p.Name;
+        return (actions, HaNotify.Payload(sessionId, title, marker, actions, options.DashboardUrlPath, options.MachineName,
             Notify.Icon, Notify.IconColor, Notify.Color, Notify.InterruptionLevel));
     }
 
@@ -387,9 +389,10 @@ public sealed partial class HaConnector
     }
 
     // A finished turn, by turn and reply: the same words ending a later turn are that turn's own.
+    // The main agent's reply only (subagents.md §7): a delegate's latest words finish no turn.
     static string? FinishedKey(Session s) =>
-        string.IsNullOrWhiteSpace(s.Activity.Response) ? null
-            : $"{s.Activity.TurnCount}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s.Activity.Response)))[..16]}";
+        HaPayloads.MainResponse(s.Activity) is not { } reply || string.IsNullOrWhiteSpace(reply) ? null
+            : $"{s.Activity.TurnCount}:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(reply)))[..16]}";
 
     // The hooks' pushes for one session, from what the host now shows of it.
     async Task PushesAsync(Session full, Published p, string name, DateTimeOffset now, CancellationToken ct)
@@ -455,7 +458,7 @@ public sealed partial class HaConnector
         foreach (var (id, p, key) in due)
         {
             p.Notify.FinishedDue = null;
-            if (source.Get(id) is not { Status: SessionStatus.Idle, Question: null } s) { continue; }
+            if (CardSession(id) is not { Status: SessionStatus.Idle, Question: null } s) { continue; }
             // A reply newer than the one the wait began with, still at rest: wait again for it,
             // rather than drop the turn because the session moved on between the two reads.
             if (FinishedKey(s) is var current && current != key)
@@ -464,7 +467,7 @@ public sealed partial class HaConnector
                 continue;
             }
             p.Notify.FinishedKey = key;
-            if (Notify.Enabled && HaNotify.Response(p.Name, s.Activity.Response, s.Agent == AgentKind.Copilot) is { } finished)
+            if (Notify.Enabled && HaNotify.Response(p.Name, HaPayloads.MainResponse(s.Activity), s.Agent == AgentKind.Copilot) is { } finished)
             {
                 await PushAsync(finished.Title, finished.Message, ct);
             }
@@ -484,19 +487,22 @@ public sealed partial class HaConnector
         }
     }
 
-    // The push the agent's hook sends for a question, by agent and kind.
+    // The push the agent's hook sends for a question, by agent and kind. A sub-agent's says whose
+    // it is, in its title (subagents.md §7) and as its card does (HaDecision.Plan).
     (string Title, string Message)? QuestionPush(Session full, string name, Question question)
     {
-        var plan = HaDecision.Plan(question, full.Agent);
-        return (full.Agent, question.Kind) switch
+        var plan = HaDecision.Plan(question, full);
+        var message = question.Agent is null ? question.Message : $"{HaDecision.Asker(question, full)} asks:\n\n{question.Message}";
+        (string Title, string Message)? push = (full.Agent, question.Kind) switch
         {
-            (AgentKind.Copilot, QuestionKind.Approval) => HaNotify.CopilotPermission(question.Message),
+            (AgentKind.Copilot, QuestionKind.Approval) => HaNotify.CopilotPermission(message),
             (AgentKind.Copilot, _) => HaNotify.CopilotQuestion(name, options.MachineName, plan.Question, plan.Choices),
-            (AgentKind.Claude, QuestionKind.Approval) => HaNotify.ClaudeWaiting(name, options.MachineName, question.Message),
+            (AgentKind.Claude, QuestionKind.Approval) => HaNotify.ClaudeWaiting(name, options.MachineName, message),
             (AgentKind.Claude, _) => HaNotify.ClaudeQuestion(name, options.MachineName, plan.Question, plan.Choices, plan.TerminalOnly),
-            (AgentKind.Codex, QuestionKind.Approval) => HaNotify.CodexApproval(name, question.Message),
+            (AgentKind.Codex, QuestionKind.Approval) => HaNotify.CodexApproval(name, message),
             _ => null,
         };
+        return push is { } p && question.Agent is not null ? (HaNotify.NotificationTitle(HaNotify.AskerTitle(HaDecision.Asker(question, full), p.Title)), p.Message) : push;
     }
 
     // The ledger's record of which phones hold which session's notification.

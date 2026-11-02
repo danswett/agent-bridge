@@ -1,3 +1,4 @@
+using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Local;
@@ -24,9 +25,26 @@ public static class HostSide
         Model = string.IsNullOrEmpty(s.Model) ? null : s.Model,
         Compactions = s.Activity.Compactions ?? 0,
         ResponseTail = ShadowHash.Tail(s.Activity.Response),
+        // Unknown when the protocol budget dropped the main agent's own reply: the shadow reads the
+        // budgeted form, the card the whole one, so the note in its place says nothing about what
+        // the card shows (found in review).
+        CardResponseTail = s.Activity.Source?.Response is null || s.Activity.Own is { Response: null, ResponseTruncated: true } ? null
+            : ShadowHash.Tail(HaPayloads.MainResponse(s.Activity)) ?? ShadowCompare.NoResponse,
+        RunningSubagents = RunningSubagents(s),
         Question = Question(s.Question),
         PermissionPending = s.Question?.Kind == QuestionKind.Approval,
     };
+
+    // What background.agents counts, entry by entry: background sub-agents working or waiting, at
+    // any depth (subagents.md §2). The list holds them all exactly when it lists as many running
+    // as the host counts; the budget may have dropped finished entries, or the cap running ones
+    // (found in review). A host that lists fewer, none included (one from before sub-agents, or an
+    // agent that reports counts only, rule 8), is compared by its count alone.
+    static IReadOnlyList<string>? RunningSubagents(Session s)
+    {
+        IReadOnlyList<string> running = [.. (s.Subagents ?? []).Where(a => a.Kind == SubagentKind.Background && !a.Finished).Select(a => a.Id)];
+        return running.Count == (s.Activity.Background?.Agents ?? 0) ? running : null;
+    }
 
     // Permission prompts are not compared: agent-ha-bridge only mirrors them as an alert and arms
     // no question for them, where this host offers them to approve (parity §3, beyond parity).

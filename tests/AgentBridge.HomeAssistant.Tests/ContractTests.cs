@@ -226,6 +226,160 @@ public class ContractTests
         }
     }
 
+    // subagents.md §7: the card is the main agent's. A delegate's words, the latest on the session,
+    // never stand in for its reply or its reasoning, in the state, the card text or the trail.
+    [Fact]
+    public void The_cards_text_is_the_main_agents_own_while_a_delegate_wrote_last()
+    {
+        var name = Contract.Text("session.sessionName");
+        var s = FakeSessions.Copilot(SessionId, status: SessionStatus.Working) with
+        {
+            Activity = new Activity
+            {
+                Response = "Delegate: the suite passed",
+                Reasoning = "Delegate: reading the log",
+                Source = new ActivitySource { Response = "agent-1", Reasoning = "agent-1" },
+                Own = new OwnActivity { Response = "Main: cutting the release", Reasoning = "Main: which tag" },
+            },
+            Subagents = [new Subagent { Id = "agent-1", Kind = SubagentKind.Background, Name = "Run the suite", Status = SubagentStatus.Working }],
+        };
+        Assert.Equal("Main: cutting the release", HaPayloads.ActivitySummary(s));
+        var detail = HaPayloads.ActivityAttributes(s, name, Machine, verbose: true, DateTimeOffset.Now);
+        Assert.Equal("Main: cutting the release", detail["response"]!.GetValue<string>());
+        Assert.Equal(["Thinking: Main: which tag", "Main: cutting the release"], detail["history"]!.AsArray().Select(h => h!.GetValue<string>()));
+        // Only its reasoning is a delegate's: the reply shown is the main agent's, which is also the
+        // top-level one, and the thought is the main agent's own.
+        var mixed = s with { Activity = s.Activity with { Response = "Main: cutting the release", Source = new ActivitySource { Reasoning = "agent-1" }, Own = new OwnActivity { Reasoning = "Main: which tag" } } };
+        detail = HaPayloads.ActivityAttributes(mixed, name, Machine, verbose: true, DateTimeOffset.Now, thinking: true);
+        Assert.Equal(("Main: which tag", "reasoning"), (detail["response"]!.GetValue<string>(), detail["response_kind"]!.GetValue<string>()));
+        // A main agent with no words of its own shows none, not the delegate's.
+        var silent = s with { Activity = s.Activity with { Own = null } };
+        Assert.Equal("Thinking", HaPayloads.ActivitySummary(silent));
+        Assert.False(HaPayloads.ActivityAttributes(silent, name, Machine, verbose: true, DateTimeOffset.Now).ContainsKey("response"));
+        // One whose reply a budget dropped, keeping only that it had one, says so: neither blank
+        // nor the delegate's.
+        var dropped = s with { Activity = s.Activity with { Own = new OwnActivity { ResponseTruncated = true } } };
+        Assert.Equal(HaPayloads.OwnResponseDropped, HaPayloads.ActivitySummary(dropped));
+        Assert.Equal(HaPayloads.OwnResponseDropped, HaPayloads.ActivityAttributes(dropped, name, Machine, verbose: false, DateTimeOffset.Now)["response"]!.GetValue<string>());
+    }
+
+    // Home Assistant keeps at most 16 KiB of a state's attributes. The subagents attribute lists
+    // five of however many there are, each bounded, so it stays far inside that even with twenty
+    // whose names and lines are the longest and most expensive text there is.
+    [Fact]
+    public void The_subagents_attribute_stays_well_inside_home_assistants_limit_with_twenty_delegates()
+    {
+        var emoji = string.Concat(Enumerable.Repeat("\U0001F680", 400));
+        var templates = string.Concat(Enumerable.Repeat("{{", 2000));
+        var s = FakeSessions.Copilot(SessionId, status: SessionStatus.Working) with
+        {
+            Subagents = [.. Enumerable.Range(0, 20).Select(i => new Subagent
+            {
+                Id = $"agent-{i}", Kind = SubagentKind.Background, Status = SubagentStatus.Working,
+                Name = i % 2 == 0 ? emoji : templates, Line = i % 2 == 0 ? templates : emoji, Task = emoji,
+            })],
+            SubagentsMore = 7,
+        };
+        var detail = HaPayloads.ActivityAttributes(s, Contract.Text("session.sessionName"), Machine, verbose: true, DateTimeOffset.Now);
+        var listed = detail["subagents"]!.AsArray();
+        Assert.Equal(HaPayloads.SubagentsShown, listed.Count);
+        Assert.Equal(15 + 7, detail["subagents_more"]!.GetValue<int>());
+        Assert.All(listed, e => Assert.Equal(["name", "status", "line"], e!.AsObject().Select(p => p.Key)));
+        var bytes = System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(listed));
+        Assert.True(bytes < 8 * 1024, $"{bytes} bytes");
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(detail)) < 16 * 1024);
+    }
+
+    // Found in review: read before the protocol budget, a reply's first line goes whole into the
+    // trail beside up to 6000 characters of it in response, and JSON escaping doubles quotes. The
+    // whole payload stays inside Home Assistant's limit, the trail giving way first and the reply
+    // keeping its start; an ordinary card is untouched.
+    [Fact]
+    public void The_whole_activity_payload_stays_inside_home_assistants_limit_for_the_longest_replies()
+    {
+        int Bytes(JsonObject o) => System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(o));
+        JsonObject Detail(string reply, string? reasoning = null, AgentKind agent = AgentKind.Copilot) => HaPayloads.ActivityAttributes(
+            FakeSessions.Copilot(SessionId, response: reply) with { Agent = agent, Activity = new Activity { Response = reply, Reasoning = reasoning } },
+            Contract.Text("session.sessionName"), Machine, verbose: true, DateTimeOffset.Now);
+
+        var line = "Start of the answer " + new string('a', 16 * 1024);
+        var detail = Detail(line);
+        Assert.True(Bytes(detail) <= HaPayloads.ActivityAttributesBudget, $"{Bytes(detail)} bytes");
+        Assert.Equal(line[..(HaPayloads.ResponseMaxChars)] + HaPayloads.TruncatedNote, detail["response"]!.GetValue<string>());
+        Assert.Equal(HaPayloads.CapState(line), detail["history"]!.AsArray()[^1]!.GetValue<string>());
+
+        var quotes = new string('"', 6000);
+        detail = Detail(quotes);
+        Assert.True(Bytes(detail) <= HaPayloads.ActivityAttributesBudget, $"{Bytes(detail)} bytes");
+        Assert.Equal(quotes, detail["response"]!.GetValue<string>());
+
+        // Even when the shown text alone is too much for it (control characters escape to six
+        // bytes each): its start, and the note.
+        var escaped = new string('\u0001', 6000);
+        detail = Detail(escaped);
+        Assert.True(Bytes(detail) <= HaPayloads.ActivityAttributesBudget, $"{Bytes(detail)} bytes");
+        var shown = detail["response"]!.GetValue<string>();
+        Assert.EndsWith(HaPayloads.TruncatedNote, shown, StringComparison.Ordinal);
+        Assert.InRange(shown.Length - HaPayloads.TruncatedNote.Length, 1000, 2600);
+
+        Assert.Equal("Done.\nMore", Detail("Done.\nMore")["response"]!.GetValue<string>());
+
+        // Long multibyte tool names fill the trail on their own: its oldest lines go, never the
+        // reply (found in review).
+        var tools = HaPayloads.ActivityAttributes(
+            FakeSessions.Copilot(SessionId, response: "Done.") with
+            {
+                Activity = new Activity
+                {
+                    Response = "Done.",
+                    History = [.. Enumerable.Range(0, 30).Select(i => new ToolCall { Id = $"t{i}", Name = new string('\u5de5', 300), Status = ToolStatus.Done, StartedAt = FakeSessions.T0 })],
+                },
+            },
+            Contract.Text("session.sessionName"), Machine, verbose: true, DateTimeOffset.Now);
+        Assert.True(Bytes(tools) <= HaPayloads.ActivityAttributesBudget, $"{Bytes(tools)} bytes");
+        Assert.Equal("Done.", tools["response"]!.GetValue<string>());
+        Assert.Equal("Done.", tools["history"]!.AsArray()[^1]!.GetValue<string>());
+        Assert.InRange(tools["history"]!.AsArray().Count, 2, HaPayloads.HistoryDepthDetailed - 1);
+    }
+
+    // Found in review: a 6000-character reply is in both response and history, and five delegates at
+    // their limits on top of it came to over 17 KiB. They make way for the card's text, never the
+    // other way round, and are still counted when none fit.
+    [Fact]
+    public void Delegates_make_way_for_the_cards_own_text_within_home_assistants_limit_and_are_still_counted()
+    {
+        var templates = string.Concat(Enumerable.Repeat("{{", 2000));
+        var delegates = Enumerable.Range(0, 6).Select(i => new Subagent
+        {
+            Id = $"agent-{i}", Kind = SubagentKind.Background, Status = SubagentStatus.Working, Name = templates, Line = templates,
+        }).ToList();
+        int Bytes(JsonObject o) => System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(o));
+        JsonObject Detail(string reply, IReadOnlyList<Subagent>? list, int? more = null) => HaPayloads.ActivityAttributes(
+            FakeSessions.Copilot(SessionId, response: reply) with { Subagents = list, SubagentsMore = more },
+            Contract.Text("session.sessionName"), Machine, verbose: false, DateTimeOffset.Now);
+
+        var reply = new string('r', 6000);
+        var detail = Detail(reply, delegates);
+        Assert.True(Bytes(detail) <= HaPayloads.ActivityAttributesBudget, $"{Bytes(detail)} bytes");
+        Assert.Equal(reply, detail["response"]!.GetValue<string>());
+        var listed = detail["subagents"]!.AsArray();
+        Assert.NotEmpty(listed);
+        Assert.Equal(6 - listed.Count, detail["subagents_more"]!.GetValue<int>());
+
+        // A reply that fills the budget on its own: none listed, all counted, and the list and
+        // count inside the budget too (found in review).
+        var full = Detail(string.Concat(Enumerable.Repeat("\U0001F680", 3000)), delegates, more: 2);
+        Assert.True(Bytes(full) <= HaPayloads.ActivityAttributesBudget, $"{Bytes(full)} bytes");
+        Assert.Empty(full["subagents"]!.AsArray());
+        Assert.Equal(8, full["subagents_more"]!.GetValue<int>());
+
+        // The host's budget dropped every entry: still a session with delegates.
+        var dropped = Detail("Done.", null, more: 3);
+        Assert.Empty(dropped["subagents"]!.AsArray());
+        Assert.Equal(3, dropped["subagents_more"]!.GetValue<int>());
+        Assert.False(Detail("Done.", null).ContainsKey("subagents"));
+    }
+
     // The readings the usage contract was recorded from.
     internal static readonly AgentUsage[] UsageReadings =
     {
