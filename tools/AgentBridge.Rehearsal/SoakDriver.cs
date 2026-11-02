@@ -103,11 +103,21 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
         if (state.Began == default) { state.Began = now(); }
         var plan = SoakScript.Plan(options.Count);
         Log($"soak: {plan.Count} episode(s), one every {options.Every.TotalMinutes:0} min, from episode {state.Episodes.Count}");
+        // An episode a stopped driver left under way: its session is ended, not left running.
+        if (state.Episodes.LastOrDefault() is { Ended: null } interrupted)
+        {
+            interrupted.Problems.Add("the driver stopped during it");
+            if (interrupted.Node is { } left) { await EndAsync(left, interrupted, ct); }
+            interrupted.Ended = now();
+            Save(state);
+        }
         for (var i = state.Episodes.Count; i < plan.Count && !ct.IsCancellationRequested; i++)
         {
             var episode = plan[i];
             if (options.Only is { } only && episode.Scenario.Name != only) { continue; }
             var due = state.Began + options.Every * i;
+            // After a stop, the overdue ones are spread out again rather than run back to back.
+            if (state.Episodes.LastOrDefault()?.Ended is { } last && last + options.Every / 4 > due) { due = last + options.Every / 4; }
             if (due > now()) { Log($"waiting until {due:HH:mm:ss}Z for episode {i}"); await wait(due - now(), ct); }
             if (options.RestartDaemonAt == i && !state.DaemonRestarted)
             {
