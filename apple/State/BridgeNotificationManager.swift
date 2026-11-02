@@ -45,10 +45,10 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
     @ObservationIgnored private var focusedSession: (machine: String, session: String)?
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let center: UNUserNotificationCenter
-    @ObservationIgnored private var sessions: [String: [String: BridgeSession]] = [:]
     @ObservationIgnored private var knownNotices: [String: BridgeSessionNotice] = [:]
     @ObservationIgnored private var deliveryIdentifiers: [String: String] = [:]
     @ObservationIgnored private var actionRegistry = BridgeNoticeActionRegistry()
+    @ObservationIgnored private var history = BridgeNotificationPlanner.History()
     @ObservationIgnored private var foreground = false
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var permissionGeneration = UUID()
@@ -176,13 +176,12 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
         }
     }
 
-    public func update(machineID: String, machineName: String, before: [BridgeSession], after: [BridgeSession], initialSnapshot: Bool = false, capabilities: Set<String> = [], scope: String = "local") {
-        sessions[machineID] = Dictionary(after.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
-        let plan = BridgeNotificationPlanner.plan(machineID: machineID, machineName: machineName, before: before, after: after,
-                                                  showPreviews: showPreviews, initialSnapshot: initialSnapshot, capabilities: capabilities)
-        let stale = knownNotices.values.filter { $0.machineID == machineID && !BridgeNotificationPlanner.isCurrent($0, session: sessions[machineID]?[$0.sessionID]) }.map(\.id)
+    public func update(machineID: String, machineName: String, before _: [BridgeSession], after: [BridgeSession], initialSnapshot: Bool = false, capabilities: Set<String> = [], scope: String = "local") {
+        let plan = history.plan(machineID: machineID, machineName: machineName, after: after,
+                                showPreviews: showPreviews, initialSnapshot: initialSnapshot, capabilities: capabilities)
+        let stale = knownNotices.values.filter { $0.machineID == machineID && !BridgeNotificationPlanner.isCurrent($0, session: history.sessions[machineID]?[$0.sessionID]) }.map(\.id)
         remove(Array(Set(plan.removeIDs + stale)))
-        waitingCount = sessions.values.reduce(0) { $0 + $1.values.filter { BridgeNotificationPlanner.pendingQuestion($0) != nil }.count }
+        waitingCount = history.sessions.values.reduce(0) { $0 + $1.values.filter { BridgeNotificationPlanner.pendingQuestion($0) != nil }.count }
         updateBadge()
         guard enabled, !quiet else { return }
         for notice in plan.notices where knownNotices[notice.id] == nil {
@@ -196,21 +195,17 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
     }
 
     public func clear(machineID: String, sessionID: String? = nil) {
+        history.clear(machineID: machineID, sessionID: sessionID)
         let ids = knownNotices.values.filter { $0.machineID == machineID && (sessionID == nil || $0.sessionID == sessionID) }.map(\.id)
         remove(ids)
-        if let sessionID {
-            sessions[machineID]?.removeValue(forKey: sessionID)
-        } else {
-            sessions.removeValue(forKey: machineID)
-        }
-        waitingCount = sessions.values.reduce(0) { $0 + $1.values.filter { BridgeNotificationPlanner.pendingQuestion($0) != nil }.count }
+        waitingCount = history.sessions.values.reduce(0) { $0 + $1.values.filter { BridgeNotificationPlanner.pendingQuestion($0) != nil }.count }
         updateBadge()
     }
 
     public func clearAll() {
         actionStatus = nil
         generation = UUID()
-        sessions = [:]
+        history = BridgeNotificationPlanner.History()
         waitingCount = 0
         removeAllNotices()
         updateBadge()
@@ -218,7 +213,7 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
 
     private func canDeliver(_ notice: BridgeSessionNotice, generation token: UUID) -> Bool {
         guard token == generation, enabled, !quiet, knownNotices[notice.id] != nil,
-              BridgeNotificationPlanner.isCurrent(notice, session: sessions[notice.machineID]?[notice.sessionID]) else { return false }
+              BridgeNotificationPlanner.isCurrent(notice, session: history.sessions[notice.machineID]?[notice.sessionID]) else { return false }
         if notice.kind == .finished, !notifyFinished {
             return false
         }
@@ -347,7 +342,7 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
         guard enabled, let binding = actionRegistry.bindings[identifier], actionToken == binding.token.uuidString,
               binding.notice.machineID == machine, binding.notice.sessionID == session,
               knownNotices[identifier] == binding.notice,
-              BridgeNotificationPlanner.isCurrent(binding.notice, session: sessions[binding.notice.machineID]?[binding.notice.sessionID]),
+              BridgeNotificationPlanner.isCurrent(binding.notice, session: history.sessions[binding.notice.machineID]?[binding.notice.sessionID]),
               let onAction,
               let request = actionRegistry.consume(identifier: identifier, token: actionToken, machine: machine, session: session, action: action, text: text)
         else {
