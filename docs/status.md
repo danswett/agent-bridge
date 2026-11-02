@@ -74,7 +74,7 @@ Check `gh pr list -R danswett/agent-bridge` for open PRs. Two coordinators work 
 - Cross-track needs go on #170.
 
 In flight on 2026-11-02 (overall coordinator):
-- #200: live Claude and Codex usage read by the agents themselves (`claude -p /usage`, Codex's app-server), retiring the direct Claude token read. Built after the E1-E14 checks (#236, #228). Needs an independent review.
+- #200: live Claude and Codex usage read by the agents themselves (`claude -p /usage`, Codex's app-server), retiring the direct Claude token read once that route works. Built after the E1-E14 checks (#236, #228). Needs an independent review.
 - #227: the HA connector retried a rejected token every 30 s and got ARM8 IP-banned by HA. Fix: stop on auth failures, as agent-ha-bridge does. Urgent: every migrated machine runs the connector.
 - The VM soak (§3).
 - Next on track A: S2 (#174), using the sub-agent transcripts the soak recorded (in `~/repos/wt/agent-bridge-soak-transcripts`, not committed).
@@ -307,7 +307,7 @@ agent-ha-bridge releases from this work:
 | 11-01 | Dev Box keep-awake (#47) is built now, since migrating DEV-VM1 (a Dev Box) disables agent-ha-bridge's keep-awake task. It runs inside the host on agent-ha-bridge's terms (`az` login, skip then delay, no-op beyond 24 h, at most every 30 min), and any host stands back while agent-ha-bridge's own keep-awake task is enabled, so the schedule never has two writers. Migrate follows that task, not its config value: an enabled task is carried as on, or migrate refuses. Unusable Dev Box agent settings and a stand-back on an unreadable scheduler alarm on every pass rather than pass for "not a Dev Box" |
 | 11-01 | Shadow coverage comes from a scripted soak on the Azure rehearsal VMs (Copilot, Claude, Codex), not only from organic use; DEV-VM1 no longer waits for its own gate |
 | 11-01 | Migrate machines now, while the soak continues as the comparator. Order: ARM8 (after a native Arm64 build, #222), DEV-VM1 (after keep-awake, #47), DASDESK, the Mac (P5), HOME last |
-| 11-01 | Live Claude and Codex usage (#197/#200): read through the agents themselves, never with their tokens. The host's direct Claude token read is retired (Anthropic's consumer terms), and the build waits for the disposable-VM checks, now done (#236, #228). The Linux-only Codex checks ran on a temporary Azure Linux VM, since deleted |
+| 11-01 | Live Claude and Codex usage (#197/#200): read through the agents themselves, never with their tokens. The host's direct Claude token read is to be retired (Anthropic's consumer terms) once the `/usage` route works; until #200 ships it is still the default collector. The build waits for the disposable-VM checks, now done (#236, #228). The Linux-only Codex checks ran on a temporary Azure Linux VM, since deleted |
 | 11-01 | E14a (a real Codex revoke) was simulated on the VM. ChatGPT has no per-device revoke, and the owner declined "Log out of all devices" |
 | 11-02 | ARM8 migrated on Arm64. The HA connector's 30 s retry of a rejected token got its IP banned in HA. The owner cleared the ban and restarted HA (00:12), and every machine was back within 3 min. Fix tracked as #227. For any migration, reuse agent-ha-bridge's admin token rather than minting one |
 | 11-02 | Agents installed after the bridge should be detected and offered "Set up", and Settings should show each agent's state (#231, builds on #54). The backend belongs to the overall coordinator, the UI to the UI coordinator |
