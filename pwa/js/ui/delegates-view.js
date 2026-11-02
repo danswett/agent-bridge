@@ -32,9 +32,15 @@ export class DelegatesBlock {
     const e = this.els;
     this.element.hidden = !d;
     const live = new Set();
+    // A row that moves keeps keyboard focus: moving a node in the DOM drops it.
+    const focused = this.element.contains(document.activeElement) ? document.activeElement : null;
     if (d) {
+      // An open delegate that finishes moves into the fold, which opens so it stays in view.
+      const wasActive = new Set([...e.active.children].map((el) => el.dataset.id));
+      const moved = d.finished.some((r) => wasActive.has(r.id) && this.#rows.get(r.id)?.open);
       this.#place(d.active, e.active, live, now);
       this.#place(d.finished, e.finishedList, live, now);
+      if (moved) { e.finished.open = true; }
       e.active.hidden = d.active.length === 0;
       e.finished.hidden = d.finished.length === 0;
       e.finishedCount.textContent = `${d.finished.length} finished`;
@@ -42,12 +48,13 @@ export class DelegatesBlock {
       e.more.textContent = d.more ? `${plural(d.more, 'more delegate', 'more delegates')} not listed` : '';
     }
     for (const [id, row] of this.#rows) {
-      if (!live.has(id)) { row.dispose(); this.#rows.delete(id); }
+      if (!live.has(id)) { row.dispose(); row.element.remove(); this.#rows.delete(id); }
     }
+    if (focused?.isConnected && document.activeElement !== focused) { focused.focus({ preventScroll: true }); }
   }
 
   // Rows are kept and moved, never rebuilt, so an open one stays open as its delegate changes;
-  // and only moved when the order changed, so focus stays where it was.
+  // and only the rows out of place are moved.
   #place(rows, list, live, now) {
     const items = rows.map((r) => {
       live.add(r.id);
@@ -59,8 +66,9 @@ export class DelegatesBlock {
       row.update(r, now);
       return row.element;
     });
-    const same = items.length === list.children.length && items.every((el, i) => list.children[i] === el);
-    if (!same) { list.replaceChildren(...items); }
+    items.forEach((el, i) => { if (list.children[i] !== el) { list.insertBefore(el, list.children[i] ?? null); } });
+    // What is left after them is rows that moved to the other list or went.
+    while (list.children.length > items.length) { list.lastElementChild.remove(); }
   }
 
   refreshTimes(now = Date.now()) {
@@ -73,9 +81,20 @@ export class DelegatesBlock {
   }
 }
 
+// An open delegate that is running is fetched again this often: a host sends no update when only
+// its line changes (v1-sessions.md, Subagent), so its words would otherwise stand still.
+const POLL_MS = 10000;
+// And at most this often when its entry changes.
+const CHANGE_MS = 2000;
+
 class DelegateRow {
   #a = null;
-  #state = { loading: false, timer: null, key: null, loaded: false };
+  #state = { loading: false, again: false, timer: null, due: 0, key: null, loaded: false };
+  // Its task and latest line, from the list or a fetch, whichever came last. A list the session
+  // budget trimmed leaves them out; that is not the delegate saying nothing.
+  #task = null;
+  #line = null;
+  #listLine = null;
 
   constructor(id, fetchDelegate) {
     this.id = id;
@@ -98,9 +117,13 @@ class DelegateRow {
       h('summary', { class: 'delegate-summary' },
         h('span', { class: 'delegate-head' }, e.glyph, e.name, e.time, icon('chevron', 'icon delegate-chevron')), e.line),
       h('div', { class: 'delegate-body' }, e.facts, e.taskBlock, e.status, e.latestBlock, e.reasoning));
-    e.detail.addEventListener('toggle', () => { if (e.detail.open) { this.#load(); } });
+    e.detail.addEventListener('toggle', () => {
+      if (e.detail.open) { this.#load(); } else { this.#stop(); }
+    });
     this.element = h('li', { class: 'delegate', dataset: { id } }, e.detail);
   }
+
+  get open() { return this.els.detail.open; }
 
   update(a, now) {
     const first = this.#a === null;
@@ -111,18 +134,26 @@ class DelegateRow {
     root.dataset.depth = String(Math.min(a.depth, 3));
     setGlyph(e.glyph, a.glyph, { size: 14, label: a.words });
     e.name.textContent = a.name || 'Delegate';
-    e.line.textContent = a.line ?? '';
-    e.line.hidden = !a.line;
+    if (a.line !== null && a.line !== this.#listLine) { this.#line = a.line; }
+    this.#listLine = a.line;
+    if (a.task) { this.#task = a.task; }
+    this.#drawWords();
     this.refreshTime(now);
     e.facts.textContent = [a.kind === 'background' ? 'Background' : 'Task', a.model,
       a.currentTool ? `${a.currentTool.name}${a.currentTool.summary ? `: ${a.currentTool.summary}` : ''}` : null,
       a.shells ? plural(a.shells, 'background command', 'background commands') : null].filter(Boolean).join(' · ');
-    e.task.textContent = a.task ?? '';
-    e.taskBlock.hidden = !a.task;
     // An open delegate follows its entry: fetched again (at most every 2 s) as it changes.
     const key = JSON.stringify([a.status, a.outcome, a.line, a.endedAt]);
-    if (!first && key !== this.#state.key && e.detail.open) { this.#schedule(); }
+    if (!first && key !== this.#state.key && e.detail.open) { this.#schedule(CHANGE_MS); }
     this.#state.key = key;
+  }
+
+  #drawWords() {
+    const e = this.els;
+    e.line.textContent = this.#line ?? '';
+    e.line.hidden = !this.#line;
+    e.task.textContent = this.#task ?? '';
+    e.taskBlock.hidden = !this.#task;
   }
 
   refreshTime(now = Date.now()) {
@@ -130,18 +161,28 @@ class DelegateRow {
   }
 
   dispose() {
-    clearTimeout(this.#state.timer);
-    this.#state.timer = null;
+    this.#stop();
   }
 
-  #schedule() {
-    if (this.#state.timer) { return; }
-    this.#state.timer = setTimeout(() => { this.#state.timer = null; this.#load(); }, 2000);
+  #stop() {
+    clearTimeout(this.#state.timer);
+    this.#state.timer = null;
+    this.#state.again = false;
+  }
+
+  // A fetch in ms, unless one is due sooner.
+  #schedule(ms) {
+    const due = Date.now() + ms;
+    if (this.#state.timer && this.#state.due <= due) { return; }
+    clearTimeout(this.#state.timer);
+    this.#state.due = due;
+    this.#state.timer = setTimeout(() => { this.#state.timer = null; this.#load(); }, ms);
   }
 
   async #load() {
     const e = this.els;
-    if (this.#state.loading) { return; }
+    // One at a time; a fetch asked for meanwhile goes once this one is back.
+    if (this.#state.loading) { this.#state.again = true; return; }
     if (!this.fetchDelegate) { this.#show({}); return; }
     this.#state.loading = true;
     if (!this.#state.loaded) {
@@ -154,6 +195,9 @@ class DelegateRow {
       if (!full) {
         this.#show({ status: 'This delegate is no longer listed.' });
       } else {
+        if (full.line) { this.#line = full.line; }
+        if (full.task) { this.#task = full.task; }
+        this.#drawWords();
         this.#show({ response: full.response, truncated: full.responseTruncated, reasoning: full.reasoning });
         this.#state.loaded = true;
       }
@@ -161,6 +205,13 @@ class DelegateRow {
       this.#show({ status: `Couldn't load the delegate: ${err.reason ?? err.message}`, warn: true });
     } finally {
       this.#state.loading = false;
+    }
+    if (!e.detail.open) { return; }
+    if (this.#state.again) {
+      this.#state.again = false;
+      this.#load();
+    } else if (this.#a && (this.#a.status === 'working' || this.#a.status === 'waiting')) {
+      this.#schedule(POLL_MS);
     }
   }
 
@@ -171,8 +222,8 @@ class DelegateRow {
     e.status.textContent = status ?? '';
     // A failed fetch keeps what was fetched before; with nothing fetched yet, its latest line.
     if (status && this.#state.loaded) { return; }
-    e.latest.replaceChildren(renderMarkdown(response || this.#a?.line || ''));
-    e.latestBlock.hidden = !(response || this.#a?.line);
+    e.latest.replaceChildren(renderMarkdown(response || this.#line || ''));
+    e.latestBlock.hidden = !(response || this.#line);
     e.truncated.hidden = !(truncated && response);
     e.reasoningText.textContent = reasoning ?? '';
     e.reasoning.hidden = !reasoning;

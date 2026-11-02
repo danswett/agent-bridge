@@ -122,6 +122,8 @@ export class DemoHost {
   calls = [];
   // Every session.get request's data, for a test to see what was asked (a delegate by agent).
   getLog = [];
+  // What each delegate said in full, by its id, for session.get with agent; a test changes it.
+  delegateWords = clone(DELEGATE_WORDS);
   seq = 0;
   revision = 0;
 
@@ -228,8 +230,12 @@ export class DemoHost {
       case 'session.get': {
         this.getLog.push(clone(data ?? {}));
         const s = this.sessions.get(data?.id);
-        // With agent: that one delegate in full, as a host since sub-agents answers.
-        if (s && typeof data?.agent === 'string') { return reply(delegateDetail(s, data.agent)); }
+        // With agent: that one delegate in full, as a host since sub-agents answers. After the
+        // answer delay and any hold, so a test can change the delegate while one is on its way.
+        if (s && typeof data?.agent === 'string') {
+          this.#after(() => delegateDetail(this.sessions.get(data.id) ?? s, data.agent, this.delegateWords)).then(reply);
+          return undefined;
+        }
         return reply(s ? withHistory(s) : { missing: true });
       }
       case 'sessions.subscribe': {
@@ -740,10 +746,10 @@ function withHistory(s) {
 
 // session.get { id, agent }: the delegate's entry with its own words, as a host since sub-agents
 // sends it, or missing when the session lists no such delegate.
-function delegateDetail(s, agent) {
+function delegateDetail(s, agent, said) {
   const entry = (s.subagents ?? []).find((a) => a.id === agent);
   if (!entry) { return { missing: true }; }
-  const words = DELEGATE_WORDS[agent] ?? {};
+  const words = said[agent] ?? {};
   return { ...clone(entry), response: words.response ?? entry.line ?? '', ...(words.reasoning ? { reasoning: words.reasoning } : {}), history: [] };
 }
 

@@ -96,7 +96,67 @@ test('an open delegate stays open as it finishes, and moves into the finished fo
   await expect(card(page).locator('.delegates-finished > summary')).toHaveText('3 finished');
   await expect(row.locator('.glyph')).toHaveAttribute('data-glyph', 'done');
   await expect(row.locator('.delegate-detail')).toHaveAttribute('open', '');
+  // The fold opened with it, so what was being read is still in view.
+  await expect(card(page).locator('.delegates-finished')).toHaveAttribute('open', '');
+  await expect(row.locator('.delegate-latest')).toBeVisible();
   await expect(row.locator('.delegate-line')).toHaveText('All 412 tests pass.');
+});
+
+const fetches = (page, agent) => page.evaluate((a) => window.agentBridgeDemo.host.getLog.filter((g) => g.agent === a).length, agent);
+const say = (page, agent, response) => page.evaluate(({ a, r }) => { window.agentBridgeDemo.host.delegateWords[a] = { response: r }; }, { a: agent, r: response });
+const change = (page, agent, fields) => page.evaluate(({ id, a, fields, at }) => {
+  const d = window.agentBridgeDemo;
+  const s = d.host.get(id);
+  d.upsert({ ...s, updatedAt: at, subagents: s.subagents.map((x) => (x.id === a ? { ...x, ...fields } : x)) });
+}, { id: SESSION, a: agent, fields, at: later() });
+
+test('a delegate that changes while its words are on their way is fetched again once they are back', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+  const row = delegate(page, 'demo-agent-suite');
+  await row.locator('.delegate-summary').click();
+  await expect(row.locator('.delegate-body [role="status"]')).toHaveText('Loading…');
+  await say(page, 'demo-agent-suite', 'Found it: commit 4 of 10.');
+  await change(page, 'demo-agent-suite', { line: 'Found it.' });
+  // The change's fetch comes due while the first is still held.
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+  await expect.poll(() => fetches(page, 'demo-agent-suite')).toBe(2);
+  await expect(row.locator('.delegate-latest .md')).toHaveText('Found it: commit 4 of 10.');
+});
+
+test('an open delegate that is running is fetched again, as a host sends nothing when only its words change', async ({ page }) => {
+  await openDemo(page);
+  const row = delegate(page, 'demo-agent-suite');
+  await row.locator('.delegate-summary').click();
+  await expect(row.locator('.delegate-latest .md')).toContainText('The suite fails on HEAD');
+  await say(page, 'demo-agent-suite', 'Commit 7 of 10 is the first to fail.');
+  await expect(row.locator('.delegate-latest .md')).toHaveText('Commit 7 of 10 is the first to fail.', { timeout: 15000 });
+});
+
+test('a delegate\'s task and line the budget left out of the list are kept, not taken for silence', async ({ page }) => {
+  await openDemo(page);
+  await change(page, 'demo-agent-suite', { line: undefined, task: undefined, model: 'claude-haiku-5.5 (trimmed)' });
+  const row = delegate(page, 'demo-agent-suite');
+  await expect(row.locator('.delegate-facts')).toContainText('(trimmed)');
+  await expect(row.locator('.delegate-line')).toHaveText(SUITE_LINE);
+  await row.locator('.delegate-summary').click();
+  await expect(row.locator('.delegate-task')).toContainText('Run the full test suite on HEAD');
+});
+
+test('a delegate starting does not take keyboard focus from the row being read', async ({ page }) => {
+  await openDemo(page);
+  const summary = delegate(page, 'demo-agent-suite').locator('.delegate-summary');
+  await summary.focus();
+  await page.evaluate(({ id, at }) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    d.upsert({ ...s, updatedAt: at, subagents: [{ id: 'demo-agent-new', kind: 'background', name: 'Write the fix', status: 'working', startedAt: at, shells: 0 }, ...s.subagents] });
+  }, { id: SESSION, at: later() });
+  await expect(delegate(page, 'demo-agent-new')).toBeVisible();
+  const ids = await card(page).locator('.delegate-list').first().locator(':scope > .delegate').evaluateAll((els) => els.map((e) => e.dataset.id));
+  expect(ids.indexOf('demo-agent-new')).toBeLessThan(ids.indexOf('demo-agent-suite'));
+  await expect(summary).toBeFocused();
 });
 
 test('a main-agent response the machine left out says so, and never shows the delegate\'s in its place', async ({ page }) => {

@@ -98,6 +98,8 @@ test('a parent loop from a broken host still lists every delegate once', () => {
 test('a host that lists no delegates gets no Delegates block, whatever its background count', () => {
   assert.equal(delegateList(session({ activity: { background: { agents: 2, shells: 0 } } })), null);
   assert.deepEqual(delegateList(session({ subagents: [], subagentsMore: 3 })), { active: [], finished: [], more: 3 });
+  // The budget can drop every entry and keep only the count: still a host that lists them.
+  assert.deepEqual(delegateList(session({ subagentsMore: 3 })), { active: [], finished: [], more: 3 });
 });
 
 test('a running delegate says how long it has run, a finished one that it finished', () => {

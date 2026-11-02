@@ -34,7 +34,7 @@ export function mainVoice(session) {
     responseTruncated: !!response && truncated,
     responseDropped: !response && truncated,
     reasoning,
-    attributed: source !== null || own !== null || Array.isArray(session?.subagents),
+    attributed: source !== null || own !== null || Array.isArray(session?.subagents) || !!session?.subagentsMore,
   };
 }
 
@@ -55,14 +55,15 @@ export function delegateState(a) {
 
 // The session's delegates, as a card lists them: { active, finished, more }, or null when the
 // host lists none (Claude and Codex, or a host before sub-agents: status rule 8 says what it can).
+// A list the session budget emptied but counted in subagentsMore still says how many.
 //   active: running ones first (working, waiting), then idle ones, each nested under its parent.
 //   finished: ended ones, folded into "N finished", nested the same way.
 //   more: entries the host left out (subagentsMore).
 // Each row: the entry, plus { depth, glyph, words, running }.
 export function delegateList(session) {
-  const list = session?.subagents;
+  const list = Array.isArray(session?.subagents) ? session.subagents : [];
   const more = session?.subagentsMore ?? 0;
-  if (!Array.isArray(list) || (list.length === 0 && !more)) { return null; }
+  if (list.length === 0 && !more) { return null; }
   const rows = list.map((a) => ({ ...a, ...delegateState(a) }));
   const running = rows.filter((r) => r.running);
   const idle = rows.filter((r) => !r.running && r.status !== 'ended');
