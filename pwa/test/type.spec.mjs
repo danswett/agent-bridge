@@ -1,8 +1,8 @@
-// Inline mono beside the system face (docs/design/ui.md §4.2, #215): a branch in a session's
-// meta line and a tool's name and arguments sit as if they were the text face, at a phone's
-// width, in both engines. Measured on the page, not read back from the stylesheet.
+// Inline mono beside the system face (docs/design/ui.md §4.2, #215): a folder in a row's and a
+// session header's meta line and a tool's name and arguments sit as if they were the text face,
+// at a phone's width, in both engines. Measured on the page, not read back from the stylesheet.
 import { test, expect } from '@playwright/test';
-import { go } from './nav.mjs';
+import { go, open } from './nav.mjs';
 
 const CLAUDE = '6f1c2b7e-claude-example';
 
@@ -13,11 +13,22 @@ async function openDemo(page) {
   await page.waitForSelector('html[data-demo-ready]');
 }
 
+// Mono in a line of text: a session's folder in its row's meta line (#214), and the tool its
+// main agent is running, in its view.
+const ROW_MONO = '.session .row-facts .mono';
+const TOOL_NAME = `.session-view[data-id="${CLAUDE}"] .tool-line .tool-name`;
+const TOOL_SUMMARY = `.session-view[data-id="${CLAUDE}"] .tool-line .tool-summary`;
+// The rows' runs are measured from the list; the tool's from its session, opened.
+async function measured(page, selector, fn) {
+  if (selector !== ROW_MONO) { await open(page, CLAUDE); } else { await go(page, 'sessions'); }
+  return page.locator(selector).first().evaluate(fn);
+}
+
 // The x-height inline mono is drawn at, as a fraction of the size of the text around it: a
 // 1ex-wide probe in it (`ex` is the used font's own x-height, after any font-size-adjust),
 // over the surrounding font size; and a second probe in the text itself.
 async function monoX(page, selector) {
-  return page.locator(selector).first().evaluate((el) => {
+  return measured(page, selector, (el) => {
     const p = document.createElement('span');
     p.style.display = 'inline-block';
     p.style.width = '1ex';
@@ -36,10 +47,11 @@ async function monoX(page, selector) {
   });
 }
 
-test('a branch in the meta line and a tool\'s name and arguments have the text face\'s x-height, not a smaller or larger one', async ({ page }) => {
+test('a folder in a row\'s meta line and a tool\'s name and arguments have the text face\'s x-height, not a smaller or larger one', async ({ page }) => {
   await openDemo(page);
-  await expect(page.locator(`.session[data-id="${CLAUDE}"] .tool-line .tool-name`)).toHaveText('Bash');
-  for (const selector of ['.meta .branch', `.session[data-id="${CLAUDE}"] .tool-line .tool-name`, `.session[data-id="${CLAUDE}"] .tool-line .tool-summary`]) {
+  await open(page, CLAUDE);
+  await expect(page.locator(TOOL_NAME)).toHaveText('Bash');
+  for (const selector of [ROW_MONO, TOOL_NAME, TOOL_SUMMARY]) {
     const { ratio, target, ex, text } = await monoX(page, selector);
     expect(target, 'tokens.css names a ratio').toBeGreaterThan(0.4);
     // The platform face's ratio, closely: what the design commits to on every machine.
@@ -50,7 +62,7 @@ test('a branch in the meta line and a tool\'s name and arguments have the text f
   }
 });
 
-test('where a browser has no font-size-adjust, a branch and a tool\'s name and arguments keep the line height of the text around them', async ({ page }) => {
+test('where a browser has no font-size-adjust, a folder in a row and a tool\'s name and arguments keep the line height of the text around them', async ({ page }) => {
   await openDemo(page);
   // The size-scaling fallback, as a browser without font-size-adjust takes it (through the
   // CSSOM: the page's policy allows no inline style element).
@@ -61,8 +73,8 @@ test('where a browser has no font-size-adjust, a branch and a tool\'s name and a
     }
   });
   const scale = await page.evaluate(() => Number(getComputedStyle(document.documentElement).getPropertyValue('--ab-inline-mono-scale')));
-  for (const selector of ['.meta .branch', `.session[data-id="${CLAUDE}"] .tool-line .tool-name`, `.session[data-id="${CLAUDE}"] .tool-line .tool-summary`]) {
-    const [own, around, size, aroundSize] = await page.locator(selector).first().evaluate((el) => [
+  for (const selector of [ROW_MONO, TOOL_NAME, TOOL_SUMMARY]) {
+    const [own, around, size, aroundSize] = await measured(page, selector, (el) => [
       parseFloat(getComputedStyle(el).lineHeight), parseFloat(getComputedStyle(el.parentElement).lineHeight),
       parseFloat(getComputedStyle(el).fontSize), parseFloat(getComputedStyle(el.parentElement).fontSize)]);
     // It is the fallback being measured: the run's size is scaled.
@@ -96,10 +108,10 @@ test('where a browser has no font-size-adjust, a folder-trust question\'s paths 
 
 test('inline mono is set in Agent Bridge Mono at the weight of the text around it, with no spacing of its own', async ({ page }) => {
   await openDemo(page);
-  const tool = page.locator(`.session[data-id="${CLAUDE}"] .tool-line .tool-name`);
-  await expect(tool).toHaveText('Bash');
-  for (const selector of ['.meta .branch', `.session[data-id="${CLAUDE}"] .tool-line .tool-name`]) {
-    const style = await page.locator(selector).first().evaluate((el) => {
+  await open(page, CLAUDE);
+  await expect(page.locator(TOOL_NAME)).toHaveText('Bash');
+  for (const selector of [ROW_MONO, TOOL_NAME]) {
+    const style = await measured(page, selector, (el) => {
       const own = getComputedStyle(el);
       const around = getComputedStyle(el.parentElement);
       return { family: own.fontFamily, weight: own.fontWeight, around: around.fontWeight, spacing: own.letterSpacing, padding: own.paddingLeft };
@@ -111,13 +123,25 @@ test('inline mono is set in Agent Bridge Mono at the weight of the text around i
   }
 });
 
-test('the separator before a branch is in the text face, not the branch\'s mono', async ({ page }) => {
+test('the separator before a folder is in the text face, not the folder\'s mono', async ({ page }) => {
   await openDemo(page);
-  const branch = page.locator('.meta .branch').first();
-  await expect(branch).toBeVisible();
-  const [separator, text] = await branch.evaluate((el) => [getComputedStyle(el, '::before'), getComputedStyle(el.parentElement)]
-    .map((s) => ({ family: s.fontFamily, content: s.content })));
-  expect(separator.content).toBe('"·"');
+  const folder = page.locator(ROW_MONO).first();
+  await expect(folder).toBeVisible();
+  const [separator, text] = await folder.evaluate((el) => [el.previousElementSibling, el.parentElement]
+    .map((e) => ({ family: getComputedStyle(e).fontFamily, content: e.textContent })));
+  expect(separator.content.trim()).toBe('·');
   expect(separator.family).toBe(text.family);
   expect(separator.family).not.toMatch(/Agent Bridge Mono/);
+});
+test('inline mono leaves the type ramp\'s lines alone: the tool line and Tools keep the meta line height, and a tool\'s name in Tools its row\'s weight', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  const v = await open(page, CLAUDE);
+  await expect(v.locator('.tools-panel li.tool').first()).toBeVisible();
+  const meta = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--type-meta-line').trim());
+  const line = (el) => getComputedStyle(el).lineHeight;
+  expect(await v.locator('.tool-line').evaluate(line)).toBe(meta);
+  expect(await v.locator('.tools-panel li.tool').first().evaluate(line)).toBe(meta);
+  const [name, row] = await v.locator('.tools-panel li.tool .tool-name').first().evaluate((el) => [getComputedStyle(el).fontWeight, getComputedStyle(el.closest('.tool')).fontWeight]);
+  expect(name).toBe(row);
 });

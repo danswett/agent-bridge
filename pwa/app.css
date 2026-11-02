@@ -717,8 +717,6 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .tool-line { margin: var(--ab-space-2) 0 0; display: flex; gap: var(--ab-space-2); align-items: baseline; min-width: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); }
 .tool-line .glyph { align-self: center; }
 .tool-line .tool-summary { color: var(--ab-text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-/* What is mono (ui.md §4.1): commands, paths, ids, branch@SHA, a tool's name and arguments. */
-.mono, .branch, .tool-name, .tool-summary { font-family: var(--ab-font-mono); }
 
 /* Reduced motion stops every glyph (ui.md §9): the state is in the shape, never the motion. */
 @media (prefers-reduced-motion: reduce) {
@@ -754,7 +752,6 @@ summary {
 .tools { list-style: none; margin: 0; padding: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); }
 .tool { display: grid; grid-template-columns: 1.4em auto minmax(0, 1fr) auto; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--ab-stroke2); align-items: baseline; }
 .tool:last-child { border-bottom: 0; }
-.tool .tool-name { font-family: var(--ab-font-mono); font-weight: 600; }
 .tool .tool-summary { min-width: 0; color: var(--ab-text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool .tool-time { color: var(--ab-text2); font-size: .78rem; white-space: nowrap; }
 .tool .tool-mark { align-self: center; display: flex; }
@@ -808,8 +805,10 @@ summary {
   font-size: calc(1em * var(--ab-inline-mono-scale));
 }
 /* Where a mono run is its own flex or grid item, its line box is its own: the line height it
-   inherits must be a length, or the fallback's smaller size would shrink it with the font. */
-.meta, .tool-line, .tool, .trust-line { line-height: calc(1em * 1.45); }
+   inherits must be a length, or the fallback's smaller size would shrink it with the font. The
+   type ramp's lines (rows, the tool line, Tools, Details) are lengths already; a folder-trust
+   question's path takes one here. */
+.trust-line { line-height: calc(1em * 1.45); }
 @supports (font-size-adjust: ex-height 0.5) {
   .mono, .branch, .tool-name, .tool-summary, .trust-path, .md :not(pre) > code {
     font-size: 1em; font-size-adjust: ex-height var(--ab-inline-mono-x);
