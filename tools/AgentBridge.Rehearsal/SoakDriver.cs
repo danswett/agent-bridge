@@ -429,7 +429,10 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
             }
             // A launched session reads idle for a moment before it starts, so a turn is over once
             // it has been seen working, its response has moved on, or a new session has replied.
-            if (status == "idle" && (asked || sawWork || moved || replied))
+            // Not while the card still shows the question just answered: agent-ha-bridge resets
+            // the reply box when it clears the card, and a prompt typed before that is wiped,
+            // leaving its Send armed to take the prompt after it (seen on VM-M, 2026-11-02).
+            if (status == "idle" && q is null && (asked || sawWork || moved || replied))
             {
                 idleSince ??= now();
                 // Idle for a while: a background shell's end, a woken agent or a question can
