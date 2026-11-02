@@ -286,6 +286,67 @@ Get-Content "$env:LOCALAPPDATA\AgentBridge\shadow\shadow\shadow.log" -Tail 20
 **Afterwards:** `pwsh build/shadow-week.ps1 -Uninstall` stops and removes both tasks. The
 reports, the `shadow` profile and the published folder stay until deleted by hand.
 
+## A scripted soak on the rehearsal VMs
+
+Organic use fills the gate slowly, and on DEV-VM1 it had no Claude or Codex sessions at all.
+`build/shadow-soak-vm.ps1` fills it on the Azure rehearsal VMs instead
+([parity-checklist.md](parity-checklist.md), "VM-M in Azure"): VM-M runs agent-ha-bridge with
+the shadow host beside it, installed by `shadow-week.ps1` as on DEV-VM1, and a driver drives
+agent-ha-bridge through VM-W's disposable Home Assistant the way a person does from its
+dashboard. Never the owner's Home Assistant: the driver refuses any address but VM-M's loopback,
+which the tunnel forwards to VM-W. Everything in the VMs goes through `az vm run-command`
+(`rehearsal-azure-vmw.ps1 -InvokeScript`), so it runs as a scheduled task of the VM's user, not
+from an agent session, and the #67 guard does not stand in its way.
+
+```powershell
+./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Start; ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Role M -Start
+./build/shadow-soak-vm.ps1 -Subscription <id> -Prepare [-HostRef main] [-DriverRef main]
+./build/shadow-soak-vm.ps1 -Subscription <id> -Start [-Count 66] [-EveryMinutes 22] [-RestartDaemonAt 20] [-RestartShadowAt 40]
+./build/shadow-soak-vm.ps1 -Subscription <id> -Status       # the driver's counts, its log, and shadow summary --gate
+./build/shadow-soak-vm.ps1 -Subscription <id> -Collect <session id> -OutDir <folder>
+./build/shadow-soak-vm.ps1 -Subscription <id> -Finish       # driver removed, app host back, auto-shutdown on, both deallocated
+```
+
+* **`-Prepare`** starts VM-W's Mosquitto (agent-ha-bridge publishes through Home Assistant's
+  MQTT; a container stopped by hand stayed stopped across a restart), keeps VM-M's tunnel to
+  VM-W's Home Assistant up as a logon task, checks agent-ha-bridge is beating and pointed at the
+  tunnel, installs the .NET SDK for the VM's user, and builds the shadow host from `-HostRef` and
+  the driver from `-DriverRef`, each checked out at the exact commit. It stops the app's own host,
+  whose Home Assistant connector would wake while the daemon restarts; `-Finish` starts it again.
+  `-DriverOnly` rebuilds the driver alone, between `-Stop` and `-Start`.
+* **`-Start`** runs `agent-bridge-rehearsal soak run` as a logon task, restarted if it fails, and
+  turns both VMs' auto-shutdown off so the run lasts the night. Its state is
+  `C:\rehearsal\soak\state\soak.json` on VM-M, so a restart carries on from the next episode
+  (ending a session one left under way); `-Fresh` starts again from the first.
+* **`-Collect`** zips a session's raw transcripts and its sub-agents' on VM-M
+  (`agent-bridge-rehearsal soak collect`) and copies them back in run-command-sized pieces.
+  Transcripts are not redacted: keep them out of the repository.
+
+**The load** (`tools/AgentBridge.Rehearsal/Soak.cs`). An episode every `-EveryMinutes`, so 66
+take about 24 hours and the gate's hours and its clean last day can both be met. The first three
+are the sub-agent scenarios: Copilot with a nested sub-agent and a background agent, Claude with
+two `Task` sub-agents, one nested, and a background Bash, and Codex with a `spawn_agent` thread.
+Then a block of twelve repeats: for each agent a question-heavy, a background (shells and
+sub-agents), and a compaction session, Codex with approvals asked on the card, and a resume of
+each agent's last session. Each is launched by the launch request agent-ha-bridge's MCP tool
+publishes (agent, workspace, a small model, permissions) and the Launch button, then prompted from
+the reply box. Questions are Copilot's `ask_user` (choice, text, a form, a choice allowing words,
+a multi-select) and Claude's `AskUserQuestion` (one question, two, multi-select), held 35 seconds
+so both sides sample them, then answered as the dashboard does: the field slots or the selector
+and Send, the reply box and Send, or the reply card's publish; some after three minutes, and some
+left open while the session is ended. Approvals are answered by their tap. `/compact` goes as a
+reply. Sessions end by End session, with its confirming second press when not idle. One
+agent-ha-bridge restart (`agent-ha-bridge restart`) and one restart of the shadow host's serve
+task happen at the episodes given, between sessions. Usage readings accrue on their own.
+
+What it cannot do: answer at the terminal (it has no console), or answer the folder-trust and
+Bypass-permissions prompts a fresh agent install shows (sign the agents in and trust the
+workspace first). An agent whose sign-in has lapsed shows as a session that never answers.
+
+Diagnosing a resume-list mismatch: `agent-bridge-rehearsal soak resumable --token-file <file>
+--profile shadow` prints agent-ha-bridge's list (from Home Assistant) beside the host's
+(`launch.options`), as the comparison sees them. Labels are printed, never written to a report.
+
 ## What is compared
 
 Per session, for every session either side lists:

@@ -111,6 +111,19 @@
 .PARAMETER ListSnapshots
     The snapshots taken of this VM.
 
+.PARAMETER InvokeScript
+    Run the PowerShell script in this file on the running VM, as SYSTEM, and return its output
+    (the last 4 KB). For other scripts that drive the VMs, such as build/shadow-soak-vm.ps1. Only
+    non-secret text may go in: run-command keeps the script in the VM's extension settings.
+
+.PARAMETER AsDesktopUser
+    With -InvokeScript: run it as the desktop user in its autologon session instead (`rehearsal`
+    on VM-M, unelevated), within -TimeoutMinutes.
+
+.PARAMETER AutoShutdown
+    Off removes the VM's nightly auto-shutdown, for a run that has to last through the night (the
+    shadow soak); On puts it back at the time provisioning sets.
+
 .EXAMPLE
     ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -AllowedSshCidr 203.0.113.0/24 `
         -TunnelPublicKeyPath .\rehearsal-m-tunnel.pub -HyperloopDirectory <Hyperloop.Tools folder>
