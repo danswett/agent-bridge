@@ -136,18 +136,18 @@ public sealed partial class SessionRow : UserControl
 
     // After a keyboard or menu move the row is drawn in its new place, perhaps by a new control: its
     // list item takes focus back there, so the next Alt+Up/Down moves the same row.
+    // Asked for again by whichever row shows the card when it attaches, and cleared only once focus
+    // has landed: a row parked for reuse while this was queued still holds the card, and clearing
+    // it there left the row drawn for it unfocused, the next Alt+Up/Down going elsewhere.
     void TakeFocus()
     {
-        if (Card is not { WantsRowFocus: true } c) { return; }
+        if (parked || !attached || Card is not { WantsRowFocus: true } c) { return; }
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (!c.WantsRowFocus || Card != c || !IsLoaded) { return; }
+            if (parked || !attached || !c.WantsRowFocus || Card != c || !IsLoaded) { return; }
+            if (Container is not { } item || !ReferenceEquals(item.Content, c) || !item.Focus(FocusState.Keyboard)) { return; }
             c.WantsRowFocus = false;
-            if (Container is { } item)
-            {
-                item.Focus(FocusState.Keyboard);
-                item.StartBringIntoView();
-            }
+            item.StartBringIntoView();
         });
     }
 

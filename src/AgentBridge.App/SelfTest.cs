@@ -125,7 +125,19 @@ static partial class SelfTest
                 Check(focused, "takes keyboard focus into the session a Needs you entry opens");
             }
             else { Check(false, "finds the form question's Needs you entry"); }
-
+            // Alt+Down and Alt+Up on a row (§9, #164): the row moves, perhaps drawn by another
+            // control, and its list item has focus again, so the next move is the same row's.
+            var movable = Rows(window).Where(r => r.Card is { Row.CanMoveDown: true }).OrderBy(Top).FirstOrDefault();
+            if (movable?.Card is { } moving)
+            {
+                bool RowFocused() => Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is ListViewItem item && ReferenceEquals(item.Content, moving);
+                movable.MoveBy(1);
+                var down = await Until(() => !moving.WantsRowFocus && RowFocused(), TimeSpan.FromSeconds(5));
+                Rows(window).FirstOrDefault(r => r.Card == moving)?.MoveBy(-1);
+                var up = await Until(() => !moving.WantsRowFocus && RowFocused(), TimeSpan.FromSeconds(5));
+                Check(down && up, "keeps keyboard focus on a row moved down and back up, so the next Alt+Up/Down moves the same row");
+            }
+            else { Check(false, "finds a row that can move down"); }
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".window.png"));
             await Picture(window.Sessions, Path.ChangeExtension(outFile, ".sessions.png"));
 
