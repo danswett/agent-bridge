@@ -32,6 +32,7 @@ public sealed partial class SessionView : UserControl
     // Listening to the card only while on screen (SessionRow says why).
     bool attached;
     PaneLayoutViewModel? layout;
+    bool showingTab;
 
     public SessionView()
     {
@@ -140,12 +141,17 @@ public sealed partial class SessionView : UserControl
     {
         if (layout is null) { return; }
         var want = layout.ShownTab switch { SessionTab.Delegates => DelegatesTab, SessionTab.Tools => ToolsTab, _ => ConversationTab };
-        if (Tabs.SelectedItem != want) { Tabs.SelectedItem = want; }
+        if (Tabs.SelectedItem == want) { return; }
+        // Not the person's choice: the tab they picked stays picked, to come back to when the session
+        // or the width has it again.
+        showingTab = true;
+        try { Tabs.SelectedItem = want; }
+        finally { showingTab = false; }
     }
 
     void OnTab(SelectorBar sender, SelectorBarSelectionChangedEventArgs args)
     {
-        if (layout is null || sender.SelectedItem?.Tag is not string tag || !Enum.TryParse<SessionTab>(tag, out var tab)) { return; }
+        if (showingTab || layout is null || sender.SelectedItem?.Tag is not string tag || !Enum.TryParse<SessionTab>(tag, out var tab)) { return; }
         layout.Tab = tab;
     }
 

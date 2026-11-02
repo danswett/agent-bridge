@@ -54,6 +54,10 @@ public sealed class MarkdownView : StackPanel
             case Border { Child: { } child }:
                 Read(child);
                 break;
+            // A table, in its sideways scroller: the same size as the text around it.
+            case ContentControl { Content: DependencyObject inner }:
+                Read(inner);
+                break;
         }
     }
 
