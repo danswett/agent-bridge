@@ -166,13 +166,15 @@ public sealed class HaAuthGuard
     async Task<Lease> EnterCoreAsync(HaCredential credential, CancellationToken cancellationToken)
     {
         Decision decision;
+        Seen seen;
         lock (gate)
         {
             // Even a token accepted here may since have been refused in another process.
             Refresh();
             decision = Decide(credential, time.GetUtcNow());
+            seen = SeenLocked(credential);
         }
-        if (decision.Gate == Gate.Clear) { return new Lease(this, credential, null); }
+        if (decision.Gate == Gate.Clear) { return new Lease(this, credential, null, seen); }
         if (decision.Gate == Gate.Held) { throw Refusal(credential, decision.Kind, sent: false); }
         await probe.WaitAsync(cancellationToken);
         try
@@ -200,6 +202,7 @@ public sealed class HaAuthGuard
                         s.ProbeUntil = now + Reservation;
                         return true;
                     });
+                    seen = SeenLocked(credential);
                 }
                 if (!busy) { break; }
                 await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
@@ -210,9 +213,9 @@ public sealed class HaAuthGuard
             probe.Release();
             throw;
         }
-        if (decision.Gate == Gate.Clear) { probe.Release(); return new Lease(this, credential, null); }
+        if (decision.Gate == Gate.Clear) { probe.Release(); return new Lease(this, credential, null, seen); }
         if (decision.Gate == Gate.Held) { probe.Release(); throw Refusal(credential, decision.Kind, sent: false); }
-        return new Lease(this, credential, probe);
+        return new Lease(this, credential, probe, seen);
     }
 
     // The reservation given up without an answer (a timeout, no connection): the next attempt, in
@@ -237,14 +240,16 @@ public sealed class HaAuthGuard
     {
         readonly HaAuthGuard guard;
         readonly HaCredential credential;
+        readonly Seen seen;
         SemaphoreSlim? probe;
         bool answered;
 
-        internal Lease(HaAuthGuard guard, HaCredential credential, SemaphoreSlim? probe)
+        internal Lease(HaAuthGuard guard, HaCredential credential, SemaphoreSlim? probe, Seen seen)
         {
             this.guard = guard;
             this.credential = credential;
             this.probe = probe;
+            this.seen = seen;
         }
 
         // An HTTP answer, the WebSocket upgrade's included. The refusal to throw when it was one.
@@ -266,7 +271,7 @@ public sealed class HaAuthGuard
                 case 404:
                 case >= 200 and < 300:
                     answered = true;
-                    guard.Accept(credential, resetsCount: false);
+                    guard.Accept(credential, resetsCount: false, seen);
                     return null;
                 default:
                     return null;
@@ -280,7 +285,7 @@ public sealed class HaAuthGuard
             answered = true;
             if (ok)
             {
-                guard.Accept(credential, resetsCount: true);
+                guard.Accept(credential, resetsCount: true, seen);
                 return null;
             }
             return guard.Refuse(credential, HaAuthKind.Rejected, null);
@@ -296,6 +301,16 @@ public sealed class HaAuthGuard
     }
 
     enum Gate { Clear, Probe, Held }
+
+    // What was recorded when a request was let go: an answer to it clears only what it could have
+    // answered, never a refusal or ban recorded while it was on its way.
+    internal readonly record struct Seen(int Rejections, int Strikes, DateTimeOffset? BannedSince, int BanLooks);
+
+    Seen SeenLocked(HaCredential credential)
+    {
+        var server = state.Servers.GetValueOrDefault(credential.Server);
+        return new(server?.Credentials.GetValueOrDefault(credential.Id)?.Rejections ?? 0, state.Strikes, server?.BannedSince, server?.BanLooks ?? 0);
+    }
 
     readonly record struct Decision(Gate Gate, HaAuthKind Kind = HaAuthKind.Rejected);
 
@@ -365,10 +380,11 @@ public sealed class HaAuthGuard
         return Refusal(credential, kind, sent: true, status);
     }
 
-    void Accept(HaCredential credential, bool resetsCount)
+    void Accept(HaCredential credential, bool resetsCount, Seen seen)
     {
         var now = time.GetUtcNow();
         string? was;
+        string? still;
         bool changed;
         lock (gate)
         {
@@ -389,20 +405,29 @@ public sealed class HaAuthGuard
                 var sv = ServerOf(s, credential, now);
                 var cr = CredOf(sv, credential);
                 cr.Accepted = true;
-                cr.Rejections = 0;
-                cr.RejectedAt = null;
                 cr.AttemptAt = now;
-                sv.BannedSince = null;
-                sv.BanCheckAt = null;
-                sv.BanLooks = 0;
-                if (resetsCount)
+                // A request answered in Home Assistant's order is not answered here in that order:
+                // a refusal recorded since this one was let go may be the later of the two.
+                if (cr.Rejections <= seen.Rejections)
+                {
+                    cr.Rejections = 0;
+                    cr.RejectedAt = null;
+                }
+                if (sv.BannedSince == seen.BannedSince && sv.BanLooks == seen.BanLooks)
+                {
+                    sv.BannedSince = null;
+                    sv.BanCheckAt = null;
+                    sv.BanLooks = 0;
+                }
+                if (resetsCount && s.Strikes <= seen.Strikes)
                 {
                     s.Strikes = 0;
                     s.StrikeAt = null;
                 }
             });
+            still = DescribeLocked(credential);
         }
-        if (was is not null) { log($"Home Assistant accepted {credential.Name} again"); }
+        if (was is not null && still is null) { log($"Home Assistant accepted {credential.Name} again"); }
         Changed?.Invoke();
     }
 
@@ -461,8 +486,10 @@ public sealed class HaAuthGuard
         if (!s.Servers.TryGetValue(credential.Server, out var server))
         {
             s.Servers[credential.Server] = server = new Server { Touched = now };
-            // Never the one just added, whose refusal is about to be recorded on it.
-            foreach (var old in s.Servers.Where(x => x.Key != credential.Server).OrderBy(x => x.Value.Touched ?? DateTimeOffset.MinValue)
+            // Only addresses with nothing refused or banned, and never the one just added, whose
+            // refusal is about to be recorded on it: forgotten, a refusal would be a fresh attempt.
+            foreach (var old in s.Servers.Where(x => x.Key != credential.Server && x.Value.BannedSince is null && x.Value.Credentials.Values.All(c => c.Rejections == 0))
+                .OrderBy(x => x.Value.Touched ?? DateTimeOffset.MinValue)
                 .Take(Math.Max(0, s.Servers.Count - MaxServers)).Select(x => x.Key).ToList())
             {
                 s.Servers.Remove(old);
@@ -477,7 +504,7 @@ public sealed class HaAuthGuard
         if (!server.Credentials.TryGetValue(credential.Id, out var c))
         {
             server.Credentials[credential.Id] = c = new Cred();
-            foreach (var old in server.Credentials.Where(x => x.Key != credential.Id).OrderBy(x => x.Value.AttemptAt ?? DateTimeOffset.MinValue)
+            foreach (var old in server.Credentials.Where(x => x.Key != credential.Id && x.Value.Rejections == 0).OrderBy(x => x.Value.AttemptAt ?? DateTimeOffset.MinValue)
                 .Take(Math.Max(0, server.Credentials.Count - MaxCredentials)).Select(x => x.Key).ToList())
             {
                 server.Credentials.Remove(old);

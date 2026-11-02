@@ -293,6 +293,58 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Single(outcomes, e => ((HomeAssistantAuthException)e!).Sent);
     }
 
+    // The token revoked while a request with it was on its way: that request's success, answered
+    // last, must not wipe out the refusal of the one Home Assistant answered after it.
+    [Fact]
+    public async Task A_success_already_on_its_way_does_not_erase_a_newer_refusal()
+    {
+        var slow = new TaskCompletionSource();
+        var calls = 0;
+        var handler = new Waiting(async () =>
+        {
+            var n = Interlocked.Increment(ref calls);
+            if (n == 1) { return HttpStatusCode.OK; }
+            if (n == 2) { await slow.Task; return HttpStatusCode.OK; }
+            return HttpStatusCode.Unauthorized;
+        });
+        var guard = new HaAuthGuard(Record, time);
+        var client = new HomeAssistantClient(Url, Token, new HttpClient(handler), auth: guard);
+        Assert.Null(await Publish(client));
+
+        var onItsWay = Publish(client);
+        while (Volatile.Read(ref calls) < 2) { await Task.Delay(10); }
+        Assert.IsType<HomeAssistantAuthException>(await Publish(client));
+        slow.SetResult();
+        Assert.Null(await onItsWay);
+
+        Assert.NotNull(client.Refused);
+        Assert.False(Assert.IsType<HomeAssistantAuthException>(await Publish(client)).Sent);
+        Assert.Equal(3, calls);
+    }
+
+    // The record keeps a bounded number of addresses and tokens, but never by forgetting a refusal.
+    [Fact]
+    public async Task A_stopped_token_stays_stopped_however_many_other_tokens_and_addresses_come_after_it()
+    {
+        var ha = new Answering(time);
+        var guard = new HaAuthGuard(Record, time);
+        await Hammer(Client(ha, guard), TimeSpan.FromHours(1));
+        Assert.Equal(3, ha.Seen.Count);
+
+        ha.Status = HttpStatusCode.OK;
+        for (var i = 0; i < 20; i++)
+        {
+            Assert.Null(await Publish(Client(ha, guard, $"token-{i}-not-a-secret")));
+            Assert.Null(await Publish(new HomeAssistantClient(new Uri($"http://ha{i}.test:8123"), Token + i, new HttpClient(ha), auth: guard)));
+            time.Advance(TimeSpan.FromMinutes(1));
+        }
+        var before = ha.Seen.Count;
+
+        ha.Status = HttpStatusCode.Unauthorized;
+        await Hammer(Client(ha, new HaAuthGuard(Record, time)), TimeSpan.FromDays(1));
+        Assert.Equal(before, ha.Seen.Count);
+    }
+
     // serve's app shows what its guard says; a refusal shadow run recorded must reach it too, not
     // only stop the connector.
     [Fact]
