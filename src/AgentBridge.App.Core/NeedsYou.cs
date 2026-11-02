@@ -171,7 +171,9 @@ public sealed partial class NeedsYouEntry : Observable
     {
         // A character that is not drawn, or is drawn somewhere other than where it runs, is never on
         // screen as it will run: a bidi control can make `curl ... | sh` read as a comment.
-        if (HasHidden(q.Message)) { return false; }
+        // Nor is one with right-to-left letters, which reorder what is drawn around them without any
+        // control: three Hebrew letters before `; rm -rf / #` show its comment marker first.
+        if (HasHidden(q.Message) || HasRightToLeft(q.Message)) { return false; }
         // Every line ending the renderer breaks on is counted: a bare CR is a line too.
         var m = q.Message.Trim().Replace("\r\n", "\n").Replace('\r', '\n');
         return m.Length > 0 && m.Length <= PromptMaxChars && m.Split('\n').Length <= PromptMaxLines && LiteralShape(m) && !HasTable(MarkdownModel.Parse(m));
@@ -190,6 +192,12 @@ public sealed partial class NeedsYouEntry : Observable
         }
         return false;
     }
+
+    // The right-to-left blocks: Hebrew to Arabic Extended, their presentation forms, and the
+    // supplementary planes' right-to-left ranges (pwa/js/needs-you.js RTL).
+    public static bool HasRightToLeft(string text) => text.EnumerateRunes().Any(r => r.Value is
+        (>= 0x0590 and <= 0x08FF) or (>= 0xFB1D and <= 0xFDFF) or (>= 0xFE70 and <= 0xFEFF)
+        or (>= 0x10800 and <= 0x10FFF) or (>= 0x1E800 and <= 0x1EFFF));
 
     static bool Hidden(Rune r) => r.Value is 0x2028 or 0x2029 || Rune.GetUnicodeCategory(r) switch
     {
