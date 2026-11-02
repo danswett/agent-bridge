@@ -7,14 +7,17 @@ struct SessionActions: View {
     @Bindable var host: HostStore
     @Environment(\.dismiss) private var dismiss
     @State private var values: [String: JSONValue] = [:]
-    @State private var text = ""
+    @State private var answerText = ""
     @State private var error: String?
     @State private var loadedQuestionID: String?
     @State private var stopConfirmation: BridgeStopConfirmation?
     @State private var stopConnection: UUID?
     @State private var uploading = false
     @State private var attachments: [(UUID, String)] = []
-    @State private var cleanedReplyRequestID: UUID?
+
+    private var replyText: Binding<String> {
+        Binding(get: { host.replyDrafts[sessionID] ?? "" }, set: { host.replyDrafts[sessionID] = $0 })
+    }
 
     private var session: BridgeSession? {
         host.sessions.first { $0.id == sessionID }
@@ -56,13 +59,13 @@ struct SessionActions: View {
                     questionSection(question)
                 } else if host.can("sessions.reply"), session != nil {
                     Section("Reply") {
-                        TextField("Message", text: $text, axis: .vertical).lineLimit(3 ... 12)
+                        TextField("Message", text: replyText, axis: .vertical).lineLimit(3 ... 12)
                             .disabled(busy)
                         AttachmentComposer(store: store, host: host, attachments: $attachments,
                                            disabled: attempt?.isSending == true || attempt?.uncertain == true) { uploading = $0 }
                         Button("Send Reply", systemImage: "paperplane", action: sendReply)
                             .keyboardShortcut(.return, modifiers: .command)
-                            .disabled(busy || attempt?.uncertain == true || !host.isLive || text.isEmpty && attachments.isEmpty)
+                            .disabled(busy || attempt?.uncertain == true || !host.isLive || replyText.wrappedValue.isEmpty && attachments.isEmpty)
                     }
                 } else if question == nil, session != nil {
                     Section { Text("This machine does not offer remote replies.").foregroundStyle(.secondary) }
@@ -85,12 +88,7 @@ struct SessionActions: View {
             .navigationTitle(question == nil ? "Session actions" : "Answer question")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) } }
             .interactiveDismissDisabled(busy)
-            .onAppear { resetQuestion(); attachments = host.attachmentDrafts[sessionID] ?? []; removeSubmittedReplyAttachments(clearReplyText: false) }
-            .onChange(of: text) {
-                if question == nil {
-                    host.replyDrafts[sessionID] = text
-                }
-            }
+            .onAppear { resetQuestion(); attachments = host.attachmentDrafts[sessionID] ?? []; removeSubmittedReplyAttachments() }
             .onChange(of: attachments.map(\.0)) { host.attachmentDrafts[sessionID] = attachments }
             .onChange(of: attempt?.result) { removeSubmittedReplyAttachments() }
             .onChange(of: question?.id) { resetQuestion() }
@@ -133,7 +131,7 @@ struct SessionActions: View {
                 Text(reason).foregroundStyle(.secondary)
             } else {
                 if question.fields.isEmpty {
-                    TextField("Answer", text: $text, axis: .vertical).lineLimit(2 ... 8)
+                    TextField("Answer", text: $answerText, axis: .vertical).lineLimit(2 ... 8)
                 } else {
                     ForEach(question.fields) { field in QuestionFieldEditor(field: field, value: binding(field.name)) }.id(question.id)
                 }
@@ -154,7 +152,7 @@ struct SessionActions: View {
         for field in question?.fields ?? [] {
             values[field.name] = field.defaultValue
         }
-        text = question == nil ? host.replyDrafts[sessionID] ?? "" : ""
+        answerText = ""
         error = nil
     }
 
@@ -162,14 +160,14 @@ struct SessionActions: View {
         do {
             guard let question, let session else { return }
             let operation = try question.answer(sessionID: sessionID, currentQuestionID: loadedQuestionID,
-                                                values: values, text: question.fields.isEmpty ? text : nil, capabilities: host.capabilities, sessionAgent: session.agent)
+                                                values: values, text: question.fields.isEmpty ? answerText : nil, capabilities: host.capabilities, sessionAgent: session.agent)
             Task { await host.perform(operation, slot: slot) }
         } catch { self.error = error.localizedDescription }
     }
 
     private func sendReply() {
         do {
-            let operation = try BridgeSessionOperations.reply(sessionID: sessionID, text: text, attachments: attachments.map(\.0),
+            let operation = try BridgeSessionOperations.reply(sessionID: sessionID, text: replyText.wrappedValue, attachments: attachments.map(\.0),
                                                               hasQuestion: session?.question != nil, capabilities: host.capabilities)
             Task {
                 await host.perform(operation, slot: slot)
@@ -179,26 +177,12 @@ struct SessionActions: View {
         } catch { self.error = error.localizedDescription }
     }
 
-    private func removeSubmittedReplyAttachments(clearReplyText: Bool = true) {
+    private func removeSubmittedReplyAttachments() {
         guard let attempt, attempt.operation.op == "session.reply", let result = attempt.result,
               ["delivered", "unconfirmed"].contains(result["outcome"]?.string ?? "") else { return }
         let used = Set(attempt.operation.data["attachments"]?.array?.compactMap { $0["id"]?.string.flatMap(UUID.init(uuidString:)) } ?? [])
         attachments.removeAll { used.contains($0.0) }
         host.attachmentDrafts[sessionID]?.removeAll { used.contains($0.0) }
-        // A new question can arrive while the reply is awaiting its receipt. Its answer
-        // shares this editor state and must survive the earlier reply's completion.
-        if result["outcome"]?.string == "delivered", let requestID = attempt.operation.requestID {
-            let firstReceipt = cleanedReplyRequestID != requestID
-            cleanedReplyRequestID = requestID
-            if clearReplyText, firstReceipt, let sentText = attempt.operation.data["text"]?.string {
-                if host.replyDrafts[sessionID] == sentText {
-                    host.replyDrafts[sessionID] = ""
-                }
-                if question == nil, text == sentText {
-                    text = ""
-                }
-            }
-        }
     }
 
     private func stop(_ confirmation: BridgeStopConfirmation?) {
