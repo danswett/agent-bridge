@@ -216,7 +216,11 @@ internal static class Program
                         p.Int("--restart-daemon-at"), p.Int("--restart-shadow-at"), p.Option("--only"));
                     if (options.Only is { } only && SoakScript.All.All(s => s.Name != only)) { throw new UsageException($"--only takes one of {string.Join(", ", SoakScript.All.Select(s => s.Name).Distinct())}"); }
                     await new SoakDriver(ha, options, Path.GetFullPath(p.Option("--state")!), homes).RunAsync(ct);
-                    return Outcome.Pass(SoakDriver.Summary(SoakDriver.Load(Path.GetFullPath(p.Option("--state")!))));
+                    // Done with the plan either way; the episodes that went wrong make it a FAIL
+                    // (exit 1), which the wrapper does not run again: only a crash (2) is retried.
+                    var finished = SoakDriver.Load(Path.GetFullPath(p.Option("--state")!));
+                    var troubled = finished.Episodes.Count(e => e.Problems.Count > 0);
+                    return troubled == 0 ? Outcome.Pass(SoakDriver.Summary(finished)) : Outcome.Fail($"{troubled} episode(s) had problems\n{SoakDriver.Summary(finished)}");
                 }
             case "soak status": return Outcome.Pass(SoakDriver.Summary(SoakDriver.Load(Path.GetFullPath(p.Option("--state")!))));
             case "soak collect":

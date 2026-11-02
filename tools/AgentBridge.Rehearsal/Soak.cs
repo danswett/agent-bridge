@@ -192,12 +192,14 @@ internal static class CardAnswer
             var approve = q.Choices.FirstOrDefault(c => c.StartsWith("Approve", StringComparison.OrdinalIgnoreCase) || c.StartsWith("Allow", StringComparison.OrdinalIgnoreCase) || c.StartsWith("Yes", StringComparison.OrdinalIgnoreCase)) ?? q.Choices[0];
             return [CardAction.Select(decision, approve)];
         }
-        if (style == AnswerStyle.Payload && q.TakesWords)
+        // A lone schema field with nothing to choose is free text: its slot offers only Idle.
+        var words = q.TakesWords || (q.FieldCount == 1 && q.Choices.Count == 0 && slotOptions(1).All(CardQuestion.Placeholders.Contains));
+        if (style == AnswerStyle.Payload && words)
         {
             var payload = new JsonObject { ["at"] = now.ToString("o"), ["text"] = Words, ["decision_id"] = q.DecisionId };
             return [CardAction.Publish($"copilot/cli/{node}/replypayload/set", payload.ToJsonString())];
         }
-        if (style == AnswerStyle.Box && q.TakesWords && q.FieldCount <= 1)
+        if (style == AnswerStyle.Box && words && q.FieldCount <= 1)
         {
             return [CardAction.Text(reply, Words), CardAction.Press(submit)];
         }

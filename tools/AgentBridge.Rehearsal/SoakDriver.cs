@@ -155,7 +155,7 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
     const string ShadowRestartScript =
         "$t = Get-ScheduledTask | Where-Object TaskName -like 'AgentBridgeShadowHost_shadow_*'; if (-not $t) { throw 'no shadow host task' }; " +
         "Stop-ScheduledTask -TaskName $t.TaskName; " +
-        "Get-CimInstance Win32_Process -Filter \"Name='agent-bridge-host.exe'\" | Where-Object { $_.ExecutablePath -like \"$env:LOCALAPPDATA\\AgentBridgeShadow\\bin\\*\" -and $_.CommandLine -match ' serve ' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; " +
+        "Get-CimInstance Win32_Process -Filter \"Name='agent-bridge-host.exe'\" | Where-Object { $_.ExecutablePath -like \"$env:LOCALAPPDATA\\AgentBridgeShadow\\bin\\*\" -and $_.CommandLine -match ' serve ' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; " +
         "Start-Sleep 5; Start-ScheduledTask -TaskName $t.TaskName; 'restarted ' + $t.TaskName";
 
     // True once done. A refused or failed restart is logged and not counted, so the next
@@ -177,7 +177,8 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
 
     static async Task<string> RunPwshAsync(string command, CancellationToken ct)
     {
-        var psi = new ProcessStartInfo("pwsh", ["-NoProfile", "-NonInteractive", "-Command", command]) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        // Stop, so a task cmdlet's error fails the restart rather than scrolling past it.
+        var psi = new ProcessStartInfo("pwsh", ["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; " + command]) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         using var p = Process.Start(psi) ?? throw new InvalidOperationException("pwsh did not start");
         var output = await p.StandardOutput.ReadToEndAsync(ct) + await p.StandardError.ReadToEndAsync(ct);
         await p.WaitForExitAsync(ct);
@@ -353,10 +354,17 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
         }
     }
 
-    async Task<string> MarkerAsync(string node, CancellationToken ct)
+    async Task<string> MarkerAsync(string node, CancellationToken ct) => Marker(await ha.StateAsync($"sensor.{node}_activity", ct));
+
+    // What a turn's end changes on the card. Codex's activity carries no `updated` stamp, so
+    // there it is the response with the trail of what the turn did: two turns answering "ok"
+    // alike still differ in their trail.
+    internal static string Marker(HaState? activity)
     {
-        var a = await ha.StateAsync($"sensor.{node}_activity", ct);
-        return Attr(a, "updated") ?? (Attr(a, "response") is { } r ? "r:" + r.GetHashCode(StringComparison.Ordinal) : "");
+        if (Attr(activity, "updated") is { } updated) { return updated; }
+        if (activity is null || activity.Attributes.ValueKind != JsonValueKind.Object) { return ""; }
+        var history = activity.Attributes.TryGetProperty("history", out var h) ? h.GetRawText() : "";
+        return "r:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes((Attr(activity, "response") ?? "") + "\n" + history + "\n" + activity.State)))[..16];
     }
 
     // A prompt as the reply card sends it: a publish of its words, not retained. Not the reply
@@ -515,6 +523,8 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
     // folder beside it, Codex in rollouts of their own that name the parent).
     public static int Collect(Homes homes, string sessionId, string zipPath)
     {
+        // The id becomes a path below each agent's home: never "..", a separator or a pattern.
+        if (!sessionId.All(c => char.IsAsciiLetterOrDigit(c) || c == '-') || sessionId.Length is < 8 or > 64) { throw new UsageException("a session id is 8 to 64 letters, digits and '-'"); }
         var files = new List<(string Path, string Name)>();
         var copilot = Path.Combine(homes.CopilotHome, "session-state", sessionId);
         if (Directory.Exists(copilot))

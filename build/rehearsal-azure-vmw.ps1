@@ -1408,6 +1408,7 @@ if ($InvokeScript) {
     # so nothing about reaching the VM is duplicated. Only non-secret text may go in.
     if (-not (Test-VmRunning)) { throw "$VmName is not running; -Start it first" }
     $text = Get-Content -LiteralPath $InvokeScript -Raw
+    if (-not $PSCmdlet.ShouldProcess($VmName, "Run $InvokeScript $(if ($AsDesktopUser) { "as $DesktopUser" } else { 'as SYSTEM' })")) { return }
     if ($AsDesktopUser) { return Invoke-VmAsDesktopUser -Script $text -TimeoutMinutes $TimeoutMinutes }
     return Invoke-VmRunCommand -Script $text
 }

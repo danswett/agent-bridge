@@ -210,12 +210,20 @@ if ($LASTEXITCODE) { throw 'publishing the driver failed' }
         $guest += @'
 
 foreach ($p in Get-Process AgentBridge -ErrorAction SilentlyContinue) { Stop-Process -Id $p.Id -Force }
-foreach ($t in Get-ScheduledTask | Where-Object TaskName -like 'AgentBridgeHost_*') { Stop-ScheduledTask -TaskName $t.TaskName }
+# Disabled, not only stopped: its logon task would bring it back after a reboot, and the app
+# starts the host only through that task. Which were enabled is kept for -Finish.
+$record = '__SOAK__\state\app-host-tasks.txt'
+New-Item -ItemType Directory -Path (Split-Path $record) -Force | Out-Null
+foreach ($t in Get-ScheduledTask | Where-Object TaskName -like 'AgentBridgeHost_*') {
+    if ($t.Settings.Enabled) { Add-Content -Path $record -Value $t.TaskName }
+    Stop-ScheduledTask -TaskName $t.TaskName
+    Disable-ScheduledTask -TaskName $t.TaskName | Out-Null
+}
 foreach ($p in Get-Process agent-bridge-host, agent-bridge-hostw -ErrorAction SilentlyContinue) {
     if ($p.Path -like "$env:LOCALAPPDATA\AgentBridgeApp\*") { Stop-Process -Id $p.Id -Force }
 }
-'the app and its host stopped'
-'@
+'the app and its host stopped, and its logon task disabled until -Finish'
+'@.Replace('__SOAK__', $soak)
     }
     Invoke-Guest M -AsDesktopUser -TimeoutMinutes 60 -Script $guest | Write-Output
     return
@@ -239,7 +247,8 @@ Set-Content -Path $run -Encoding utf8 -Value @"
 New-Item -ItemType Directory -Path '__SOAK__\state' -Force | Out-Null
 while (`$true) {
     & '__SOAK__\tool\agent-bridge-rehearsal.exe' __ARGS__ *>> '__SOAK__\state\driver.out'
-    if (`$LASTEXITCODE -eq 0) { break }
+    # 0: done; 1: done, with episodes that went wrong (soak status says which). Only a crash is retried.
+    if (`$LASTEXITCODE -in 0, 1) { break }
     Start-Sleep -Seconds 60
 }
 "@
@@ -318,9 +327,15 @@ if ($Finish) {
 Stop-ScheduledTask -TaskName 'AgentBridgeSoakDriver' -ErrorAction SilentlyContinue
 Get-CimInstance Win32_Process -Filter "Name='agent-bridge-rehearsal.exe'" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 Unregister-ScheduledTask -TaskName 'AgentBridgeSoakDriver' -Confirm:$false -ErrorAction SilentlyContinue
-foreach ($t in Get-ScheduledTask | Where-Object TaskName -like 'AgentBridgeHost_*') { Start-ScheduledTask -TaskName $t.TaskName }
+# The app's host tasks -Prepare disabled, enabled and started again.
+$record = '__SOAK__\state\app-host-tasks.txt'
+foreach ($name in @(if (Test-Path $record) { Get-Content $record | Sort-Object -Unique })) {
+    Enable-ScheduledTask -TaskName $name | Out-Null
+    Start-ScheduledTask -TaskName $name
+}
+Remove-Item $record -ErrorAction SilentlyContinue
 'driver removed, the app host started again'
-'@ | Write-Output
+'@.Replace('__SOAK__', $soak) | Write-Output
     foreach ($role in 'W', 'M') {
         & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $role -AutoShutdown On 6>$null
         & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $role -Deallocate

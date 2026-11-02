@@ -51,6 +51,10 @@ public class SoakTests
         Assert.Equal($"copilot/cli/{Node}/replypayload/set", publish.Topic);
         Assert.Equal("d4", (string?)JsonNode.Parse(publish.Payload!)!["decision_id"]);
 
+        // A lone schema text field, as agent-ha-bridge arms it (ha-decisions.json "text"): one slot offering only Idle.
+        var field = CardQuestion.Read(State($"select.{Node}_decision", "Awaiting answer...", new { decision_id = "d7", field_count = 1, multi_field = true }))!;
+        Assert.NotNull(Assert.Single(CardAnswer.Plan(Node, field, AnswerStyle.Payload, _ => ["Idle"], 0, DateTimeOffset.UnixEpoch)).Topic);
+
         var strict = CardQuestion.Read(State($"select.{Node}_decision", "Awaiting answer...", new { decision_id = "d5", choices = new[] { "a", "b" } }))!;
         Assert.Equal(["select.select_option", "button.press"], CardAnswer.Plan(Node, strict, AnswerStyle.Payload, _ => [], 0, DateTimeOffset.UnixEpoch).Select(a => $"{a.Domain}.{a.Service}"));
     }
@@ -61,6 +65,23 @@ public class SoakTests
         Assert.Null(CardQuestion.Read(State($"select.{Node}_decision", "Idle", new { decision_id = "d6", choices = new[] { "a" } })));
         Assert.Null(CardQuestion.Read(State($"select.{Node}_decision", "Idle", new { })));
     }
+
+    [Fact]
+    public void Two_Codex_turns_answering_alike_still_mark_different_ends()
+    {
+        // Codex's activity has no updated stamp: the response alone would not move.
+        var first = State($"sensor.{Node}_activity", "ok", new { response = "ok", history = new[] { "Reading your message", "ok" } });
+        var second = State($"sensor.{Node}_activity", "ok", new { response = "ok", history = new[] { "Reading your message", "ok", "Reading your message", "ok" } });
+        Assert.NotEqual(SoakDriver.Marker(first), SoakDriver.Marker(second));
+        Assert.Equal("7", SoakDriver.Marker(State($"sensor.{Node}_activity", "ok", new { updated = "7", response = "ok" })));
+    }
+
+    [Theory]
+    [InlineData("..")]
+    [InlineData("..\\..\\x")]
+    [InlineData("abc*")]
+    public void Collect_takes_only_a_session_id_never_a_path(string id) =>
+        Assert.Throws<UsageException>(() => SoakDriver.Collect(Homes.For(Path.Combine(AppContext.BaseDirectory, "no-home")), id, "x.zip"));
 
     [Theory]
     [InlineData("14867bc7-04dd-45aa-9a3e-0123456789ab", "agent_bridge_14867bc704dd45aa")]
