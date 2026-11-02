@@ -228,7 +228,11 @@ public sealed partial class SessionView : UserControl
         if (target is not null && target.Focus(FocusState.Keyboard))
         {
             c.WantsFocus = false;
-            target.StartBringIntoView();
+            // One scroll for the question: focus inside it brings the whole card into view, heading
+            // first, on the same terms as QuestionWanted's (smooth once the page has drawn, a jump
+            // at start or with animations off), and that queued scroll then stands down.
+            var inQuestion = Motion.Within(target, QuestionCard);
+            (inQuestion ? (UIElement)QuestionCard : target).StartBringIntoView(new BringIntoViewOptions { AnimationDesired = Ready && Motion.Scrolls });
             if (focusPending) { focusPending = false; LayoutUpdated -= OnFocusLayout; }
         }
         else if (!focusPending)
@@ -259,9 +263,12 @@ public sealed partial class SessionView : UserControl
         var smooth = Ready && Motion.Scrolls;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
-            if (Card == card && QuestionCard.Visibility == Visibility.Visible) { QuestionCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = smooth }); }
+            if (Card != card || QuestionCard.Visibility != Visibility.Visible || FocusedInQuestion()) { return; }
+            QuestionCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = smooth });
         });
     }
+
+    bool FocusedInQuestion() => XamlRoot is { } root && FocusManager.GetFocusedElement(root) is DependencyObject focused && Motion.Within(focused, QuestionCard);
 
     // The Sessions page has drawn its list (SessionsPage): until then, nothing here moves.
     internal bool Ready { get; set; }
