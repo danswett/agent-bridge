@@ -41,7 +41,7 @@ current client shows. Its fixtures also feed the shadow gate (#40). If sign-off 
 | U6 | #180 | Windows app layout: Mica, title bar, `NavigationView`, panes, resizable, row anatomy, type ramp | U1, U2, U4 | `src/AgentBridge.App` broadly, `App.Core` |
 | U7 | #168 | PWA platform layer: shortcut hints, safe areas, back navigation | U5 | `pwa/js/platform.js` (new) |
 | U8 | #176 | Delegates in both clients: strip, tab, inspector, sheet, attributed questions | S1, U5, U6 | `pwa/`, `src/AgentBridge.App` |
-| U9 | #232 | Motion (ui.md §5.3). Phase 1: the spec, `motion` tokens and the generator's `--ab-motion-*` and `AbMotion*` outputs, unused by either client. Phase 2: the PWA and the app implement the catalogue, one PR each | Phase 1: none. Phase 2: U5 for the PWA, U6 for the app, and the owner's sign-off of §5.3 | Phase 1: `docs/design/ui.md`, `design/`, `tools/design-gen` and its generated files. Phase 2: `pwa/`; `src/AgentBridge.App` |
+| U9 | #232 | Motion (ui.md §5.3). Phase 1: the spec, `motion` tokens and the generator's `--ab-motion-*` and `AbMotion*` outputs, unused by either client. Phase 2: the PWA and the app implement the catalogue, one PR each | Phase 1: none. Phase 2: U5 for the PWA, U6 for the app, and the owner's sign-off of §5.3 (given 2026-11-02) | Phase 1: `docs/design/ui.md`, `design/`, `tools/design-gen` and its generated files. Phase 2: `pwa/`; `src/AgentBridge.App` |
 
 **U8 part 1 landed early, in the PWA (#176):** its cards show only the main agent's own
 response and reasoning (`activity.source` and `own`), and a compact Delegates block in today's

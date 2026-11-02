@@ -9,7 +9,7 @@ iOS and Android apps.
 
 *Status: proposed by the design session on 2026-11-01 and signed off by the owner the
 same day (status.md §5). Two light-theme tokens are corrected for contrast in #183. Motion
-(§5.3) is proposed in #232 and awaits the owner's sign-off.* The
+(§5.3) was added in #232 and signed off by the owner on 2026-11-02.* The
 owner's mock-ups live in a private design canvas, "Agent Bridge — Session Workbench".
 Every board is also rendered in [mockups/](mockups/README.md), and its source is in
 [`/design/canvas`](../../design/canvas/README.md). This page is the spec, and it is complete
@@ -231,6 +231,11 @@ Selection survives a resize across breakpoints. #166 has the acceptance criteria
   to the list.
 
 ### 5.3 Motion
+
+*Signed off by the owner on 2026-11-02 (#232). That includes three calls: platform
+transitions keep their own timing, the in-flight progress ring is the only loop besides the
+glyphs, and scrolling to a question never moves a conversation the person has scrolled back
+through.*
 
 Motion shows where something came from and where it went. It answers the person or a
 change, and never runs for its own sake. The values are in `tokens.json` under `motion`,
