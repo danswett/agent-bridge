@@ -193,6 +193,42 @@ a { color: var(--ab-bridge); }
 /* The "new activity" dot: 6 px, Bridge, at the title's trailing edge. */
 .unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ab-bridge); flex: none; }
 @media (forced-colors: active) { .unread-dot { background: Highlight; forced-color-adjust: none; } }
+/* Needs you · N (ui.md §6.1, #165): every pending question, above the list and apart from it, in
+   the Needs you role, each entry marked with its glyph (#178). */
+.needs-you { margin: 8px 0 14px; padding: 10px 12px; border: 1px solid var(--ab-needs); border-radius: var(--radius); background: var(--ab-needs-fill); }
+.needs-you-head { margin: 0 0 6px; font-size: .8125rem; line-height: 1.125rem; font-weight: 600; color: var(--ab-needs-head); }
+.needs-you-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); }
+/* align-content: an entry beside a taller one in the wide grid keeps its lines together. */
+.needs-entry { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; align-items: start; align-content: start; }
+.needs-entry > :not(.needs-mark) { grid-column: 2; }
+.needs-mark { grid-row: 1; display: flex; margin-top: 8px; }
+@media (pointer: coarse) { .needs-mark { margin-top: 14px; } }
+.needs-title {
+  min-height: 32px; padding: 0; text-align: left; overflow-wrap: anywhere;
+  font: inherit; font-weight: 600; color: var(--ab-text); background: none; border: 0; cursor: pointer;
+}
+@media (pointer: coarse) { .needs-title { min-height: var(--tap); } }
+.needs-title:hover { text-decoration: underline; }
+.needs-line { margin: 0; font-size: .9rem; overflow-wrap: anywhere; }
+/* An approval answered here, its prompt whole: code literal, as on the card. */
+.needs-prompt { font-size: .9rem; }
+.needs-prompt > :first-child { margin-top: 0; }
+.needs-prompt > :last-child { margin-bottom: 4px; }
+/* Never a tint on a role fill, as in a question: a linked `code` would be bridge at 4.41:1 on
+   subtle over the light needs fill (design/tokens.json color.contrast.tints). */
+.needs-prompt.md pre, .needs-prompt.md :not(pre) > code { background: var(--ab-card); }
+.needs-meta { margin: 2px 0 0; font-size: .8rem; color: var(--ab-text2); overflow-wrap: anywhere; }
+.needs-delegate, .needs-at-machine { color: var(--ab-needs-text); font-weight: 600; }
+.needs-age { font-variant-numeric: tabular-nums; }
+.needs-at-machine { margin: 4px 0 0; font-size: .85rem; }
+.needs-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.button.needs-approve { background: var(--ab-bridge); border-color: var(--ab-bridge); color: var(--ab-bridge-on); }
+/* In the text colour, not the outcome's: the role colours are checked against the card, not the
+   Needs you fill, and the words say the outcome. */
+.needs-status { margin: 4px 0 0; font-size: .85rem; color: var(--ab-text); }
+@media (forced-colors: active) {
+  .needs-you { border-color: Highlight; }
+}
 /* Moving rows: a grip on hover with a mouse, and a line where a dragged row will go. */
 .drag-handle { display: none; }
 @media (hover: hover) and (pointer: fine) {
@@ -550,4 +586,5 @@ summary {
 @media (min-width: 960px) {
   main, .topbar { max-width: 1680px; }
   .session-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); align-items: start; }
+  .needs-you-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); }
 }

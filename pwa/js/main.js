@@ -280,7 +280,8 @@ async function startDemo() {
     usage: (report) => host.setUsage(report),
     // The next answers' outcomes, in order: 'delivered' (the default once these run out),
     // 'unconfirmed', 'stale', 'busy', 'refused', an unknown one, or { outcome, reason,
-    // drop: true } to lose the response the first time, as a dropped channel would.
+    // drop: true } to lose the response the first time, as a dropped channel would, or { error }
+    // for the host to fail the op itself.
     script: (...outcomes) => host.scriptAnswers(outcomes),
     // The same, for the next replies.
     scriptReplies: (...outcomes) => host.scriptReplies(outcomes),

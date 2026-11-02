@@ -4,6 +4,7 @@
 // docs/answer.png: answering the worked example's question, on its way to the machine.
 // docs/approval.png: a permission request, answered with a tap.
 // docs/all-machines.png: every machine at once, each card (folded here) naming its machine.
+// docs/needs-you-light.png, needs-you-dark.png and needs-you-wide.png: Needs you (#165) on a phone and wide.
 import { webkit, devices } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,8 +16,8 @@ const server = await startStaticServer({ dir: buildSite({ out: path.join(pwa, '.
 const url = `http://127.0.0.1:${server.address().port}${APP_PATH}?demo=1&static=1`;
 const browser = await webkit.launch();
 
-async function open(scheme, query = '') {
-  const context = await browser.newContext({ ...devices['iPhone 13'], colorScheme: scheme, reducedMotion: 'reduce', serviceWorkers: 'block' });
+async function open(scheme, query = '', device = devices['iPhone 13']) {
+  const context = await browser.newContext({ ...device, colorScheme: scheme, reducedMotion: 'reduce', serviceWorkers: 'block' });
   const page = await context.newPage();
   await page.goto(url + query);
   await page.waitForSelector('html[data-demo-ready]');
@@ -91,6 +92,42 @@ try {
     await page.screenshot({ path: out('all-machines.png'), fullPage: true, clip: { x: 0, y: top.y - 8, width: page.viewportSize().width, height: bottom.end - top.y + 16 } });
     await context.close();
     console.log('docs/all-machines.png');
+  }
+
+  // Needs you (#165), with every machine shown: a permission prompt answered in the lane, a
+  // delegate's question, the forms that open their sessions and a read-only machine's question.
+  const wide = { viewport: { width: 1440, height: 900 } };
+  for (const [scheme, name, device] of [['light', 'needs-you-light.png', undefined], ['dark', 'needs-you-dark.png', undefined], ['light', 'needs-you-wide.png', wide]]) {
+    const { context, page } = await open(scheme, '&machines=3', device);
+    await page.evaluate(() => {
+      const d = window.agentBridgeDemo;
+      const t = new Date().toISOString();
+      const land = d.host.get('8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35');
+      d.upsert({
+        ...land, status: 'waiting', statusSince: t, updatedAt: t,
+        question: {
+          id: 'r1#shot', kind: 'approval', askedAt: t, message: 'Allow **shell**?\n\n```\ngit push origin main --force-with-lease\n```',
+          fields: [{ name: 'decision', type: 'choice', required: true, options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }] }],
+        },
+      });
+      const claude = d.host.get('6f1c2b7e-claude-example');
+      d.upsert({
+        ...claude, status: 'waiting', statusSince: t, updatedAt: t, waitingOn: 'agent-7',
+        subagents: [{ id: 'agent-7', kind: 'background', status: 'waiting', name: 'Read witness shell logic' }],
+        question: { id: 'q-delegate', kind: 'form', agent: 'agent-7', answerAtMachine: true, askedAt: t, message: 'Keep the old witness format?', fields: [] },
+      });
+    });
+    await page.locator('#needs-you .needs-entry').nth(4).waitFor();
+    await page.evaluate(() => { for (const t of document.querySelectorAll('.needs-age')) { t.textContent = '4m'; } });
+    await fixTimes(page);
+    await hideBar(page);
+    const [lane, list] = await page.evaluate(() => ['needs-you', 'session-list'].map((id) => {
+      const r = document.getElementById(id).getBoundingClientRect();
+      return { x: r.left, y: r.top + scrollY, width: r.width };
+    }));
+    await page.screenshot({ path: out(name), fullPage: true, clip: { x: 0, y: lane.y - 8, width: page.viewportSize().width, height: list.y - lane.y + 160 } });
+    await context.close();
+    console.log(`docs/${name}`);
   }
 } finally {
   await browser.close();

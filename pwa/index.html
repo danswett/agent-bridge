@@ -69,6 +69,12 @@
         <select id="session-sort" class="sort" aria-label="Sort sessions" title="Sort sessions"></select>
       </div>
       <p id="host-state" class="note" role="status" aria-live="polite"></p>
+      <!-- Needs you · N (#165): every pending question, oldest first. It refers to sessions and
+           never moves their rows. -->
+      <div id="needs-you" class="needs-you" role="region" aria-labelledby="needs-you-h" hidden>
+        <h3 id="needs-you-h" class="needs-you-head">Needs you</h3>
+        <ol class="needs-you-list"></ol>
+      </div>
       <div id="session-list" class="session-list"></div>
       <p id="sessions-empty" class="note empty" hidden>No live sessions on this machine.</p>
     </section>

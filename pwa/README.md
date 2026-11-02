@@ -19,9 +19,9 @@ once, and shows each machine's updates with Check, Install and Check all, per
 [v1-update.md](../docs/protocol/v1-update.md).
 Larger files come next.
 
-| Light | Dark | Answering | A permission request | All machines |
-|---|---|---|---|---|
-| ![Demo mode, light](docs/demo-light.png) | ![Demo mode, dark](docs/demo-dark.png) | ![Answering the worked example's question](docs/answer.png) | ![An approval, answered with a tap](docs/approval.png) | ![Every machine's sessions at once, each card naming its machine](docs/all-machines.png) |
+| Light | Dark | Answering | A permission request | All machines | Needs you |
+|---|---|---|---|---|---|
+| ![Demo mode, light](docs/demo-light.png) | ![Demo mode, dark](docs/demo-dark.png) | ![Answering the worked example's question](docs/answer.png) | ![An approval, answered with a tap](docs/approval.png) | ![Every machine's sessions at once, each card naming its machine](docs/all-machines.png) | ![Needs you: every pending question above the list, an approval answered in place](docs/needs-you-light.png) |
 
 ## Modules
 
@@ -40,6 +40,7 @@ Larger files come next.
 | `js/sessions-store.js` | The live sessions, most recently updated first (the Most recent sort); a removed session goes with its change, for the Ended group |
 | `js/session-order.js` | The list's order, kept on this device (#164): Your order (new sessions at the top once, then never moved by the host), pins, Most recent and Machine sorts, the Ended group, and which rows have news since last open. Blocked storage falls back to Most recent |
 | `js/status.js` | What a session says about itself: [ui.md](../docs/design/ui.md) §2.2's rules, as its glyph, its words, the colour role of the words, and the glyph's accessible name (§9). Rules 1-6 first match wins, 8 refining 4, and 7 (an agent driving) as an overlay. Pure, and tested rule by rule in `test/unit/status.test.mjs` |
+| `js/needs-you.js` | The Needs you lane (#165): one entry per pending question across the machines shown, oldest first; what each says (title, machine, agent, age, first line or an approval's whole prompt, a delegate by name) and offers (Approve once and Deny, open the session, or answer at the machine); and the app badge with its count |
 | `js/answers.js` | An answer as the form holds it, as the request sends it, and checked first: `checkAnswer` mirrors the C# `Answers.Check` case for case, with its wording |
 | `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect |
 | `js/replies.js` | A reply checked before it goes: `checkReply` mirrors the C# `Replies.Check`, with its wording |
@@ -56,6 +57,7 @@ Larger files come next.
 | `js/forget.js` | Forgetting an offline machine ([roster.md](../docs/protocol/roster.md)): two presses, the first arming for 5 seconds; an arm goes with a machine that comes back; the relay's refusals in words |
 | `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
+| `js/ui/needs-you-view.js` | Needs you on screen, above the list and apart from it, its entries kept in place across redraws |
 | `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each card's answers, replies, files, End session and the launch panel to the machine it is for; the heading, count, empty state and a line per machine that can't be reached |
 | `js/ui/glyph.js` | The status glyphs at 12, 14, 16, 20 and 24 px and the design icons, drawn from the generated sprite with `<use>`: the role colour from `data-glyph`, the driven diamond over it, and the moving part (`glyph-spin`, `glyph-orbit`) its own group, which `app.css` turns and reduced motion stops |
 | `js/ui/*` | Session cards, the row menu (Move up, Move down, Pin), the question and its answer form, the reply box, End session, the Start a session panel (agent-ha-bridge's launch card, without its 255-character prompt), machines list (offline machines after the online ones, with when each was last seen and Forget), the usage panel, fold state, relative times |
@@ -142,6 +144,30 @@ stays as picked in the panel. Folded, the panel reads
   from the machine last launched on or picked there, remembered on the device.
 * **Notifications** are as before: each machine opened registers this device. With All, that
   is every machine shown, each on its own, so one slow or failing machine holds up no other.
+
+### Needs you
+
+Above the list, **Needs you · N** has an entry for each pending question on the machines
+shown, the oldest first: the session's title, the question's first line (an approval's whole
+prompt, when it fits), the machine (with every machine shown), the agent and how long it has
+waited. A delegate's question says who asks, by the delegate's name. The lane refers to
+sessions and never moves their rows. An entry leaves when its question does.
+
+* **An approval** answerable from here has **Approve once** and **Deny** in the entry, under
+  its whole prompt (at most 600 characters and 12 lines), drawn as the card draws it with code
+  literal: Approve once allows all of it, so all of it is on screen. They are the card's own
+  buttons: the same request, the same progress shown in the entry and on the card, and the
+  same outcomes (a refused or busy answer can be given again, stale and unconfirmed are
+  final). A longer approval (an edit's diff, a long command), one with a table, one not shaped
+  as a host writes a permission (a fence in its words, words after its command or its opening
+  fence, a link, whose words hide where it goes), or one from Codex (whose command can reach the machine cut short)
+  opens its session instead.
+* **A form**, or a question this machine won't take from the phone, opens its session (the
+  title), where the card says what it asks.
+* **A prompt marked `answerAtMachine`** says "Answer at the machine", with nothing to press.
+
+The lane's count is the app's badge on the Home Screen or taskbar, where the browser has the
+Badging API (`navigator.setAppBadge`), and nothing where it hasn't.
 
 ### Answering
 
