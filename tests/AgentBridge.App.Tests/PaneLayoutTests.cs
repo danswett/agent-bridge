@@ -245,4 +245,42 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         Assert.Same(id, TestUi.Read(() => busy.Details.Single(d => d.Label == "ID")));
         Assert.All(touched, label => Assert.Contains(label, new[] { "For", "Updated" }));
     }
+
+    [Fact]
+    public async Task A_fact_leaving_details_keeps_the_rows_after_it_so_a_selected_id_stays_selected()
+    {
+        var busy = Card("busy");
+        var id = TestUi.Read(() => busy.Details.Single(d => d.Label == "ID"));
+        var updated = TestUi.Read(() => busy.Details.Single(d => d.Label == "Updated"));
+
+        // Its background work finishes and it goes idle: Background and For leave Details.
+        await host.SendAsync(Events.SessionUpsert, Make.Session("busy", updated: Make.T0.AddMinutes(1)));
+        await Wait.UntilAsync(() => TestUi.Read(() => busy.Details.All(d => d.Label is not ("Background" or "For"))), "Background and For gone");
+
+        Assert.Same(id, TestUi.Read(() => busy.Details.Single(d => d.Label == "ID")));
+        Assert.Same(updated, TestUi.Read(() => busy.Details.Single(d => d.Label == "Updated")));
+    }
+
+    [Fact]
+    public async Task A_question_opened_from_needs_you_or_a_toast_shows_conversation_but_a_row_chosen_keeps_the_tab_picked()
+    {
+        await host.SendAsync(Events.SessionUpsert, Make.Session("asking", question: Make.Choice(options: ["yes", "no"]), updated: Make.T0.AddMinutes(2)));
+        await Wait.UntilAsync(() => TestUi.Read(() => main.Sessions.Any(c => c.Id == "asking")), "the asking session");
+        Resize(1000);
+
+        Select("asking");
+        ui.Post(() => layout.Tab = SessionTab.Tools);
+        Select("busy");
+        Select("asking");
+        Assert.Equal(SessionTab.Tools, Read(l => l.Tab));
+
+        // Opened to be answered: Tools would hide the question.
+        ui.Post(() => main.Open("asking"));
+        Assert.Equal(SessionTab.Conversation, Read(l => l.Tab));
+
+        // A session with nothing to answer keeps the tab, opened or chosen.
+        ui.Post(() => layout.Tab = SessionTab.Tools);
+        ui.Post(() => main.Open("busy"));
+        Assert.Equal(SessionTab.Tools, Read(l => l.Tab));
+    }
 }

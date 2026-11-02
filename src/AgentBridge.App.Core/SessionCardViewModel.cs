@@ -166,6 +166,7 @@ public sealed partial class SessionCardViewModel : Observable
     bool pinned;
     bool unread;
     bool wantsFocus;
+    bool wantsRowFocus;
     public string? GroupHeader { get => groupHeader; internal set { if (Set(ref groupHeader, value)) { Raise(nameof(HasGroupHeader)); } } }
     public bool HasGroupHeader => groupHeader is not null;
     public bool Pinned { get => pinned; internal set => Set(ref pinned, value); }
@@ -180,8 +181,13 @@ public sealed partial class SessionCardViewModel : Observable
         }
     }
     public RowActions? Row { get; internal set; }
-    // A keyboard move: the card's title takes focus again once it is drawn in its new place.
+    // Opened to be answered (Needs you): keyboard focus goes into the session, so the next Tab is
+    // in its question, not back in the lane. The session pane takes it, and clears it once it has.
     public bool WantsFocus { get => wantsFocus; set => Set(ref wantsFocus, value); }
+    // A keyboard or menu move, or a drag: the row's list item takes focus again once it is drawn in
+    // its new place, so the next Alt+Up/Down moves the same row. Apart from WantsFocus: below 760 px
+    // the list is hidden while a session is open, and focusing a row there went nowhere.
+    public bool WantsRowFocus { get => wantsRowFocus; set => Set(ref wantsRowFocus, value); }
 
     public void Update(Session next)
     {

@@ -57,7 +57,7 @@ public sealed partial class MainViewModel
     {
         if (!Order.Place(dragged, KeyOf(target), after)) { return false; }
         // The dragged card keeps focus, as after a keyboard or menu move, so the next Alt+Up/Down moves it.
-        if (byId.TryGetValue(dragged, out var moved)) { moved.WantsFocus = true; }
+        if (byId.TryGetValue(dragged, out var moved)) { moved.WantsRowFocus = true; }
         Rearrange(chosen: true);
         return true;
     }

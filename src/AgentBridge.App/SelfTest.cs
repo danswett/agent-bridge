@@ -119,6 +119,10 @@ static partial class SelfTest
                 ((IInvokeProvider)new HyperlinkButtonAutomationPeer(open).GetPattern(PatternInterface.Invoke)).Invoke();
                 var opened = await Until(() => main.Selected?.Id == "02d9e5d5-6b35-49bd-b083-39572fbff648" && window.Sessions.SessionPaneView.Card == main.Selected && window.Sessions.Rows.SelectedItem == main.Selected, TimeSpan.FromSeconds(5));
                 Check(opened, "opens a Needs you entry's session in the session pane, its row selected");
+                // Keyboard focus goes with it, into the question, so the next Tab is in the session.
+                bool InSession() => Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is DependencyObject f && Above<FrameworkElement>(f, e => e == window.Sessions.SessionPaneView) is not null;
+                var focused = await Until(() => main.Selected is { WantsFocus: false } && InSession(), TimeSpan.FromSeconds(5));
+                Check(focused, "takes keyboard focus into the session a Needs you entry opens");
             }
             else { Check(false, "finds the form question's Needs you entry"); }
 

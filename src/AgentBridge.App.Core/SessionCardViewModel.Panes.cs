@@ -45,6 +45,14 @@ public sealed partial class SessionCardViewModel
     void SyncDetails()
     {
         var want = CurrentDetails();
+        // A fact that has gone (Background at zero, For once idle) goes first, by label: inserting
+        // before it instead made new copies of every row after it, the ID among them, and a
+        // selection in one was lost to an ordinary update.
+        var labels = want.Select(d => d.Label).ToHashSet();
+        for (var i = Details.Count - 1; i >= 0; i--)
+        {
+            if (!labels.Contains(Details[i].Label)) { Details.RemoveAt(i); }
+        }
         for (var i = 0; i < want.Count; i++)
         {
             if (i < Details.Count && Details[i] == want[i]) { continue; }

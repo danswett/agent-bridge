@@ -123,7 +123,9 @@ public sealed class MainTests : IAsyncLifetime
         ui.Post(() => Assert.True(old.Row!.Drop(asking.Row!.Key, after: true)));
         Assert.Equal(["old", "asking"], Order());
         // The dragged card takes focus, as after a keyboard move.
-        Assert.True(TestUi.Read(() => asking.WantsFocus));
+        Assert.True(TestUi.Read(() => asking.WantsRowFocus));
+        // Its row, not the session: that focus is for a session opened to be answered.
+        Assert.False(TestUi.Read(() => asking.WantsFocus));
     }
 
     [Fact]

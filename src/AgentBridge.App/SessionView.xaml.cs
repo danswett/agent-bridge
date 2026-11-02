@@ -74,7 +74,7 @@ public sealed partial class SessionView : UserControl
         if (attached && old is not null) { old.PropertyChanged -= OnCardChanged; }
         // The box the person is typing in now belongs to the next session: the last one is no longer
         // being edited, which would otherwise keep holding its list's order (MainViewModel.Rearrange).
-        if (old is not null) { old.Editing = false; }
+        if (old is not null) { old.Editing = false; old.WantsFocus = false; }
         if (card is not null) { card.Editing = ReplyBox.FocusState != FocusState.Unfocused; }
         if (card is not null)
         {
@@ -89,6 +89,7 @@ public sealed partial class SessionView : UserControl
         Bindings.Update();
         ShowWords();
         ConversationScroll.ChangeView(null, 0, null, disableAnimation: true);
+        TakeFocus();
     }
 
     void Attach()
@@ -100,6 +101,7 @@ public sealed partial class SessionView : UserControl
         Bindings.Update();
         words = null;
         ShowWords();
+        TakeFocus();
     }
 
     void Detach()
@@ -119,6 +121,40 @@ public sealed partial class SessionView : UserControl
         if (all || e.PropertyName == nameof(SessionCardViewModel.Question)) { SyncQuestion(); }
         if ((all || e.PropertyName == nameof(SessionCardViewModel.AsksText)) && questionView is not null && Card is { } c) { questionView.Heading = c.AsksText; }
         if (all || e.PropertyName == nameof(SessionCardViewModel.StatusTone)) { ShowWords(); }
+        if (e.PropertyName == nameof(SessionCardViewModel.WantsFocus)) { TakeFocus(); }
+    }
+
+    // Opened from Needs you (SessionCardViewModel.WantsFocus): keyboard focus into the question, or
+    // the reply box when there is none, so the next Tab is in the session and not back in the lane.
+    // Tried again after each layout pass until it lands, as the pane may still be hidden in one
+    // column, and cleared only then (it was once cleared by a row the list had hidden).
+    bool focusPending;
+    void TakeFocus()
+    {
+        if (!attached || Card is not { WantsFocus: true } c) { return; }
+        var target = (questionView is not null ? FocusManager.FindFirstFocusableElement(questionView) as Control : null) ?? ReplyBox;
+        if (target.Focus(FocusState.Keyboard))
+        {
+            c.WantsFocus = false;
+            target.StartBringIntoView();
+            if (focusPending) { focusPending = false; LayoutUpdated -= OnFocusLayout; }
+        }
+        else if (!focusPending)
+        {
+            focusPending = true;
+            LayoutUpdated += OnFocusLayout;
+        }
+    }
+
+    void OnFocusLayout(object? sender, object e)
+    {
+        if (!attached || Card is not { WantsFocus: true })
+        {
+            focusPending = false;
+            LayoutUpdated -= OnFocusLayout;
+            return;
+        }
+        TakeFocus();
     }
 
     void ShowWords()

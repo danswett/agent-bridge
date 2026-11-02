@@ -104,7 +104,7 @@ public sealed partial class SessionRow : UserControl
         var all = string.IsNullOrEmpty(e.PropertyName);
         if (all || e.PropertyName == nameof(SessionCardViewModel.StatusTone)) { ShowWords(); }
         if (all || e.PropertyName is nameof(SessionCardViewModel.RowLabel) or nameof(SessionCardViewModel.Unread)) { NameRow(); }
-        if (e.PropertyName == nameof(SessionCardViewModel.WantsFocus)) { TakeFocus(); }
+        if (e.PropertyName == nameof(SessionCardViewModel.WantsRowFocus)) { TakeFocus(); }
     }
 
     // The row read aloud (§9), on the list item that has focus, not only on this control.
@@ -138,11 +138,11 @@ public sealed partial class SessionRow : UserControl
     // list item takes focus back there, so the next Alt+Up/Down moves the same row.
     void TakeFocus()
     {
-        if (Card is not { WantsFocus: true } c) { return; }
+        if (Card is not { WantsRowFocus: true } c) { return; }
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (!c.WantsFocus || Card != c || !IsLoaded) { return; }
-            c.WantsFocus = false;
+            if (!c.WantsRowFocus || Card != c || !IsLoaded) { return; }
+            c.WantsRowFocus = false;
             if (Container is { } item)
             {
                 item.Focus(FocusState.Keyboard);
@@ -170,15 +170,15 @@ public sealed partial class SessionRow : UserControl
     internal void MoveBy(int delta)
     {
         if (Card is not { Row: { } row } c) { return; }
-        c.WantsFocus = true;
-        if (!(delta < 0 ? row.MoveUp() : row.MoveDown())) { c.WantsFocus = false; return; }
+        c.WantsRowFocus = true;
+        if (!(delta < 0 ? row.MoveUp() : row.MoveDown())) { c.WantsRowFocus = false; return; }
         Say(delta < 0 ? "Moved up" : "Moved down");
     }
 
     void OnPin(object sender, RoutedEventArgs e)
     {
         if (Card is not { Row: { } row } c) { return; }
-        c.WantsFocus = true;
+        c.WantsRowFocus = true;
         var pinning = !c.Pinned;
         row.TogglePin();
         Say(pinning ? "Pinned" : "Unpinned");

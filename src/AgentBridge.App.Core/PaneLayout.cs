@@ -27,6 +27,7 @@ public sealed class PaneLayoutViewModel : Observable
     {
         this.main = main;
         main.PropertyChanged += OnMain;
+        main.OpenRequested += OnOpened;
         Watch(main.Selected);
         SyncHistory();
     }
@@ -100,6 +101,12 @@ public sealed class PaneLayoutViewModel : Observable
 
     public void Back() => main.Selected = null;
 
+    // A session opened to be answered (Needs you, a toast, the tray, search) shows its question:
+    // Tools or Delegates picked before would hide it. A row chosen, or a resize, keeps the tab.
+    void OnOpened(SessionCardViewModel card)
+    {
+        if (card.Question is not null && card == main.Selected) { Tab = SessionTab.Conversation; }
+    }
     void OnMain(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is not (nameof(MainViewModel.Selected) or "" or null)) { return; }
