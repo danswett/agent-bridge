@@ -484,7 +484,11 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
   position: absolute; right: 8px; top: 48px; z-index: 5; min-width: 168px;
   display: grid; padding: 4px; background: var(--ab-card); border: 1px solid var(--ab-stroke2);
   border-radius: 8px; box-shadow: 0 8px 24px var(--ab-shadow);
+  scroll-margin-bottom: calc(var(--tabbar) + env(safe-area-inset-bottom) + var(--ab-space-2));
 }
+@media (min-width: 760px) { .row-menu { scroll-margin-bottom: var(--ab-space-2); } }
+/* Above its row, where below would be under the bottom navigation. */
+.row-menu.up { top: auto; bottom: calc(100% - var(--ab-space-1)); }
 .row-menu-item {
   min-height: var(--tap); padding: 0 12px; text-align: left; font: inherit; color: var(--ab-text);
   background: none; border: 0; border-radius: 4px; cursor: pointer;

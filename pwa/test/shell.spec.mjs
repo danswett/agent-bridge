@@ -97,6 +97,42 @@ test('Ctrl+K focuses search, which narrows the list to the sessions that match, 
   await expect(page.locator('#sessions-empty')).toBeHidden();
 });
 
+test('a machine renamed while a search is open brings its sessions into the results at once', async ({ page }) => {
+  await openDemo(page);
+  await page.keyboard.press('Control+k');
+  await page.keyboard.type('workstation');
+  await expect(page.locator('.session')).toHaveCount(0);
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const link = d.hosts.link('demo');
+    link.machine = { ...link.machine, name: 'Workstation' };
+    d.page.refresh();
+  });
+  await expect(page.locator('.session')).toHaveCount(4);
+});
+
+test('a page retired with its account no longer answers the routes', async ({ page }) => {
+  await openDemo(page);
+  // A relay that stops accepting the sign-in retires the page (clear()); the next sign-in in the
+  // same tab makes a new one, and the old must not go on drawing into the shared list.
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.evaluate(() => {
+    const { view, launchPanel } = window.agentBridgeDemo.page;
+    window.agentBridgeDemo.page.clear();
+    window.__heard = 0;
+    for (const [o, f] of [[view, 'schedule'], [launchPanel, 'setOpen']]) {
+      const was = o[f].bind(o);
+      o[f] = (...a) => { window.__heard += 1; return was(...a); };
+    }
+  });
+  await go(page, 'machines');
+  await go(page, 'sessions');
+  await page.waitForTimeout(200);
+  expect(await page.evaluate(() => window.__heard)).toBe(0);
+  expect(errors).toEqual([]);
+});
+
 test('a reply being written outlives a search that hides its session, with its text when search lets it back', async ({ page }) => {
   await openDemo(page);
   const input = page.locator(`.session[data-id="${IDLE}"] form.reply`).getByRole('textbox', { name: 'Reply' });

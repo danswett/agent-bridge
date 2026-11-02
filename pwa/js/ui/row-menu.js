@@ -37,6 +37,14 @@ export class RowMenu {
     const outside = (e) => { if (!el.contains(e.target)) { this.close(false); } };
     document.addEventListener('pointerdown', outside, true);
     this.#off = () => document.removeEventListener('pointerdown', outside, true);
+    // A row near the foot of a phone's list would put its menu under the bottom navigation, where
+    // a tap on Pin lands on the bar instead: it opens upward where there is room above.
+    const r = el.getBoundingClientRect();
+    const bar = document.getElementById('nav');
+    const fixed = bar && !bar.hidden && getComputedStyle(bar).position === 'fixed';
+    const floor = fixed ? bar.getBoundingClientRect().top : window.innerHeight;
+    if (r.bottom > floor && anchor.getBoundingClientRect().top - r.height > 0) { el.classList.add('up'); }
+    el.scrollIntoView?.({ block: 'nearest' });
     (buttons.find((b) => !b.disabled) ?? el).focus?.();
   }
 

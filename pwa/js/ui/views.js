@@ -359,6 +359,8 @@ export class SessionListView {
   // A machine's name, or whether cards name their machine, may have changed.
   refreshMachines() {
     for (const c of this.#cards.values()) { const m = this.machine(c.hostId); c.setMachine(m.name, m.show); }
+    // Search matches machine names too: a renamed machine's sessions come into it or leave it.
+    if (this.filter) { this.schedule(); }
   }
 
   // Whether search is hiding a card: it exists, and is not in the list.

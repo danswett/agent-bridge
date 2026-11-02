@@ -270,6 +270,23 @@ test.describe('on a phone', () => {
     await expect(card(page, CODEX).getByRole('menu')).toHaveCount(0);
   });
 
+  test('a row menu by the bottom navigation opens above its row, clear of the bar, and Pin is pressed there', async ({ page }) => {
+    await openDemo(page);
+    const fold = card(page, DELEGATING).locator('.fold');
+    // The last row's title just above the bar, where a menu below it would be under the bar.
+    await fold.evaluate((el) => { window.scrollBy(0, el.getBoundingClientRect().bottom - document.getElementById('nav').getBoundingClientRect().top + 4); });
+    const barTop = await page.locator('#nav').evaluate((el) => el.getBoundingClientRect().top);
+    expect((await fold.boundingBox()).y + (await fold.boundingBox()).height).toBeLessThanOrEqual(barTop);
+    await longPress(page, DELEGATING);
+    const menu = card(page, DELEGATING).getByRole('menu');
+    await expect(menu.getByRole('menuitem', { name: 'Pin' })).toBeVisible();
+    const box = await menu.boundingBox();
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(barTop);
+    await menu.getByRole('menuitem', { name: 'Pin' }).tap();
+    await expect.poll(() => order(page)).toEqual([DELEGATING, COPILOT, CLAUDE, CODEX]);
+  });
+
   test('the sort menu sits in the sessions header without crowding it', async ({ page }) => {
     await openDemo(page);
     const head = await page.locator('.sessions-head').boundingBox();

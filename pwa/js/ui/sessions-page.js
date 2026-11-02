@@ -56,6 +56,7 @@ export class SessionsPage {
   // The machine last launched on or picked to launch on: kept here, and on the device as far as
   // its storage allows, so a picker never depends on a write that may fail.
   #launchHost = null;
+  #unroute = null;
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
@@ -120,7 +121,9 @@ export class SessionsPage {
       // Search narrows the sessions list; the launch page's panel is open while it shows, and
       // asks its machine again each time it opens.
       shell.onSearch((q) => this.view.setFilter(q));
-      shell.onRoute(({ route }) => {
+      // Kept, so a page retired with its account (clear()) stops answering routes: a second
+      // sign-in in the same tab would otherwise have two pages rendering into one list.
+      this.#unroute = shell.onRoute(({ route }) => {
         this.launchPanel.setOpen(route === 'launch');
         // Back on Sessions, what it shows is seen now.
         if (route === 'sessions') { this.view.schedule(); }
@@ -164,6 +167,8 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    this.#unroute?.();
+    this.#unroute = null;
     this.answers.clear();
     this.replies.clear();
     this.stops.clear();
