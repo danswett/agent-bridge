@@ -77,6 +77,7 @@ public sealed class HaAuthGuard
     readonly List<Func<State, bool>> pending = [];
     readonly Func<State, bool> markLost;
     bool lostSaid;
+    DateTimeOffset? lostAt;
     // What the record said when this process last read or wrote it.
     string? readText;
     // The record was read again, with whatever another process recorded: what Problem says may have
@@ -91,7 +92,9 @@ public sealed class HaAuthGuard
         this.log = log ?? (_ => { });
         markLost = s =>
         {
-            s.Lost ??= this.time.GetUtcNow();
+            // One time for the loss, however often it is applied before it can be written: leases
+            // let go after it compare against it (Seen.Lost).
+            s.Lost ??= lostAt ??= this.time.GetUtcNow();
             return true;
         };
         lock (gate) { Refresh(); }
@@ -724,6 +727,10 @@ public sealed class HaAuthGuard
             return null;
         }
         if (!pending.Contains(markLost)) { pending.Add(markLost); }
+        // Nothing of what came before stands, here either, even if the record cannot be set aside
+        // or replaced: another process may have stopped a token this one still knew as accepted.
+        state = new State();
+        markLost(state);
         // Copied, not moved: the corrupt record stays where it is until the record of its loss
         // replaces it, so a write that fails, or a process that ends, still finds it and holds.
         try { File.Copy(path!, path + CorruptSuffix, overwrite: true); }

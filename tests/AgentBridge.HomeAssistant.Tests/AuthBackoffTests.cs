@@ -264,6 +264,21 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(HaAuthKind.RecordLost, Assert.IsType<HomeAssistantAuthException>(await Publish(serve)).Kind);
     }
 
+    // Nor when the corrupt record cannot even be set aside: what this process knew before is gone
+    // with it, accepted tokens included.
+    [Fact]
+    public async Task A_corrupt_record_that_cannot_be_set_aside_holds_a_token_this_process_knew_as_accepted()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var serve = Client(ha, new HaAuthGuard(Record, time));
+        Assert.Null(await Publish(serve));
+        File.WriteAllBytes(Record, new byte[64]);
+        Directory.CreateDirectory(Record + HaAuthGuard.CorruptSuffix);
+
+        Assert.False(Assert.IsType<HomeAssistantAuthException>(await Publish(serve)).Sent);
+        Assert.Single(ha.Seen);
+    }
+
     // A request let go before the record was lost and answered after: its answer says nothing the
     // lost record could still be held to, so it does not make the token accepted.
     [Fact]
