@@ -7,6 +7,7 @@ let package = Package(
     products: [.library(name: "AgentBridgeAppleCore", targets: ["AgentBridgeAppleCore"])],
     targets: [
         .target(name: "AgentBridgeAppleCore"),
-        .testTarget(name: "AgentBridgeAppleCoreTests", dependencies: ["AgentBridgeAppleCore"]),
+        .testTarget(name: "AgentBridgeAppleCoreTests", dependencies: ["AgentBridgeAppleCore"],
+                    resources: [.copy("Resources/noise-xx-p256-vectors.json")]),
     ]
 )
