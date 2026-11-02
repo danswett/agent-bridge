@@ -34,7 +34,9 @@ the connected host offers them, such as a capable remote Windows host.
   state, recently ended sessions, Markdown, reasoning, recent tools and delegates.
 - Structured questions/approvals, replies and two-step stop. An uncertain action
   remains bound to its original UUID and host process; reconnect never silently
-  sends a fresh press.
+  sends a fresh press. A delivered reply removes only its sent prefix from the
+  saved draft once, preserving text appended while delivery was pending. Question
+  answers have separate editor state.
 - Files, PhotosPicker and Mac image paste, resizing when needed, removable staged
   attachments, bounded chunk uploads and encrypted blob uploads up to host limits.
 - Host-provided launch/resume choices, signed full-disclosure folder-trust answers,
