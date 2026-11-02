@@ -8,6 +8,9 @@ The workbench supports local Mac sockets and remote machines through the same
 GitHub device sign-in, relay proof and Noise XX protocol used by Windows and the
 PWA. Tokens and per-account device identities stay in Keychain. Remote session
 JSON, attachment keys and signed commands travel inside authenticated channels.
+Device sign-in polling observes a monotonic expiry deadline, including responses
+that arrive after expiry, and rejects redirects and responses over 16 KiB. Tests
+use private URL-loading fixtures and a controlled clock without contacting a relay.
 
 Implemented client workflows include:
 
