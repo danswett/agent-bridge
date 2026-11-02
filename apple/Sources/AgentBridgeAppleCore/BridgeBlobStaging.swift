@@ -25,6 +25,7 @@ public enum BridgeBlobStaging {
                 let result = try await Task { try await send(start, min(.seconds(120), remaining)) }.value
                 try Task.checkCancellation()
                 try await validateConnection()
+                try Task.checkCancellation()
                 guard clock.now < deadline else { throw RelayError.timeout }
                 let state = try BridgeAttachmentState(json: result)
                 guard state.received >= received, state.received <= attachment.size,
