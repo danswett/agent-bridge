@@ -270,4 +270,45 @@ public sealed class WordsTests
         Assert.Equal("3d", Words.Duration(t0, t0.AddDays(3)));
         Assert.Equal("due", Words.Until(t0, t0.AddSeconds(1)));
     }
+
+    [Fact]
+    public void A_rows_age_is_its_largest_whole_unit_as_the_mock_ups_read()
+    {
+        var t0 = new DateTimeOffset(2026, 10, 28, 0, 0, 0, TimeSpan.Zero);
+        Assert.Equal("now", Words.Age(t0, t0.AddSeconds(59)));
+        Assert.Equal("now", Words.Age(t0, t0.AddSeconds(-5)));
+        Assert.Equal("32m", Words.Age(t0, t0.AddMinutes(32)));
+        Assert.Equal("10h", Words.Age(t0, t0.AddHours(10).AddMinutes(59)));
+        Assert.Equal("47h", Words.Age(t0, t0.AddHours(47)));
+        Assert.Equal("3d", Words.Age(t0, t0.AddDays(3)));
+    }
+
+    [Fact]
+    public void A_long_path_is_cut_in_the_middle_keeping_its_start_and_end()
+    {
+        var path = @"C:\Users\someone\repos\wt\agent-bridge-u6-app\src\AgentBridge.App\LaunchView.xaml.cs";
+        var cut = Words.Middle(path, 40);
+        Assert.Equal(40, cut.Length);
+        Assert.StartsWith(@"C:\Users\someone\", cut);
+        Assert.EndsWith(@"LaunchView.xaml.cs", cut);
+        Assert.Contains('\u2026', cut);
+        Assert.Equal("short", Words.Middle("short", 40));
+        Assert.Equal("", Words.Middle(null, 40));
+    }
+
+    [Theory]
+    // The head's cut would fall between an emoji's two halves.
+    [InlineData("C:\\\U0001F4C1\\some-long-folder\\file.txt", 9, "C:\\\u2026.txt")]
+    // The tail's.
+    [InlineData("C:\\some-long-folder\\notes-\U0001F4C1.md", 9, "C:\\s\u2026.md")]
+    // Whole on either side of the cut.
+    [InlineData("\U0001F4C1\U0001F4C1-some-long-folder-\U0001F4C1\U0001F4C1", 11, "\U0001F4C1\U0001F4C1-\u2026-\U0001F4C1\U0001F4C1")]
+    public void A_path_cut_in_the_middle_never_keeps_half_a_character(string path, int most, string cut)
+    {
+        var got = Words.Middle(path, most);
+        Assert.Equal(cut, got);
+        Assert.True(got.Length <= most);
+        Assert.DoesNotContain(got.EnumerateRunes(), r => r == System.Text.Rune.ReplacementChar);
+        Assert.True(System.Text.Unicode.Utf8.FromUtf16(got, new byte[got.Length * 3], out _, out _, replaceInvalidSequences: false) == System.Buffers.OperationStatus.Done);
+    }
 }

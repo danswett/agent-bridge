@@ -20,6 +20,10 @@ public sealed class MarkdownView : StackPanel
 
     public MarkdownView() => Spacing = 8;
 
+    // Set in the reading role (docs/design/ui.md §4.3, the generated AbTypeReading): a response in
+    // the conversation, a step larger than the UI around it. Headings and code keep their own sizes.
+    public bool Reading { get; set; }
+
     public string? Markdown
     {
         get => markdown;
@@ -28,6 +32,32 @@ public sealed class MarkdownView : StackPanel
             if (value == markdown) { return; }
             markdown = value;
             Render();
+        }
+    }
+
+    // The reading role's size and line height, taken from its generated style.
+    static T ReadingType<T>(DependencyProperty property) =>
+        (T)((Style)Application.Current.Resources["AbTypeReading"]).Setters.OfType<Setter>().First(s => s.Property == property).Value;
+
+    static void Read(DependencyObject element)
+    {
+        switch (element)
+        {
+            case RichTextBlock rich when rich.ReadLocalValue(RichTextBlock.FontSizeProperty) == DependencyProperty.UnsetValue:
+                rich.FontSize = ReadingType<double>(TextBlock.FontSizeProperty);
+                rich.LineHeight = ReadingType<double>(TextBlock.LineHeightProperty);
+                rich.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
+                break;
+            case Panel panel:
+                foreach (var child in panel.Children) { Read(child); }
+                break;
+            case Border { Child: { } child }:
+                Read(child);
+                break;
+            // A table, in its sideways scroller: the same size as the text around it.
+            case ContentControl { Content: DependencyObject inner }:
+                Read(inner);
+                break;
         }
     }
 
@@ -48,7 +78,12 @@ public sealed class MarkdownView : StackPanel
     {
         Children.Clear();
         if (markdown is null) { return; }
-        foreach (var b in MarkdownModel.Parse(markdown)) { Children.Add(Block(b)); }
+        foreach (var b in MarkdownModel.Parse(markdown))
+        {
+            var element = Block(b);
+            if (Reading) { Read(element); }
+            Children.Add(element);
+        }
     }
 
     UIElement Block(MdBlock block) => block switch

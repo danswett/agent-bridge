@@ -254,9 +254,8 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 - **Ended** holds the sessions a host removed while the client was running: the most
   recently ended first, at most 20, until the client restarts. A machine that goes offline
   or out of view ends nothing.
-- **Unread:** a row whose session updated since the row was last open (an unfolded card in
-  today's layout; the selected row once #179 and #180 land). A session seen for the first
-  time starts read.
+- **Unread:** a row whose session updated since the row was last open: the selected row (an
+  unfolded card in the PWA until #179 lands). A session seen for the first time starts read.
 
 **Row anatomy (two lines):**
 - **Leading:** the status glyph, aligned to line 1.
@@ -305,7 +304,9 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 - **Your messages:** a right-aligned bubble (card fill, platform radius).
 - **Main agent:** a label line ("Main agent", then the age in meta style), then reading
   text. Reasoning is behind a "Show reasoning" disclosure, and is always the main agent's
-  own.
+  own. "Main agent" only where the host says whose the words are (`activity.source`, `own`
+  or a delegate list); otherwise the label is the agent's name ("Claude"), as such a host may
+  send a delegate's words as the response.
 - **Delegate events:** one line each, meta style, with an icon: "Started 3 delegates ·
   26m", "*Read witness shell logic* reported back · 22m". The name links to the delegate.
 - **Questions:** in the stream, as a card in Needs you colours. The header reads "Main agent

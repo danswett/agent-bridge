@@ -31,7 +31,7 @@ public sealed record ToolRow(StatusGlyph Glyph, string Status, string Name, stri
 // status as a glyph and words (docs/design/ui.md §2.2, StatusRules), a header that stays when
 // folded, and below it the question, the response, reasoning, the last message, the reply box,
 // the tool history, the facts and End session.
-public sealed class SessionCardViewModel : Observable
+public sealed partial class SessionCardViewModel : Observable
 {
     static readonly Dictionary<AgentKind, string> AgentNames = new() { [AgentKind.Copilot] = "Copilot", [AgentKind.Claude] = "Claude", [AgentKind.Codex] = "Codex", [AgentKind.Unknown] = "Agent" };
 
@@ -99,11 +99,33 @@ public sealed class SessionCardViewModel : Observable
     public string ToolState => (session.Activity.CurrentTool?.Status ?? ToolStatus.Running).ToString().ToLowerInvariant();
     static StatusGlyph ToolGlyphOf(ToolStatus s) => s switch { ToolStatus.Running => StatusGlyph.Working, ToolStatus.Failed => StatusGlyph.Failed, _ => StatusGlyph.Done };
 
-    public string Response => session.Activity.Response ?? "";
-    public bool HasResponse => !string.IsNullOrEmpty(session.Activity.Response);
-    public bool ResponseTruncated => session.Activity.ResponseTruncated == true && HasResponse;
-    public string Reasoning => session.Activity.Reasoning ?? "";
-    public bool HasReasoning => ctx.ShowDetail() && !string.IsNullOrEmpty(session.Activity.Reasoning);
+    // The main agent's own words, which the session pane labels "Main agent" (§6.4). The top-level
+    // text is whoever wrote last: where activity.source names a delegate for it, activity.own
+    // carries the main agent's, and own's stands in when the top-level text is absent
+    // (docs/design/subagents.md, "New clients"). A delegate's words are U8's (#176).
+    bool ResponseByDelegate => !string.IsNullOrEmpty(session.Activity.Source?.Response) || string.IsNullOrEmpty(session.Activity.Response);
+    // Whether the host says whose the words are (pwa/js/attribution.js): source, own or a delegate
+    // list. A host that doesn't (Claude and Codex until #84's later slices, an older host on another
+    // machine) may send a delegate's words as the top-level response (v1-sessions.md), so they are
+    // labelled with the agent's name, never "Main agent": a delegate's text, after reading something
+    // untrusted, must not pass as the main agent's.
+    public bool Attributed => session.Activity.Source is not null || session.Activity.Own is not null || session.Subagents is not null || session.SubagentsMore > 0;
+    public string Speaker => Attributed ? "Main agent" : AgentName;
+    public string Response => (ResponseByDelegate ? session.Activity.Own?.Response : session.Activity.Response) ?? "";
+    public bool HasResponse => Response.Length > 0;
+    public bool ResponseTruncated => (ResponseByDelegate ? session.Activity.Own?.ResponseTruncated : session.Activity.ResponseTruncated) == true && HasResponse;
+    // The main agent had a response, but the session budget left it out to make room for its
+    // delegates (own.response dropped, own.responseTruncated kept): said so, rather than looking
+    // like no answer, and never filled with the delegate's text.
+    public bool ResponseDropped => ResponseByDelegate && !HasResponse && session.Activity.Own?.ResponseTruncated == true;
+    // The label line shows for the main agent's words, or for the note that they were left out.
+    public bool HasVoice => HasResponse || ResponseDropped;
+    // When the main agent last wrote what is shown: own.at for its own text beside a delegate's,
+    // which moves the session's updatedAt without touching the main agent's answer; else the
+    // session's age, as on its row.
+    public string ResponseAgeText => ResponseByDelegate && session.Activity.Own?.At is { } at ? Words.Age(at, ctx.Time.GetUtcNow()) : AgeText;
+    public string Reasoning => (!string.IsNullOrEmpty(session.Activity.Source?.Reasoning) ? session.Activity.Own?.Reasoning : session.Activity.Reasoning ?? session.Activity.Own?.Reasoning) ?? "";
+    public bool HasReasoning => ctx.ShowDetail() && Reasoning.Length > 0;
     public string UserMessage => session.Activity.UserMessage ?? "";
     public bool HasUserMessage => !string.IsNullOrEmpty(session.Activity.UserMessage);
     public bool ShowHistory => ctx.ShowDetail();
@@ -166,13 +188,28 @@ public sealed class SessionCardViewModel : Observable
     bool pinned;
     bool unread;
     bool wantsFocus;
+    bool wantsRowFocus;
     public string? GroupHeader { get => groupHeader; internal set { if (Set(ref groupHeader, value)) { Raise(nameof(HasGroupHeader)); } } }
     public bool HasGroupHeader => groupHeader is not null;
     public bool Pinned { get => pinned; internal set => Set(ref pinned, value); }
-    public bool Unread { get => unread; internal set => Set(ref unread, value); }
+    public bool Unread
+    {
+        get => unread;
+        internal set
+        {
+            if (!Set(ref unread, value)) { return; }
+            Raise(nameof(ShowAge));
+            Raise(nameof(RowLabel));
+        }
+    }
     public RowActions? Row { get; internal set; }
-    // A keyboard move: the card's title takes focus again once it is drawn in its new place.
+    // Opened to be answered (Needs you): keyboard focus goes into the session, so the next Tab is
+    // in its question, not back in the lane. The session pane takes it, and clears it once it has.
     public bool WantsFocus { get => wantsFocus; set => Set(ref wantsFocus, value); }
+    // A keyboard or menu move, or a drag: the row's list item takes focus again once it is drawn in
+    // its new place, so the next Alt+Up/Down moves the same row. Apart from WantsFocus: below 760 px
+    // the list is hidden while a session is open, and focusing a row there went nowhere.
+    public bool WantsRowFocus { get => wantsRowFocus; set => Set(ref wantsRowFocus, value); }
 
     public void Update(Session next)
     {
@@ -282,8 +319,12 @@ public sealed class SessionCardViewModel : Observable
         // Idle needs no clock; delegating does, since it is waiting on something.
         SinceText = View == "idle" ? "" : $"for {Words.Duration(session.StatusSince, now)}";
         UpdatedText = $"updated {Words.Ago(session.UpdatedAt, now)}";
+        AgeText = Words.Age(session.UpdatedAt, now);
         Raise(nameof(SinceText));
         Raise(nameof(UpdatedText));
+        Raise(nameof(AgeText));
+        Raise(nameof(ResponseAgeText));
+        SyncDetails();
     }
 
     // The tool history, from session.get, newest first.

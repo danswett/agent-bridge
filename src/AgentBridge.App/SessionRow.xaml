@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="AgentBridge.App.SessionRow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AgentBridge.App">
+    <!-- One row of the session list (docs/design/ui.md §6.1): the glyph aligned with line 1; the
+         title, semibold only for unread activity, with the 6 px Bridge dot or the age trailing; and
+         line 2, at most two facts on one line, so no separator ever starts a line (#214). Its menu
+         (right-click, press and hold, Shift+F10), Alt+Up/Down and a drag by the grip that shows on
+         hover move and pin it (#164). -->
+    <Grid
+        x:Name="RowRoot"
+        Padding="8,10,12,10"
+        ColumnSpacing="12"
+        Background="Transparent"
+        AllowDrop="True"
+        DragOver="OnDragOver"
+        Drop="OnDrop"
+        PointerEntered="OnPointerEntered"
+        PointerExited="OnPointerExited">
+        <VisualStateManager.VisualStateGroups>
+            <!-- The status words' colour (ui.md §2.2, §3): needs' text for a question, agent's text while
+                 an agent drives, else secondary text, as meta is. ThemeResources, entered again on a
+                 theme change, so the words follow it; never active or neutral, which are glyph colours. -->
+            <VisualStateGroup x:Name="Words">
+                <VisualState x:Name="WordsUnset" />
+                <VisualState x:Name="WordsPlain">
+                    <VisualState.Setters>
+                        <Setter Target="StatusWords.Foreground" Value="{ThemeResource AbText2}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WordsNeeds">
+                    <VisualState.Setters>
+                        <Setter Target="StatusWords.Foreground" Value="{ThemeResource AbNeedsText}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WordsAgent">
+                    <VisualState.Setters>
+                        <Setter Target="StatusWords.Foreground" Value="{ThemeResource AbAgentText}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WordsMuted">
+                    <VisualState.Setters>
+                        <Setter Target="StatusWords.Foreground" Value="{ThemeResource AbText2}" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="16" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <Grid.ContextFlyout>
+            <MenuFlyout x:Name="RowMenu" Opening="OnRowMenuOpening">
+                <MenuFlyoutItem x:Name="MoveUpItem" Text="Move up" Click="OnMoveUp" AutomationProperties.AutomationId="MoveUp" />
+                <MenuFlyoutItem x:Name="MoveDownItem" Text="Move down" Click="OnMoveDown" AutomationProperties.AutomationId="MoveDown" />
+                <MenuFlyoutItem x:Name="PinItem" Text="Pin" Click="OnPin" AutomationProperties.AutomationId="Pin" />
+            </MenuFlyout>
+        </Grid.ContextFlyout>
+
+        <!-- "Pinned" and "Sessions" over each group, once anything is pinned (#164). Here, not in the
+             list's item template: a template's x:Bind kept listening to a card after its control went. -->
+        <TextBlock
+            Grid.ColumnSpan="3"
+            Margin="0,4,0,10"
+            Style="{StaticResource AbTypeSectionHeader}"
+            Foreground="{ThemeResource AbText2}"
+            AutomationProperties.HeadingLevel="Level3"
+            Text="{x:Bind Card.GroupHeader, Mode=OneWay}"
+            Visibility="{x:Bind local:Ui.Show(Card.HasGroupHeader), Mode=OneWay}" />
+
+        <!-- Line 1's height is 20: the 16 px glyph sits 2 px down, on the line, not on the row's centre. -->
+        <local:StatusGlyphView
+            Grid.Row="1"
+            Margin="0,2,0,0"
+            VerticalAlignment="Top"
+            AutomationProperties.AutomationId="StatusGlyph"
+            Size="16"
+            Glyph="{x:Bind Card.Glyph, Mode=OneWay}"
+            Driven="{x:Bind Card.Driven, Mode=OneWay}"
+            Label="{x:Bind Card.GlyphLabel, Mode=OneWay}" />
+        <TextBlock
+            Grid.Row="1"
+            Grid.Column="1"
+            Style="{StaticResource AbTypeRow}"
+            TextTrimming="CharacterEllipsis"
+            TextWrapping="NoWrap"
+            AutomationProperties.AutomationId="RowTitle"
+            FontWeight="{x:Bind local:SessionRow.Weight(Card.Unread), Mode=OneWay}"
+            Text="{x:Bind Card.Title, Mode=OneWay}" />
+        <!-- The same line height as the title, so the two share line 1's baseline. -->
+        <Grid Grid.Row="1" Grid.Column="2" Height="20">
+            <Ellipse
+                Width="6"
+                Height="6"
+                VerticalAlignment="Center"
+                Fill="{ThemeResource AbBridge}"
+                AutomationProperties.AutomationId="Unread"
+                Visibility="{x:Bind local:Ui.Show(Card.Unread), Mode=OneWay}" />
+            <TextBlock
+                Style="{StaticResource AbTypeMeta}"
+                LineHeight="20"
+                Foreground="{ThemeResource AbText2}"
+                AutomationProperties.AutomationId="Age"
+                Text="{x:Bind Card.AgeText, Mode=OneWay}"
+                Visibility="{x:Bind local:Ui.Show(Card.ShowAge), Mode=OneWay}" />
+        </Grid>
+
+        <!-- Line 2: what the session does, in its tone, then where. One line, cut at the end. -->
+        <TextBlock
+            Grid.Row="2"
+            Grid.Column="1"
+            Grid.ColumnSpan="2"
+            Style="{StaticResource AbTypeMeta}"
+            Foreground="{ThemeResource AbText2}"
+            TextTrimming="CharacterEllipsis"
+            TextWrapping="NoWrap"
+            AutomationProperties.AutomationId="RowFacts">
+            <Run x:Name="StatusWords" Text="{x:Bind Card.RowStatus, Mode=OneWay}" /><Run Text="{x:Bind local:SessionRow.Separator(Card.RowPlace), Mode=OneWay}" /><Run Text="{x:Bind Card.RowPlace, Mode=OneWay}" />
+        </TextBlock>
+
+        <!-- A grip to drag the row to another place, shown while the pointer is over it, in Your
+             order (#164). A mouse affordance: the keyboard and touch have Alt+Up/Down and the menu. -->
+        <FontIcon
+            x:Name="Grip"
+            Grid.Row="1"
+            Grid.RowSpan="2"
+            Margin="-10,0,0,0"
+            Glyph="&#xE784;"
+            FontSize="12"
+            Width="12"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Center"
+            Opacity="0"
+            CanDrag="True"
+            DragStarting="OnGripDragStarting"
+            DropCompleted="OnGripDropCompleted"
+            Foreground="{ThemeResource AbText2}"
+            ToolTipService.ToolTip="Drag to move"
+            AutomationProperties.AccessibilityView="Raw" />
+    </Grid>
+</UserControl>

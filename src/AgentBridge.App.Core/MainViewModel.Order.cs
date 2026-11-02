@@ -57,7 +57,7 @@ public sealed partial class MainViewModel
     {
         if (!Order.Place(dragged, KeyOf(target), after)) { return false; }
         // The dragged card keeps focus, as after a keyboard or menu move, so the next Alt+Up/Down moves it.
-        if (byId.TryGetValue(dragged, out var moved)) { moved.WantsFocus = true; }
+        if (byId.TryGetValue(dragged, out var moved)) { moved.WantsRowFocus = true; }
         Rearrange(chosen: true);
         return true;
     }
@@ -65,15 +65,9 @@ public sealed partial class MainViewModel
     void Hook(SessionCardViewModel card)
     {
         card.Row = new RowActions(this, card);
-        // Opened, its news has been seen.
+        // Its question asked, answered or rebuilt for new capabilities (Settings too): the lane follows.
         card.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName == nameof(SessionCardViewModel.Folded) && !card.Folded && owner.ContainsKey(card))
-            {
-                Order.MarkSeen(KeyOf(card), card.Session.UpdatedAt);
-                card.Unread = false;
-            }
-            // Its question asked, answered or rebuilt for new capabilities (Settings too): the lane follows.
             if (e.PropertyName == nameof(SessionCardViewModel.Question) && owner.ContainsKey(card)) { SyncNeedsYou(); }
         };
     }
@@ -101,7 +95,8 @@ public sealed partial class MainViewModel
         {
             c.Pinned = pins.Contains(c);
             var key = KeyOf(c);
-            if (!c.Folded) { Order.MarkSeen(key, c.Session.UpdatedAt); }
+            // The row open in the session pane sees its news as it comes (ui.md §6.1, Unread).
+            if (c == open) { Order.MarkSeen(key, c.Session.UpdatedAt); }
             c.Unread = Order.Unread(key, c.Session.UpdatedAt);
         }
         // Headings by the order on screen, which a held update leaves as it was.
