@@ -57,8 +57,8 @@ public sealed class DemoHost : IAsyncDisposable
 
     public int Count { get { lock (gate) { return sessions.Count; } } }
 
-    // The protocol's example sessions, and two more: a question answered with one click and a
-    // Copilot permission prompt, so every kind of card is on screen.
+    // The protocol's example sessions, and three more: a question answered with one click, a
+    // Copilot permission prompt, and a main agent with delegates, so every kind of card is on screen.
     public static IReadOnlyList<Session> Examples()
     {
         using var stream = typeof(DemoHost).Assembly.GetManifestResourceStream("AgentBridge.App.Core.sessions-list.json")
@@ -106,7 +106,72 @@ public sealed class DemoHost : IAsyncDisposable
                 Fields = [new Field { Name = "answer", Type = FieldType.Choice, AllowOther = true, Options = [new Option("pg", "PostgreSQL (Recommended)"), new Option("sqlite", "SQLite")] }],
             },
         });
+        shifted.Add(Delegating(now));
         return shifted;
+    }
+
+    // A main agent that started two background delegates and went idle (pwa/js/demo.js,
+    // demoDelegating): one running with a nested task under it and a finished one, one running a
+    // command, and a task that failed. The top-level response and reasoning are the delegates'
+    // (source names them); the main agent's own are in own. For the strip, the Delegates tab and
+    // the inspector (ui.md §6.3), in the self-test too.
+    public static Session Delegating(DateTimeOffset now) => new()
+    {
+        Id = "demo-delegates",
+        Agent = AgentKind.Copilot,
+        Title = "Fix RestartAfterResume",
+        Repository = "danswett/agent-bridge",
+        Branch = "fix/restart-after-resume",
+        Model = "claude-opus-5.5",
+        Status = SessionStatus.Idle,
+        StatusSince = now.AddMinutes(-17),
+        StartedAt = now.AddMinutes(-20),
+        UpdatedAt = now.AddSeconds(-30),
+        Activity = new Activity
+        {
+            Response = "Bisecting over the last 10 commits: 4 left to try.",
+            Reasoning = "Check CI before saying so.",
+            UserMessage = "Run the suite and check the witness logic, both in the background.",
+            TurnCount = 1,
+            Background = Background.Of(2, 1),
+            Source = new ActivitySource { Response = "demo-agent-suite", Reasoning = "demo-agent-witness" },
+            Own = new OwnActivity { Response = "Started 2 background agents: one runs the full suite, one reads the witness logic. I'll report back when both are done.", Reasoning = "Two independent jobs: delegate both.", At = now.AddMinutes(-17) },
+        },
+        Subagents =
+        [
+            new Subagent { Id = "demo-agent-witness", Kind = SubagentKind.Background, Name = "Read witness shell logic", Task = "Read the witness's shell logic and check it follows the latest reply of a turn.", Model = "gpt-5.6-luna", Status = SubagentStatus.Working, StartedAt = now.AddMinutes(-17), Line = "Check CI before saying so.", CurrentTool = new ToolCall { Id = "demo-t1", Name = "powershell", Summary = "Watch the checks", Status = ToolStatus.Running, StartedAt = now.AddSeconds(-40) } },
+            new Subagent { Id = "demo-agent-suite", Kind = SubagentKind.Background, Name = "Run full test suite", Task = "Run the full test suite on HEAD and report any failure with its first error line.", Model = "claude-haiku-5.5", Status = SubagentStatus.Working, StartedAt = now.AddMinutes(-16.9), Line = "Bisecting over the last 10 commits: 4 left to try.", Shells = 1 },
+            new Subagent { Id = "demo-agent-grep", Parent = "demo-agent-witness", Kind = SubagentKind.Task, Name = "Find the timer reset", Model = "gpt-5.6-luna", Status = SubagentStatus.Working, StartedAt = now.AddMinutes(-2), Line = "Two candidates in RestartWitness.cs." },
+            new Subagent { Id = "demo-agent-review", Parent = "demo-agent-witness", Kind = SubagentKind.Task, Name = "Review the witness change", Model = "gpt-5.6-luna", Status = SubagentStatus.Ended, Outcome = SubagentOutcome.Done, StartedAt = now.AddMinutes(-12), EndedAt = now.AddMinutes(-11), Line = "No regressions: the flag now follows the latest reply." },
+            new Subagent { Id = "demo-agent-lint", Kind = SubagentKind.Task, Name = "Lint the PWA", Model = "claude-haiku-5.5", Status = SubagentStatus.Ended, Outcome = SubagentOutcome.Failed, StartedAt = now.AddMinutes(-15), EndedAt = now.AddMinutes(-14), Line = "eslint could not start: no config found." },
+        ],
+    };
+
+    // What the demo's delegates said in full, beyond the latest line a list carries.
+    static readonly Dictionary<string, (string Response, string? Reasoning)> DelegateWords = new(StringComparer.Ordinal)
+    {
+        ["demo-agent-suite"] = ("The suite fails on HEAD: **RestartAfterResume** times out.\n\nBisecting over the last 10 commits: 4 left to try.", "A timing failure that only shows after a resume. Bisect first, then read the timer."),
+        ["demo-agent-witness"] = ("The witness follows the first reply of a turn, not the latest. That is why it misses a resume.", "Check CI before saying so."),
+    };
+
+    // session.get { id, agent }: the delegate's entry with its own words, as a host since sub-agents
+    // sends it, or missing when the session lists no such delegate.
+    static object DelegateDetail(Session s, string agent, DateTimeOffset now)
+    {
+        if (s.Subagents?.FirstOrDefault(a => a.Id == agent) is not { } entry) { return new { missing = true }; }
+        var (response, reasoning) = DelegateWords.GetValueOrDefault(agent, (entry.Line ?? "", null));
+        var start = entry.StartedAt ?? now;
+        return entry with
+        {
+            Response = response,
+            Reasoning = reasoning,
+            History =
+            [
+                new ToolCall { Id = $"{agent}-1", Name = "view", Summary = "src/AgentBridge.Host/RestartWitness.cs", Status = ToolStatus.Done, StartedAt = start.AddSeconds(5), EndedAt = start.AddSeconds(9) },
+                new ToolCall { Id = $"{agent}-2", Name = "powershell", Summary = "dotnet test --filter RestartAfterResume", Status = ToolStatus.Failed, StartedAt = start.AddSeconds(20), EndedAt = start.AddSeconds(262) },
+                .. entry.CurrentTool is { } current ? [current] : Array.Empty<ToolCall>(),
+            ],
+        };
     }
 
     Task<object?> HandleAsync(IProtocolChannel ch, string op, JsonElement data)
@@ -144,6 +209,7 @@ public sealed class DemoHost : IAsyncDisposable
                     lock (gate)
                     {
                         if (!sessions.TryGetValue(id, out var s)) { return Done(new { missing = true }); }
+                        if (data.TryGetProperty("agent", out var agent) && agent.GetString() is { } a) { return Done(DelegateDetail(s, a, now)); }
                         return Done(s with { Activity = s.Activity with { History = History(now) } });
                     }
                 }
@@ -307,7 +373,8 @@ public sealed class DemoHost : IAsyncDisposable
         {
             await Task.Delay(3000);
             var done = DateTimeOffset.UtcNow;
-            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.", TurnCount = (next.Activity.TurnCount ?? 0) + 1 } });
+            // The main agent wrote last: the top-level text is its own again.
+            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.", TurnCount = (next.Activity.TurnCount ?? 0) + 1, Reasoning = null, Source = null, Own = null } });
         }
     }
 

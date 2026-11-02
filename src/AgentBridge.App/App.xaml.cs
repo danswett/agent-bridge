@@ -121,6 +121,8 @@ public partial class App : Application
                     try { return await conn.CallAsync<Session>(Ops.SessionGet, new { id }, TimeSpan.FromSeconds(15)); }
                     catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or JsonException) { return null; }
                 },
+                FetchDelegate = (id, agent) => Attribution.FetchDelegateAsync(conn, id, agent),
+                Ui = ui,
             };
             var planner = new ToastPlanner(sink)
             {

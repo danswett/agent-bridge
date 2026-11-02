@@ -5,10 +5,35 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:AgentBridge.App"
     xmlns:core="using:AgentBridge.App.Core">
-    <!-- The session pane (docs/design/ui.md §6.2, §6.4, §6.5): the header with one meta line and its
-         actions; Conversation, Delegates and Tools tabs where there is no inspector; the
-         conversation at the reading measure; and the reply box. Status is the glyph and its words,
+    <!-- The session pane (docs/design/ui.md §6.2, §6.3, §6.4, §6.5): the header with one meta line and
+         its actions; its delegates' strip at three panes, or Conversation, Delegates and Tools tabs
+         where there is no inspector; the conversation at the reading measure, the main agent's own
+         words only; and the reply box. Status is the glyph and its words,
          never an edge or a glow (#178). -->
+
+    <UserControl.Resources>
+        <!-- A delegate in the Delegates tab: its glyph on line 1, its name and how long it has run,
+             who started it where the indent can't say, and its latest line, its own words. -->
+        <DataTemplate x:Key="DelegateRowTemplate" x:DataType="core:DelegateItem">
+            <Grid Padding="0,8" ColumnSpacing="8" Margin="{x:Bind local:SessionView.IndentOf(Indent), Mode=OneWay}" AutomationProperties.Name="{x:Bind Label, Mode=OneWay}" AutomationProperties.AutomationId="{x:Bind local:SessionView.RowId(Id)}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <local:StatusGlyphView Margin="0,3,0,0" VerticalAlignment="Top" Size="14" Glyph="{x:Bind Glyph, Mode=OneWay}" />
+                <TextBlock Grid.Column="1" Style="{StaticResource AbTypeRow}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Text="{x:Bind Name, Mode=OneWay}" />
+                <TextBlock Grid.Column="2" Style="{StaticResource AbTypeMeta}" LineHeight="20" Foreground="{ThemeResource AbText2}" Text="{x:Bind Time, Mode=OneWay}" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind UnderText, Mode=OneWay}" Visibility="{x:Bind local:Ui.Some(UnderText), Mode=OneWay}" />
+                <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" Text="{x:Bind Line, Mode=OneWay}" Visibility="{x:Bind local:Ui.Show(HasLine), Mode=OneWay}" />
+            </Grid>
+        </DataTemplate>
+    </UserControl.Resources>
 
     <Grid x:Name="ViewRoot">
         <VisualStateManager.VisualStateGroups>
@@ -135,8 +160,8 @@
             </StackPanel>
         </Grid>
 
-        <!-- Conversation / Delegates / Tools, where there is no inspector (§5.2). Delegates only while
-             the host reports some; U8 (#176) lists them. -->
+        <!-- Conversation / Delegates / Tools, where there is no inspector (§5.2). Delegates while the
+             host lists some or reports counts. -->
         <SelectorBar
             x:Name="Tabs"
             Grid.Row="1"
@@ -148,6 +173,69 @@
             <SelectorBarItem x:Name="DelegatesTab" Text="Delegates" Tag="Delegates" Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegatesTab), Mode=OneWay, FallbackValue=Collapsed}" />
             <SelectorBarItem x:Name="ToolsTab" Text="Tools" Tag="Tools" Visibility="{x:Bind local:Ui.Show(Layout.ShowToolsTab), Mode=OneWay, FallbackValue=Collapsed}" />
         </SelectorBar>
+
+        <!-- The delegate strip (§6.3), at three panes, where the tabs are not: one item per delegate
+             the main agent started, its glyph, name, and how long it has run and how many it
+             started; the selected one in Bridge; the finished folded into "N finished". -->
+        <ListView
+            x:Name="DelegateStrip"
+            Grid.Row="1"
+            Margin="12,0,12,8"
+            SelectionMode="None"
+            IsItemClickEnabled="True"
+            ItemClick="OnStripItem"
+            AutomationProperties.AutomationId="DelegateStrip"
+            AutomationProperties.Name="Delegates"
+            ScrollViewer.HorizontalScrollMode="Enabled"
+            ScrollViewer.HorizontalScrollBarVisibility="Auto"
+            ScrollViewer.VerticalScrollMode="Disabled"
+            ScrollViewer.VerticalScrollBarVisibility="Disabled"
+            ItemsSource="{x:Bind Card.Delegates.Strip, Mode=OneWay}"
+            Visibility="{x:Bind local:Ui.Show(Layout.ShowStrip), Mode=OneWay, FallbackValue=Collapsed}">
+            <ListView.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <ItemsStackPanel Orientation="Horizontal" />
+                </ItemsPanelTemplate>
+            </ListView.ItemsPanel>
+            <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+                    <Setter Property="Padding" Value="0" />
+                    <Setter Property="Margin" Value="0,0,8,0" />
+                    <Setter Property="MinWidth" Value="0" />
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    <Setter Property="VerticalContentAlignment" Value="Stretch" />
+                </Style>
+            </ListView.ItemContainerStyle>
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="core:DelegateItem">
+                    <Grid MinWidth="160" MaxWidth="240" AutomationProperties.Name="{x:Bind Label, Mode=OneWay}" AutomationProperties.AutomationId="{x:Bind local:SessionView.StripId(Id)}">
+                        <!-- Two edges, each a ThemeResource, so either follows a theme change. -->
+                        <Border BorderThickness="1" BorderBrush="{ThemeResource AbStroke}" CornerRadius="{StaticResource AbRadiusCard}" Visibility="{x:Bind local:Ui.Show(NotSelected), Mode=OneWay}" />
+                        <Border BorderThickness="1" BorderBrush="{ThemeResource AbBridge}" Background="{ThemeResource AbSelected}" CornerRadius="{StaticResource AbRadiusCard}" Visibility="{x:Bind local:Ui.Show(Selected), Mode=OneWay}" />
+                        <Grid Padding="12,8" ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="14" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <local:StatusGlyphView Margin="0,3,0,0" VerticalAlignment="Top" Size="14" Glyph="{x:Bind Glyph, Mode=OneWay}" />
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Style="{StaticResource AbTypeRow}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{x:Bind Name, Mode=OneWay}" Text="{x:Bind Name, Mode=OneWay}" />
+                                <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Text="{x:Bind Facts, Mode=OneWay}" Visibility="{x:Bind local:Ui.Some(Facts), Mode=OneWay}" />
+                            </StackPanel>
+                        </Grid>
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+            <ListView.Footer>
+                <TextBlock
+                    Margin="4,0,0,0"
+                    VerticalAlignment="Center"
+                    Style="{StaticResource AbTypeMeta}"
+                    Foreground="{ThemeResource AbText2}"
+                    Text="{x:Bind Card.Delegates.MoreText, Mode=OneWay}"
+                    Visibility="{x:Bind local:Ui.Show(Card.Delegates.HasMore), Mode=OneWay, FallbackValue=Collapsed}" />
+            </ListView.Footer>
+        </ListView>
 
         <Grid Grid.Row="2">
             <!-- The conversation (§6.4): the main agent only, at the reading measure. -->
@@ -239,6 +327,41 @@
                         <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.Reasoning, Mode=OneWay}" />
                     </Expander>
 
+                    <!-- Delegates starting and reporting back (§6.4): one meta line each, with an icon,
+                         the name linking to the delegate. The main agent's own delegates only. -->
+                    <ItemsControl
+                        IsTabStop="False"
+                        AutomationProperties.AutomationId="DelegateEvents"
+                        ItemsSource="{x:Bind Card.Delegates.Events, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Show(Card.Delegates.HasEvents), Mode=OneWay, FallbackValue=Collapsed}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Spacing="8" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="core:DelegateEvent">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <ContentControl Margin="0,0,4,0" VerticalAlignment="Center" Style="{StaticResource AbIconDelegate}" Width="12" Height="12" Foreground="{ThemeResource AbText2}" IsTabStop="False" Visibility="{x:Bind local:Ui.Show(Started)}" />
+                                    <local:StatusGlyphView Margin="0,0,4,0" VerticalAlignment="Center" Size="12" Glyph="{x:Bind GlyphShown}" Visibility="{x:Bind local:Ui.Show(HasGlyph)}" />
+                                    <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Before}" Visibility="{x:Bind local:Ui.Some(Before)}" />
+                                    <HyperlinkButton
+                                        VerticalAlignment="Center"
+                                        Padding="0"
+                                        MinHeight="0"
+                                        FontSize="12"
+                                        Content="{x:Bind Name}"
+                                        Tag="{x:Bind AgentId}"
+                                        AutomationProperties.Name="{x:Bind Text}"
+                                        ToolTipService.ToolTip="Show this delegate"
+                                        Visibility="{x:Bind local:Ui.Show(HasName)}"
+                                        Click="OnDelegateEvent" />
+                                    <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind After}" Visibility="{x:Bind local:Ui.Some(After)}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
                     <!-- What it is doing now: the tool glyph, then the call in inline mono on a meta line, one weight (ui.md §4.2, #215). -->
                     <Grid ColumnSpacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasTool), Mode=OneWay}">
                         <Grid.ColumnDefinitions>
@@ -253,14 +376,51 @@
                 </StackPanel>
             </ScrollViewer>
 
-            <!-- Delegates, until U8 (#176): the counts the host reports. -->
-            <StackPanel
-                Padding="24,8,24,24"
-                Spacing="8"
-                AutomationProperties.AutomationId="DelegatesPanel"
-                Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegates), Mode=OneWay}">
-                <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" AutomationProperties.AutomationId="DelegatesText" Text="{x:Bind Card.DelegatesText, Mode=OneWay}" />
-            </StackPanel>
+            <!-- The Delegates tab (§6.3, §5.2): every delegate, nested under its parent, and one opened
+                 from it pushed in its place; a host that can't list them (rule 8), its counts. -->
+            <Grid AutomationProperties.AutomationId="DelegatesPanel" Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegates), Mode=OneWay}">
+                <StackPanel Padding="24,8,24,24" Spacing="8" Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegateCounts), Mode=OneWay, FallbackValue=Collapsed}">
+                    <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" AutomationProperties.AutomationId="DelegatesText" Text="{x:Bind Card.DelegatesText, Mode=OneWay}" />
+                </StackPanel>
+                <ScrollViewer AutomationProperties.AutomationId="DelegateList" Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegateList), Mode=OneWay, FallbackValue=Collapsed}">
+                    <StackPanel Padding="12,8,12,24" Spacing="8" MaxWidth="{StaticResource AbLayoutReadingMax}" HorizontalAlignment="Left">
+                        <ListView
+                            SelectionMode="None"
+                            IsItemClickEnabled="True"
+                            ItemClick="OnDelegateRow"
+                            AutomationProperties.Name="Delegates"
+                            ItemTemplate="{StaticResource DelegateRowTemplate}"
+                            ItemsSource="{x:Bind Card.Delegates.Active, Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Show(Card.Delegates.HasActive), Mode=OneWay, FallbackValue=Collapsed}" />
+                        <Expander
+                            Margin="12,0"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            AutomationProperties.AutomationId="DelegatesFinished"
+                            Header="{x:Bind Card.Delegates.FinishedText, Mode=OneWay}"
+                            IsExpanded="{x:Bind Card.Delegates.FinishedOpen, Mode=TwoWay}"
+                            Visibility="{x:Bind local:Ui.Show(Card.Delegates.HasFinished), Mode=OneWay, FallbackValue=Collapsed}">
+                            <ListView
+                                Margin="-12,0"
+                                SelectionMode="None"
+                                IsItemClickEnabled="True"
+                                ItemClick="OnDelegateRow"
+                                AutomationProperties.Name="Finished delegates"
+                                ItemTemplate="{StaticResource DelegateRowTemplate}"
+                                ItemsSource="{x:Bind Card.Delegates.Finished, Mode=OneWay}" />
+                        </Expander>
+                        <TextBlock
+                            Margin="12,0"
+                            Style="{StaticResource AbTypeMeta}"
+                            Foreground="{ThemeResource AbText2}"
+                            Text="{x:Bind Card.Delegates.MoreText, Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Show(Card.Delegates.HasMore), Mode=OneWay, FallbackValue=Collapsed}" />
+                    </StackPanel>
+                </ScrollViewer>
+                <ScrollViewer AutomationProperties.AutomationId="DelegateDetail" Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegateDetail), Mode=OneWay, FallbackValue=Collapsed}">
+                    <local:DelegateInspector x:Name="TabDelegate" Padding="24,8,24,24" MaxWidth="{StaticResource AbLayoutReadingMax}" HorizontalAlignment="Left" Card="{x:Bind Card, Mode=OneWay}" />
+                </ScrollViewer>
+            </Grid>
 
             <ScrollViewer AutomationProperties.AutomationId="ToolsPanel" Visibility="{x:Bind local:Ui.Show(Layout.ShowTools), Mode=OneWay}">
                 <local:ToolList x:Name="ToolsTabList" Padding="24,8,24,24" />

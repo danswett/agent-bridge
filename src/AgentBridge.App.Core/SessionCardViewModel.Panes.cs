@@ -9,7 +9,7 @@ public sealed record DetailRow(string Label, string Value, bool Mono = false, bo
     public string Tip => Value;
 }
 // What the window's panes show of a session (#180): its row in the list (§6.1), its header
-// (§6.2), its Details and its delegates' counts until U8 (#176) lists them.
+// (§6.2), its Details and its delegates' counts (Delegates lists them, §6.3).
 public sealed partial class SessionCardViewModel
 {
     bool selected;
@@ -72,7 +72,7 @@ public sealed partial class SessionCardViewModel
         if (session.Branch is { Length: > 0 } branch) { rows.Add(new("Branch", branch, Mono: true)); }
         if (session.Cwd is { Length: > 0 } cwd) { rows.Add(new("Folder", cwd, Mono: true, Path: true)); }
         if (Driven) { rows.Add(new("Driven by", DriverPrincipal ?? "an agent")); }
-        // In three panes there is no Delegates tab: the inspector carries the counts until U8 (#176).
+        // The counts the host reports, beside the delegates the strip lists (or in place of them).
         if (HasDelegates) { rows.Add(new("Background", DelegatesText)); }
         if (session.Activity.TurnCount is { } t) { rows.Add(new("Turns", t.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
         if (session.Activity.Compactions is > 0 and var c) { rows.Add(new("Compactions", c.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
@@ -89,7 +89,8 @@ public sealed partial class SessionCardViewModel
     // says asked.
     public string AsksText => NeedsYouEntry.DelegateOf(session) is { } name ? $"{name} asks" : "Main agent asks";
 
-    // Until U8 (#176) lists delegates, the Delegates tab has only the counts the host reports.
+    // The counts the host reports: all a host that can't list its delegates (Claude, Codex, an older
+    // host: status rule 8) says of them, in the Delegates tab and in Details.
     public bool HasDelegates => session.Activity.Background is { } b && (b.Agents > 0 || b.Shells > 0);
     public string DelegatesText
     {

@@ -224,6 +224,7 @@ static partial class SelfTest
             Check(settled && shown > hidden && hidden >= 0, $"a row's control listens while shown and lets go when hidden, however often the tabs change ({hidden} listeners hidden: {hiddenBy}; {shown} shown: {shownBy}; {Listeners(watched)} after five more changes: {ListenersBy(watched)})");
 
             await CheckPanes(window, main, Check, outFile);
+            await CheckDelegates(window, main, Check, outFile);
 
             // Launch a session from the Launch page: it starts, its row appears, and Open goes to it.
             window.ShowPage("launch");
@@ -293,12 +294,15 @@ static partial class SelfTest
             Check(window.CurrentPage == "sessions" && main.Selected == sought && window.Sessions.Rows.SelectedItem == sought && window.Search.Text.Length == 0,
                 "opens a session chosen in the search box on the Sessions page, its row selected");
 
-            // Every page, and every pane, in every theme: three panes, with Details and Tools.
+            // Every page, and every pane, in every theme: three panes, with a delegate in the strip and
+            // the inspector, and the session's Details and Tools.
             Resize(window, 1440, 1000);
             main.Selected = main.AllCards.First(c => c.Id == "demo-approval");
             await Task.Delay(700);
             await CheckMachinesPage(window, main, Check, outFile);
             await CheckNarrowest(window, Check, outFile);
+            // The theme passes draw the Sessions page with a delegate in its strip and inspector.
+            await ShowADelegate(window, main, Check);
             await CheckPagesInEveryTheme(window, Check, outFile);
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
@@ -736,6 +740,7 @@ static partial class SelfTest
                 if (layout.ShowSession && session is not { ActualHeight: > 0 }) { broken.Add("the session pane"); }
                 if (layout.ShowInspector && inspector is not { Visibility: Visibility.Visible, ActualWidth: > 0 }) { broken.Add("the inspector"); }
                 if (!layout.ShowInspector && layout.Mode == PaneMode.Three) { broken.Add("three panes without the inspector"); }
+                await DrawDelegates(window, page, layout, broken, theme, outFile);
             }
             await Picture(root, Path.ChangeExtension(outFile, $".{tag}.{theme.ToLowerInvariant()}.png"));
         }

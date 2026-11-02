@@ -153,6 +153,25 @@ public sealed class ToastTests
     }
 
     [Fact]
+    public void A_finished_turn_previews_the_main_agents_own_words_never_a_delegates_and_a_delegate_alone_finishes_no_turn()
+    {
+        var p = Planner();
+        var byDelegate = new ActivitySource { Response = "agent-1" };
+        p.Upsert(Make.Session(status: SessionStatus.Working));
+        p.Upsert(Make.Session(turns: 2) with { Activity = new Activity { Response = "A delegate's findings.", TurnCount = 2, Source = byDelegate, Own = new OwnActivity { Response = "Started the delegates." } } });
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Equal("Started the delegates.", Xml(Assert.Single(sink.Shown)).Descendants("text").Last().Value);
+
+        // The main agent has no words of its own this turn: the delegate's are not news.
+        p.Upsert(Make.Session("s2", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s2") with { Activity = new Activity { Response = "A delegate's findings.", Source = byDelegate } });
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+    }
+
+    [Fact]
     public void A_single_choice_question_offers_its_options_as_buttons_with_a_box_for_other()
     {
         var xml = Xml(new ToastNotice("t", ToastXml.Question(Make.Session(question: Make.Choice(other: true)), Caps, null), false));

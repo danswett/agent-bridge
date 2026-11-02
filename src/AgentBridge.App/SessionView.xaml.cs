@@ -60,26 +60,30 @@ public sealed partial class SessionView : UserControl
             if (layout is not null) { layout.PropertyChanged -= OnLayout; layout.QuestionWanted -= OnQuestionWanted; }
             layout = value;
             if (layout is not null) { layout.PropertyChanged += OnLayout; layout.QuestionWanted += OnQuestionWanted; }
+            TabDelegate.Layout = value;
             Bindings.Update();
             ShowTab();
         }
     }
 
     public static string RemoveName(string name) => $"Remove {name}";
+    public static string StripId(string id) => $"Strip:{id}";
+    public static string RowId(string id) => $"Delegate:{id}";
+    public static Thickness IndentOf(double indent) => new(indent, 0, 0, 0);
     public static string PinName(bool pinned) => pinned ? "Unpin" : "Pin";
     public static string WordsState(StatusTone tone) => $"Words{tone}";
     public static Visibility Unpinned(bool pinned) => Ui.Show(!pinned);
 
     void OnCard(SessionCardViewModel? old, SessionCardViewModel? card)
     {
-        if (attached && old is not null) { old.PropertyChanged -= OnCardChanged; }
+        if (attached && old is not null) { old.PropertyChanged -= OnCardChanged; old.Delegates.ReplyWanted -= OnReplyWanted; }
         // The box the person is typing in now belongs to the next session: the last one is no longer
         // being edited, which would otherwise keep holding its list's order (MainViewModel.Rearrange).
         if (old is not null) { old.Editing = false; old.WantsFocus = false; }
         if (card is not null) { card.Editing = ReplyBox.FocusState != FocusState.Unfocused; }
         if (card is not null)
         {
-            if (attached) { card.PropertyChanged += OnCardChanged; }
+            if (attached) { card.PropertyChanged += OnCardChanged; card.Delegates.ReplyWanted += OnReplyWanted; }
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(this, $"Session:{card.Id}");
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(this, card.Title);
         }
@@ -97,7 +101,7 @@ public sealed partial class SessionView : UserControl
     {
         if (attached) { return; }
         attached = true;
-        if (Card is { } c) { c.PropertyChanged += OnCardChanged; }
+        if (Card is { } c) { c.PropertyChanged += OnCardChanged; c.Delegates.ReplyWanted += OnReplyWanted; }
         SyncQuestion();
         Bindings.Update();
         words = null;
@@ -109,7 +113,7 @@ public sealed partial class SessionView : UserControl
     {
         if (!attached) { return; }
         attached = false;
-        if (Card is { } c) { c.PropertyChanged -= OnCardChanged; }
+        if (Card is { } c) { c.PropertyChanged -= OnCardChanged; c.Delegates.ReplyWanted -= OnReplyWanted; }
         questionView?.Detach();
         questionView = null;
         QuestionHost.Content = null;
@@ -220,6 +224,34 @@ public sealed partial class SessionView : UserControl
     void OnBack(object sender, RoutedEventArgs e) => layout?.Back();
     void OnToggleInspector(object sender, RoutedEventArgs e) => layout?.ToggleInspector();
     void OnPin(object sender, RoutedEventArgs e) => Card?.Row?.TogglePin();
+
+    // A strip item: a delegate opens in the inspector, or lets go back to the session's details;
+    // "N finished" shows or hides the finished ones.
+    void OnStripItem(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is not DelegateItem item || Card is not { } c) { return; }
+        if (item.IsFold || item.Selected) { c.Delegates.Press(item); }
+        else { layout?.OpenDelegate(item.Id); }
+    }
+
+    void OnDelegateRow(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is DelegateItem item) { layout?.OpenDelegate(item.Id); }
+    }
+
+    void OnDelegateEvent(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string id }) { layout?.OpenDelegate(id); }
+    }
+
+    // "Ask main agent to stop it" filled the reply box: the person reads it there, at its end, and
+    // sends it or not.
+    void OnReplyWanted()
+    {
+        if (ReplyBox is not { IsEnabled: true, Visibility: Visibility.Visible }) { return; }
+        ReplyBox.Focus(FocusState.Programmatic);
+        ReplyBox.Select(ReplyBox.Text.Length, 0);
+    }
 
     void SyncQuestion()
     {

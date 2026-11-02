@@ -113,7 +113,7 @@ public sealed class ToastPlanner
             // pushed back by each change.
             if (t.Due is not { Kind: ToastKind.Question } d0 || d0.Question != q.Id) { t.Due = (ToastKind.Question, now + QuestionDelay, q.Id); }
         }
-        else if (before is not null && before.Status is SessionStatus.Working or SessionStatus.Waiting && s.Status == SessionStatus.Idle && !string.IsNullOrEmpty(s.Activity.Response))
+        else if (before is not null && before.Status is SessionStatus.Working or SessionStatus.Waiting && s.Status == SessionStatus.Idle && !string.IsNullOrEmpty(MainResponse(s)))
         {
             t.Due = (ToastKind.Finished, now + FinishedDelay, null);
         }
@@ -156,7 +156,7 @@ public sealed class ToastPlanner
             }
             else
             {
-                var key = $"{s.Activity.TurnCount}|{s.Activity.Response}";
+                var key = $"{s.Activity.TurnCount}|{MainResponse(s)}";
                 if (s.Status != SessionStatus.Idle || t.FinishedKey == key) { continue; }
                 t.FinishedKey = key;
                 if (!Enabled() || !FinishedEnabled() || WindowActive()) { continue; }
@@ -167,6 +167,11 @@ public sealed class ToastPlanner
     }
 
     string TagOf(string sessionId) => Tag(sessionId, MachineKey);
+
+    // A finished turn is the main agent's, read from its own response: a delegate's latest text in
+    // the top-level field (activity.source) is never the preview, and a delegate finishing alone is
+    // never a finished turn (v1-sessions.md, Notifications, `finished`).
+    internal static string? MainResponse(Session s) => Attribution.MainVoiceOf(s).Response;
 
     // A session on another machine is tagged with that machine too.
     public static string Tag(string sessionId, string? machineKey) => Tag(machineKey is null ? sessionId : $"{machineKey}/{sessionId}");
@@ -238,7 +243,7 @@ public static partial class ToastXml
 
     public static string Finished(Session s, string? machine, string? machineKey = null)
     {
-        var preview = Plain(s.Activity.Response, 300);
+        var preview = Plain(ToastPlanner.MainResponse(s), 300);
         var b = Start(Args(machineKey, ("action", "open"), ("session", s.Id)), Title(s), $"{Machine(machine)}finished", preview);
         b.Append("</toast>");
         return b.ToString();
