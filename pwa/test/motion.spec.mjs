@@ -619,3 +619,39 @@ test('the selection pill fades in on the row chosen when the row it left is scro
   expect(slid).toHaveLength(1);
   expect(slid[0].travels).toBe(true);
 });
+test('choosing an answer shows its new colours at once: a choice\'s release never eases', async ({ page }) => {
+  await openDemo(page);
+  const v = await open(page, COPILOT);
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-choice-motion', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    d.upsert({ ...d.host.get(id), status: 'waiting', statusSince: t, updatedAt: t, question });
+  }, COPILOT);
+  const choice = v.locator('.question-slot .choice').first();
+  await expect(choice).toBeVisible();
+  const b = await choice.boundingBox();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  expect(await choice.evaluate((el) => [el.dataset.press ?? null, getComputedStyle(el).transitionDuration])).toEqual([null, '0s']);
+});
+
+test('a second Alt+Down while the first move still slides goes on from where the row is seen', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-reorder-duration', '5000ms'));
+  const main = row(page, CLAUDE).locator('.row-main');
+  await main.press('Alt+ArrowDown');
+  await page.waitForTimeout(1500);
+  const [seenBefore, seenAfter] = await main.evaluate((el) => {
+    const card = el.closest('.session');
+    const top = () => card.getBoundingClientRect().top;
+    const a = top();
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', altKey: true, bubbles: true, cancelable: true }));
+    return [a, top()];
+  });
+  expect(Math.abs(seenAfter - seenBefore)).toBeLessThan(3);
+});

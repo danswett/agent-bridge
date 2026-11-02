@@ -136,8 +136,9 @@ export function watchDisclosures(doc = globalThis.document) {
 
 // Press (ui.md §5.3): the pressed fill shows at once, and eases back on release. Only on
 // release: app.css eases a control's fill only while it carries data-press="released", so a
-// row selected, a tab chosen or a theme changed takes its new fill at once.
-export const PRESSABLE = '.button, .icon-button, .row-main, .nav-item, .view-tab, .machine-tab, .row-menu-item, .choice, .toggle';
+// row selected, a tab chosen or a theme changed takes its new fill at once. Not an answer's
+// choices or a toggle: their release changes what is selected, which shows at once.
+export const PRESSABLE = '.button, .icon-button, .row-main, .nav-item, .view-tab, .machine-tab, .row-menu-item';
 
 export function watchPresses(doc = globalThis.document) {
   const timers = new WeakMap();

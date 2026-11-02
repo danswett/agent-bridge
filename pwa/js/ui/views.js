@@ -248,6 +248,9 @@ export class SessionListView {
   // at once, so nothing but the person's row moves.
   #moved(el, draw) {
     const before = el.isConnected ? el.getBoundingClientRect() : null;
+    // A move made while the last one still slides goes on from where the row is seen now: the
+    // last slide goes, so the new place is measured without its translation.
+    for (const a of el.getAnimations?.() ?? []) { if (a.id === 'ab-motion-reorder') { a.cancel(); } }
     draw();
     if (!before || !el.isConnected) { return; }
     const after = el.getBoundingClientRect();

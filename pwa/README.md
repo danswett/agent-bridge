@@ -525,8 +525,9 @@ the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `
   through pointercancel), and below a longer response that comes with it; a Needs you mark fading
   in only for an entry that arrives, never again on Back; a session the address names at startup
   shown at once, and a question arriving mid-push stopping the slide; a fill easing back only on a
-  press's release (a second press at once), and a pressed button's label at 4.5:1 in light and
-  dark; a row moved by Alt+Down past the list's edge ending in full view; the selection pill fading
+  press's release (a second press at once; an answer's choice never), and a pressed button's
+  label at 4.5:1 in light and dark; a row moved by Alt+Down past the list's edge ending in full
+  view, and a second move mid-slide going on from where the row is; the selection pill fading
   in when the row it left is out of sight; and what leaves copied
   safely (no markup, id, link, control or script), clipped and placed where it was, a glyph in its
   old colour.

@@ -1091,10 +1091,15 @@ summary {
    Press: the pressed fill shows at once on press, and eases back on release. Nothing scales.
    Only the release eases: motion.js marks a control data-press="released" for the press token's
    length once the pointer lets go, so a row being selected, a tab chosen or the theme changing
-   takes its new fill at once. */
-:is(.button, .icon-button, .row-main, .nav-item, .view-tab, .machine-tab, .row-menu-item, .choice, .toggle)[data-press="released"] {
+   takes its new fill at once. Only the fill eases, and a button's label with it (its pressed
+   label is darker or lighter, below): a tab's or a row's colours change with selection, at once.
+   An answer's choices and the toggles have no pressed fill: what changes there on release is
+   the selection itself, which shows at once. */
+:is(.button, .icon-button, .row-main, .nav-item, .view-tab, .machine-tab, .row-menu-item)[data-press="released"] {
+  transition: background-color var(--ab-motion-press-duration) var(--ab-motion-press-ease);
+}
+.button[data-press="released"] {
   transition: background-color var(--ab-motion-press-duration) var(--ab-motion-press-ease),
-    border-color var(--ab-motion-press-duration) var(--ab-motion-press-ease),
     color var(--ab-motion-press-duration) var(--ab-motion-press-ease);
 }
 :is(.icon-button, .row-main, .view-tab, .machine-tab, .row-menu-item):active:not(:disabled) { background: var(--ab-selected); }
