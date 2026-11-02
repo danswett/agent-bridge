@@ -11,7 +11,7 @@
 // channel of a machine shown, and read with the once-a-minute look at the others, which comes
 // every few seconds instead while an update there is under way.
 import { HostClient } from './host-client.js';
-import { USAGE, machineStatus } from './usage.js';
+import { USAGE, machineFacts, machineStatus } from './usage.js';
 import { UPDATE, underWay } from './update.js';
 
 export class FleetStatus {
@@ -125,12 +125,23 @@ export class FleetStatus {
 
   // "3 sessions · 0.1.0 (dev)" for a machine, or '' while nothing is known about it.
   status(id) {
+    const m = this.#known(id);
+    return m ? machineStatus(m) : '';
+  }
+
+  // The same as facts for its row (usage.js machineFacts), or null while nothing is known.
+  facts(id) {
+    const m = this.#known(id);
+    return m ? machineFacts(m) : null;
+  }
+
+  #known(id) {
     const m = this.#machines.get(id);
-    if (!m) { return ''; }
+    if (!m) { return null; }
     // A machine shown has its count live once its snapshot is in.
     const link = this.hosts.shows(id) ? this.hosts.link(id) : null;
     const live = link?.phase === 'open' && link.client?.synced;
-    return machineStatus({ ...m, sessions: live ? link.store.size : m.sessions, held: live ? link.store.held?.reason : null });
+    return { ...m, sessions: live ? link.store.size : m.sessions, held: live ? link.store.held?.reason : null };
   }
 
   // Whether a machine's figures come on a channel of its own: shown, and not found unable to

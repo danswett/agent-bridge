@@ -103,7 +103,11 @@ test('demo mode shows every session from the worked example, with every field', 
 test('a machine where agent-ha-bridge runs is shown read-only with its reason, and offers no actions', async ({ page }) => {
   await openDemo(page, '&ahb=1');
   const reason = 'agent-ha-bridge is running for this user (AgentBridgeDaemon); answer at the machine or through it';
-  await expect(page.locator('.machine .machine-status')).toHaveText(` · 4 sessions · 0.1.0 (dev) · read-only: ${reason}`);
+  // On its row, a short fact (#213): the host's reason is the line's tooltip, and said to a screen reader.
+  const status = page.locator('.machine .machine-status');
+  await expect(status).toHaveText(`4 sessions · View only: ${reason}`);
+  await expect(status.locator('.machine-flag .sr-only')).toHaveText(`: ${reason}`);
+  await expect(status).toHaveAttribute('title', `4 sessions · 0.1.0 (dev) · view only: ${reason}`);
   const q = card(page, COPILOT).locator('.question');
   await expect(q.locator('.read-only-why')).toHaveText(`This machine is read-only from the phone: ${reason}.`);
   await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
@@ -368,7 +372,7 @@ test('an upsert leaves every row where it is, and a remove takes the session to 
   await page.evaluate((id) => window.agentBridgeDemo.remove(id), CLAUDE);
   await expect(card(page, CLAUDE)).toHaveCount(0);
   expect(await order(page)).toEqual([COPILOT, CODEX, DELEGATING]);
-  await expect(page.locator('#session-count')).toHaveText('3 live');
+  await expect(page.locator('#session-count')).toHaveText('3 live on Demo machine');
   await expect(page.locator('.ended-group > summary')).toHaveText('Ended \u00b7 1');
 });
 

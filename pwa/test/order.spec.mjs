@@ -145,6 +145,20 @@ test('a folded row gets the new activity dot when its session updates, and openi
   expect(await order(page)).toEqual(FIRST);
 });
 
+test('news that comes while another page shows is not marked seen until Sessions shows again', async ({ page }) => {
+  await openDemo(page);
+  await expect(card(page, CLAUDE).locator('.fold')).toHaveAttribute('aria-expanded', 'true');
+  const seen = () => page.evaluate((k) => JSON.parse(localStorage.getItem('demo:agent-bridge.app.order') ?? '{}').seen?.[k], `demo\n${CLAUDE}`);
+  await page.locator('#nav [data-nav="machines"]').click();
+  await expect(page.locator('#sessions')).toBeHidden();
+  const t = later();
+  await upsert(page, CLAUDE, { updatedAt: t });
+  await page.waitForTimeout(100);
+  expect(await seen()).not.toBe(t);
+  await page.locator('#nav [data-nav="sessions"]').click();
+  await expect.poll(seen).toBe(t);
+});
+
 test('ended sessions fold into Ended · N at the bottom', async ({ page }) => {
   await openDemo(page);
   await page.evaluate((ids) => { for (const id of ids) { window.agentBridgeDemo.remove(id); } }, [CLAUDE, DELEGATING]);
@@ -254,6 +268,23 @@ test.describe('on a phone', () => {
     await card(page, CODEX).locator('.fold').tap();
     await expect(card(page, CODEX).locator('.fold')).toHaveAttribute('aria-expanded', 'false');
     await expect(card(page, CODEX).getByRole('menu')).toHaveCount(0);
+  });
+
+  test('a row menu by the bottom navigation opens above its row, clear of the bar, and Pin is pressed there', async ({ page }) => {
+    await openDemo(page);
+    const fold = card(page, DELEGATING).locator('.fold');
+    // The last row's title just above the bar, where a menu below it would be under the bar.
+    await fold.evaluate((el) => { window.scrollBy(0, el.getBoundingClientRect().bottom - document.getElementById('nav').getBoundingClientRect().top + 4); });
+    const barTop = await page.locator('#nav').evaluate((el) => el.getBoundingClientRect().top);
+    expect((await fold.boundingBox()).y + (await fold.boundingBox()).height).toBeLessThanOrEqual(barTop);
+    await longPress(page, DELEGATING);
+    const menu = card(page, DELEGATING).getByRole('menu');
+    await expect(menu.getByRole('menuitem', { name: 'Pin' })).toBeVisible();
+    const box = await menu.boundingBox();
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(barTop);
+    await menu.getByRole('menuitem', { name: 'Pin' }).tap();
+    await expect.poll(() => order(page)).toEqual([DELEGATING, COPILOT, CLAUDE, CODEX]);
   });
 
   test('the sort menu sits in the sessions header without crowding it', async ({ page }) => {
