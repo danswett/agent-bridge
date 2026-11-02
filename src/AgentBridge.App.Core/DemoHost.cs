@@ -82,7 +82,8 @@ public sealed class DemoHost : IAsyncDisposable
             {
                 Id = "perm-1#demo",
                 Kind = QuestionKind.Approval,
-                Message = "Run a shell command:\n\n```powershell\ndotnet test AgentBridge.slnx -c Release\n```\n\nIntention: run the tests.",
+                // As CopilotPermission writes it: the ask, the agent's intention, then the command.
+                Message = "Allow **shell**?\n\nRun the tests before pushing.\n\n```\ndotnet test AgentBridge.slnx -c Release\n```",
                 AskedAt = now.AddSeconds(-40),
                 Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")] }],
             },

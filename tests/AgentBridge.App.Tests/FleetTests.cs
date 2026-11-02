@@ -131,6 +131,7 @@ public sealed class FleetTests : IAsyncLifetime
             // Two machines: each control says which machine as well as which session.
             Assert.EndsWith(" on Test PC", main.NeedsYou[1].ApproveName);
             Assert.EndsWith(" on Test PC", main.NeedsYou[1].DenyName);
+            Assert.EndsWith(" on Test PC", main.NeedsYou[1].ResendName);
             Assert.EndsWith(" on Build server: open the session", main.NeedsYou[0].OpenName);
             Assert.Equal(2, main.Waiting);
             return true;

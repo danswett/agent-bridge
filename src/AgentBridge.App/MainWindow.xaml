@@ -176,7 +176,8 @@
                                                             Foreground="{ThemeResource AbNeedsText}"
                                                             Text="Answer at the machine"
                                                             Visibility="{x:Bind local:Ui.Show(AtMachine)}" />
-                                                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0" Visibility="{x:Bind local:Ui.Show(Approvable)}">
+                                                        <!-- Deny moves to a line of its own when the two don't fit, as in a narrow window with large text. -->
+                                                        <local:FlowPanel Spacing="8" LineSpacing="8" Margin="0,4,0,0" Visibility="{x:Bind local:Ui.Show(Approvable)}">
                                                             <Button
                                                                 MinHeight="32"
                                                                 Style="{StaticResource AccentButtonStyle}"
@@ -192,12 +193,13 @@
                                                                 Content="{x:Bind DenyLabel, Mode=OneWay}"
                                                                 IsEnabled="{x:Bind CanAnswer, Mode=OneWay}"
                                                                 Click="{x:Bind Deny}" />
-                                                        </StackPanel>
+                                                        </local:FlowPanel>
                                                         <!-- The machine failed the op: the same request again, as the card's Send again.
                                                              On a row of its own, so a narrow window or large text can't push it out of sight. -->
                                                         <Button
                                                             MinHeight="32"
                                                             AutomationProperties.AutomationId="NeedsYouResend"
+                                                            AutomationProperties.Name="{x:Bind ResendName, Mode=OneWay}"
                                                             Content="Send again"
                                                             Visibility="{x:Bind local:Ui.Show(ShowResend), Mode=OneWay}"
                                                             Click="{x:Bind Resend}" />

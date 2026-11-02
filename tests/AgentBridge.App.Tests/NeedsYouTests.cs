@@ -250,6 +250,13 @@ public sealed class NeedsYouTests : IAsyncLifetime
     [InlineData("Send to [backup][1]?\n\n[1]: https://other.example")]
     [InlineData("Allow **shell**?\n\n```\nls\n```\n\nAnd then more")]
     [InlineData("Allow **shell**?\n\n```\nls")]
+    // Words after the opening fence are not drawn: a tool's description could say one thing there
+    // and another in the block.
+    [InlineData("Allow **mytool**?\n\n``` Deletes all backups\nPrint the current status\n```")]
+    // A shortcut reference link defined inside a quote draws its label, not where it goes.
+    [InlineData("> Send to [backup]\n>\n> [backup]: https://other.example")]
+    // Lines a bare CR breaks count too: thirteen of them are more than the lane shows whole.
+    [InlineData("Allow **shell**?\r\r```\r1\r2\r3\r4\r5\r6\r7\r8\r9\r10\r```")]
     public async Task An_approval_whose_prompt_a_fence_or_a_link_could_draw_differently_from_what_it_allows_opens_its_card(string message)
     {
         await SnapshotAsync();
@@ -263,8 +270,14 @@ public sealed class NeedsYouTests : IAsyncLifetime
     [InlineData("Allow **shell**?\n\n````\ncat <<EOF\n```\nx\n```\nEOF\n````")]
     [InlineData("Allow the **github** tool `create_issue`?")]
     [InlineData("Allow **shell**?\r\n\r\n```\r\nls -la\r\n```")]
+    [InlineData("Allow **mcp**?\n\n```json\n{ \"a\": 1 }\n```")]
+    [InlineData("Allow **edit**?\n\n```diff\n+a\n```")]
     public void A_prompt_shaped_as_a_host_writes_a_permission_is_whole_with_inner_fences_no_command_or_CRLF(string message) =>
         Assert.True(NeedsYouEntry.WholePrompt(Make.Approval() with { Message = message }));
+
+    [Fact]
+    public void The_demos_permission_prompt_is_shaped_as_a_host_writes_it_so_the_lane_answers_it() =>
+        Assert.True(NeedsYouEntry.WholePrompt(DemoHost.Examples().Single(s => s.Id == "demo-approval").Question!));
 
     [Fact]
     public async Task An_approval_answered_in_the_lane_shows_its_whole_prompt_as_written_so_approve_never_allows_what_is_not_on_screen()

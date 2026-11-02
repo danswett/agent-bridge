@@ -77,6 +77,7 @@ public sealed partial class NeedsYouEntry : Observable
     public string OpenName => $"{Subject}: open the session";
     public string ApproveName => $"Approve once: {Subject}";
     public string DenyName => $"Deny: {Subject}";
+    public string ResendName => $"Send again: {Subject}";
     public string ApproveLabel => question?.SentValue == "approve" ? "✓ Approve once" : "Approve once";
     public string DenyLabel => question?.SentValue == "deny" ? "✓ Deny" : "Deny";
     public bool CanAnswer => Approvable && question?.CanAnswer == true;
@@ -115,6 +116,7 @@ public sealed partial class NeedsYouEntry : Observable
             Raise(nameof(OpenName));
             Raise(nameof(ApproveName));
             Raise(nameof(DenyName));
+            Raise(nameof(ResendName));
         }
         Delegate = DelegateOf(Card.Session);
         Meta = string.Join(" · ", new[] { machineName, Card.AgentName, Delegate is { } d ? $"{d} asks" : null, Words.Duration(AskedAt, now) }.Where(s => !string.IsNullOrEmpty(s)));
@@ -152,35 +154,52 @@ public sealed partial class NeedsYouEntry : Observable
     // a host writes a permission (LiteralShape).
     public static bool WholePrompt(Question q)
     {
-        var m = q.Message.Trim();
+        // Every line ending the renderer breaks on is counted: a bare CR is a line too.
+        var m = q.Message.Trim().Replace("\r\n", "\n").Replace('\r', '\n');
         return m.Length > 0 && m.Length <= PromptMaxChars && m.Split('\n').Length <= PromptMaxLines && LiteralShape(m) && !HasTable(MarkdownModel.Parse(m));
     }
 
     // Whether a prompt has the shape a host writes for a permission, so that what is drawn is what is
     // allowed: prose, then at most one fenced block, which ends the prompt and holds the command
     // literal. A fence in the prose (the agent's own words can open one) would let the command's fence
-    // close it instead and draw the command as Markdown, hiding some of it; and a link shows its
-    // words, not where it goes. Either opens the card (pwa/js/needs-you.js literalShape).
-    static bool LiteralShape(string text)
+    // close it instead and draw the command as Markdown, hiding some of it; a link shows its words,
+    // not where it goes; and words after the opening fence are not drawn at all, so only the info
+    // strings a host writes (none, json, diff) are taken. Any of those opens the card
+    // (pwa/js/needs-you.js literalShape).
+    static bool LiteralShape(string message)
     {
-        var message = text.Replace("\r\n", "\n").Replace('\r', '\n');
         var lines = message.Split('\n');
         var at = Array.FindIndex(lines, l => Fence().IsMatch(l));
         if (at >= 0)
         {
             var open = Fence().Match(lines[at]).Groups[1].Value;
+            if (lines[at].Trim().TrimStart(open[0]).Trim() is not ("" or "json" or "diff")) { return false; }
             var end = Array.FindIndex(lines, at + 1, l => Closes(open, l));
             if (end != lines.Length - 1) { return false; }
         }
         var prose = string.Join('\n', at >= 0 ? lines[..at] : lines);
         if (LinkSyntax().IsMatch(prose) || LinkDefinition().IsMatch(prose)) { return false; }
         // The renderer must agree: the fenced block, if any, is its last block, holding exactly the
-        // command's lines.
+        // command's lines; and no link anywhere hides where it goes behind its words.
         var blocks = MarkdownModel.Parse(message);
+        if (HasHiddenLink(blocks)) { return false; }
         if (at < 0) { return !blocks.OfType<MdCode>().Any(); }
         return blocks.Count > 0 && blocks[^1] is MdCode code && blocks.OfType<MdCode>().Count() == 1
             && code.Text == string.Join('\n', lines[(at + 1)..^1]);
     }
+
+    // A link whose words are not its address (an autolink's are), at any depth.
+    static bool HasHiddenLink(IEnumerable<MdBlock> blocks) => blocks.Any(b => b switch
+    {
+        MdParagraph p => p.Inlines.Any(Hides),
+        MdHeading h => h.Inlines.Any(Hides),
+        MdQuote q => HasHiddenLink(q.Blocks),
+        MdList l => l.Items.Any(HasHiddenLink),
+        MdTable t => t.Rows.Any(r => r.Any(c => c.Any(Hides))),
+        _ => false,
+    });
+
+    static bool Hides(MdInline i) => i is MdLink l && l.Text.TrimEnd('/') != l.Url.TrimEnd('/');
 
     // Whether line closes a fence opened by `open`: the same character, at least as many, nothing after.
     static bool Closes(string open, string line)
@@ -243,7 +262,7 @@ public sealed partial class NeedsYouEntry : Observable
     private static partial Regex Fence();
     [GeneratedRegex(@"\]\s*[(\[]")]
     private static partial Regex LinkSyntax();
-    [GeneratedRegex(@"^ {0,3}\[[^\]]+\]:", RegexOptions.Multiline)]
+    [GeneratedRegex(@"\[[^\]]*\]:")]
     private static partial Regex LinkDefinition();
     [GeneratedRegex(@"^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)")]
     private static partial Regex LeadingMark();
