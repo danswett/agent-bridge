@@ -59,12 +59,15 @@ export function delegateState(a) {
 //   active: running ones first (working, waiting), then idle ones, each nested under its parent.
 //   finished: ended ones, folded into "N finished", nested the same way.
 //   more: entries the host left out (subagentsMore).
-// Each row: the entry, plus { depth, glyph, words, running }.
+// Each row: the entry, plus { depth, glyph, words, running, parentName }. parentName names the
+// delegate that started it, when that one is listed, so a screen reader hears what the indent
+// shows.
 export function delegateList(session) {
   const list = Array.isArray(session?.subagents) ? session.subagents : [];
   const more = session?.subagentsMore ?? 0;
   if (list.length === 0 && !more) { return null; }
-  const rows = list.map((a) => ({ ...a, ...delegateState(a) }));
+  const names = new Map(list.map((a) => [a.id, a.name || 'Delegate']));
+  const rows = list.map((a) => ({ ...a, ...delegateState(a), parentName: a.parent && a.parent !== a.id ? names.get(a.parent) ?? null : null }));
   const running = rows.filter((r) => r.running);
   const idle = rows.filter((r) => !r.running && r.status !== 'ended');
   const ended = rows.filter((r) => r.status === 'ended');

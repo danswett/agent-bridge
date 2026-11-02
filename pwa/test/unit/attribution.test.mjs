@@ -83,6 +83,9 @@ test('delegates list running ones first, then idle ones, each nested under its p
   assert.deepEqual(rows(d.active), ['a:working', '  a1:working', '    a1x:working', 'b:needs', 'idle:idle']);
   assert.deepEqual(rows(d.finished), ['done:done', '  done1:failed', 'orphan:ended']);
   assert.equal(d.more, 2);
+  // Who started each, for what the indent can't say aloud, or at all across the two lists.
+  const parents = Object.fromEntries([...d.active, ...d.finished].map((r) => [r.id, r.parentName]));
+  assert.deepEqual([parents.a, parents.a1x, parents.done1, parents.orphan], [null, 'Delegate a1', 'Delegate done', 'Delegate a']);
 });
 
 test('a finished delegate\'s glyph comes from its outcome', () => {

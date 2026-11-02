@@ -97,6 +97,8 @@ class DelegateRow {
   #task = null;
   #line = null;
   #listLine = null;
+  // Moves on with each new line from the list, so a fetch sent before it can't put back an older one.
+  #lineRev = 0;
 
   constructor(id, fetchDelegate) {
     this.id = id;
@@ -105,6 +107,7 @@ class DelegateRow {
     e.glyph = glyph('idle', { size: 14 });
     e.name = h('span', { class: 'delegate-name' });
     e.time = h('span', { class: 'delegate-time' });
+    e.under = h('span', { class: 'sr-only' });
     e.line = h('span', { class: 'delegate-line' });
     e.facts = h('p', { class: 'delegate-facts' });
     e.task = h('p', { class: 'plain' });
@@ -117,7 +120,7 @@ class DelegateRow {
     e.reasoning = h('details', { class: 'reasoning', hidden: true }, h('summary', null, 'Reasoning'), e.reasoningText);
     e.detail = h('details', { class: 'delegate-detail' },
       h('summary', { class: 'delegate-summary' },
-        h('span', { class: 'delegate-head' }, e.glyph, e.name, e.time, icon('chevron', 'icon delegate-chevron')), e.line),
+        h('span', { class: 'delegate-head' }, e.glyph, e.name, e.under, e.time, icon('chevron', 'icon delegate-chevron')), e.line),
       h('div', { class: 'delegate-body' }, e.facts, e.taskBlock, e.status, e.latestBlock, e.reasoning));
     e.detail.addEventListener('toggle', () => {
       if (e.detail.open) { this.#load(); } else { this.#stop(); }
@@ -136,7 +139,11 @@ class DelegateRow {
     root.dataset.depth = String(Math.min(a.depth, 3));
     setGlyph(e.glyph, a.glyph, { size: 14, label: a.words });
     e.name.textContent = a.name || 'Delegate';
-    if (a.line !== null && a.line !== this.#listLine) { this.#line = a.line; }
+    // Who started it, said to a screen reader, which can't see the indent; and shown where the
+    // indent can't say it: a parent in the other list, or deeper than the indent goes.
+    e.under.textContent = a.parentName ? `under ${a.parentName}` : '';
+    e.under.className = a.parentName && (a.depth === 0 || a.depth > 3) ? 'delegate-under' : 'sr-only';
+    if (a.line !== null && a.line !== this.#listLine) { this.#line = a.line; this.#lineRev++; }
     this.#listLine = a.line;
     if (a.task) { this.#task = a.task; }
     this.#drawWords();
@@ -204,12 +211,14 @@ class DelegateRow {
       e.status.className = 'note';
       e.status.textContent = 'Loading…';
     }
+    const rev = this.#lineRev;
+    let failed = false;
     try {
       const full = await this.fetchDelegate(this.id);
       if (!full) {
         this.#show({ status: 'This delegate is no longer listed.' });
       } else {
-        if (full.line) { this.#line = full.line; }
+        if (full.line && rev === this.#lineRev) { this.#line = full.line; }
         if (full.task) { this.#task = full.task; }
         this.#drawWords();
         this.#show({ response: full.response, truncated: full.responseTruncated, reasoning: full.reasoning });
@@ -217,6 +226,7 @@ class DelegateRow {
       }
     } catch (err) {
       this.#show({ status: `Couldn't load the delegate: ${err.reason ?? err.message}`, warn: true });
+      failed = true;
     } finally {
       this.#state.loading = false;
     }
@@ -224,7 +234,8 @@ class DelegateRow {
     if (this.#state.again) {
       this.#state.again = false;
       this.#load();
-    } else if (this.#a && (this.#a.status === 'working' || this.#a.status === 'waiting')) {
+    } else if (failed || (this.#a && (this.#a.status === 'working' || this.#a.status === 'waiting'))) {
+      // A failed fetch (a reconnect, say) is tried again, finished delegate or not.
       this.#schedule(POLL_MS);
     }
   }

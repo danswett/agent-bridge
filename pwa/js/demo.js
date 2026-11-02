@@ -124,6 +124,7 @@ export class DemoHost {
   getLog = [];
   // What each delegate said in full, by its id, for session.get with agent; a test changes it.
   delegateWords = clone(DELEGATE_WORDS);
+  failDelegateGets = 0;
   seq = 0;
   revision = 0;
 
@@ -232,7 +233,13 @@ export class DemoHost {
         const s = this.sessions.get(data?.id);
         // With agent: that one delegate in full, as a host since sub-agents answers. After the
         // answer delay and any hold, so a test can change the delegate while one is on its way.
+        // failDelegateGets: that many fail first, as during a reconnect.
         if (s && typeof data?.agent === 'string') {
+          if (this.failDelegateGets > 0) {
+            this.failDelegateGets--;
+            t.deliver({ re: id, ok: false, error: 'the machine is reconnecting' });
+            return undefined;
+          }
           this.#after(() => delegateDetail(this.sessions.get(data.id) ?? s, data.agent, this.delegateWords)).then(reply);
           return undefined;
         }

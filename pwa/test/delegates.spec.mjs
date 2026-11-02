@@ -185,6 +185,40 @@ test('a fetch that brings the same words leaves what is shown alone', async ({ p
   await expect(row.locator('.delegate-latest .md > [data-seen="1"]')).toHaveCount(1);
 });
 
+test('a nested delegate names who started it: aloud under its parent, and in words where the parent is in the other list', async ({ page }) => {
+  await openDemo(page);
+  const grep = delegate(page, 'demo-agent-grep');
+  await expect(grep.locator('.delegate-summary')).toContainText('under Read witness shell logic');
+  await expect(grep.locator('.sr-only')).toHaveText('under Read witness shell logic');
+  await card(page).locator('.delegates-finished > summary').click();
+  await expect(delegate(page, 'demo-agent-review').locator('.delegate-under')).toBeVisible();
+  await expect(delegate(page, 'demo-agent-review').locator('.delegate-under')).toHaveText('under Read witness shell logic');
+});
+
+test('a delegate whose words could not be fetched is tried again, finished or not', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(() => { window.agentBridgeDemo.host.failDelegateGets = 1; });
+  await card(page).locator('.delegates-finished > summary').click();
+  const row = delegate(page, 'demo-agent-review');
+  await row.locator('.delegate-summary').click();
+  await expect(row.locator('.delegate-body [role="status"]')).toHaveText(/^Couldn't load the delegate: .*reconnecting/);
+  await expect(row.locator('.delegate-body [role="status"]')).toBeHidden({ timeout: 15000 });
+  await expect(row.locator('.delegate-latest .md')).toHaveText('No regressions: the flag now follows the latest reply.');
+});
+
+test('the main agent\'s reasoning alone is labelled as its own', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(({ id, at }) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    d.upsert({ ...s, updatedAt: at, activity: { ...s.activity, own: { reasoning: 'Two independent jobs: delegate both.' } } });
+  }, { id: SESSION, at: later() });
+  const c = card(page);
+  await expect(c.locator('.response')).toBeHidden();
+  await expect(c.locator('.body > .reasoning')).toBeVisible();
+  await expect(c.locator('.voice-label')).toBeVisible();
+});
+
 test('a delegate starting does not take keyboard focus from the row being read', async ({ page }) => {
   await openDemo(page);
   const summary = delegate(page, 'demo-agent-suite').locator('.delegate-summary');

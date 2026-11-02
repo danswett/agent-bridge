@@ -180,7 +180,7 @@ export class SessionCard {
     e.response.hidden = !voice.response;
     e.truncated.hidden = !voice.responseTruncated;
     e.dropped.hidden = !voice.responseDropped;
-    e.voice.hidden = !(voice.attributed && (voice.response || voice.responseDropped));
+    e.voice.hidden = !(voice.attributed && (voice.response || voice.responseDropped || voice.reasoning));
     e.reasoning.hidden = !voice.reasoning;
     e.reasoningText.textContent = voice.reasoning ?? '';
     this.delegates.update(s);
