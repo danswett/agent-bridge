@@ -72,6 +72,9 @@ final class HostStore: Identifiable {
     @ObservationIgnored private var transport: HostTransport?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var nextID = 0
+    /// One receipt per session, like the retained mutation slot. A view reopening or a
+    /// duplicate receipt must not erase a newly composed draft with the same text.
+    @ObservationIgnored private var cleanedReplyRequests: [String: UUID] = [:]
 
     init(id: String, name: String, isLocal: Bool, provider: @escaping @Sendable () async throws -> HostTransport) {
         self.id = id
@@ -145,9 +148,25 @@ final class HostStore: Identifiable {
             let result = try await call(attempt.operation.op, data: attempt.operation.data,
                                         timeout: timeout, onlyTo: attempt.hostInstance)
             attempts[slot]?.result = result
+            cleanDeliveredReplyDraft(attempt.operation, result: result)
             onMutationResult?(attempt.operation, result)
         } catch { attempts[slot]?.error = "Delivery was not confirmed. Check the session before trying again. \(error.localizedDescription)" }
         attempts[slot]?.isSending = false
+    }
+
+    private func cleanDeliveredReplyDraft(_ operation: BridgeOperation, result: JSONValue) {
+        guard operation.op == "session.reply", result["outcome"]?.string == "delivered",
+              let request = operation.requestID,
+              operation.data["request"]?.string.flatMap(UUID.init(uuidString:)) == request,
+              let sessionID = operation.data["id"]?.string,
+              let sent = operation.data["text"]?.string,
+              cleanedReplyRequests[sessionID] != request else { return }
+        cleanedReplyRequests[sessionID] = request
+        // Keep everything appended while this request was pending. Compare the exact wire
+        // prefix; Swift's canonically equivalent String comparison is too broad here.
+        guard !sent.isEmpty, let draft = replyDrafts[sessionID], draft.utf8.starts(with: sent.utf8) else { return }
+        let remaining = String(decoding: draft.utf8.dropFirst(sent.utf8.count), as: UTF8.self)
+        replyDrafts[sessionID] = String(remaining.drop(while: \.isWhitespace))
     }
 
     func start() {
