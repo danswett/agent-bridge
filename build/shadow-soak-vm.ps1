@@ -175,7 +175,7 @@ if (-not $up) { throw "Home Assistant does not answer on VM-M's loopback" }
 '@ | Write-Output
 
     Write-Information "VM-M: agent-ha-bridge, the shadow host ($hostCommit) and the driver ($driverCommit)" -InformationAction Continue
-    $guest = $dotnetEnv + @'
+    $guest = @'
 $ahb = "$HOME\.agent-ha-bridge"
 $version = Get-Content "$ahb\installer\VERSION"
 $config = Get-Content "$ahb\config.json" -Raw | ConvertFrom-Json
@@ -225,11 +225,12 @@ if ($LASTEXITCODE) { throw 'publishing the driver failed' }
 "shadow host at __HOST__, driver at __DRIVER__"
 '@
     $guest = $guest.Replace('__SOAK__', $soak).Replace('__HOST__', $hostCommit).Replace('__DRIVER__', $driverCommit)
+    $appHost = ''
     if (-not $KeepAppHost) {
         # The app's own host is read-only beside agent-ha-bridge too, but its Home Assistant
-        # connector wakes whenever the daemon is down, as during the soak's daemon restart.
-        $guest += @'
-
+        # connector wakes whenever the daemon is down, as during the soak's daemon restart - and
+        # the one above, after the worktree settings, so it is stopped before anything else.
+        $appHost = @'
 foreach ($p in Get-Process AgentBridge -ErrorAction SilentlyContinue) { Stop-Process -Id $p.Id -Force }
 # Disabled, not only stopped: its logon task would bring it back after a reboot, and the app
 # starts the host only through that task. Which were enabled is kept for -Finish.
@@ -244,9 +245,10 @@ foreach ($p in Get-Process agent-bridge-host, agent-bridge-hostw -ErrorAction Si
     if ($p.Path -like "$env:LOCALAPPDATA\AgentBridgeApp\*") { Stop-Process -Id $p.Id -Force }
 }
 'the app and its host stopped, and its logon task disabled until -Finish'
+
 '@.Replace('__SOAK__', $soak)
     }
-    Invoke-Guest M -AsDesktopUser -TimeoutMinutes 60 -Script $guest | Write-Output
+    Invoke-Guest M -AsDesktopUser -TimeoutMinutes 60 -Script ($dotnetEnv + "`r`n" + $appHost + $guest) | Write-Output
     return
 }
 
