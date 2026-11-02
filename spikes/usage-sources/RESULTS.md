@@ -770,9 +770,12 @@ from npm, signed in to a ChatGPT Plus account with device auth. The VM was then
 deleted. Every probe ran the five spike messages with no model turn and no `thread/*` or
 `turn/*` request. E13(d), the Windows repeat, wasn't run.
 
-**These results change X-4 and #200.** The 20-second grace period isn't what decides
-whether a rotated token is lost. Codex's own start-up timeouts are, and they apply to every
-`codex app-server` start, whatever the probe does with standard input.
+**These results change X-4 and #200.**
+- **Closing stdin before the responses loses rotations.** Wait for them all.
+- **Once the probe has waited, Codex's own start-up timeouts decide whether a rotated
+  token is lost, not the grace period.** They apply to every `codex app-server` start.
+- **The grace period stays**, for one refresher these runs didn't exercise (see What this
+  decides).
 
 ### How it was run
 
@@ -868,17 +871,30 @@ said "Logged in using ChatGPT", which confirms X-5.
   depends on server behaviour the client can't see.
 - **(b) passed for EOF.** Closing stdin after the responses lost nothing that the probe
   could still save.
-- **(c) No refresh outlives the probe's responses.** Every refresh came from one of three
-  places, and each finished, or was cancelled, before the responses:
+- **(c) No refresh outlived the probe's responses in any run.** Every refresh seen came from
+  one of three places, and each finished, or was cancelled, before the responses:
   - the start-up `auth()`, which `initialize` waits for;
   - the usage read's own `auth()`, which the read waits for;
   - routing discovery, which `account/read` waits for. **The second `account/read` does
     wait for routing discovery's refresh** (c2, 10 s).
-- **The refreshes that were lost were cancelled by Codex's own timeouts:** 20 s for cloud
-  config at start-up, and 15 s for routing discovery. That happened whatever the probe did
-  with stdin. In (c2), (i) and (ii) gave identical outcomes.
-- **So the 20 s grace period is harmless but buys nothing.** Closing stdin on the last
-  response is as safe as Codex itself.
+- **One refresher wasn't exercised.** The model-catalogue fetch takes its `auth()` in a
+  detached task, so that a catalogue timeout can't drop a rotation
+  (`model-provider/src/models_endpoint.rs:127-156`), and nothing the probe waits for
+  joins it.
+  - In every run the catalogue request went out at start-up, before the usage read, and
+    any refresh it needed was already in flight or done.
+  - A catalogue fetch whose `auth()` came after the usage read's, just as the window
+    opened, would refresh outside every response. EOF would then drop it at runtime
+    teardown. No run held the token response for that case.
+- **In the runs that waited for all their responses, the lost refreshes were cancelled by
+  Codex's own timeouts:** 20 s for cloud config at start-up, and 15 s for routing
+  discovery. There the stdin timing made no difference: in (c2), (i) and (ii) gave
+  identical outcomes. Closing stdin early is different: in (a), the rate-limit read's
+  refresh was cut off by the 30 s drain after EOF, and (b) saved that same rotation by
+  waiting.
+- **So keep the grace period.** It changed nothing in any run here, but it covers the
+  catalogue case above, as long as the token endpoint answers within it. X-4's rule
+  stands: wait for all the responses, then at least 20 s, then close stdin.
 - **The remaining risk is a slow token endpoint**, more than 15 to 20 s, while a refresh is
   due. That loses the rotation on any app-server start, including the user's own. Each
   probe adds a start, so the pace limits keep their weight. The daemon route (X-3) adds
@@ -891,20 +907,21 @@ said "Logged in using ChatGPT", which confirms X-5.
   which refreshes": the first 401 only reloads from disk. A refresh needs a second
   consecutive 401.
 - "A background refresh can then still be running after both responses arrive": not
-  observed in any run where the probe waited for its responses. Each refresher found is
-  awaited by `initialize`, the usage read or `account/read`.
+  observed in any run where the probe waited for its responses. Each refresher seen is
+  awaited by `initialize`, the usage read or `account/read`. The one candidate left is
+  the model catalogue's detached `auth()`, and it was not exercised with a held token.
 - Add the start-up cloud-config refresh, bounded by 20 s, to "What could still be
   refreshing". It's the first caller when a refresh is due, and the most likely place to
   lose a rotation.
 - "On Unix, closing standard input arms a 45 s watchdog": still true, but the process
   exited at the 30 s drain first, and within 0.06 s of EOF whenever nothing was in flight.
-- "Interim rule": closing stdin after all the responses is sufficient. The grace period
-  can go, or stay as cheap insurance. Either way, the standalone route stays.
+- "Interim rule": it becomes the rule. Wait for all the responses, then at least 20 s,
+  then close stdin. The standalone route stays.
 
 **#200 Codex:**
 - **Shutdown.** "It closes standard input only after the responses and the grace period,
-  or by whatever shutdown mechanism E13 chose." E13 chose: close stdin after the last
-  response, which is the second `account/read`. The test "a fake app-server that answers
+  or by whatever shutdown mechanism E13 chose." E13 keeps the grace period: close stdin
+  at least 20 s after the last response, which is the second `account/read`. The test "a fake app-server that answers
   after the 60 s reporting timeout still has its standard input open" still stands.
 - **Errors that aren't a sign-out.** The probe must treat these as transient and back
   off. They're what a slow token endpoint produces:
