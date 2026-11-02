@@ -77,10 +77,16 @@ public static class StatusRules
 
     static bool Running(Subagent a) => a.Status is SubagentStatus.Working or SubagentStatus.Waiting;
 
-    // Delegates still running beside the session's own question: the host's background count,
-    // or the listed ones running, whichever knows of more (a task agent isn't in the count, and
-    // a list cut short undercounts).
-    static int RunningDelegates(Session s) => Math.Max(s.Activity.Background?.Agents ?? 0, s.Subagents?.Count(Running) ?? 0);
+    // Delegates still running beside the session's own question. The host's background count is
+    // at any depth and never trimmed, but counts background agents only; task agents come from
+    // the list (which a budget may trim). The listed background ones stand in for the count when
+    // a host sends none, and are never counted twice.
+    static int RunningDelegates(Session s)
+    {
+        var listed = s.Subagents?.Where(Running).ToList() ?? [];
+        var background = listed.Count(a => a.Kind == SubagentKind.Background);
+        return Math.Max(s.Activity.Background?.Agents ?? 0, background) + (listed.Count - background);
+    }
 
     // The task agent running as part of the main agent's own turn: a running task entry whose
     // starters are all task agents too. One a background delegate started is that delegate's

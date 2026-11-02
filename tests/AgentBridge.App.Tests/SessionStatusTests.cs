@@ -49,6 +49,11 @@ public sealed class SessionStatusTests
         Assert.Equal("Waiting on you · 1 delegate still running", Said(Session(question: Make.Free(), subagents: [Delegate("a", SubagentKind.Task), Delegate("b", status: SubagentStatus.Ended)])).Text);
         // An idle background delegate waits to be woken: it is not running.
         Assert.Equal("Waiting on you", Said(Session(question: Make.Free(), subagents: [Delegate("a", status: SubagentStatus.Idle)])).Text);
+        // The host counts background agents, untrimmed; running tasks are added from the list, and
+        // a listed background agent is never counted twice. Ten background agents and a task, with
+        // the task and seven of the ten listed, are eleven.
+        Assert.Equal("Waiting on you · 11 delegates still running", Said(Session(question: Make.Free(), background: Background.Of(10, 0), more: 3,
+            subagents: [Delegate("t", SubagentKind.Task), .. Enumerable.Range(0, 7).Select(i => Delegate($"b{i}"))])).Text);
     }
 
     [Fact]
