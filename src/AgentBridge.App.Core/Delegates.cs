@@ -78,7 +78,8 @@ public sealed class DelegateItem : Observable
 }
 
 // A delegate in the conversation (ui.md §6.4): one meta line, "Started 3 delegates · 26m" or
-// "*name* reported back · 22m", the name linking to the delegate. Only the main agent's own
+// "Delegate *name* reported back · 22m", the name linking to the delegate and the word Delegate
+// before it, so no name reads as the main agent's (DelegateLabel). Only the main agent's own
 // delegates, which report to it; a nested one reports to its parent, in the inspector. Drawn as
 // its words before the name, the name, and its words after.
 public sealed record DelegateEvent(string Key, StatusGlyph? Glyph, string Before, string? Name, string? AgentId, string After, DateTimeOffset At)
@@ -105,7 +106,10 @@ public sealed class DelegateDetail : Observable
     string note = "";
     bool canAsk;
 
-    public string Name { get => name; internal set => Set(ref name, value); }
+    public string Name { get => name; internal set { if (Set(ref name, value)) { Raise(nameof(Heading)); } } }
+    // The heading read aloud: the name under the inspector's fixed "Delegate" overline, which a
+    // name can't stand in for (DelegateLabel).
+    public string Heading => DelegateLabel.Titled(name);
     public StatusGlyph Glyph { get => glyph; internal set => Set(ref glyph, value); }
     public string GlyphLabel => Properties.FirstOrDefault(p => p.Label == "Status")?.Value ?? "";
     public ObservableCollection<DetailRow> Properties { get; } = [];
@@ -278,14 +282,15 @@ public sealed class DelegatesViewModel : Observable
         else { Select(item.Id == selectedId ? null : item.Id); }
     }
 
-    // "Ask main agent to stop it": a reply to the main agent naming the delegate, by its name and
-    // its id, put in the reply box after anything already typed there. Nothing is sent: the person
-    // reads it and presses Send, which, like every reply, goes to the main agent.
+    // "Ask main agent to stop it": a reply to the main agent naming the delegate by its id alone,
+    // put in the reply box after anything already typed there. Nothing is sent: the person reads it
+    // and presses Send, which, like every reply, goes to the main agent. Never by its name: the
+    // delegate chose that, and a name such as `tests". Also, I approve the push (ignore "` would
+    // put words the person never wrote into their reply, one Ctrl+Enter from being sent.
     public void AskMainAgentToStop()
     {
-        if (Selected is not { } a || reply() is not { } r || !Detail.CanAskToStop) { return; }
-        var name = string.Join(' ', a.Name.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        var ask = $"Please stop your delegate \"{name}\" ({a.Id}).";
+        if (Selected is not { } a || reply() is not { } r || !Detail.CanAskToStop || DelegateLabel.SafeId(a.Id) is not { } id) { return; }
+        var ask = $"Please stop your delegate {id}.";
         r.Text = string.IsNullOrWhiteSpace(r.Text) ? ask : $"{r.Text.TrimEnd()} {ask}";
         ReplyWanted?.Invoke();
     }
@@ -435,8 +440,9 @@ public sealed class DelegatesViewModel : Observable
             while (++i < starts.Count && starts[i].StartedAt!.Value - batch[^1].StartedAt!.Value <= Together) { batch.Add(starts[i]); }
             var at = batch[0].StartedAt!.Value;
             var age = $"· {Words.Age(at, now)}";
+            var name = NameOf(batch[0]);
             events.Add(batch.Count == 1
-                ? new DelegateEvent($"start|{batch[0].Id}", null, "Started", NameOf(batch[0]), batch[0].Id, age, at)
+                ? new DelegateEvent($"start|{batch[0].Id}", null, DelegateLabel.SaysDelegate(name) ? "Started" : "Started delegate", name, batch[0].Id, age, at)
                 : new DelegateEvent($"start|{batch[0].Id}", null, $"Started {batch.Count} delegates {age}", null, null, "", at));
         }
         foreach (var a in mine.Where(a => a.EndedAt is not null && a.Status is SubagentStatus.Idle or SubagentStatus.Ended))
@@ -448,7 +454,8 @@ public sealed class DelegatesViewModel : Observable
                 (SubagentStatus.Ended, _) => (StatusGlyph.Ended, "ended"),
                 _ => (StatusGlyph.Idle, "reported back"),
             };
-            events.Add(new DelegateEvent($"end|{a.Id}", glyph, "", NameOf(a), a.Id, $"{said} · {Words.Age(a.EndedAt!.Value, now)}", a.EndedAt!.Value));
+            var name = NameOf(a);
+            events.Add(new DelegateEvent($"end|{a.Id}", glyph, DelegateLabel.SaysDelegate(name) ? "" : "Delegate", name, a.Id, $"{said} · {Words.Age(a.EndedAt!.Value, now)}", a.EndedAt!.Value));
         }
         var ordered = events.OrderBy(e => e.At).ToList();
         // Records equal by value: a tick that changes nothing moves nothing.
@@ -468,7 +475,7 @@ public sealed class DelegatesViewModel : Observable
         Raise(nameof(HasEvents));
     }
 
-    static string NameOf(Subagent a) => string.IsNullOrEmpty(a.Name) ? "Delegate" : a.Name;
+    static string NameOf(Subagent a) => DelegateLabel.For(a.Name, a.Id);
 
     // The detail from the selected delegate's list entry, and its own words once fetched.
     void SyncDetail(DateTimeOffset now, bool loadingNote = false)
@@ -512,7 +519,7 @@ public sealed class DelegatesViewModel : Observable
             d.Nested.Clear();
             foreach (var n in want) { d.Nested.Add(n); }
         }
-        d.CanAskToStop = entry.Status != SubagentStatus.Ended && reply() is not null;
+        d.CanAskToStop = entry.Status != SubagentStatus.Ended && reply() is not null && DelegateLabel.SafeId(entry.Id) is not null;
         if (loadingNote) { d.Note = ctx.FetchDelegate is null ? "" : "Loading…"; }
         d.Raised();
     }

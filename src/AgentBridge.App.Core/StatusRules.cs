@@ -49,7 +49,7 @@ public static class StatusRules
             // wins over it at the host, which then sends no waitingOn.
             if ((s.WaitingOn ?? q?.Agent) is { } asker)
             {
-                var name = s.Subagents?.FirstOrDefault(a => a.Id == asker)?.Name ?? "A delegate";
+                var name = s.Subagents?.FirstOrDefault(a => a.Id == asker) is { } agent ? DelegateLabel.For(agent.Name, agent.Id) : "A delegate";
                 return new(2, StatusGlyph.Needs, "waiting", $"{name} asks{atMachine}", StatusTone.Needs, false);
             }
             var n = RunningDelegates(s);
@@ -58,7 +58,7 @@ public static class StatusRules
         if (s.Status == SessionStatus.Working)
         {
             var task = ForegroundTask(s);
-            return new(3, StatusGlyph.Working, "working", task is null ? "Working" : $"Working · task: {task.Name}", StatusTone.Plain, false);
+            return new(3, StatusGlyph.Working, "working", task is null ? "Working" : $"Working · task: {DelegateLabel.For(task.Name, task.Id)}", StatusTone.Plain, false);
         }
         var b = s.Activity.Background;
         if (b is { Agents: > 0 })

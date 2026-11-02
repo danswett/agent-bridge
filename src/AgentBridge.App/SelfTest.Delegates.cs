@@ -55,6 +55,9 @@ static partial class SelfTest
         check(loaded && id?.Text == Witness && id.FontFamily.Source == ((Microsoft.UI.Xaml.Media.FontFamily)Application.Current.Resources["MonoFontFamily"]).Source && took.Count >= 2 && took.All(t => t.Contains(':', StringComparison.Ordinal)),
             $"shows the delegate selected in the inspector: its own words fetched, its ID in mono, and its tools with how long each took ({string.Join(", ", took)})");
         check(Item(Witness) is { } selected && AutomationProperties.GetName(selected).EndsWith(", selected", StringComparison.Ordinal), "marks the delegate shown in the inspector as selected in the strip");
+        check(inspector is not null && ById<TextBlock>(inspector, "DelegateOverline") is { Text: "Delegate", ActualHeight: > 0 }
+            && ById<TextBlock>(inspector, "DelegateName") is { } heading && AutomationProperties.GetName(heading).StartsWith("Delegate ", StringComparison.Ordinal),
+            "heads the inspector with a fixed Delegate overline, so no delegate's name reads as the main agent's label");
         await Picture(window.RootElement, Path.ChangeExtension(outFile, ".delegates.png"));
 
         // "Ask main agent to stop it": the reply box, filled, and nothing sent.
@@ -64,8 +67,8 @@ static partial class SelfTest
             ((IInvokeProvider)new ButtonAutomationPeer(ask).GetPattern(PatternInterface.Invoke)).Invoke();
             await Task.Delay(300);
             var box = ById<TextBox>(view, "ReplyText");
-            check(box?.Text.Contains($"({Witness})", StringComparison.Ordinal) == true && !reply.Pending && reply.StatusText.Length == 0,
-                "fills the reply box to ask the main agent to stop a delegate, and sends nothing");
+            check(box?.Text.Contains($"Please stop your delegate {Witness}.", StringComparison.Ordinal) == true && !reply.Pending && reply.StatusText.Length == 0,
+                "fills the reply box to ask the main agent to stop a delegate, by its id, and sends nothing");
             reply.Text = before;
         }
         else { check(false, "offers Ask main agent to stop it for a running delegate"); }

@@ -34,16 +34,26 @@
                 AutomationProperties.AutomationId="DelegateGlyph"
                 Glyph="{x:Bind Card.Delegates.Detail.Glyph, Mode=OneWay}"
                 Label="{x:Bind Card.Delegates.Detail.GlyphLabel, Mode=OneWay}" />
-            <TextBlock
-                Grid.Column="2"
-                VerticalAlignment="Center"
-                Style="{StaticResource AbTypeRow}"
-                FontWeight="SemiBold"
-                TextWrapping="Wrap"
-                IsTextSelectionEnabled="True"
-                AutomationProperties.HeadingLevel="Level2"
-                AutomationProperties.AutomationId="DelegateName"
-                Text="{x:Bind Card.Delegates.Detail.Name, Mode=OneWay}" />
+            <!-- A fixed "Delegate" overline above the name: the main agent's words carry the label
+                 "Main agent", and no name a delegate gives itself can look like that here
+                 (DelegateLabel, ui.md §6.3). -->
+            <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="0">
+                <TextBlock
+                    Style="{StaticResource AbTypeMeta}"
+                    Foreground="{ThemeResource AbText2}"
+                    AutomationProperties.AccessibilityView="Raw"
+                    AutomationProperties.AutomationId="DelegateOverline"
+                    Text="Delegate" />
+                <TextBlock
+                    Style="{StaticResource AbTypeRow}"
+                    FontWeight="SemiBold"
+                    TextWrapping="Wrap"
+                    IsTextSelectionEnabled="True"
+                    AutomationProperties.HeadingLevel="Level2"
+                    AutomationProperties.AutomationId="DelegateName"
+                    AutomationProperties.Name="{x:Bind Card.Delegates.Detail.Heading, Mode=OneWay}"
+                    Text="{x:Bind Card.Delegates.Detail.Name, Mode=OneWay}" />
+            </StackPanel>
         </Grid>
 
         <ItemsControl ItemsSource="{x:Bind Card.Delegates.Detail.Properties, Mode=OneWay}" IsTabStop="False" AutomationProperties.AutomationId="DelegateProperties">

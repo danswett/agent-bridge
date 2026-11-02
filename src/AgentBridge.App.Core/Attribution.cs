@@ -18,7 +18,7 @@ public sealed record DelegateState(StatusGlyph Glyph, string Words, bool Running
 public sealed record DelegateEntry(Subagent Agent, int Depth, DelegateState State, string? ParentName)
 {
     public string Id => Agent.Id;
-    public string Name => string.IsNullOrEmpty(Agent.Name) ? "Delegate" : Agent.Name;
+    public string Name => DelegateLabel.For(Agent.Name, Agent.Id);
 }
 
 // The session's delegates: Active (running ones first, then idle ones, each nested under its
@@ -90,7 +90,7 @@ public static class Attribution
         var more = s.SubagentsMore ?? 0;
         if (list.Count == 0 && more <= 0) { return null; }
         var names = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var a in list) { names.TryAdd(a.Id, string.IsNullOrEmpty(a.Name) ? "Delegate" : a.Name); }
+        foreach (var a in list) { names.TryAdd(a.Id, DelegateLabel.For(a.Name, a.Id)); }
         var rows = list.Select(a => (Agent: a, State: StateOf(a), ParentName: a.Parent is { } p && p != a.Id ? names.GetValueOrDefault(p) : null)).ToList();
         var running = rows.Where(r => r.State.Running);
         var idle = rows.Where(r => !r.State.Running && r.Agent.Status != SubagentStatus.Ended);

@@ -466,6 +466,16 @@ dot with the preceding fact.
   - nested delegates, listed under their parent.
 - **One action:** "Ask main agent to stop it". It pre-fills a reply to the main agent and
   sends nothing on its own. There is no per-delegate typing or Stop.
+- **Delegate names** are the delegate's own words, so one could pose as the main agent.
+  Every surface shows the same safe label (the app's `DelegateLabel`): bidi controls,
+  zero-width, format, control and other default-ignorable characters are removed, any
+  whitespace (line and paragraph separators too) becomes one space, and the result is cut to
+  60 characters with "…". With nothing left, it is "Delegate" and the first 8 characters of
+  its id. A name that reads as the main agent's (NFKD-folded, marks and case dropped: "main"
+  then "agent…", or "mainagent…") shows as `Delegate “<name>”`. The inspector's heading has a
+  fixed "Delegate" overline above the name, and the pre-filled reply names the delegate by its
+  id alone ("Please stop your delegate *id*."), never by its name; an id with anything but
+  ASCII letters, digits, `-`, `_`, `.` or `:` gets no action.
 
 ### 6.4 Conversation
 
@@ -476,7 +486,8 @@ dot with the preceding fact.
   or a delegate list); otherwise the label is the agent's name ("Claude"), as such a host may
   send a delegate's words as the response.
 - **Delegate events:** one line each, meta style, with an icon: "Started 3 delegates ·
-  26m", "*Read witness shell logic* reported back · 22m". The name links to the delegate.
+  26m", "Delegate *Read witness shell logic* reported back · 22m". The name links to the
+  delegate, and the word "Delegate" stays outside the link.
 - **Questions:** in the stream, as a card in Needs you colours. The header reads "Main agent
   asks" or "*Delegate* asks", followed by the question and the platform's own radio,
   checkbox and text controls, with Answer in Bridge.
@@ -580,6 +591,8 @@ machine, online ones first, then the account's offline machines (#213):
 - **Names:**
   - "Main agent" (never "parent").
   - "Delegate" in the UI ("sub-agent" in code and specs).
+  - A delegate's name is always its safe label (§6.3), never the text the host sent, and
+    never reads as "Main agent".
   - "Needs you".
   - "End session" (not "Stop" for the whole session).
 - **Numbers before nouns:** "3 delegates", "1 background command".
