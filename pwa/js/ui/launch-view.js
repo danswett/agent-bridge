@@ -97,6 +97,8 @@ export class LaunchPanel {
   // Which machines shown only for their questions have a folder-trust question waiting, as last
   // seen: the Launch way keeps its dot while any does, whichever machine is picked (#217).
   #asks = new Map();
+  // When each such machine not picked was last asked for its list (probe()).
+  #probed = new Map();
   #target = null;
   #options = null;
   // Sessions the account's other machines offer: [{ hostId, machineName, key, resumable }].
@@ -199,7 +201,7 @@ export class LaunchPanel {
     if (choices.length) { e.machine.value = picked; }
     // A machine no longer offered has nothing waiting here.
     const offered = new Set((list ?? []).map((m) => m.hostId));
-    for (const id of [...this.#asks.keys()]) { if (!offered.has(id) && id !== picked) { this.#asks.delete(id); } }
+    for (const id of [...this.#asks.keys()]) { if (!offered.has(id) && id !== picked) { this.#asks.delete(id); this.#probed.delete(id); } }
   }
 
   // The machine shown, or null when it can't launch: { hostId, machineName, load, transfers,
@@ -244,7 +246,7 @@ export class LaunchPanel {
     // Another machine's choices: nothing picked on the last one carries over but the prompt.
     for (const s of this.els.form.querySelectorAll('select')) { delete s.dataset.scope; }
     this.root.hidden = !target;
-    if (!target) { this.#asks.clear(); this.waiting(false); return; }
+    if (!target) { this.#asks.clear(); this.#probed.clear(); this.waiting(false); return; }
     this.#unwatch = this.service.watch(target.hostId, (entry) => this.#settled(entry));
     // One that finished while another machine was picked was not watched then: the list asked
     // for next supersedes the question it named, as it would have.
@@ -254,6 +256,22 @@ export class LaunchPanel {
     // Its questions are looked for even with the panel closed: it shows only if there is one.
     if (target.inspectOnly && !this.#loading) { this.refresh(); }
     this.#draw();
+  }
+
+  // Another machine shown only for its questions, not the one picked: its list is read now and
+  // then (as often as the picked one's is asked again), so the Launch way's dot says when a
+  // question waits there too, without its being picked. load() is its launch.options.
+  probe(hostId, load) {
+    if (!this.#target || hostId === this.#target.hostId) { return; }
+    const at = this.#probed.get(hostId);
+    if (at !== undefined && Date.now() - at < LaunchPanel.recheckMs) { return; }
+    this.#probed.set(hostId, Date.now());
+    load().then((o) => {
+      // Picked meanwhile: its own list, read for the panel, says.
+      if (!this.#target || this.#target.hostId === hostId) { return; }
+      this.#asks.set(hostId, (o?.trust ?? []).length > 0);
+      this.waiting([...this.#asks.values()].some(Boolean));
+    }, () => { this.#probed.delete(hostId); });
   }
 
   // A channel to that machine opened again: one shown only for its questions, with none shown,

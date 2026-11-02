@@ -582,6 +582,9 @@ export class SessionCard {
     } finally {
       this.#history.loading = false;
     }
+    // The session changed while this was on its way (an update then had nothing to refresh, or
+    // found this still loading): what came may be older than it, so it is asked again.
+    if (this.#history.loaded && this.#s.updatedAt !== at && this.#toolsShown()) { this.#scheduleHistory(); }
   }
 }
 

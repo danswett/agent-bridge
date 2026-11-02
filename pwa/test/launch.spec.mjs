@@ -560,6 +560,22 @@ test.describe('a folder-trust question', () => {
     await expect(panel(page).locator('.launch-title')).toHaveText('Waiting on DEV-VM1 (shadow)');
     await expect(card(page).locator('.trust-folder')).toHaveText('C:\\Users\\demo\\untrusted\\web');
   });
+  test('with every machine shown and none taking launches, a question on a machine not picked lights the Launch way', async ({ page }) => {
+    await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
+    await page.waitForSelector('html[data-demo-ready]');
+    await page.evaluate(() => {
+      const laptop = window.agentBridgeDemo.machines['demo-laptop'];
+      laptop.machine = { ...laptop.machine, readOnly: 'this is a read-only comparison host (delivery.readOnly in its config); answer at the machine' };
+      laptop.capabilities = laptop.capabilities.filter((c) => c !== 'sessions.launch');
+      laptop.disconnect();
+      window.agentBridgeDemo.machines['demo-shadow'].askTrust({ id: '6e1d0a4f-3c2b-4d9e-8f7a-5b4c3d2e1f0a', agent: 'claude', kind: 'claude', label: 'Claude Code', workspace: 'web', folder: 'C:\\Users\\demo\\untrusted\\web', warning: 'Do you trust the files in this folder?', answerable: false, atMachine: 'Answer at the machine.' });
+    });
+    await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
+    const way = page.locator('#nav [data-nav="launch"]');
+    await expect(way).toHaveClass(/attention/);
+    await expect(way).toHaveAttribute('aria-label', 'Launch, a question is waiting');
+    expect(await page.evaluate(() => window.agentBridgeDemo.launchPanel.hostId)).toBe('demo-laptop');
+  });
   test('with every machine shown, picking a machine with no question keeps the Launch dot for another machine\'s', async ({ page }) => {
     await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
     await page.waitForSelector('html[data-demo-ready]');

@@ -373,6 +373,32 @@ test('Tools left while the session changed are fetched again when they show', as
   await expect(v.locator('.tools-panel li.tool')).toHaveCount(7);
 });
 
+test('a session that changes while its Tools are first on their way has them fetched again', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  // Every Tools fetch from here held, with what the machine sent, until the test lets it go.
+  await page.evaluate(() => {
+    const { view } = window.agentBridgeDemo;
+    const was = view.fetchDetail.bind(view);
+    window.__held = [];
+    view.fetchDetail = (hostId, id) => was(hostId, id).then((r) => (window.__holding ? new Promise((go) => { window.__held.push(() => go(r)); }) : r));
+    window.__holding = true;
+  });
+  await row(page, CLAUDE).locator('.row-main').click();
+  const v = view(page, CLAUDE);
+  await expect.poll(() => page.evaluate(() => window.__held.length)).toBeGreaterThan(0);
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    const history = Array.from({ length: 7 }, (_, k) => ({ name: 'grep', summary: `call ${k}`, status: 'succeeded', at: new Date().toISOString() }));
+    d.upsert({ ...s, updatedAt: new Date(Date.now() + 1000).toISOString(), activity: { ...s.activity, history } });
+  }, CLAUDE);
+  await page.waitForTimeout(100);
+  // The earlier list arrives; the change it missed brings the later one.
+  await page.evaluate(() => { window.__holding = false; for (const go of window.__held.splice(0)) { go(); } });
+  await expect(v.locator('.tools-panel li.tool')).toHaveCount(7, { timeout: 8000 });
+});
+
 test('picking another machine in the tabs shows its first session, not a pane waiting for the last one', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await openDemo(page, '&machines=2');

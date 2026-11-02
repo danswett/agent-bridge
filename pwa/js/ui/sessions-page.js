@@ -493,6 +493,8 @@ export class SessionsPage {
     const pick = hosts.all ? [this.#launchHost, this.#read(LAUNCH_HOST), panel.hostId].find(has) ?? can[0]?.id ?? null : can[0]?.id ?? null;
     panel.setMachines(hosts.all ? can.map((l) => ({ hostId: l.id, name: hosts.nameOf(l.id) ?? l.id.slice(0, 8) })) : null, pick);
     panel.setTarget(pick ? this.launchTarget(pick) : null);
+    // The others shown only for their questions: a question on one lights the Launch way too.
+    for (const l of inspect) { if (l.id !== pick && l.phase === 'open') { panel.probe(l.id, this.launchTarget(l.id).load); } }
   }
 
   #launches(l) {
