@@ -352,7 +352,8 @@ public sealed class DelegatesViewModel : Observable
     }
 
     // A tool starting or finishing is a change too: the detail's Tools list is fetched, not listed.
-    static string Key(Subagent a) => $"{a.Status}|{a.Outcome}|{a.Line}|{a.EndedAt:O}|{a.CurrentTool?.Id}|{a.CurrentTool?.Status}";
+    // So is a new model: the inspector shows the fetched one, and an idle delegate is not polled.
+    static string Key(Subagent a) => $"{a.Status}|{a.Outcome}|{a.Line}|{a.EndedAt:O}|{a.Model}|{a.CurrentTool?.Id}|{a.CurrentTool?.Status}";
 
     // The selected delegate's task and latest line as its list entry has them. A new line from the
     // list moves lineRev on, so a fetch sent before it can't put back an older one; one the same
@@ -499,8 +500,10 @@ public sealed class DelegatesViewModel : Observable
         var response = fetched?.Response;
         d.Latest = !string.IsNullOrEmpty(response) ? response : keptLine;
         d.LatestTruncated = !string.IsNullOrEmpty(response) && fetched?.ResponseTruncated == true;
-        d.Reasoning = fetched?.Reasoning ?? "";
-        var tools = fetched?.History is { Count: > 0 } history ? history.Reverse() : entry.CurrentTool is { } current ? [current] : [];
+        // "Show reasoning and tool history on cards" covers a delegate's as well as the session's.
+        var showDetail = ctx.ShowDetail();
+        d.Reasoning = showDetail ? fetched?.Reasoning ?? "" : "";
+        var tools = !showDetail ? [] : fetched?.History is { Count: > 0 } history ? history.Reverse() : entry.CurrentTool is { } current ? [current] : [];
         SyncRows(d.Tools, [.. tools.Take(50).Select(t => new ToolRow(SessionCardViewModel.ToolGlyphOf(t.Status), t.Status.ToString().ToLowerInvariant(), t.Name, t.Summary, Words.Clock((t.EndedAt ?? now) - t.StartedAt)))]);
         var nested = Descendants(entry.Id, session.Subagents ?? []);
         var want = nested.Where(n => items.ContainsKey(n.Agent.Id)).Select(n => new NestedDelegate(items[n.Agent.Id], Math.Min(n.Depth, 3) * 16)).ToList();

@@ -17,6 +17,7 @@ public sealed class DelegatesTests : IAsyncLifetime
     HostConnection connection = null!;
     MainViewModel main = null!;
     PaneLayoutViewModel layout = null!;
+    bool showDetail = true;
 
     static Subagent Delegate(string id, string name, SubagentKind kind = SubagentKind.Background, SubagentStatus status = SubagentStatus.Working, double started = -1, string? parent = null) =>
         new() { Id = id, Name = name, Kind = kind, Status = status, Parent = parent, StartedAt = Now.AddMinutes(started), Model = "gpt-5.6-luna", Line = $"{name}: the latest." };
@@ -76,6 +77,7 @@ public sealed class DelegatesTests : IAsyncLifetime
             FetchDelegate = (id, agent) => Attribution.FetchDelegateAsync(connection, id, agent),
             Ui = ui,
             Time = clock,
+            ShowDetail = () => showDetail,
         }, new UsageViewModel());
         layout = new PaneLayoutViewModel(main);
         connection.Start();
@@ -253,6 +255,43 @@ public sealed class DelegatesTests : IAsyncLifetime
         ui.Post(card.RefreshTimes);
         await Wait.UntilAsync(() => card.Delegates.Detail.Latest == "Lint the PWA: everything it said." && card.Delegates.Detail.Note == "", "the retried load");
         Assert.Equal(2, Gets().Count);
+    }
+
+    [Fact]
+    public async Task A_new_model_for_an_idle_open_delegate_is_fetched_and_shown()
+    {
+        Resize(1440);
+        Select("del");
+        var card = Card("del");
+        ui.Post(() => layout.OpenDelegate("review"));
+        await Wait.UntilAsync(() => Gets().Count == 1 && card.Delegates.Detail.Note == "", "the first fetch");
+
+        clock.Advance(TimeSpan.FromSeconds(3));
+        var next = Delegating() with
+        {
+            Subagents = [.. Delegating().Subagents!.Select(a => a.Id == "review" ? a with { Model = "gpt-6-sol" } : a)],
+            UpdatedAt = Now.AddSeconds(3),
+        };
+        host.Sessions[0] = next;
+        await host.SendAsync(Events.SessionUpsert, next);
+
+        await Wait.UntilAsync(() => Gets().Count == 2 && card.Delegates.Detail.Properties.Any(p => p.Label == "Model" && p.Value == "gpt-6-sol"), "the new model");
+    }
+
+    [Fact]
+    public async Task Turning_off_reasoning_and_tool_history_hides_them_in_an_open_delegate_too()
+    {
+        Resize(1440);
+        Select("del");
+        var card = Card("del");
+        ui.Post(() => layout.OpenDelegate("witness"));
+        await Wait.UntilAsync(() => card.Delegates.Detail.HasReasoning && card.Delegates.Detail.HasTools, "its reasoning and tools");
+
+        showDetail = false;
+        ui.Post(card.CapabilitiesChanged);
+        Assert.False(TestUi.Read(() => card.Delegates.Detail.HasReasoning || card.Delegates.Detail.HasTools));
+        // Its own words stay.
+        Assert.Equal("Read witness shell logic: everything it said.", TestUi.Read(() => card.Delegates.Detail.Latest));
     }
 
     [Fact]
