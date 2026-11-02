@@ -187,19 +187,48 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Null(await Publish(client));
     }
 
+    // The exact sequel to the incident: the machine banned after a rejected token's attempts, and
+    // the replacement token given then is answered 403. It must read as the ban it is, and be
+    // looked at again, not be stopped for good as one more rejected token.
     [Fact]
-    public async Task A_403_twice_running_is_a_ban_even_from_a_token_never_accepted()
+    public async Task A_403_is_a_ban_even_for_a_new_token_after_the_last_one_used_up_its_attempts()
     {
-        var ha = new Answering(time) { Status = HttpStatusCode.Forbidden };
+        var ha = new Answering(time);
         var guard = new HaAuthGuard(Record, time);
-        var client = Client(ha, guard);
+        await Hammer(Client(ha, guard), TimeSpan.FromHours(1));
+        Assert.Equal(3, ha.Seen.Count);
 
-        var first = Assert.IsType<HomeAssistantAuthException>(await Publish(client));
-        Assert.Equal(HaAuthKind.Rejected, first.Kind);
-        time.Advance(TimeSpan.FromMinutes(5));
-        var second = Assert.IsType<HomeAssistantAuthException>(await Publish(client));
-        Assert.Equal(HaAuthKind.Banned, second.Kind);
-        Assert.Equal(2, ha.Seen.Count);
+        ha.Status = HttpStatusCode.Forbidden;
+        var replacement = Client(ha, guard, "second-token-not-a-secret");
+        var banned = Assert.IsType<HomeAssistantAuthException>(await Publish(replacement));
+        Assert.Equal((HaAuthKind.Banned, true), (banned.Kind, banned.Sent));
+
+        ha.Status = HttpStatusCode.OK;
+        await Hammer(replacement, TimeSpan.FromMinutes(20));
+        Assert.Null(guard.Describe(guard.Credential(Url, "second-token-not-a-secret")));
+        Assert.Null(await Publish(replacement));
+    }
+
+    // serve has the token accepted and sends it freely; shadow run, in its own process, has since
+    // seen it refused three times. serve must not send it again on what it knew before.
+    [Fact]
+    public async Task A_token_accepted_in_one_process_is_not_sent_again_once_another_has_seen_it_refused()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var serve = Client(ha, new HaAuthGuard(Record, time));
+        Assert.Null(await Publish(serve));
+
+        ha.Status = HttpStatusCode.Unauthorized;
+        var shadow = Client(ha, new HaAuthGuard(Record, time));
+        foreach (var wait in new[] { 5, 15, 0 })
+        {
+            await Publish(shadow);
+            time.Advance(TimeSpan.FromMinutes(wait));
+        }
+        Assert.Equal(4, ha.Seen.Count);
+
+        Assert.False(Assert.IsType<HomeAssistantAuthException>(await Publish(serve)).Sent);
+        Assert.Equal(4, ha.Seen.Count);
     }
 
     [Fact]

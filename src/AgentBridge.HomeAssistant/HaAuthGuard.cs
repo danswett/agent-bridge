@@ -28,9 +28,10 @@ namespace AgentBridge.HomeAssistant;
 //     between, a token not tried before gets exactly one attempt, and then stops too;
 //   * an attempt not yet known to be accepted goes one at a time, so a burst of callers cannot
 //     spend the budget at once;
-//   * 403 from a token Home Assistant accepted before, or 403 twice running, is a ban: nothing is
-//     sent while it lasts but a look every BanChecks, since requests from a banned address are
-//     refused before any token is read, and so are wasted rather than counted;
+//   * 403 is a ban: Home Assistant answers a refused or under-privileged token 401, and 403 only to
+//     an address it has banned. Nothing is sent while it lasts but a look every BanChecks, since
+//     requests from a banned address are refused before any token is read, and so are wasted
+//     rather than counted;
 //   * anything else (5xx, a timeout, no connection) is no refusal, and the callers' own retries
 //     and backoff go on as before.
 public sealed class HaAuthGuard
@@ -62,6 +63,8 @@ public sealed class HaAuthGuard
     // The record could not be written once: from then on this process keeps its own count, which
     // a read of the stale file must not undo (a refusal lost that way would be repeated for ever).
     bool unwritable;
+    // When the record had last been written as this process last read it.
+    DateTime readAt;
 
     // path: the shared record (FileFor); null keeps it in this process only.
     public HaAuthGuard(string? path = null, TimeProvider? time = null, Action<string>? log = null)
@@ -113,7 +116,11 @@ public sealed class HaAuthGuard
     // a whole pass rather than fail each request in it.
     public string? Refused(HaCredential credential)
     {
-        lock (gate) { return Decide(credential, time.GetUtcNow()) is { Gate: Gate.Held } d ? Message(credential, d.Kind) : null; }
+        lock (gate)
+        {
+            Refresh();
+            return Decide(credential, time.GetUtcNow()) is { Gate: Gate.Held } d ? Message(credential, d.Kind) : null;
+        }
     }
 
     // ha token set: the token was given again, which counts as a change, so it gets an attempt of
@@ -133,7 +140,12 @@ public sealed class HaAuthGuard
     public async Task<Lease> EnterAsync(HaCredential credential, CancellationToken cancellationToken = default)
     {
         Decision decision;
-        lock (gate) { decision = Decide(credential, time.GetUtcNow()); }
+        lock (gate)
+        {
+            // Even a token accepted here may since have been refused in another process.
+            Refresh();
+            decision = Decide(credential, time.GetUtcNow());
+        }
         if (decision.Gate == Gate.Clear) { return new Lease(this, credential, null); }
         if (decision.Gate == Gate.Held) { throw Refusal(credential, decision.Kind, sent: false); }
         await probe.WaitAsync(cancellationToken);
@@ -218,9 +230,12 @@ public sealed class HaAuthGuard
                 case 401:
                     answered = true;
                     return guard.Refuse(credential, HaAuthKind.Rejected, status);
+                // Not counted by Home Assistant, but how it answers a banned address, before it reads
+                // any token. Taken for a ban whatever the token: told apart by a second attempt, a
+                // token that had used up its attempts would never be looked at again.
                 case 403:
                     answered = true;
-                    return guard.Forbidden(credential);
+                    return guard.Refuse(credential, HaAuthKind.Banned, status);
                 // Home Assistant only gets as far as a missing entity having read the token.
                 case 404:
                 case >= 200 and < 300:
@@ -287,22 +302,6 @@ public sealed class HaAuthGuard
         return last + Spacing[Math.Min(c.Rejections - 1, Spacing.Count - 1)];
     }
 
-    HomeAssistantAuthException Forbidden(HaCredential credential)
-    {
-        // A 403 is not counted by Home Assistant, but it is how a banned address is answered. From
-        // a token accepted before, or twice running, it is taken for one; the first from a token
-        // never accepted is a rejection, so it is not tried again soon either way.
-        bool ban;
-        lock (gate)
-        {
-            Reload();
-            var server = state.Servers.GetValueOrDefault(credential.Server);
-            ban = server is not null && (server.BannedSince is not null || server.Forbidden > 0
-                || server.Credentials.GetValueOrDefault(credential.Id) is { Accepted: true });
-        }
-        return Refuse(credential, ban ? HaAuthKind.Banned : HaAuthKind.Rejected, HttpStatusCode.Forbidden);
-    }
-
     HomeAssistantAuthException Refuse(HaCredential credential, HaAuthKind kind, HttpStatusCode? status)
     {
         var now = time.GetUtcNow();
@@ -315,7 +314,6 @@ public sealed class HaAuthGuard
                 var server = ServerOf(s, credential, now);
                 var c = CredOf(server, credential);
                 c.AttemptAt = now;
-                if (status == HttpStatusCode.Forbidden) { server.Forbidden++; }
                 if (kind == HaAuthKind.Banned)
                 {
                     if (server.BannedSince is null) { server.BannedSince = now; server.BanLooks = 0; }
@@ -325,13 +323,9 @@ public sealed class HaAuthGuard
                 else
                 {
                     // A 401 means Home Assistant read the token, so whatever ban there was is gone.
-                    if (status != HttpStatusCode.Forbidden)
-                    {
-                        server.Forbidden = 0;
-                        server.BannedSince = null;
-                        server.BanCheckAt = null;
-                        server.BanLooks = 0;
-                    }
+                    server.BannedSince = null;
+                    server.BanCheckAt = null;
+                    server.BanLooks = 0;
                     c.Rejections++;
                     c.RejectedAt = now;
                     s.Strikes++;
@@ -355,7 +349,7 @@ public sealed class HaAuthGuard
             // Most answers change nothing, and are not written: one known good, nothing pending.
             var server = state.Servers.GetValueOrDefault(credential.Server);
             var c = server?.Credentials.GetValueOrDefault(credential.Id);
-            changed = server is null || c is not { Accepted: true, Rejections: 0 } || server.BannedSince is not null || server.Forbidden > 0
+            changed = server is null || c is not { Accepted: true, Rejections: 0 } || server.BannedSince is not null
                 || (resetsCount && state.Strikes > 0);
             if (!changed)
             {
@@ -375,7 +369,6 @@ public sealed class HaAuthGuard
                 sv.BannedSince = null;
                 sv.BanCheckAt = null;
                 sv.BanLooks = 0;
-                sv.Forbidden = 0;
                 if (resetsCount)
                 {
                     s.Strikes = 0;
@@ -494,6 +487,7 @@ public sealed class HaAuthGuard
                 var temp = path + ".tmp";
                 File.WriteAllText(temp, JsonSerializer.Serialize(state, Json));
                 File.Move(temp, path, overwrite: true);
+                readAt = File.GetLastWriteTimeUtc(path);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
@@ -509,14 +503,29 @@ public sealed class HaAuthGuard
         if (path is not null) { state = Read(); }
     }
 
+    // Reads the record again only when it has been written since it was last read: one look at its
+    // time, cheap enough for every request.
+    void Refresh()
+    {
+        if (path is null || unwritable) { return; }
+        try
+        {
+            if (File.GetLastWriteTimeUtc(path) != readAt) { state = Read(); }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
     State Read()
     {
         if (path is null || unwritable) { return state; }
         try
         {
             if (!File.Exists(path)) { return state.Servers.Count == 0 ? new State() : state; }
+            var written = File.GetLastWriteTimeUtc(path);
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            return JsonSerializer.Deserialize<State>(stream, Json) ?? new State();
+            var read = JsonSerializer.Deserialize<State>(stream, Json) ?? new State();
+            readAt = written;
+            return read;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -572,8 +581,6 @@ public sealed class HaAuthGuard
     // One Home Assistant, by address.
     sealed class Server
     {
-        // 403s running, with nothing accepted between.
-        public int Forbidden { get; set; }
         public DateTimeOffset? BannedSince { get; set; }
         public int BanLooks { get; set; }
         public DateTimeOffset? BanCheckAt { get; set; }

@@ -1235,14 +1235,16 @@ agent-ha-bridge's (`test-auth-backoff.ps1`):
   client's address. Once it has refused 3 times without a WebSocket login since, a change
   (`ha token set`, even with the same token, or a new `homeAssistant.baseUrl`) earns exactly one
   attempt.
+- **A refusal is recorded when Home Assistant answers**, from the status alone, however the body
+  then goes; and every process reads what the others have recorded before each request.
 - **A token not yet accepted** goes one request at a time, across processes too, so a burst of
   callers spends one attempt, not one each. That covers a fresh start, a fresh token, and a look
   during a ban.
-- **A ban** is recognised as a 403 from a token Home Assistant accepted before, or as 403 twice
-  running. Nothing the host calls is otherwise answered 403: Home Assistant answers a refused or
-  under-privileged token with 401. Requests from a banned address are refused before any token
-  is read, so they count for nothing but achieve nothing either. The host only looks again after
-  15 minutes, then an hour, then every 4 hours.
+- **A 403 is taken for a ban**, whatever the token. Home Assistant answers a refused or
+  under-privileged token with 401; it answers 403 only to an address it has banned (or a proxy in
+  front of it does, to a machine it refuses). Requests from a banned address are refused before
+  any token is read, so they count for nothing but achieve nothing either. The host only looks
+  again after 15 minutes, then an hour, then every 4 hours.
 - **Anything else** is not a refusal: a 5xx, a timeout or a refused connection (Home Assistant
   restarting, say). Those are retried as before, the connector's start every 30 s.
 

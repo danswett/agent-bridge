@@ -424,6 +424,20 @@ public class ClientTests
         Assert.NotNull(client.Refused);
     }
 
+    // Home Assistant counted the refusal when it answered; a body that then stalls must not hide it.
+    [Fact]
+    public async Task A_401_whose_body_stalls_is_still_recorded_as_a_refusal()
+    {
+        var guard = new HaAuthGuard();
+        var handler = new Handler((_, _) => new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StreamContent(new Stalling()) });
+        var client = new HomeAssistantClient(new Uri("http://ha.test:8123"), Token, new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(300) }, auth: guard);
+
+        using var backstop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var e = await Assert.ThrowsAsync<HomeAssistantAuthException>(() => client.PublishAsync("t", "p", false, backstop.Token));
+        Assert.True(e.Sent);
+        Assert.NotNull(client.Refused);
+    }
+
     [Fact]
     public void A_refused_websocket_upgrade_is_read_for_its_status_as_dotnet_words_it()
     {

@@ -355,13 +355,33 @@ public sealed class HomeAssistantClient : IHomeAssistant
     async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completion, CancellationToken cancellationToken)
     {
         using var lease = await auth.EnterAsync(credential, cancellationToken);
-        var response = await http.SendAsync(request, completion, cancellationToken);
+        // The headers first, and the refusal recorded from them: Home Assistant counted it when it
+        // answered, however its body then goes.
+        var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (lease.Answered(response.StatusCode) is { } refused)
         {
             response.Dispose();
             throw refused;
         }
-        return response;
+        if (completion == HttpCompletionOption.ResponseHeadersRead) { return response; }
+        // The body as ResponseContentRead would have read it, within the same timeout.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (http.Timeout != Timeout.InfiniteTimeSpan) { deadline.CancelAfter(http.Timeout); }
+        try
+        {
+            await response.Content.LoadIntoBufferAsync(deadline.Token);
+            return response;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            response.Dispose();
+            throw new TimeoutException($"Home Assistant did not send its answer within {http.Timeout.TotalSeconds:F0}s");
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
     }
 
     HttpRequestMessage Request(HttpMethod method, string path)
