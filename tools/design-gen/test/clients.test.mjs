@@ -99,10 +99,31 @@ test('the Windows app bundles every font file its MonoFontFamily names, with the
   assert.match(read(`${appDir}/Design/DesignResources.xaml`), /ms-appx:\/\/\/Assets\/Fonts\/AgentBridgeMono-Regular\.ttf#/);
 });
 
+// A status glyph is a graphic drawn in currentColor, held to 3:1 rather than 4.5:1, so a rule
+// that only styles glyphs (the failed glyph, #204) may take the danger role itself. Only a whole
+// compound selector on .glyph counts: .glyph-label is another class, and .glyph + .status-text
+// styles words.
+const GLYPH_ONLY = /^\.glyph(?:\[[^\]]*\]|:{1,2}[\w-]+(?:\([^)]*\))?|\.[\w-]+)*$/;
+const dangerWords = (css) => {
+  const offenders = [];
+  for (const [, selectors, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (selectors.split(',').every((s) => GLYPH_ONLY.test(s.trim()))) continue;
+    for (const m of body.matchAll(/(?<![-\w])color:\s*var\(--ab-danger\)/g)) offenders.push(`${selectors.trim()} { ${m[0]} }`);
+  }
+  return offenders;
+};
+
+test('only a rule that styles nothing but a status glyph may colour it in the danger role', () => {
+  assert.deepEqual(dangerWords('.glyph[data-glyph="failed"] { color: var(--ab-danger); }'), []);
+  assert.deepEqual(dangerWords('.glyph.big:hover, .glyph[data-glyph="failed"] { color: var(--ab-danger); }'), []);
+  for (const sel of ['.glyph-label', '.glyph + .status-text', '.glyph ~ span', '.glyph > text', '.row .glyph', '.glyph, .status-text']) {
+    assert.equal(dangerWords(`${sel} { color: var(--ab-danger); }`).length, 1, sel);
+  }
+});
+
 test('neither client sets words in the danger role itself, only in its text colour', () => {
   // Dark danger is 3.72:1 on the needs fill, where a question's errors and Deny sit (#188).
-  const css = withoutComments(read('pwa/app.css'));
-  assert.deepEqual([...css.matchAll(/(?<![-\w])color:\s*var\(--ab-danger\)/g)].map((m) => m[0]), []);
+  assert.deepEqual(dangerWords(withoutComments(read('pwa/app.css'))), []);
   const found = [];
   for (const f of appFiles()) {
     const text = read(`${appDir}/${f}`);
