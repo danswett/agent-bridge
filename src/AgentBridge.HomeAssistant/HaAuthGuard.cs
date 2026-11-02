@@ -60,8 +60,9 @@ public sealed class HaAuthGuard
     State state = new();
     bool unreadableSaid;
     bool unlockedSaid;
-    // The record could not be written once: from then on this process keeps its own count, which
-    // a read of the stale file must not undo (a refusal lost that way would be repeated for ever).
+    // The record could not be written, or locked, once: from then on this process keeps its own
+    // count, which a read of the stale file must not undo (a refusal lost that way would be
+    // repeated for ever).
     bool unwritable;
     // When the record had last been written as this process last read it.
     DateTime readAt;
@@ -473,12 +474,21 @@ public sealed class HaAuthGuard
     {
         lock (gate)
         {
-            if (path is null)
+            if (path is null || unwritable)
             {
                 change(state);
                 return;
             }
             using var held = Lock();
+            // Without the lock, counted here only from now on: read and written unlocked, the record
+            // could lose what another process was recording at the same moment, and read again
+            // later, it would lose what this one counted.
+            if (held is null)
+            {
+                unwritable = true;
+                change(state);
+                return;
+            }
             state = Read();
             if (!change(state)) { return; }
             try
@@ -549,7 +559,7 @@ public sealed class HaAuthGuard
             catch (IOException) when (Environment.TickCount64 < deadline) { Thread.Sleep(20); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                if (!unlockedSaid) { log($"Home Assistant's refusals could not be locked ({e.GetType().Name}); recording them anyway"); }
+                if (!unlockedSaid) { log($"Home Assistant's refusals could not be locked ({e.GetType().Name}); counting in this process"); }
                 unlockedSaid = true;
                 return null;
             }

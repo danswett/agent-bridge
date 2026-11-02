@@ -156,6 +156,25 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(1 + HaAuthGuard.MaxRejections, ha.Seen.Count);
     }
 
+    // Another process holding the record's lock for good: nothing is written over its record, and
+    // this one still counts for itself.
+    [Fact]
+    public async Task A_record_that_cannot_be_locked_is_left_alone_and_a_rejected_token_still_stops_after_three_attempts()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var guard = new HaAuthGuard(Record, time);
+        Assert.Null(await Publish(Client(ha, guard, "other-token-not-a-secret")));
+        var before = File.ReadAllText(Record);
+        using (new FileStream(Record + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            ha.Status = HttpStatusCode.Unauthorized;
+            await Hammer(Client(ha, guard), TimeSpan.FromDays(1));
+        }
+
+        Assert.Equal(1 + HaAuthGuard.MaxRejections, ha.Seen.Count);
+        Assert.Equal(before, File.ReadAllText(Record));
+    }
+
     [Fact]
     public async Task A_403_once_the_token_was_accepted_is_reported_as_a_ban_and_only_looked_at_now_and_then()
     {
