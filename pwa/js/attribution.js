@@ -14,6 +14,9 @@ import { ago, duration } from './ui/time.js';
 //   responseTruncated: the start of the response was cut to fit.
 //   responseDropped: the main agent had a response, but the session budget left it out.
 //   attributed: the host says whose each field is, so the words can be labelled "Main agent".
+//   at: when the main agent last wrote, where its words are own's and the host says (own.at);
+//     null where they are the top-level ones, which the session's own updatedAt dates. A
+//     delegate's later update must not make the main agent's words look newer (#249).
 export function mainVoice(session) {
   const a = session?.activity ?? {};
   const source = a.source ?? null;
@@ -29,11 +32,13 @@ export function mainVoice(session) {
     truncated = a.responseTruncated === true;
   }
   const reasoning = (source?.reasoning ? own?.reasoning : a.reasoning || own?.reasoning) || null;
+  const owns = !!(source?.response || source?.reasoning || !a.response);
   return {
     response,
     responseTruncated: !!response && truncated,
     responseDropped: !response && truncated,
     reasoning,
+    at: owns && own?.at ? own.at : null,
     attributed: source !== null || own !== null || Array.isArray(session?.subagents) || !!session?.subagentsMore,
   };
 }

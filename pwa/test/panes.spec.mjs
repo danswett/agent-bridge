@@ -697,3 +697,70 @@ test('in forced colours the selected row and the tabs keep a system colour for t
   const tab = await v.getByRole('tab', { name: 'Conversation' }).evaluate((e) => getComputedStyle(e, '::after').forcedColorAdjust);
   expect(tab).toBe('none');
 });
+
+// #249: who asks, when the main agent spoke, and where Details puts focus.
+test.describe('the session pane after #221\'s review', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+  const DELEGATES = [{ id: 'agent-7', kind: 'background', status: 'waiting', name: 'Read witness shell logic' }, { id: 'agent-9', kind: 'background', status: 'working', name: 'Lint the PWA' }];
+  // COPILOT's question, asked by whoever `agent` and `waitingOn` say, with the delegates given.
+  const askAs = (page, { agent, waitingOn, subagents = DELEGATES }) => page.evaluate(({ id, agent, waitingOn, subagents }) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    const { agent: _, ...question } = s.question;
+    d.upsert({ ...s, updatedAt: new Date(Date.now() + 1000).toISOString(), waitingOn, subagents, question: agent ? { ...question, agent } : question });
+  }, { id: COPILOT, agent, waitingOn, subagents });
+
+  test('a delegate\'s question is the delegate\'s by its own agent, else by waitingOn, as Needs you says', async ({ page }) => {
+    await openDemo(page);
+    const v = await open(page, COPILOT);
+    await askAs(page, { waitingOn: 'agent-7' });
+    await expect(v.locator('.question .question-head')).toHaveText('Read witness shell logic asks');
+    await expect(page.locator('#needs-you .needs-delegate')).toHaveText('Read witness shell logic asks');
+    // Where the question and waitingOn name different delegates, the question's own asks, in both.
+    await askAs(page, { agent: 'agent-9', waitingOn: 'agent-7' });
+    await expect(v.locator('.question .question-head')).toHaveText('Lint the PWA asks');
+    await expect(page.locator('#needs-you .needs-delegate')).toHaveText('Lint the PWA asks');
+  });
+
+  test('a delegate\'s question whose delegate the list left out is a delegate\'s, never the main agent\'s', async ({ page }) => {
+    await openDemo(page);
+    const v = await open(page, COPILOT);
+    await askAs(page, { waitingOn: 'agent-3', subagents: DELEGATES });
+    await expect(v.locator('.question .question-head')).toHaveText('A delegate asks');
+  });
+
+  test('the main agent\'s words are dated by when it wrote them, not by a delegate\'s later update', async ({ page }) => {
+    await openDemo(page, '&delegates=1');
+    const v = await open(page, 'demo-delegates');
+    const said = new Date(Date.now() - 20 * 60000).toISOString();
+    await page.evaluate((at) => {
+      const d = window.agentBridgeDemo;
+      const s = d.host.get('demo-delegates');
+      d.upsert({ ...s, updatedAt: new Date().toISOString(), activity: { ...s.activity, own: { ...s.activity.own, at } } });
+    }, said);
+    await expect(v.locator('.speaker-age')).toHaveText('20m ago');
+    await expect(v.locator('.speaker-age')).toHaveAttribute('datetime', said);
+    // The row still says when the session last changed.
+    await expect(row(page, 'demo-delegates').locator('.row-age')).toHaveText('just now');
+  });
+
+  for (const [width, how] of [[1440, 'the inspector'], [900, 'the Details button'], [390, 'the More menu']]) {
+    test(`Details opened from ${how} at ${width} px puts focus on its heading, never in the question`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await openDemo(page);
+      const v = await open(page, COPILOT);
+      await expect(v.locator('.question')).toBeVisible();
+      if (width === 390) {
+        await v.locator('.session-header .more').click();
+        await page.getByRole('menuitem', { name: 'Details' }).click();
+      } else {
+        await v.locator('.session-header .details-button').click();
+      }
+      const head = v.locator('.details .section-head');
+      await expect(head).toBeFocused();
+      await expect(head).toHaveRole('heading');
+      await expect(head).toHaveAccessibleName('Details');
+      expect(await page.evaluate(() => !!document.activeElement?.closest('.question-slot, .question'))).toBe(false);
+    });
+  }
+});

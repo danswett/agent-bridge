@@ -40,7 +40,7 @@ test('a main-agent response the budget dropped says so rather than showing the d
 
 test('an older host with no source shows the top-level text, unchanged and unlabelled', () => {
   const v = voice({ response: 'Done. The test now waits for the socket to drain.', responseTruncated: true, reasoning: 'Plan.' });
-  assert.deepEqual(v, { response: 'Done. The test now waits for the socket to drain.', responseTruncated: true, responseDropped: false, reasoning: 'Plan.', attributed: false });
+  assert.deepEqual(v, { response: 'Done. The test now waits for the socket to drain.', responseTruncated: true, responseDropped: false, reasoning: 'Plan.', at: null, attributed: false });
 });
 
 test('the main agent\'s own text fills in where the top-level text is absent', () => {
@@ -110,4 +110,18 @@ test('a running delegate says how long it has run, a finished one that it finish
   assert.equal(delegateTime({ status: 'working', startedAt: '2026-11-01T19:56:00Z' }, now), '4m');
   assert.equal(delegateTime({ status: 'ended', endedAt: '2026-11-01T19:57:00Z' }, now), 'finished 3m ago');
   assert.equal(delegateTime({ status: 'idle', endedAt: null }, now), 'finished');
+});
+
+test('the main agent\'s words are dated by when it wrote them, not by a delegate\'s later text', () => {
+  const at = '2026-11-02T10:00:00Z';
+  // A delegate wrote last: the main agent's own words carry their own time.
+  const byDelegate = mainVoice({ activity: { response: 'Bisecting.', source: { response: 'agent-1' }, own: { response: 'Started 2 agents.', at } } });
+  assert.equal(byDelegate.response, 'Started 2 agents.');
+  assert.equal(byDelegate.at, at);
+  // Reasoning alone by a delegate: still the main agent's own time.
+  assert.equal(mainVoice({ activity: { response: 'Done.', source: { reasoning: 'agent-1' }, own: { reasoning: 'Mine.', at } } }).at, at);
+  // The top-level words are the main agent's: the session's own time dates them.
+  assert.equal(mainVoice({ activity: { response: 'Done.' } }).at, null);
+  // A host that sends no own.at: the session's time, as before.
+  assert.equal(mainVoice({ activity: { response: 'Bisecting.', source: { response: 'agent-1' }, own: { response: 'Started.' } } }).at, null);
 });
