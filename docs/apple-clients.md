@@ -1,9 +1,42 @@
 # Native Apple clients
 
-The implementation lives in [`apple/`](../apple/README.md), with reproducible XcodeGen targets for macOS, iPhone and iPad and a shared Swift protocol package.
+The native SwiftUI clients live in [`apple/`](../apple/README.md). They share a
+Swift 6 protocol library and tested client state across macOS 15+, iOS 18+ and
+iPadOS 18+. XcodeGen builds both applications from `apple/project.yml`.
 
-The current slice is a read-only local Mac session workbench. It negotiates `hello`, subscribes to sessions, replaces snapshots at the subscribe response boundary and resubscribes after a channel sequence gap. Its asynchronous socket reader handles interleaved responses/events, bounded frames, cancellation, timeouts and disconnects. Profile endpoint resolution follows [local-pipe.md](protocol/local-pipe.md).
+The workbench supports local Mac sockets and remote machines through the same
+GitHub device sign-in, relay proof and Noise XX protocol used by Windows and the
+PWA. Tokens and per-account device identities stay in Keychain. Remote session
+JSON, attachment keys and signed commands travel inside authenticated channels.
 
-The iOS/iPadOS target builds and renders the same adaptive workbench with explicitly labelled offline samples. It does not yet connect remotely. Relay sign-in, Keychain persistence and a vector-tested Noise implementation are the next prerequisite; the existing PWA and .NET transport remain the interoperability references. No host lifecycle management or session mutations are exposed by this slice.
+Implemented client workflows include:
 
-Run `bash apple/scripts/verify.sh` for unit/socket tests, formatting checks and both native builds. See the Apple README for verified environments and remaining limitations. This foundation is not P5 or P8 feature parity or release readiness.
+- Reconnecting session/usage/update subscriptions, sequence-gap recovery,
+  canonical machine selection, offline roster and confirmed Forget.
+- Needs You, global search, persistent pins/order/unread state, ended sessions,
+  Markdown, attributed main-agent text, delegate summaries and recent tools.
+- Capability-gated questions, replies, two-step stop, attachments and photos;
+  launch/resume, signed folder trust and cross-machine copy/resume.
+- Usage across machines with a 14-day account-scoped cache, remote machine
+  update checks/install requests, guarded notification answer/reply actions,
+  native notification preferences, local host diagnostics and a Mac menu/login setting.
+
+Requests retain their identity across uncertain delivery and reconnects. An
+explicit `unconfirmed` response is never replayed; lost replies can be checked
+only within the host's deduplication window and against the same host process.
+Signed folder-trust questions display the full warning/path and are fetched again
+before signing. Account changes revoke old state and cache work.
+
+Run `bash apple/scripts/verify.sh` for protocol/state tests, formatting and both
+native builds. Cryptographic vectors are byte-identical to the .NET/WebCrypto
+fixtures. Transport tests use in-memory encrypted peers and disposable local
+sockets. A debug-only `--ui-fixture` launch exercises UI actions without opening
+a host connection; its footer explicitly identifies simulated actions.
+
+See [the parity checklist](apple-parity.md) for remaining work. This is not yet a
+shipping-parity claim: a real .NET-host/relay interoperability run,
+physical/minimum-OS devices, VoiceOver and APNs delivery remain acceptance work.
+The current delivery target is local development builds; signing and distribution
+are deliberately deferred. The Mac/Linux host also lacks answer/reply/stop/launch
+backends and local host management; the client must respect those capability
+limits rather than bypass them. Live hooks, Home Assistant and daemons are untouched.
