@@ -140,3 +140,13 @@ test('transform functions separated by a comma read as they do in SVG, and anyth
   assert.equal(formatCommands(comma.commands), 'M3,10 L15,10');
   assert.throws(() => readDesignSvg(svgFile('junk', g('translate(1 0) ; translate(0 2)')), 'glyph'), /cannot read transform/);
 });
+
+test('a dotted attribute name is read whole, so it cannot pass for one the subset checks', () => {
+  assert.throws(() => readDesignSvg(svgFile('dotted', '<circle cx="8" cy="8" r="5" fill="currentColor" data.opacity="0"/>'), 'glyph'), /attribute data\.opacity is not in the design subset/);
+  assert.throws(() => readDesignSvg(svgFile('twice', '<circle cx="8" cy="8" r="5" fill="currentColor" fill="none"/>'), 'glyph'), /repeats fill/);
+});
+
+test('a square viewBox is read by its numbers, so 16 and 16.0 are the same side', () => {
+  const svg = readDesignSvg(svgFile('vb16', '<circle cx="8" cy="8" r="5" fill="currentColor"/>', 'viewBox="0 0 16 16.0"'), 'glyph');
+  assert.equal(svg.size, 16);
+});

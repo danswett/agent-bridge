@@ -37,7 +37,12 @@ export function parseXml(source, file = 'svg', { text = false } = {}) {
       continue;
     }
     const attrs = {};
-    for (const a of m[3].matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) { attrs[a[1]] = a[2] ?? a[3]; }
+    // The same name the element pattern accepted, dots included: "data.opacity" must not read as
+    // "opacity" and slip past the subset's checks.
+    for (const a of m[3].matchAll(/\s+([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+      if (a[1] in attrs) { throw new Error(`${file}: <${m[2]}> repeats ${a[1]}, which XML forbids`); }
+      attrs[a[1]] = a[2] ?? a[3];
+    }
     const node = { tag: m[2], attrs, children: [] };
     stack[stack.length - 1].children.push(node);
     if (!m[4]) { stack.push(node); }
@@ -269,7 +274,7 @@ export function readDesignSvg(file, kind) {
   const root = parseXml(source, file);
   if (root.tag !== 'svg') { throw new Error(`${file}: the root must be <svg>`); }
   const vb = (root.attrs.viewBox ?? '').trim().split(/[\s,]+/);
-  if (vb.length !== 4 || !vb.every((v) => PLAIN.test(v)) || Number(vb[0]) !== 0 || Number(vb[1]) !== 0 || vb[2] !== vb[3]) { throw new Error(`${file}: needs a square viewBox from 0 0`); }
+  if (vb.length !== 4 || !vb.every((v) => PLAIN.test(v)) || Number(vb[0]) !== 0 || Number(vb[1]) !== 0 || Number(vb[2]) !== Number(vb[3])) { throw new Error(`${file}: needs a square viewBox from 0 0`); }
   vb.forEach((v, i) => { vb[i] = Number(v); });
   // The root carries only its size and paint the parts inherit: an opacity, transform or class
   // here would be dropped by both clients rather than drawn.
