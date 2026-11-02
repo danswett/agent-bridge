@@ -59,6 +59,9 @@ public enum BridgeSessionOperations {
         if !attachments.isEmpty {
             data["attachments"] = BridgeOperationValidation.attachmentReferences(attachments)
         }
+        // Reserve the longest channel ID before HostStore records a mutation. A local
+        // encoding failure must not become an uncertain, possibly delivered reply.
+        try BridgeOperationValidation.requestSize(op: "session.reply", data: data)
         return BridgeOperation(op: "session.reply", data: data, requestID: requestID)
     }
 
@@ -140,6 +143,13 @@ enum BridgeOperationValidation {
     static func encodedSize(_ data: [String: JSONValue], maximum: Int) throws {
         guard try JSONEncoder().encode(JSONValue.object(data)).count <= maximum else {
             throw BridgeOperationError("The request is larger than \(maximum / 1024) KiB.")
+        }
+    }
+
+    static func requestSize(op: String, data: [String: JSONValue]) throws {
+        let request = BridgeRequest(id: Int.max, op: op, data: data)
+        guard try JSONEncoder().encode(request).count <= 48 * 1024 else {
+            throw BridgeOperationError("The encoded message is larger than 48 KiB. Shorten it before sending.")
         }
     }
 }

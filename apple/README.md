@@ -38,7 +38,9 @@ the connected host offers them, such as a capable remote Windows host.
   remains bound to its original UUID and host process; reconnect never silently
   sends a fresh press. A delivered reply removes only its sent prefix from the
   saved draft once, preserving text appended while delivery was pending. Question
-  answers have separate editor state.
+  answers have separate editor state. Replies check the complete encoded 48 KiB
+  request budget before delivery; answers also check the host's 16 KiB budget using
+  its pinned .NET 10 JSON escaping rules.
 - Files, PhotosPicker and Mac image paste, resizing when needed, removable staged
   attachments, bounded chunk uploads and encrypted blob uploads up to host limits.
 - Host-provided launch/resume choices, signed full-disclosure folder-trust answers,
