@@ -541,7 +541,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   background agents and commands, turns, compactions and the process id; then End session.
   At three panes it heads the inspector, over Tools (each call: glyph, name and arguments in
   mono, age). Below three panes Tools is a tab beside Conversation, and Details takes the
-  conversation's place until pressed again. Delegates (#176) join the inspector and the tabs.
+  conversation's place until pressed again. Delegates (#176) join the inspector and the tabs: a
+  delegate chosen takes the inspector in place of Details and Tools (§6.3).
 - **An `ask_user` call in Tools** (#253) is one line without its summary. While its question
   (Question `id` is the call's id) waits, it reads "Waiting on you", a link to the question.
   After, it reads the call's reported status ("Done", "Failed"), since a call can end without
@@ -568,8 +569,16 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - Task (the prompt it was given), Latest (its latest output), and Reasoning (collapsed);
   - Tools: mono, glyph per call, tabular duration;
   - nested delegates, listed under their parent.
-- **One action:** "Ask main agent to stop it". It pre-fills a reply to the main agent and
-  sends nothing on its own. There is no per-delegate typing or Stop.
+- **Choosing:** at three panes a strip item shows its delegate in the inspector, in place of
+  Details and Tools, bringing a hidden inspector back; pressed again, it lets go. Below three
+  panes the Delegates tab lists every delegate under its parent, finished ones folded, and the
+  one opened is pushed in the list's place with "All delegates" to go back. A delegate stays
+  open across a resize, and as it finishes (its fold opens).
+- **A host that lists none** (Claude, Codex, a host before sub-agents) gets no strip; its
+  Delegates tab, while it counts background agents, says only how many.
+- **One action:** "Ask main agent to stop it". It pre-fills a reply to the main agent, after
+  anything already typed, and sends nothing on its own. There is no per-delegate typing or
+  Stop, and a finished delegate has no action.
 - **Delegate names** are the delegate's own words, so one could pose as the main agent.
   Every surface shows the same safe label (the app's `DelegateLabel`): bidi controls,
   zero-width, format, control and other default-ignorable characters are removed, any

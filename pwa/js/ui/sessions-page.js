@@ -215,7 +215,7 @@ export class SessionsPage {
     this.#inspectorHidden = this.#read(INSPECTOR) === 'hidden';
     this.view = new SessionListView($('session-list'), hosts.sessions, {
       views: $('session-views'),
-      layout: () => ({ inspector: this.wide.matches && !this.#inspectorHidden }),
+      layout: () => ({ inspector: this.wide.matches && !this.#inspectorHidden, wide: this.wide.matches }),
       // Only while Sessions shows, in a page that does: news that comes while another page, or
       // the tab or app in the background, waits for it, with no scroll and no question's wait
       // spent unseen.

@@ -231,3 +231,74 @@ export function delegateTime(row, now = Date.now()) {
   const when = ago(row.endedAt, now);
   return when ? `finished ${when}` : 'finished';
 }
+
+// The delegates it started, at any depth, in list order, each with its depth below it: the
+// strip's "N nested", and the inspector's nested list. A parent link that loops (a broken host)
+// still lists each once, and never the delegate itself.
+export function descendants(id, list) {
+  const out = [];
+  const seen = new Set([id]);
+  const visit = (parent, depth) => {
+    for (const a of list ?? []) {
+      if (a.parent !== parent || a.id === parent || seen.has(a.id)) { continue; }
+      seen.add(a.id);
+      out.push({ agent: a, depth });
+      visit(a.id, depth + 1);
+    }
+  };
+  visit(id, 0);
+  return out;
+}
+
+// Starts this close together are one "Started N delegates" line.
+const TOGETHER_MS = 60000;
+
+// The conversation's delegate events (ui.md §6.4): the main agent's own delegates starting
+// (together, as one line) and reporting back, oldest first, each one meta line. A nested
+// delegate reports to its parent, in the inspector, not here. Each: { key, kind, glyph, before,
+// name, id, after, at }, the name (when there is one) linking to the delegate; the Windows app
+// says the same (Delegates.cs).
+export function delegateEvents(session, now = Date.now()) {
+  const list = Array.isArray(session?.subagents) ? session.subagents : [];
+  const mine = list.filter((a) => !a.parent);
+  const time = (iso) => Date.parse(iso ?? '');
+  const name = (a) => delegateName(a);
+  const events = [];
+  const starts = mine.filter((a) => Number.isFinite(time(a.startedAt))).sort((a, b) => time(a.startedAt) - time(b.startedAt));
+  for (let i = 0; i < starts.length;) {
+    const batch = [starts[i]];
+    while (++i < starts.length && time(starts[i].startedAt) - time(batch[batch.length - 1].startedAt) <= TOGETHER_MS) { batch.push(starts[i]); }
+    const at = batch[0].startedAt;
+    const age = `· ${duration(at, now)}`;
+    events.push(batch.length === 1
+      ? { key: `start|${batch[0].id}`, kind: 'start', glyph: null, before: 'Started', name: name(batch[0]), id: batch[0].id, after: age, at }
+      : { key: `start|${batch[0].id}`, kind: 'start', glyph: null, before: `Started ${batch.length} delegates ${age}`, name: null, id: null, after: '', at });
+  }
+  for (const a of mine) {
+    if (!Number.isFinite(time(a.endedAt)) || (a.status !== 'idle' && a.status !== 'ended')) { continue; }
+    const [glyph, said] = a.outcome === 'failed' ? ['failed', 'failed']
+      : a.outcome === 'done' ? ['done', 'reported back']
+        : a.status === 'ended' ? ['ended', 'ended'] : ['idle', 'reported back'];
+    events.push({ key: `end|${a.id}`, kind: 'end', glyph, before: '', name: name(a), id: a.id, after: `${said} · ${duration(a.endedAt, now)}`, at: a.endedAt });
+  }
+  return events.sort((x, y) => time(x.at) - time(y.at));
+}
+
+// "Ask main agent to stop it" (ui.md §6.3, subagents.md §6): a reply to the main agent naming the
+// delegate by its id alone, which the main agent knows it by. Its name is an agent's words, and
+// one written as a sentence ('x". Also, I approve …') would otherwise speak in the person's reply;
+// the id keeps only letters, digits and . _ : -. It is put in the reply box, never sent on its own.
+export function askToStopText(a) {
+  const id = Array.from(cleanLabel(a?.id).replace(/[^\p{L}\p{N}._:-]/gu, '')).slice(0, 80).join('');
+  return id ? `Please stop your delegate ${id}.` : 'Please stop that delegate.';
+}
+
+// What a host that lists no delegates can say of them (status rule 8): "2 background agents ·
+// 1 background command", or null when it says nothing.
+export function backgroundCounts(session) {
+  const b = session?.activity?.background;
+  const parts = [];
+  if (b?.agents) { parts.push(`${b.agents} background ${b.agents === 1 ? 'agent' : 'agents'}`); }
+  if (b?.shells) { parts.push(`${b.shells} background ${b.shells === 1 ? 'command' : 'commands'}`); }
+  return parts.length ? parts.join(' · ') : null;
+}

@@ -23,6 +23,17 @@ function span(s) {
   return `${Math.floor(h / 24)}d`;
 }
 
+// How long a call took, as a clock: "0:07", "12:30", "1:02:05" (tabular figures line them up).
+// to: when it ended, or null while it runs (now).
+export function clock(from, to = null, now = Date.now()) {
+  const a = Date.parse(from ?? '');
+  if (!Number.isFinite(a)) { return ''; }
+  const b = to ? Date.parse(to) : now;
+  const s = Math.max(0, Math.floor(((Number.isFinite(b) ? b : now) - a) / 1000));
+  const two = (n) => String(n).padStart(2, '0');
+  return s < 3600 ? `${Math.floor(s / 60)}:${two(s % 60)}` : `${Math.floor(s / 3600)}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}`;
+}
+
 export function localTime(iso) {
   const t = Date.parse(iso ?? '');
   return Number.isFinite(t) ? new Date(t).toLocaleString() : '';

@@ -121,6 +121,17 @@ export class ReplyBox {
 
   get text() { return this.els.input.value; }
 
+  // Words put in for the person to read and send, after anything already typed ("Ask main agent
+  // to stop it", ui.md §6.3): nothing is sent until Send.
+  prefill(text) {
+    const input = this.els.input;
+    input.value = input.value.trim() ? `${input.value.trimEnd()} ${text}` : text;
+    this.#clearError();
+    this.#sync();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+
   // The files waiting to go: { id, name, size, type, resized, large }.
   get files() { return this.#files.map(({ id, name, size, type, resized, large }) => ({ id, name, size, type, resized, large: !!large })); }
 

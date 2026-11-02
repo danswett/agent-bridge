@@ -14,7 +14,13 @@
 // reasoning behind "Show reasoning", the question as a Needs you card) over the reply box; and
 // the inspector, with Details (everything the row leaves out, and End session) and Tools. The
 // inspector is a pane of its own at the three-pane width; below it, Tools is a tab beside
-// Conversation and Details is the header's button. Delegates (U8, #176) join both later.
+// Conversation and Details is the header's button.
+//
+// Delegates (ui.md §6.3, #176): at three panes a strip under the header, the delegate chosen
+// there shown in the inspector in place of Details and Tools; below that a Delegates tab, whose
+// list pushes the delegate chosen in its place; on a phone a chip row as well. The conversation
+// says when the main agent's own delegates start and report back, each name opening the delegate.
+// Nothing types to a delegate: its one action fills the reply box to the main agent.
 //
 // Status is a glyph and the words of ui.md §2.2 (js/status.js): no coloured edge or glow (#178).
 import { h } from './dom.js';
@@ -28,8 +34,8 @@ import { ReplyBox } from './reply-view.js';
 import { EndSession } from './stop-view.js';
 import { lastSegment, pathView, setFacts } from './meta.js';
 import { RowMenu } from './row-menu.js';
-import { DelegatesBlock } from './delegates-view.js';
-import { mainVoice } from '../attribution.js';
+import { DelegateDetail, DelegatesBlock, DelegateStrip } from './delegates-view.js';
+import { backgroundCounts, delegateEvents, mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
 import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
 
@@ -115,6 +121,8 @@ export class SessionCard {
   // A question that arrived in the drawing under way, to bring into sight once it is all drawn.
   #arrived = null;
   #menu = new RowMenu();
+  // The delegate open, in the inspector or pushed in the Delegates tab.
+  #delegate = null;
 
   // hostId: the machine the session is on, which everything the view sends goes to.
   // fetchDetail(id) -> Promise<Session|null>, for the tool history (session.get).
@@ -122,13 +130,14 @@ export class SessionCard {
   // questions, sends replies and ends sessions, and whether the session's machine takes each at
   // all. labelled: whether the row names its machine, as it does with every machine shown.
   // onSelect(card): its row was chosen. onPin(card, pinned), onBack(card): the header's Pin and
-  // (on a phone) Back. layout() -> { inspector }: whether the inspector is a pane of its own now.
+  // (on a phone) Back. layout() -> { inspector, wide }: whether the inspector is a pane of its own
+  // now, and whether the window is wide enough for one (the strip's width).
   // stale: why its machine's sessions can't be acted on now ({ reason, since }), or null.
   constructor(session, { hostId = null, fetchDetail, fetchDelegate = null, machineName, labelled = false, answering = () => null, onSelect = () => {}, onPin = () => {}, onBack = () => {}, layout = () => ({ inspector: false }), viewing = () => true, stale = null }) {
     Object.assign(this, { hostId, fetchDetail, fetchDelegate, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
     this.#stale = stale;
     const n = ++seq;
-    this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates` };
+    this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates`, delegate: `s${n}-delegate` };
     this.#buildRow();
     this.#buildView();
     this.update(session);
@@ -170,6 +179,9 @@ export class SessionCard {
     e.more = h('button', { type: 'button', class: 'icon-button more', 'aria-haspopup': 'menu', 'aria-label': 'More', title: 'More', onclick: () => this.#openMore() }, designIcon('more', { cls: 'ab-icon-20' }));
     e.actions = h('div', { class: 'header-actions' }, e.pin, e.detailsButton, e.inspectorButton, e.more);
     e.header = h('header', { class: 'session-header' }, e.back, h('div', { class: 'header-main' }, e.titleText, e.statusLine), e.actions);
+    // The delegate strip (§6.3): at three panes under the header; on a phone a chip row.
+    // Its item pressed again lets the delegate go, unless the inspector is hidden: then it shows it.
+    this.strip = new DelegateStrip({ onSelect: (id) => (id === null && !this.layout().inspector && this.layout().wide ? this.openDelegate(this.#delegate) : id === null ? this.closeDelegate() : this.openDelegate(id)) });
 
     // Conversation / Delegates / Tools, where the inspector isn't a pane of its own (ui.md §6.3).
     // Delegates is there only while the host lists any.
@@ -206,7 +218,10 @@ export class SessionCard {
     e.toolSummary = h('span', { class: 'tool-summary' });
     e.toolGlyph = glyph('working', { size: 12 });
     e.tool = h('p', { class: 'tool-line', hidden: true }, e.toolGlyph, e.toolName, e.toolSummary);
-    e.agentBlock = h('div', { class: 'agent-block' }, e.speaker, e.reasoning, e.truncated, e.dropped, e.response, e.tool);
+    // Its own delegates starting and reporting back (§6.4): one meta line each, the name opening
+    // it; after its words and before what it is running now.
+    e.events = h('ol', { class: 'delegate-events', 'aria-label': 'Delegates started and finished', hidden: true });
+    e.agentBlock = h('div', { class: 'agent-block' }, e.speaker, e.reasoning, e.truncated, e.dropped, e.response, e.events, e.tool);
     e.question = h('div', { class: 'question-slot' });
     this.#guardQuestion(e.question);
     e.stream = h('div', { class: 'stream' }, e.user, e.agentBlock, e.question);
@@ -225,14 +240,26 @@ export class SessionCard {
     e.historyBody = h('div', { class: 'history-body' });
     e.tools = h('section', { class: 'tools-panel', id: this.ids.tools, role: 'tabpanel', 'aria-labelledby': this.ids.tabT },
       h('h3', { class: 'section-head' }, 'Tools'), e.historyBody);
-    // Delegates (#176, ui.md §6.3): each under its own name, never in the main agent's place.
-    // Opening one fetches its own words (session.get with agent); nothing here replies to it.
-    this.delegates = new DelegatesBlock({ fetchDelegate: this.fetchDelegate ? (agent) => this.fetchDelegate(this.#s.id, agent) : null });
-    e.delegates = h('section', { class: 'delegates-panel', id: this.ids.delegates, role: 'tabpanel', 'aria-labelledby': this.ids.tabD, hidden: true }, this.delegates.element);
+    // Delegates (#176, ui.md §6.3): each under its own name, never in the main agent's place. The
+    // Delegates tab lists them (or, from a host that lists none, says how many there are); the one
+    // opened shows in the inspector, or pushed in the list's place, its own words fetched from the
+    // machine (session.get with agent). Nothing here replies to a delegate.
+    this.delegates = new DelegatesBlock({ onOpen: (id) => this.openDelegate(id) });
+    e.delegateCounts = h('p', { class: 'note delegate-counts', hidden: true });
+    e.delegates = h('section', { class: 'delegates-panel', id: this.ids.delegates, role: 'tabpanel', 'aria-labelledby': this.ids.tabD, hidden: true }, this.delegates.element, e.delegateCounts);
+    this.detail = new DelegateDetail({
+      fetchDelegate: this.fetchDelegate ? (agent) => this.fetchDelegate(this.#s.id, agent) : null,
+      onOpen: (id) => this.openDelegate(id),
+      onAsk: (text) => this.#askToStop(text),
+      onBack: () => this.closeDelegate({ focus: true }),
+      canAsk: () => !!this.#reply,
+      idBase: this.ids.delegate,
+    });
+    // The delegate's pane is in the document only while one is open.
     e.inspector = h('aside', { class: 'inspector', 'aria-label': 'Inspector' }, e.details, e.delegates, e.tools);
 
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
-      e.header, e.tabs, h('div', { class: 'view-body' }, e.conversation, e.inspector));
+      e.header, this.strip.element, e.tabs, h('div', { class: 'view-body' }, e.conversation, e.inspector));
     this.#applyTab();
   }
 
@@ -329,12 +356,8 @@ export class SessionCard {
     e.voice.hidden = !voice.attributed;
     e.agentLabel.hidden = voice.attributed;
     e.agentLabel.textContent = AGENT_NAME[s.agent] ?? AGENT_NAME.unknown;
-    e.agentBlock.hidden = !voice.response && !voice.responseDropped && !voice.reasoning && !t;
-    this.delegates.update(s);
-    const listed = !this.delegates.element.hidden;
-    e.delegates.hidden = !listed;
-    e.tabD.hidden = !listed;
-    if (!listed && this.#tab === 'delegates') { this.setTab('conversation'); }
+    this.#renderDelegates(s);
+    e.agentBlock.hidden = !voice.response && !voice.responseDropped && !voice.reasoning && !t && e.events.hidden;
     const echoed = (s.activity.userMessage ?? '') !== e.userText.textContent;
     e.user.hidden = !s.activity.userMessage;
     e.userText.textContent = s.activity.userMessage ?? '';
@@ -348,6 +371,77 @@ export class SessionCard {
 
     // The tools shown follow the session: refetched (at most every 2 s) as it changes.
     if (!first && this.#history.loaded && this.#toolsShown() && this.#changed('historyAt', s.updatedAt)) { this.#scheduleHistory(); }
+  }
+
+  // The strip, the Delegates tab and the delegate open (§6.3), and the conversation's events.
+  #renderDelegates(s, now = Date.now()) {
+    const e = this.els;
+    // Every update, open or not: the detail remembers what a trimmed list leaves out.
+    if (!this.detail.update(s, now) && this.#delegate) { this.closeDelegate(); }
+    this.strip.update(s, now, this.#delegate);
+    this.delegates.update(s, now, this.#delegate);
+    const listed = !this.delegates.element.hidden;
+    // A host that lists none (Claude, Codex, one before sub-agents) says only how many (rule 8).
+    const counts = !listed && !Array.isArray(s.subagents) ? backgroundCounts(s) : null;
+    e.delegateCounts.textContent = counts ?? '';
+    e.delegateCounts.hidden = !counts;
+    e.delegates.hidden = !listed && !counts;
+    e.tabD.hidden = e.delegates.hidden;
+    if (e.tabD.hidden && this.#tab === 'delegates') { this.setTab('conversation'); }
+    this.#renderEvents(s, now);
+  }
+
+  #renderEvents(s, now = Date.now()) {
+    const e = this.els;
+    const events = delegateEvents(s, now);
+    if (!this.#changed('events', events)) { return; }
+    e.events.replaceChildren(...events.map((ev) => h('li', { class: 'delegate-event', dataset: { kind: ev.kind } },
+      glyph(ev.glyph ?? 'delegating', { size: 12 }),
+      h('span', { class: 'delegate-event-text' },
+        ev.before ? `${ev.before}${ev.name ? ' ' : ''}` : '',
+        ev.name ? h('button', { type: 'button', class: 'delegate-link', dataset: { id: ev.id }, onclick: () => this.openDelegate(ev.id) }, ev.name) : null,
+        ev.after ? ` ${ev.after}` : ''))));
+    e.events.hidden = events.length === 0;
+  }
+
+  // A delegate opened from the strip, the list, a nested list or the conversation: in the
+  // inspector at three panes (brought back, if it was hidden), else pushed in the Delegates tab.
+  openDelegate(id) {
+    if (!id) { this.closeDelegate(); return; }
+    if (!(this.#s.subagents ?? []).some((a) => a.id === id)) { return; }
+    this.#delegate = id;
+    if (!this.detail.element.isConnected) { this.els.inspector.insertBefore(this.detail.element, this.els.tools); }
+    this.detail.select(id, this.#s);
+    this.view.dataset.delegate = 'open';
+    if (this.layout().wide && !this.layout().inspector) { this.onInspector?.(); }
+    const inspector = this.layout().inspector;
+    if (!inspector) { this.setTab('delegates'); }
+    this.#renderDelegates(this.#s);
+    this.detail.shown();
+    // Pushed in the list's place, focus goes to it; in the inspector it stays where it was.
+    if (!inspector) { this.detail.focus(); }
+  }
+
+  // Back to the session's own Details and Tools, or to the Delegates tab's list.
+  closeDelegate({ focus = false } = {}) {
+    const id = this.#delegate;
+    if (!id) { return; }
+    this.#delegate = null;
+    this.detail.select(null);
+    this.detail.element.remove();
+    delete this.view.dataset.delegate;
+    this.#renderDelegates(this.#s);
+    if (focus) { (this.delegates.row(id) ?? this.els.tabD).focus(); }
+  }
+
+  get openDelegateId() { return this.#delegate; }
+
+  // "Ask main agent to stop it": the words go in the reply box, after anything already there, for
+  // the person to read and send. Nothing is sent; Send, as every reply, goes to the main agent.
+  #askToStop(text) {
+    if (!this.#reply) { return; }
+    if (!this.layout().inspector) { this.setTab('conversation'); }
+    this.#reply.prefill(text);
   }
 
   // Details (ui.md §6.2): everything the row leaves out, as a property list.
@@ -467,6 +561,7 @@ export class SessionCard {
     this.els.inspectorButton.setAttribute('aria-label', inspector ? 'Hide inspector' : 'Show inspector');
     this.els.inspectorButton.title = this.els.inspectorButton.getAttribute('aria-label');
     this.#revealTools();
+    this.detail.shown();
   }
 
   // Conversation or Tools, where they are tabs; Details, from the header's button.
@@ -477,6 +572,7 @@ export class SessionCard {
     this.#tab = tab === 'tools' || tab === 'details' || (tab === 'delegates' && !this.els.tabD.hidden) ? tab : 'conversation';
     this.#applyTab();
     this.#revealTools();
+    this.detail.shown();
     if (this.#tab === was) { return; }
     this.#readToEnd = null;
     // Back on the conversation, its question shows again where a click may be headed: the same
@@ -489,7 +585,9 @@ export class SessionCard {
       const r = now.getBoundingClientRect();
       slide(now, 'selection', from.left - r.left, 0, { pseudo: '::after', scaleX: from.width / r.width });
     }
-    const shown = { conversation: this.els.conversation, delegates: this.els.delegates, tools: this.els.tools, details: this.els.details }[this.#tab];
+    // A delegate pushed in the list's place is what the Delegates tab shows, the list hidden.
+    const delegates = this.#delegate && !this.layout().inspector ? this.detail.element : this.els.delegates;
+    const shown = { conversation: this.els.conversation, delegates, tools: this.els.tools, details: this.els.details }[this.#tab];
     if (from && shown?.getClientRects().length) { enter(shown, 'tab'); }
   }
 
@@ -556,6 +654,7 @@ export class SessionCard {
     this.#menu.close(false);
     this.#dropReceipt();
     this.delegates.dispose();
+    this.detail.dispose();
     clearTimeout(this.#history.timer);
   }
 
@@ -863,6 +962,9 @@ export class SessionCard {
     e.rowAge.textContent = ago(s.updatedAt, now);
     e.agentAge.textContent = ago(mainVoice(s).at ?? s.updatedAt, now);
     this.delegates.refreshTimes(now);
+    this.strip.refreshTimes(now);
+    this.detail.refreshTimes(now);
+    this.#renderEvents(s, now);
     // "last seen 2m ago" moves on with nothing from the machine, which is away.
     if (this.#stale && (this.#staleText(now)?.join(' ') ?? null) !== this.#shownStale) { this.update(s); }
   }
